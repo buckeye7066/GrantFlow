@@ -1,0 +1,8 @@
+{
+  "repo": "buckeye7066/GrantFlow",
+  "branch": "patch/base44-compatible-matching-engine",
+  "filePaths": [
+    "functions/_shared/profileMatchingEngine.js",
+    "functions/_shared/discoveredFields.js"
+  ]
+}
