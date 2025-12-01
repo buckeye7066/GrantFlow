@@ -1,8 +1,28 @@
-// File: functions/checkPendingApplications.js
-// 
-// This file's actual content should be copied from the Base44 dashboard.
-// Go to: Dashboard → Code → Functions → checkPendingApplications.js
-// 
-// Note: This is a placeholder. To backup actual code:
-// 1. Copy the code from Base44 dashboard
-// 2. Or use the AI assistant: "Show me the code for functions/checkPendingApplications.js"
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.4';
+
+Deno.serve(async (req) => {
+  try {
+    const base44 = createClientFromRequest(req);
+    const grantsToCheck = await base44.asServiceRole.entities.Grant.filter({ application_status: 'not_yet_open', notify_when_open: true });
+
+    const results = [];
+    for (const grant of grantsToCheck) {
+      if (grant.application_next_check && new Date(grant.application_next_check) > new Date()) {
+        results.push({ grant_id: grant.id, title: grant.title, skipped: true });
+        continue;
+      }
+
+      try {
+        const checkResp = await base44.asServiceRole.functions.invoke('checkApplicationAvailability', { grant_id: grant.id, force_check: true });
+        results.push({ grant_id: grant.id, title: grant.title, ...checkResp });
+        await new Promise(r => setTimeout(r, 2000));
+      } catch (e) {
+        results.push({ grant_id: grant.id, title: grant.title, error: e.message });
+      }
+    }
+
+    return Response.json({ success: true, total_checked: grantsToCheck.length, newly_opened: results.filter(r => r.is_open).length, results });
+  } catch (error) {
+    return Response.json({ error: error.message }, { status: 500 });
+  }
+});
