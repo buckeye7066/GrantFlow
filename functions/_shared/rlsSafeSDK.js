@@ -1,7 +1,7 @@
 // File: functions/_shared/rlsSafeSDK.js
 // 
 // This file's actual content should be copied from the Base44 dashboard.
-// Go to: Dashboard â Code â Functions â _shared/rlsSafeSDK.js
+// Go to: Dashboard Ã¢ÂÂ Code Ã¢ÂÂ Functions Ã¢ÂÂ _shared/rlsSafeSDK.js
 // 
 // Note: This is a placeholder. To backup actual code:
 // 1. Copy the code from Base44 dashboard
