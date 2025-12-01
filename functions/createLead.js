@@ -1,8 +1,14 @@
-// File: functions/createLead.js
-// 
-// This file's actual content should be copied from the Base44 dashboard.
-// Go to: Dashboard → Code → Functions → createLead.js
-// 
-// Note: This is a placeholder. To backup actual code:
-// 1. Copy the code from Base44 dashboard
-// 2. Or use the AI assistant: "Show me the code for functions/createLead.js"
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.4';
+
+Deno.serve(async (req) => {
+  try {
+    const base44 = createClientFromRequest(req);
+    const payload = await req.json();
+    const { data } = payload;
+
+    const newLead = await base44.entities.Lead.create(data);
+    return Response.json(newLead);
+  } catch (error) {
+    return Response.json({ error: error.message }, { status: 500 });
+  }
+});
