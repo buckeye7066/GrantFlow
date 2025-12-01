@@ -1,59 +1,36 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.4';
 
-const CONFIG = { MAX_RETRIES: 3, RETRY_DELAY_MS: 1000, BATCH_SIZE: 5, CRAWLER_TIMEOUT_MS: 40000, MAX_PROGRAMS: 15 };
-
-function log(level, message, ctx = {}) {
-  console.log('[' + new Date().toISOString() + '] [' + level.toUpperCase() + '] [crawlBenefitsGov] ' + message, Object.keys(ctx).length > 0 ? JSON.stringify(ctx) : '');
-}
-
-async function retryWithBackoff(fn, maxRetries = CONFIG.MAX_RETRIES) {
-  let lastError = null;
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try { return await fn(); } catch (error) {
-      lastError = error;
-      if (attempt < maxRetries) await new Promise(r => setTimeout(r, CONFIG.RETRY_DELAY_MS * Math.pow(2, attempt - 1)));
-    }
-  }
-  throw lastError;
-}
-
-async function runCrawler(sdk, crawlId, organizationId) {
-  const SOURCE_NAME = 'benefits_gov';
-  let logEntry = null;
-  try { logEntry = await sdk.entities.CrawlLog.create({ source: SOURCE_NAME, status: 'started' }); } catch (e) {}
-
-  try {
-    let opportunities = [
-      { source: SOURCE_NAME, source_id: "snap", url: "https://www.benefits.gov/benefit/361", title: "SNAP", sponsor: "USDA", description_raw: "Nutrition assistance for needy families.", funding_type: "benefit", regions: ["USA"], categories: ["food"] },
-      { source: SOURCE_NAME, source_id: "medicare", url: "https://www.benefits.gov/benefit/1307", title: "Medicare", sponsor: "CMS", description_raw: "Health insurance for 65+.", funding_type: "benefit", regions: ["USA"], categories: ["healthcare"] },
-      { source: SOURCE_NAME, source_id: "medicaid", url: "https://www.benefits.gov/benefit/1640", title: "Medicaid", sponsor: "CMS", description_raw: "Health coverage for low-income.", funding_type: "benefit", regions: ["USA"], categories: ["healthcare"] },
-      { source: SOURCE_NAME, source_id: "ssi", url: "https://www.benefits.gov/benefit/4416", title: "SSI", sponsor: "SSA", description_raw: "Monthly payments for disabled/elderly.", funding_type: "benefit", regions: ["USA"], categories: ["financial"] },
-      { source: SOURCE_NAME, source_id: "liheap", url: "https://www.benefits.gov/benefit/623", title: "LIHEAP", sponsor: "HHS", description_raw: "Energy bill assistance.", funding_type: "assistance", regions: ["USA"], categories: ["utility"] }
-    ];
-
-    let recordsProcessed = 0;
-    for (const item of opportunities) {
-      try {
-        await retryWithBackoff(() => sdk.functions.invoke('processCrawledItem', { item }));
-        recordsProcessed++;
-      } catch (e) { log('error', 'Failed', { error: e.message }); }
-    }
-
-    if (logEntry) try { await sdk.entities.CrawlLog.update(logEntry.id, { status: 'completed', recordsFound: opportunities.length, recordsAdded: recordsProcessed }); } catch (e) {}
-    return { ok: true, result: { status: 'completed', found: opportunities.length, processed: recordsProcessed } };
-  } catch (error) {
-    if (logEntry) try { await sdk.entities.CrawlLog.update(logEntry.id, { status: 'failed', errorMessage: error.message }); } catch (e) {}
-    throw error;
-  }
-}
-
+// Crawl Benefits.gov - Federal benefits crawler
 Deno.serve(async (req) => {
-  const crawlId = crypto.randomUUID().slice(0, 8);
   try {
     const base44 = createClientFromRequest(req);
+    const sdk = base44.asServiceRole;
     const body = await req.json().catch(() => ({}));
-    return Response.json(await runCrawler(base44.asServiceRole, crawlId, body.organization_id), { status: 200 });
+    const { organization_id } = body;
+
+    const prompt = `Search Benefits.gov for 15 federal assistance programs for low-income individuals/families. Return: name, agency, description, eligibility, assistance_type, url, benefit_amount, application_method.`;
+
+    const ai = await sdk.integrations.Core.InvokeLLM({
+      prompt, add_context_from_internet: true,
+      response_json_schema: { type: "object", properties: { programs: { type: "array", items: { type: "object", properties: { name: { type: "string" }, agency: { type: "string" }, description: { type: "string" } } } } } }
+    });
+
+    const programs = ai.programs || [];
+    let processed = 0;
+
+    for (const p of programs) {
+      if (!p.name) continue;
+      const item = {
+        source: 'benefits_gov', source_id: `bg_${Date.now()}_${processed}`, url: 'https://www.benefits.gov',
+        title: p.name, sponsor: p.agency, description_raw: p.description, funding_type: 'federal_benefit',
+        regions: ['USA'], categories: [p.assistance_type || 'assistance']
+      };
+      await sdk.functions.invoke('processCrawledItem', { item });
+      processed++;
+    }
+
+    return Response.json({ ok: true, result: { status: 'completed', found: programs.length, processed } });
   } catch (error) {
-    return Response.json({ ok: false, error: error?.message ?? 'Crawler error' }, { status: 500 });
+    return Response.json({ ok: false, error: error.message }, { status: 500 });
   }
 });

@@ -1,90 +1,34 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.4';
 
-const CONFIG = { MAX_RETRIES: 3, RETRY_DELAY_MS: 2000, BATCH_SIZE: 5, BATCH_DELAY_MS: 1000, CRAWLER_TIMEOUT_MS: 40000 };
-
-function log(level, message, ctx = {}) {
-  console.log('[' + new Date().toISOString() + '] [' + level.toUpperCase() + '] [crawlGrantsGov] ' + message, 
-    Object.keys(ctx).length > 0 ? JSON.stringify(ctx) : '');
-}
-
-async function retryWithBackoff(fn, maxRetries = CONFIG.MAX_RETRIES) {
-  let lastError = null;
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try { return await fn(); } catch (error) {
-      lastError = error;
-      if (attempt < maxRetries) {
-        const delay = CONFIG.RETRY_DELAY_MS * Math.pow(2, attempt - 1);
-        await new Promise(r => setTimeout(r, delay));
-      }
-    }
-  }
-  throw lastError;
-}
-
-async function runCrawler(sdk, crawlId) {
-  const timeout = Date.now() + CONFIG.CRAWLER_TIMEOUT_MS;
-  let logEntry = null;
-  try { logEntry = await sdk.entities.CrawlLog.create({ source: 'grants.gov', status: 'started' }); } catch (e) {}
-
-  try {
-    if (Date.now() > timeout) throw new Error('Crawler timeout');
-    
-    const llmResponse = await retryWithBackoff(async () => {
-      return await sdk.integrations.Core.InvokeLLM({
-        prompt: 'Search https://www.grants.gov for 20 recent federal grants. Extract opportunityNumber, title, agencyName, postedDate, closeDate, awardCeiling, awardFloor, description, eligibleApplicants, fundingCategory.',
-        add_context_from_internet: true,
-        response_json_schema: {
-          type: "object",
-          properties: { grants: { type: "array", items: { type: "object", properties: {
-            opportunityNumber: { type: "string" }, title: { type: "string" }, agencyName: { type: "string" },
-            postedDate: { type: "string" }, closeDate: { type: "string" }, awardCeiling: { type: "number" },
-            awardFloor: { type: "number" }, description: { type: "string" },
-            eligibleApplicants: { type: "array", items: { type: "string" } }, fundingCategory: { type: "string" }
-          }}}}
-        }
-      });
-    });
-
-    if (!llmResponse?.grants?.length) {
-      if (logEntry) try { await sdk.entities.CrawlLog.update(logEntry.id, { status: 'completed', recordsFound: 0 }); } catch (e) {}
-      return { ok: true, result: { status: 'completed', found: 0, processed: 0 } };
-    }
-
-    let recordsProcessed = 0;
-    for (const rawGrant of llmResponse.grants) {
-      if (Date.now() > timeout) break;
-      try {
-        const mappedItem = {
-          source: 'grants_gov',
-          source_id: rawGrant.opportunityNumber || 'grants_gov_' + Date.now() + '_' + Math.random().toString(36).slice(2),
-          title: rawGrant.title || 'Untitled',
-          sponsor: rawGrant.agencyName || 'Unknown',
-          url: rawGrant.opportunityNumber ? 'https://www.grants.gov/search-results-detail/' + rawGrant.opportunityNumber : 'https://www.grants.gov',
-          description_raw: rawGrant.description || '',
-          close_date: rawGrant.closeDate || null,
-          funding_type: 'federal_grant',
-          award_max: rawGrant.awardCeiling || null,
-          regions: ['USA']
-        };
-        await retryWithBackoff(() => sdk.functions.invoke('processCrawledItem', { item: mappedItem }));
-        recordsProcessed++;
-      } catch (e) { log('error', 'Failed to process grant', { error: e.message }); }
-    }
-
-    if (logEntry) try { await sdk.entities.CrawlLog.update(logEntry.id, { status: 'completed', recordsFound: llmResponse.grants.length, recordsAdded: recordsProcessed }); } catch (e) {}
-    return { ok: true, result: { status: 'completed', found: llmResponse.grants.length, processed: recordsProcessed } };
-  } catch (error) {
-    if (logEntry) try { await sdk.entities.CrawlLog.update(logEntry.id, { status: 'failed', errorMessage: error.message }); } catch (e) {}
-    throw error;
-  }
-}
-
+// Crawl Grants.gov - Federal grants crawler
 Deno.serve(async (req) => {
-  const crawlId = crypto.randomUUID().slice(0, 8);
   try {
     const base44 = createClientFromRequest(req);
-    return Response.json(await runCrawler(base44.asServiceRole, crawlId), { status: 200 });
+    const sdk = base44.asServiceRole;
+
+    const prompt = `Search grants.gov for 20 most recent federal grants. Extract: opportunityNumber, title, agencyName, postedDate, closeDate, awardCeiling, awardFloor, description, eligibleApplicants, fundingCategory.`;
+
+    const llm = await sdk.integrations.Core.InvokeLLM({
+      prompt, add_context_from_internet: true,
+      response_json_schema: { type: "object", properties: { grants: { type: "array", items: { type: "object", properties: { opportunityNumber: { type: "string" }, title: { type: "string" }, agencyName: { type: "string" }, closeDate: { type: "string" } } } } } }
+    });
+
+    const grants = llm.grants || [];
+    let processed = 0;
+
+    for (const g of grants) {
+      if (!g.title) continue;
+      const item = {
+        source: 'grants_gov', source_id: g.opportunityNumber || `gg_${Date.now()}`, title: g.title,
+        sponsor: g.agencyName, url: `https://www.grants.gov/search-results-detail/${g.opportunityNumber}`,
+        description_raw: g.description || '', close_date: g.closeDate, funding_type: 'federal_grant', regions: ['USA']
+      };
+      await sdk.functions.invoke('processCrawledItem', { item });
+      processed++;
+    }
+
+    return Response.json({ ok: true, result: { status: 'completed', found: grants.length, processed } });
   } catch (error) {
-    return Response.json({ ok: false, error: error?.message ?? 'Crawler error' }, { status: 500 });
+    return Response.json({ ok: false, error: error.message }, { status: 500 });
   }
 });
