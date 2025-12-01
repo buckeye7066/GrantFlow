@@ -1,7 +1,7 @@
 // File: functions/_shared/phiAuditLogger.js
 // 
 // This file's actual content should be copied from the Base44 dashboard.
-// Go to: Dashboard → Code → Functions → _shared/phiAuditLogger.js
+// Go to: Dashboard â Code â Functions â _shared/phiAuditLogger.js
 // 
 // Note: This is a placeholder. To backup actual code:
 // 1. Copy the code from Base44 dashboard
