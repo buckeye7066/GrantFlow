@@ -1,0 +1,9 @@
+{
+  "issues": [
+    {
+      "file": "/workspaces/GrantFlow/scripts/rls_check.js",
+      "line": 26,
+      "snippet": "  const lines = content.split(/\\r?\\n/);\n  lines.forEach((line, idx) => {\n    if (line.includes('filter(') && line.includes('sdk.entities')) {\n      // heuristics - check if next lines include profile_id or organization_id\n      const snippet = lines.slice(Math.max(0, idx - 2), idx + 6).join('\\n');\n      // If the filter includes profile_id, organization_id, or other safe filters (lock_id, source_i"
+    }
+  ]
+}

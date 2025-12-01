@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.4';
+import { createSafeServer } from './_shared/safeHandler.js';
 
 const CONFIG = { MAX_RETRIES: 3, RETRY_DELAY_MS: 1000, MAX_DESCRIPTION_LENGTH: 2500, MIN_DESCRIPTION_FOR_AI: 100 };
 
@@ -25,7 +26,7 @@ function validateItem(item) {
   return { isValid: errors.length === 0, errors };
 }
 
-Deno.serve(async (req) => {
+createSafeServer(async (req) => {
   const requestId = crypto.randomUUID().slice(0, 8);
   try {
     let body = null;

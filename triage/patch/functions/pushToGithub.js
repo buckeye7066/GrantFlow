@@ -1,9 +1,8 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.4';
-import { createSafeServer } from './_shared/safeHandler.js';
 
 const GITHUB_API = 'https://api.github.com';
 
-createSafeServer(async (req) => {
+Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
     const user = await base44.auth.me();

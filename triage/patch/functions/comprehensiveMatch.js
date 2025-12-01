@@ -1,5 +1,4 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.4';
-import { createSafeServer } from './_shared/safeHandler.js';
 import {
   successResponse,
   errorResponse,
@@ -8,8 +7,7 @@ import {
   getStateAbbr,
   PROFILE_SECTIONS,
   extractSectionData,
-  safeCrawler,
-  extractAllProfileData
+  safeCrawler
 } from './_shared/crawlerFramework.js';
 
 // ============================================================================
@@ -86,13 +84,8 @@ function scoreOpportunityBySection(opp, profile) {
   const matchedSections = [];
   const allReasons = [];
   
-  const allProfileData = extractAllProfileData(profile);
-  // Prepare a global keyword set from all profile fields to increase recall
-  const profileText = Object.values(profile || {}).map(v => (typeof v === 'string' ? v : '')).join(' ').toLowerCase();
-  const globalKeywords = new Set((profileText.match(/\b[a-zA-Z0-9_\-]{3,}\b/g) || []).map(x => x.toLowerCase()));
-
   for (const sectionName of PROFILE_SECTIONS) {
-    const sectionData = allProfileData[sectionName] || extractSectionData(profile, sectionName);
+    const sectionData = extractSectionData(profile, sectionName);
     if (!sectionData) continue;
     
     const sectionKeywords = extractSectionKeywords(sectionName, sectionData);
@@ -104,15 +97,6 @@ function scoreOpportunityBySection(opp, profile) {
         sectionScore += 10;
         sectionReasons.push(keyword);
         if (sectionScore >= 30) break; // Cap per section
-      }
-    }
-
-    // Also check global keywords for the whole profile (not only section-specific)
-    // Minor boost for global matches
-    for (const kw of globalKeywords) {
-      if (kw.length <= 3) continue;
-      if (combined.includes(kw)) {
-        sectionScore += 1; // small boost per keyword match
       }
     }
     
@@ -130,7 +114,7 @@ function scoreOpportunityBySection(opp, profile) {
   };
 }
 
-createSafeServer(async (req) => {
+Deno.serve(async (req) => {
   const requestId = crypto.randomUUID().slice(0, 8);
   
   try {

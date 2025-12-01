@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.4';
+import { createSafeServer } from './_shared/safeHandler.js';
 
 const CONFIG = { MAX_RETRIES: 3, RETRY_DELAY_MS: 2000, BATCH_SIZE: 5, BATCH_DELAY_MS: 1000, CRAWLER_TIMEOUT_MS: 40000 };
 
@@ -79,7 +80,7 @@ async function runCrawler(sdk, crawlId) {
   }
 }
 
-Deno.serve(async (req) => {
+createSafeServer(async (req) => {
   const crawlId = crypto.randomUUID().slice(0, 8);
   try {
     const base44 = createClientFromRequest(req);

@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.7.1';
+import { createSafeServer } from './_shared/safeHandler.js';
 
 const ErrorCodes = {
   MISSING_REQUEST_BODY: 'MISSING_REQUEST_BODY',
@@ -37,7 +38,7 @@ function createErrorResponse(errorCode, message, details = {}, statusCode = 400)
   }), { status: statusCode, headers: { 'Content-Type': 'application/json' } });
 }
 
-Deno.serve(async (req) => {
+createSafeServer(async (req) => {
   const base44 = createClientFromRequest(req);
   const requestId = crypto.randomUUID();
   logSafe('info', 'Processing opportunity request started', { requestId });
