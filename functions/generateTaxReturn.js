@@ -1,38 +1,39 @@
-// NOTE: Very large file (963 lines) with IRS form generation - minified
-import { createClientFromRequest } from 'npm:@base44/sdk@0.7.1';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.4';
 
+// Generate Tax Return - Automated tax form generation
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
+    const sdk = base44.asServiceRole;
     const body = await req.json();
     const { organization_id, tax_year } = body;
     if (!organization_id || !tax_year) return Response.json({ error: 'organization_id and tax_year required' }, { status: 400 });
 
-    const organization = await base44.entities.Organization.get(organization_id);
-    const taxDocuments = await base44.entities.TaxDocument.filter({ organization_id, tax_year });
-    const taxProfiles = await base44.entities.TaxProfile.filter({ organization_id, tax_year });
-    const taxProfile = taxProfiles[0];
-    
-    if (!taxProfile) return Response.json({ error: 'Run tax analysis first' }, { status: 400 });
+    const organization = await sdk.entities.Organization.get(organization_id);
+    const taxDocs = await sdk.entities.TaxDocument.filter({ organization_id, tax_year });
+    const profiles = await sdk.entities.TaxProfile.filter({ organization_id, tax_year });
+    const profile = profiles[0];
+    if (!profile) return Response.json({ error: 'No tax analysis found. Run analysis first.' }, { status: 400 });
 
-    // Generate Form 1040 + all schedules
-    const w2Docs = taxDocuments.filter(d => d.document_type === 'w2');
-    const wages = w2Docs.reduce((sum, d) => sum + (d.amount || 0), 0);
+    const w2s = taxDocs.filter(d => d.document_type === 'w2');
+    const wages = w2s.reduce((s, d) => s + (d.amount || 0), 0);
+    const interest = taxDocs.filter(d => d.document_type === '1099_int').reduce((s, d) => s + (d.amount || 0), 0);
 
     const form1040 = {
-      first_name: organization.name?.split(' ')[0], last_name: organization.name?.split(' ').slice(1).join(' '),
+      first_name: organization.name.split(' ')[0], last_name: organization.name.split(' ').slice(1).join(' '),
       address: organization.address, city: organization.city, state: organization.state, zip: organization.zip,
-      filing_status: taxProfile.filing_status, line_1z: wages, line_9: wages, line_11: wages,
-      line_12: taxProfile.itemized_deductions || 0, line_34: taxProfile.estimated_refund || 0
+      filing_status: profile.filing_status, line_1z: wages, line_2b: interest, line_9: wages + interest,
+      line_11: wages + interest, line_34: profile.estimated_refund || 0
     };
 
-    // Generate PDF
-    const html = '<html><body><h1>Form 1040</h1><p>AGI: $' + wages + '</p></body></html>';
-    const file = new File([new TextEncoder().encode(html)], 'tax-return-' + tax_year + '.html', { type: 'text/html' });
-    const { file_uri } = await base44.integrations.Core.UploadPrivateFile({ file });
+    const html = `<html><body><h1>Form 1040 - ${tax_year}</h1><p>Name: ${form1040.first_name} ${form1040.last_name}</p><p>Wages: $${wages}</p><p>Refund: $${profile.estimated_refund}</p></body></html>`;
+    const blob = new TextEncoder().encode(html);
+    const file = new File([blob], `tax-return-${tax_year}.html`, { type: 'text/html' });
+    const { file_uri } = await sdk.integrations.Core.UploadPrivateFile({ file });
 
-    const returnData = { organization_id, tax_year, form_data: form1040, status: 'draft', generated_pdf_uri: file_uri };
-    const saved = await base44.entities.TaxReturn.create(returnData);
+    const returnData = { organization_id, tax_year, return_type: '1040', status: 'draft', form_data: form1040, refund_amount: profile.estimated_refund, generated_pdf_uri: file_uri };
+    const existing = await sdk.entities.TaxReturn.filter({ organization_id, tax_year });
+    const saved = existing[0] ? await sdk.entities.TaxReturn.update(existing[0].id, returnData) : await sdk.entities.TaxReturn.create(returnData);
 
     return Response.json({ success: true, tax_return: saved, pdf_uri: file_uri });
   } catch (error) {

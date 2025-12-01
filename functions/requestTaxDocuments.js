@@ -1,31 +1,28 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.7.1';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.4';
 
+// Request Tax Documents - Email requests to employers/banks for tax forms
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
-    const user = { id: 'public', email: 'public@grantflow.app', full_name: 'Public User' };
+    const sdk = base44.asServiceRole;
     const body = await req.json();
     const { organization_id, institution_name, institution_email, connection_type, tax_year } = body;
-    
-    if (!organization_id || !institution_name || !institution_email) {
-      return Response.json({ error: 'organization_id, institution_name, and institution_email required' }, { status: 400 });
-    }
+    if (!organization_id || !institution_name || !institution_email) return Response.json({ error: 'organization_id, institution_name, institution_email required' }, { status: 400 });
 
-    const organization = await base44.entities.Organization.get(organization_id);
-    const currentYear = tax_year || new Date().getFullYear();
+    const organization = await sdk.entities.Organization.get(organization_id);
+    const year = tax_year || new Date().getFullYear();
 
-    const connection = await base44.entities.TaxDocumentConnection.create({
+    const connection = await sdk.entities.TaxDocumentConnection.create({
       organization_id, connection_type, institution_name, institution_contact_email: institution_email,
       connection_method: 'email_request', connection_status: 'pending', email_sent_date: new Date().toISOString()
     });
 
-    await base44.integrations.Core.SendEmail({
-      from_name: 'GrantFlow Tax Center', to: institution_email,
-      subject: 'Tax Document Request - ' + connection_type + ' for ' + currentYear,
-      body: '<h2>Tax Document Request</h2><p>Dear ' + institution + ',</p><p>Requesting ' + connection_type + ' for ' + organization.name + ' for tax year ' + currentYear + '.</p><p>Send to: ' + user.email + '</p>'
-    });
+    const docType = connection_type === 'employer_w2' ? 'W-2' : connection_type.includes('1099') ? connection_type.replace('_', ' ').toUpperCase() : 'Tax Document';
+    const subject = `Tax Document Request - ${docType} for ${year}`;
+    const body_text = `Dear ${institution_name},\n\nI am requesting my ${docType} for tax year ${year}.\n\nName: ${organization.name}\nAddress: ${organization.address}, ${organization.city}, ${organization.state} ${organization.zip}\n\nPlease send to: ${organization.created_by}\n\nThank you,\n${organization.name}`;
 
-    return Response.json({ success: true, connection_id: connection.id, message: 'Document request sent to ' + institution_name });
+    await sdk.integrations.Core.SendEmail({ to: institution_email, subject, body: body_text });
+    return Response.json({ success: true, connection_id: connection.id, message: `Request sent to ${institution_name}` });
   } catch (error) {
     return Response.json({ error: error.message }, { status: 500 });
   }
