@@ -48,7 +48,8 @@ export function safeHandler(handler, options = {}) {
       return Response.json({ ok: true, error: null, data: result });
       
     } catch (error) {
-      console.error('[' + name + '][' + requestId + '] Handler error:', error?.message || error);
+      // Avoid logging full error stack or sensitive data - print only the error message and requestId.
+      console.error('[' + name + '][' + requestId + '] Handler error:', error?.message || String(error));
       return Response.json({ ok: false, error: error?.message || 'Unknown error', data: null }, { status: 500 });
     }
   };

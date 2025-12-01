@@ -155,7 +155,8 @@ Deno.serve(async (req) => {
       return Response.json(errorResponse('PROFILE_MISSING_STATE'), { status: 400 });
     }
     
-    console.log(`[${requestId}] Profile: ${profile.name}, State: ${profileStateAbbr}`);
+    // Avoid logging PHI (profile name). Log the profile id only.
+    console.log(`[${requestId}] ProfileID: ${profile.id}, State: ${profileStateAbbr}`);
     
     let opportunities = [];
     try {
@@ -184,7 +185,8 @@ Deno.serve(async (req) => {
     filtered = filtered.filter(opp => {
       const repaymentCheck = requiresRepayment(opp);
       if (repaymentCheck.requires) {
-        console.log(`[${requestId}] REPAYMENT_REJECT: "${opp.title?.slice(0,40)}"`);
+        // Avoid logging full title text, may contain sensitive info; log the opportunity id.
+        console.log(`[${requestId}] REPAYMENT_REJECT: id=${opp.id}`);
         return false;
       }
       return true;
