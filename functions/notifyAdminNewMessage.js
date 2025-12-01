@@ -11,11 +11,11 @@ Deno.serve(async (req) => {
     if (!messages?.length) return Response.json({ error: 'Message not found' }, { status: 404 });
 
     const message = messages[0];
-
     await base44.integrations.Core.SendEmail({
-      from_name: 'GrantFlow', to: 'buckeye7066@gmail.com',
-      subject: 'New Message: ' + message.subject,
-      body: 'From: ' + message.from_user_name + ' (' + message.from_user_email + ')\n\nMessage:\n' + message.message
+      from_name: 'GrantFlow',
+      to: 'buckeye7066@gmail.com',
+      subject: `New Message: ${message.subject}`,
+      body: `From: ${message.from_user_name} (${message.from_user_email})\nType: ${message.message_type}\n\n${message.message}`
     });
 
     return Response.json({ success: true });
