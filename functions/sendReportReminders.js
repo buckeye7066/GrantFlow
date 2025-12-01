@@ -1,42 +1,40 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.4';
 
+// Send Report Reminders - Scheduled job for deadline notifications
 Deno.serve(async (req) => {
   try {
     const sdk = createClientFromRequest(req).asServiceRole;
     const today = new Date();
-    
+
     const allReports = await sdk.entities.ComplianceReport.filter({ status: { $in: ['scheduled', 'draft'] } });
     if (allReports.length === 0) return Response.json({ success: true, message: 'No pending reports', reminders_sent: 0 });
 
-    const results = [];
+    const thresholds = [30, 14, 7, 3, 1];
+    let sent = 0, skipped = 0;
+
     for (const report of allReports) {
-      const due = new Date(report.due_date);
-      const daysUntil = Math.ceil((due - today) / (1000 * 60 * 60 * 24));
-      
-      if ([30, 14, 7, 3, 1].includes(daysUntil) || daysUntil < 0) {
-        const [grant, organization] = await Promise.all([
-          sdk.entities.Grant.get(report.grant_id),
-          sdk.entities.Organization.get(report.organization_id)
-        ]);
-        
-        if (grant && organization && organization.created_by) {
-          try {
-            await sdk.integrations.Core.SendEmail({
-              to: organization.created_by,
-              subject: (daysUntil < 0 ? '🚨 OVERDUE' : '📅') + ' Report: ' + grant.title,
-              body: 'Report due in ' + daysUntil + ' days for grant: ' + grant.title
-            });
-            await sdk.entities.ComplianceReport.update(report.id, { reminder_sent: true, reminder_sent_date: new Date().toISOString() });
-            results.push({ sent: true, reportId: report.id, daysUntil });
-          } catch (e) {
-            results.push({ success: false, reportId: report.id });
-          }
-        }
-      }
+      const dueDate = new Date(report.due_date);
+      const daysUntil = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
+      const isThreshold = thresholds.includes(daysUntil) || daysUntil < 0;
+
+      if (!isThreshold) { skipped++; continue; }
+      if (report.reminder_sent_date && new Date(report.reminder_sent_date).toDateString() === today.toDateString()) { skipped++; continue; }
+
+      const grant = await sdk.entities.Grant.get(report.grant_id);
+      const org = await sdk.entities.Organization.get(report.organization_id);
+      if (!grant || !org) continue;
+
+      const urgency = daysUntil < 0 ? '🚨 OVERDUE' : daysUntil <= 3 ? '⚠️ URGENT' : '📅 Reminder';
+      const subject = `${urgency}: ${grant.title} - ${report.report_type.toUpperCase()} Report`;
+      const body = `Report for ${grant.title} is due ${daysUntil < 0 ? Math.abs(daysUntil) + ' days ago' : 'in ' + daysUntil + ' days'}. Log in to GrantFlow to submit.`;
+
+      await sdk.integrations.Core.SendEmail({ to: org.created_by, subject, body });
+      await sdk.entities.ComplianceReport.update(report.id, { reminder_sent: true, reminder_sent_date: today.toISOString() });
+      sent++;
     }
 
-    return Response.json({ success: true, total_pending: allReports.length, reminders_sent: results.filter(r => r.sent).length, results });
+    return Response.json({ success: true, total_pending: allReports.length, reminders_sent: sent, reminders_skipped: skipped });
   } catch (error) {
-    return Response.json({ success: false, error: { code: 'UNEXPECTED_ERROR', message: error.message } }, { status: 500 });
+    return Response.json({ success: false, error: error.message }, { status: 500 });
   }
 });

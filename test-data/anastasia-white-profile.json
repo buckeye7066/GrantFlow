@@ -1,0 +1,76 @@
+{
+  "id": "68ef395ec773e81a37ff4930",
+  "name": "Anastasia White",
+  "applicant_type": "high_school_student",
+  "email": "tishka1201@icloud.com",
+  "phone": "4234752124",
+  "date_of_birth": "2008-07-19",
+  "address": "3940 Eveningside Dr. NE",
+  "city": "Cleveland",
+  "state": "TN",
+  "zip": "37312",
+  "pro_bono": true,
+  "gpa": 3.81,
+  "intended_major": "Forensic Science",
+  "current_college": null,
+  "target_colleges": [
+    "Lee University",
+    "University of Tennessee at Chattanooga",
+    "Tennessee Tech University",
+    "Middle Tennessee State University"
+  ],
+  "first_generation": true,
+  "household_income": 65000,
+  "household_size": 4,
+  "low_income": false,
+  "mission": "Aspiring forensic scientist with a strong passion for criminal justice and crime scene investigation. Dedicated high school senior seeking scholarship opportunities to pursue an undergraduate degree in forensic science.",
+  "focus_areas": [
+    "Forensic Science",
+    "Criminal Justice",
+    "DNA Analysis",
+    "Crime Scene Investigation",
+    "Biology",
+    "Chemistry"
+  ],
+  "keywords": [
+    "forensic science",
+    "criminal justice",
+    "DNA analysis",
+    "crime scene investigation",
+    "high school senior",
+    "scholarship",
+    "STEM",
+    "biology",
+    "chemistry"
+  ],
+  "extracurricular_activities": [
+    "Marching Band - Section Leader",
+    "Crochet Club - President",
+    "Sign Language Club - President",
+    "National Honor Society",
+    "Science Club"
+  ],
+  "honor_societies": [
+    "National Honor Society"
+  ],
+  "community_service_hours": 150,
+  "race_ethnicity": [
+    "White",
+    "Eastern European"
+  ],
+  "immigration_status": "us_citizen",
+  "russian_heritage": true,
+  "multilingual": true,
+  "languages_spoken": [
+    "English",
+    "Russian"
+  ],
+  "student_qualifiers": [
+    "first_generation",
+    "multilingual",
+    "stem_focused",
+    "community_leader"
+  ],
+  "planned_enrollment_term": "fall",
+  "planned_enrollment_year": 2026
+}
