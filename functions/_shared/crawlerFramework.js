@@ -25,6 +25,8 @@ export const SECTION_FIELDS = {
   interests: ['focus_areas', 'program_areas', 'keywords'],
   household: ['household_size', 'single_parent', 'caregiver'],
   goals: ['primary_goal', 'goals', 'funding_need']
+  ,
+  extra_fields: []
 };
 
 export function filterRepaymentOpportunities(opportunities) {

@@ -11,6 +11,7 @@ import {
   safeCrawler,
   extractAllProfileData
 } from './_shared/crawlerFramework.js';
+import { buildProfileKeywordMap, scoreOpportunity } from './_shared/profileMatchingEngine.js';
 
 // ============================================================================
 // COMPREHENSIVE MATCH - Section-Sequential AI-Enhanced Matching
@@ -77,58 +78,7 @@ function extractSectionKeywords(sectionName, sectionData) {
   return keywords.map(k => k.toLowerCase());
 }
 
-function scoreOpportunityBySection(opp, profile) {
-  const text = `${opp.title || ''} ${opp.descriptionMd || ''} ${opp.sponsor || ''}`.toLowerCase();
-  const eligibility = (opp.eligibilityBullets || []).join(' ').toLowerCase();
-  const combined = `${text} ${eligibility}`;
-  
-  let totalScore = 50; // Base score
-  const matchedSections = [];
-  const allReasons = [];
-  
-  const allProfileData = extractAllProfileData(profile);
-  // Prepare a global keyword set from all profile fields to increase recall
-  const profileText = Object.values(profile || {}).map(v => (typeof v === 'string' ? v : '')).join(' ').toLowerCase();
-  const globalKeywords = new Set((profileText.match(/\b[a-zA-Z0-9_\-]{3,}\b/g) || []).map(x => x.toLowerCase()));
-
-  for (const sectionName of PROFILE_SECTIONS) {
-    const sectionData = allProfileData[sectionName] || extractSectionData(profile, sectionName);
-    if (!sectionData) continue;
-    
-    const sectionKeywords = extractSectionKeywords(sectionName, sectionData);
-    let sectionScore = 0;
-    const sectionReasons = [];
-    
-    for (const keyword of sectionKeywords) {
-      if (combined.includes(keyword)) {
-        sectionScore += 10;
-        sectionReasons.push(keyword);
-        if (sectionScore >= 30) break; // Cap per section
-      }
-    }
-
-    // Also check global keywords for the whole profile (not only section-specific)
-    // Minor boost for global matches
-    for (const kw of globalKeywords) {
-      if (kw.length <= 3) continue;
-      if (combined.includes(kw)) {
-        sectionScore += 1; // small boost per keyword match
-      }
-    }
-    
-    if (sectionScore > 0) {
-      totalScore += sectionScore;
-      matchedSections.push(sectionName);
-      allReasons.push(`${sectionName}: ${sectionReasons.join(', ')}`);
-    }
-  }
-  
-  return {
-    score: Math.min(totalScore, 100),
-    matchedSections,
-    reasons: allReasons
-  };
-}
+// use profileMatchingEngine.scoreOpportunity (scoreOpportunity) instead of local function for unified matching
 
 createSafeServer(async (req) => {
   const requestId = crypto.randomUUID().slice(0, 8);
@@ -213,7 +163,7 @@ createSafeServer(async (req) => {
     console.log(`[${requestId}] After active filter: ${filtered.length}`);
     
     const scoredResults = filtered.map(opp => {
-      const { score, matchedSections, reasons } = scoreOpportunityBySection(opp, profile);
+      const { score, matchedSections, reasons } = scoreOpportunity(opp, profile, { weights: { sectionWeight: 10, extraFieldWeight: 1, globalKeywordBoost: 1 } });
       
       return {
         ...opp,

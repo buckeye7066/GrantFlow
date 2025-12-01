@@ -1,13 +1,37 @@
-# REPAIR REPORT - Mon Dec  1 04:46:24 UTC 2025
+# REPAIR REPORT - Mon Dec  1 04:58:01 UTC 2025
 Base ref: origin/main
 - .github/ISSUE_TEMPLATE/bug_report.md
   - Diff stat:  1 file changed, 51 insertions(+)
+- FIXED_FILES.json
+  - Diff stat:  1 file changed, 156 insertions(+)
+- FULL_REPAIRED_REPO.zip
+  - Diff stat:  1 file changed, 0 insertions(+), 0 deletions(-)
+- REPAIR_REPORT.md
+  - Diff stat:  1 file changed, 319 insertions(+)
+- functions/_shared/crawlerFramework.js
+  - Diff stat:  1 file changed, 68 insertions(+), 1 deletion(-)
 - functions/_shared/safeHandler.js
   - Diff stat:  1 file changed, 2 insertions(+), 1 deletion(-)
+- functions/analyzeTaxSituation.js
+  - Diff stat:  1 file changed, 35 deletions(-)
+- functions/autoDiscoverSources.js
+  - Diff stat:  1 file changed, 44 deletions(-)
+- functions/autoFillApplicationForm.js
+  - Diff stat:  1 file changed, 32 deletions(-)
+- functions/autoGenerateBulkOutreach.js
+  - Diff stat:  1 file changed, 57 deletions(-)
+- functions/checkApplicationCompliance.js
+  - Diff stat:  1 file changed, 32 deletions(-)
 - functions/checkGrantAlerts.js
   - Diff stat:  1 file changed, 47 deletions(-)
 - functions/comprehensiveMatch.js
-  - Diff stat:  1 file changed, 4 insertions(+), 2 deletions(-)
+  - Diff stat:  1 file changed, 23 insertions(+), 5 deletions(-)
+- functions/crawlBenefitsGov.js
+  - Diff stat:  1 file changed, 2 insertions(+), 1 deletion(-)
+- functions/crawlDSIRE.js
+  - Diff stat:  1 file changed, 2 insertions(+), 1 deletion(-)
+- functions/crawlGrantsGov.js
+  - Diff stat:  1 file changed, 2 insertions(+), 1 deletion(-)
 - functions/crawlIrs990.js
   - Diff stat:  1 file changed, 50 deletions(-)
 - functions/crawlLeeUniversity.js
@@ -16,36 +40,80 @@ Base ref: origin/main
   - Diff stat:  1 file changed, 33 deletions(-)
 - functions/crawlWebsite.js
   - Diff stat:  1 file changed, 59 deletions(-)
+- functions/deleteOrganizationWithCascade.js
+  - Diff stat:  1 file changed, 67 deletions(-)
+- functions/deleteSourceWithCascade.js
+  - Diff stat:  1 file changed, 41 deletions(-)
 - functions/discoverECFServices.js
   - Diff stat:  1 file changed, 46 deletions(-)
 - functions/discoverLocalSources.js
   - Diff stat:  1 file changed, 20 deletions(-)
+- functions/enrichProfileForSearch.js
+  - Diff stat:  1 file changed, 30 deletions(-)
+- functions/exportForTaxSoftware.js
+  - Diff stat:  1 file changed, 35 deletions(-)
+- functions/generateGrantProposal.js
+  - Diff stat:  1 file changed, 32 deletions(-)
+- functions/generateOutreachMessage.js
+  - Diff stat:  1 file changed, 32 deletions(-)
 - functions/generateReport.js
   - Diff stat:  1 file changed, 43 deletions(-)
+- functions/generateTaxReturn.js
+  - Diff stat:  1 file changed, 41 deletions(-)
+- functions/getBackgroundJobStatus.js
+  - Diff stat:  1 file changed, 20 deletions(-)
 - functions/getSearchJob.js
   - Diff stat:  1 file changed, 23 deletions(-)
+- functions/matchGrantsForOrganization.js
+  - Diff stat:  1 file changed, 43 deletions(-)
 - functions/parseNOFO.js
   - Diff stat:  1 file changed, 53 deletions(-)
+- functions/processCrawledItem.js
+  - Diff stat:  1 file changed, 2 insertions(+), 1 deletion(-)
 - functions/processDocumentForFacts.js
   - Diff stat:  1 file changed, 34 deletions(-)
 - functions/processFoundation.js
   - Diff stat:  1 file changed, 55 deletions(-)
+- functions/processOpportunity.js
+  - Diff stat:  1 file changed, 2 insertions(+), 1 deletion(-)
 - functions/processScannedApplication.js
+  - Diff stat:  1 file changed, 32 deletions(-)
+- functions/pushToGithub.js
+  - Diff stat:  1 file changed, 2 insertions(+), 1 deletion(-)
+- functions/queueCrawl.js
+  - Diff stat:  1 file changed, 2 insertions(+), 1 deletion(-)
+- functions/requestTaxDocuments.js
   - Diff stat:  1 file changed, 32 deletions(-)
 - functions/runAutomatedDiscovery.js
   - Diff stat:  1 file changed, 65 deletions(-)
+- functions/runBackgroundAutoAdvance.js
+  - Diff stat:  1 file changed, 48 deletions(-)
+- functions/runGrantBackfill.js
+  - Diff stat:  1 file changed, 57 deletions(-)
 - functions/runPartnerFeed.js
   - Diff stat:  1 file changed, 74 deletions(-)
 - functions/runVerification.js
   - Diff stat:  1 file changed, 76 deletions(-)
 - functions/scheduledCrawl.js
   - Diff stat:  1 file changed, 39 deletions(-)
+- functions/searchForItem.js
+  - Diff stat:  1 file changed, 27 deletions(-)
 - functions/searchForSource.js
   - Diff stat:  1 file changed, 23 deletions(-)
 - functions/sendInvoice.js
   - Diff stat:  1 file changed, 53 deletions(-)
 - functions/sendReportReminders.js
   - Diff stat:  1 file changed, 42 deletions(-)
+- functions/suggestDocumentsForGrant.js
+  - Diff stat:  1 file changed, 34 deletions(-)
+- functions/suggestGrantKeywords.js
+  - Diff stat:  1 file changed, 29 deletions(-)
+- scripts/generate_repair_report.sh
+  - Diff stat:  1 file changed, 62 insertions(+)
+- scripts/repo_scan.js
+  - Diff stat:  1 file changed, 153 insertions(+)
+- scripts/rls_check.js
+  - Diff stat:  1 file changed, 44 insertions(+)
 - triage/README.md
   - Diff stat:  1 file changed, 21 insertions(+)
 - triage/analysis_20251201T042414Z.md
@@ -60,6 +128,18 @@ Base ref: origin/main
   - Diff stat:  1 file changed, 34 insertions(+)
 - triage/cleanup_placeholders.sh
   - Diff stat:  1 file changed, 34 insertions(+)
+- triage/patch/functions/_shared/atomicLock.js
+  - Diff stat:  1 file changed, 142 insertions(+)
+- triage/patch/functions/_shared/cosineSimilarity.js
+  - Diff stat:  1 file changed, 51 insertions(+)
+- triage/patch/functions/_shared/crawlerFramework.js
+  - Diff stat:  1 file changed, 229 insertions(+)
+- triage/patch/functions/_shared/safeHandler.js
+  - Diff stat:  1 file changed, 67 insertions(+)
+- triage/patch/functions/comprehensiveMatch.js
+  - Diff stat:  1 file changed, 250 insertions(+)
+- triage/patch/functions/pushToGithub.js
+  - Diff stat:  1 file changed, 169 insertions(+)
 - triage/patch_20251201T042448Z.zip
   - Diff stat:  1 file changed, 0 insertions(+), 0 deletions(-)
 - triage/patch_20251201T042857Z.zip
@@ -308,8 +388,14 @@ Base ref: origin/main
   - Diff stat:  1 file changed, 8 insertions(+)
 - triage/prepare_patch.sh
   - Diff stat:  1 file changed, 51 insertions(+)
+- triage/rls_report.json
+  - Diff stat:  1 file changed, 9 insertions(+)
 - triage/run_diagnostics.sh
   - Diff stat:  1 file changed, 175 insertions(+)
+- triage/scan_report.json
+  - Diff stat:  1 file changed, 6 insertions(+)
+- triage/triage_report.md
+  - Diff stat:  1 file changed, 11 insertions(+)
 
 ## Summary
 - Files changed: ${NB_CHANGED}
