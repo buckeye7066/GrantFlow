@@ -1,4 +1,3 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.4';
 import { getSafeSDK, assertNotUserSuppliedAuthId, enforceOwnership } from './_shared/security.js';
 import { resolveGrantId } from './_utils/resolveEntityId.js';
 
@@ -23,12 +22,52 @@ Deno.serve(async (req) => {
       sdk.entities.Milestone.filter({ grant_id })
     ]);
 
+    const kpiSummary = (kpis ?? [])
+      .map((kpi) => {
+        const label = kpi.metric ?? kpi.name ?? `KPI ${kpi.id}`;
+        const current = kpi.current_value ?? kpi.value ?? kpi.status ?? 'n/a';
+        return `${label}: ${current}`;
+      })
+      .slice(0, 10)
+      .join('\n');
+
+    const expenseSummary = (expenses ?? [])
+      .map((expense) => {
+        const category = expense.category ?? expense.type ?? 'Expense';
+        const amount = expense.amount ?? expense.total ?? 'n/a';
+        return `${category}: ${amount}`;
+      })
+      .slice(0, 10)
+      .join('\n');
+
+    const milestoneSummary = (milestones ?? [])
+      .map((milestone) => {
+        const name = milestone.name ?? milestone.title ?? `Milestone ${milestone.id}`;
+        const status = milestone.status ?? milestone.state ?? 'unknown';
+        const date = milestone.completed_at ?? milestone.due_date ?? milestone.target_date ?? '';
+        return `${name}: ${status}${date ? ` (${date})` : ''}`;
+      })
+      .slice(0, 10)
+      .join('\n');
+
+    const analysisContext = [
+      `Grant: ${grant.title}`,
+      `Organization: ${organization.name}`,
+      grant.award_amount ? `Award Amount: ${grant.award_amount}` : null,
+      grant.status ? `Grant Status: ${grant.status}` : null,
+      kpiSummary ? `KPIs:\n${kpiSummary}` : null,
+      expenseSummary ? `Expenses:\n${expenseSummary}` : null,
+      milestoneSummary ? `Milestones:\n${milestoneSummary}` : null
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+
     const sectionsToGenerate = sections || ['executive_summary', 'activities_summary', 'progress_toward_goals', 'financial_summary', 'challenges_and_solutions', 'next_steps'];
     const reportSections = {};
     
     for (const section of sectionsToGenerate) {
       const response = await sdk.integrations.Core.InvokeLLM({
-        prompt: `Generate ${section} for grant: ${grant.title}, org: ${organization.name}`,
+        prompt: `Generate the ${section} section for the compliance report.\n\n${analysisContext}`,
         add_context_from_internet: false
       });
       reportSections[section] = response;

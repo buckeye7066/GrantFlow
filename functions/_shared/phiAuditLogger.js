@@ -1,8 +1,42 @@
-// File: functions/_shared/phiAuditLogger.js
-// 
-// This file's actual content should be copied from the Base44 dashboard.
-// Go to: Dashboard ÃÂ¢ÃÂÃÂ Code ÃÂ¢ÃÂÃÂ Functions ÃÂ¢ÃÂÃÂ _shared/phiAuditLogger.js
-// 
-// Note: This is a placeholder. To backup actual code:
-// 1. Copy the code from Base44 dashboard
-// 2. Or use the AI assistant: "Show me the code for functions/_shared/phiAuditLogger.js"
+function buildAuditPayload(event = {}) {
+  const {
+    action = 'access',
+    entity = 'unknown',
+    entity_id = null,
+    function_name = 'unspecified',
+    metadata = {}
+  } = event;
+
+  return {
+    action,
+    entity,
+    entity_id,
+    function_name,
+    metadata,
+    occurred_at: new Date().toISOString()
+  };
+}
+
+export async function logPHIAccess(sdk, event) {
+  if (!sdk?.entities) return;
+
+  const payload = buildAuditPayload(event);
+  const targets = [
+    ['PHIAuditLog', { severity: 'information' }],
+    ['AuditLog', { category: 'phi' }]
+  ];
+
+  for (const [entityName, defaults] of targets) {
+    const entity = sdk.entities[entityName];
+    if (!entity?.create) continue;
+
+    try {
+      await entity.create({ ...defaults, ...payload });
+      return;
+    } catch (error) {
+      console.warn(`Failed to log PHI access to ${entityName}:`, error.message);
+    }
+  }
+
+  console.warn('PHI audit entity not available. Event:', payload);
+}
