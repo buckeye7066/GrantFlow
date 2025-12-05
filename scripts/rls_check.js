@@ -27,7 +27,7 @@ for (const f of files) {
       // heuristics - check if next lines include profile_id or organization_id
       const snippet = lines.slice(Math.max(0, idx - 2), idx + 6).join('\n');
       // If the filter includes profile_id, organization_id, or other safe filters (lock_id, source_id), skip
-      if (!/profile_id\s*:/g.test(snippet) && !/organization_id\s*:/g.test(snippet) && !/lock_id\s*:/g.test(snippet) && !/source_id\s*:/g.test(snippet) && !/source\s*:/g.test(snippet)) {
+      if (!/(profile_id|organization_id|lock_id|source_id|source)\s*:/g.test(snippet)) {
         issues.push({ file: f, line: idx + 1, snippet: snippet.substring(0, 400) });
       }
     }

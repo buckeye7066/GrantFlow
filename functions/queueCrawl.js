@@ -12,7 +12,7 @@ const ADAPTER_MAP = {
 };
 
 function log(level, message, ctx = {}) {
-  console.log('[' + new Date().toISOString() + '] [' + level.toUpperCase() + '] [queueCrawl] ' + message, Object.keys(ctx).length > 0 ? JSON.stringify(ctx) : '');
+  console.log(`[${new Date().toISOString()}] [${level.toUpperCase()}] [queueCrawl] ${message}`, Object.keys(ctx).length > 0 ? JSON.stringify(ctx) : '');
 }
 
 async function retryWithBackoff(fn, maxRetries = CONFIG.MAX_RETRIES) {
