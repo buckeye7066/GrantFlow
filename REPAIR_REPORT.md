@@ -1,0 +1,319 @@
+# REPAIR REPORT - Mon Dec  1 04:46:24 UTC 2025
+Base ref: origin/main
+- .github/ISSUE_TEMPLATE/bug_report.md
+  - Diff stat:  1 file changed, 51 insertions(+)
+- functions/_shared/safeHandler.js
+  - Diff stat:  1 file changed, 2 insertions(+), 1 deletion(-)
+- functions/checkGrantAlerts.js
+  - Diff stat:  1 file changed, 47 deletions(-)
+- functions/comprehensiveMatch.js
+  - Diff stat:  1 file changed, 4 insertions(+), 2 deletions(-)
+- functions/crawlIrs990.js
+  - Diff stat:  1 file changed, 50 deletions(-)
+- functions/crawlLeeUniversity.js
+  - Diff stat:  1 file changed, 28 deletions(-)
+- functions/crawlSourceDirectory.js
+  - Diff stat:  1 file changed, 33 deletions(-)
+- functions/crawlWebsite.js
+  - Diff stat:  1 file changed, 59 deletions(-)
+- functions/discoverECFServices.js
+  - Diff stat:  1 file changed, 46 deletions(-)
+- functions/discoverLocalSources.js
+  - Diff stat:  1 file changed, 20 deletions(-)
+- functions/generateReport.js
+  - Diff stat:  1 file changed, 43 deletions(-)
+- functions/getSearchJob.js
+  - Diff stat:  1 file changed, 23 deletions(-)
+- functions/parseNOFO.js
+  - Diff stat:  1 file changed, 53 deletions(-)
+- functions/processDocumentForFacts.js
+  - Diff stat:  1 file changed, 34 deletions(-)
+- functions/processFoundation.js
+  - Diff stat:  1 file changed, 55 deletions(-)
+- functions/processScannedApplication.js
+  - Diff stat:  1 file changed, 32 deletions(-)
+- functions/runAutomatedDiscovery.js
+  - Diff stat:  1 file changed, 65 deletions(-)
+- functions/runPartnerFeed.js
+  - Diff stat:  1 file changed, 74 deletions(-)
+- functions/runVerification.js
+  - Diff stat:  1 file changed, 76 deletions(-)
+- functions/scheduledCrawl.js
+  - Diff stat:  1 file changed, 39 deletions(-)
+- functions/searchForSource.js
+  - Diff stat:  1 file changed, 23 deletions(-)
+- functions/sendInvoice.js
+  - Diff stat:  1 file changed, 53 deletions(-)
+- functions/sendReportReminders.js
+  - Diff stat:  1 file changed, 42 deletions(-)
+- triage/README.md
+  - Diff stat:  1 file changed, 21 insertions(+)
+- triage/analysis_20251201T042414Z.md
+  - Diff stat:  1 file changed, 13 insertions(+)
+- triage/analysis_20251201T042448Z.md
+  - Diff stat:  1 file changed, 85 insertions(+)
+- triage/analysis_20251201T042856Z.md
+  - Diff stat:  1 file changed, 14 insertions(+)
+- triage/analysis_20251201T042940Z.md
+  - Diff stat:  1 file changed, 39 insertions(+)
+- triage/bug_fix_template.md
+  - Diff stat:  1 file changed, 34 insertions(+)
+- triage/cleanup_placeholders.sh
+  - Diff stat:  1 file changed, 34 insertions(+)
+- triage/patch_20251201T042448Z.zip
+  - Diff stat:  1 file changed, 0 insertions(+), 0 deletions(-)
+- triage/patch_20251201T042857Z.zip
+  - Diff stat:  1 file changed, 0 insertions(+), 0 deletions(-)
+- triage/patch_20251201T042941Z.zip
+  - Diff stat:  1 file changed, 0 insertions(+), 0 deletions(-)
+- triage/placeholder_backup/functions/_shared/adminGuard.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/_shared/authGuard.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/_shared/buildNormalizedProfile.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/_shared/crawlerStability.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/_shared/env.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/_shared/parseProfileNarratives.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/_shared/phiAuditLogger.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/_shared/pipelineIsolation.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/_shared/processingQueue.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/_shared/profileIsolation.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/_shared/profileMatchingEngine.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/_shared/profileSignature.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/_shared/redactSensitiveProfileFields.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/_shared/rlsSafeSDK.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/_shared/safety.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/_shared/saveFundingSource.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/_shared/security.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/_shared/strictProfileValidator.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/_utils/resolveEntityId.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/aiGrantMatcher.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/analyze2grant.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/analyzeGrant.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/analyzeProjectOutcomes.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/analyzeProposal.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/analyzeTaxSituation.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/autoCreateLead.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/autoDiscoverSources.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/autoFillApplicationForm.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/autoGenerateBulkOutreach.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/autoMonitor.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/backgroundWorker.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/buildDependencyGraph.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/checkApplicationAvailability.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/checkApplicationCompliance.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/checkGrantAlerts.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/checkPendingApplications.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/crawlCLSFM.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/crawlECFChoices.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/crawlIrs990.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/crawlLeeUniversity.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/crawlSourceDirectory.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/crawlUniversityScholarships.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/crawlWebsite.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/createLead.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/deleteLead.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/deleteOrganizationWithCascade.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/deleteSourceWithCascade.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/deleteUser.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/discoverECFServices.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/discoverECFSources.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/discoverLocalSources.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/discoverStudentSources.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/enqueueGrant.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/enrichProfileForSearch.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/exportForTaxSoftware.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/findAllFunctions.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/generateApplicationResponse.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/generateGrantProposal.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/generateOutreachMessage.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/generateProgressReport.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/generateProposalSection.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/generateReport.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/generateTaxReturn.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/getAIRecommendations.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/getActivities.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/getAllFunctionCodes.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/getBackgroundJobStatus.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/getFunctionCode.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/getFunctionDetails.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/getFunctionInfluenceMap.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/getLead.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/getLeadActivities.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/getLeads.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/getSearchJob.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/getSuggestedEnhancements.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/getUserList.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/matchFunderToProfile.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/matchGrantsForOrganization.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/matchProfileToGrants.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/notifyAdminNewMessage.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/notifyAdminNewUser.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/parseFunderWebsite.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/parseNOFO.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/prepareGrantSubmission.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/processApplicationEmail.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/processDocumentForFacts.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/processFoundation.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/processScannedApplication.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/processSingleGrant.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/publicApplicationForm.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/refineGrantText.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/refineProposalText.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/requestTaxDocuments.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/runAutomatedDiscovery.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/runBackgroundAutoAdvance.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/runBatchAutomation.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/runGrantBackfill.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/runPartnerFeed.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/runSmartAutomation.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/runVerification.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/scheduledCrawl.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/searchForItem.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/searchForSource.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/searchOpportunities.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/sendDeadlineAlerts.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/sendEmailResend.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/sendInvoice.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/sendReportReminders.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/simulatePipelineRunDebug.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/submitGrant.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/submitPublicApplication.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/suggestDocumentsForGrant.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/suggestGrantKeywords.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/suggestProposalKeywords.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/testAllFunctions.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/testFileSystemAPI.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/testSharedModules.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/updateLead.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/validatePipelineAdvancement.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/placeholder_backup/functions/verifyProfileIsolation.js
+  - Diff stat:  1 file changed, 8 insertions(+)
+- triage/prepare_patch.sh
+  - Diff stat:  1 file changed, 51 insertions(+)
+- triage/run_diagnostics.sh
+  - Diff stat:  1 file changed, 175 insertions(+)
+
+## Summary
+- Files changed: ${NB_CHANGED}
+
+## Next steps
+- Validate the changes in a staging environment.
+- Deploy and confirm webserver behavior.
