@@ -65,6 +65,65 @@ export function extractSectionData(profile, section) {
   return out;
 }
 
+// Return a flat list of all keys present in the profile
+export function getProfileKeys(profile) {
+  if (!profile || typeof profile !== 'object') return [];
+  const keys = new Set();
+  function walk(obj, prefix = '') {
+    Object.keys(obj || {}).forEach(k => {
+      const v = obj[k];
+      const name = prefix ? `${prefix}.${k}` : k;
+      keys.add(name);
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        walk(v, name);
+      }
+    });
+  }
+  walk(profile);
+  return Array.from(keys);
+}
+
+export async function auditUnmappedProfileKeys(sdk, { profile, profileId, crawlerName, requestId, sampleLimit = 10 }) {
+  try {
+    const allMappedKeys = new Set();
+    for (const section of Object.keys(SECTION_FIELDS)) {
+      for (const k of (SECTION_FIELDS[section] || [])) allMappedKeys.add(k);
+    }
+    const profileKeys = getProfileKeys(profile);
+    const unmapped = profileKeys.filter(k => ![...allMappedKeys].some(mk => k === mk || k.startsWith(mk + '.') || mk.startsWith(k + '.')));
+    if (unmapped.length === 0) return { unmappedCount: 0, unmapped: [] };
+
+    // Log a short summary to CrawlLog
+    await sdk.entities.CrawlLog.create({
+      source: crawlerName,
+      status: 'audit',
+      results_count: 0,
+      profile_id: profileId,
+      data: { unmapped_count: unmapped.length, sample: unmapped.slice(0, sampleLimit) }
+    });
+    console.log(`[${crawlerName}:${requestId}] Found ${unmapped.length} unmapped profile keys, sample: ${unmapped.slice(0, sampleLimit).join(', ')}`);
+    return { unmappedCount: unmapped.length, unmappedSample: unmapped.slice(0, sampleLimit) };
+  } catch (err) {
+    console.warn(`[${crawlerName}:audit] Audit failed: ${err?.message || err}`);
+    return { unmappedCount: 0, unmapped: [] };
+  }
+}
+
+export function extractAllProfileData(profile) {
+  const out = {};
+  for (const section of PROFILE_SECTIONS) {
+    out[section] = extractSectionData(profile, section);
+  }
+  // include other top-level profile fields not part of sections
+  const profileKeys = getProfileKeys(profile);
+  for (const k of profileKeys) {
+    if (!Object.values(SECTION_FIELDS).flat().includes(k.split('.')[0])) {
+      out[k] = profile[k];
+    }
+  }
+  return out;
+}
+
 export async function safeCrawlerWrapper(sdk, {
   crawlerName,
   profile,
@@ -77,7 +136,15 @@ export async function safeCrawlerWrapper(sdk, {
   const requestId = randomUUID().slice(0, 8);
   const start = Date.now();
 
-  console.log(\`[\${crawlerName}:\${requestId}] Starting crawl for profile \${profileId}\`);
+    console.log(`[${crawlerName}:${requestId}] Starting crawl for profile ${profileId}`);
+    // Audit unmapped profile keys to surface fields that are not yet included in SECTION_FIELDS
+    try {
+      if (sdk && typeof auditUnmappedProfileKeys === 'function') {
+        await auditUnmappedProfileKeys(sdk, { profile, profileId, crawlerName, requestId });
+      }
+    } catch (auditErr) {
+      console.warn(`[${crawlerName}:${requestId}] profile audit failed: ${auditErr?.message || auditErr}`);
+    }
 
   await logPHIAccess(sdk, {
     user,
