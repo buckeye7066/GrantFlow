@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+  }
+}
+
+.theme-surface {
+  background: rgba(255,255,255,0.88);
+  backdrop-filter: blur(18px);
+}
