@@ -6,7 +6,9 @@ const DEFAULT_LOCK_ID = "global_automation";
 const DEFAULT_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
 
 async function getLockRow(sdk) {
-  let rows = await sdk.entities.AutomationLock.filter({ lock_id: DEFAULT_LOCK_ID });
+  let rows = await sdk.entities.AutomationLock.filter({
+    lock_id: DEFAULT_LOCK_ID,
+  });
 
   if (rows.length === 1) return rows[0];
 
@@ -30,15 +32,21 @@ async function getLockRow(sdk) {
       lock_id: DEFAULT_LOCK_ID,
       locked: false,
       locked_by: null,
-      locked_at: null
+      locked_at: null,
     });
   } catch (err) {
-    rows = await sdk.entities.AutomationLock.filter({ lock_id: DEFAULT_LOCK_ID });
+    rows = await sdk.entities.AutomationLock.filter({
+      lock_id: DEFAULT_LOCK_ID,
+    });
     return rows[0];
   }
 }
 
-export async function acquireLock(sdk, requestId, timeoutMs = DEFAULT_TIMEOUT_MS) {
+export async function acquireLock(
+  sdk,
+  requestId,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+) {
   try {
     const lock = await getLockRow(sdk);
     const now = Date.now();
@@ -49,19 +57,19 @@ export async function acquireLock(sdk, requestId, timeoutMs = DEFAULT_TIMEOUT_MS
 
       if (elapsed > timeoutMs) {
         console.log(
-          \`[AtomicLock] Force-releasing stale lock (\${elapsed}ms old, held by \${lock.locked_by})\`
+          `[AtomicLock] Force-releasing stale lock (${elapsed}ms old, held by ${lock.locked_by})`,
         );
 
         await sdk.entities.AutomationLock.update(lock.id, {
           locked: false,
           locked_by: null,
-          locked_at: null
+          locked_at: null,
         });
 
         await sdk.entities.AutomationLock.update(lock.id, {
           locked: true,
           locked_by: requestId,
-          locked_at: new Date().toISOString()
+          locked_at: new Date().toISOString(),
         });
 
         const verify = await sdk.entities.AutomationLock.get(lock.id);
@@ -72,22 +80,24 @@ export async function acquireLock(sdk, requestId, timeoutMs = DEFAULT_TIMEOUT_MS
         return { acquired: true, forced: true };
       }
 
-      return { acquired: false, reason: \`Lock held by \${lock.locked_by}\` };
+      return { acquired: false, reason: `Lock held by ${lock.locked_by}` };
     }
 
     await sdk.entities.AutomationLock.update(lock.id, {
       locked: true,
       locked_by: requestId,
-      locked_at: new Date().toISOString()
+      locked_at: new Date().toISOString(),
     });
 
     const verify = await sdk.entities.AutomationLock.get(lock.id);
     if (verify.locked_by !== requestId) {
-      return { acquired: false, reason: \`Race: lock taken by \${verify.locked_by}\` };
+      return {
+        acquired: false,
+        reason: `Race: lock taken by ${verify.locked_by}`,
+      };
     }
 
     return { acquired: true };
-
   } catch (err) {
     return { acquired: false, reason: String(err?.message || err) };
   }
@@ -99,7 +109,7 @@ export async function releaseLock(sdk, requestId) {
 
     if (requestId && lock.locked_by && lock.locked_by !== requestId) {
       console.warn(
-        \`[AtomicLock] Release requested by \${requestId} but held by \${lock.locked_by}\`
+        `[AtomicLock] Release requested by ${requestId} but held by ${lock.locked_by}`,
       );
     }
 
@@ -107,18 +117,17 @@ export async function releaseLock(sdk, requestId) {
       await sdk.entities.AutomationLock.update(lock.id, {
         locked: false,
         locked_by: null,
-        locked_at: null
+        locked_at: null,
       });
     } catch (innerErr) {
       await sdk.entities.AutomationLock.update(lock.id, {
         locked: false,
         locked_by: null,
-        locked_at: null
+        locked_at: null,
       });
     }
 
     return { success: true };
-
   } catch (err) {
     return { success: false, error: String(err?.message || err) };
   }
@@ -130,7 +139,7 @@ export async function checkLockStatus(sdk) {
     return {
       locked: !!lock.locked,
       locked_by: lock.locked_by,
-      locked_at: lock.locked_at
+      locked_at: lock.locked_at,
     };
   } catch (err) {
     return { locked: false, error: String(err?.message || err) };

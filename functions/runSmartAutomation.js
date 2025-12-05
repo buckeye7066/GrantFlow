@@ -54,7 +54,7 @@ export default createSafeServer(async (req) => {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = await req.json().catch(() => ({}));
+  const _body = await req.json().catch(() => ({}));
   const requestId = `smart_${crypto.randomUUID().slice(0, 8)}`;
   const lockInfo = await acquireLock(sdk, requestId);
   if (!lockInfo.acquired) {
