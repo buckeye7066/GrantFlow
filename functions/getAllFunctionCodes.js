@@ -1,7 +1,7 @@
 // File: functions/getAllFunctionCodes.js
 // 
 // This file's actual content should be copied from the Base44 dashboard.
-// Go to: Dashboard ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ Code ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ Functions ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ getAllFunctionCodes.js
+// Go to: Dashboard ÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ Code ÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ Functions ÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ getAllFunctionCodes.js
 // 
 // Note: This is a placeholder. To backup actual code:
 // 1. Copy the code from Base44 dashboard
