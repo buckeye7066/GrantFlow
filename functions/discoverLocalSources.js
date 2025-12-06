@@ -43,7 +43,7 @@ function validateProfileId(profileId) {
     return { valid: false, error: 'EMPTY_PROFILE_ID' };
   }
   
-  // UUID format validation (standard UUID v4 pattern)
+  // UUID format validation (accepts standard UUID versions 1-5)
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   if (!uuidRegex.test(trimmedId)) {
     return { valid: false, error: 'INVALID_PROFILE_ID_FORMAT' };
@@ -162,7 +162,10 @@ function scoreOpportunity(opp, profile) {
 }
 
 createSafeServer(async (req) => {
-  const requestId = crypto.randomUUID().slice(0, 8);
+  // Generate unique request ID for logging (Deno exposes crypto globally)
+  const requestId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID().slice(0, 8)
+    : Math.random().toString(36).slice(2, 10);
   
   // ========================================================================
   // STEP 1: PARSE REQUEST BODY

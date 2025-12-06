@@ -27,17 +27,21 @@ export const SECTION_FIELDS = {
   goals: ['primary_goal', 'goals', 'funding_need']
 };
 
-export function filterRepaymentOpportunities(opportunities) {
-  const keywords = [
-    'loan','repay','repayment','interest rate','monthly payment',
-    'credit score','borrower','lender','debt','financing'
-  ];
+// Shared keywords for detecting opportunities that require repayment (loans)
+export const REPAYMENT_KEYWORDS = [
+  'loan', 'repay', 'repayment', 'interest rate', 'monthly payment',
+  'credit score', 'borrower', 'lender', 'debt', 'financing'
+];
 
+// Keywords that exempt an opportunity from being classified as requiring repayment
+export const REPAYMENT_EXEMPTION_KEYWORDS = ['forgiveness', 'repayment assistance', 'loan forgiveness'];
+
+export function filterRepaymentOpportunities(opportunities) {
   return opportunities.filter(opp => {
-    const t = \`\${opp.title||''} \${opp.descriptionMd||''} \${opp.sponsor||''}\`.toLowerCase();
-    for (const kw of keywords) {
+    const t = `${opp.title||''} ${opp.descriptionMd||''} ${opp.sponsor||''}`.toLowerCase();
+    for (const kw of REPAYMENT_KEYWORDS) {
       if (t.includes(kw)) {
-        if (t.includes('forgiveness') || t.includes('repayment assistance')) return true;
+        if (REPAYMENT_EXEMPTION_KEYWORDS.some(ex => t.includes(ex))) return true;
         return false;
       }
     }
@@ -332,24 +336,19 @@ export function errorResponse(code, details = null) {
  * Checks if an opportunity requires repayment (e.g., is a loan).
  * Defensive design: returns an object indicating whether repayment is required
  * and the reason, so callers can filter out loan-type opportunities.
+ * Uses the shared REPAYMENT_KEYWORDS and REPAYMENT_EXEMPTION_KEYWORDS constants.
  * @param {Object} opp - The opportunity object.
  * @returns {{ requires: boolean, reason?: string }} Repayment status.
  */
 export function requiresRepayment(opp) {
   if (!opp) return { requires: false };
   
-  const repaymentKeywords = [
-    'loan', 'repay', 'repayment', 'interest rate', 'monthly payment',
-    'credit score', 'borrower', 'lender', 'debt', 'financing'
-  ];
-  const exemptionKeywords = ['forgiveness', 'repayment assistance', 'loan forgiveness'];
-  
   const text = `${opp.title || ''} ${opp.descriptionMd || ''} ${opp.sponsor || ''}`.toLowerCase();
   
-  for (const keyword of repaymentKeywords) {
+  for (const keyword of REPAYMENT_KEYWORDS) {
     if (text.includes(keyword)) {
       // Check for exemptions (e.g., loan forgiveness programs)
-      const hasExemption = exemptionKeywords.some(ex => text.includes(ex));
+      const hasExemption = REPAYMENT_EXEMPTION_KEYWORDS.some(ex => text.includes(ex));
       if (hasExemption) {
         return { requires: false, reason: 'exemption_found' };
       }
