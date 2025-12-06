@@ -10,20 +10,35 @@
 // This module provides a polling mechanism that repeatedly queries the backend
 // for the new organization until it becomes available, or until a timeout occurs.
 //
-// Usage:
-//   const result = await pollForOrganization(sdk, organizationId, options);
+// Usage (React/Frontend - using base44 client):
+//   import { base44 } from '@/api/base44Client';
+//   const result = await pollForOrganization(base44, organizationId, options);
 //   if (result.success) {
-//     // Navigate to /OrganizationProfile?id={organizationId}
+//     navigate(`/OrganizationProfile?id=${organizationId}`);
 //   } else {
 //     // Show user-friendly error message
 //   }
+//
+// Usage (Deno/Backend - using SDK):
+//   const result = await pollForOrganization(sdk, organizationId, options);
+//
+// The sdk/base44 parameter should have an `entities.Organization.filter()` method.
 // ============================================================================
 
 /**
  * Configuration for polling behavior
  */
-const DEFAULT_POLL_INTERVAL_MS = 250;  // Poll every 250ms
-const DEFAULT_MAX_POLL_DURATION_MS = 5000;  // Maximum 5 seconds of polling
+export const POLL_INTERVAL_MS = 250;  // Poll every 250ms
+export const MAX_POLL_DURATION_MS = 5000;  // Maximum 5 seconds of polling
+
+/**
+ * Simple sleep utility for async/await usage
+ * @param {number} ms - Milliseconds to sleep
+ * @returns {Promise<void>}
+ */
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 /**
  * Polls the backend for an organization by ID until it becomes available or timeout.
@@ -31,21 +46,28 @@ const DEFAULT_MAX_POLL_DURATION_MS = 5000;  // Maximum 5 seconds of polling
  * This addresses the eventual consistency issue where a just-created organization
  * may not be immediately queryable due to RLS policies or replication delays.
  * 
- * @param {Object} sdk - The Base44 SDK instance (typically base44.asServiceRole or base44.entities)
+ * @param {Object} apiClient - The Base44 client/SDK instance with `entities.Organization.filter()` method
  * @param {string} organizationId - The ID of the newly created organization
  * @param {Object} options - Optional configuration
  * @param {number} options.pollIntervalMs - Interval between polls (default: 250ms)
  * @param {number} options.maxDurationMs - Maximum time to poll (default: 5000ms)
- * @returns {Promise<{success: boolean, organization?: Object, error?: string}>}
+ * @returns {Promise<{success: boolean, organization?: Object, error?: string, attempts?: number, elapsedMs?: number}>}
  */
-export async function pollForOrganization(sdk, organizationId, options = {}) {
-  const pollIntervalMs = options.pollIntervalMs || DEFAULT_POLL_INTERVAL_MS;
-  const maxDurationMs = options.maxDurationMs || DEFAULT_MAX_POLL_DURATION_MS;
+export async function pollForOrganization(apiClient, organizationId, options = {}) {
+  const pollIntervalMs = options.pollIntervalMs || POLL_INTERVAL_MS;
+  const maxDurationMs = options.maxDurationMs || MAX_POLL_DURATION_MS;
   
   if (!organizationId) {
     return {
       success: false,
       error: 'Organization ID is required for polling'
+    };
+  }
+
+  if (!apiClient || !apiClient.entities || !apiClient.entities.Organization) {
+    return {
+      success: false,
+      error: 'Valid API client with entities.Organization is required'
     };
   }
 
@@ -60,7 +82,7 @@ export async function pollForOrganization(sdk, organizationId, options = {}) {
     try {
       // Attempt to fetch the organization by ID
       // Using filter with id to match the pattern used elsewhere in the codebase
-      const results = await sdk.entities.Organization.filter({ id: organizationId });
+      const results = await apiClient.entities.Organization.filter({ id: organizationId });
       
       if (results && results.length > 0) {
         // Organization found - return success
@@ -103,27 +125,18 @@ export async function pollForOrganization(sdk, organizationId, options = {}) {
 }
 
 /**
- * Simple sleep utility for async/await usage
- * @param {number} ms - Milliseconds to sleep
- * @returns {Promise<void>}
- */
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-/**
  * Creates an organization and polls until it's available.
  * This is a convenience wrapper that combines creation and polling.
  * 
- * @param {Object} sdk - The Base44 SDK instance
+ * @param {Object} apiClient - The Base44 client/SDK instance with entities.Organization methods
  * @param {Object} organizationData - The data for the new organization
  * @param {Object} options - Optional polling configuration
- * @returns {Promise<{success: boolean, organization?: Object, error?: string}>}
+ * @returns {Promise<{success: boolean, organization?: Object, error?: string, createdId?: string}>}
  */
-export async function createAndPollOrganization(sdk, organizationData, options = {}) {
+export async function createAndPollOrganization(apiClient, organizationData, options = {}) {
   try {
     // Step 1: Create the organization
-    const createdOrg = await sdk.entities.Organization.create(organizationData);
+    const createdOrg = await apiClient.entities.Organization.create(organizationData);
     
     if (!createdOrg || !createdOrg.id) {
       return {
@@ -135,8 +148,7 @@ export async function createAndPollOrganization(sdk, organizationData, options =
     console.log(`[createAndPollOrganization] Organization created with ID: ${createdOrg.id}`);
 
     // Step 2: Poll until the organization is accessible
-    // Note: We pass the SDK that will be used for fetching (may be different from creation SDK)
-    const pollResult = await pollForOrganization(sdk, createdOrg.id, options);
+    const pollResult = await pollForOrganization(apiClient, createdOrg.id, options);
 
     if (pollResult.success) {
       return {
@@ -167,6 +179,6 @@ export async function createAndPollOrganization(sdk, organizationData, options =
 export default {
   pollForOrganization,
   createAndPollOrganization,
-  DEFAULT_POLL_INTERVAL_MS,
-  DEFAULT_MAX_POLL_DURATION_MS
+  POLL_INTERVAL_MS,
+  MAX_POLL_DURATION_MS
 };

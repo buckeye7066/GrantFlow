@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
-import { Loader2, Building2, Plus, AlertCircle, CheckCircle } from 'lucide-react';
+import { Loader2, Building2, Plus, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -11,74 +11,13 @@ import { Textarea } from '@/components/ui/textarea';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 
 // ============================================================================
-// POLLING CONFIGURATION
+// ORGANIZATION POLLING UTILITY
 // ============================================================================
+// Import the polling utility that handles eventual consistency issues.
 // After creating a new organization, the backend may take time to make it
-// accessible due to row-level security (RLS) and/or eventual consistency.
-// These values control how long we wait and how often we check.
-const POLL_INTERVAL_MS = 250;  // Poll every 250ms
-const MAX_POLL_DURATION_MS = 5000;  // Maximum 5 seconds of polling
-
-/**
- * Polls the backend for an organization by ID until it becomes available or timeout.
- * This addresses the eventual consistency issue where a just-created organization
- * may not be immediately queryable due to RLS policies or replication delays.
- * 
- * @param {string} organizationId - The ID of the newly created organization
- * @returns {Promise<{success: boolean, organization?: Object, error?: string}>}
- */
-async function pollForOrganization(organizationId) {
-  const startTime = Date.now();
-  let attempts = 0;
-  let lastError = null;
-
-  // Polling loop: repeatedly query for the organization until found or timeout
-  while (Date.now() - startTime < MAX_POLL_DURATION_MS) {
-    attempts++;
-    
-    try {
-      // Attempt to fetch the organization by ID
-      const results = await base44.entities.Organization.filter({ id: organizationId });
-      
-      if (results && results.length > 0) {
-        // Organization found - return success
-        console.log(
-          `[pollForOrganization] Organization ${organizationId} found after ${attempts} attempts (${Date.now() - startTime}ms)`
-        );
-        return {
-          success: true,
-          organization: results[0],
-          attempts,
-          elapsedMs: Date.now() - startTime
-        };
-      }
-    } catch (err) {
-      // Store the error but continue polling - the organization may become available
-      lastError = err;
-      console.warn(
-        `[pollForOrganization] Attempt ${attempts} failed for ${organizationId}: ${err.message}`
-      );
-    }
-
-    // Wait before next poll attempt
-    await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
-  }
-
-  // Timeout reached - organization not found within the allowed time
-  const elapsedMs = Date.now() - startTime;
-  console.error(
-    `[pollForOrganization] Timeout after ${attempts} attempts (${elapsedMs}ms) for organization ${organizationId}`
-  );
-  
-  return {
-    success: false,
-    error: lastError 
-      ? `Organization not accessible after ${elapsedMs}ms: ${lastError.message}`
-      : `Organization not accessible after ${elapsedMs}ms - the profile may still be processing`,
-    attempts,
-    elapsedMs
-  };
-}
+// accessible due to row-level security (RLS) and/or replication delays.
+// The utility polls every 250ms for up to 5 seconds before timing out.
+import { pollForOrganization } from '../functions/_utils/pollOrganizationAvailability';
 
 export default function Organizations() {
   const navigate = useNavigate();
@@ -145,10 +84,11 @@ export default function Organizations() {
       setPollError(null);
       
       // Start polling to wait for the organization to be accessible
+      // Pass the base44 client as the first argument for the polling utility
       setIsPolling(true);
       
       try {
-        const pollResult = await pollForOrganization(createdOrg.id);
+        const pollResult = await pollForOrganization(base44, createdOrg.id);
         
         if (pollResult.success) {
           // Success! Navigate to the organization profile
@@ -210,7 +150,8 @@ export default function Organizations() {
     setPollError(null);
     
     try {
-      const pollResult = await pollForOrganization(pollError.organizationId);
+      // Pass the base44 client as the first argument for the polling utility
+      const pollResult = await pollForOrganization(base44, pollError.organizationId);
       
       if (pollResult.success) {
         navigate(`/OrganizationProfile?id=${pollError.organizationId}`);
