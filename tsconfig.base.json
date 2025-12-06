@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "noImplicitAny": false,
+    "types": [
+      "node"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@grantflow/match-engine": ["packages/match-engine/src"],
+      "@grantflow/match-engine/*": ["packages/match-engine/src/*"],
+      "@grantflow/crawler-runtime": ["packages/crawler-runtime/src"],
+      "@grantflow/crawler-runtime/*": ["packages/crawler-runtime/src/*"],
+      "@grantflow/prisma": ["packages/prisma/src/client.ts"],
+      "@grantflow/prisma/*": ["packages/prisma/src/*"]
+    }
+  }
+}
+

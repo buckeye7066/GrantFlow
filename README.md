@@ -1,18 +1,15 @@
 # GrantFlow Repository
 
-This repo now contains the **complete GrantFlow stack** as exported from Base44:
-
-- `functions/` — All Deno backend functions (cleaned and production-ready)
-- `frontend/` — Full React/Vite application implementing the dashboard, pipeline, profile management, analytics, automation control panels, and 200+ UI components.
-- `exportFromBase44.js` — Script for pulling future function updates from Base44.
+This repository is being converted into a **self-hosted GrantFlow platform**.  
+The legacy Base44 exports are still present (`functions/` and `exportFromBase44.js`), but the new stack lives in a monorepo that you fully control.
 
 ---
 
 ## Prerequisites
 
-- Node.js 20+ (for the frontend)
-- npm (ships with Node) or your package manager of choice
-- Deno 2.x (for local function testing, optional unless you’re editing backend code)
+- Node.js 20+ (install [pnpm](https://pnpm.io/) via `corepack enable pnpm`)
+- Docker Desktop (for local Postgres/Redis; optional but recommended)
+- Deno 2.x (only required if you continue to work with the legacy Base44 functions)
 - Git
 
 ---
@@ -21,86 +18,112 @@ This repo now contains the **complete GrantFlow stack** as exported from Base44:
 
 ```text
 GrantFlow/
-├── frontend/                # React + Vite codebase
-│   ├── src/
-│   │   ├── pages/           # 40+ flat route components (Dashboard, Pipeline, etc.)
-│   │   ├── components/      # Large component library (pipeline, organizations, UI primitives...)
-│   │   ├── api/             # Base44 SDK wrappers
-│   │   └── ...              # hooks, utils, styles
-│   ├── package.json         # Frontend dependencies & scripts
-│   ├── vite.config.js       # Vite config with alias setup
-│   ├── tailwind.config.js   # Tailwind/shadcn configuration
-│   └── eslint.config.js     # Extended lint rules
-├── functions/               # Deno serverless functions
-│   ├── _shared/             # Shared utilities (security, matching engine, atomic locks, AI helpers)
-│   ├── _utils/              # Common helper modules
-│   └── *.js                 # Individual Base44 functions
-└── exportFromBase44.js      # Optional script to re-export functions from Base44
+├── apps/
+│   ├── api/                 # Node.js (Express + tRPC) backend
+│   └── web/                 # React/Vite frontend (imported from Base44)
+├── jobs/
+│   ├── crawler-worker/      # BullMQ worker for grant processing
+│   └── scheduler/           # Cron-style orchestrator (node-cron)
+├── packages/
+│   ├── prisma/              # Prisma schema + client wrapper
+│   ├── match-engine/        # AI-driven matching service (OpenAI)
+│   └── crawler-runtime/     # Shared crawler strategy utilities
+├── docker/                  # docker-compose, NGINX reverse proxy
+├── functions/               # Legacy Base44 Deno functions (read-only)
+└── exportFromBase44.js      # Legacy helper script
 ```
 
 ---
 
-## Frontend Setup
+## Getting Started
 
-```bash
-cd frontend
-npm install
-npm run dev
-```
+1. **Install dependencies**
+   ```bash
+   corepack enable pnpm
+   pnpm install
+   ```
 
-This launches Vite (default: <http://localhost:5173>). The codebase already uses the Base44 SDK wrappers under `src/api/`. To connect to a live Base44 environment, provide the expected credentials via environment variables (see below).
+2. **Set environment files**
+   ```bash
+   cp apps/api/env.sample apps/api/.env
+   cp packages/prisma/env.sample packages/prisma/.env
+   # fill in DATABASE_URL, REDIS_URL, OPENAI_API_KEY, JWT_SECRET
+   ```
 
-### Useful scripts
+3. **Run local database (optional)**
+   ```bash
+   docker compose -f docker/docker-compose.yml up -d postgres redis
+   ```
 
-- `npm run dev` — Start development server (with hot module reload)
-- `npm run build` — Production build
-- `npm run preview` — Preview the production build locally
-- `npm run lint` — Run ESLint across the frontend
+4. **Apply Prisma migrations**
+   ```bash
+   pnpm prisma:migrate
+   pnpm prisma:generate
+   ```
 
----
-
-## Backend Functions
-
-The `functions/` directory contains the production-ready Deno functions. They are designed to be deployed via Base44’s serverless infrastructure. If you want to run local validation:
-
-```bash
-deno check functions/<function>.js
-deno lint functions/<function>.js
-```
-
-Most functions rely on Base44’s runtime (environment variables, auth context, etc.), so they aren’t meant to run standalone without the platform. Use the `exportFromBase44.js` script to refresh functions from Base44 when needed.
+5. **Start services**
+   ```bash
+   pnpm dev:api        # http://localhost:4000 (tRPC router)
+   pnpm dev:web        # http://localhost:5173 (Vite dev server)
+   pnpm dev:crawler    # background worker consuming BullMQ jobs
+   ```
 
 ---
 
 ## Environment Variables
 
-The frontend expects Base44 credentials, typically configured via Vite environment files. Create `frontend/.env.local` (never commit it) with values similar to:
+| Location                     | Variables                                                                        |
+|-----------------------------|----------------------------------------------------------------------------------|
+| `apps/api/.env`             | `DATABASE_URL`, `REDIS_URL`, `OPENAI_API_KEY`, `JWT_SECRET`                      |
+| `packages/prisma/.env`      | `DATABASE_URL`                                                                   |
+| `apps/web/.env.local` (new) | `VITE_API_URL`, `VITE_OPENAI_PROXY` (if needed)                                  |
+| jobs                        | inherit from API environment (`OPENAI_API_KEY`, `REDIS_URL`, `DATABASE_URL`)     |
 
-```env
-VITE_BASE44_PROJECT_URL=https://your-project.base44.com
-VITE_BASE44_ANON_KEY=...
+---
+
+## Docker Deployment (self-hosted)
+
+The `docker/docker-compose.yml` file provisions:
+
+- Postgres 16
+- Redis 7
+- API container
+- Crawler worker
+- Scheduler
+- Web build (Vite) served behind NGINX reverse proxy
+
+Steps:
+
+```bash
+cd docker
+OPENAI_API_KEY=... JWT_SECRET=... docker compose up -d
 ```
 
-If additional keys are required (service role tokens, etc.), mirror the values used in Base44’s dashboard.
+Point DNS:
+
+- `grantflow.axiombiolabs.org` → host IP (served by NGINX → web)
+- `api.axiombiolabs.org` → host IP (served by NGINX → API)
+
+Provide TLS certs in `docker/certs/` (e.g., Let’s Encrypt `fullchain.pem` and `privkey.pem`).
 
 ---
 
 ## Testing & QA
 
-- **Frontend linting:** `npm run lint` (under `frontend/`)
-- **Frontend type checks:** Vite + ESLint handle JSX/TSX validation automatically; optional to add TypeScript in the future.
-- **Backend linting:** `deno lint functions`
-- **Backend type checks:** `deno check functions/<name>.js`
-- **Pipeline integrity:** Use the `removeMismatchedPipelineGrants` function (dry-run mode available) to purge stale grants from queues.
+- **Frontend:** `pnpm --filter @grantflow/web lint`
+- **API:** `pnpm --filter @grantflow/api lint`
+- **Prisma:** `pnpm prisma:migrate` / `pnpm prisma:generate`
+- **Workers:** run BullMQ queues locally (`pnpm dev:crawler`)
+- The legacy Deno functions remain in `functions/` for reference—use `deno lint` / `deno check` if needed.
 
 ---
 
 ## Next Steps
 
-1. Configure `.env.local` with Base44 credentials so the frontend can authenticate.
-2. Optional: Add root-level scripts for convenience, e.g. `npm run frontend` (dev server) and `npm run functions:check` (deno lint/check) via a top-level `package.json`.
-3. Update this README with any deployment steps once you integrate with your hosting platform (Netlify, Vercel, Base44, etc.).
-4. Consider automating the `exportFromBase44.js` script (GitHub Action or manual run) to keep backend functions synchronized.
+1. **Replace Base44 SDK usage** inside `apps/web` with calls to the new tRPC API.
+2. **Import existing Base44 data** into Postgres using Prisma scripts.
+3. **Expand the crawler runtime** with real web-scraping + LLM calls.
+4. **Implement authentication** (JWT/session) in `apps/api`.
+5. **Retire the legacy `functions/` directory** once the new backend covers all features.
 
-With the frontend imported and backend functions cleaned up, you now have a full local copy of the GrantFlow platform ready for continued development. Let me know if you’d like scaffolding for deployment scripts or additional tooling. 
-
+With this structure, GrantFlow can run entirely on your own infrastructure, with full transparency and control over logs, runtime, and database access. Let me know when you want help wiring the frontend to the new API or setting up CI/CD for your self-hosted environment.

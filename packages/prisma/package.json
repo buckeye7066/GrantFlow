@@ -1,0 +1,20 @@
+{
+  "name": "@grantflow/prisma",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "migrate": "prisma migrate dev",
+    "generate": "prisma generate"
+  },
+  "prisma": {
+    "schema": "./prisma/schema.prisma"
+  },
+  "dependencies": {
+    "prisma": "^5.19.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.5",
+    "typescript": "^5.7.3"
+  }
+}
+

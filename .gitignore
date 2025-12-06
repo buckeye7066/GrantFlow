@@ -1,0 +1,32 @@
+# Node / PNPM
+node_modules/
+pnpm-lock.yaml
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Prisma
+packages/prisma/.env
+packages/prisma/migrations/
+
+# Build outputs
+apps/web/dist/
+apps/api/dist/
+jobs/crawler-worker/dist/
+jobs/scheduler/dist/
+
+# Logs
+*.log
+logs/
+
+# Docker artifacts
+docker/certs/
+
+# OS
+Thumbs.db
+.DS_Store
+

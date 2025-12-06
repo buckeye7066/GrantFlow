@@ -1,0 +1,26 @@
+{
+  "name": "grantflow",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Self-hosted GrantFlow monorepo",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "jobs/*"
+  ],
+  "scripts": {
+    "dev:api": "pnpm --filter @grantflow/api dev",
+    "dev:web": "pnpm --filter @grantflow/web dev",
+    "dev:crawler": "pnpm --filter @grantflow/crawler-worker dev",
+    "build": "pnpm -r run build",
+    "lint": "pnpm -r run lint",
+    "format": "pnpm -r run format",
+    "prisma:migrate": "pnpm --filter @grantflow/prisma migrate",
+    "prisma:generate": "pnpm --filter @grantflow/prisma generate"
+  },
+  "engines": {
+    "node": ">=20.11",
+    "pnpm": ">=9"
+  }
+}
+

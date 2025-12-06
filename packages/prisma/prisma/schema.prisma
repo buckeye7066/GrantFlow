@@ -1,0 +1,173 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model FundingProfile {
+  id             String           @id @default(uuid())
+  type           String
+  name           String
+  email          String?
+  phone          String?
+  address        Json?
+  coreFlags      Json?
+  qualifiers     Json
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  grants         Grant[]
+  fundingSources FundingSource[]
+  activities     Activity[]
+  documents      Document[]
+}
+
+model Grant {
+  id                String              @id @default(uuid())
+  profileId         String
+  profile           FundingProfile      @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  title             String
+  sponsor           String?
+  summary           String?
+  eligibility       Json?
+  matchScore        Float               @default(0)
+  status            GrantStatus         @default(DISCOVERED)
+  deadline          DateTime?
+  amountLow         Int?
+  amountHigh        Int?
+  metadata          Json?
+  aiSummary         String?
+  aiStatus          String?
+  discoveredAt      DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  removedReason     String?
+
+  submissions       GrantSubmission[]
+  documents         Document[]
+  checklistItems    ChecklistItem[]
+  queueEntries      ProcessingQueue[]
+}
+
+model FundingSource {
+  id          String         @id @default(uuid())
+  profileId   String
+  profile     FundingProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  name        String
+  url         String?
+  category    String?
+  tags        String[]
+  metadata    Json?
+  score       Float?
+  createdAt   DateTime       @default(now())
+}
+
+model Activity {
+  id          String         @id @default(uuid())
+  profileId   String?
+  profile     FundingProfile? @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  grantId     String?
+  grant       Grant?         @relation(fields: [grantId], references: [id], onDelete: Cascade)
+  message     String
+  type        ActivityType
+  metadata    Json?
+  createdAt   DateTime       @default(now())
+}
+
+model GrantSubmission {
+  id            String         @id @default(uuid())
+  grantId       String
+  grant         Grant          @relation(fields: [grantId], references: [id], onDelete: Cascade)
+  submittedBy   String?
+  payload       Json?
+  status        SubmissionStatus @default(SUBMITTED)
+  submittedAt   DateTime        @default(now())
+}
+
+model ChecklistItem {
+  id        String         @id @default(uuid())
+  grantId   String
+  grant     Grant          @relation(fields: [grantId], references: [id], onDelete: Cascade)
+  code      String
+  label     String
+  status    ChecklistStatus @default(PENDING)
+  dueAt     DateTime?
+  metadata  Json?
+}
+
+model Document {
+  id         String           @id @default(uuid())
+  grantId    String?
+  grant      Grant?           @relation(fields: [grantId], references: [id], onDelete: Cascade)
+  profileId  String?
+  profile    FundingProfile?  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  name       String
+  type       String
+  url        String?
+  storageKey String?
+  status     DocumentStatus   @default(DRAFT)
+  metadata   Json?
+  createdAt  DateTime         @default(now())
+}
+
+model ProcessingQueue {
+  id          String        @id @default(uuid())
+  grantId     String
+  grant       Grant         @relation(fields: [grantId], references: [id], onDelete: Cascade)
+  profileId   String?
+  status      String
+  lockedBy    String?
+  attempts    Int           @default(0)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+}
+
+model AutomationLock {
+  id        String   @id @default(uuid())
+  lockId    String   @unique
+  locked    Boolean  @default(false)
+  lockedBy  String?
+  lockedAt  DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum GrantStatus {
+  DISCOVERED
+  INTERESTED
+  DRAFTING
+  APPLICATION_PREP
+  SUBMITTED
+  ARCHIVED
+}
+
+enum SubmissionStatus {
+  SUBMITTED
+  DRAFT
+  REJECTED
+  AWARDED
+}
+
+enum ChecklistStatus {
+  PENDING
+  COMPLETE
+  BLOCKED
+}
+
+enum ActivityType {
+  NOTE
+  MATCH
+  SUBMISSION
+  AUTOMATION
+  CRAWLER
+  EMAIL
+}
+
+enum DocumentStatus {
+  DRAFT
+  FINAL
+  ARCHIVED
+}
+
