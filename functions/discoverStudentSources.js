@@ -97,13 +97,14 @@ createSafeServer(async (req) => {
     // Add college-specific sources if target colleges are specified
     if (profile.target_colleges && Array.isArray(profile.target_colleges)) {
       for (const college of profile.target_colleges.slice(0, 3)) {
+        const collegeName = college.toLowerCase().replace(/\s+/g, '-');
         knownStudentSources.push({
-          url: `https://www.google.com/search?q=${encodeURIComponent(college + ' scholarships financial aid')}`,
+          url: `https://www.${collegeName}.edu/financial-aid`,
           title: `${college} - Financial Aid & Scholarships`,
           description: `Scholarship and financial aid opportunities at ${college}`,
           categories: ['scholarships', 'college', 'institutional_aid'],
           source_type: 'university',
-          metadata: { college_name: college }
+          metadata: { college_name: college, url_generated: true }
         });
       }
     }

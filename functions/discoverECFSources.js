@@ -80,7 +80,7 @@ createSafeServer(async (req) => {
         source_type: 'directory'
       },
       {
-        url: 'https://www.understood.org/en/school-learning/evaluations/evaluation-basics/evaluation-guide-for-learning-and-attention-issues',
+        url: 'https://www.understood.org',
         title: 'Understood.org - Learning & Attention Resources',
         description: 'Resources and guidance for families of children with learning and attention issues',
         categories: ['learning_disabilities', 'education', 'special_needs'],

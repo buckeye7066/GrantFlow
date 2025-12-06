@@ -69,24 +69,8 @@ createSafeServer(async (req) => {
     // Add known state-level sources
     const { saveFundingSource } = await import('./_shared/saveFundingSource.js');
     
-    // Try to add state government grant page
-    try {
-      const stateCode = state.toLowerCase().replace(/\s+/g, '');
-      await saveFundingSource(sdk, {
-        url: `https://www.${stateCode}.gov/grants`,
-        title: `${state} State Government Grants`,
-        description: `Official state government grants and funding opportunities for ${state} residents`,
-        categories: ['state', 'government', 'local'],
-        source_type: 'government',
-        discovered_by: 'discoverLocalSources',
-        organization_id: organizationId,
-        profile_id: profileId,
-        metadata: { state, automated: true }
-      });
-      result.saved++;
-    } catch (err) {
-      console.warn('[discoverLocalSources] Could not save state gov source:', err?.message);
-    }
+    // Note: State government URLs vary widely in format, so we don't auto-generate them
+    // Instead, rely on the LLM search to discover actual state government grant pages
 
     return Response.json({
       ok: true,

@@ -34,7 +34,7 @@ export function filterRepaymentOpportunities(opportunities) {
   ];
 
   return opportunities.filter(opp => {
-    const t = \`\${opp.title||''} \${opp.descriptionMd||''} \${opp.sponsor||''}\`.toLowerCase();
+    const t = `${opp.title||''} ${opp.descriptionMd||''} ${opp.sponsor||''}`.toLowerCase();
     for (const kw of keywords) {
       if (t.includes(kw)) {
         if (t.includes('forgiveness') || t.includes('repayment assistance')) return true;
@@ -197,7 +197,7 @@ export async function safeCrawlerWrapper(sdk, {
         duration_ms: Date.now() - start
       });
     } catch (logErr) {
-      console.warn(\`[\${crawlerName}] CrawlLog write failed:\`, logErr?.message);
+      console.warn(`[${crawlerName}] CrawlLog write failed:`, logErr?.message);
     }
 
     return {
@@ -219,7 +219,7 @@ export async function safeCrawlerWrapper(sdk, {
         duration_ms: Date.now() - start
       });
     } catch (logErr) {
-      console.warn(\`[\${crawlerName}] CrawlLog error write failed:\`, logErr?.message);
+      console.warn(`[${crawlerName}] CrawlLog error write failed:`, logErr?.message);
     }
 
     throw error;
@@ -252,7 +252,7 @@ export function isStudentEligible(opportunity, profile) {
   const studentTypes = ['high_school_student', 'college_student', 'graduate_student'];
   const isStudent = studentTypes.includes(profile.applicant_type);
 
-  const t = \`\${opportunity.title||''} \${opportunity.descriptionMd||''}\`.toLowerCase();
+  const t = `${opportunity.title||''} ${opportunity.descriptionMd||''}`.toLowerCase();
   const kws = ['student','scholarship','undergraduate','graduate','college','university'];
   const studentOpp = kws.some(k => t.includes(k));
 
@@ -262,7 +262,7 @@ export function isStudentEligible(opportunity, profile) {
 
 export function isECFEligible(opportunity, profile) {
   const kws = ['exceptional','children','ecf','disability','special needs'];
-  const t = \`\${opportunity.title||''} \${opportunity.descriptionMd||''}\`.toLowerCase();
+  const t = `${opportunity.title||''} ${opportunity.descriptionMd||''}`.toLowerCase();
   const isECF = kws.some(k => t.includes(k));
 
   if (isECF) {
