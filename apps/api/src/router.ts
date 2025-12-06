@@ -1,6 +1,7 @@
 import { initTRPC } from '@trpc/server';
 import { z } from 'zod';
 import type { Context } from './context';
+import { TRPCError } from '@trpc/server';
 
 const t = initTRPC.context<Context>().create();
 
@@ -72,7 +73,7 @@ export const appRouter = t.router({
           where: { id: input.profileId },
         });
         if (!profile) {
-          throw new Error('Profile not found');
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Profile not found' });
         }
         return ctx.matchEngine.scoreProfile(profile, input.limit ?? 15);
       }),

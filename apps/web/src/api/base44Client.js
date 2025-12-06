@@ -1,8 +1,19 @@
-import { createClient } from '@base44/sdk';
-// import { getAccessToken } from '@base44/sdk/utils/auth-utils';
+console.warn(
+  '[base44Client] Deprecated. Use trpc client from "@/lib/apiClient" instead.',
+);
 
-// Create a client with authentication required
-export const base44 = createClient({
-  appId: "68ef1aa9f941d6a9736bafec", 
-  requiresAuth: true // Ensure authentication is required for all operations
-});
+const handler = {
+  get() {
+    throw new Error('Base44 client is no longer available.');
+  },
+};
+
+export const base44 = {
+  functions: new Proxy({}, handler),
+  entities: new Proxy({}, handler),
+  auth: {
+    async me() {
+      throw new Error('Base44 client is no longer available.');
+    },
+  },
+};
