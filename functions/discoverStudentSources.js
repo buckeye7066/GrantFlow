@@ -94,21 +94,6 @@ createSafeServer(async (req) => {
       }
     ];
 
-    // Add college-specific sources if target colleges are specified
-    if (profile.target_colleges && Array.isArray(profile.target_colleges)) {
-      for (const college of profile.target_colleges.slice(0, 3)) {
-        const collegeName = college.toLowerCase().replace(/\s+/g, '-');
-        knownStudentSources.push({
-          url: `https://www.${collegeName}.edu/financial-aid`,
-          title: `${college} - Financial Aid & Scholarships`,
-          description: `Scholarship and financial aid opportunities at ${college}`,
-          categories: ['scholarships', 'college', 'institutional_aid'],
-          source_type: 'university',
-          metadata: { college_name: college, url_generated: true }
-        });
-      }
-    }
-
     const { saveFundingSource } = await import('./_shared/saveFundingSource.js');
     for (const source of knownStudentSources) {
       try {
@@ -123,6 +108,9 @@ createSafeServer(async (req) => {
         console.warn('[discoverStudentSources] Failed to save known source:', err?.message);
       }
     }
+
+    // Note: College-specific URLs are not auto-generated as they don't follow a standard pattern.
+    // The LLM-based search will discover actual college financial aid pages if target_colleges are mentioned.
 
     return Response.json({
       ok: true,
