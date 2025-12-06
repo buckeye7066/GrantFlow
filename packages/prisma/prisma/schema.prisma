@@ -16,6 +16,7 @@ model FundingProfile {
   address        Json?
   coreFlags      Json?
   qualifiers     Json
+  createdBy      String?
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
