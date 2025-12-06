@@ -294,3 +294,68 @@ export function getStateAbbreviation(stateName) {
   const n = stateName.toLowerCase().trim();
   return STATE_ABBREVIATIONS[n] || stateName.toUpperCase();
 }
+
+/**
+ * Alias for getStateAbbreviation for brevity.
+ * @param {string} stateName - Full state name or abbreviation.
+ * @returns {string|null} Two-letter state abbreviation or null.
+ */
+export const getStateAbbr = getStateAbbreviation;
+
+// ============================================================================
+// STANDARD RESPONSE HELPERS
+// These provide consistent response formats for API endpoints.
+// ============================================================================
+
+/**
+ * Creates a standardized success response object.
+ * @param {any} data - The data to include in the response.
+ * @param {string} [message='Success'] - Optional success message.
+ * @returns {Object} Standardized success response.
+ */
+export function successResponse(data, message = 'Success') {
+  return { ok: true, success: true, message, data, error: null };
+}
+
+/**
+ * Creates a standardized error response object.
+ * Defensive design: always returns a consistent error structure to prevent 500s.
+ * @param {string} code - Error code (e.g., 'PROFILE_NOT_FOUND', 'INVALID_JSON').
+ * @param {string} [details=null] - Optional additional details.
+ * @returns {Object} Standardized error response.
+ */
+export function errorResponse(code, details = null) {
+  return { ok: false, success: false, error: code, details, data: null };
+}
+
+/**
+ * Checks if an opportunity requires repayment (e.g., is a loan).
+ * Defensive design: returns an object indicating whether repayment is required
+ * and the reason, so callers can filter out loan-type opportunities.
+ * @param {Object} opp - The opportunity object.
+ * @returns {{ requires: boolean, reason?: string }} Repayment status.
+ */
+export function requiresRepayment(opp) {
+  if (!opp) return { requires: false };
+  
+  const repaymentKeywords = [
+    'loan', 'repay', 'repayment', 'interest rate', 'monthly payment',
+    'credit score', 'borrower', 'lender', 'debt', 'financing'
+  ];
+  const exemptionKeywords = ['forgiveness', 'repayment assistance', 'loan forgiveness'];
+  
+  const text = `${opp.title || ''} ${opp.descriptionMd || ''} ${opp.sponsor || ''}`.toLowerCase();
+  
+  for (const keyword of repaymentKeywords) {
+    if (text.includes(keyword)) {
+      // Check for exemptions (e.g., loan forgiveness programs)
+      const hasExemption = exemptionKeywords.some(ex => text.includes(ex));
+      if (hasExemption) {
+        return { requires: false, reason: 'exemption_found' };
+      }
+      return { requires: true, reason: keyword };
+    }
+  }
+  
+  return { requires: false };
+}
