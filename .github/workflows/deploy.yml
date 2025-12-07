@@ -1,0 +1,15 @@
+name: Deploy to Base44
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Base44 Deployment
+        run: |
+          curl -X POST https://grant-flow-736bafec.base44.app/api/functions/githubWebhook \
+            -H "Content-Type: application/json" \
+            -d '{"ref": "${{ github.ref }}", "commit": "${{ github.sha }}"}'
