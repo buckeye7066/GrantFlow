@@ -32,6 +32,8 @@ The migration follows a **staged approach** to ensure quality, allow for iterati
 - **Base44 App ID**: `68ef1aa9f941d6a9736bafec`
 - **Project Name**: `grant-flow-736bafec`
 
+**Note**: The webhook endpoint has been provided by the Base44 team and should be verified during the integration testing phase to ensure proper connectivity and authorization.
+
 ## Review Process
 
 ### For Base44 Team
