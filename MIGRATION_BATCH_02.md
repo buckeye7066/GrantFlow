@@ -106,7 +106,7 @@ For items 5-9 (directories), the Base44 team should:
 4. Determine migration priority and dependencies
 
 ### Dependencies
-- Functions directory includes profile-based crawling infrastructure referenced in repository memories
+- Functions directory includes profile-based crawling infrastructure (crawlGrantsGov, crawlBenefitsGov, crawlDSIRE)
 - Test data file supports profile-based functionality testing
 - Workflow files may require Base44 CI/CD configuration adjustments
 
