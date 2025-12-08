@@ -3,7 +3,7 @@
 ## Overview
 This document outlines the next batch of 10 top-level files and directories from the `buckeye7066/GrantFlow` repository (main branch) for migration and integration review with Base44.
 
-**Migration Date:** December 8, 2025  
+**Migration Date:** December 2025  
 **Repository:** buckeye7066/GrantFlow  
 **Branch:** main  
 **Batch Number:** 2
@@ -202,8 +202,10 @@ The webhook is configured in `.github/workflows/deploy.yml` and triggers on push
 
 ### Pre-Migration
 - [ ] Review Base44 webhook endpoint configuration
-- [ ] Verify authentication method for webhook (GitHub Actions automatically provides GITHUB_TOKEN for authentication)
-- [ ] Confirm webhook endpoint accepts unauthenticated requests or set up API key/secret if required
+- [ ] Verify webhook authentication approach:
+  - Current implementation in `deploy.yml` sends unauthenticated POST requests from GitHub Actions
+  - Recommended: Add HMAC signature verification using GitHub webhook secret for production security
+  - Alternative: Implement API key/token authentication if HMAC is not supported
 - [ ] Backup current Base44 application state
 - [ ] Review dependencies in `Layout.js` for Base44 client compatibility
 
