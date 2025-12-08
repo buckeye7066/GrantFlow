@@ -184,10 +184,10 @@ The webhook is configured in `.github/workflows/deploy.yml` and triggers on push
 
 - **Migration Priority:** HIGH (Due to PII Security Concern)
 - **Description:** Contains test fixtures for development and testing
-- **⚠️ SECURITY ALERT:** The current test data contains REAL personal information that must be sanitized before migration:
-  - Real email: `tishka1201@icloud.com` → Replace with `test.student@example.com`
-  - Real phone: `4234752124` → Replace with `555-0100`
-  - Real address: `3940 Eveningside Dr. NE, Cleveland, TN 37312` → Replace with fictional address
+- **⚠️ SECURITY ALERT:** The current test data contains REAL personal information (currently visible in public repository) that must be sanitized before migration:
+  - Real email found in test data → Replace with `test.student@example.com`
+  - Real phone found in test data → Replace with `555-0100`
+  - Real address found in test data → Replace with fictional address
   
 - **Recommendation:**
   - ✅ **IMMEDIATE ACTION REQUIRED:** Sanitize PII before migration
@@ -195,6 +195,7 @@ The webhook is configured in `.github/workflows/deploy.yml` and triggers on push
   - Maintain data structure integrity while removing identifiable information
   - Document the sanitization process for future test data additions
   - Ensure test data is clearly separated from production
+  - Consider removing real PII from public repository history if possible
 
 ---
 
@@ -228,16 +229,16 @@ The webhook is configured in `.github/workflows/deploy.yml` and triggers on push
 
 ### Security Review
 - [ ] **CRITICAL:** Sanitize real PII in `test-data/anastasia-white-profile.json` before migration (HIGH PRIORITY)
-  - [ ] Replace real email `tishka1201@icloud.com` with test email
-  - [ ] Replace real phone `4234752124` with test phone number
-  - [ ] Replace real address with fictional address
+  - [ ] Review test data file and replace all real personal information with test values
+  - [ ] Consider removing real PII from repository history if possible
 - [ ] Validate RLS checks in `scripts/rls_check.js` align with Base44 security model
 - [ ] Ensure webhook endpoint authentication:
-  - [ ] Verify webhook accepts requests from GitHub Actions
+  - [ ] Verify webhook endpoint security (endpoint URL currently in public deploy.yml)
   - [ ] Implement HMAC-SHA256 signature verification (see GitHub webhook security docs: https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
   - [ ] Example verification: Compare `X-Hub-Signature-256` header with HMAC digest of payload using webhook secret
   - [ ] Review Base44 endpoint for rate limiting and DDoS protection
   - [ ] Validate HTTPS/TLS configuration
+  - [ ] Consider IP allowlisting if webhook endpoint needs additional protection
 - [ ] Review any API keys or secrets in migrated files
 - [ ] Scan for hardcoded credentials or tokens in all migrated files
 
