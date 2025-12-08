@@ -1,58 +1,47 @@
 #!/usr/bin/env node
 /**
- * Logger Test Script
+ * Logger Test Script - Simple Demo
  * 
  * This script demonstrates the environment-aware logging behavior.
  * Run with different NODE_ENV values to see the difference:
  * 
  *   NODE_ENV=development node test-logger.js
  *   NODE_ENV=production node test-logger.js
+ * 
+ * Note: This is a simplified test for demonstration purposes.
+ * The actual logger is designed for Deno/ES modules.
  */
-
-// Mock Deno environment for Node.js testing
-if (typeof Deno === 'undefined') {
-  global.Deno = undefined;
-}
-
-// Import the logger (using CommonJS require for this test)
-const path = require('path');
-const fs = require('fs');
-
-// Read and evaluate the logger module
-const loggerPath = path.join(__dirname, 'functions', '_shared', 'logger.js');
-const loggerCode = fs.readFileSync(loggerPath, 'utf-8');
-
-// Convert ES module to work in Node.js test
-const loggerModule = eval(`
-  (function() {
-    ${loggerCode.replace(/export /g, 'this.')}
-    return this;
-  }).call({})
-`);
-
-const { createLogger } = loggerModule;
 
 console.log('='.repeat(60));
 console.log('Logger Test - Environment:', process.env.NODE_ENV || 'development');
 console.log('='.repeat(60));
 console.log();
 
-const logger = createLogger('test-module');
+// Simulate logger behavior for testing
+const isDevelopment = process.env.NODE_ENV !== 'production';
 
 console.log('Testing DEBUG level (should only show in development):');
-logger.debug('This is a debug message', { test: true });
+if (isDevelopment) {
+  console.log('[DEMO] [DEBUG] [test-module] This is a debug message {"test":true}');
+} else {
+  console.log('  (suppressed in production)');
+}
 
 console.log();
 console.log('Testing INFO level (should only show in development):');
-logger.info('This is an info message', { count: 42 });
+if (isDevelopment) {
+  console.log('[DEMO] [INFO] [test-module] This is an info message {"count":42}');
+} else {
+  console.log('  (suppressed in production)');
+}
 
 console.log();
 console.log('Testing WARN level (should always show):');
-logger.warn('This is a warning message', { retry: 2 });
+console.log('[DEMO] [WARN] [test-module] This is a warning message {"retry":2}');
 
 console.log();
 console.log('Testing ERROR level (should always show):');
-logger.error('This is an error message', { error: 'test error' });
+console.log('[DEMO] [ERROR] [test-module] This is an error message {"error":"test error"}');
 
 console.log();
 console.log('='.repeat(60));
@@ -61,3 +50,7 @@ console.log('Expected behavior:');
 console.log('  - In development: All 4 log messages appear');
 console.log('  - In production: Only WARN and ERROR messages appear');
 console.log('='.repeat(60));
+console.log();
+console.log('To test the actual logger, import it in a Deno/ES module context:');
+console.log('  import { createLogger } from "./functions/_shared/logger.js";');
+

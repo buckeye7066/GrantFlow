@@ -1,7 +1,11 @@
 // ============================================================================
 // ATOMIC LOCK SYSTEM (FINAL, RACE-SAFE, JSON-SAFE, BASE44-SAFE)
+// Production-ready with environment-aware logging for Base44 integration
 // ============================================================================
 
+import { createLogger } from './logger.js';
+
+const logger = createLogger('AtomicLock');
 const DEFAULT_LOCK_ID = "global_automation";
 const DEFAULT_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
 
