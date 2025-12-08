@@ -43,23 +43,27 @@ class PHIDocumentUploader extends Component {
     this.setState({ uploading: true, error: null });
 
     try {
-      // Simulate upload process (replace with actual upload logic)
+      // TODO: Replace with actual upload logic (e.g., API call to upload endpoint)
       const uploadedFileData = {
         fileName: files[0].name,
         fileSize: files[0].size,
         uploadDate: new Date().toISOString()
       };
 
-      this.setState(prevState => ({
-        uploadedFiles: [...prevState.uploadedFiles, uploadedFileData],
-        uploading: false
-      }));
+      this.setState(prevState => {
+        const updatedFiles = [...prevState.uploadedFiles, uploadedFileData];
+        
+        // Safely call onUpdate with uploaded file data after state update
+        this.safeOnUpdate({
+          action: 'file_uploaded',
+          file: uploadedFileData,
+          allFiles: updatedFiles
+        });
 
-      // Safely call onUpdate with uploaded file data
-      this.safeOnUpdate({
-        action: 'file_uploaded',
-        file: uploadedFileData,
-        allFiles: [...this.state.uploadedFiles, uploadedFileData]
+        return {
+          uploadedFiles: updatedFiles,
+          uploading: false
+        };
       });
 
     } catch (error) {
@@ -83,14 +87,14 @@ class PHIDocumentUploader extends Component {
         file => file.fileName !== fileName
       );
       
-      // Safely call onUpdate with updated file list
+      return { uploadedFiles: updatedFiles };
+    }, () => {
+      // Safely call onUpdate after state update is complete
       this.safeOnUpdate({
         action: 'file_removed',
         fileName: fileName,
-        allFiles: updatedFiles
+        allFiles: this.state.uploadedFiles
       });
-
-      return { uploadedFiles: updatedFiles };
     });
   };
 
