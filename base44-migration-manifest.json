@@ -4,7 +4,7 @@
     "version": "1.0.0",
     "description": "Staged migration of GrantFlow repository to Base44 for integration and review",
     "batch": 1,
-    "totalBatches": "TBD",
+    "totalBatches": null,
     "status": "ready_for_review"
   },
   "destination": {
