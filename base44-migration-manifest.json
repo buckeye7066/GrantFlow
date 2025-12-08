@@ -1,0 +1,94 @@
+{
+  "migration": {
+    "name": "Base44 Staged Migration",
+    "version": "1.0.0",
+    "description": "Staged migration of GrantFlow repository to Base44 for integration and review",
+    "batch": 1,
+    "totalBatches": "TBD",
+    "status": "ready_for_review"
+  },
+  "destination": {
+    "platform": "Base44",
+    "webhookEndpoint": "https://grant-flow-736bafec.base44.app/api/apps/68ef1aa9f941d6a9736bafec/functions/githubWebhook",
+    "appId": "68ef1aa9f941d6a9736bafec",
+    "projectName": "grant-flow-736bafec"
+  },
+  "source": {
+    "repository": "buckeye7066/GrantFlow",
+    "branch": "main",
+    "commitRef": "HEAD"
+  },
+  "batch1": {
+    "description": "First batch of 10 files for Base44 integration",
+    "fileCount": 10,
+    "files": [
+      {
+        "path": "README.md",
+        "type": "documentation",
+        "description": "Repository README and overview"
+      },
+      {
+        "path": "Layout.js",
+        "type": "component",
+        "description": "Main layout component"
+      },
+      {
+        "path": "REPAIR_REPORT.md",
+        "type": "documentation",
+        "description": "Repair and maintenance report"
+      },
+      {
+        "path": "helpgrantflowpull",
+        "type": "script",
+        "description": "Helper script for grant flow pull operations"
+      },
+      {
+        "path": "pages/Billing.js",
+        "type": "page",
+        "description": "Billing page component"
+      },
+      {
+        "path": "globals.css",
+        "type": "stylesheet",
+        "description": "Global CSS styles"
+      },
+      {
+        "path": "triage/prepare_patch.sh",
+        "type": "script",
+        "description": "Triage script for preparing patches"
+      },
+      {
+        "path": "triage/run_diagnostics.sh",
+        "type": "script",
+        "description": "Triage diagnostics runner"
+      },
+      {
+        "path": "pages/GrantDetail.js",
+        "type": "page",
+        "description": "Grant detail page component"
+      },
+      {
+        "path": "triage/analysis_20251201T042940Z.md",
+        "type": "documentation",
+        "description": "Triage analysis report from 2025-12-01"
+      }
+    ]
+  },
+  "integrationNotes": {
+    "readyForIntegration": true,
+    "requiresFeedback": true,
+    "nextSteps": [
+      "Base44 team to review batch 1 files",
+      "Provide integration feedback and requirements",
+      "Confirm webhook endpoint is properly configured",
+      "Proceed with batch 2 after approval"
+    ],
+    "migrationStrategy": "staged",
+    "approachRationale": "Staged migration allows for incremental review and feedback, reducing risk and ensuring proper integration at each step"
+  },
+  "metadata": {
+    "createdAt": "2025-12-08T04:05:48.727Z",
+    "createdBy": "GitHub Copilot",
+    "purpose": "Stage first 10 files for Base44 integration and review"
+  }
+}
