@@ -28,6 +28,7 @@
 - **Issue**: Mix of v0.7.1 (2 files) and v0.8.4 (7 files)
 - **Recommendation**: Standardize to v0.8.4
 - **Files to upgrade**: queueCrawl.js, processOpportunity.js
+- **Note**: Review v0.8.4 changelog for breaking changes before upgrading
 
 ## Webhook Information
 
@@ -111,7 +112,7 @@ ProcessingQueue (entity)
 - Git blob/tree/commit creation
 - Empty repo handling
 - Optional PR creation
-- GitHub API v3 (2022-11-28)
+- GitHub API v3 (API version 2022-11-28 for stable interface)
 
 ### processOpportunity.js
 - Field validation with warnings

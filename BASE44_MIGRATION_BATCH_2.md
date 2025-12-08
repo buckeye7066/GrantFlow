@@ -122,7 +122,7 @@ This document covers the second batch of 10 functions from the `functions/` dire
 
 **Integration Notes**:
 - Uses Core.SendEmail integration
-- Hardcoded admin email: `buckeye7066@gmail.com`
+- Hardcoded admin email: `buckeye7066@gmail.com` (Note: Should be configurable via environment variable for better maintainability)
 - Email includes message subject, sender info, type, and content
 - Requires Message entity access
 
