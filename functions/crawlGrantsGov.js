@@ -68,7 +68,10 @@ async function runCrawler(sdk, crawlId) {
         };
         await retryWithBackoff(() => sdk.functions.invoke('processCrawledItem', { item: mappedItem }));
         recordsProcessed++;
-      } catch (e) { log('error', 'Failed to process grant', { error: e.message }); }
+      } catch (e) { 
+        // Base44 integration: Error logging for failed items
+        logger.error('Failed to process grant', { error: e.message });
+      }
     }
 
     if (logEntry) try { await sdk.entities.CrawlLog.update(logEntry.id, { status: 'completed', recordsFound: llmResponse.grants.length, recordsAdded: recordsProcessed }); } catch (e) {}

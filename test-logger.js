@@ -53,4 +53,3 @@ console.log('='.repeat(60));
 console.log();
 console.log('To test the actual logger, import it in a Deno/ES module context:');
 console.log('  import { createLogger } from "./functions/_shared/logger.js";');
-
