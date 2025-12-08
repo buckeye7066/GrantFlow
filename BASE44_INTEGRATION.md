@@ -182,19 +182,19 @@ The webhook is configured in `.github/workflows/deploy.yml` and triggers on push
 - **Files:**
   - `anastasia-white-profile.json` - Sample user profile data for testing
 
-- **Migration Priority:** MEDIUM
+- **Migration Priority:** HIGH (Due to PII Security Concern)
 - **Description:** Contains test fixtures for development and testing
-- **Review Notes:**
-  - Profile data includes PII (email, phone, address) - verify this is test data only
-  - Used for testing profile-based features like grant matching and discovery
-  - Contains realistic student profile structure
+- **⚠️ SECURITY ALERT:** The current test data contains REAL personal information that must be sanitized before migration:
+  - Real email: `tishka1201@icloud.com` → Replace with `test.student@example.com`
+  - Real phone: `4234752124` → Replace with `555-0100`
+  - Real address: `3940 Eveningside Dr. NE, Cleveland, TN 37312` → Replace with fictional address
   
 - **Recommendation:**
-  - ✅ Migrate to test environment
-  - Ensure test data is clearly separated from production
-  - **PII Sanitization:** Replace real email/phone with fake data (e.g., `test+student@example.com`, `555-0100`)
-  - **Address Anonymization:** Use fictional addresses or generic city/state combinations
+  - ✅ **IMMEDIATE ACTION REQUIRED:** Sanitize PII before migration
+  - Create sanitized version: Replace all real PII with fake but realistic test data
   - Maintain data structure integrity while removing identifiable information
+  - Document the sanitization process for future test data additions
+  - Ensure test data is clearly separated from production
 
 ---
 
@@ -227,11 +227,15 @@ The webhook is configured in `.github/workflows/deploy.yml` and triggers on push
 - [ ] Verify GitHub Actions workflows trigger correctly
 
 ### Security Review
-- [ ] Review and sanitize PII in test-data directory (replace real emails, phones, addresses with test values)
+- [ ] **CRITICAL:** Sanitize real PII in `test-data/anastasia-white-profile.json` before migration (HIGH PRIORITY)
+  - [ ] Replace real email `tishka1201@icloud.com` with test email
+  - [ ] Replace real phone `4234752124` with test phone number
+  - [ ] Replace real address with fictional address
 - [ ] Validate RLS checks in `scripts/rls_check.js` align with Base44 security model
 - [ ] Ensure webhook endpoint authentication:
   - [ ] Verify webhook accepts requests from GitHub Actions
-  - [ ] Consider adding HMAC signature verification using GitHub webhook secret
+  - [ ] Implement HMAC-SHA256 signature verification (see GitHub webhook security docs: https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
+  - [ ] Example verification: Compare `X-Hub-Signature-256` header with HMAC digest of payload using webhook secret
   - [ ] Review Base44 endpoint for rate limiting and DDoS protection
   - [ ] Validate HTTPS/TLS configuration
 - [ ] Review any API keys or secrets in migrated files
