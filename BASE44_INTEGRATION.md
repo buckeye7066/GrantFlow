@@ -3,7 +3,7 @@
 ## Overview
 This document outlines the next batch of 10 top-level files and directories from the `buckeye7066/GrantFlow` repository (main branch) for migration and integration review with Base44.
 
-**Migration Date:** December 8, 2024  
+**Migration Date:** December 8, 2025  
 **Repository:** buckeye7066/GrantFlow  
 **Branch:** main  
 **Batch Number:** 2
@@ -192,7 +192,9 @@ The webhook is configured in `.github/workflows/deploy.yml` and triggers on push
 - **Recommendation:**
   - ✅ Migrate to test environment
   - Ensure test data is clearly separated from production
-  - Consider sanitizing or anonymizing PII even in test data
+  - **PII Sanitization:** Replace real email/phone with fake data (e.g., `test+student@example.com`, `555-0100`)
+  - **Address Anonymization:** Use fictional addresses or generic city/state combinations
+  - Maintain data structure integrity while removing identifiable information
 
 ---
 
@@ -200,7 +202,8 @@ The webhook is configured in `.github/workflows/deploy.yml` and triggers on push
 
 ### Pre-Migration
 - [ ] Review Base44 webhook endpoint configuration
-- [ ] Verify authentication method for webhook (currently using GitHub Actions)
+- [ ] Verify authentication method for webhook (GitHub Actions automatically provides GITHUB_TOKEN for authentication)
+- [ ] Confirm webhook endpoint accepts unauthenticated requests or set up API key/secret if required
 - [ ] Backup current Base44 application state
 - [ ] Review dependencies in `Layout.js` for Base44 client compatibility
 
@@ -222,10 +225,15 @@ The webhook is configured in `.github/workflows/deploy.yml` and triggers on push
 - [ ] Verify GitHub Actions workflows trigger correctly
 
 ### Security Review
-- [ ] Review PII in test-data directory
-- [ ] Validate RLS checks in `scripts/rls_check.js`
-- [ ] Ensure webhook endpoint uses secure authentication
+- [ ] Review and sanitize PII in test-data directory (replace real emails, phones, addresses with test values)
+- [ ] Validate RLS checks in `scripts/rls_check.js` align with Base44 security model
+- [ ] Ensure webhook endpoint authentication:
+  - [ ] Verify webhook accepts requests from GitHub Actions
+  - [ ] Consider adding HMAC signature verification using GitHub webhook secret
+  - [ ] Review Base44 endpoint for rate limiting and DDoS protection
+  - [ ] Validate HTTPS/TLS configuration
 - [ ] Review any API keys or secrets in migrated files
+- [ ] Scan for hardcoded credentials or tokens in all migrated files
 
 ---
 
