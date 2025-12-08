@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 /**
- * Logger Test Script - Simple Demo
+ * Logger Behavior Demo Script
  * 
- * This script demonstrates the environment-aware logging behavior.
- * Run with different NODE_ENV values to see the difference:
+ * This is a DEMO script that simulates the logger's environment-aware behavior.
+ * It does NOT test the actual logger (which is designed for Deno/ES modules).
+ * 
+ * Run with different NODE_ENV values to see the expected behavior:
  * 
  *   NODE_ENV=development node test-logger.js
  *   NODE_ENV=production node test-logger.js
  * 
- * Note: This is a simplified test for demonstration purposes.
- * The actual logger is designed for Deno/ES modules.
+ * For actual logger testing, use it in a Deno/ES module context.
  */
 
 console.log('='.repeat(60));

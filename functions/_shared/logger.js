@@ -46,7 +46,7 @@ export function createLogger(source = 'unknown') {
      */
     debug: (message, context = {}) => {
       if (isDevelopment()) {
-        console.log(formatMessage('debug', source, message, context));
+        console.debug(formatMessage('debug', source, message, context));
       }
     },
 

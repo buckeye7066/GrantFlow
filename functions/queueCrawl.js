@@ -51,6 +51,8 @@ createSafeServer(async (req) => {
     try {
       taskResult = await retryWithBackoff(() => sdk.functions.invoke(adapterFunction, options));
     } catch (e) {
+      // Base44 integration: Error logging for failed invocations
+      logger.error(`Failed to invoke ${adapterFunction}`, { error: e.message, sourceName });
       return Response.json({ success: false, error: { code: 'INVOCATION_FAILED', message: e.message } }, { status: 500 });
     }
 
@@ -63,6 +65,8 @@ createSafeServer(async (req) => {
       result: taskResult?.data
     }, { status: 202 });
   } catch (error) {
+    // Base44 integration: Error logging for unexpected errors
+    logger.error('Unexpected error in queueCrawl', { error: error.message });
     return Response.json({ success: false, error: { code: 'UNEXPECTED_ERROR', message: error.message } }, { status: 500 });
   }
 });

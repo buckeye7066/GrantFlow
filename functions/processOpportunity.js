@@ -25,8 +25,10 @@ function validateRawGrant(rawGrant) {
   return { errors, warnings, isValid: errors.length === 0 };
 }
 
-// Base44 integration: Removed logSafe in favor of centralized logger
-// The logger already handles environment-aware logging
+// Base44 integration: Removed custom logSafe in favor of centralized logger
+// The centralized logger does NOT log sensitive data by design.
+// If you need to log data here, use logger.error() or logger.warn() and
+// ensure you are only passing non-sensitive context (no PHI/PII).
 
 function createErrorResponse(errorCode, message, details = {}, statusCode = 400) {
   return new Response(JSON.stringify({
