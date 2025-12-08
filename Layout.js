@@ -92,7 +92,13 @@ export default function Layout({ children, currentPageName }) {
       try {
         return await base44.auth.me();
       } catch (error) {
-        console.error('[Layout] Auth error:', error);
+        // Critical error logging - kept for production troubleshooting
+        // Only log error message, not full error object to avoid sensitive data exposure
+        if (process.env.NODE_ENV !== 'production') {
+          console.error('[Layout] Auth error:', error?.message || String(error));
+        } else {
+          console.error('[Layout] Authentication failed');
+        }
         return null;
       }
     },

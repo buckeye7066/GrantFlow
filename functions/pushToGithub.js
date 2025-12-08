@@ -1,7 +1,11 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.4';
 import { createSafeServer } from './_shared/safeHandler.js';
+import { createLogger } from './_shared/logger.js';
 
 const GITHUB_API = 'https://api.github.com';
+
+// Base44 integration: Use centralized logger
+const logger = createLogger('pushToGithub');
 
 createSafeServer(async (req) => {
   try {
@@ -164,7 +168,8 @@ createSafeServer(async (req) => {
     return Response.json(result);
 
   } catch (error) {
-    console.error('[pushToGithub] Error:', error);
+    // Base44 integration: Error logging for GitHub operations
+    logger.error('GitHub operation failed', { error: error.message });
     return Response.json({ error: error.message }, { status: 500 });
   }
 });

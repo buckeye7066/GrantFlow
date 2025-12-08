@@ -1,9 +1,13 @@
 /**
  * UNIVERSAL CRAWLER FRAMEWORK
+ * 
+ * Production-ready crawling with environment-aware logging.
+ * Updated for Base44 integration.
  */
 
 import { logPHIAccess } from './phiAuditLogger.js';
 import { randomUUID } from 'node:crypto';
+import { createLogger } from './logger.js';
 
 export const PROFILE_SECTIONS = [
   'identity',
@@ -101,10 +105,15 @@ export async function auditUnmappedProfileKeys(sdk, { profile, profileId, crawle
       profile_id: profileId,
       data: { unmapped_count: unmapped.length, sample: unmapped.slice(0, sampleLimit) }
     });
-    console.log(`[${crawlerName}:${requestId}] Found ${unmapped.length} unmapped profile keys, sample: ${unmapped.slice(0, sampleLimit).join(', ')}`);
+    
+    // Base44 integration: Debug log only in development
+    const logger = createLogger(crawlerName);
+    logger.debug(`[${requestId}] Found ${unmapped.length} unmapped profile keys, sample: ${unmapped.slice(0, sampleLimit).join(', ')}`);
     return { unmappedCount: unmapped.length, unmappedSample: unmapped.slice(0, sampleLimit) };
   } catch (err) {
-    console.warn(`[${crawlerName}:audit] Audit failed: ${err?.message || err}`);
+    // Warning logs always shown for troubleshooting
+    const logger = createLogger(crawlerName);
+    logger.warn(`[audit] Audit failed: ${err?.message || err}`);
     return { unmappedCount: 0, unmapped: [] };
   }
 }
@@ -135,16 +144,19 @@ export async function safeCrawlerWrapper(sdk, {
 }) {
   const requestId = randomUUID().slice(0, 8);
   const start = Date.now();
+  const logger = createLogger(crawlerName);
 
-    console.log(`[${crawlerName}:${requestId}] Starting crawl for profile ${profileId}`);
-    // Audit unmapped profile keys to surface fields that are not yet included in SECTION_FIELDS
-    try {
-      if (sdk && typeof auditUnmappedProfileKeys === 'function') {
-        await auditUnmappedProfileKeys(sdk, { profile, profileId, crawlerName, requestId });
-      }
-    } catch (auditErr) {
-      console.warn(`[${crawlerName}:${requestId}] profile audit failed: ${auditErr?.message || auditErr}`);
+  // Base44 integration: Info logging only in development
+  logger.info(`[${requestId}] Starting crawl for profile ${profileId}`);
+  
+  // Audit unmapped profile keys to surface fields that are not yet included in SECTION_FIELDS
+  try {
+    if (sdk && typeof auditUnmappedProfileKeys === 'function') {
+      await auditUnmappedProfileKeys(sdk, { profile, profileId, crawlerName, requestId });
     }
+  } catch (auditErr) {
+    logger.warn(`[${requestId}] profile audit failed: ${auditErr?.message || auditErr}`);
+  }
 
   await logPHIAccess(sdk, {
     user,
@@ -197,7 +209,7 @@ export async function safeCrawlerWrapper(sdk, {
         duration_ms: Date.now() - start
       });
     } catch (logErr) {
-      console.warn(\`[\${crawlerName}] CrawlLog write failed:\`, logErr?.message);
+      logger.warn(\`CrawlLog write failed: \${logErr?.message}\`);
     }
 
     return {
@@ -219,7 +231,7 @@ export async function safeCrawlerWrapper(sdk, {
         duration_ms: Date.now() - start
       });
     } catch (logErr) {
-      console.warn(\`[\${crawlerName}] CrawlLog error write failed:\`, logErr?.message);
+      logger.warn(\`CrawlLog error write failed: \${logErr?.message}\`);
     }
 
     throw error;

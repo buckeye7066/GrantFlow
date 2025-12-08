@@ -1,6 +1,11 @@
 /**
  * SAFE HANDLER WRAPPER
+ * 
+ * Production-ready error handling with environment-aware logging.
+ * Updated for Base44 integration - logs only essential error info in production.
  */
+
+import { createLogger } from './logger.js';
 
 export function safeHandler(handler, options = {}) {
   const { name = 'unknown', skipSelfCheck = false } = options;
@@ -48,8 +53,10 @@ export function safeHandler(handler, options = {}) {
       return Response.json({ ok: true, error: null, data: result });
       
     } catch (error) {
-      // Avoid logging full error stack or sensitive data - print only the error message and requestId.
-      console.error('[' + name + '][' + requestId + '] Handler error:', error?.message || String(error));
+      // Production-safe error logging: no stack traces or sensitive data
+      // Base44 integration: Only log essential error info
+      const logger = createLogger(name);
+      logger.error(`[${requestId}] Handler error: ${error?.message || String(error)}`);
       return Response.json({ ok: false, error: error?.message || 'Unknown error', data: null }, { status: 500 });
     }
   };

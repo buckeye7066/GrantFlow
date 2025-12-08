@@ -48,8 +48,9 @@ export async function acquireLock(sdk, requestId, timeoutMs = DEFAULT_TIMEOUT_MS
       const elapsed = now - lockedAt;
 
       if (elapsed > timeoutMs) {
-        console.log(
-          \`[AtomicLock] Force-releasing stale lock (\${elapsed}ms old, held by \${lock.locked_by})\`
+        // Base44 integration: Debug log for lock operations
+        logger.debug(
+          \`Force-releasing stale lock (\${elapsed}ms old, held by \${lock.locked_by})\`
         );
 
         await sdk.entities.AutomationLock.update(lock.id, {
@@ -98,8 +99,9 @@ export async function releaseLock(sdk, requestId) {
     const lock = await getLockRow(sdk);
 
     if (requestId && lock.locked_by && lock.locked_by !== requestId) {
-      console.warn(
-        \`[AtomicLock] Release requested by \${requestId} but held by \${lock.locked_by}\`
+      // Warning: potential lock conflict - always log
+      logger.warn(
+        \`Release requested by \${requestId} but held by \${lock.locked_by}\`
       );
     }
 

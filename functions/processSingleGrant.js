@@ -1,4 +1,8 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.4';
+import { createLogger } from './_shared/logger.js';
+
+// Base44 integration: Use centralized logger
+const logger = createLogger('processSingleGrant');
 
 async function processGrantInternal(sdk, profileId, grantId) {
   const grant = await sdk.entities.Grant.get(grantId);
@@ -15,7 +19,10 @@ async function processGrantInternal(sdk, profileId, grantId) {
       prompt: `Analyze grant ${grant.title} for profile ${profile.name}`,
       response_json_schema: { type: "object", properties: { match_score: { type: "number" }, summary: { type: "string" } } }
     });
-  } catch (e) { console.error('AI failed:', e.message); }
+  } catch (e) { 
+    // Base44 integration: Error logging for AI failures
+    logger.error('AI analysis failed', { error: e.message });
+  }
 
   const updateData = { ai_status: 'ready', ai_summary: analysis?.summary || 'Done', match_score: analysis?.match_score || 50 };
   if (grant.status === 'discovered' && updateData.match_score >= 60) updateData.status = 'interested';

@@ -1,5 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.7.1';
 import { createSafeServer } from './_shared/safeHandler.js';
+import { createLogger } from './_shared/logger.js';
 
 const CONFIG = { MAX_RETRIES: 3, RETRY_DELAY_MS: 1000 };
 
@@ -11,9 +12,8 @@ const ADAPTER_MAP = {
   'lee_university': 'crawlLeeUniversity'
 };
 
-function log(level, message, ctx = {}) {
-  console.log(`[${new Date().toISOString()}] [${level.toUpperCase()}] [queueCrawl] ${message}`, Object.keys(ctx).length > 0 ? JSON.stringify(ctx) : '');
-}
+// Base44 integration: Use centralized logger instead of custom function
+const logger = createLogger('queueCrawl');
 
 async function retryWithBackoff(fn, maxRetries = CONFIG.MAX_RETRIES) {
   let lastError;
