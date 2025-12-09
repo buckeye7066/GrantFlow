@@ -1,5 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.4';
 import { createSafeServer } from './_shared/safeHandler.js';
+import { createLogger } from './_shared/logger.js';
 import {
   successResponse,
   errorResponse,
@@ -14,7 +15,10 @@ import {
 
 // ============================================================================
 // COMPREHENSIVE MATCH - Section-Sequential AI-Enhanced Matching
+// Base44 Integration: Reduced noisy logging, environment-aware debug logs
 // ============================================================================
+
+const logger = createLogger('comprehensiveMatch');
 
 function opportunityMatchesState(opp, profileStateAbbr) {
   if (!profileStateAbbr) return false;
@@ -162,7 +166,8 @@ createSafeServer(async (req) => {
     }
     
     if (profile.id !== effectiveProfileId) {
-      console.error(`[${requestId}] ISOLATION_VIOLATION`);
+      // Critical security issue - always log
+      logger.error(`[${requestId}] ISOLATION_VIOLATION`);
       return Response.json(errorResponse('PROFILE_MISMATCH'), { status: 400 });
     }
     
@@ -171,8 +176,8 @@ createSafeServer(async (req) => {
       return Response.json(errorResponse('PROFILE_MISSING_STATE'), { status: 400 });
     }
     
-    // Avoid logging PHI (profile name). Log the profile id only.
-    console.log(`[${requestId}] ProfileID: ${profile.id}, State: ${profileStateAbbr}`);
+    // Base44 integration: Debug log only - avoid logging PHI (profile name)
+    logger.debug(`[${requestId}] ProfileID: ${profile.id}, State: ${profileStateAbbr}`);
     
     let opportunities = [];
     try {
@@ -189,28 +194,29 @@ createSafeServer(async (req) => {
         }
       }
     } catch (e) {
-      console.error(`[${requestId}] Fetch error:`, e.message);
+      logger.error(`[${requestId}] Fetch error: ${e.message}`);
       return Response.json(successResponse([]));
     }
     
-    console.log(`[${requestId}] Fetched ${opportunities.length} opportunities`);
+    // Base44 integration: Debug logs for processing steps
+    logger.debug(`[${requestId}] Fetched ${opportunities.length} opportunities`);
     
     let filtered = opportunities.filter(opp => opportunityMatchesState(opp, profileStateAbbr));
-    console.log(`[${requestId}] After geo-filter: ${filtered.length}`);
+    logger.debug(`[${requestId}] After geo-filter: ${filtered.length}`);
     
     filtered = filtered.filter(opp => {
       const repaymentCheck = requiresRepayment(opp);
       if (repaymentCheck.requires) {
-        // Avoid logging full title text, may contain sensitive info; log the opportunity id.
-        console.log(`[${requestId}] REPAYMENT_REJECT: id=${opp.id}`);
+        // Base44 integration: Debug log only, no sensitive data
+        logger.debug(`[${requestId}] REPAYMENT_REJECT: id=${opp.id}`);
         return false;
       }
       return true;
     });
-    console.log(`[${requestId}] After repayment filter: ${filtered.length}`);
+    logger.debug(`[${requestId}] After repayment filter: ${filtered.length}`);
     
     filtered = filtered.filter(opp => isOpportunityActive(opp));
-    console.log(`[${requestId}] After active filter: ${filtered.length}`);
+    logger.debug(`[${requestId}] After active filter: ${filtered.length}`);
     
     const scoredResults = filtered.map(opp => {
       const { score, matchedSections, reasons } = scoreOpportunityBySection(opp, profile);
@@ -229,7 +235,7 @@ createSafeServer(async (req) => {
       .sort((a, b) => b.match - a.match)
       .slice(0, 100);
     
-    console.log(`[${requestId}] Final results: ${results.length} opportunities`);
+    logger.debug(`[${requestId}] Final results: ${results.length} opportunities`);
     
     try {
       await sdk.entities.CrawlLog.create({
@@ -237,7 +243,7 @@ createSafeServer(async (req) => {
         status: 'success'
       });
     } catch (logErr) {
-      console.warn(`[${requestId}] Audit log failed:`, logErr.message);
+      logger.warn(`[${requestId}] Audit log failed: ${logErr.message}`);
     }
     
     return Response.json({
@@ -260,7 +266,7 @@ createSafeServer(async (req) => {
     });
     
   } catch (error) {
-    console.error(`[${requestId}] ERROR:`, error.message);
+    logger.error(`[${requestId}] ERROR: ${error.message}`);
     return Response.json(errorResponse(error.message), { status: 500 });
   }
 });

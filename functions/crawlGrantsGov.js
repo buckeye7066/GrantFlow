@@ -1,12 +1,11 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.4';
 import { createSafeServer } from './_shared/safeHandler.js';
+import { createLogger } from './_shared/logger.js';
 
 const CONFIG = { MAX_RETRIES: 3, RETRY_DELAY_MS: 2000, BATCH_SIZE: 5, BATCH_DELAY_MS: 1000, CRAWLER_TIMEOUT_MS: 40000 };
 
-function log(level, message, ctx = {}) {
-  console.log('[' + new Date().toISOString() + '] [' + level.toUpperCase() + '] [crawlGrantsGov] ' + message, 
-    Object.keys(ctx).length > 0 ? JSON.stringify(ctx) : '');
-}
+// Base44 integration: Use centralized logger instead of custom function
+const logger = createLogger('crawlGrantsGov');
 
 async function retryWithBackoff(fn, maxRetries = CONFIG.MAX_RETRIES) {
   let lastError = null;
@@ -69,7 +68,10 @@ async function runCrawler(sdk, crawlId) {
         };
         await retryWithBackoff(() => sdk.functions.invoke('processCrawledItem', { item: mappedItem }));
         recordsProcessed++;
-      } catch (e) { log('error', 'Failed to process grant', { error: e.message }); }
+      } catch (e) { 
+        // Base44 integration: Error logging for failed items
+        logger.error('Failed to process grant', { error: e.message });
+      }
     }
 
     if (logEntry) try { await sdk.entities.CrawlLog.update(logEntry.id, { status: 'completed', recordsFound: llmResponse.grants.length, recordsAdded: recordsProcessed }); } catch (e) {}

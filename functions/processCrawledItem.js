@@ -1,11 +1,11 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.4';
 import { createSafeServer } from './_shared/safeHandler.js';
+import { createLogger } from './_shared/logger.js';
 
 const CONFIG = { MAX_RETRIES: 3, RETRY_DELAY_MS: 1000, MAX_DESCRIPTION_LENGTH: 2500, MIN_DESCRIPTION_FOR_AI: 100 };
 
-function log(level, message, ctx = {}) {
-  console.log('[' + new Date().toISOString() + '] [' + level.toUpperCase() + '] [processCrawledItem] ' + message, Object.keys(ctx).length > 0 ? JSON.stringify(ctx) : '');
-}
+// Base44 integration: Use centralized logger instead of custom function
+const logger = createLogger('processCrawledItem');
 
 async function retryWithBackoff(fn, maxRetries = CONFIG.MAX_RETRIES) {
   let lastError = null;

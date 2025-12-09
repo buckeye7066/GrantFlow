@@ -1,5 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.7.1';
 import { createSafeServer } from './_shared/safeHandler.js';
+import { createLogger } from './_shared/logger.js';
 
 const CONFIG = { MAX_RETRIES: 3, RETRY_DELAY_MS: 1000 };
 
@@ -11,9 +12,8 @@ const ADAPTER_MAP = {
   'lee_university': 'crawlLeeUniversity'
 };
 
-function log(level, message, ctx = {}) {
-  console.log(`[${new Date().toISOString()}] [${level.toUpperCase()}] [queueCrawl] ${message}`, Object.keys(ctx).length > 0 ? JSON.stringify(ctx) : '');
-}
+// Base44 integration: Use centralized logger instead of custom function
+const logger = createLogger('queueCrawl');
 
 async function retryWithBackoff(fn, maxRetries = CONFIG.MAX_RETRIES) {
   let lastError;
@@ -51,6 +51,8 @@ createSafeServer(async (req) => {
     try {
       taskResult = await retryWithBackoff(() => sdk.functions.invoke(adapterFunction, options));
     } catch (e) {
+      // Base44 integration: Error logging for failed invocations
+      logger.error(`Failed to invoke ${adapterFunction}`, { error: e.message, sourceName });
       return Response.json({ success: false, error: { code: 'INVOCATION_FAILED', message: e.message } }, { status: 500 });
     }
 
@@ -63,6 +65,8 @@ createSafeServer(async (req) => {
       result: taskResult?.data
     }, { status: 202 });
   } catch (error) {
+    // Base44 integration: Error logging for unexpected errors
+    logger.error('Unexpected error in queueCrawl', { error: error.message });
     return Response.json({ success: false, error: { code: 'UNEXPECTED_ERROR', message: error.message } }, { status: 500 });
   }
 });

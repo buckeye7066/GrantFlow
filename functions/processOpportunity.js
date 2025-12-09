@@ -1,5 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.7.1';
 import { createSafeServer } from './_shared/safeHandler.js';
+import { createLogger } from './_shared/logger.js';
 
 const ErrorCodes = {
   MISSING_REQUEST_BODY: 'MISSING_REQUEST_BODY',
@@ -11,6 +12,9 @@ const ErrorCodes = {
   UNEXPECTED_ERROR: 'UNEXPECTED_ERROR'
 };
 
+// Base44 integration: Use centralized logger
+const logger = createLogger('processOpportunity');
+
 function validateRawGrant(rawGrant) {
   const errors = [];
   const warnings = [];
@@ -21,15 +25,10 @@ function validateRawGrant(rawGrant) {
   return { errors, warnings, isValid: errors.length === 0 };
 }
 
-function logSafe(level, message, data = {}) {
-  const safeData = { ...data };
-  const sensitiveFields = ['email', 'phone', 'ssn', 'ein', 'apiKey'];
-  for (const field of sensitiveFields) {
-    if (safeData[field]) safeData[field] = '***MASKED***';
-  }
-  console.log('[' + new Date().toISOString() + '] [' + level.toUpperCase() + '] [processOpportunity] ' + message, 
-    Object.keys(safeData).length > 0 ? safeData : '');
-}
+// Base44 integration: Removed custom logSafe in favor of centralized logger
+// The centralized logger does NOT log sensitive data by design.
+// If you need to log data here, use logger.error() or logger.warn() and
+// ensure you are only passing non-sensitive context (no PHI/PII).
 
 function createErrorResponse(errorCode, message, details = {}, statusCode = 400) {
   return new Response(JSON.stringify({

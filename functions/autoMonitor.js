@@ -1,4 +1,8 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.4';
+import { createLogger } from './_shared/logger.js';
+
+// Base44 integration: Use centralized logger
+const logger = createLogger('autoMonitor');
 
 Deno.serve(async (req) => {
   const requestId = crypto.randomUUID().slice(0, 8);
@@ -12,7 +16,8 @@ Deno.serve(async (req) => {
     ]);
 
     const stats = { pending: pending?.length || 0, running: running?.length || 0 };
-    console.log(`[${requestId}] Queue: ${stats.pending} pending, ${stats.running} running`);
+    // Base44 integration: Debug log only in development
+    logger.debug(`[${requestId}] Queue: ${stats.pending} pending, ${stats.running} running`);
 
     if (stats.pending === 0 && stats.running === 0) {
       return Response.json({ ok: true, result: { message: 'No jobs to process', stats } });
