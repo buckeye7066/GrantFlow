@@ -99,7 +99,7 @@ const Dashboard = () => {
             padding: '12px',
             marginBottom: '16px',
             backgroundColor: '#e7f3ff',
-            border: '1px solid '#b3d9ff',
+            border: '1px solid #b3d9ff',
             borderRadius: '4px',
             color: '#004085'
           }}>

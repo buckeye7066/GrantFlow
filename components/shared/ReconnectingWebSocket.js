@@ -10,7 +10,7 @@
 
 class ReconnectingWebSocket {
   constructor(url, protocols = [], options = {}) {
-    this.url = url;
+    this._url = url;
     this.protocols = protocols;
     this.options = {
       maxReconnectAttempts: options.maxReconnectAttempts || Infinity,
@@ -43,7 +43,7 @@ class ReconnectingWebSocket {
     if (this.forcedClose) return;
 
     try {
-      this.ws = new WebSocket(this.url, this.protocols);
+      this.ws = new WebSocket(this._url, this.protocols);
       
       this.ws.onopen = (event) => {
         this.reconnectAttempts = 0;
@@ -178,10 +178,6 @@ class ReconnectingWebSocket {
 
   get url() {
     return this._url;
-  }
-
-  set url(value) {
-    this._url = value;
   }
 }
 
