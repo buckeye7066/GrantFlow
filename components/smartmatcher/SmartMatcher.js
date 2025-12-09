@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import PropTypes from 'prop-types';
 
 /**
  * SmartMatcher - Smart matching component with robust error handling
@@ -194,19 +193,6 @@ const SmartMatcher = ({ baseUrl, organizationId, onMatchComplete, onError }) => 
       )}
     </div>
   );
-};
-
-SmartMatcher.propTypes = {
-  baseUrl: PropTypes.string.isRequired,
-  organizationId: PropTypes.string,
-  onMatchComplete: PropTypes.func,
-  onError: PropTypes.func
-};
-
-SmartMatcher.defaultProps = {
-  organizationId: null,
-  onMatchComplete: null,
-  onError: null
 };
 
 export default SmartMatcher;

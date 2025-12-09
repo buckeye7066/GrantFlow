@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import PropTypes from 'prop-types';
 
 /**
  * OrganizationProfileDetails - Display and manage organization profile with event handling
@@ -116,20 +115,6 @@ const OrganizationProfileDetails = ({
       </div>
     </div>
   );
-};
-
-OrganizationProfileDetails.propTypes = {
-  organization: PropTypes.object,
-  onUpdate: PropTypes.func,
-  confirmAndSave: PropTypes.func,
-  children: PropTypes.oneOfType([PropTypes.node, PropTypes.func])
-};
-
-OrganizationProfileDetails.defaultProps = {
-  organization: null,
-  onUpdate: null,
-  confirmAndSave: null,
-  children: null
 };
 
 export default OrganizationProfileDetails;

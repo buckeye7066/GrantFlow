@@ -1,5 +1,4 @@
 import React, { useRef, useEffect, useState } from 'react';
-import PropTypes from 'prop-types';
 
 /**
  * PHIDocumentUploader - Upload and process PHI documents with defensive callback handling
@@ -188,26 +187,6 @@ const PHIDocumentUploader = ({
       {typeof children === 'function' ? children(uploaderApi) : children}
     </div>
   );
-};
-
-PHIDocumentUploader.propTypes = {
-  onUpdate: PropTypes.func,
-  confirmAndSave: PropTypes.func,
-  onSave: PropTypes.func,
-  onComplete: PropTypes.func,
-  onError: PropTypes.func,
-  onCancel: PropTypes.func,
-  children: PropTypes.oneOfType([PropTypes.node, PropTypes.func])
-};
-
-PHIDocumentUploader.defaultProps = {
-  onUpdate: null,
-  confirmAndSave: null,
-  onSave: null,
-  onComplete: null,
-  onError: null,
-  onCancel: null,
-  children: null
 };
 
 export default PHIDocumentUploader;
