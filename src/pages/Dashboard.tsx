@@ -20,6 +20,7 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { base44, type Organization, type Grant, type Milestone, type Expense } from '../api/base44Client'
+import { AnyaStatusPanel } from '../components/anya/AnyaStatusPanel'
 
 type CardProps = {
   className?: string
@@ -313,6 +314,9 @@ export default function Dashboard() {
         </Card>
       </section>
 
+      <div className="mt-8">
+        <AnyaStatusPanel />
+      </div>
       {!hasOrganizations && (
         <Card className="border-dashed bg-slate-50">
           <CardContent className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -476,4 +480,5 @@ export default function Dashboard() {
     </main>
   )
 }
+
 
