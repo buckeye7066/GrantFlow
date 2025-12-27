@@ -2,6 +2,12 @@ import { getDb } from '../../db/index.js'
 import { logAudit } from '../../audit/logger.js'
 
 /**
+ * Confidence threshold for applying patches
+ * Fields with confidence below this value will not be applied
+ */
+const CONFIDENCE_THRESHOLD = 0.7
+
+/**
  * Apply patches to database
  * Returns summary of changes made
  */
@@ -26,8 +32,8 @@ export async function applyPatches(patches, documentId, profileId) {
     for (const [field, fieldData] of Object.entries(patches.profile.set)) {
       const { value, confidence } = fieldData
       
-      // Only apply if confidence is above threshold (0.7)
-      if (confidence >= 0.7) {
+      // Only apply if confidence is above threshold
+      if (confidence >= CONFIDENCE_THRESHOLD) {
         // Check if field is empty or we're improving it
         if (!profile[field] || profile[field] === '') {
           updates[field] = value
@@ -98,7 +104,7 @@ export async function applyPatches(patches, documentId, profileId) {
     for (const [field, fieldData] of Object.entries(fundingPatch.set)) {
       const { value, confidence } = fieldData
       
-      if (confidence >= 0.7) {
+      if (confidence >= CONFIDENCE_THRESHOLD) {
         // Map field names to database columns
         let dbField = field
         if (field === 'contact_email') dbField = 'email'

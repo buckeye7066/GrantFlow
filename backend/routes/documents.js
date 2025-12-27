@@ -1,5 +1,6 @@
 import express from 'express'
 import multer from 'multer'
+import rateLimit from 'express-rate-limit'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import fs from 'fs/promises'
@@ -20,6 +21,15 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 const router = express.Router()
+
+// Rate limiter for upload endpoints
+const uploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20, // Limit each IP to 20 uploads per window
+  message: 'Too many uploads from this IP, please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+})
 
 // Configure multer for file uploads
 const upload = multer({
@@ -48,7 +58,7 @@ const upload = multer({
  * POST /api/profiles/:profileId/documents
  * Upload document for a profile
  */
-router.post('/:profileId/documents', upload.single('file'), async (req, res, next) => {
+router.post('/:profileId/documents', uploadLimiter, upload.single('file'), async (req, res, next) => {
   try {
     const { profileId } = req.params
     
@@ -77,8 +87,13 @@ router.post('/:profileId/documents', upload.single('file'), async (req, res, nex
     const storagePath = path.join(storageDir, file.originalname)
     await fs.writeFile(storagePath, file.buffer)
     
-    // Set file permissions (read/write for owner only)
-    await fs.chmod(storagePath, 0o600)
+    // Set file permissions (read/write for owner only) - Unix/Linux only
+    try {
+      await fs.chmod(storagePath, 0o600)
+    } catch (error) {
+      // chmod may not work on all platforms (e.g., Windows)
+      console.warn('Failed to set file permissions:', error.message)
+    }
     
     // Create document record
     const document = createDocument({

@@ -88,10 +88,12 @@ export default function Organizations() {
   }
 
   const handleApplyDocument = async (documentId: string) => {
+    if (!selectedProfile) return
+    
     try {
       const result = await base44.documents.apply(documentId)
       alert(`Document applied successfully!\n\n${result.message}`)
-      await loadDocuments(selectedProfile!.id)
+      await loadDocuments(selectedProfile.id)
       await loadProfiles() // Reload to see updated profile data
     } catch (error) {
       console.error('Failed to apply document:', error)

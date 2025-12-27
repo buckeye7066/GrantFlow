@@ -15,11 +15,12 @@
   "dependencies": {
     "@tanstack/react-query": "^5.62.7",
     "better-sqlite3": "^11.8.1",
-    "cors": "^2.8.5",
     "cookie-parser": "^1.4.6",
+    "cors": "^2.8.5",
     "date-fns": "^4.1.0",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "express-rate-limit": "^8.2.1",
     "lucide-react": "^0.470.0",
     "mammoth": "^1.8.0",
     "multer": "^1.4.5-lts.1",
