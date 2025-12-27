@@ -1,220 +1,184 @@
-const path = require('path');
-const { BaseCrawler, DEFAULT_TIMEOUT_MS, DEFAULT_MAX_RETRIES } = require('./base');
+import path from 'path';
+import { fileURLToPath } from 'url';
+import BaseCrawler from './base.js';
 
-let Database;
-try {
-  // Prefer better-sqlite3 when available; fall back to no-op persistence otherwise.
-  // eslint-disable-next-line global-require
-  Database = require('better-sqlite3');
-} catch (_) {
-  Database = null;
-}
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-const ALL_STATES = [
-  'AL',
-  'AK',
-  'AZ',
-  'AR',
-  'CA',
-  'CO',
-  'CT',
-  'DE',
-  'DC',
-  'FL',
-  'GA',
-  'HI',
-  'ID',
-  'IL',
-  'IN',
-  'IA',
-  'KS',
-  'KY',
-  'LA',
-  'ME',
-  'MD',
-  'MA',
-  'MI',
-  'MN',
-  'MS',
-  'MO',
-  'MT',
-  'NE',
-  'NV',
-  'NH',
-  'NJ',
-  'NM',
-  'NY',
-  'NC',
-  'ND',
-  'OH',
-  'OK',
-  'OR',
-  'PA',
-  'RI',
-  'SC',
-  'SD',
-  'TN',
-  'TX',
-  'UT',
-  'VT',
-  'VA',
-  'WA',
-  'WV',
-  'WI',
-  'WY',
-  'PR',
-  'VI',
-  'GU',
-  'AS',
+// State constants
+export const ALL_STATES = [
+  'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
+  'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
+  'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
+  'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
+  'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY'
 ];
 
-/**
- * Placeholder zip code mapping; expect real configuration to override.
- */
-const STATE_ZIP_MAP = new Map();
+export const STATE_ZIP_MAP = {
+  'AL': ['35000-36999'],
+  'AK': ['99500-99999'],
+  'AZ': ['85000-86599'],
+  'AR': ['71600-72999', '75500-75599'],
+  'CA': ['90000-96199'],
+  'CO': ['80000-81699'],
+  'CT': ['06000-06999'],
+  'DE': ['19700-19999'],
+  'FL': ['32000-34999'],
+  'GA': ['30000-31999', '39800-39999'],
+  'HI': ['96700-96899'],
+  'ID': ['83200-83899'],
+  'IL': ['60000-62999'],
+  'IN': ['46000-47999'],
+  'IA': ['50000-52899'],
+  'KS': ['66000-67999'],
+  'KY': ['40000-42799'],
+  'LA': ['70000-71599'],
+  'ME': ['03900-04999'],
+  'MD': ['20600-21999'],
+  'MA': ['01000-02799'],
+  'MI': ['48000-49999'],
+  'MN': ['55000-56799'],
+  'MS': ['38600-39799'],
+  'MO': ['63000-65899'],
+  'MT': ['59000-59999'],
+  'NE': ['68000-69399'],
+  'NV': ['89000-89899'],
+  'NH': ['03000-03899'],
+  'NJ': ['07000-08999'],
+  'NM': ['87000-88499'],
+  'NY': ['10000-14999'],
+  'NC': ['27000-28999'],
+  'ND': ['58000-58899'],
+  'OH': ['43000-45999'],
+  'OK': ['73000-74999'],
+  'OR': ['97000-97999'],
+  'PA': ['15000-19699'],
+  'RI': ['02800-02999'],
+  'SC': ['29000-29999'],
+  'SD': ['57000-57799'],
+  'TN': ['37000-38599'],
+  'TX': ['75000-79999', '88500-88599'],
+  'UT': ['84000-84799'],
+  'VT': ['05000-05999'],
+  'VA': ['20100-20199', '22000-24699'],
+  'WA': ['98000-99499'],
+  'WV': ['24700-26899'],
+  'WI': ['53000-54999'],
+  'WY': ['82000-83199']
+};
 
-const INSERT_OPPORTUNITY_SQL = `
-  INSERT INTO funding_sources (
-    state,
-    zip_code,
-    title,
-    description,
-    amount,
-    deadline,
-    contact_url,
-    source_url,
-    created_at,
-    updated_at
-  ) VALUES (
-    @state,
-    @zip,
-    @title,
-    @description,
-    @amount,
-    @deadline,
-    @contactUrl,
-    @sourceUrl,
-    datetime('now'),
-    datetime('now')
-  )
-  ON CONFLICT(state, zip_code, title) DO UPDATE SET
-    description = excluded.description,
-    amount = excluded.amount,
-    deadline = excluded.deadline,
-    contact_url = excluded.contact_url,
-    source_url = excluded.source_url,
-    updated_at = datetime('now')
-`;
-
-class LocalFundingCrawler extends BaseCrawler {
-  constructor(options = {}) {
-    const {
-      states = ALL_STATES,
-      timeoutMs = DEFAULT_TIMEOUT_MS,
-      maxRetries = DEFAULT_MAX_RETRIES,
-      logger = console,
-      dbPath = path.join(__dirname, '..', 'data', 'grantflow.db'),
-      db = null,
-    } = options;
-
-    super({
-      items: states,
-      timeoutMs,
-      maxRetries,
-      logger,
-    });
-
-    this.db =
-      db || (Database ? new Database(dbPath, { fileMustExist: false }) : null);
-    this.insertStmt = this.db ? this.db.prepare(INSERT_OPPORTUNITY_SQL) : null;
+export class LocalFundingCrawler extends BaseCrawler {
+  constructor(config = {}) {
+    super('local-funding', config);
+    this.Database = null;
   }
 
-  /**
-   * Crawl a state by iterating its zip codes.
-   * Each zip code error is logged and skipped.
-   */
-  async crawl(stateCode) {
-    const zipCodes = STATE_ZIP_MAP.get(stateCode) || [];
-    if (!zipCodes.length) {
-      this.logger.warn(`[Crawler] No zip codes configured for ${stateCode}`);
-      return;
-    }
+  async initialize() {
+    // Dynamic import for Database
+    const { default: Database } = await import('../database.js');
+    this.Database = Database;
+  }
 
-    for (const zip of zipCodes) {
+  async crawl(options = {}) {
+    await this.initialize();
+    
+    const { states = ALL_STATES, limit = 100 } = options;
+    const results = [];
+
+    this.log('info', `Starting local funding crawl for states: ${states.join(', ')}`);
+
+    for (const state of states) {
       try {
-        // eslint-disable-next-line no-await-in-loop
-        const opportunities = await this.fetchOpportunitiesForZip({
-          stateCode,
-          zip,
-        });
-
-        if (opportunities.length) {
-          this.saveOpportunities(stateCode, zip, opportunities);
-          this.incrementOpportunities(opportunities.length);
-        }
+        this.log('info', `Crawling local funding for ${state}`);
+        const stateResults = await this.crawlState(state, limit);
+        results.push(...stateResults);
       } catch (error) {
-        this.logger.error(
-          `[Crawler] Error on ${stateCode}-${zip}, skipping: ${error.message}`,
-        );
-        this.errors.push({
-          item: `${stateCode}-${zip}`,
-          error: error.message,
-        });
+        this.log('error', `Error crawling ${state}: ${error.message}`);
       }
     }
+
+    this.log('info', `Completed local funding crawl. Found ${results.length} opportunities`);
+    return results;
   }
 
-  /**
-   * Fetch opportunities for the given zip code.
-   * Override to provide actual fetch logic.
-   */
-  // eslint-disable-next-line class-methods-use-this
-  async fetchOpportunitiesForZip({ stateCode, zip }) {
-    // Placeholder implementation – replace with real HTTP/database logic.
-    return [
+  async crawlState(state, limit) {
+    const zipRanges = STATE_ZIP_MAP[state] || [];
+    const results = [];
+
+    for (const zipRange of zipRanges) {
+      const [start, end] = zipRange.split('-').map(z => parseInt(z));
+      
+      // Sample some zip codes from the range
+      const sampleSize = Math.min(5, Math.ceil((end - start + 1) / 1000));
+      const step = Math.floor((end - start + 1) / sampleSize);
+
+      for (let i = 0; i < sampleSize && results.length < limit; i++) {
+        const zip = start + (i * step);
+        try {
+          const zipResults = await this.searchByZipCode(zip.toString().padStart(5, '0'));
+          results.push(...zipResults);
+        } catch (error) {
+          this.log('error', `Error searching zip ${zip}: ${error.message}`);
+        }
+      }
+
+      if (results.length >= limit) break;
+    }
+
+    return results.slice(0, limit);
+  }
+
+  async searchByZipCode(zipCode) {
+    this.log('debug', `Searching for opportunities near zip code: ${zipCode}`);
+    
+    // This is a placeholder implementation
+    // In a real implementation, this would:
+    // 1. Query local government databases
+    // 2. Search municipal grant programs
+    // 3. Check county-level funding opportunities
+    // 4. Search for community foundation grants
+    
+    const mockResults = [
       {
-        title: `Sample Opportunity ${stateCode}-${zip}`,
-        description:
-          'Placeholder opportunity generated by LocalFundingCrawler.',
-        amount: null,
-        deadline: null,
-        contactUrl: null,
-        sourceUrl: null,
-      },
+        title: `Local Community Grant - ${zipCode}`,
+        description: 'Funding for local community projects',
+        amount: 50000,
+        deadline: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
+        source: 'local-government',
+        location: zipCode,
+        url: `https://example.com/grants/${zipCode}`,
+        eligibility: ['non-profit', 'community-organization'],
+        categories: ['community-development', 'local-impact']
+      }
     ];
+
+    return mockResults;
   }
 
-  /**
-   * Persist opportunities to the database (if configured).
-   */
-  saveOpportunities(stateCode, zip, opportunities) {
-    if (!this.insertStmt) {
-      this.logger.warn('[Crawler] No database configured; skipping persistence');
-      return;
+  async saveResults(results) {
+    if (!this.Database) {
+      await this.initialize();
     }
 
-    const insertMany = this.db.transaction((records) => {
-      for (const record of records) {
-        this.insertStmt.run({
-          state: stateCode,
-          zip,
-          title: record.title,
-          description: record.description,
-          amount: record.amount,
-          deadline: record.deadline,
-          contactUrl: record.contactUrl,
-          sourceUrl: record.sourceUrl,
-        });
-      }
-    });
+    const db = new this.Database();
+    const saved = [];
 
-    insertMany(opportunities);
+    for (const result of results) {
+      try {
+        const saved_result = await db.saveOpportunity({
+          ...result,
+          source: 'local-funding',
+          crawled_at: new Date().toISOString()
+        });
+        saved.push(saved_result);
+      } catch (error) {
+        this.log('error', `Error saving result: ${error.message}`);
+      }
+    }
+
+    this.log('info', `Saved ${saved.length} opportunities to database`);
+    return saved;
   }
 }
 
-module.exports = {
-  LocalFundingCrawler,
-  ALL_STATES,
-  STATE_ZIP_MAP,
-};
-
+export default LocalFundingCrawler;
