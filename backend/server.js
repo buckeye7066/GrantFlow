@@ -8,6 +8,10 @@ import dotenv from 'dotenv'
 import ActionLogStore from './storage/actionLogStore.js'
 import AnyaRuntimeController from './runtime/anyaRuntime.js'
 import adminAuth from './middleware/adminAuth.js'
+import { initDb } from './db/index.js'
+import profilesRouter from './routes/profiles.js'
+import documentsRouter from './routes/documents.js'
+import opportunitiesRouter from './routes/opportunities.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -24,10 +28,19 @@ app.use(
   }),
 )
 
+// Initialize database
+initDb()
+
 const logStore = new ActionLogStore(path.resolve(__dirname, 'data', 'anya-log.json'), {
   maxEntries: Number(process.env.ANYA_LOG_LIMIT ?? 1000),
 })
 const runtime = new AnyaRuntimeController(logStore)
+
+// Mount API routes
+app.use('/api/profiles', profilesRouter)
+app.use('/api/documents', documentsRouter)
+app.use('/api/profiles', documentsRouter) // For /api/profiles/:profileId/documents
+app.use('/api/opportunities', opportunitiesRouter)
 
 app.get('/api/anya/status', async (req, res) => {
   const status = runtime.getStatus()
