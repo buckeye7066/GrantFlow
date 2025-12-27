@@ -82,6 +82,14 @@ async function extractText(buffer, mimeType) {
     return await extractTextFromImage(buffer)
   }
   
+  // For testing: support plain text
+  if (mimeType === 'text/plain') {
+    return {
+      text: buffer.toString('utf-8'),
+      error: null,
+    }
+  }
+  
   return {
     text: '',
     error: `Unsupported file type: ${mimeType}`,

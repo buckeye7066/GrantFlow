@@ -23,7 +23,7 @@ app.use(express.json())
 app.use(cookieParser())
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : undefined,
+    origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : ['http://localhost:5173'],
     credentials: true,
   }),
 )
