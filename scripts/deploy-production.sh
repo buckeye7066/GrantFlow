@@ -144,7 +144,13 @@ install_dependencies() {
     print_step "Installing dependencies..."
     
     cd "$APP_DIR"
-    npm install --production
+    # Use npm ci for clean, reproducible installs in production
+    # Install all dependencies (including devDependencies needed for build)
+    if [[ -f "package-lock.json" ]]; then
+        npm ci
+    else
+        npm install
+    fi
     
     print_success "Dependencies installed"
 }
