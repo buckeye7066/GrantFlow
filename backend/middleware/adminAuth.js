@@ -17,7 +17,7 @@ function extractToken(req) {
   return null
 }
 
-module.exports = function adminAuth(req, res, next) {
+export default function adminAuth(req, res, next) {
   if (req.user && (req.user.role === 'admin' || req.user.isAdmin)) {
     req.anyaActor = req.user.email ?? req.user.id ?? 'admin-user'
     return next()
