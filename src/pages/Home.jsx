@@ -55,7 +55,7 @@ export default function Home() {
                 Why teams choose GrantFlow
               </CardTitle>
               <CardDescription>
-                "GrantFlow didn't just streamline applications - it made our entire funding operation predictable."
+                "GrantFlow didn't just streamline applicationsâ€”it made our entire funding operation predictable."
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4 text-sm text-muted-foreground">

@@ -1,3 +1,5 @@
+import { API_BASE } from './apiBase'
+
 export type AnyaStatus = {
   status: 'idle' | 'running' | 'error'
   currentAction: null | {
@@ -30,6 +32,14 @@ type FetchOptions = {
   signal?: AbortSignal
 }
 
+const buildApiUrl = (path: string): string => {
+  const withoutApiPrefix = path.startsWith('/api') ? path.slice(4) : path
+  if (!withoutApiPrefix || withoutApiPrefix === '/') {
+    return API_BASE
+  }
+  return `${API_BASE}${withoutApiPrefix.startsWith('/') ? withoutApiPrefix : `/${withoutApiPrefix}`}`
+}
+
 function buildHeaders(token?: string | null, contentType = false): HeadersInit {
   const headers: Record<string, string> = {}
   if (contentType) headers['Content-Type'] = 'application/json'
@@ -47,7 +57,7 @@ async function handleResponse<T>(res: Response): Promise<T> {
 }
 
 export async function fetchStatus(options: FetchOptions = {}): Promise<AnyaStatus> {
-  const res = await fetch('/api/anya/status', {
+  const res = await fetch(buildApiUrl('/api/anya/status'), {
     method: 'GET',
     headers: buildHeaders(options.token),
     credentials: 'include',
@@ -57,7 +67,7 @@ export async function fetchStatus(options: FetchOptions = {}): Promise<AnyaStatu
 }
 
 export async function fetchLogs(limit = 25, options: FetchOptions = {}): Promise<AnyaLogEntry[]> {
-  const res = await fetch(`/api/anya/logs?limit=${Math.max(limit, 1)}`, {
+  const res = await fetch(buildApiUrl(`/api/anya/logs?limit=${Math.max(limit, 1)}`), {
     method: 'GET',
     headers: buildHeaders(options.token),
     credentials: 'include',
@@ -72,7 +82,7 @@ export async function triggerAction(
   payload: Record<string, unknown> = {},
   options: FetchOptions = {},
 ) {
-  const res = await fetch(`/api/anya/${action}`, {
+  const res = await fetch(buildApiUrl(`/api/anya/${action}`), {
     method: 'POST',
     headers: buildHeaders(options.token, true),
     credentials: 'include',

@@ -5,7 +5,14 @@ import { base44, type Profile } from "../api/base44Client"
 import { useExperience } from "../contexts/ExperienceContext"
 import { Button } from "../components/ui/button"
 import { Badge } from "../components/ui/badge"
-import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from "../components/ui/card"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "../components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs"
 import {
   Table,
@@ -179,7 +186,7 @@ export default function Organizations() {
                             </Badge>
                           </TableCell>
                           <TableCell className="max-w-xs truncate text-sm text-muted-foreground">
-                            {profile.notes || "No notes yet"}
+                            {profile.notes || "â€”"}
                           </TableCell>
                           <TableCell className="text-right text-sm text-muted-foreground">
                             {new Date(profile.updated_at).toLocaleDateString()}

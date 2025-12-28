@@ -1,3 +1,5 @@
+import { API_BASE } from './apiBase'
+
 // Profile interfaces
 export interface Profile {
   id: string
@@ -170,11 +172,17 @@ const expensesSeed: Expense[] = [
   },
 ]
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000'
+const buildApiUrl = (path: string): string => {
+  const withoutApiPrefix = path.startsWith('/api') ? path.slice(4) : path
+  if (!withoutApiPrefix || withoutApiPrefix === '/') {
+    return API_BASE
+  }
+  return `${API_BASE}${withoutApiPrefix.startsWith('/') ? withoutApiPrefix : `/${withoutApiPrefix}`}`
+}
 
 // API helper function
 async function apiCall<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+  const response = await fetch(buildApiUrl(endpoint), {
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -228,7 +236,7 @@ export const base44 = {
       const formData = new FormData()
       formData.append('file', file)
 
-      const response = await fetch(`${API_BASE_URL}/api/profiles/${profileId}/documents`, {
+      const response = await fetch(buildApiUrl(`/api/profiles/${profileId}/documents`), {
         method: 'POST',
         body: formData,
         credentials: 'include',

@@ -182,7 +182,7 @@ export default function Dashboard() {
   if (isLoading) {
     return (
       <main className="mx-auto max-w-6xl space-y-8 p-6">
-        <LoadingState label="Gathering the latest grant intelligence..." />
+        <LoadingState label="Gathering the latest grant intelligenceâ€¦" />
       </main>
     )
   }
@@ -355,7 +355,7 @@ export default function Dashboard() {
                 {urgentDeadlines.length === 0 ? (
                   <EmptyState
                     title="No urgent deadlines"
-                    description="You're clear for the next seven days. Use the time to strengthen upcoming proposals."
+                    description="Youâ€™re clear for the next seven days. Use the time to strengthen upcoming proposals."
                     icon={<AlarmClock className="h-6 w-6" aria-hidden />}
                     className="border border-dashed bg-muted/20"
                   />
@@ -376,7 +376,7 @@ export default function Dashboard() {
                           <div>
                             <p className="font-medium text-foreground">{grant.name}</p>
                             <p className="text-xs text-muted-foreground">
-                              {grant.organization} - {deadlineLabel}
+                              {grant.organization} â€¢ {deadlineLabel}
                             </p>
                           </div>
                           <Badge variant="warning">
@@ -458,7 +458,7 @@ export default function Dashboard() {
             {recentGrants.length === 0 ? (
               <EmptyState
                 title="No recent activity yet"
-                description="As new grants are added, they'll appear here with status and organization context."
+                description="As new grants are added, theyâ€™ll appear here with status and organization context."
                 icon={<PlusCircle className="h-6 w-6" aria-hidden />}
                 className="border border-dashed bg-muted/20"
               />
