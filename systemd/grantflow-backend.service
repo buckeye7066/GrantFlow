@@ -5,12 +5,12 @@ After=network.target
 
 [Service]
 Type=simple
-User=grantflow
-Group=grantflow
-WorkingDirectory=/opt/grantflow
+User=root
+Group=root
+WorkingDirectory=/var/www/grantflow
 Environment="NODE_ENV=production"
-EnvironmentFile=/opt/grantflow/.env
-ExecStart=/usr/bin/node /opt/grantflow/backend/server.js
+EnvironmentFile=/var/www/grantflow/.env
+ExecStart=/usr/bin/node /var/www/grantflow/backend/server.js
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -20,9 +20,7 @@ SyslogIdentifier=grantflow-backend
 # Security hardening
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/opt/grantflow/backend/data
+ReadWritePaths=/var/www/grantflow/backend/data
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=true
 RestrictRealtime=true
