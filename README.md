@@ -142,6 +142,57 @@ npm run build
 - Enable HTTPS for all production deployments
 - Set appropriate CORS origins
 
+## 🚀 Production Deployment
+
+For deploying GrantFlow to a production environment (Digital Ocean, AWS, etc.), see the comprehensive deployment guide:
+
+**[📘 Production Deployment Guide](docs/DEPLOYMENT.md)**
+
+The deployment guide covers:
+- Digital Ocean server setup
+- Cloudflare and DNS configuration
+- Nginx reverse proxy configuration
+- SSL/TLS certificate setup
+- Backend service configuration with systemd
+- Automated deployment scripts
+- Troubleshooting common issues
+- Health checks and monitoring
+
+### Quick Deploy
+
+For automated deployment on your production server:
+
+```bash
+# Make the deployment script executable
+chmod +x scripts/deploy-production.sh
+
+# Run the deployment
+./scripts/deploy-production.sh
+```
+
+### Production Checklist
+
+Before going live, ensure:
+- [ ] Environment variables configured (`.env.production.example` → `.env`)
+- [ ] Strong, random `ANYA_ADMIN_TOKEN` generated
+- [ ] CORS origins set to production domain(s)
+- [ ] SSL/TLS certificates installed
+- [ ] Nginx configured and running
+- [ ] Backend systemd service enabled
+- [ ] Firewall rules configured (ports 80, 443, 22)
+- [ ] DNS records pointing to your server
+- [ ] Health checks passing
+
+### Production Architecture
+
+```
+GoDaddy Domain → Cloudflare CDN → Digital Ocean Server
+                                           ↓
+                                    Nginx (Reverse Proxy)
+                                    ├── /grantflow/* → Frontend (Static)
+                                    └── /grantflow/api/* → Backend (:4000)
+```
+
 ## 🧪 React + Vite Configuration
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
