@@ -5,6 +5,7 @@ import express from 'express'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
 import dotenv from 'dotenv'
+import rateLimit from 'express-rate-limit'
 
 import ActionLogStore from './storage/actionLogStore.js'
 import { getDb, isDatabaseAvailable } from './db/index.js'
@@ -21,6 +22,16 @@ const __dirname = path.dirname(__filename)
 dotenv.config({ path: path.resolve(process.cwd(), '.env') })
 
 const app = express()
+
+// Rate limiting for API routes
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+
+app.use('/api', apiLimiter)
 app.use(express.json())
 app.use(cookieParser())
 app.use(
