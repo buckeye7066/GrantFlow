@@ -1,14 +1,20 @@
+import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import express from 'express'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
 import dotenv from 'dotenv'
+import rateLimit from 'express-rate-limit'
 
 import ActionLogStore from './storage/actionLogStore.js'
+import { getDb, isDatabaseAvailable } from './db/index.js'
 import AnyaRuntimeController from './runtime/anyaRuntime.js'
-import { getOpportunities } from './services/opportunitiesService.js'
 import adminAuth from './middleware/adminAuth.js'
+import { initDb } from './db/index.js'
+import profilesRouter from './routes/profiles.js'
+import documentsRouter from './routes/documents.js'
+import opportunitiesRouter from './routes/opportunities.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -16,19 +22,55 @@ const __dirname = path.dirname(__filename)
 dotenv.config({ path: path.resolve(process.cwd(), '.env') })
 
 const app = express()
+
+// Rate limiting for API routes
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+
+app.use('/api', apiLimiter)
 app.use(express.json())
 app.use(cookieParser())
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : undefined,
+    origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : ['http://localhost:5173'],
     credentials: true,
   }),
 )
+
+// Initialize database
+initDb()
 
 const logStore = new ActionLogStore(path.resolve(__dirname, 'data', 'anya-log.json'), {
   maxEntries: Number(process.env.ANYA_LOG_LIMIT ?? 1000),
 })
 const runtime = new AnyaRuntimeController(logStore)
+let databaseReady = false
+if (isDatabaseAvailable()) {
+  try {
+    getDb()
+    databaseReady = true
+  } catch (error) {
+    console.error('[Database] Failed to initialize persistence layer:', error)
+  }
+} else {
+  console.warn(
+    '[Database] better-sqlite3 is not installed. Profile/document services are disabled. Install it with "npm install better-sqlite3" and restart the server.',
+  )
+}
+
+// Health check endpoint (no authentication required)
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    service: 'grantflow-backend',
+    version: '1.0.0',
+  })
+})
 
 app.get('/api/anya/status', async (req, res) => {
   const status = runtime.getStatus()
@@ -89,14 +131,47 @@ app.post('/api/anya/explain', adminAuth, async (req, res, next) => {
   }
 })
 
-app.get('/api/opportunities', (req, res) => {
-  try {
-    const opportunities = getOpportunities()
-    res.json({ count: opportunities.length, opportunities })
-  } catch {
-    res.status(500).json({ error: 'Failed to load opportunities' })
-  }
-})
+const clientDistPath = path.resolve(__dirname, '..', 'dist')
+const clientIndexPath = path.join(clientDistPath, 'index.html')
+const hasBuiltClient = fs.existsSync(clientIndexPath)
+
+if (hasBuiltClient) {
+  app.use(
+    '/grantflow',
+    express.static(clientDistPath, {
+      setHeaders(res) {
+        res.setHeader('Cache-Control', 'public, max-age=300, must-revalidate')
+      },
+    }),
+  )
+
+  app.get(['/grantflow', '/grantflow/*'], (req, res, next) => {
+    res.sendFile(clientIndexPath, (error) => {
+      if (error) next(error)
+    })
+  })
+} else {
+  console.warn(
+    '[GrantFlow] dist/ missing. Run "npm run build" to generate the client bundle before serving /grantflow routes.',
+  )
+}
+
+if (databaseReady) {
+  app.use('/api/profiles', adminAuth, profilesRouter)
+  app.use('/api', adminAuth, documentsRouter)
+} else {
+  app.use('/api/profiles', (req, res) =>
+    res
+      .status(503)
+      .json({ error: 'Profile services unavailable: install better-sqlite3 and restart the server.' }),
+  )
+  app.use('/api/documents', (req, res) =>
+    res
+      .status(503)
+      .json({ error: 'Document ingestion unavailable: install better-sqlite3 and restart the server.' }),
+  )
+}
+app.use('/api/opportunities', adminAuth, opportunitiesRouter)
 
 app.use((err, req, res, next) => {
   console.error('[AnyaRuntimeError]', err)
@@ -105,10 +180,13 @@ app.use((err, req, res, next) => {
 })
 
 const PORT = Number.parseInt(process.env.PORT, 10) || 4000
+const HOST = process.env.HOST || '0.0.0.0'
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  app.listen(PORT, () => {
-    console.log(`Anya runtime controller listening on port ${PORT}`)
+  app.listen(PORT, HOST, () => {
+    console.log(`Anya runtime controller listening on ${HOST}:${PORT}`)
+    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`)
+    console.log(`CORS Origins: ${process.env.CORS_ORIGIN || 'not configured'}`)
   })
 }
 
