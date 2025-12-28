@@ -2,51 +2,88 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  color-scheme: light;
-  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  background-color: #f8fafc;
-  color: #0f172a;
-}
+@layer base {
+  :root {
+    color-scheme: light;
+    --background: 213 32% 97%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 224 71% 4%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 222 84% 46%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 215 16% 92%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 215 16% 92%;
+    --muted-foreground: 222 31% 32%;
+    --accent: 210 40% 95%;
+    --accent-foreground: 222 47% 11%;
+    --destructive: 0 70% 50%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 222 84% 46%;
+    --radius: 0.75rem;
+    --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
 
-html,
-body,
-#root {
-  height: 100%;
-}
+  .dark {
+    color-scheme: dark;
+    --background: 217 33% 8%;
+    --foreground: 210 40% 96%;
+    --card: 221 39% 12%;
+    --card-foreground: 210 40% 96%;
+    --popover: 221 39% 12%;
+    --popover-foreground: 210 40% 96%;
+    --primary: 217 90% 60%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 222 31% 17%;
+    --secondary-foreground: 210 40% 96%;
+    --muted: 222 31% 17%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 217 32% 18%;
+    --accent-foreground: 210 40% 96%;
+    --destructive: 0 63% 55%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217 33% 18%;
+    --input: 217 33% 18%;
+    --ring: 217 90% 60%;
+  }
 
-body {
-  margin: 0;
-  min-width: 320px;
-  background-color: inherit;
-}
+  * {
+    border-color: hsl(var(--border));
+  }
 
-a {
-  color: inherit;
-  text-decoration: none;
-}
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    margin: 0;
+    min-width: 320px;
+    font-family: var(--font-sans);
+    font-weight: 400;
+    line-height: 1.5;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
 
-a:hover {
-  text-decoration: underline;
-}
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
 
-button {
-  font: inherit;
-}
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
 
-html.dark {
-  color-scheme: dark;
-  background-color: #0f172a;
-  color: #e2e8f0;
-}
+  a:hover {
+    text-decoration: underline;
+  }
 
-html.dark body {
-  background-color: #0f172a;
-  color: #e2e8f0;
+  button {
+    font: inherit;
+  }
 }
