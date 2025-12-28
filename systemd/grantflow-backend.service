@@ -10,6 +10,8 @@ Group=root
 WorkingDirectory=/var/www/grantflow
 Environment="NODE_ENV=production"
 EnvironmentFile=/var/www/grantflow/.env
+# Create data directory if needed
+ExecStartPre=/bin/mkdir -p /var/www/grantflow/backend/data
 # Run backend directly (it's already ES modules compatible)
 ExecStart=/usr/bin/node backend/server.js
 Restart=always
@@ -17,9 +19,6 @@ RestartSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=grantflow-backend
-
-# Create data directory if needed
-ExecStartPre=/bin/mkdir -p /var/www/grantflow/backend/data
 
 # Security hardening
 NoNewPrivileges=true
