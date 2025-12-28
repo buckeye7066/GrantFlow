@@ -9,36 +9,13 @@ User=root
 Group=root
 WorkingDirectory=/var/www/grantflow
 Environment="NODE_ENV=production"
-EnvironmentFile=/var/www/grantflow/.env
-# Create data directory if needed
-ExecStartPre=/bin/mkdir -p /var/www/grantflow/backend/data
-# Run backend directly (it's already ES modules compatible)
+EnvironmentFile=-/var/www/grantflow/.env
 ExecStart=/usr/bin/node backend/server.js
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=grantflow-backend
-
-# Security hardening
-NoNewPrivileges=true
-PrivateTmp=true
-ReadWritePaths=/var/www/grantflow/backend/data
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-RestrictNamespaces=true
-RestrictRealtime=true
-RestrictSUIDSGID=true
-LockPersonality=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectKernelLogs=true
-ProtectControlGroups=true
-PrivateDevices=true
-SystemCallArchitectures=native
-
-# Resource limits
-LimitNOFILE=65536
-LimitNPROC=512
 
 [Install]
 WantedBy=multi-user.target
