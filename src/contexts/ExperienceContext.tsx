@@ -79,6 +79,7 @@ export function ExperienceProvider({ children }: { children: ReactNode }) {
   return <ExperienceContext.Provider value={value}>{children}</ExperienceContext.Provider>
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useExperience() {
   const context = useContext(ExperienceContext)
   if (!context) {

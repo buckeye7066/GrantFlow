@@ -271,16 +271,19 @@ export const base44 = {
     },
     Grant: {
       async list(_sort: string): Promise<Grant[]> {
+      async list() {
         return grantsSeed
       },
     },
     Milestone: {
       async list(_sort: string): Promise<Milestone[]> {
+      async list() {
         return milestonesSeed
       },
     },
     Expense: {
       async list(_sort: string): Promise<Expense[]> {
+      async list() {
         return expensesSeed
       },
     },

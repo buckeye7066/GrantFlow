@@ -1,3 +1,4 @@
+import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import express from 'express'
@@ -6,6 +7,7 @@ import cookieParser from 'cookie-parser'
 import dotenv from 'dotenv'
 
 import ActionLogStore from './storage/actionLogStore.js'
+import { getDb, isDatabaseAvailable } from './db/index.js'
 import AnyaRuntimeController from './runtime/anyaRuntime.js'
 import adminAuth from './middleware/adminAuth.js'
 import { initDb } from './db/index.js'
@@ -35,6 +37,19 @@ const logStore = new ActionLogStore(path.resolve(__dirname, 'data', 'anya-log.js
   maxEntries: Number(process.env.ANYA_LOG_LIMIT ?? 1000),
 })
 const runtime = new AnyaRuntimeController(logStore)
+let databaseReady = false
+if (isDatabaseAvailable()) {
+  try {
+    getDb()
+    databaseReady = true
+  } catch (error) {
+    console.error('[Database] Failed to initialize persistence layer:', error)
+  }
+} else {
+  console.warn(
+    '[Database] better-sqlite3 is not installed. Profile/document services are disabled. Install it with "npm install better-sqlite3" and restart the server.',
+  )
+}
 
 // Mount API routes
 app.use('/api/profiles', profilesRouter)
@@ -100,6 +115,48 @@ app.post('/api/anya/explain', adminAuth, async (req, res, next) => {
     next(error)
   }
 })
+
+const clientDistPath = path.resolve(__dirname, '..', 'dist')
+const clientIndexPath = path.join(clientDistPath, 'index.html')
+const hasBuiltClient = fs.existsSync(clientIndexPath)
+
+if (hasBuiltClient) {
+  app.use(
+    '/grantflow',
+    express.static(clientDistPath, {
+      setHeaders(res) {
+        res.setHeader('Cache-Control', 'public, max-age=300, must-revalidate')
+      },
+    }),
+  )
+
+  app.get(['/grantflow', '/grantflow/*'], (req, res, next) => {
+    res.sendFile(clientIndexPath, (error) => {
+      if (error) next(error)
+    })
+  })
+} else {
+  console.warn(
+    '[GrantFlow] dist/ missing. Run "npm run build" to generate the client bundle before serving /grantflow routes.',
+  )
+}
+
+if (databaseReady) {
+  app.use('/api/profiles', adminAuth, profilesRouter)
+  app.use('/api', adminAuth, documentsRouter)
+} else {
+  app.use('/api/profiles', (req, res) =>
+    res
+      .status(503)
+      .json({ error: 'Profile services unavailable: install better-sqlite3 and restart the server.' }),
+  )
+  app.use('/api/documents', (req, res) =>
+    res
+      .status(503)
+      .json({ error: 'Document ingestion unavailable: install better-sqlite3 and restart the server.' }),
+  )
+}
+app.use('/api/opportunities', adminAuth, opportunitiesRouter)
 
 app.use((err, req, res, next) => {
   console.error('[AnyaRuntimeError]', err)
