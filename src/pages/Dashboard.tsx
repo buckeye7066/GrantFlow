@@ -121,17 +121,17 @@ export default function Dashboard() {
 
   const grantsQuery = useQuery<Grant[]>({
     queryKey: ['grants'],
-    queryFn: () => base44.entities.Grant.list(),
+    queryFn: () => base44.entities.Grant.list('-created_date'),
   })
 
   const milestonesQuery = useQuery<Milestone[]>({
     queryKey: ['milestones'],
-    queryFn: () => base44.entities.Milestone.list(),
+    queryFn: () => base44.entities.Milestone.list('due_date'),
   })
 
   const expensesQuery = useQuery<Expense[]>({
     queryKey: ['expenses'],
-    queryFn: () => base44.entities.Expense.list(),
+    queryFn: () => base44.entities.Expense.list('-date'),
   })
 
   const isLoading =
@@ -139,10 +139,12 @@ export default function Dashboard() {
 
   const isError = organizationsQuery.isError || grantsQuery.isError || milestonesQuery.isError || expensesQuery.isError
 
-  const organizations = useMemo(() => organizationsQuery.data ?? [], [organizationsQuery.data])
-  const grants = useMemo(() => grantsQuery.data ?? [], [grantsQuery.data])
-  const milestones = useMemo(() => milestonesQuery.data ?? [], [milestonesQuery.data])
-  const expenses = useMemo(() => expensesQuery.data ?? [], [expensesQuery.data])
+  const organizations = organizationsQuery.data ?? []
+  const grants = grantsQuery.data ?? []
+  const milestones = milestonesQuery.data ?? []
+  const expenses = expensesQuery.data ?? []
+
+  const now = new Date()
 
   const totalExpenses = useMemo(
     () => expenses.reduce((sum, item) => sum + (typeof item.amount === 'number' ? item.amount : Number(item.amount) || 0), 0),
@@ -152,7 +154,6 @@ export default function Dashboard() {
   const activeGrants = useMemo(() => grants.filter((grant) => ACTIVE_GRANT_STATUSES.has(grant.status)), [grants])
 
   const upcomingDeadlineGrants = useMemo(() => {
-    const now = new Date()
     return grants.filter((grant) => {
       if (!UPCOMING_DEADLINE_STATUSES.has(grant.status)) return false
       const deadline = toDate(grant.deadline)
@@ -160,10 +161,9 @@ export default function Dashboard() {
       if (deadline === 'rolling') return true
       return isAfter(deadline, now) && isBefore(deadline, addDays(now, 14))
     })
-  }, [grants])
+  }, [grants, now])
 
   const urgentDeadlines = useMemo(() => {
-    const now = new Date()
     return grants
       .filter((grant) => {
         if (!UPCOMING_DEADLINE_STATUSES.has(grant.status)) return false
@@ -178,19 +178,16 @@ export default function Dashboard() {
         return aDate.getTime() - bDate.getTime()
       })
       .slice(0, 5)
-  }, [grants])
+  }, [grants, now])
 
   const upcomingMilestones = useMemo(
     () =>
       milestones
         .map((milestone) => ({ milestone, parsed: toDate(milestone.due_date) }))
-        .filter((entry): entry is { milestone: Milestone; parsed: Date } => {
-          if (!(entry.parsed instanceof Date)) return false
-          return isAfter(entry.parsed, new Date())
-        })
+        .filter((entry): entry is { milestone: Milestone; parsed: Date } => entry.parsed instanceof Date && isAfter(entry.parsed, now))
         .sort((a, b) => a.parsed.getTime() - b.parsed.getTime())
         .slice(0, 5),
-    [milestones],
+    [milestones, now],
   )
 
   const recentGrants = useMemo(() => grants.slice(0, 5), [grants])
@@ -365,7 +362,7 @@ export default function Dashboard() {
                         ? format(deadline, 'MMM d, yyyy')
                         : 'Rolling deadline'
                     const daysAway =
-                      deadline && deadline !== 'rolling' ? differenceInCalendarDays(deadline, new Date()) : undefined
+                      deadline && deadline !== 'rolling' ? differenceInCalendarDays(deadline, now) : undefined
 
                     return (
                       <li key={grant.id} className="flex items-start justify-between gap-4">

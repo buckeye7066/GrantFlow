@@ -1,10 +1,10 @@
-export const DEFAULT_TIMEOUT_MS = 5000;
-export const DEFAULT_MAX_RETRIES = 1;
+const DEFAULT_TIMEOUT_MS = 5000;
+const DEFAULT_MAX_RETRIES = 1;
 
 /**
  * Base crawler that wraps crawl operations with retry/recovery logic.
  */
-export class BaseCrawler {
+class BaseCrawler {
   constructor(options = {}) {
     const {
       items = [],
@@ -29,6 +29,7 @@ export class BaseCrawler {
    * Implement in subclasses to perform actual crawl.
    * @param {*} item
    */
+  // eslint-disable-next-line class-methods-use-this, no-unused-vars
   async crawl(item) {
     throw new Error('crawl(item) must be implemented by subclass');
   }
@@ -60,7 +61,9 @@ export class BaseCrawler {
     }
   }
 
-  /** Retry helper with exponential backoff. */
+  /**
+   * Retry helper with exponential backoff.
+   */
   async withRetry(task, { item }) {
     let attempt = 0;
     let delay = 500;
@@ -109,9 +112,12 @@ export class BaseCrawler {
     );
   }
 
-  /** Kick off a full crawl run. */
+  /**
+   * Kick off a full crawl run.
+   */
   async run() {
     for (const item of this.items) {
+      // eslint-disable-next-line no-await-in-loop
       await this.crawlWithRecovery(item);
     }
     return {
@@ -123,4 +129,9 @@ export class BaseCrawler {
   }
 }
 
-export default BaseCrawler;
+module.exports = {
+  BaseCrawler,
+  DEFAULT_TIMEOUT_MS,
+  DEFAULT_MAX_RETRIES,
+};
+

@@ -23,7 +23,7 @@ export default function adminAuth(req, res, next) {
     return next()
   }
 
-  const configuredToken = process.env.ANYA_ADMIN_TOKEN || process.env.ADMIN_TOKEN
+  const configuredToken = process.env.ANYA_ADMIN_TOKEN
   const token = extractToken(req)
 
   if (!configuredToken && !token) {

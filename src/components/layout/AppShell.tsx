@@ -54,10 +54,9 @@ function KeyboardShortcuts() {
   )
 }
 
-const SESSION_TIMEOUT_MS = 30 * 60 * 1000
-const WARNING_THRESHOLD_MS = 5 * 60 * 1000
-
 function SessionTimeoutNotice() {
+  const SESSION_TIMEOUT_MS = 30 * 60 * 1000
+  const WARNING_THRESHOLD_MS = 5 * 60 * 1000
   const [lastActive, setLastActive] = useState<number>(Date.now())
   const [showWarning, setShowWarning] = useState(false)
 

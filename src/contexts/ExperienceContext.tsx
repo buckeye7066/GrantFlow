@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { differenceInMinutes, formatDistanceToNow } from 'date-fns'
 
@@ -79,7 +80,6 @@ export function ExperienceProvider({ children }: { children: ReactNode }) {
   return <ExperienceContext.Provider value={value}>{children}</ExperienceContext.Provider>
 }
 
-// eslint-disable-next-line react-refresh/only-export-components
 export function useExperience() {
   const context = useContext(ExperienceContext)
   if (!context) {
