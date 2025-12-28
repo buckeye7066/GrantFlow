@@ -12,12 +12,12 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy to DigitalOcean
-        uses: appleboy/ssh-action@v1.0.0
+      - name: Deploy to DigitalOcean via SSH (password auth)
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DO_HOST }}
           username: root
-          key: ${{ secrets.DO_SSH_KEY }}
+          password: ${{ secrets.DO_PASSWORD }}
           script: |
             set -e
             
@@ -29,15 +29,13 @@ jobs:
             git clone https://github.com/buckeye7066/GrantFlow.git grantflow
             cd grantflow
             
-            # Create .env
-            cat > .env << 'ENVEOF'
-            ANYA_ADMIN_TOKEN=${{ secrets.ANYA_ADMIN_TOKEN }}
-            PORT=4000
-            CORS_ORIGIN=https://app.axiombiolabs.org,https://www.axiombiolabs.org
-            OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
-            ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
-            NODE_ENV=production
-            ENVEOF
+            # Create .env with proper secret expansion
+            echo "ANYA_ADMIN_TOKEN=${{ secrets.ANYA_ADMIN_TOKEN }}" > .env
+            echo "PORT=4000" >> .env
+            echo "CORS_ORIGIN=https://app.axiombiolabs.org,https://www.axiombiolabs.org" >> .env
+            echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
+            echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> .env
+            echo "NODE_ENV=production" >> .env
             
             # Install and build
             npm install

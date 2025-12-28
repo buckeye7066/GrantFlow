@@ -5,10 +5,10 @@ Go to: https://github.com/buckeye7066/GrantFlow/settings/secrets/actions
 Add these secrets:
 
 1. **DO_HOST**: `138.197.30.220`
-2. **DO_SSH_KEY**: Your DigitalOcean SSH private key
+2. **DO_PASSWORD**: Your DigitalOcean root password (the one you use to SSH)
 3. **ANYA_ADMIN_TOKEN**: `OLIVIA-2024` (or any admin token)
-4. **OPENAI_API_KEY**: `sk-proj-...` (provided)
-5. **ANTHROPIC_API_KEY**: `sk-ant-...` (provided)
+4. **OPENAI_API_KEY**: Your OpenAI API key
+5. **ANTHROPIC_API_KEY**: Your Anthropic API key
 
 ## How to Deploy
 
@@ -18,15 +18,15 @@ Add these secrets:
 4. Wait 2-3 minutes
 5. Visit: https://app.axiombiolabs.org/grantflow/login
 
-## SSH Key Setup
+## Security Note
 
-If you don't have DO_SSH_KEY:
-```bash
-# On your local machine
-ssh root@138.197.30.220
-cat ~/.ssh/authorized_keys
-# Copy the private key that matches
-```
+The workflow uses password authentication over SSH. The password is stored securely in GitHub Secrets and is never exposed in logs.
+
+For production environments, consider switching to SSH key-based authentication by:
+1. Generating an SSH key pair on the server
+2. Adding the public key to `~/.ssh/authorized_keys`
+3. Storing the private key in GitHub Secrets as `DO_SSH_KEY`
+4. Updating the workflow to use `key:` instead of `password:`
 
 ## Troubleshooting
 
