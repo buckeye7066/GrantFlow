@@ -6,15 +6,6 @@ export default {
     "./src/**/*.{js,ts,jsx,tsx}",
   ],
   theme: {
-    extend: {
-      colors: {
-        'axiom-blue': '#1e40af',
-        'axiom-light-blue': '#3b82f6',
-      },
-    },
-  },
-  plugins: [],
-}
     extend: {},
   },
   plugins: [],

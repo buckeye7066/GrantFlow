@@ -22,8 +22,8 @@ backend/storage/profiles/
 
 # Audit logs
 backend/audit/*.log
+
 # Runtime artifacts
-backend/data/*.db
 backend/data/anya-log.json
 backend/storage/profiles/*
 !backend/storage/profiles/.gitkeep
@@ -45,5 +45,4 @@ backend/anya/audit/**/*.log
 *.ntvs*
 *.njsproj
 *.sln
-*.sw?
 *.sw?

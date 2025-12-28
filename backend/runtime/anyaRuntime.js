@@ -1,6 +1,3 @@
-import { promises as fs } from 'fs'
-import path from 'path'
-import { fileURLToPath } from 'url'
 import { v4 as uuid } from 'uuid'
 import {
   executeQuery,
@@ -10,17 +7,12 @@ import {
   rebuildSearchIndex,
 } from './adminOperations.js'
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
-const AUDIT_DIR = path.join(__dirname, '..', 'anya', 'audit')
-
 class AnyaRuntimeController {
   constructor(logStore) {
     this.logStore = logStore
     this.status = 'idle'
     this.currentAction = null
     this.lastError = null
-    this.auditReady = false
   }
 
   getStatus() {
@@ -37,8 +29,6 @@ class AnyaRuntimeController {
       throw new Error('Anya is currently executing another task')
     }
 
-    await this.#ensureAuditDirectory()
-
     const startedAt = new Date().toISOString()
     this.status = 'running'
     this.currentAction = { action, startedAt, payload }
@@ -54,7 +44,6 @@ class AnyaRuntimeController {
       message: `${action} requested`,
     }
     await this.logStore.append(startLog)
-    await this.#appendAudit(startLog)
 
     try {
       const result = await this.#executeAction(action, payload)
@@ -70,7 +59,6 @@ class AnyaRuntimeController {
         data: result.data,
       }
       await this.logStore.append(successLog)
-      await this.#appendAudit(successLog)
       this.status = 'idle'
       this.currentAction = null
       return successLog
@@ -86,7 +74,6 @@ class AnyaRuntimeController {
         message: error.message,
       }
       await this.logStore.append(errorLog)
-      await this.#appendAudit(errorLog)
       this.status = 'error'
       this.lastError = { message: error.message, occurredAt: failedAt }
       this.currentAction = null
@@ -163,25 +150,6 @@ class AnyaRuntimeController {
 
   async #delay(ms) {
     await new Promise((resolve) => setTimeout(resolve, ms))
-  }
-}
-
-export default AnyaRuntimeController
-
-  async #ensureAuditDirectory() {
-    if (this.auditReady) return
-    await fs.mkdir(AUDIT_DIR, { recursive: true })
-    this.auditReady = true
-  }
-
-  async #appendAudit(entry) {
-    try {
-      const stamp = entry.timestamp ?? new Date().toISOString()
-      const file = path.join(AUDIT_DIR, `${stamp.slice(0, 10)}.log`)
-      await fs.appendFile(file, `${JSON.stringify({ ...entry, timestamp: stamp })}\n`, 'utf8')
-    } catch (error) {
-      console.error('[AnyaRuntime] Unable to persist audit log', error)
-    }
   }
 }
 

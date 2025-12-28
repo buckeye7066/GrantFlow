@@ -5,6 +5,7 @@ import express from 'express'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
 import dotenv from 'dotenv'
+import rateLimit from 'express-rate-limit'
 
 import ActionLogStore from './storage/actionLogStore.js'
 import { getDb, isDatabaseAvailable } from './db/index.js'
@@ -21,6 +22,16 @@ const __dirname = path.dirname(__filename)
 dotenv.config({ path: path.resolve(process.cwd(), '.env') })
 
 const app = express()
+
+// Rate limiting for API routes
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+
+app.use('/api', apiLimiter)
 app.use(express.json())
 app.use(cookieParser())
 app.use(
@@ -51,11 +62,6 @@ if (isDatabaseAvailable()) {
   )
 }
 
-// Mount API routes
-app.use('/api/profiles', profilesRouter)
-app.use('/api/documents', documentsRouter)
-app.use('/api/profiles', documentsRouter) // For /api/profiles/:profileId/documents
-app.use('/api/opportunities', opportunitiesRouter)
 // Health check endpoint (no authentication required)
 app.get('/api/health', (req, res) => {
   res.json({
@@ -174,7 +180,7 @@ app.use((err, req, res, next) => {
 })
 
 const PORT = Number.parseInt(process.env.PORT, 10) || 4000
-const HOST = process.env.NODE_ENV === 'production' ? '127.0.0.1' : '0.0.0.0'
+const HOST = process.env.HOST || '0.0.0.0'
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   app.listen(PORT, HOST, () => {

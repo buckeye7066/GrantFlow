@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "backend": "node backend/server.js",
     "dev:full": "concurrently \"npm run backend\" \"npm run dev\"",
-    "smoke:login": "node ./scripts/smoke-login.mjs"
+    "smoke:login": "node ./scripts/smoke-login.mjs",
+    "start": "node backend/server.js"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.7",

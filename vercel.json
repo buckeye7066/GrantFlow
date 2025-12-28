@@ -1,0 +1,16 @@
+{
+  "rewrites": [
+    {
+      "source": "/grantflow",
+      "destination": "/grantflow/"
+    },
+    {
+      "source": "/grantflow/assets/:path*",
+      "destination": "/assets/:path*"
+    },
+    {
+      "source": "/grantflow/:path*",
+      "destination": "/index.html"
+    }
+  ]
+}

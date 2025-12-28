@@ -2,17 +2,11 @@ PRAGMA journal_mode=WAL;
 
 CREATE TABLE IF NOT EXISTS profiles (
   id TEXT PRIMARY KEY,
-  profile_type TEXT NOT NULL DEFAULT 'organization', -- organization | individual
   profile_type TEXT NOT NULL DEFAULT 'organization',
   display_name TEXT NOT NULL,
   notes TEXT DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-
-  -- canonical identity fields (for IDs, licenses, etc.)
-  full_name TEXT,
-  dob TEXT, -- ISO date: YYYY-MM-DD
-
   full_name TEXT,
   dob TEXT,
   address_line1 TEXT,
@@ -30,10 +24,6 @@ CREATE TABLE IF NOT EXISTS documents (
   storage_path TEXT NOT NULL,
   sha256 TEXT NOT NULL,
   size_bytes INTEGER NOT NULL,
-  status TEXT NOT NULL, -- uploaded | parsing | parsed | applied | failed
-  doc_type TEXT NOT NULL DEFAULT 'unknown',
-  extracted_json TEXT,         -- raw extraction + structured fields
-  suggested_patches_json TEXT, -- patch plan for profile/funding_sources
   status TEXT NOT NULL,
   doc_type TEXT NOT NULL DEFAULT 'unknown',
   extracted_json TEXT,
@@ -45,8 +35,6 @@ CREATE TABLE IF NOT EXISTS documents (
   FOREIGN KEY(profile_id) REFERENCES profiles(id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_documents_profile ON documents(profile_id);
-CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 CREATE INDEX IF NOT EXISTS idx_documents_profile ON documents (profile_id);
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents (status);
 

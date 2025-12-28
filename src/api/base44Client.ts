@@ -270,20 +270,17 @@ export const base44 = {
       },
     },
     Grant: {
-      async list(_sort: string): Promise<Grant[]> {
-      async list() {
+      async list(): Promise<Grant[]> {
         return grantsSeed
       },
     },
     Milestone: {
-      async list(_sort: string): Promise<Milestone[]> {
-      async list() {
+      async list(): Promise<Milestone[]> {
         return milestonesSeed
       },
     },
     Expense: {
-      async list(_sort: string): Promise<Expense[]> {
-      async list() {
+      async list(): Promise<Expense[]> {
         return expensesSeed
       },
     },

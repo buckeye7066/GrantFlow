@@ -1,26 +1,16 @@
-import path from 'path'
-import fs from 'fs/promises'
-import { createRequire } from 'module'
-import { fileURLToPath } from 'url'
-import {
-  BaseCrawler,
-  DEFAULT_TIMEOUT_MS,
-  DEFAULT_MAX_RETRIES,
-} from './base.js'
+const path = require('path');
+const { BaseCrawler, DEFAULT_TIMEOUT_MS, DEFAULT_MAX_RETRIES } = require('./base');
 
-const require = createRequire(import.meta.url)
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
-
-let Database = null
+let Database;
 try {
-  // Prefer better-sqlite3 when available; fall back to JSON persistence otherwise.
-  Database = require('better-sqlite3')
-} catch (error) {
-  Database = null
+  // Prefer better-sqlite3 when available; fall back to no-op persistence otherwise.
+  // eslint-disable-next-line global-require
+  Database = require('better-sqlite3');
+} catch (_) {
+  Database = null;
 }
 
-export const ALL_STATES = [
+const ALL_STATES = [
   'AL',
   'AK',
   'AZ',
@@ -76,53 +66,12 @@ export const ALL_STATES = [
   'VI',
   'GU',
   'AS',
-]
+];
 
-const DEFAULT_STATE_ZIP_MAP = new Map([
-  ['CA', ['94102', '95814']],
-  ['NY', ['10001', '11742']],
-  ['TX', ['73301', '78701']],
-])
-
-export const STATE_ZIP_MAP = new Map(DEFAULT_STATE_ZIP_MAP)
-const JSON_STORE_PATH = path.join(__dirname, '..', 'data', 'opportunities.json')
-
-function normaliseZip(zip) {
-  return String(zip ?? '').trim()
-}
-
-export function configureStateZipMap(entries = {}) {
-  STATE_ZIP_MAP.clear()
-  if (!entries || typeof entries !== 'object') {
-    for (const [state, zips] of DEFAULT_STATE_ZIP_MAP.entries()) {
-      STATE_ZIP_MAP.set(state, [...zips])
-    }
-    return
-  }
-
-  for (const [state, zips] of Object.entries(entries)) {
-    if (!Array.isArray(zips)) continue
-    const sanitized = zips.map(normaliseZip).filter(Boolean)
-    if (sanitized.length) {
-      STATE_ZIP_MAP.set(state.toUpperCase(), sanitized)
-    }
-  }
-
-  if (!STATE_ZIP_MAP.size) {
-    for (const [state, zips] of DEFAULT_STATE_ZIP_MAP.entries()) {
-      STATE_ZIP_MAP.set(state, [...zips])
-    }
-  }
-}
-
-async function ensureJsonStore() {
-  await fs.mkdir(path.dirname(JSON_STORE_PATH), { recursive: true })
-  try {
-    await fs.access(JSON_STORE_PATH)
-  } catch (error) {
-    await fs.writeFile(JSON_STORE_PATH, JSON.stringify({}, null, 2), 'utf8')
-  }
-}
+/**
+ * Placeholder zip code mapping; expect real configuration to override.
+ */
+const STATE_ZIP_MAP = new Map();
 
 const INSERT_OPPORTUNITY_SQL = `
   INSERT INTO funding_sources (
@@ -155,9 +104,9 @@ const INSERT_OPPORTUNITY_SQL = `
     contact_url = excluded.contact_url,
     source_url = excluded.source_url,
     updated_at = datetime('now')
-`
+`;
 
-export class LocalFundingCrawler extends BaseCrawler {
+class LocalFundingCrawler extends BaseCrawler {
   constructor(options = {}) {
     const {
       states = ALL_STATES,
@@ -166,24 +115,18 @@ export class LocalFundingCrawler extends BaseCrawler {
       logger = console,
       dbPath = path.join(__dirname, '..', 'data', 'grantflow.db'),
       db = null,
-    } = options
+    } = options;
 
     super({
       items: states,
       timeoutMs,
       maxRetries,
       logger,
-    })
+    });
 
     this.db =
-      db || (Database ? new Database(dbPath, { fileMustExist: false }) : null)
-    this.insertStmt = this.db ? this.db.prepare(INSERT_OPPORTUNITY_SQL) : null
-    this.jsonStorePath = JSON_STORE_PATH
-    this.warnedAboutJsonPersistence = false
-
-    if (!STATE_ZIP_MAP.size) {
-      configureStateZipMap()
-    }
+      db || (Database ? new Database(dbPath, { fileMustExist: false }) : null);
+    this.insertStmt = this.db ? this.db.prepare(INSERT_OPPORTUNITY_SQL) : null;
   }
 
   /**
@@ -191,31 +134,32 @@ export class LocalFundingCrawler extends BaseCrawler {
    * Each zip code error is logged and skipped.
    */
   async crawl(stateCode) {
-    const zipCodes = STATE_ZIP_MAP.get(stateCode) || []
+    const zipCodes = STATE_ZIP_MAP.get(stateCode) || [];
     if (!zipCodes.length) {
-      this.logger.warn(`[Crawler] No zip codes configured for ${stateCode}`)
-      return
+      this.logger.warn(`[Crawler] No zip codes configured for ${stateCode}`);
+      return;
     }
 
     for (const zip of zipCodes) {
       try {
+        // eslint-disable-next-line no-await-in-loop
         const opportunities = await this.fetchOpportunitiesForZip({
           stateCode,
           zip,
-        })
+        });
 
         if (opportunities.length) {
-          await this.saveOpportunities(stateCode, zip, opportunities)
-          this.incrementOpportunities(opportunities.length)
+          this.saveOpportunities(stateCode, zip, opportunities);
+          this.incrementOpportunities(opportunities.length);
         }
       } catch (error) {
         this.logger.error(
           `[Crawler] Error on ${stateCode}-${zip}, skipping: ${error.message}`,
-        )
+        );
         this.errors.push({
           item: `${stateCode}-${zip}`,
           error: error.message,
-        })
+        });
       }
     }
   }
@@ -224,6 +168,7 @@ export class LocalFundingCrawler extends BaseCrawler {
    * Fetch opportunities for the given zip code.
    * Override to provide actual fetch logic.
    */
+  // eslint-disable-next-line class-methods-use-this
   async fetchOpportunitiesForZip({ stateCode, zip }) {
     // Placeholder implementation – replace with real HTTP/database logic.
     return [
@@ -236,44 +181,16 @@ export class LocalFundingCrawler extends BaseCrawler {
         contactUrl: null,
         sourceUrl: null,
       },
-    ]
+    ];
   }
 
   /**
    * Persist opportunities to the database (if configured).
    */
-  async saveOpportunities(stateCode, zip, opportunities) {
+  saveOpportunities(stateCode, zip, opportunities) {
     if (!this.insertStmt) {
-      if (!this.warnedAboutJsonPersistence) {
-        this.logger.info(
-          '[Crawler] No SQLite database configured; using JSON persistence store.',
-        )
-        this.warnedAboutJsonPersistence = true
-      }
-
-      await ensureJsonStore()
-      let existing = {}
-      try {
-        const raw = await fs.readFile(this.jsonStorePath, 'utf8')
-        existing = raw ? JSON.parse(raw) : {}
-      } catch (error) {
-        existing = {}
-      }
-
-      const key = `${stateCode}-${zip}`
-      existing[key] = opportunities.map((record) => ({
-        ...record,
-        state: stateCode,
-        zip,
-        savedAt: new Date().toISOString(),
-      }))
-
-      await fs.writeFile(
-        this.jsonStorePath,
-        JSON.stringify(existing, null, 2),
-        'utf8',
-      )
-      return
+      this.logger.warn('[Crawler] No database configured; skipping persistence');
+      return;
     }
 
     const insertMany = this.db.transaction((records) => {
@@ -287,37 +204,17 @@ export class LocalFundingCrawler extends BaseCrawler {
           deadline: record.deadline,
           contactUrl: record.contactUrl,
           sourceUrl: record.sourceUrl,
-        })
+        });
       }
-    })
+    });
 
-    insertMany(opportunities)
-  }
-
-  /**
-   * Orchestrate the crawl run and return summary stats.
-   */
-  async run() {
-    const result = await super.run()
-
-    this.logger.info(
-      `[Crawler] Completed run – ${result.opportunitiesFound} opportunities found across ${result.completed} states.`,
-    )
-
-    if (result.errors.length) {
-      this.logger.warn(
-        `[Crawler] Encountered ${result.errors.length} errors:\n` +
-          result.errors
-            .map(
-              ({ item, error }) =>
-                `  • ${item}: ${error}`.replace(/\s+/g, ' ').trim(),
-            )
-            .join('\n'),
-      )
-    }
-
-    return result
+    insertMany(opportunities);
   }
 }
 
-export default LocalFundingCrawler
+module.exports = {
+  LocalFundingCrawler,
+  ALL_STATES,
+  STATE_ZIP_MAP,
+};
+
