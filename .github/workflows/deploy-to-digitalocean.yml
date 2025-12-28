@@ -1,65 +1,41 @@
 name: Deploy to DigitalOcean
 
 on:
-  workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy to DigitalOcean via SSH (password auth)
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Deploy to DigitalOcean
+        uses: appleboy/ssh-action@master
         with:
-          host: ${{ secrets.DO_HOST }}
+          host: ${{ secrets.DROPLET_IP }}
           username: root
-          password: ${{ secrets.DO_PASSWORD }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            set -e
+            cd /root/GrantFlow
+            git pull origin main
             
-            # Remove broken directory
-            cd /var/www
-            rm -rf grantflow
-            
-            # Clone fresh
-            git clone https://github.com/buckeye7066/GrantFlow.git grantflow
-            cd grantflow
-            
-            # Create .env
-            cat > .env << 'ENVEOF'
-            ANYA_ADMIN_TOKEN=${{ secrets.ANYA_ADMIN_TOKEN }}
-            PORT=4000
-            CORS_ORIGIN=https://app.axiombiolabs.org,https://www.axiombiolabs.org
-            OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
-            ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
-            NODE_ENV=production
-            ENVEOF
-            
-            # Install and build
+            # Install dependencies
             npm install
+            
+            # Build the application
             npm run build
             
-            # Deploy frontend files
-            mkdir -p /var/www/html/grantflow
-            cp -r dist/* /var/www/html/grantflow/
-            chown -R www-data:www-data /var/www/html/grantflow
-            chmod -R 755 /var/www/html/grantflow
+            # Stop existing PM2 process
+            pm2 stop grantflow || true
             
-            # Setup nginx
-            cp nginx/grantflow.conf /etc/nginx/sites-available/grantflow
-            ln -sf /etc/nginx/sites-available/grantflow /etc/nginx/sites-enabled/
-            nginx -t
-            systemctl reload nginx
+            # Create .env
+            echo "ANYA_ADMIN_TOKEN=${{ secrets.ANYA_ADMIN_TOKEN }}" > .env
+            echo "PORT=4000" >> .env
+            echo "CORS_ORIGIN=https://app.axiombiolabs.org,https://www.axiombiolabs.org" >> .env
+            echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
+            echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> .env
+            echo "NODE_ENV=production" >> .env
             
-            # Setup systemd
-            cp systemd/grantflow-backend.service /etc/systemd/system/
-            systemctl daemon-reload
-            systemctl enable grantflow-backend
-            systemctl restart grantflow-backend
-            
-            # Wait and health check
-            sleep 3
-            curl -f http://localhost:4000/api/health || exit 1
-            
-            echo "✅ Deployment complete!"
+            # Start with PM2
+            pm2 start dist/index.js --name grantflow
+            pm2 save
