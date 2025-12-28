@@ -51,11 +51,6 @@ if (isDatabaseAvailable()) {
   )
 }
 
-// Mount API routes
-app.use('/api/profiles', profilesRouter)
-app.use('/api/documents', documentsRouter)
-app.use('/api/profiles', documentsRouter) // For /api/profiles/:profileId/documents
-app.use('/api/opportunities', opportunitiesRouter)
 // Health check endpoint (no authentication required)
 app.get('/api/health', (req, res) => {
   res.json({
@@ -174,7 +169,7 @@ app.use((err, req, res, next) => {
 })
 
 const PORT = Number.parseInt(process.env.PORT, 10) || 4000
-const HOST = process.env.NODE_ENV === 'production' ? '127.0.0.1' : '0.0.0.0'
+const HOST = process.env.HOST || '0.0.0.0'
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   app.listen(PORT, HOST, () => {
