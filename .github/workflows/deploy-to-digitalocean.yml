@@ -41,6 +41,9 @@ jobs:
             npm install
             npm run build
             
+            # Create backend data directory
+            mkdir -p backend/data
+            
             # Deploy frontend files
             mkdir -p /var/www/html/grantflow
             cp -r dist/* /var/www/html/grantflow/
