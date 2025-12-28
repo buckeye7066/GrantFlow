@@ -132,17 +132,17 @@ export const base44 = {
       },
     },
     Grant: {
-      async list(_sort: string) {
+      async list() {
         return grantsSeed
       },
     },
     Milestone: {
-      async list(_sort: string) {
+      async list() {
         return milestonesSeed
       },
     },
     Expense: {
-      async list(_sort: string) {
+      async list() {
         return expensesSeed
       },
     },
