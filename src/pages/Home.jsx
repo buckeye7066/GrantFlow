@@ -1,143 +1,245 @@
-import { Link } from 'react-router-dom';
+﻿import { Link } from "react-router-dom"
+import {
+  ArrowRight,
+  BarChart3,
+  Building2,
+  CheckCircle2,
+  Hospital,
+  Layers,
+  Search,
+  ShieldCheck,
+  Sparkles,
+} from "lucide-react"
+import { Button } from "../components/ui/button"
+import { Badge } from "../components/ui/badge"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "../components/ui/card"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs"
 
 export default function Home() {
   return (
-    <div className="min-h-screen">
-      {/* Hero Section */}
-      <section className="bg-gradient-to-r from-blue-600 to-blue-800 text-white py-20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center">
-            <h1 className="text-5xl md:text-6xl font-bold mb-6">
-              Find Funding Sources with GrantFlow
-            </h1>
-            <p className="text-xl md:text-2xl mb-8 text-blue-100">
-              Streamline your grant search and application process with AI-powered matching
-            </p>
-            <div className="flex flex-col sm:flex-row justify-center gap-4">
-              <Link
-                to="/pricing"
-                className="bg-white text-blue-700 px-8 py-4 rounded-lg text-lg font-semibold hover:bg-blue-50 transition"
-              >
-                Get Started
-              </Link>
-              <a
-                href="#features"
-                className="bg-blue-700 text-white px-8 py-4 rounded-lg text-lg font-semibold hover:bg-blue-600 transition border-2 border-white"
-              >
-                Learn More
-              </a>
+    <div className="space-y-24 bg-background text-foreground">
+      <section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-primary/10 via-primary/5 to-primary/20 px-6 py-16 shadow-sm">
+        <div className="mx-auto flex max-w-6xl flex-col gap-10 lg:flex-row lg:items-center">
+          <div className="space-y-6">
+            <Badge className="w-fit bg-primary text-primary-foreground">Grant intelligence platform</Badge>
+            <div className="space-y-4">
+              <h1 className="text-4xl font-semibold tracking-tight text-foreground sm:text-5xl">
+                Find, win, and manage grants in one modern workspace.
+              </h1>
+              <p className="text-base text-muted-foreground sm:text-lg">
+                GrantFlow surfaces aligned opportunities, automates the busywork, and keeps every stakeholder on the same page.
+              </p>
+            </div>
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <Button asChild size="lg">
+                <Link to="/pricing">
+                  Start a guided tour
+                  <ArrowRight className="h-4 w-4" aria-hidden />
+                </Link>
+              </Button>
+              <Button asChild variant="outline" size="lg">
+                <Link to="#features">Explore the feature set</Link>
+              </Button>
             </div>
           </div>
+          <Card className="relative w-full max-w-xl border-none bg-background/80 backdrop-blur">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-lg font-semibold text-foreground">
+                <Sparkles className="h-5 w-5 text-primary" aria-hidden />
+                Why teams choose GrantFlow
+              </CardTitle>
+              <CardDescription>
+                "GrantFlow didn't just streamline applications - it made our entire funding operation predictable."
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4 text-sm text-muted-foreground">
+              <div className="flex items-start gap-3">
+                <Search className="mt-1 h-4 w-4 text-primary" aria-hidden />
+                <p>Opportunity engine trained on healthcare, education, and workforce datasets.</p>
+              </div>
+              <div className="flex items-start gap-3">
+                <Layers className="mt-1 h-4 w-4 text-primary" aria-hidden />
+                <p>Workflow guardrails with approval checkpoints and real-time collaboration.</p>
+              </div>
+              <div className="flex items-start gap-3">
+                <ShieldCheck className="mt-1 h-4 w-4 text-primary" aria-hidden />
+                <p>Security that meets HIPAA expectations and funder documentation requirements.</p>
+              </div>
+            </CardContent>
+          </Card>
         </div>
       </section>
 
-      {/* Features Section */}
-      <section id="features" className="py-20 bg-gray-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center mb-16">
-            <h2 className="text-4xl font-bold text-gray-900 mb-4">
-              Powerful Features for Grant Seekers
-            </h2>
-            <p className="text-xl text-gray-600">
-              Everything you need to find and secure funding for your projects
-            </p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            <div className="bg-white p-8 rounded-lg shadow-md">
-              <div className="text-blue-600 text-4xl mb-4">🔍</div>
-              <h3 className="text-2xl font-bold mb-4">Smart Search</h3>
-              <p className="text-gray-600">
-                AI-powered grant matching that connects you with the most relevant funding opportunities
-                based on your profile and needs.
-              </p>
-            </div>
-            <div className="bg-white p-8 rounded-lg shadow-md">
-              <div className="text-blue-600 text-4xl mb-4">📊</div>
-              <h3 className="text-2xl font-bold mb-4">Application Tracking</h3>
-              <p className="text-gray-600">
-                Keep track of all your grant applications in one place with automated reminders and
-                status updates.
-              </p>
-            </div>
-            <div className="bg-white p-8 rounded-lg shadow-md">
-              <div className="text-blue-600 text-4xl mb-4">🔒</div>
-              <h3 className="text-2xl font-bold mb-4">Secure & Compliant</h3>
-              <p className="text-gray-600">
-                HIPAA-compliant data handling with enterprise-grade security to protect your sensitive
-                information.
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Benefits Section */}
-      <section className="py-20 bg-white">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-12 items-center">
-            <div>
-              <h2 className="text-4xl font-bold text-gray-900 mb-6">
-                Why Choose GrantFlow?
-              </h2>
-              <ul className="space-y-4">
-                <li className="flex items-start">
-                  <span className="text-blue-600 mr-2">✓</span>
-                  <span className="text-gray-700">
-                    <strong>Comprehensive Database:</strong> Access thousands of grant opportunities
-                    updated daily
-                  </span>
-                </li>
-                <li className="flex items-start">
-                  <span className="text-blue-600 mr-2">✓</span>
-                  <span className="text-gray-700">
-                    <strong>Time-Saving:</strong> Reduce research time by up to 70% with our AI matching
-                    algorithm
-                  </span>
-                </li>
-                <li className="flex items-start">
-                  <span className="text-blue-600 mr-2">✓</span>
-                  <span className="text-gray-700">
-                    <strong>Expert Support:</strong> Dedicated support team to help you every step of the way
-                  </span>
-                </li>
-                <li className="flex items-start">
-                  <span className="text-blue-600 mr-2">✓</span>
-                  <span className="text-gray-700">
-                    <strong>Success Tracking:</strong> Monitor your application success rate and optimize
-                    your strategy
-                  </span>
-                </li>
-              </ul>
-            </div>
-            <div className="bg-blue-50 p-8 rounded-lg">
-              <p className="text-gray-700 italic text-lg mb-4">
-                "GrantFlow has transformed how we find and apply for grants. We've secured 3x more funding
-                since switching to this platform."
-              </p>
-              <p className="font-semibold text-gray-900">- Healthcare Organization</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* CTA Section */}
-      <section id="contact" className="bg-blue-600 text-white py-20">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-          <h2 className="text-4xl font-bold mb-6">
-            Ready to Find Your Next Grant?
-          </h2>
-          <p className="text-xl mb-8 text-blue-100">
-            Join thousands of organizations that have successfully secured funding with GrantFlow
+      <section id="features" className="mx-auto max-w-6xl space-y-12 px-6">
+        <div className="space-y-3 text-center">
+          <Badge variant="secondary" className="mx-auto w-fit">Core capabilities</Badge>
+          <h2 className="text-3xl font-semibold tracking-tight">Everything you need to run grant operations</h2>
+          <p className="mx-auto max-w-2xl text-muted-foreground">
+            Skip spreadsheets. GrantFlow keeps discovery, decisioning, and compliance in one organized, auditable system.
           </p>
-          <Link
-            to="/pricing"
-            className="inline-block bg-white text-blue-700 px-8 py-4 rounded-lg text-lg font-semibold hover:bg-blue-50 transition"
-          >
-            Start Your Free Trial
-          </Link>
-          <p className="mt-4 text-blue-100">No credit card required</p>
+        </div>
+        <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+          <Card className="h-full">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-lg">
+                <Search className="h-5 w-5 text-primary" aria-hidden />
+                Precision matching
+              </CardTitle>
+              <CardDescription>Surface leads using mission alignment, geography, eligibility, and award size.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm text-muted-foreground">
+              <p>Blend public datasets with your historical wins to find the best-fit opportunities automatically.</p>
+              <p>Save custom views for different program teams or funding priorities.</p>
+            </CardContent>
+          </Card>
+          <Card className="h-full">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-lg">
+                <BarChart3 className="h-5 w-5 text-primary" aria-hidden />
+                Pipeline forecasting
+              </CardTitle>
+              <CardDescription>Track probability, effort, and projected impact across every open grant.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm text-muted-foreground">
+              <p>Spot at-risk submissions with automated reminders and color-coded urgency states.</p>
+              <p>Share tailored snapshots with finance or executive stakeholders instantly.</p>
+            </CardContent>
+          </Card>
+          <Card className="h-full">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-lg">
+                <ShieldCheck className="h-5 w-5 text-primary" aria-hidden />
+                Compliance built-in
+              </CardTitle>
+              <CardDescription>HIPAA-aware storage, permissioned collaboration, and audit-ready exports.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm text-muted-foreground">
+              <p>Version every document with clear attribution. Lock final submissions for historical reference.</p>
+              <p>Generate compliance packets for funders or internal reviews in seconds.</p>
+            </CardContent>
+          </Card>
+        </div>
+      </section>
+
+      <section className="mx-auto max-w-6xl space-y-8 px-6">
+        <Tabs defaultValue="nonprofit" className="space-y-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="space-y-3">
+              <h2 className="text-3xl font-semibold tracking-tight">Adaptable to how your team works</h2>
+              <p className="max-w-2xl text-muted-foreground">
+                Toggle to see how different sectors rely on GrantFlow to accelerate their funding pipeline.
+              </p>
+            </div>
+            <TabsList>
+              <TabsTrigger value="nonprofit">Community orgs</TabsTrigger>
+              <TabsTrigger value="health">Healthcare</TabsTrigger>
+              <TabsTrigger value="education">Education</TabsTrigger>
+            </TabsList>
+          </div>
+
+          <TabsContent value="nonprofit" className="mt-0">
+            <Card className="border-muted">
+              <CardHeader className="flex flex-col gap-2">
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <Building2 className="h-5 w-5 text-primary" aria-hidden />
+                  Nonprofit alliances
+                </CardTitle>
+                <CardDescription>Coordinate partners, volunteers, and rotating grant writers with ease.</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-3 text-sm text-muted-foreground md:grid-cols-2">
+                <div className="flex items-start gap-2">
+                  <CheckCircle2 className="mt-1 h-4 w-4 text-primary" aria-hidden />
+                  <span>Shared opportunity library with notes and eligibility criteria stored alongside each record.</span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <CheckCircle2 className="mt-1 h-4 w-4 text-primary" aria-hidden />
+                  <span>Role-based permissions so partner staff can collaborate without exposing sensitive data.</span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <CheckCircle2 className="mt-1 h-4 w-4 text-primary" aria-hidden />
+                  <span>Track commitments across fiscal years to prove impact to board members and donors.</span>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="health" className="mt-0">
+            <Card className="border-muted">
+              <CardHeader className="flex flex-col gap-2">
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <Hospital className="h-5 w-5 text-primary" aria-hidden />
+                  Health systems
+                </CardTitle>
+                <CardDescription>Protect PHI, align stakeholders, and speed reimbursement programs.</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-3 text-sm text-muted-foreground md:grid-cols-2">
+                <div className="flex items-start gap-2">
+                  <CheckCircle2 className="mt-1 h-4 w-4 text-primary" aria-hidden />
+                  <span>Store templates for narratives, budgets, and letters while keeping sensitive data locked down.</span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <CheckCircle2 className="mt-1 h-4 w-4 text-primary" aria-hidden />
+                  <span>Route fundraising, compliance, and finance approvals in one checklist.</span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <CheckCircle2 className="mt-1 h-4 w-4 text-primary" aria-hidden />
+                  <span>Track clinical program outcomes for faster reporting back to funders.</span>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="education" className="mt-0">
+            <Card className="border-muted">
+              <CardHeader className="flex flex-col gap-2">
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <Layers className="h-5 w-5 text-primary" aria-hidden />
+                  Schools & workforce
+                </CardTitle>
+                <CardDescription>Connect classroom initiatives to regional economic development goals.</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-3 text-sm text-muted-foreground md:grid-cols-2">
+                <div className="flex items-start gap-2">
+                  <CheckCircle2 className="mt-1 h-4 w-4 text-primary" aria-hidden />
+                  <span>Bundle federal, state, and private grants into coordinated funding calendars.</span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <CheckCircle2 className="mt-1 h-4 w-4 text-primary" aria-hidden />
+                  <span>Keep career services, academics, and finance aligned through shared dashboards.</span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <CheckCircle2 className="mt-1 h-4 w-4 text-primary" aria-hidden />
+                  <span>Roll up outcomes and budget utilization for board and accreditation reporting.</span>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
+      </section>
+
+      <section className="mx-auto max-w-5xl rounded-3xl border border-muted bg-card px-6 py-16 text-center shadow-sm">
+        <div className="space-y-4">
+          <Badge variant="secondary" className="mx-auto w-fit">Ready to move faster?</Badge>
+          <h2 className="text-3xl font-semibold tracking-tight text-foreground">Let GrantFlow run point on your next funding cycle</h2>
+          <p className="mx-auto max-w-2xl text-muted-foreground">
+            Launch with a curated opportunity list, workflows tailored to your organization, and built-in compliance guardrails.
+          </p>
+          <div className="flex flex-col items-center justify-center gap-3 sm:flex-row">
+            <Button asChild size="lg">
+              <Link to="/pricing">View plans and onboarding timelines</Link>
+            </Button>
+            <Button asChild variant="outline" size="lg">
+              <Link to="/contact">Chat with a specialist</Link>
+            </Button>
+          </div>
         </div>
       </section>
     </div>
-  );
+  )
 }
