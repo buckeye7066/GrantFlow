@@ -164,6 +164,9 @@ class AnyaRuntimeController {
   async #delay(ms) {
     await new Promise((resolve) => setTimeout(resolve, ms))
   }
+}
+
+export default AnyaRuntimeController
 
   async #ensureAuditDirectory() {
     if (this.auditReady) return

@@ -10,6 +10,7 @@ import ActionLogStore from './storage/actionLogStore.js'
 import { getDb, isDatabaseAvailable } from './db/index.js'
 import AnyaRuntimeController from './runtime/anyaRuntime.js'
 import adminAuth from './middleware/adminAuth.js'
+import { initDb } from './db/index.js'
 import profilesRouter from './routes/profiles.js'
 import documentsRouter from './routes/documents.js'
 import opportunitiesRouter from './routes/opportunities.js'
@@ -24,10 +25,13 @@ app.use(express.json())
 app.use(cookieParser())
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : undefined,
+    origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : ['http://localhost:5173'],
     credentials: true,
   }),
 )
+
+// Initialize database
+initDb()
 
 const logStore = new ActionLogStore(path.resolve(__dirname, 'data', 'anya-log.json'), {
   maxEntries: Number(process.env.ANYA_LOG_LIMIT ?? 1000),
@@ -47,6 +51,11 @@ if (isDatabaseAvailable()) {
   )
 }
 
+// Mount API routes
+app.use('/api/profiles', profilesRouter)
+app.use('/api/documents', documentsRouter)
+app.use('/api/profiles', documentsRouter) // For /api/profiles/:profileId/documents
+app.use('/api/opportunities', opportunitiesRouter)
 // Health check endpoint (no authentication required)
 app.get('/api/health', (req, res) => {
   res.json({
