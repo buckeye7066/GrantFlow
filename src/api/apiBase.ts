@@ -1,3 +1,2 @@
-export { API_BASE } from '../../frontend/src/api/apiBase'
-
+export const API_BASE = `${import.meta.env.BASE_URL}api`
 
