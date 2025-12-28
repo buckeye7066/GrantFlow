@@ -66,6 +66,17 @@ export function getDb() {
   return dbInstance
 }
 
+export function initDb() {
+  // Initialize database if available
+  if (isDatabaseAvailable()) {
+    try {
+      getDb()
+    } catch (error) {
+      console.error('Failed to initialize database:', error)
+    }
+  }
+}
+
 export function isDatabaseAvailable() {
   return Boolean(Database)
 }

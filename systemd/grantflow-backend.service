@@ -1,0 +1,41 @@
+[Unit]
+Description=GrantFlow Backend API Service
+Documentation=https://github.com/buckeye7066/GrantFlow
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/var/www/grantflow
+Environment="NODE_ENV=production"
+EnvironmentFile=/var/www/grantflow/.env
+ExecStart=/usr/bin/node /var/www/grantflow/backend/server.js
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=grantflow-backend
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ReadWritePaths=/var/www/grantflow/backend/data
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+PrivateDevices=true
+SystemCallArchitectures=native
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=512
+
+[Install]
+WantedBy=multi-user.target

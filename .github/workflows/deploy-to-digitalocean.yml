@@ -1,0 +1,65 @@
+name: Deploy to DigitalOcean
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to DigitalOcean
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.DO_HOST }}
+          username: root
+          key: ${{ secrets.DO_SSH_KEY }}
+          script: |
+            set -e
+            
+            # Remove broken directory
+            cd /var/www
+            rm -rf grantflow
+            
+            # Clone fresh
+            git clone https://github.com/buckeye7066/GrantFlow.git grantflow
+            cd grantflow
+            
+            # Create .env
+            cat > .env << 'ENVEOF'
+            ANYA_ADMIN_TOKEN=${{ secrets.ANYA_ADMIN_TOKEN }}
+            PORT=4000
+            CORS_ORIGIN=https://app.axiombiolabs.org,https://www.axiombiolabs.org
+            OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+            ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+            NODE_ENV=production
+            ENVEOF
+            
+            # Install and build
+            npm install
+            npm run build
+            
+            # Deploy frontend files
+            mkdir -p /var/www/html/grantflow
+            cp -r dist/* /var/www/html/grantflow/
+            chown -R www-data:www-data /var/www/html/grantflow
+            chmod -R 755 /var/www/html/grantflow
+            
+            # Setup nginx
+            cp nginx/grantflow.conf /etc/nginx/sites-available/grantflow
+            ln -sf /etc/nginx/sites-available/grantflow /etc/nginx/sites-enabled/
+            nginx -t
+            systemctl reload nginx
+            
+            # Setup systemd
+            cp systemd/grantflow-backend.service /etc/systemd/system/
+            systemctl daemon-reload
+            systemctl enable grantflow-backend
+            systemctl restart grantflow-backend
+            
+            # Wait and health check
+            sleep 3
+            curl -f http://localhost:4000/api/health || exit 1
+            
+            echo "✅ Deployment complete!"
