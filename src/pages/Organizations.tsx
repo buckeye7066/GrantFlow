@@ -5,14 +5,7 @@ import { base44, type Profile } from "../api/base44Client"
 import { useExperience } from "../contexts/ExperienceContext"
 import { Button } from "../components/ui/button"
 import { Badge } from "../components/ui/badge"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "../components/ui/card"
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "../components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs"
 import {
   Table,
@@ -147,6 +140,8 @@ export default function Organizations() {
         <CardHeader className="flex flex-col gap-6">
           <CardTitle className="text-xl font-semibold">Workspace overview</CardTitle>
           <CardDescription>Switch between profiles and working notes for your current grant cycle.</CardDescription>
+        </CardHeader>
+        <CardContent>
           <Tabs defaultValue={profiles.length > 0 ? "profiles" : "notes"} className="space-y-5">
             <TabsList>
               <TabsTrigger value="profiles">Profiles</TabsTrigger>
@@ -221,7 +216,7 @@ export default function Organizations() {
               </CardFooter>
             </TabsContent>
           </Tabs>
-        </CardHeader>
+        </CardContent>
       </Card>
     </main>
   )
