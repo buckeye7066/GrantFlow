@@ -24,7 +24,7 @@ export function ExperienceProvider({ children }: { children: ReactNode }) {
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
   })
 
-  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null)
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(() => new Date())
 
   useEffect(() => {
     if (typeof document !== 'undefined') {
@@ -39,10 +39,6 @@ export function ExperienceProvider({ children }: { children: ReactNode }) {
       window.localStorage.setItem(STORAGE_KEY, theme)
     }
   }, [theme])
-
-  useEffect(() => {
-    setLastSavedAt(new Date())
-  }, [])
 
   const setTheme = useCallback((next: Theme) => {
     setThemeState(next)

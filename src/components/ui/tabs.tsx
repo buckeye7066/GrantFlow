@@ -2,7 +2,6 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useId,
   useMemo,
   useState,
@@ -42,15 +41,9 @@ export function Tabs({
   ...props
 }: TabsProps) {
   const isControlled = value !== undefined;
-  const [internalValue, setInternalValue] = useState<string | null>(defaultValue ?? null);
+  const [internalValue, setInternalValue] = useState<string | null>(() => defaultValue ?? null);
   const activeValue = isControlled ? value ?? null : internalValue;
   const baseId = useId();
-
-  useEffect(() => {
-    if (!isControlled && defaultValue !== undefined) {
-      setInternalValue(defaultValue);
-    }
-  }, [defaultValue, isControlled]);
 
   const setValue = useCallback(
     (next: string) => {

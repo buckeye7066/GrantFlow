@@ -58,7 +58,8 @@ const SESSION_TIMEOUT_MS = 30 * 60 * 1000
 const WARNING_THRESHOLD_MS = 5 * 60 * 1000
 
 function SessionTimeoutNotice() {
-  const [lastActive, setLastActive] = useState<number>(Date.now())
+  const [lastActive, setLastActive] = useState<number>(() => Date.now())
+  const [now, setNow] = useState<number>(() => Date.now())
   const [showWarning, setShowWarning] = useState(false)
 
   useEffect(() => {
@@ -70,7 +71,9 @@ function SessionTimeoutNotice() {
 
   useEffect(() => {
     const interval = window.setInterval(() => {
-      const inactiveMs = Date.now() - lastActive
+      const currentNow = Date.now()
+      setNow(currentNow)
+      const inactiveMs = currentNow - lastActive
       if (inactiveMs >= SESSION_TIMEOUT_MS) {
         setShowWarning(true)
       } else if (inactiveMs >= SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS) {
@@ -85,7 +88,7 @@ function SessionTimeoutNotice() {
 
   if (!showWarning) return null
 
-  const minutesRemaining = Math.max(0, Math.ceil((SESSION_TIMEOUT_MS - (Date.now() - lastActive)) / 60_000))
+  const minutesRemaining = Math.max(0, Math.ceil((SESSION_TIMEOUT_MS - (now - lastActive)) / 60_000))
 
   return (
     <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-amber-200 bg-amber-50 px-6 py-3 text-sm text-amber-800 shadow-lg dark:border-amber-400/40 dark:bg-amber-950/80 dark:text-amber-200">

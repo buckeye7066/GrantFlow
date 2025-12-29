@@ -1,7 +1,7 @@
 import type { HTMLAttributes } from "react";
 import { cn } from "./utils";
 
-export interface CardProps extends HTMLAttributes<HTMLDivElement> {}
+export type CardProps = HTMLAttributes<HTMLDivElement>;
 
 export function Card({ className, ...props }: CardProps) {
   return (
@@ -34,5 +34,4 @@ export function CardContent({ className, ...props }: HTMLAttributes<HTMLDivEleme
 export function CardFooter({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
   return <div className={cn("flex items-center justify-between gap-2 px-6 pb-6 pt-0", className)} {...props} />;
 }
-
 

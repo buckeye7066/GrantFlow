@@ -17,6 +17,9 @@ export interface Profile {
   zip?: string | null
 }
 
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
+type JsonRecord = Record<string, JsonValue>
+
 export interface Document {
   id: string
   profile_id: string
@@ -29,21 +32,20 @@ export interface Document {
   doc_type: string
   extracted?: {
     text: string
-    classification: any
-    extracted: any
+    classification: JsonRecord
+    extracted: JsonRecord
   } | null
-  suggested_patches?: any | null
+  suggested_patches?: JsonRecord | null
   applied_at?: string | null
   error?: string | null
   created_at: string
   updated_at: string
 }
 
-export interface Opportunity {
+export type Opportunity = {
   id: string
   name: string
-  [key: string]: any
-}
+} & JsonRecord
 
 // Legacy interfaces for backward compatibility
 export interface Organization {
@@ -254,8 +256,8 @@ export const base44 = {
         method: 'POST',
       })
     },
-    async apply(documentId: string): Promise<{ message: string; changes: any }> {
-      return apiCall<{ message: string; changes: any }>(`/api/documents/${documentId}/apply`, {
+    async apply(documentId: string): Promise<{ message: string; changes: JsonRecord }> {
+      return apiCall<{ message: string; changes: JsonRecord }>(`/api/documents/${documentId}/apply`, {
         method: 'POST',
       })
     },

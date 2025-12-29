@@ -1,0 +1,17 @@
+[Unit]
+Description=GrantFlow Orchestrator Bridge
+After=network.target
+
+# Adjust WorkingDirectory, ExecStart, and GRANTFLOW_PROJECT_ROOT to match
+# the deployment paths on your host.
+[Service]
+Type=simple
+WorkingDirectory=/opt/grantflow/agent-orchestra
+ExecStart=/usr/bin/env python3 /opt/grantflow/agent-orchestra/main.py --bridge-host 0.0.0.0 --memory-dir /opt/grantflow/agent-orchestra/memory --allowed-actions /opt/grantflow/agent-orchestra/config/allowed_actions.json --mailbox-poll-interval 0.5
+Restart=on-failure
+RestartSec=5
+Environment=GRANTFLOW_PROJECT_ROOT=/opt/grantflow
+
+[Install]
+WantedBy=multi-user.target
+

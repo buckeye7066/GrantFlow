@@ -11,6 +11,8 @@ import {
   type HTMLAttributes,
   type ReactElement,
   type ReactNode,
+  type SyntheticEvent,
+  type MouseEventHandler,
 } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "./utils";
@@ -72,20 +74,27 @@ export interface DialogTriggerProps extends ButtonHTMLAttributes<HTMLButtonEleme
 export function DialogTrigger({ asChild = false, children, onClick, ...props }: DialogTriggerProps) {
   const { setOpen } = useDialogContext("DialogTrigger");
 
-  const handleOpen = (event: any) => {
-    onClick?.(event);
+  const handleOpen = (event: SyntheticEvent) => {
     if (!event?.defaultPrevented) {
       setOpen(true);
     }
+  };
+
+  const handleButtonClick: MouseEventHandler<HTMLButtonElement> = (event) => {
+    onClick?.(event);
+    handleOpen(event);
   };
 
   if (asChild && isValidElement(children)) {
     const child = children as ReactElement<Record<string, unknown>>;
     return cloneElement(child, {
       ...props,
-      onClick: (event: any) => {
+      onClick: (event: SyntheticEvent) => {
         if (typeof child.props?.onClick === "function") {
           child.props.onClick(event);
+        }
+        if (typeof onClick === "function") {
+          onClick(event as unknown as never);
         }
         handleOpen(event);
       },
@@ -93,7 +102,7 @@ export function DialogTrigger({ asChild = false, children, onClick, ...props }: 
   }
 
   return (
-    <button type="button" onClick={handleOpen} {...props}>
+    <button type="button" onClick={handleButtonClick} {...props}>
       {children}
     </button>
   );
@@ -105,14 +114,10 @@ interface DialogContentProps extends HTMLAttributes<HTMLDivElement> {
 
 export function DialogContent({ className, children, ...props }: DialogContentProps) {
   const { open, setOpen } = useDialogContext("DialogContent");
-  const [mounted, setMounted] = useState(false);
+  const isBrowser = typeof document !== "undefined";
 
   useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  useEffect(() => {
-    if (!open || typeof document === "undefined") return;
+    if (!open || !isBrowser) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setOpen(false);
@@ -125,9 +130,9 @@ export function DialogContent({ className, children, ...props }: DialogContentPr
       document.body.style.overflow = previousOverflow;
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [open, setOpen]);
+  }, [open, setOpen, isBrowser]);
 
-  if (!open || !mounted || typeof document === "undefined") {
+  if (!open || !isBrowser) {
     return null;
   }
 
@@ -179,20 +184,27 @@ export interface DialogCloseProps extends ButtonHTMLAttributes<HTMLButtonElement
 export function DialogClose({ asChild = false, children, onClick, ...props }: DialogCloseProps) {
   const { setOpen } = useDialogContext("DialogClose");
 
-  const handleClose = (event: any) => {
-    onClick?.(event);
+  const handleClose = (event: SyntheticEvent) => {
     if (!event?.defaultPrevented) {
       setOpen(false);
     }
+  };
+
+  const handleButtonClose: MouseEventHandler<HTMLButtonElement> = (event) => {
+    onClick?.(event);
+    handleClose(event);
   };
 
   if (asChild && isValidElement(children)) {
     const child = children as ReactElement<Record<string, unknown>>;
     return cloneElement(child, {
       ...props,
-      onClick: (event: any) => {
+      onClick: (event: SyntheticEvent) => {
         if (typeof child.props?.onClick === "function") {
           child.props.onClick(event);
+        }
+        if (typeof onClick === "function") {
+          onClick(event as unknown as never);
         }
         handleClose(event);
       },
@@ -200,7 +212,7 @@ export function DialogClose({ asChild = false, children, onClick, ...props }: Di
   }
 
   return (
-    <button type="button" onClick={handleClose} {...props}>
+    <button type="button" onClick={handleButtonClose} {...props}>
       {children}
     </button>
   );

@@ -29,7 +29,6 @@ class BaseCrawler {
    * Implement in subclasses to perform actual crawl.
    * @param {*} item
    */
-  // eslint-disable-next-line class-methods-use-this, no-unused-vars
   async crawl(item) {
     throw new Error('crawl(item) must be implemented by subclass');
   }
@@ -117,7 +116,6 @@ class BaseCrawler {
    */
   async run() {
     for (const item of this.items) {
-      // eslint-disable-next-line no-await-in-loop
       await this.crawlWithRecovery(item);
     }
     return {

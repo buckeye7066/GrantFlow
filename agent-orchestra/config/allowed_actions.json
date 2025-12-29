@@ -1,0 +1,123 @@
+{
+  "actions": {
+    "task.architecture": {
+      "role": ["claude"],
+      "human_gated": false,
+      "description": "Design architecture plan"
+    },
+    "task.code_generation": {
+      "role": ["claude"],
+      "human_gated": false,
+      "description": "Generate code blocks"
+    },
+    "task.file_creation": {
+      "role": ["cursor"],
+      "human_gated": false,
+      "description": "Apply code changes locally"
+    },
+    "task.lint": {
+      "role": ["cursor"],
+      "human_gated": false,
+      "description": "Run linting commands"
+    },
+    "task.build": {
+      "role": ["cursor"],
+      "human_gated": false,
+      "description": "Run project build"
+    },
+    "task.test": {
+      "role": ["cursor"],
+      "human_gated": false,
+      "description": "Execute automated tests"
+    },
+    "task.domain_validation": {
+      "role": ["anya"],
+      "human_gated": false,
+      "description": "Review domain-specific output"
+    },
+    "task.debug_analysis": {
+      "role": ["chatgpt", "claude"],
+      "human_gated": false,
+      "description": "Provide debugging analysis"
+    },
+    "deploy.frontend": {
+      "role": ["cursor"],
+      "human_gated": true,
+      "description": "Trigger Vercel deployment"
+    },
+    "deploy.backend": {
+      "role": ["cursor"],
+      "human_gated": true,
+      "description": "Trigger Railway deployment"
+    },
+    "dns.change": {
+      "role": ["cursor"],
+      "human_gated": true,
+      "description": "Modify Cloudflare DNS routing"
+    },
+    "fs.read_file": {
+      "role": ["cursor", "ellie"],
+      "human_gated": false,
+      "description": "Read a file from workspace"
+    },
+    "fs.write_file": {
+      "role": ["cursor", "ellie"],
+      "human_gated": false,
+      "description": "Write to a file in workspace"
+    },
+    "build.run": {
+      "role": ["cursor"],
+      "human_gated": false,
+      "description": "Execute project build"
+    },
+    "git.create_branch": {
+      "role": ["cursor"],
+      "human_gated": false,
+      "description": "Create git branch"
+    },
+    "git.commit": {
+      "role": ["cursor"],
+      "human_gated": false,
+      "description": "Create git commit"
+    },
+    "git.open_pr": {
+      "role": ["cursor"],
+      "human_gated": true,
+      "description": "Open pull request"
+    },
+    "deploy.preview": {
+      "role": ["cursor"],
+      "human_gated": true,
+      "description": "Run preview deployment"
+    },
+    "deploy.production": {
+      "role": ["cursor"],
+      "human_gated": true,
+      "description": "Promote production deployment"
+    },
+    "automation.web": {
+      "role": ["ellie"],
+      "human_gated": true,
+      "description": "Control web browser sessions"
+    },
+    "automation.local": {
+      "role": ["ellie"],
+      "human_gated": true,
+      "description": "Control local desktop automation"
+    }
+  },
+  "task_mapping": {
+    "architecture": "task.architecture",
+    "code_generation": "task.code_generation",
+    "file_creation": "task.file_creation",
+    "lint": "task.lint",
+    "build": "task.build",
+    "test": "task.test",
+    "domain_validation": "task.domain_validation",
+    "debug_analysis": "task.debug_analysis",
+    "deploy_frontend": "deploy.frontend",
+    "deploy_backend": "deploy.backend",
+    "dns_routing": "dns.change"
+  }
+}
+

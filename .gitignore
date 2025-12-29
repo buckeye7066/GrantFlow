@@ -11,6 +11,9 @@ node_modules
 dist
 dist-ssr
 *.local
+agent-orchestra/mailbox/
+agent-orchestra/memory/
+agent-orchestra/core/__pycache__/
 
 # Database files
 backend/data/*.db
