@@ -39,10 +39,11 @@ export interface Profile {
   admin_id?: string | null
   last_contacted_at?: string | null
   status?: string | null
+  application_data?: JsonRecord | null
 }
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
-type JsonRecord = Record<string, JsonValue>
+export type JsonRecord = Record<string, JsonValue>
 
 export interface Document {
   id: string
@@ -66,10 +67,97 @@ export interface Document {
   updated_at: string
 }
 
-export type Opportunity = {
+export interface FundingOpportunity {
+  id: string
+  title: string
+  summary: string | null
+  description: string | null
+  amount_min: number | null
+  amount_max: number | null
+  currency: string | null
+  deadline: string | null
+  geography: string | null
+  category: string | null
+  tags: string[]
+  eligibility: string | null
+  source_id: string | null
+  contact_email: string | null
+  contact_phone: string | null
+  source_url: string | null
+  last_synced_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface DiscoveryTemplate {
   id: string
   name: string
-} & JsonRecord
+  description: string | null
+  query: string
+  filters: Record<string, unknown>
+  owner_id: string | null
+  is_default: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface DiscoverySavedSearch {
+  id: string
+  template_id: string | null
+  profile_id: string | null
+  name: string
+  description: string | null
+  filters: Record<string, unknown>
+  schedule: string | null
+  last_run_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface DiscoverySource {
+  id: string
+  name: string
+  description: string | null
+  type: string
+  region: string | null
+  status: string
+  schedule: string | null
+  last_run_at: string | null
+  last_success_at: string | null
+  success_count: number
+  failure_count: number
+  metadata: Record<string, unknown>
+}
+
+export interface DiscoveryActivity {
+  id: string
+  source_id: string | null
+  type: string
+  message: string | null
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
+export interface DiscoveryRun {
+  id: string
+  template_id: string | null
+  profile_id: string | null
+  query: string
+  filters: Record<string, unknown>
+  executed_by: string | null
+  result_count: number
+  created_at: string
+}
+
+export interface DiscoveryRunResponse {
+  data: FundingOpportunity[]
+  run: {
+    id: string
+    result_count: number
+    query: string
+    filters: Record<string, unknown>
+  }
+}
 
 // Legacy interfaces for backward compatibility
 export interface Organization {
@@ -229,6 +317,35 @@ async function apiCall<T>(endpoint: string, options: RequestInit = {}): Promise<
   return payload as T
 }
 
+async function apiCallRaw<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  const response = await fetch(buildApiUrl(endpoint), {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+    credentials: 'include',
+  })
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(error.error || `HTTP ${response.status}`)
+  }
+
+  return (await response.json()) as T
+}
+
+async function apiDelete(endpoint: string): Promise<void> {
+  const response = await fetch(buildApiUrl(endpoint), {
+    method: 'DELETE',
+    credentials: 'include',
+  })
+  if (!response.ok && response.status !== 204) {
+    const error = await response.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(error.error || `HTTP ${response.status}`)
+  }
+}
+
 export const base44 = {
   profiles: {
     async list(): Promise<Profile[]> {
@@ -296,8 +413,8 @@ export const base44 = {
     },
   },
   opportunities: {
-    async list(): Promise<Opportunity[]> {
-      return apiCall<Opportunity[]>('/api/opportunities')
+    async list(): Promise<FundingOpportunity[]> {
+      return apiCall<FundingOpportunity[]>('/api/opportunities')
     },
   },
   // Legacy entities for backward compatibility
@@ -320,6 +437,106 @@ export const base44 = {
     Expense: {
       async list(): Promise<Expense[]> {
         return expensesSeed
+      },
+    },
+  },
+  discovery: {
+    templates: {
+      async list(ownerId?: string): Promise<DiscoveryTemplate[]> {
+        const query = ownerId ? `?ownerId=${encodeURIComponent(ownerId)}` : ''
+        return apiCall<DiscoveryTemplate[]>(`/api/discovery/templates${query}`)
+      },
+      async create(data: Partial<DiscoveryTemplate>): Promise<DiscoveryTemplate> {
+        return apiCall<DiscoveryTemplate>('/api/discovery/templates', {
+          method: 'POST',
+          body: JSON.stringify(data),
+        })
+      },
+      async update(id: string, data: Partial<DiscoveryTemplate>): Promise<DiscoveryTemplate> {
+        return apiCall<DiscoveryTemplate>(`/api/discovery/templates/${id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(data),
+        })
+      },
+      async delete(id: string): Promise<void> {
+        await apiDelete(`/api/discovery/templates/${id}`)
+      },
+    },
+    savedSearches: {
+      async list(profileId?: string): Promise<DiscoverySavedSearch[]> {
+        const query = profileId ? `?profileId=${encodeURIComponent(profileId)}` : ''
+        return apiCall<DiscoverySavedSearch[]>(`/api/discovery/saved-searches${query}`)
+      },
+      async create(data: Partial<DiscoverySavedSearch>): Promise<DiscoverySavedSearch> {
+        return apiCall<DiscoverySavedSearch>('/api/discovery/saved-searches', {
+          method: 'POST',
+          body: JSON.stringify(data),
+        })
+      },
+      async update(id: string, data: Partial<DiscoverySavedSearch>): Promise<DiscoverySavedSearch> {
+        return apiCall<DiscoverySavedSearch>(`/api/discovery/saved-searches/${id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(data),
+        })
+      },
+      async delete(id: string): Promise<void> {
+        await apiDelete(`/api/discovery/saved-searches/${id}`)
+      },
+    },
+    async run(payload: {
+      templateId?: string
+      profileId?: string
+      query?: string
+      filters?: Record<string, unknown>
+      executedBy?: string
+    }): Promise<DiscoveryRunResponse> {
+      return apiCallRaw<DiscoveryRunResponse>('/api/discovery/run', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      })
+    },
+    opportunities: {
+      async list(filters: {
+        search?: string
+        category?: string
+        geography?: string
+        tag?: string
+      } = {}): Promise<FundingOpportunity[]> {
+        const params = new URLSearchParams()
+        if (filters.search) params.append('search', filters.search)
+        if (filters.category) params.append('category', filters.category)
+        if (filters.geography) params.append('geography', filters.geography)
+        if (filters.tag) params.append('tag', filters.tag)
+        const query = params.toString()
+        return apiCall<FundingOpportunity[]>(`/api/discovery/opportunities${query ? `?${query}` : ''}`)
+      },
+    },
+    sources: {
+      async list(): Promise<DiscoverySource[]> {
+        return apiCall<DiscoverySource[]>('/api/discovery/sources')
+      },
+      async update(id: string, data: Partial<DiscoverySource>): Promise<DiscoverySource> {
+        return apiCall<DiscoverySource>(`/api/discovery/sources/${id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(data),
+        })
+      },
+      async run(id: string, options: { success?: boolean } = {}): Promise<DiscoverySource> {
+        return apiCall<DiscoverySource>(`/api/discovery/sources/${id}/run`, {
+          method: 'POST',
+          body: JSON.stringify(options),
+        })
+      },
+    },
+    activity: {
+      async list(sourceId?: string): Promise<DiscoveryActivity[]> {
+        const query = sourceId ? `?sourceId=${encodeURIComponent(sourceId)}` : ''
+        return apiCall<DiscoveryActivity[]>(`/api/discovery/activity${query}`)
+      },
+    },
+    runs: {
+      async list(): Promise<DiscoveryRun[]> {
+        return apiCall<DiscoveryRun[]>('/api/discovery/runs')
       },
     },
   },

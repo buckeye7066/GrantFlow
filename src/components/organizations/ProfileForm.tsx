@@ -1,10 +1,11 @@
-import { Controller, useForm } from "react-hook-form"
-import type { Profile } from "../../api/base44Client"
+import { Controller, FormProvider, useForm } from "react-hook-form"
+import type { Profile, JsonRecord } from "../../api/base44Client"
 import { Input } from "../ui/input"
 import { Textarea } from "../ui/textarea"
 import { Select } from "../ui/select"
 import { Checkbox } from "../ui/checkbox"
 import { Button } from "../ui/button"
+import { ComprehensiveApplicationForm } from "./ComprehensiveApplicationForm"
 
 export type ProfileFormValues = {
   profile_type: string
@@ -41,6 +42,7 @@ export type ProfileFormValues = {
   last_contacted_at: string
   status: string
   phi_access_required: boolean
+  application_data: Record<string, unknown>
 }
 
 const PROFILE_TYPES = [
@@ -92,6 +94,7 @@ export function toProfileFormValues(profile?: Profile | null): ProfileFormValues
     last_contacted_at: profile?.last_contacted_at ?? "",
     status: profile?.status ?? "active",
     phi_access_required: Boolean(profile?.phi_access_required),
+    application_data: (profile?.application_data ?? {}) as Record<string, unknown>,
   }
 }
 
@@ -141,6 +144,7 @@ export function profilePayloadFromValues(values: ProfileFormValues): Partial<Pro
       ? new Date(values.last_contacted_at).toISOString()
       : null,
     status: normaliseString(values.status),
+    application_data: (values.application_data ?? {}) as JsonRecord,
   }
 }
 
@@ -164,13 +168,14 @@ export function ProfileForm({
   })
 
   return (
-    <form
-      className="space-y-6"
-      onSubmit={form.handleSubmit(onSubmit)}
-      onReset={() => {
-        form.reset(initialValues ?? toProfileFormValues())
-      }}
-    >
+    <FormProvider {...form}>
+      <form
+        className="space-y-6"
+        onSubmit={form.handleSubmit(onSubmit)}
+        onReset={() => {
+          form.reset(initialValues ?? toProfileFormValues())
+        }}
+      >
       <section className="grid gap-4 md:grid-cols-2">
         <div className="space-y-2">
           <label className="text-sm font-medium text-foreground">
@@ -454,6 +459,8 @@ export function ProfileForm({
         </label>
       </section>
 
+      <ComprehensiveApplicationForm />
+
       <div className="flex flex-col gap-2 border-t border-border/60 pt-4 sm:flex-row sm:justify-end">
         <Button type="button" variant="outline" onClick={onCancel} disabled={isSubmitting}>
           Cancel
@@ -462,7 +469,8 @@ export function ProfileForm({
           {isSubmitting ? "Saving..." : submitLabel}
         </Button>
       </div>
-    </form>
+      </form>
+    </FormProvider>
   )
 }
 

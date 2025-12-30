@@ -1,16 +1,19 @@
 {
-  "rewrites": [
+  "redirects": [
     {
-      "source": "/grantflow",
-      "destination": "/grantflow/"
+      "source": "/",
+      "destination": "https://grant-flow-736bfafec.base44.app/",
+      "permanent": false
     },
     {
-      "source": "/grantflow/assets/:path*",
-      "destination": "/assets/:path*"
+      "source": "/grantflow",
+      "destination": "https://grant-flow-736bfafec.base44.app/",
+      "permanent": false
     },
     {
       "source": "/grantflow/:path*",
-      "destination": "/index.html"
+      "destination": "https://grant-flow-736bfafec.base44.app/",
+      "permanent": false
     }
   ]
 }

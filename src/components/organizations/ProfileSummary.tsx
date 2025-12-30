@@ -1,8 +1,11 @@
+import type { ReactElement } from "react"
 import type { Profile } from "../../api/base44Client"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card"
 import { Badge } from "../ui/badge"
 import { Button } from "../ui/button"
 import { EmptyState } from "../EmptyState"
+import { APPLICATION_SECTIONS } from "./applicationSections"
+import type { ApplicationField } from "./applicationSections"
 
 interface ProfileSummaryProps {
   profile: Profile | null
@@ -86,6 +89,8 @@ export function ProfileSummary({ profile, onEdit }: ProfileSummaryProps) {
           <InfoBlock label="Compliance notes" value={profile.compliance_notes || "—"} />
         </div>
 
+        <ApplicationSummary applicationData={profile.application_data ?? {}} />
+
         <div className="space-y-2">
           <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Internal notes</h4>
           <p className="rounded-lg border border-muted/60 bg-muted/20 p-3 text-sm text-muted-foreground">
@@ -104,6 +109,88 @@ function InfoBlock({ label, value }: { label: string; value: string }) {
       <p className="text-sm text-foreground">{value}</p>
     </div>
   )
+}
+
+function ApplicationSummary({ applicationData }: { applicationData: Record<string, unknown> }) {
+  const renderedSections = APPLICATION_SECTIONS.map((section) => {
+    const entries = section.fields
+      .map((field) => {
+        const rawValue = applicationData[field.id]
+        const formatted = formatApplicationValue(field, rawValue)
+        if (!formatted) return null
+        return { label: field.label, value: formatted }
+      })
+      .filter((entry): entry is { label: string; value: string } => entry !== null)
+
+    if (entries.length === 0) {
+      return null
+    }
+
+    return (
+      <div key={section.id} className="space-y-2">
+        <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{section.title}</h5>
+        <div className="grid gap-3 md:grid-cols-2">
+          {entries.map((entry) => (
+            <InfoBlock key={`${section.id}-${entry.label}`} label={entry.label} value={entry.value} />
+          ))}
+        </div>
+      </div>
+    )
+  }).filter((section): section is ReactElement => Boolean(section))
+
+  if (renderedSections.length === 0) {
+    return null
+  }
+
+  return (
+    <div className="space-y-3">
+      <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+        Comprehensive Application Details
+      </h4>
+      <div className="space-y-4">{renderedSections}</div>
+    </div>
+  )
+}
+
+function formatApplicationValue(field: ApplicationField, rawValue: unknown): string | null {
+  switch (field.type) {
+    case "text":
+    case "textarea":
+    case "date":
+      if (typeof rawValue === "string" && rawValue.trim().length > 0) {
+        return rawValue
+      }
+      return null
+    case "number":
+      if (rawValue === null || rawValue === undefined) return null
+      if (rawValue === "") return null
+      if (typeof rawValue === "number") {
+        return rawValue.toLocaleString()
+      }
+      if (typeof rawValue === "string" && rawValue.trim().length > 0) {
+        const numeric = Number(rawValue)
+        return Number.isNaN(numeric) ? rawValue : numeric.toLocaleString()
+      }
+      return null
+    case "boolean":
+      if (rawValue === true) return "Yes"
+      return null
+    case "single-select":
+      if (typeof rawValue !== "string" || rawValue.trim() === "") return null
+      return field.options?.find((option) => option.value === rawValue)?.label ?? rawValue
+    case "multi-select": {
+      if (!Array.isArray(rawValue) || rawValue.length === 0) return null
+      const labels = rawValue
+        .map((value) => {
+          if (typeof value !== "string") return null
+          return field.options?.find((option) => option.value === value)?.label ?? value
+        })
+        .filter((value): value is string => Boolean(value))
+      return labels.length > 0 ? labels.join(", ") : null
+    }
+    default:
+      return null
+  }
 }
 
 

@@ -15,6 +15,7 @@ import { initDb } from './db/index.js'
 import profilesRouter from './routes/profiles.js'
 import documentsRouter from './routes/documents.js'
 import opportunitiesRouter from './routes/opportunities.js'
+import discoveryRouter from './routes/discovery.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -172,6 +173,7 @@ if (databaseReady) {
   )
 }
 app.use('/api/opportunities', adminAuth, opportunitiesRouter)
+app.use('/api/discovery', adminAuth, discoveryRouter)
 
 app.use((err, req, res, next) => {
   console.error('[AnyaRuntimeError]', err)

@@ -5,6 +5,9 @@ import Organizations from './pages/Organizations'
 import Login from './pages/Login'
 import { AppShell } from './components/layout/AppShell'
 import { useAdmin } from './contexts/AdminContext'
+import DiscoverGrants from './pages/DiscoverGrants'
+import DataSources from './pages/DataSources'
+import SourceDirectory from './pages/SourceDirectory'
 
 function ProtectedRoute({ children }: { children: ReactNode }) {
   const { isAdmin } = useAdmin()
@@ -41,6 +44,36 @@ export default function App() {
           <ProtectedRoute>
             <ShellRoute>
               <Organizations />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/discover"
+        element={
+          <ProtectedRoute>
+            <ShellRoute>
+              <DiscoverGrants />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/data-sources"
+        element={
+          <ProtectedRoute>
+            <ShellRoute>
+              <DataSources />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/opportunity-directory"
+        element={
+          <ProtectedRoute>
+            <ShellRoute>
+              <SourceDirectory />
             </ShellRoute>
           </ProtectedRoute>
         }

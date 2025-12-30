@@ -19,6 +19,9 @@ type AppShellProps = {
 const NAV_ITEMS = [
   { to: '/', label: 'Dashboard' },
   { to: '/organizations', label: 'Organizations' },
+  { to: '/discover', label: 'Discover' },
+  { to: '/data-sources', label: 'Sources' },
+  { to: '/opportunity-directory', label: 'Directory' },
 ]
 
 function KeyboardShortcuts() {

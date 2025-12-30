@@ -21,7 +21,26 @@ router.get('/', async (req, res, next) => {
     try {
       const rows = db
         .prepare(
-          `SELECT id, title, description, amount, deadline, contact_url, source_url, updated_at
+          `SELECT
+             id,
+             title,
+             summary,
+             description,
+             amount_min,
+             amount_max,
+             currency,
+             deadline,
+             geography,
+             category,
+             tags,
+             eligibility,
+             source_id,
+             contact_email,
+             contact_phone,
+             source_url,
+             last_synced_at,
+             created_at,
+             updated_at
            FROM funding_sources
            ORDER BY datetime(updated_at) DESC`,
         )

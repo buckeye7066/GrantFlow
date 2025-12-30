@@ -19,10 +19,20 @@ import {
   CalendarDays,
   DollarSign,
   PlusCircle,
+  RefreshCcw,
   Sparkles,
   Target,
 } from "lucide-react"
-import { base44, type Organization, type Grant, type Milestone, type Expense } from "../api/base44Client"
+import {
+  base44,
+  type Organization,
+  type Grant,
+  type Milestone,
+  type Expense,
+  type FundingOpportunity,
+  type DiscoveryActivity,
+  type DiscoveryRun,
+} from "../api/base44Client"
 import { AnyaStatusPanel } from "../components/anya/AnyaStatusPanel"
 import { Button } from "../components/ui/button"
 import {
@@ -76,6 +86,11 @@ function toDate(value?: string | null): ParsedDate {
   return isValid(parsed) ? parsed : undefined
 }
 
+function formatAmount(value?: number | null): string {
+  if (value == null || Number.isNaN(value)) return "—"
+  return `$${value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+}
+
 export default function Dashboard() {
   const queryClient = useQueryClient()
 
@@ -99,11 +114,38 @@ export default function Dashboard() {
     queryFn: () => base44.entities.Expense.list(),
   })
 
+  const discoveryOpportunitiesQuery = useQuery<FundingOpportunity[]>({
+    queryKey: ["discovery", "opportunities", "dashboard"],
+    queryFn: () => base44.discovery.opportunities.list(),
+  })
+
+  const discoveryActivityQuery = useQuery<DiscoveryActivity[]>({
+    queryKey: ["discovery", "activity", "dashboard"],
+    queryFn: () => base44.discovery.activity.list(),
+  })
+
+  const discoveryRunsQuery = useQuery<DiscoveryRun[]>({
+    queryKey: ["discovery", "runs", "dashboard"],
+    queryFn: () => base44.discovery.runs.list(),
+  })
+
   const isLoading =
-    organizationsQuery.isLoading || grantsQuery.isLoading || milestonesQuery.isLoading || expensesQuery.isLoading
+    organizationsQuery.isLoading ||
+    grantsQuery.isLoading ||
+    milestonesQuery.isLoading ||
+    expensesQuery.isLoading ||
+    discoveryOpportunitiesQuery.isLoading ||
+    discoveryActivityQuery.isLoading ||
+    discoveryRunsQuery.isLoading
 
   const isError =
-    organizationsQuery.isError || grantsQuery.isError || milestonesQuery.isError || expensesQuery.isError
+    organizationsQuery.isError ||
+    grantsQuery.isError ||
+    milestonesQuery.isError ||
+    expensesQuery.isError ||
+    discoveryOpportunitiesQuery.isError ||
+    discoveryActivityQuery.isError ||
+    discoveryRunsQuery.isError
 
   const organizations = useMemo(() => organizationsQuery.data ?? [], [organizationsQuery.data])
   const grants = useMemo(() => grantsQuery.data ?? [], [grantsQuery.data])
@@ -161,6 +203,16 @@ export default function Dashboard() {
 
   const recentGrants = useMemo(() => grants.slice(0, 5), [grants])
 
+  const discoveryHighlights = useMemo(() => (discoveryOpportunitiesQuery.data ?? []).slice(0, 4), [
+    discoveryOpportunitiesQuery.data,
+  ])
+
+  const recentDiscoveryRuns = useMemo(() => (discoveryRunsQuery.data ?? []).slice(0, 3), [discoveryRunsQuery.data])
+
+  const latestDiscoveryActivity = useMemo(() => (discoveryActivityQuery.data ?? []).slice(0, 4), [
+    discoveryActivityQuery.data,
+  ])
+
   const quickStats: QuickStats = useMemo(() => {
     const discovered = grants.filter((grant) => grant.status === "discovered").length
     const inProgress = grants.filter((grant) => grant.status === "interested" || grant.status === "drafting").length
@@ -176,6 +228,9 @@ export default function Dashboard() {
       queryClient.invalidateQueries({ queryKey: ["grants"] }),
       queryClient.invalidateQueries({ queryKey: ["milestones"] }),
       queryClient.invalidateQueries({ queryKey: ["expenses"] }),
+      queryClient.invalidateQueries({ queryKey: ["discovery", "opportunities", "dashboard"] }),
+      queryClient.invalidateQueries({ queryKey: ["discovery", "activity", "dashboard"] }),
+      queryClient.invalidateQueries({ queryKey: ["discovery", "runs", "dashboard"] }),
     ])
   }
 
@@ -330,6 +385,126 @@ export default function Dashboard() {
           className="border border-dashed"
         />
       )}
+
+      <section className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <Card className="border-muted/70">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-primary" aria-hidden />
+              Discovery highlights
+            </CardTitle>
+            <CardDescription>Newest opportunities surfaced by crawlers and AI scoring.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {discoveryHighlights.length === 0 ? (
+              <EmptyState
+                title="No discovery results yet"
+                description="Run a discovery search to populate highlights."
+                className="border border-dashed bg-muted/10"
+              />
+            ) : (
+              <ul className="space-y-4">
+                {discoveryHighlights.map((opportunity) => (
+                  <li key={opportunity.id} className="rounded-lg border border-border/60 bg-muted/20 p-4">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="space-y-1">
+                        <p className="font-semibold text-foreground">{opportunity.title}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {opportunity.summary ?? opportunity.description ?? "No summary available."}
+                        </p>
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          <Badge variant="secondary">{opportunity.category ?? "General"}</Badge>
+                          <Badge variant="secondary" className="bg-muted/40">
+                            {opportunity.geography ?? "Any region"}
+                          </Badge>
+                        </div>
+                      </div>
+                      <div className="text-right text-xs text-muted-foreground">
+                        <p className="font-medium text-foreground">
+                          {opportunity.deadline ? new Date(opportunity.deadline).toLocaleDateString() : "Rolling"}
+                        </p>
+                        <p className="mt-1">
+                          {opportunity.amount_min != null || opportunity.amount_max != null
+                            ? `${formatAmount(opportunity.amount_min)} – ${formatAmount(opportunity.amount_max)}`
+                            : "Amount TBD"}
+                        </p>
+                        <a
+                          href={opportunity.source_url ?? "#"}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-2 inline-flex items-center gap-1 text-blue-600 hover:underline"
+                        >
+                          View source
+                          <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+                        </a>
+                      </div>
+                    </div>
+                    {opportunity.tags.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-1">
+                        {opportunity.tags.map((tag) => (
+                          <Badge key={tag} variant="secondary" className="text-xs bg-muted/40">
+                            {tag}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="border-muted/70">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2">
+              <RefreshCcw className="h-5 w-5 text-primary" aria-hidden />
+              Discovery signals
+            </CardTitle>
+            <CardDescription>Latest runs and system notes from the discovery layer.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4 text-sm text-muted-foreground">
+            <div className="space-y-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground/80">Recent runs</h3>
+              {recentDiscoveryRuns.length === 0 ? (
+                <p className="text-xs">No runs recorded yet.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {recentDiscoveryRuns.map((run) => (
+                    <li key={run.id} className="rounded-lg border border-border/60 bg-muted/20 p-3">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-foreground">
+                          {run.query ? run.query : run.template_id ? "Template run" : "Ad-hoc search"}
+                        </span>
+                        <span className="text-xs">{new Date(run.created_at).toLocaleString()}</span>
+                      </div>
+                      <p className="mt-1 text-xs">{run.result_count} results captured</p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground/80">Activity log</h3>
+              {latestDiscoveryActivity.length === 0 ? (
+                <p className="text-xs">No activity entries yet.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {latestDiscoveryActivity.map((entry) => (
+                    <li key={entry.id} className="rounded-lg border border-border/60 bg-muted/10 p-3">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-foreground">{entry.type}</span>
+                        <span className="text-xs">{new Date(entry.created_at).toLocaleString()}</span>
+                      </div>
+                      <p className="mt-1 text-xs">{entry.message ?? "No details provided."}</p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </section>
 
       <section className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <Tabs defaultValue="deadlines" className="space-y-4">

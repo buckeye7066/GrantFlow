@@ -39,6 +39,7 @@ const PROFILE_STRING_FIELDS = [
 
 const PROFILE_NUMERIC_FIELDS = new Set(['annual_budget', 'staff_count', 'volunteer_count'])
 const PROFILE_BOOLEAN_FIELDS = new Set(['phi_access_required'])
+const PROFILE_JSON_FIELDS = new Set(['application_data'])
 
 const PROFILE_DEFAULTS = {
   profile_type: 'organization',
@@ -62,6 +63,14 @@ function normalizeValue(key, value) {
   if (value === undefined) return undefined
   if (value === null || value === '') return null
 
+  if (PROFILE_JSON_FIELDS.has(key)) {
+    try {
+      return JSON.stringify(value)
+    } catch (error) {
+      return null
+    }
+  }
+
   if (PROFILE_BOOLEAN_FIELDS.has(key)) {
     return value ? 1 : 0
   }
@@ -76,6 +85,15 @@ function normalizeValue(key, value) {
 
 function mapProfile(row) {
   if (!row) return null
+
+  let applicationData = {}
+  if (row.application_data) {
+    try {
+      applicationData = JSON.parse(row.application_data)
+    } catch (error) {
+      applicationData = {}
+    }
+  }
 
   return {
     id: row.id,
@@ -115,6 +133,7 @@ function mapProfile(row) {
     admin_id: row.admin_id,
     last_contacted_at: row.last_contacted_at,
     status: row.status,
+    application_data: applicationData,
   }
 }
 
@@ -180,6 +199,14 @@ router.post('/', (req, res, next) => {
       }
     }
 
+    for (const key of PROFILE_JSON_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(body, key)) {
+        record[key] = normalizeValue(key, body[key])
+      } else {
+        record[key] = null
+      }
+    }
+
     const columns = Object.keys(record)
     const placeholders = columns.map((key) => `@${key}`).join(', ')
     const stmt = db.prepare(`INSERT INTO profiles (${columns.join(', ')}) VALUES (${placeholders})`)
@@ -224,7 +251,12 @@ router.patch('/:id', (req, res, next) => {
     const body = req.body || {}
     const updates = {}
 
-    for (const key of [...PROFILE_STRING_FIELDS, ...PROFILE_NUMERIC_FIELDS, ...PROFILE_BOOLEAN_FIELDS]) {
+    for (const key of [
+      ...PROFILE_STRING_FIELDS,
+      ...PROFILE_NUMERIC_FIELDS,
+      ...PROFILE_BOOLEAN_FIELDS,
+      ...PROFILE_JSON_FIELDS,
+    ]) {
       if (Object.prototype.hasOwnProperty.call(body, key)) {
         const value = normalizeValue(key, body[key])
         updates[key] = value === undefined ? null : value
