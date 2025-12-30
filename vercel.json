@@ -2,18 +2,18 @@
   "redirects": [
     {
       "source": "/",
-      "destination": "https://grant-flow-736bfafec.base44.app/",
+      "destination": "/grantflow",
       "permanent": false
-    },
+    }
+  ],
+  "rewrites": [
     {
       "source": "/grantflow",
-      "destination": "https://grant-flow-736bfafec.base44.app/",
-      "permanent": false
+      "destination": "/index.html"
     },
     {
       "source": "/grantflow/:path*",
-      "destination": "https://grant-flow-736bfafec.base44.app/",
-      "permanent": false
+      "destination": "/index.html"
     }
   ]
 }

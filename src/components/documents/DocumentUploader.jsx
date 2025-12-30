@@ -1,0 +1,181 @@
+
+import React, { useState } from "react";
+import { useForm, Controller } from "react-hook-form";
+import { base44 } from "@/api/base44Client";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { X, Loader2, UploadCloud } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+
+const DOCUMENT_TYPES = [
+  "nofo", "proposal", "budget", "letter_of_support", "mou", "resume",
+  "irs_determination", "financial_statement", "audit", "logic_model",
+  "timeline", "other"
+];
+
+const ALLOWED_FILE_TYPES = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'image/png', 'image/jpeg'];
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
+
+export default function DocumentUploader({ organizationId, onClose }) {
+  const queryClient = useQueryClient();
+  const { register, handleSubmit, control, formState: { errors } } = useForm();
+  const [file, setFile] = useState(null);
+  const [fileError, setFileError] = useState(null);
+
+  const uploadFileMutation = useMutation({
+    mutationFn: (file) => base44.integrations.Core.UploadPrivateFile({ file }),
+  });
+
+  const createDocMutation = useMutation({
+    mutationFn: (docData) => base44.entities.Document.create(docData),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['documents', organizationId] });
+      onClose();
+    },
+  });
+
+  const onSubmit = async (data) => {
+    if (!file) {
+      setFileError("Please select a file to upload.");
+      return;
+    }
+    
+    // Additional check for file validation before submission if handleFileChange might be bypassed
+    if (!ALLOWED_FILE_TYPES.includes(file.type)) {
+      setFileError(`Invalid file type. Please upload one of: PDF, DOCX, XLSX, PNG, JPG.`);
+      return;
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      setFileError(`File is too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB.`);
+      return;
+    }
+
+    try {
+      const uploadResult = await uploadFileMutation.mutateAsync(file);
+      const fileUri = uploadResult.file_uri;
+
+      await createDocMutation.mutateAsync({
+        ...data,
+        organization_id: organizationId,
+        file_uri: fileUri,
+        file_type: file.type,
+      });
+
+    } catch (error) {
+      console.error("Upload failed", error);
+      // Optionally set an error message for the user if mutation fails
+      setFileError("Document upload failed. Please try again.");
+    }
+  };
+
+  const handleFileChange = (e) => {
+    const selectedFile = e.target.files[0];
+    if (selectedFile) {
+      setFileError(null); // Clear previous errors
+
+      if (!ALLOWED_FILE_TYPES.includes(selectedFile.type)) {
+        setFileError(`Invalid file type. Please upload one of: PDF, DOCX, XLSX, PNG, JPG.`);
+        setFile(null); // Clear selected file if invalid
+        return;
+      }
+      if (selectedFile.size > MAX_FILE_SIZE) {
+        setFileError(`File is too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB.`);
+        setFile(null); // Clear selected file if invalid
+        return;
+      }
+      setFile(selectedFile);
+    } else {
+      setFile(null);
+      setFileError(null); // Clear error if no file selected (e.g., user cancels file selection)
+    }
+  };
+  
+  const isSubmitting = uploadFileMutation.isPending || createDocMutation.isPending;
+
+  return (
+    <Card className="mb-8 shadow-xl border-0 bg-white">
+      <form onSubmit={handleSubmit(onSubmit)}>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>Upload New Document</CardTitle>
+          <Button variant="ghost" size="icon" onClick={onClose}>
+            <X className="w-5 h-5" />
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <Label htmlFor="file-upload">File *</Label>
+            <div className="mt-2 flex items-center justify-center w-full">
+              <label htmlFor="file-upload" className="flex flex-col items-center justify-center w-full h-32 border-2 border-slate-300 border-dashed rounded-lg cursor-pointer bg-slate-50 hover:bg-slate-100">
+                <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                  <UploadCloud className="w-8 h-8 mb-3 text-slate-500" />
+                  {file ? (
+                    <p className="font-semibold text-blue-600">{file.name}</p>
+                  ) : (
+                    <>
+                      <p className="mb-2 text-sm text-slate-500"><span className="font-semibold">Click to upload</span> or drag and drop</p>
+                      <p className="text-xs text-slate-500">PDF, DOCX, XLSX, PNG, JPG (Max 5MB)</p>
+                    </>
+                  )}
+                </div>
+                <Input id="file-upload" type="file" className="hidden" onChange={handleFileChange} accept={ALLOWED_FILE_TYPES.join(',')} />
+              </label>
+            </div>
+            {fileError && <Alert variant="destructive" className="mt-2"><AlertDescription>{fileError}</AlertDescription></Alert>}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="title">Document Title *</Label>
+            <Input id="title" {...register("title", { required: "Title is required" })} />
+            {errors.title && <Alert variant="destructive"><AlertDescription>{errors.title.message}</AlertDescription></Alert>}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="document_type">Document Type *</Label>
+            <Controller
+              name="document_type"
+              control={control}
+              rules={{ required: "Document type is required" }}
+              render={({ field }) => (
+                <Select onValueChange={field.onChange} defaultValue={field.value}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select document type..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {DOCUMENT_TYPES.map(type => (
+                      <SelectItem key={type} value={type} className="capitalize">{type.replace(/_/g, ' ')}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            />
+            {errors.document_type && <Alert variant="destructive"><AlertDescription>{errors.document_type.message}</AlertDescription></Alert>}
+          </div>
+          
+          <div className="space-y-2">
+            <Label htmlFor="tags">Tags (comma-separated)</Label>
+            <Input id="tags" {...register("tags")} placeholder="e.g., financial, 2024, required" />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="description">Description</Label>
+            <Textarea id="description" {...register("description")} />
+          </div>
+        </CardContent>
+        <CardFooter className="flex justify-end gap-3">
+          <Button type="button" variant="outline" onClick={onClose} disabled={isSubmitting}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={isSubmitting}>
+            {isSubmitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <UploadCloud className="w-4 h-4 mr-2" />}
+            {isSubmitting ? "Uploading..." : "Upload & Save"}
+          </Button>
+        </CardFooter>
+      </form>
+    </Card>
+  );
+}
