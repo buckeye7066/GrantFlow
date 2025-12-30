@@ -4,6 +4,48 @@ import { getDb } from '../db/index.js'
 
 const router = Router()
 
+const PROFILE_STRING_FIELDS = [
+  'profile_type',
+  'display_name',
+  'notes',
+  'full_name',
+  'dob',
+  'job_title',
+  'address_line1',
+  'address_line2',
+  'city',
+  'state',
+  'zip',
+  'contact_email',
+  'contact_phone',
+  'website',
+  'mission_statement',
+  'ein',
+  'duns',
+  'cage_code',
+  'naics_codes',
+  'service_area',
+  'demographics_served',
+  'program_focus_areas',
+  'compliance_notes',
+  'certifications',
+  'created_by',
+  'owner_id',
+  'case_manager_id',
+  'admin_id',
+  'status',
+  'last_contacted_at',
+]
+
+const PROFILE_NUMERIC_FIELDS = new Set(['annual_budget', 'staff_count', 'volunteer_count'])
+const PROFILE_BOOLEAN_FIELDS = new Set(['phi_access_required'])
+
+const PROFILE_DEFAULTS = {
+  profile_type: 'organization',
+  notes: '',
+  phi_access_required: 0,
+}
+
 function resolveDb(res) {
   try {
     return getDb()
@@ -11,13 +53,30 @@ function resolveDb(res) {
     const status = error.status ?? 503
     res
       .status(status)
-      .json({ error: error.message ?? 'Database unavailable. Install better-sqlite3 on the server.' })
+      .json({ error: error.message ?? 'Database unavailable. Install better-sqlite3 to enable persistence.' })
     return null
   }
 }
 
+function normalizeValue(key, value) {
+  if (value === undefined) return undefined
+  if (value === null || value === '') return null
+
+  if (PROFILE_BOOLEAN_FIELDS.has(key)) {
+    return value ? 1 : 0
+  }
+
+  if (PROFILE_NUMERIC_FIELDS.has(key)) {
+    const numeric = Number(value)
+    return Number.isNaN(numeric) ? null : numeric
+  }
+
+  return String(value)
+}
+
 function mapProfile(row) {
   if (!row) return null
+
   return {
     id: row.id,
     profile_type: row.profile_type,
@@ -27,11 +86,35 @@ function mapProfile(row) {
     updated_at: row.updated_at,
     full_name: row.full_name,
     dob: row.dob,
+    job_title: row.job_title,
     address_line1: row.address_line1,
     address_line2: row.address_line2,
     city: row.city,
     state: row.state,
     zip: row.zip,
+    contact_email: row.contact_email,
+    contact_phone: row.contact_phone,
+    website: row.website,
+    mission_statement: row.mission_statement,
+    ein: row.ein,
+    duns: row.duns,
+    cage_code: row.cage_code,
+    naics_codes: row.naics_codes,
+    annual_budget: row.annual_budget === null ? null : Number(row.annual_budget),
+    staff_count: row.staff_count === null ? null : Number(row.staff_count),
+    volunteer_count: row.volunteer_count === null ? null : Number(row.volunteer_count),
+    service_area: row.service_area,
+    demographics_served: row.demographics_served,
+    program_focus_areas: row.program_focus_areas,
+    compliance_notes: row.compliance_notes,
+    certifications: row.certifications,
+    phi_access_required: Boolean(row.phi_access_required),
+    created_by: row.created_by,
+    owner_id: row.owner_id,
+    case_manager_id: row.case_manager_id,
+    admin_id: row.admin_id,
+    last_contacted_at: row.last_contacted_at,
+    status: row.status,
   }
 }
 
@@ -52,57 +135,59 @@ router.get('/', (req, res, next) => {
 
 router.post('/', (req, res, next) => {
   try {
-    const {
-      display_name: displayName,
-      profile_type: profileType = 'organization',
-      notes = '',
-      full_name: fullName = null,
-      dob = null,
-      address_line1: addressLine1 = null,
-      address_line2: addressLine2 = null,
-      city = null,
-      state = null,
-      zip = null,
-    } = req.body || {}
+    const body = req.body || {}
+    const displayName = typeof body.display_name === 'string' ? body.display_name.trim() : ''
 
-    if (!displayName || typeof displayName !== 'string') {
+    if (!displayName) {
       return res.status(400).json({ error: 'display_name is required' })
     }
 
-    const id = uuid()
-    const timestamp = new Date().toISOString()
     const db = resolveDb(res)
     if (!db) return
-    const stmt = db.prepare(
-      `INSERT INTO profiles (
-        id, profile_type, display_name, notes, created_at, updated_at,
-        full_name, dob, address_line1, address_line2, city, state, zip
-      ) VALUES (
-        @id, @profile_type, @display_name, @notes, @created_at, @updated_at,
-        @full_name, @dob, @address_line1, @address_line2, @city, @state, @zip
-      )`,
-    )
 
-    stmt.run({
+    const timestamp = new Date().toISOString()
+    const id = uuid()
+
+    const record = {
       id,
-      profile_type: profileType,
-      display_name: displayName,
-      notes,
       created_at: timestamp,
       updated_at: timestamp,
-      full_name: fullName,
-      dob,
-      address_line1: addressLine1,
-      address_line2: addressLine2,
-      city,
-      state,
-      zip,
-    })
+      ...PROFILE_DEFAULTS,
+    }
 
-    const record = db
-      .prepare('SELECT * FROM profiles WHERE id = ?')
-      .get(id)
-    res.status(201).json({ data: mapProfile(record) })
+    for (const key of PROFILE_STRING_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(body, key)) {
+        const value = normalizeValue(key, body[key])
+        record[key] = value === undefined ? null : value
+      } else if (!Object.prototype.hasOwnProperty.call(record, key)) {
+        record[key] = null
+      }
+    }
+
+    for (const key of PROFILE_NUMERIC_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(body, key)) {
+        record[key] = normalizeValue(key, body[key])
+      } else {
+        record[key] = null
+      }
+    }
+
+    for (const key of PROFILE_BOOLEAN_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(body, key)) {
+        record[key] = normalizeValue(key, body[key])
+      } else {
+        record[key] = PROFILE_DEFAULTS[key] ?? 0
+      }
+    }
+
+    const columns = Object.keys(record)
+    const placeholders = columns.map((key) => `@${key}`).join(', ')
+    const stmt = db.prepare(`INSERT INTO profiles (${columns.join(', ')}) VALUES (${placeholders})`)
+
+    stmt.run(record)
+
+    const created = db.prepare('SELECT * FROM profiles WHERE id = ?').get(id)
+    res.status(201).json({ data: mapProfile(created) })
   } catch (error) {
     next(error)
   }
@@ -130,56 +215,39 @@ router.patch('/:id', (req, res, next) => {
   try {
     const db = resolveDb(res)
     if (!db) return
-    const record = db
-      .prepare('SELECT * FROM profiles WHERE id = ?')
-      .get(req.params.id)
+    const existing = db.prepare('SELECT * FROM profiles WHERE id = ?').get(req.params.id)
 
-    if (!record) {
+    if (!existing) {
       return res.status(404).json({ error: 'Profile not found' })
     }
 
-    const allowed = [
-      'display_name',
-      'notes',
-      'profile_type',
-      'full_name',
-      'dob',
-      'address_line1',
-      'address_line2',
-      'city',
-      'state',
-      'zip',
-    ]
-
+    const body = req.body || {}
     const updates = {}
-    for (const key of allowed) {
-      if (Object.prototype.hasOwnProperty.call(req.body, key)) {
-        updates[key] = req.body[key]
+
+    for (const key of [...PROFILE_STRING_FIELDS, ...PROFILE_NUMERIC_FIELDS, ...PROFILE_BOOLEAN_FIELDS]) {
+      if (Object.prototype.hasOwnProperty.call(body, key)) {
+        const value = normalizeValue(key, body[key])
+        updates[key] = value === undefined ? null : value
       }
     }
 
     if (Object.keys(updates).length === 0) {
-      return res.json({ data: mapProfile(record) })
+      return res.json({ data: mapProfile(existing) })
     }
+
+    updates.updated_at = new Date().toISOString()
 
     const assignments = Object.keys(updates)
       .map((key) => `${key} = @${key}`)
       .join(', ')
 
-    const stmt = db.prepare(
-      `UPDATE profiles SET ${assignments}, updated_at = @updated_at WHERE id = @id`,
-    )
-
+    const stmt = db.prepare(`UPDATE profiles SET ${assignments} WHERE id = @id`)
     stmt.run({
       ...updates,
-      updated_at: new Date().toISOString(),
       id: req.params.id,
     })
 
-    const updated = db
-      .prepare('SELECT * FROM profiles WHERE id = ?')
-      .get(req.params.id)
-
+    const updated = db.prepare('SELECT * FROM profiles WHERE id = ?').get(req.params.id)
     res.json({ data: mapProfile(updated) })
   } catch (error) {
     next(error)

@@ -3,18 +3,42 @@ import { API_BASE } from './apiBase'
 // Profile interfaces
 export interface Profile {
   id: string
-  profile_type: 'organization' | 'individual'
+  profile_type: string
   display_name: string
   notes: string
   created_at: string
   updated_at: string
   full_name?: string | null
   dob?: string | null
+  job_title?: string | null
   address_line1?: string | null
   address_line2?: string | null
   city?: string | null
   state?: string | null
   zip?: string | null
+  contact_email?: string | null
+  contact_phone?: string | null
+  website?: string | null
+  mission_statement?: string | null
+  ein?: string | null
+  duns?: string | null
+  cage_code?: string | null
+  naics_codes?: string | null
+  annual_budget?: number | null
+  staff_count?: number | null
+  volunteer_count?: number | null
+  service_area?: string | null
+  demographics_served?: string | null
+  program_focus_areas?: string | null
+  compliance_notes?: string | null
+  certifications?: string | null
+  phi_access_required: boolean
+  created_by?: string | null
+  owner_id?: string | null
+  case_manager_id?: string | null
+  admin_id?: string | null
+  last_contacted_at?: string | null
+  status?: string | null
 }
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
@@ -198,7 +222,11 @@ async function apiCall<T>(endpoint: string, options: RequestInit = {}): Promise<
     throw new Error(error.error || `HTTP ${response.status}`)
   }
 
-  return response.json()
+  const payload = await response.json()
+  if (payload && typeof payload === 'object' && 'data' in payload) {
+    return (payload as { data: T }).data
+  }
+  return payload as T
 }
 
 export const base44 = {

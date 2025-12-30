@@ -39,10 +39,48 @@ function ensureFundingSourceColumns(db) {
   }
 }
 
+function ensureProfileColumns(db) {
+  const info = db.prepare('PRAGMA table_info(profiles)').all()
+  const columns = new Set(info.map((column) => column.name))
+  const additions = [
+    { name: 'contact_email', definition: 'TEXT' },
+    { name: 'contact_phone', definition: 'TEXT' },
+    { name: 'website', definition: 'TEXT' },
+    { name: 'mission_statement', definition: 'TEXT' },
+    { name: 'ein', definition: 'TEXT' },
+    { name: 'duns', definition: 'TEXT' },
+    { name: 'cage_code', definition: 'TEXT' },
+    { name: 'naics_codes', definition: 'TEXT' },
+    { name: 'annual_budget', definition: 'REAL' },
+    { name: 'staff_count', definition: 'INTEGER' },
+    { name: 'volunteer_count', definition: 'INTEGER' },
+    { name: 'service_area', definition: 'TEXT' },
+    { name: 'demographics_served', definition: 'TEXT' },
+    { name: 'program_focus_areas', definition: 'TEXT' },
+    { name: 'compliance_notes', definition: 'TEXT' },
+    { name: 'certifications', definition: 'TEXT' },
+    { name: 'phi_access_required', definition: 'INTEGER DEFAULT 0' },
+    { name: 'created_by', definition: 'TEXT' },
+    { name: 'owner_id', definition: 'TEXT' },
+    { name: 'case_manager_id', definition: 'TEXT' },
+    { name: 'admin_id', definition: 'TEXT' },
+    { name: 'last_contacted_at', definition: 'TEXT' },
+    { name: 'status', definition: "TEXT DEFAULT 'active'" },
+    { name: 'job_title', definition: 'TEXT' },
+  ]
+
+  for (const addition of additions) {
+    if (!columns.has(addition.name)) {
+      db.exec(`ALTER TABLE profiles ADD COLUMN ${addition.name} ${addition.definition}`)
+    }
+  }
+}
+
 function applyMigrations(db) {
   const schema = fs.readFileSync(SCHEMA_PATH, 'utf8')
   db.exec(schema)
   try {
+    ensureProfileColumns(db)
     ensureFundingSourceColumns(db)
   } catch (error) {
     // ignore if table does not exist yet
