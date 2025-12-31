@@ -1,194 +1,155 @@
-import fs from 'fs'
-import path from 'path'
-import { fileURLToPath } from 'url'
-import express from 'express'
-import cors from 'cors'
-import cookieParser from 'cookie-parser'
-import dotenv from 'dotenv'
-import rateLimit from 'express-rate-limit'
+import express from 'express';
+import cors from 'cors';
+import Database from 'better-sqlite3';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import fs from 'fs';
 
-import ActionLogStore from './storage/actionLogStore.js'
-import { getDb, isDatabaseAvailable } from './db/index.js'
-import AnyaRuntimeController from './runtime/anyaRuntime.js'
-import adminAuth from './middleware/adminAuth.js'
-import { initDb } from './db/index.js'
-import profilesRouter from './routes/profiles.js'
-import documentsRouter from './routes/documents.js'
-import opportunitiesRouter from './routes/opportunities.js'
+// Routes
+import organizationsRouter from './routes/organizations.js';
+import grantsRouter from './routes/grants.js';
+import opportunitiesRouter from './routes/opportunities.js';
+import milestonesRouter from './routes/milestones.js';
+import documentsRouter from './routes/documents.js';
+import expensesRouter from './routes/expenses.js';
+import aiRouter from './routes/ai.js';
+import anyaRouter from './routes/anya.js';
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
-dotenv.config({ path: path.resolve(process.cwd(), '.env') })
+const app = express();
+app.set('trust proxy', 1);
+const PORT = process.env.PORT || 8080;
 
-const app = express()
+// CORS configuration
+const corsOrigins = process.env.CORS_ORIGIN?.split(',') || [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'https://grant-flow-three.vercel.app',
+  'https://app.axiombiolabs.org'
+];
 
-// Rate limiting for API routes
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
-  standardHeaders: true,
-  legacyHeaders: false,
-})
+app.use(cors({
+  origin: corsOrigins,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Token', 'X-Anya-Token']
+}));
 
-app.use('/api', apiLimiter)
-app.use(express.json())
-app.use(cookieParser())
-app.use(
-  cors({
-    origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : ['http://localhost:5173'],
-    credentials: true,
-  }),
-)
+app.use(express.json({ limit: '10mb' }));
 
 // Initialize database
-initDb()
-
-const logStore = new ActionLogStore(path.resolve(__dirname, 'data', 'anya-log.json'), {
-  maxEntries: Number(process.env.ANYA_LOG_LIMIT ?? 1000),
-})
-const runtime = new AnyaRuntimeController(logStore)
-let databaseReady = false
-if (isDatabaseAvailable()) {
-  try {
-    getDb()
-    databaseReady = true
-  } catch (error) {
-    console.error('[Database] Failed to initialize persistence layer:', error)
-  }
-} else {
-  console.warn(
-    '[Database] better-sqlite3 is not installed. Profile/document services are disabled. Install it with "npm install better-sqlite3" and restart the server.',
-  )
+const dataDir = join(__dirname, 'data');
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
 }
 
-// Health check endpoint (no authentication required)
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    service: 'grantflow-backend',
-    version: '1.0.0',
-  })
-})
+const dbPath = process.env.DATABASE_URL || join(dataDir, 'grantflow.db');
+export const db = new Database(dbPath);
+db.pragma('journal_mode = WAL');
 
-app.get('/api/anya/status', async (req, res) => {
-  const status = runtime.getStatus()
-  const logs = await logStore.getAll(1)
-  const lastAction = logs[0] ?? null
-  res.json({ ...status, lastAction })
-})
-
-app.get('/api/anya/logs', adminAuth, async (req, res, next) => {
-  try {
-    const limit = Number.parseInt(req.query.limit, 10)
-    const entries = await logStore.getAll(Number.isFinite(limit) ? limit : 50)
-    res.json({ entries })
-  } catch (error) {
-    next(error)
-  }
-})
-
-app.post('/api/anya/scan', adminAuth, async (req, res, next) => {
-  try {
-    const actor = req.anyaActor ?? 'admin'
-    const payload = {
-      target: req.body?.target ?? 'repository',
-      autoFix: Boolean(req.body?.autoFix),
-      approve: Boolean(req.body?.approve),
-    }
-    const result = await runtime.execute('scan', actor, payload)
-    res.status(202).json({ message: 'Scan started', result })
-  } catch (error) {
-    next(error)
-  }
-})
-
-app.post('/api/anya/crawl', adminAuth, async (req, res, next) => {
-  try {
-    const actor = req.anyaActor ?? 'admin'
-    const payload = {
-      scope: req.body?.scope ?? 'default-datasets',
-      depth: Number.parseInt(req.body?.depth, 10) || 1,
-    }
-    const result = await runtime.execute('crawl', actor, payload)
-    res.status(202).json({ message: 'Crawl started', result })
-  } catch (error) {
-    next(error)
-  }
-})
-
-app.post('/api/anya/explain', adminAuth, async (req, res, next) => {
-  try {
-    const actor = req.anyaActor ?? 'admin'
-    const payload = {
-      context: req.body?.context ?? 'latest-scan',
-    }
-    const result = await runtime.execute('explain', actor, payload)
-    res.status(202).json({ message: 'Explanation requested', result })
-  } catch (error) {
-    next(error)
-  }
-})
-
-const clientDistPath = path.resolve(__dirname, '..', 'dist')
-const clientIndexPath = path.join(clientDistPath, 'index.html')
-const hasBuiltClient = fs.existsSync(clientIndexPath)
-
-if (hasBuiltClient) {
-  app.use(
-    '/grantflow',
-    express.static(clientDistPath, {
-      setHeaders(res) {
-        res.setHeader('Cache-Control', 'public, max-age=300, must-revalidate')
-      },
-    }),
-  )
-
-  app.get(['/grantflow', '/grantflow/*'], (req, res, next) => {
-    res.sendFile(clientIndexPath, (error) => {
-      if (error) next(error)
-    })
-  })
-} else {
-  console.warn(
-    '[GrantFlow] dist/ missing. Run "npm run build" to generate the client bundle before serving /grantflow routes.',
-  )
+// Run schema migration
+const schemaPath = join(__dirname, 'db', 'schema.sql');
+if (fs.existsSync(schemaPath)) {
+  const schema = fs.readFileSync(schemaPath, 'utf8');
+  db.exec(schema);
+  console.log('Database schema initialized');
 }
 
-if (databaseReady) {
-  app.use('/api/profiles', adminAuth, profilesRouter)
-  app.use('/api', adminAuth, documentsRouter)
-} else {
-  app.use('/api/profiles', (req, res) =>
-    res
-      .status(503)
-      .json({ error: 'Profile services unavailable: install better-sqlite3 and restart the server.' }),
-  )
-  app.use('/api/documents', (req, res) =>
-    res
-      .status(503)
-      .json({ error: 'Document ingestion unavailable: install better-sqlite3 and restart the server.' }),
-  )
-}
-app.use('/api/opportunities', adminAuth, opportunitiesRouter)
+// Make db available to routes
+app.use((req, res, next) => {
+  req.db = db;
+  next();
+});
 
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+});
+
+// API routes
+app.use('/api/organizations', organizationsRouter);
+app.use('/api/grants', grantsRouter);
+app.use('/api/opportunities', opportunitiesRouter);
+app.use('/api/milestones', milestonesRouter);
+app.use('/api/documents', documentsRouter);
+app.use('/api/expenses', expensesRouter);
+app.use('/api/ai', aiRouter);
+app.use('/api/anya', anyaRouter); // Keep existing Anya routes for compatibility
+
+// Stats endpoint for dashboard
+app.get('/api/stats', (req, res) => {
+  try {
+    const orgCount = db.prepare('SELECT COUNT(*) as count FROM organizations').get();
+    const grantCount = db.prepare('SELECT COUNT(*) as count FROM grants WHERE status IN (?, ?, ?, ?)').get('interested', 'drafting', 'submitted', 'awarded');
+    const totalExpenses = db.prepare('SELECT COALESCE(SUM(amount), 0) as total FROM expenses').get();
+    const upcomingDeadlines = db.prepare(`
+      SELECT COUNT(*) as count FROM grants 
+      WHERE deadline IS NOT NULL 
+      AND deadline >= date('now') 
+      AND deadline <= date('now', '+14 days')
+      AND status IN ('discovered', 'interested', 'drafting')
+    `).get();
+    
+    res.json({
+      organizations: orgCount.count,
+      activeGrants: grantCount.count,
+      totalExpenses: totalExpenses.total,
+      upcomingDeadlines: upcomingDeadlines.count
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Pipeline stats
+app.get('/api/pipeline/stats', (req, res) => {
+  try {
+    const stats = db.prepare(`
+      SELECT status, COUNT(*) as count 
+      FROM grants 
+      GROUP BY status
+    `).all();
+    
+    const pipeline = {
+      discovered: 0,
+      interested: 0,
+      drafting: 0,
+      app_prep: 0,
+      revision: 0,
+      submitted: 0,
+      awarded: 0,
+      rejected: 0
+    };
+    
+    stats.forEach(s => {
+      if (pipeline.hasOwnProperty(s.status)) {
+        pipeline[s.status] = s.count;
+      }
+    });
+    
+    res.json(pipeline);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Error handling
 app.use((err, req, res, next) => {
-  console.error('[AnyaRuntimeError]', err)
-  const status = err.statusCode ?? err.status ?? 500
-  res.status(status).json({ error: err.message ?? 'Unexpected error' })
-})
+  console.error('Error:', err);
+  res.status(500).json({ error: err.message || 'Internal server error' });
+});
 
-const PORT = Number.parseInt(process.env.PORT, 10) || 4000
-const HOST = process.env.HOST || '0.0.0.0'
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  app.listen(PORT, HOST, () => {
-    console.log(`Anya runtime controller listening on ${HOST}:${PORT}`)
-    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`)
-    console.log(`CORS Origins: ${process.env.CORS_ORIGIN || 'not configured'}`)
-  })
-}
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`GrantFlow API server running on port ${PORT}`);
+  console.log(`Database: ${dbPath}`);
+  console.log(`CORS origins: ${corsOrigins.join(', ')}`);
+});
 
-export default app
-
+export default app;
