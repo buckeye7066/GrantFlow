@@ -1,25 +1,106 @@
 # GrantFlow
 
-A professional marketing website for GrantFlow by Axiom BioLabs - Finding funding sources for various financial situations.
+A grant lifecycle management platform by Axiom BioLabs - Streamlining grant discovery, application, and tracking for organizations and individuals.
 
 ## Overview
 
-This is a static marketing site built with Vite, React, and Tailwind CSS. It includes:
+GrantFlow is currently a **marketing site + backend foundation** with plans to evolve into a full-featured grant management application. The platform includes:
 
-- Landing page with hero section, features, and CTAs
-- Pricing page with multiple subscription tiers
-- Complete legal pages (Terms of Service, Privacy Policy, HIPAA Compliance, Data Retention)
-- Responsive design with modern UI components
-- Navigation and footer with all required links
+**Current Features:**
+- Marketing website with landing page, pricing, and legal pages
+- Basic grant operations dashboard
+- Organization/profile management
+- Document upload and processing pipeline
+- Grant opportunity database
+- RESTful backend APIs
+- AI integration foundation (Anya runtime)
+
+**Target State:**
+The full-featured GrantFlow will provide complete grant lifecycle management with AI-powered features, similar to the [Base44 reference implementation](https://grant-flow-736bafec.base44.app).
+
+See [Feature Roadmap](#feature-roadmap) below for details on current capabilities and planned features.
 
 ## Technology Stack
 
-- **Vite** - Fast build tool and dev server
-- **React** - UI component library
-- **Tailwind CSS** - Utility-first CSS framework
-- **React Router** - Client-side routing
+**Frontend:**
+- **React 19** + **TypeScript** - Modern UI framework
+- **Vite 7** - Fast build tool and dev server with HMR
+- **Tailwind CSS 4** - Utility-first CSS framework
+- **React Router 7** - Client-side routing
+- **React Query 5** - Server state management
 
-## Getting Started
+**Backend:**
+- **Node.js** + **Express** - RESTful API server
+- **SQLite** (better-sqlite3) - Database with WAL mode
+- **Anya Runtime** - AI integration foundation
+- **OpenAI API** - AI-powered features (configured)
+
+## Feature Roadmap
+
+GrantFlow is evolving from a marketing site + backend foundation into a comprehensive grant lifecycle management platform. Our target is feature parity with the [Base44 reference implementation](https://grant-flow-736bafec.base44.app).
+
+### Current Implementation (Phase 1) ✅
+
+**Marketing & Documentation:**
+- Professional marketing website with pricing and legal pages
+- Comprehensive deployment and configuration documentation
+
+**Backend Foundation:**
+- RESTful APIs for profiles, documents, and opportunities
+- SQLite database with profiles, documents, and funding_sources tables
+- Document upload, parsing, and data extraction pipeline
+- Admin authentication with token-based security
+- AI integration foundation (Anya runtime)
+- Railway deployment with health monitoring
+
+**Basic Application UI:**
+- Grant operations dashboard with key metrics
+- Organization management (create, edit, list)
+- Document upload interface
+- Anya AI status panel
+
+### Planned Features (Phases 2-6)
+
+**Phase 2: Pipeline Management** 🚧 *Next Priority*
+- Full grant lifecycle tracking (discovered → awarded)
+- Kanban board with drag-and-drop
+- Grant detail pages with milestones and expenses
+- Activity logging and audit trail
+
+**Phase 3: Proposal Drafting** 📋
+- Rich text proposal editor
+- AI-assisted content generation
+- Template library
+- Version control and collaboration
+
+**Phase 4: Analytics & Reporting** 📊
+- Success rate analytics
+- Pipeline funnel visualization
+- Custom report builder
+- Export to PDF/CSV
+
+**Phase 5: Submission Tracking** 📤
+- Submission checklists
+- Document requirement tracking
+- Follow-up activity management
+- Deadline notifications
+
+**Phase 6: User Management & RBAC** 🔐
+- Multi-user authentication
+- Role-based access control
+- Team collaboration
+- Permission management
+
+### Documentation
+
+For detailed information about current capabilities, missing features, and the development roadmap:
+
+- **[Feature Parity Analysis](docs/FEATURE_PARITY.md)** - Complete comparison with Base44 reference implementation
+- **[Development Roadmap](docs/DEVELOPMENT_ROADMAP.md)** - Phased implementation plan with technical details
+- **[Backend Documentation](backend/README.md)** - API endpoints, database schema, and AI integration
+- **[UI Architecture](docs/UI_ARCHITECTURE.md)** - Component design and frontend architecture
+
+
 
 ### Prerequisites
 
