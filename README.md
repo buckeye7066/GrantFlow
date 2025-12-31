@@ -416,6 +416,95 @@ CORS_ORIGIN=http://localhost:5173       # Frontend URL for CORS
 NODE_ENV=development                     # Environment
 ```
 
+**Before deploying:**
+- Ensure all environment variables are properly configured on your hosting platform
+- Use production-grade secrets (not development values)
+- Enable HTTPS for all production deployments
+- Set appropriate CORS origins
+
+## 🚀 Production Deployment
+
+### Current Production Stack (Recommended)
+
+GrantFlow uses a modern serverless architecture:
+
+**Primary Deployment Method: Vercel + Railway**
+
+```
+GoDaddy/Cloudflare DNS → Vercel (Frontend) → Railway (Backend)
+                              ↓
+                         /grantflow/* → React App
+                         /api/* → Node.js API
+```
+
+**Architecture:**
+- **Frontend:** Vercel (Static site with edge caching)
+- **Backend:** Railway (Node.js API service)
+- **CDN:** Vercel Edge Network
+- **Base Path:** `/grantflow/`
+
+**Current Status:**
+- ✅ Working at `app.axiombiolabs.org/grantflow`
+- ⏳ DNS migration pending for root domain
+
+### Deployment Guides
+
+📘 **[Vercel + Railway Deployment](DEPLOYMENT_PATH2.md)** - Current deployment architecture
+
+📘 **[DNS Migration Guide](docs/DNS_MIGRATION.md)** - Complete root domain migration to Vercel:
+- Step-by-step Vercel domain configuration
+- DNS setup for GoDaddy and Cloudflare
+- CORS configuration for Railway backend
+- Testing and verification procedures
+
+✅ **[Domain Migration Checklist](docs/VERCEL_DOMAIN_CHECKLIST.md)** - Pre-flight checklist:
+- Pre-migration verification
+- Execution steps
+- Post-migration smoke tests
+- Rollback procedures
+
+### Production Checklist (Vercel + Railway)
+
+Before going live:
+- [ ] Vercel project deployed and verified
+- [ ] Railway backend service running
+- [ ] Environment variables configured on Railway
+- [ ] `CORS_ORIGIN` includes all domains
+- [ ] Custom domains added in Vercel
+- [ ] DNS records configured (see DNS Migration Guide)
+- [ ] SSL certificates verified in Vercel
+- [ ] Health checks passing on Railway
+- [ ] End-to-end authentication tested
+
+### Quick Verification
+
+```bash
+# Test frontend
+curl -I https://app.axiombiolabs.org/grantflow/login
+
+# Test backend API
+curl https://grantflow-production.up.railway.app/api/health
+
+# Expected: {"status":"ok"}
+```
+
+---
+
+## Legacy Deployment (Digital Ocean)
+
+> **⚠️ DEPRECATED:** The Digital Ocean deployment method is being phased out in favor of Vercel + Railway.
+
+**[📘 Legacy Deployment Guide](docs/DEPLOYMENT.md)** (Digital Ocean + Nginx)
+
+The legacy guide covers:
+- Digital Ocean server setup
+- Cloudflare and DNS configuration
+- Nginx reverse proxy configuration
+- SSL/TLS certificate setup
+- Backend service configuration with systemd
+- Troubleshooting common issues
+
+### Legacy Architecture
 #### Optional Variables
 ```env
 OPENAI_API_KEY=<your-api-key>           # For AI features

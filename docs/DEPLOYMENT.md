@@ -2,8 +2,45 @@
 
 > ⚠️ **LEGACY DOCUMENTATION**: This deployment method is no longer recommended for new deployments. Please use the Vercel + Railway architecture instead. See [`docs/DNS_MIGRATION.md`](./DNS_MIGRATION.md) for the recommended deployment approach.
 
-This guide provides step-by-step instructions for deploying GrantFlow to a Digital Ocean droplet with Nginx, behind Cloudflare CDN, using a GoDaddy domain.
+## ⚠️ Important: Domain Migration to Vercel
 
+**Current Production Architecture:** The GrantFlow application is now deployed using **Vercel (frontend) + Railway (backend)** infrastructure. This is the recommended deployment method going forward.
+
+**Migration Status:**
+- ✅ `app.axiombiolabs.org/grantflow` → Vercel (Active)
+- ⏳ `axiombiolabs.org/grantflow` → Needs DNS migration
+- ⏳ `www.axiombiolabs.org/grantflow` → Needs DNS migration
+
+### Current Deployment (Vercel + Railway)
+
+For the current Vercel + Railway deployment:
+- **Frontend:** Deployed on Vercel at `app.axiombiolabs.org/grantflow`
+- **Backend:** Deployed on Railway at `grantflow-production.up.railway.app`
+- **See:** [DEPLOYMENT_PATH2.md](../DEPLOYMENT_PATH2.md) for Vercel + Railway architecture
+
+### DNS Migration to Complete
+
+To point the root domain (`axiombiolabs.org` and `www.axiombiolabs.org`) to Vercel:
+
+📘 **[DNS Migration Guide](DNS_MIGRATION.md)** - Complete step-by-step instructions for:
+- Adding custom domains in Vercel
+- Configuring DNS records in GoDaddy or Cloudflare
+- Testing and verification procedures
+- Troubleshooting common issues
+
+✅ **[Vercel Domain Checklist](VERCEL_DOMAIN_CHECKLIST.md)** - Pre-flight checklist for migration:
+- Pre-migration verification steps
+- Step-by-step execution plan
+- Post-migration smoke tests
+- Rollback procedures
+
+---
+
+## Legacy Deployment (Digital Ocean)
+
+> **⚠️ DEPRECATED:** The Digital Ocean deployment path below is considered legacy and is being phased out in favor of Vercel + Railway. The information is maintained for reference and for teams still running the old infrastructure.
+
+### Legacy Architecture Overview
 **Recommended Alternative:** For new deployments, use the modern Vercel (frontend) + Railway (backend) architecture which offers better performance, easier maintenance, and automatic scaling. See:
 - [`docs/DNS_MIGRATION.md`](./DNS_MIGRATION.md) - Complete migration guide
 - [`DEPLOYMENT_PATH2.md`](../DEPLOYMENT_PATH2.md) - Quick reference for Vercel + Railway
