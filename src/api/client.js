@@ -8,6 +8,19 @@ class APIClient {
   constructor() {
     this.baseUrl = API_URL;
     this.token = null;
+    this.entityResourceMap = {
+      Organization: 'organizations',
+      Grant: 'grants',
+      FundingOpportunity: 'opportunities',
+      Opportunity: 'opportunities',
+      Milestone: 'milestones',
+      Document: 'documents',
+      Expense: 'expenses',
+    };
+    this.stubStores = new Map();
+    this.stubWarnings = new Set();
+    this.isDev = import.meta.env?.DEV ?? false;
+    this.entities = {};
   }
 
   setToken(token) {
@@ -59,23 +72,45 @@ class APIClient {
   }
 
   // Entity wrapper for Base44-compatible interface
-  createEntityClient(entityName) {
-    const endpoint = `/api/${entityName.toLowerCase()}s`;
-    
+  createEntityClient(resource) {
+    const normalizedResource = resource.replace(/^\/+/, '');
+    const endpoint = normalizedResource.startsWith('api/')
+      ? `/${normalizedResource}`
+      : `/api/${normalizedResource}`;
+
+    const buildUrl = (searchParams) => {
+      const query = searchParams && [...searchParams].length > 0
+        ? `?${searchParams.toString()}`
+        : '';
+      return `${endpoint}${query}`;
+    };
+
     return {
-      list: async (sortBy) => {
-        let url = endpoint;
+      list: async (sortBy, limit, filters = {}) => {
+        const params = new URLSearchParams();
         if (sortBy) {
           const order = sortBy.startsWith('-') ? 'desc' : 'asc';
           const field = sortBy.replace(/^-/, '');
-          url += `?sort=${field}&order=${order}`;
+          params.set('sort', field);
+          params.set('order', order);
         }
-        return this.fetch(url);
+        if (typeof limit === 'number') {
+          params.set('limit', String(limit));
+        }
+        if (filters && typeof filters === 'object') {
+          Object.entries(filters)
+            .filter(([, value]) => value !== undefined && value !== null)
+            .forEach(([key, value]) => params.set(key, value));
+        }
+        return this.fetch(buildUrl(params));
       },
       
-      filter: async (filters) => {
-        const params = new URLSearchParams(filters);
-        return this.fetch(`${endpoint}?${params}`);
+      filter: async (filters = {}) => {
+        const params = new URLSearchParams();
+        Object.entries(filters)
+          .filter(([, value]) => value !== undefined && value !== null)
+          .forEach(([key, value]) => params.set(key, value));
+        return this.fetch(buildUrl(params));
       },
       
       get: async (id) => {
@@ -101,6 +136,77 @@ class APIClient {
           method: 'DELETE',
         });
       },
+
+      bulkCreate: async (items = []) => {
+        if (!Array.isArray(items) || items.length === 0) {
+          return [];
+        }
+        return Promise.all(
+          items.map((item) =>
+            this.fetch(endpoint, {
+              method: 'POST',
+              body: JSON.stringify(item),
+            }),
+          ),
+        );
+      },
+    };
+  }
+
+  createStubEntityClient(entityName) {
+    if (!this.stubStores.has(entityName)) {
+      this.stubStores.set(entityName, new Map());
+    }
+    const store = this.stubStores.get(entityName);
+
+    const generateId = () => {
+      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+      }
+      return `${entityName.toLowerCase()}_${Math.random().toString(36).slice(2, 10)}`;
+    };
+
+    const listRecords = () => Array.from(store.values());
+
+    const upsertRecord = (data = {}) => {
+      const id = data.id ?? generateId();
+      const record = { ...data, id };
+      store.set(id, record);
+      return record;
+    };
+
+    const applyFilters = (records, filters = {}) => {
+      const entries = Object.entries(filters || {}).filter(
+        ([, value]) => value !== undefined && value !== null,
+      );
+      if (entries.length === 0) return records;
+      return records.filter((record) =>
+        entries.every(([key, value]) => {
+          if (Array.isArray(value)) {
+            return value.includes(record[key]);
+          }
+          return `${record[key]}` === `${value}`;
+        }),
+      );
+    };
+
+    return {
+      list: async () => listRecords(),
+      filter: async (filters = {}) => applyFilters(listRecords(), filters),
+      get: async (id) => store.get(id) ?? null,
+      create: async (data) => upsertRecord(data),
+      update: async (id, data = {}) => {
+        const existing = store.get(id) ?? { id };
+        const updated = { ...existing, ...data, id };
+        store.set(id, updated);
+        return updated;
+      },
+      delete: async (id) => {
+        const existing = store.get(id) ?? null;
+        store.delete(id);
+        return existing ?? { id, deleted: Boolean(existing) };
+      },
+      bulkCreate: async (items = []) => items.map((item) => upsertRecord(item)),
     };
   }
 
@@ -168,16 +274,31 @@ class APIClient {
 
   // Initialize entity clients
   init() {
-    this.entities.Organization = this.createEntityClient('organization');
-    this.entities.Grant = this.createEntityClient('grant');
-    this.entities.FundingOpportunity = this.createEntityClient('opportunitie'); // Note: opportunities
-    this.entities.Milestone = this.createEntityClient('milestone');
-    this.entities.Document = this.createEntityClient('document');
-    this.entities.Expense = this.createEntityClient('expense');
-    this.entities.Budget = this.createEntityClient('budget');
-    this.entities.Contact = this.createEntityClient('contact');
-    this.entities.CrawlLog = this.createEntityClient('crawl_log');
-    this.entities.ApplicationDraft = this.createEntityClient('application_draft');
+    const target = {};
+    this.entities = new Proxy(target, {
+      get: (obj, prop) => {
+        if (typeof prop !== 'string') {
+          return Reflect.get(obj, prop);
+        }
+
+        if (!obj[prop]) {
+          const resource = this.entityResourceMap[prop];
+          obj[prop] = resource
+            ? this.createEntityClient(resource)
+            : this.createStubEntityClient(prop);
+
+          if (!resource && !this.stubWarnings.has(prop) && this.isDev && typeof console !== 'undefined') {
+            console.warn(
+              `[base44] Using in-memory stub for entity "${prop}". API endpoint not configured.`,
+            );
+            this.stubWarnings.add(prop);
+          }
+        }
+
+        return obj[prop];
+      },
+      has: (obj, prop) => Reflect.has(obj, prop) || prop in this.entityResourceMap,
+    });
   }
 }
 
