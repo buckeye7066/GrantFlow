@@ -1,4 +1,6 @@
-# Production Deployment Guide
+# Legacy Deployment Guide (Digital Ocean)
+
+> ⚠️ **LEGACY DOCUMENTATION**: This deployment method is no longer recommended for new deployments. Please use the Vercel + Railway architecture instead. See [`docs/DNS_MIGRATION.md`](./DNS_MIGRATION.md) for the recommended deployment approach.
 
 ## ⚠️ Important: Domain Migration to Vercel
 
@@ -39,6 +41,11 @@ To point the root domain (`axiombiolabs.org` and `www.axiombiolabs.org`) to Verc
 > **⚠️ DEPRECATED:** The Digital Ocean deployment path below is considered legacy and is being phased out in favor of Vercel + Railway. The information is maintained for reference and for teams still running the old infrastructure.
 
 ### Legacy Architecture Overview
+**Recommended Alternative:** For new deployments, use the modern Vercel (frontend) + Railway (backend) architecture which offers better performance, easier maintenance, and automatic scaling. See:
+- [`docs/DNS_MIGRATION.md`](./DNS_MIGRATION.md) - Complete migration guide
+- [`DEPLOYMENT_PATH2.md`](../DEPLOYMENT_PATH2.md) - Quick reference for Vercel + Railway
+
+## Architecture Overview
 
 ```
 GoDaddy Domain (axiombiolabs.org)
