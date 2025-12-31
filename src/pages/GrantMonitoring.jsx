@@ -462,7 +462,31 @@ export default function GrantMonitoring() {
                 <div>
                   <Label className="text-sm text-slate-500">Details</Label>
                   <pre className="text-sm bg-slate-50 p-3 rounded mt-1 overflow-auto">
-                    {JSON.stringify(JSON.parse(selectedEvent.event_data || '{}'), null, 2)}
+                    {/* Sanitize event data before displaying to prevent XSS */}
+                    {JSON.stringify(
+                      (() => {
+                        try {
+                          const data = JSON.parse(selectedEvent.event_data || '{}');
+                          // Remove any potentially dangerous fields
+                          if (typeof data === 'object' && data !== null) {
+                            const sanitized = {};
+                            for (const [key, value] of Object.entries(data)) {
+                              if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+                                sanitized[key] = value;
+                              } else if (Array.isArray(value)) {
+                                sanitized[key] = value.filter(v => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean');
+                              }
+                            }
+                            return sanitized;
+                          }
+                          return data;
+                        } catch {
+                          return {};
+                        }
+                      })(),
+                      null,
+                      2
+                    )}
                   </pre>
                 </div>
                 <div>

@@ -265,9 +265,20 @@ export default function SourceDirectory() {
   // NEW: Search for specific source mutation
   const searchSourceMutation = useMutation({
     mutationFn: async ({ source_name, location, organization_id }) => {
+      // Validate inputs before sending
+      if (source_name && typeof source_name !== 'string') {
+        throw new Error('Invalid source name');
+      }
+      if (location && typeof location !== 'string') {
+        throw new Error('Invalid location');
+      }
+      if (organization_id && typeof organization_id !== 'number') {
+        throw new Error('Invalid organization ID');
+      }
+      
       const response = await base44.functions.invoke('searchForSource', {
-        source_name,
-        location,
+        source_name: source_name?.trim(),
+        location: location?.trim(),
         organization_id
       });
       return response.data;

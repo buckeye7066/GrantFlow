@@ -102,9 +102,23 @@ export default function NOFOParser() {
         fileUrl = file_url;
         console.log('[NOFOParser] File uploaded:', fileUrl);
       } else {
-        // URL mode - validate URL format
+        // URL mode - validate URL format more thoroughly
         const trimmedUrl = url.trim();
-        if (!trimmedUrl.startsWith('http://') && !trimmedUrl.startsWith('https://')) {
+        try {
+          const urlObj = new URL(trimmedUrl);
+          // Only allow http and https protocols to prevent SSRF
+          if (urlObj.protocol !== 'http:' && urlObj.protocol !== 'https:') {
+            throw new Error('Only HTTP and HTTPS URLs are allowed');
+          }
+          // Prevent localhost and internal network access
+          if (urlObj.hostname === 'localhost' || 
+              urlObj.hostname === '127.0.0.1' || 
+              urlObj.hostname.match(/^192\.168\./) ||
+              urlObj.hostname.match(/^10\./) ||
+              urlObj.hostname.match(/^172\.(1[6-9]|2[0-9]|3[0-1])\./)) {
+            throw new Error('Internal URLs are not allowed');
+          }
+        } catch (e) {
           throw new Error('Please enter a valid URL starting with http:// or https://');
         }
         console.log('[NOFOParser] Using URL:', trimmedUrl);
