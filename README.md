@@ -350,46 +350,87 @@ npm run build
 
 ## 🚀 Production Deployment
 
-For deploying GrantFlow to a production environment (Digital Ocean, AWS, etc.), see the comprehensive deployment guide:
+### Current Production Stack (Recommended)
 
-**[📘 Production Deployment Guide](docs/DEPLOYMENT.md)**
+GrantFlow uses a modern serverless architecture:
 
-The deployment guide covers:
+**Primary Deployment Method: Vercel + Railway**
+
+```
+GoDaddy/Cloudflare DNS → Vercel (Frontend) → Railway (Backend)
+                              ↓
+                         /grantflow/* → React App
+                         /api/* → Node.js API
+```
+
+**Architecture:**
+- **Frontend:** Vercel (Static site with edge caching)
+- **Backend:** Railway (Node.js API service)
+- **CDN:** Vercel Edge Network
+- **Base Path:** `/grantflow/`
+
+**Current Status:**
+- ✅ Working at `app.axiombiolabs.org/grantflow`
+- ⏳ DNS migration pending for root domain
+
+### Deployment Guides
+
+📘 **[Vercel + Railway Deployment](DEPLOYMENT_PATH2.md)** - Current deployment architecture
+
+📘 **[DNS Migration Guide](docs/DNS_MIGRATION.md)** - Complete root domain migration to Vercel:
+- Step-by-step Vercel domain configuration
+- DNS setup for GoDaddy and Cloudflare
+- CORS configuration for Railway backend
+- Testing and verification procedures
+
+✅ **[Domain Migration Checklist](docs/VERCEL_DOMAIN_CHECKLIST.md)** - Pre-flight checklist:
+- Pre-migration verification
+- Execution steps
+- Post-migration smoke tests
+- Rollback procedures
+
+### Production Checklist (Vercel + Railway)
+
+Before going live:
+- [ ] Vercel project deployed and verified
+- [ ] Railway backend service running
+- [ ] Environment variables configured on Railway
+- [ ] `CORS_ORIGIN` includes all domains
+- [ ] Custom domains added in Vercel
+- [ ] DNS records configured (see DNS Migration Guide)
+- [ ] SSL certificates verified in Vercel
+- [ ] Health checks passing on Railway
+- [ ] End-to-end authentication tested
+
+### Quick Verification
+
+```bash
+# Test frontend
+curl -I https://app.axiombiolabs.org/grantflow/login
+
+# Test backend API
+curl https://grantflow-production.up.railway.app/api/health
+
+# Expected: {"status":"ok"}
+```
+
+---
+
+## Legacy Deployment (Digital Ocean)
+
+> **⚠️ DEPRECATED:** The Digital Ocean deployment method is being phased out in favor of Vercel + Railway.
+
+**[📘 Legacy Deployment Guide](docs/DEPLOYMENT.md)** (Digital Ocean + Nginx)
+
+The legacy guide covers:
 - Digital Ocean server setup
 - Cloudflare and DNS configuration
 - Nginx reverse proxy configuration
 - SSL/TLS certificate setup
 - Backend service configuration with systemd
-- Automated deployment scripts
 - Troubleshooting common issues
-- Health checks and monitoring
 
-### Quick Deploy
-
-For automated deployment on your production server:
-
-```bash
-# Make the deployment script executable
-chmod +x scripts/deploy-production.sh
-
-# Run the deployment
-./scripts/deploy-production.sh
-```
-
-### Production Checklist
-
-Before going live, ensure:
-- [ ] Environment variables configured (`.env.production.example` → `.env`)
-- [ ] Strong, random `ANYA_ADMIN_TOKEN` generated
-- [ ] CORS origins set to production domain(s)
-- [ ] SSL/TLS certificates installed
-- [ ] Nginx configured and running
-- [ ] Backend systemd service enabled
-- [ ] Firewall rules configured (ports 80, 443, 22)
-- [ ] DNS records pointing to your server
-- [ ] Health checks passing
-
-### Production Architecture
+### Legacy Architecture
 
 ```
 GoDaddy Domain → Cloudflare CDN → Digital Ocean Server
