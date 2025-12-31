@@ -71,7 +71,7 @@ export default function Calendar() {
                   {upcomingDeadlines.map((grant) => {
                     const daysLeft = differenceInDays(new Date(grant.deadline), new Date());
                     return (
-                      <Link key={grant.id} to={createPageUrl(`GrantDetail?id=${grant.id}`)}>
+                      <Link key={grant.id} to={createPageUrl("GrantDetail", { id: grant.id })}>
                         <div className="flex items-start justify-between p-4 bg-slate-50 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer">
                           <div className="flex-1">
                             <h4 className="font-semibold text-slate-900">{grant.title}</h4>
@@ -112,7 +112,7 @@ export default function Calendar() {
                   {upcomingMilestones.map((milestone) => {
                     const grant = grants.find(g => g.id === milestone.grant_id);
                     return (
-                      <Link key={milestone.id} to={createPageUrl(`GrantDetail?id=${milestone.grant_id}`)}>
+                      <Link key={milestone.id} to={createPageUrl("GrantDetail", { id: milestone.grant_id })}>
                         <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer">
                           <div className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0 mt-1" />
                           <div className="flex-1">

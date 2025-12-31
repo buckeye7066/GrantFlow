@@ -1,150 +1,372 @@
 # GrantFlow
 
-A grant lifecycle management platform by Axiom BioLabs - Streamlining grant discovery, application, and tracking for organizations and individuals.
+GrantFlow is Axiom BioLabs’ grant operations workspace: a full-stack platform for managing detailed applicant profiles, orchestrating AI-assisted crawlers, tracking pipeline progress, and coordinating billing at scale. The repository contains both the production backend (Express + SQLite + OpenAI/Twilio integrations) and the Vite/React frontend deployed under `/grantflow`.
+
+> **Production launch checklist?** See [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) for Railway/Vercel deployment steps, environment variables, seeding instructions, QA, and monitoring guidance.
+
+---
+
+## Feature Highlights
+
+- **Multi-channel authentication** — Email OTP, SMS OTP (Twilio), and social OAuth (Google, Facebook, Yahoo) with rotating access/refresh tokens and session guardrails.
+- **Profile operations** — 11 curated baseline profiles, section-level editors, AI enrichment, avatar lookup, document ingestion, and pipeline metrics.
+- **Crawler automation** — Local, scholarship, comprehensive, item search, document ingestion, profile enrichment, avatar lookup, and pipeline automation jobs with telemetry, retry, and cancellation.
+- **Funding intelligence** — Grants and item funding views enriched with match scores, crawler reasons, compliance badges, and guardrails against loans/match-required programs.
+- **Billing console** — Tier assignment, discounts (student/minister), pro bono workflows, and audit logging for admins and end users.
+- **Deployment ready** — Bundled scripts, smoke tests, and documentation for Railway (backend) + Vercel (frontend) with SQLite seed import and verification utilities.
+
+---
+
+## Architecture
+
+| Layer | Technology |
+| --- | --- |
+| Frontend | Vite, React 18, React Router 7, Tailwind, shadcn/ui, Zustand, TanStack Query |
+| Backend | Node.js 18+, Express, better-sqlite3, Twilio, OpenAI SDK, JWT |
+| Data | SQLite (`grantflow.db` plus `/uploads` media) |
+| Deployment | Railway (backend + persistent volume), Vercel (frontend with base path `/grantflow`) |
+| Tooling | ESLint, Playwright smoke scripts, automation scripts under `scripts/` |
+
+---
+
+## Getting Started (Local Development)
+
+### 1. Prerequisites
+
+- Node.js 18+ and npm
+- unzip / rsync (for seeding) and optionally the SQLite CLI
+- OpenAI and Twilio credentials (even in development, many flows rely on them)
+
+### 2. Clone & Install
+
+```bash
+git clone https://github.com/buckeye7066/grantflow.git
+cd grantflow
+npm install
+```
+
+### 3. Configure Environment
+
+Copy the sample environment files and populate secrets:
+
+```bash
+cp backend/env.example backend/.env
+cp env.example .env
+```
+
+At minimum set:
+
+- `OPENAI_API_KEY`, `TWILIO_*`, and OAuth client IDs/secrets inside `backend/.env`
+- `VITE_API_URL` (usually `http://localhost:8080`) inside `.env`
+
+### 4. Seed the Database (11 baseline profiles)
+
+Generate or refresh the curated SQLite seed that powers the app and automation previews:
+
+```bash
+npm run seed:db                    # creates backend/data/grantflow.db from scratch
+FORCE=true npm run seed:db         # overwrite an existing database
+
+# Reset an existing database back to the 11 curated profiles/sections
+npm run seed:profiles -- --force   # uses seed/baseline-profiles.json
+# Preview the changes without touching the DB
+npm run seed:profiles -- --dry-run
+```
+
+> **Verification:** `npm run check:profiles` confirms the database contains all 11 baseline profiles and required sections. Use `DB_PATH=/absolute/path npm run check:profiles` if the database lives elsewhere.
+
+### 5. Run the App
+
+```bash
+# Start backend + frontend concurrently
+npm run dev:full
+```
+
+- Backend API: http://localhost:8080
+- Frontend: http://localhost:5173/grantflow
+
+You can also run the services individually (`npm run backend` and `npm run dev`) when debugging.
+
+### 6. Onboarding Video
+
+New team members land faster when they watch the GrantFlow walkthrough. Drop the final MP4 into `public/Grant Flow_ Get Started.mp4` (the filename matters so the dashboard link resolves) and share it during onboarding. The clip covers authentication, crawler automation, document ingestion, and the new Anya copilot.
+
+> **Tip:** The repository ships with a placeholder file path only. Add your own recording before promoting to production so the dashboard CTA isn’t broken.
+
+---
+
+## QA & Smoke Tests
+
+| Command | Purpose |
+| --- | --- |
+| `npm run lint` | ESLint across `src/` and `backend/` |
+| `npm run smoke:callback` | Playwright smoke for social auth callback UX (requires `npm run preview`) |
+| `npm run smoke:login` | Optional legacy login surface smoke |
+| `npm run check:profiles` | Ensures the seed database retains the 11 baseline profiles + sections |
+| `npm run seed:profiles -- --dry-run` | Preview the profile seeding plan against a target database |
+
+Refer to the QA checklist in [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md#5-quality-assurance-checklist) before promoting a build.
+
+---
+
+## Deployment Overview
+
+| Target | Checklist |
+| --- | --- |
+| **Railway (backend)** | Provision Node service, mount persistent volume (`/mnt/data`), copy `grantflow-migration.zip` data, set environment variables, start with `npm run server`, and verify `/api/health`.|
+| **Vercel (frontend)** | Configure `VITE_API_URL` + `VITE_APP_BASE=/grantflow`, build with `npm run build`, and add rewrites for `/grantflow/api/* → Railway`. |
+| **Runbook** | [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) details env vars, seeding, QA, monitoring, and rollback. |
+
+---
+
+## Useful Scripts
+
+| Script | Description |
+| --- | --- |
+| `npm run dev:full` | Run backend and frontend simultaneously |
+| `npm run backend` | Start the Express API |
+| `npm run smoke:callback` | Validate auth callback error surfaces |
+| `npm run check:profiles` | Audit SQLite seeds (11 profiles + sections) |
+| `npm run seed:db` | Build `backend/data/grantflow.db` from curated baseline profiles |
+| `npm run seed:profiles` | Rehydrate the 11 curated profiles/sections into an existing DB (`--force` to reset) |
+| `npm run build` / `npm run preview` | Build and preview the production frontend |
+
+See `package.json` for the full script catalogue.
+
+---
+
+## Documentation & References
+
+- [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) — Production checklist, env vars, seeding, QA, monitoring.
+- [`docs/INFRASTRUCTURE_GUIDE.md`](docs/INFRASTRUCTURE_GUIDE.md) — DigitalOcean droplet setup, Nginx proxy, Cloudflare TLS, GoDaddy DNS.
+- [`docs/AUTH_FRONTEND_PLAN.md`](docs/AUTH_FRONTEND_PLAN.md) — Historical context for the authentication UX overhaul.
+- `scripts/` — Smoke tests (`smoke-login.mjs`, `smoke-auth-callback.mjs`) and database auditing (`check-profiles.mjs`).
+
+---
+
+## Support & Maintenance
+
+- Monitor OpenAI and Twilio usage; set billing caps and alerts.
+- Schedule backups of `grantflow.db` and `/uploads` from the Railway volume.
+- Keep OAuth redirect URIs in each provider dashboard synchronized with production (`https://app.axiombiolabs.org/grantflow/api/auth/<provider>/callback`).
+
+Questions or deployment assistance? Open an issue or contact the GrantFlow engineering team at Axiom BioLabs. Happy shipping! 🎉
+# GrantFlow
+
+A professional marketing website for GrantFlow by Axiom BioLabs - Finding funding sources for various financial situations.
 
 ## Overview
 
-GrantFlow is currently a **marketing site + backend foundation** with plans to evolve into a full-featured grant management application. The platform includes:
+This is a static marketing site built with Vite, React, and Tailwind CSS. It includes:
 
-**Current Features:**
-- Marketing website with landing page, pricing, and legal pages
-- Basic grant operations dashboard
-- Organization/profile management
-- Document upload and processing pipeline
-- Grant opportunity database
-- RESTful backend APIs
-- AI integration foundation (Anya runtime)
-
-**Target State:**
-The full-featured GrantFlow will provide complete grant lifecycle management with AI-powered features, similar to the [Base44 reference implementation](https://grant-flow-736bafec.base44.app).
-
-See [Feature Roadmap](#feature-roadmap) below for details on current capabilities and planned features.
+- Landing page with hero section, features, and CTAs
+- Pricing page with multiple subscription tiers
+- Complete legal pages (Terms of Service, Privacy Policy, HIPAA Compliance, Data Retention)
+- Responsive design with modern UI components
+- Navigation and footer with all required links
 
 ## Technology Stack
 
-**Frontend:**
-- **React 19** + **TypeScript** - Modern UI framework
-- **Vite 7** - Fast build tool and dev server with HMR
-- **Tailwind CSS 4** - Utility-first CSS framework
-- **React Router 7** - Client-side routing
-- **React Query 5** - Server state management
+- **Vite** - Fast build tool and dev server
+- **React** - UI component library
+- **Tailwind CSS** - Utility-first CSS framework
+- **React Router** - Client-side routing
 
-**Backend:**
-- **Node.js** + **Express** - RESTful API server
-- **SQLite** (better-sqlite3) - Database with WAL mode
-- **Anya Runtime** - AI integration foundation
-- **OpenAI API** - AI-powered features (configured)
+## Getting Started
 
-## Feature Roadmap
+### Prerequisites
 
-GrantFlow is evolving from a marketing site + backend foundation into a comprehensive grant lifecycle management platform. Our target is feature parity with the [Base44 reference implementation](https://grant-flow-736bafec.base44.app).
+- Node.js 18+ and npm
 
-### Current Implementation (Phase 1) ✅
+### Installation
 
-**Marketing & Documentation:**
-- Professional marketing website with pricing and legal pages
-- Comprehensive deployment and configuration documentation
+```bash
+# Install dependencies
+npm install
+```
 
-**Backend Foundation:**
-- RESTful APIs for profiles, documents, and opportunities
-- SQLite database with profiles, documents, and funding_sources tables
-- Document upload, parsing, and data extraction pipeline
-- Admin authentication with token-based security
-- AI integration foundation (Anya runtime)
-- Railway deployment with health monitoring
+### Development
 
-**Basic Application UI:**
-- Grant operations dashboard with key metrics
-- Organization management (create, edit, list)
-- Document upload interface
-- Anya AI status panel
+```bash
+# Start development server
+npm run dev
+```
 
-### Planned Features (Phases 2-6)
+The site will be available at `http://localhost:5173/`
 
-**Phase 2: Pipeline Management** 🚧 *Next Priority*
-- Full grant lifecycle tracking (discovered → awarded)
-- Kanban board with drag-and-drop
-- Grant detail pages with milestones and expenses
-- Activity logging and audit trail
+### Build for Production
 
-**Phase 3: Proposal Drafting** 📋
-- Rich text proposal editor
-- AI-assisted content generation
-- Template library
-- Version control and collaboration
+```bash
+# Build optimized production bundle
+npm run build
+```
 
-**Phase 4: Analytics & Reporting** 📊
-- Success rate analytics
-- Pipeline funnel visualization
-- Custom report builder
-- Export to PDF/CSV
+The production files will be in the `dist/` directory.
 
-**Phase 5: Submission Tracking** 📤
-- Submission checklists
-- Document requirement tracking
-- Follow-up activity management
-- Deadline notifications
+### Preview Production Build
 
-**Phase 6: User Management & RBAC** 🔐
-- Multi-user authentication
-- Role-based access control
-- Team collaboration
-- Permission management
+```bash
+# Preview production build locally
+npm run preview
+```
 
-### Documentation
+### Linting
 
-For detailed information about current capabilities, missing features, and the development roadmap:
+```bash
+# Run ESLint
+npm run lint
+```
 
-- **[Feature Parity Analysis](docs/FEATURE_PARITY.md)** - Complete comparison with Base44 reference implementation
-- **[Development Roadmap](docs/DEVELOPMENT_ROADMAP.md)** - Phased implementation plan with technical details
-- **[Backend Documentation](backend/README.md)** - API endpoints, database schema, and AI integration
-- **[UI Architecture](docs/UI_ARCHITECTURE.md)** - Component design and frontend architecture
+## Deployment
 
+### GoDaddy Hosting
 
-AI-powered grant discovery and application management platform by Axiom BioLabs - Finding funding sources for various financial situations.
+1. **Build the project:**
+   ```bash
+   npm run build
+   ```
 
-## 🎯 Overview
+2. **Upload to GoDaddy:**
+   - Log in to your GoDaddy account
+   - Navigate to your hosting control panel (cPanel)
+   - Use File Manager or FTP to upload the contents of the `dist/` folder
+   - Upload to your `public_html` directory (or subdirectory)
+   - Ensure the `index.html` is in the root of your web directory
 
-GrantFlow is a comprehensive grant management application that helps individuals and organizations discover funding opportunities, manage applications, and increase their success rate through intelligent automation and AI-powered guidance.
+3. **Configure .htaccess for Single Page Application:**
+   Create a `.htaccess` file in your web root with:
+   ```apache
+   <IfModule mod_rewrite.c>
+     RewriteEngine On
+     RewriteBase /
+     RewriteRule ^index\.html$ - [L]
+     RewriteCond %{REQUEST_FILENAME} !-f
+     RewriteCond %{REQUEST_FILENAME} !-d
+     RewriteRule . /index.html [L]
+   </IfModule>
+   ```
 
-**Key Features:**
-- 🔍 Advanced grant search and discovery
-- 🤖 ANYA AI assistant for grant guidance
-- 📄 Intelligent document processing and analysis
-- 📊 Application tracking and milestone management
-- 💰 Expense tracking and reporting
-- 🎯 Personalized grant recommendations
+### Cloudflare Setup
 
-## 🏗️ Technology Stack
+1. **Add Site to Cloudflare:**
+   - Log in to Cloudflare
+   - Add your domain
+   - Update nameservers at GoDaddy to Cloudflare's nameservers
 
-### Frontend
-- **Framework:** React 19.2.0 with TypeScript 5.9.3
-- **Build Tool:** Vite 7.2.4 (fast HMR and optimized builds)
-- **Styling:** Tailwind CSS 4.1.18 (utility-first CSS)
-- **Routing:** React Router DOM 7.11.0
-- **State Management:** TanStack Query 5.62.7
-- **Icons:** Lucide React 0.470.0
+2. **Configure Caching Rules:**
+   - Go to Caching > Configuration
+   - Set Browser Cache TTL to "Respect Existing Headers"
+   - Enable "Always Online"
 
-### Backend
-- **Runtime:** Node.js 18+
-- **Framework:** Express.js 4.19.2
-- **Database:** SQLite 3 (better-sqlite3 11.8.1)
-- **Document Processing:** pdf-parse, mammoth, tesseract.js
-- **AI Integration:** OpenAI API
-- **Authentication:** Token-based (JWT planned for Phase 1)
+3. **Page Rules for SPA:**
+   - Create a page rule for `yourdomain.com/*`
+   - Set Cache Level to "Cache Everything"
+   - Edge Cache TTL: 1 month
+   - Browser Cache TTL: 4 hours
 
-### Infrastructure
-- **Frontend Hosting:** Vercel (recommended)
-- **Backend Hosting:** Railway (recommended)
-- **CDN & DNS:** Cloudflare
-- **Legacy Option:** Digital Ocean with Nginx (see legacy docs)
+4. **Purge Cache After Updates:**
+   - Go to Caching > Configuration
+   - Click "Purge Everything" after deploying new versions
+   - Or use Cloudflare API for automated cache purging
+
+5. **Performance Optimizations:**
+   - Enable Auto Minify (JavaScript, CSS, HTML)
+   - Enable Brotli compression
+   - Enable HTTP/2 and HTTP/3
+
+6. **Security Settings:**
+   - Enable "Always Use HTTPS"
+   - Set SSL/TLS encryption mode to "Full" or "Full (strict)"
+   - Enable "Automatic HTTPS Rewrites"
+
+## Project Structure
+
+```
+GrantFlow/
+├── src/
+│   ├── components/
+│   │   ├── Navigation.jsx    # Main navigation bar
+│   │   └── Footer.jsx         # Site footer
+│   ├── pages/
+│   │   ├── Home.jsx           # Landing page
+│   │   ├── Pricing.jsx        # Pricing plans
+│   │   ├── Terms.jsx          # Terms of Service
+│   │   ├── Privacy.jsx        # Privacy Policy
+│   │   ├── HIPAA.jsx          # HIPAA Compliance
+│   │   └── DataRetention.jsx  # Data Retention Policy
+│   ├── App.jsx                # Main app component with routing
+│   ├── main.jsx               # Application entry point
+│   └── index.css              # Global styles with Tailwind
+├── public/                    # Static assets
+├── index.html                 # HTML template
+├── tailwind.config.js         # Tailwind configuration
+├── postcss.config.js          # PostCSS configuration
+├── vite.config.js             # Vite configuration
+└── package.json               # Project dependencies
+```
+
+## Placeholder Assets
+
+⚠️ **Note: The following assets need to be replaced with actual assets:**
+
+- Company logo (currently using text-based branding)
+- Hero section background images
+- Feature icons (currently using emoji placeholders: 🔍 📊 🔒)
+- Testimonial photos
+- Any branded imagery
+
+To add real images:
+1. Place images in the `public/` directory
+2. Reference them in components using `/image-name.png`
+3. For optimized images, place in `src/assets/` and import in components
+
+## Customization
+
+### Brand Colors
+
+Edit `tailwind.config.js` to update brand colors:
+
+```javascript
+theme: {
+  extend: {
+    colors: {
+      'axiom-blue': '#1e40af',        // Primary brand color
+      'axiom-light-blue': '#3b82f6',  // Secondary brand color
+    },
+  },
+}
+```
+
+### Content Updates
+
+- **Home page:** Edit `src/pages/Home.jsx`
+- **Pricing:** Edit `src/pages/Pricing.jsx`
+- **Legal pages:** Edit respective files in `src/pages/`
+- **Navigation links:** Edit `src/components/Navigation.jsx`
+- **Footer content:** Edit `src/components/Footer.jsx`
+
+## Browser Support
+
+- Chrome (latest)
+- Firefox (latest)
+- Safari (latest)
+- Edge (latest)
+
+## License
+
+Copyright © 2024 Axiom BioLabs. All rights reserved.
+
+## Support
+
+For questions or issues, contact: support@axiombiolabs.org
+A grant management application built with React, TypeScript, and Vite.
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 
-- Node.js 18+ and npm
-- Git
+- Node.js (v16 or higher)
+- npm or yarn
 
 ### Installation
 
@@ -164,237 +386,97 @@ GrantFlow is a comprehensive grant management application that helps individuals
    # Copy the example environment file
    cp .env.example .env
    
-   # Edit .env and configure your values
-   # See "Environment Configuration" section below
+   # Edit .env and replace placeholder values with your actual configuration
+   # IMPORTANT: Never commit your .env file to version control
    ```
 
 4. **Start the development servers**
    
-   **Option 1: Full stack (frontend + backend)**
-   ```bash
-   npm run dev:full
-   ```
-   
-   **Option 2: Frontend only**
+   **Frontend (Vite dev server):**
    ```bash
    npm run dev
    ```
    
-   **Option 3: Backend only**
+   **Backend (if applicable):**
    ```bash
-   npm run backend
+   cd backend
+   npm start
    ```
 
-The frontend will be available at `http://localhost:5173/`
-The backend API will be available at `http://localhost:8080/`
+## 🔐 Environment Configuration
 
-## 🚀 Production Deployment
+### Required Environment Variables
 
-### Recommended: Vercel + Railway Architecture
+GrantFlow requires several environment variables to run properly. These should be configured in a `.env` file in the root directory.
 
-For modern, scalable production deployments, we recommend:
+#### Backend Variables
+- `ANYA_ADMIN_TOKEN` - Admin authentication token (⚠️ **Must be a strong, random value**)
+- `PORT` - Backend server port (default: 4000)
+- `CORS_ORIGIN` - Allowed CORS origin for API requests
 
-**Frontend:** Vercel (optimized for React/Vite apps)
-**Backend:** Railway (modern backend hosting)
-**CDN/DNS:** Cloudflare (free tier available)
+#### Frontend Variables
+- `VITE_API_PROXY_TARGET` - Backend API URL for Vite proxy
 
-📖 **Complete Migration Guide:** [`docs/DNS_MIGRATION.md`](docs/DNS_MIGRATION.md)
-📋 **Pre-flight Checklist:** [`docs/VERCEL_DOMAIN_CHECKLIST.md`](docs/VERCEL_DOMAIN_CHECKLIST.md)
-🚀 **Quick Reference:** [`DEPLOYMENT_PATH2.md`](DEPLOYMENT_PATH2.md)
+#### Optional Variables
+- `OPENAI_API_KEY` - For AI-powered features (if enabled)
+- Database connection strings (if using a database)
 
-**Benefits:**
-- ✅ Zero server maintenance
-- ✅ Automatic SSL/HTTPS
-- ✅ Global CDN distribution
-- ✅ Auto-scaling
-- ✅ Easy rollbacks
-- ✅ Built-in monitoring
-- ✅ Cost-effective (pay only for usage)
+### 🔒 Security Best Practices
 
-### Architecture Overview
+**CRITICAL:** Never commit secrets to version control!
 
-```
-GoDaddy Domain (axiombiolabs.org)
-           ↓
-   Cloudflare DNS + CDN
-           ↓
-   Origin Rules (Path-based routing)
-   ├── /grantflow/* → Vercel (Frontend Static Files)
-   └── /api/* → Railway (Backend API)
-```
+1. **Always use `.env` for local development**
+   - Your `.env` file is automatically ignored by git
+   - Use `.env.example` as a template (safe to commit)
 
-### Legacy: Digital Ocean Deployment
+2. **Generate strong tokens**
+   ```bash
+   # Example: Generate a secure random token
+   openssl rand -hex 32
+   ```
 
-For self-hosted deployments on Digital Ocean with Nginx:
+3. **Rotate exposed secrets immediately**
+   - If you accidentally expose an API key, rotate it immediately
+   - Check your git history for accidentally committed secrets
+   - Review access logs for unauthorized usage
 
-⚠️ **LEGACY OPTION**: This deployment method is no longer recommended for new deployments.
+4. **Use different secrets for each environment**
+   - Development, staging, and production should have unique credentials
 
-📖 **Legacy Guide:** [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
+5. **Audit your configuration regularly**
+   ```bash
+   # Check that .env is in .gitignore
+   git check-ignore .env
+   
+   # Search for accidentally committed secrets (if you have git-secrets)
+   git secrets --scan
+   ```
 
-### Production Checklist
+### 📋 Environment Setup Checklist
 
-Before going live:
-- [ ] Environment variables configured for production
-- [ ] Strong, random `ANYA_ADMIN_TOKEN` generated (`openssl rand -hex 32`)
-- [ ] CORS origins set to production domain(s)
-- [ ] SSL/TLS certificates configured
-- [ ] DNS records configured in Cloudflare
-- [ ] Cloudflare Origin Rules set up
-- [ ] Health checks passing
-- [ ] Monitoring and alerting configured
-
-## 🗺️ Feature Roadmap
-
-GrantFlow is actively under development with a phased approach to reach full feature parity with enterprise grant management platforms.
-
-### Current Status (v0.1 - Foundation)
-
-**✅ Completed:**
-- Basic React frontend with modern UI components
-- Express backend API framework  
-- SQLite database with grant schema
-- Document parser infrastructure (PDF, DOCX, OCR)
-- ANYA AI chat interface
-- Authentication stub (admin token)
-- Railway + Vercel deployment configuration
-
-**📊 Feature Parity:** ~27% complete (see [`docs/FEATURE_PARITY.md`](docs/FEATURE_PARITY.md))
-
-### Development Phases
-
-#### Phase 1: User Foundation (Weeks 1-6)
-- [ ] User registration and authentication (JWT)
-- [ ] User profile management
-- [ ] Advanced grant search and filtering
-- [ ] Bookmark and basic tracking
-
-**Goal:** Users can search, discover, and track grants
-
-#### Phase 2: Core Grant Management (Weeks 7-12)
-- [ ] Application status tracking workflow
-- [ ] Email notification system
-- [ ] Deadline reminders
-- [ ] Personal dashboard with real metrics
-
-**Goal:** Users can manage entire grant application lifecycle
-
-#### Phase 3: Intelligence & Automation (Weeks 13-20)
-- [ ] Enhanced ANYA with grant-specific knowledge
-- [ ] Grant recommendation engine
-- [ ] Eligibility matching system
-- [ ] Advanced document extraction
-
-**Goal:** AI-powered assistance throughout process
-
-#### Phase 4: External Integrations (Weeks 21-28)
-- [ ] Grants.gov API integration
-- [ ] Foundation database connections
-- [ ] Local government grant crawlers
-- [ ] Unified grant ingestion pipeline
-
-**Goal:** Comprehensive grant database from multiple sources
-
-#### Phase 5: Application Workflow (Weeks 29-36)
-- [ ] Document library and management
-- [ ] Application form builder
-- [ ] Pre-fill from user profile
-- [ ] Application submission tracking
-
-**Goal:** Complete application lifecycle management
-
-#### Phase 6: Analytics & Premium (Weeks 37-44)
-- [ ] Enhanced dashboard and reporting
-- [ ] Subscription tiers (Free, Pro, Team)
-- [ ] Payment integration (Stripe)
-- [ ] Team collaboration features
-
-**Goal:** Production-ready, revenue-generating product
-
-#### Phase 7: Production Hardening (Weeks 45-48)
-- [ ] Comprehensive monitoring (Sentry, logging)
-- [ ] Automated backups and disaster recovery
-- [ ] Security hardening (OWASP compliance)
-- [ ] Complete API documentation
-
-**Goal:** Enterprise-grade reliability and security
-
-### Detailed Documentation
-
-📖 **Feature Comparison:** [`docs/FEATURE_PARITY.md`](docs/FEATURE_PARITY.md)
-🗓️ **Development Timeline:** [`docs/DEVELOPMENT_ROADMAP.md`](docs/DEVELOPMENT_ROADMAP.md)
-🎨 **UI Architecture:** [`docs/UI_ARCHITECTURE.md`](docs/UI_ARCHITECTURE.md)
-📡 **Backend API:** [`backend/README.md`](backend/README.md)
-
-### Target: v1.0 Production Release
-
-**Timeline:** 48 weeks (1 year from start)
-**Feature Parity:** 95%+ complete
-**Status:** Production-ready, publicly launchable
-
-## 📁 Project Structure
-
-```
-GrantFlow/
-├── backend/                    # Backend API server
-│   ├── anya/                  # ANYA AI assistant
-│   ├── audit/                 # Audit logging
-│   ├── crawlers/              # Grant data crawlers
-│   ├── data/                  # Database and data files
-│   ├── db/                    # Database schema and utilities
-│   ├── middleware/            # Express middleware
-│   ├── parser/                # Document processing
-│   │   ├── text/             # PDF, DOCX, OCR parsers
-│   │   └── extract/          # Field extraction logic
-│   ├── routes/                # API route handlers
-│   ├── services/              # Business logic services
-│   ├── storage/               # File storage utilities
-│   └── server.js              # Backend entry point
-├── docs/                      # Documentation
-│   ├── DNS_MIGRATION.md       # Vercel + Railway migration guide
-│   ├── VERCEL_DOMAIN_CHECKLIST.md  # Pre-migration checklist
-│   ├── FEATURE_PARITY.md      # Feature comparison analysis
-│   ├── DEVELOPMENT_ROADMAP.md # Phased development plan
-│   ├── UI_ARCHITECTURE.md     # Frontend architecture guide
-│   ├── DEPLOYMENT.md          # Legacy Digital Ocean guide
-│   └── GITHUB_SECRETS.md      # GitHub secrets configuration
-├── src/                       # Frontend application
-│   ├── components/            # React components
-│   │   ├── common/           # Reusable UI components
-│   │   ├── layout/           # Layout components
-│   │   └── grants/           # Grant-specific components
-│   ├── pages/                 # Page-level components
-│   ├── hooks/                 # Custom React hooks
-│   ├── contexts/              # React Context providers
-│   ├── api/                   # API client utilities
-│   ├── utils/                 # Utility functions
-│   ├── App.jsx                # Root component with routing
-│   └── main.jsx               # Application entry point
-├── public/                    # Static assets
-├── scripts/                   # Build and deployment scripts
-├── nginx/                     # Nginx configuration (legacy)
-├── systemd/                   # Systemd service files (legacy)
-├── .env.example               # Environment variables template
-├── DEPLOYMENT_PATH2.md        # Vercel + Railway quick reference
-├── package.json               # Dependencies and scripts
-├── vite.config.ts             # Vite configuration
-└── tailwind.config.js         # Tailwind CSS configuration
-```
+- [ ] `.env` file created from `.env.example`
+- [ ] All placeholder values replaced with real credentials
+- [ ] Strong, random token generated for `ANYA_ADMIN_TOKEN`
+- [ ] Verified `.env` is in `.gitignore`
+- [ ] Confirmed no secrets in git history
+- [ ] Different credentials for dev/staging/production
 
 ## 🛠️ Development
+
+### Tech Stack
+
+- **Frontend:** React + TypeScript + Vite
+- **Styling:** Tailwind CSS
+- **Backend:** Node.js (Express)
+- **Build Tool:** Vite with HMR (Hot Module Replacement)
 
 ### Available Scripts
 
 ```bash
-# Start frontend development server
+# Start development server
 npm run dev
 
-# Start backend server
-npm run backend
-
-# Start both frontend and backend
-npm run dev:full
-
-# Build frontend for production
+# Build for production
 npm run build
 
 # Preview production build
@@ -404,16 +486,20 @@ npm run preview
 npm run lint
 ```
 
-## 🔐 Environment Configuration
+### Smoke Tests
 
-### Required Environment Variables
+- `npm run smoke:login` validates that the login page renders in a headless browser.
+- Start the preview server in another terminal (`npm run preview`) before running the smoke script.
+- Local preview serves the app at `/`, so run `SMOKE_BASE_PATH=/ npm run smoke:login`.
+- In hosted environments (Vercel), the default base path `/grantflow` is already configured—no override required.
 
-#### Backend Variables
-```env
-ANYA_ADMIN_TOKEN=<secure-random-token>  # Generate with: openssl rand -hex 32
-PORT=8080                                # Backend server port
-CORS_ORIGIN=http://localhost:5173       # Frontend URL for CORS
-NODE_ENV=development                     # Environment
+## 📦 Building for Production
+
+```bash
+# Create optimized production build
+npm run build
+
+# The build output will be in the `dist` directory
 ```
 
 **Before deploying:**
@@ -424,116 +510,87 @@ NODE_ENV=development                     # Environment
 
 ## 🚀 Production Deployment
 
-### Current Production Stack (Recommended)
+For deploying GrantFlow to a production environment (Digital Ocean, AWS, etc.), see the comprehensive deployment guide:
 
-GrantFlow uses a modern serverless architecture:
+**[📘 Production Deployment Guide](docs/DEPLOYMENT.md)**
 
-**Primary Deployment Method: Vercel + Railway**
-
-```
-GoDaddy/Cloudflare DNS → Vercel (Frontend) → Railway (Backend)
-                              ↓
-                         /grantflow/* → React App
-                         /api/* → Node.js API
-```
-
-**Architecture:**
-- **Frontend:** Vercel (Static site with edge caching)
-- **Backend:** Railway (Node.js API service)
-- **CDN:** Vercel Edge Network
-- **Base Path:** `/grantflow/`
-
-**Current Status:**
-- ✅ Working at `app.axiombiolabs.org/grantflow`
-- ⏳ DNS migration pending for root domain
-
-### Deployment Guides
-
-📘 **[Vercel + Railway Deployment](DEPLOYMENT_PATH2.md)** - Current deployment architecture
-
-📘 **[DNS Migration Guide](docs/DNS_MIGRATION.md)** - Complete root domain migration to Vercel:
-- Step-by-step Vercel domain configuration
-- DNS setup for GoDaddy and Cloudflare
-- CORS configuration for Railway backend
-- Testing and verification procedures
-
-✅ **[Domain Migration Checklist](docs/VERCEL_DOMAIN_CHECKLIST.md)** - Pre-flight checklist:
-- Pre-migration verification
-- Execution steps
-- Post-migration smoke tests
-- Rollback procedures
-
-### Production Checklist (Vercel + Railway)
-
-Before going live:
-- [ ] Vercel project deployed and verified
-- [ ] Railway backend service running
-- [ ] Environment variables configured on Railway
-- [ ] `CORS_ORIGIN` includes all domains
-- [ ] Custom domains added in Vercel
-- [ ] DNS records configured (see DNS Migration Guide)
-- [ ] SSL certificates verified in Vercel
-- [ ] Health checks passing on Railway
-- [ ] End-to-end authentication tested
-
-### Quick Verification
-
-```bash
-# Test frontend
-curl -I https://app.axiombiolabs.org/grantflow/login
-
-# Test backend API
-curl https://grantflow-production.up.railway.app/api/health
-
-# Expected: {"status":"ok"}
-```
-
----
-
-## Legacy Deployment (Digital Ocean)
-
-> **⚠️ DEPRECATED:** The Digital Ocean deployment method is being phased out in favor of Vercel + Railway.
-
-**[📘 Legacy Deployment Guide](docs/DEPLOYMENT.md)** (Digital Ocean + Nginx)
-
-The legacy guide covers:
+The deployment guide covers:
 - Digital Ocean server setup
 - Cloudflare and DNS configuration
 - Nginx reverse proxy configuration
 - SSL/TLS certificate setup
 - Backend service configuration with systemd
+- Automated deployment scripts
 - Troubleshooting common issues
+- Health checks and monitoring
 
-### Legacy Architecture
-#### Optional Variables
-```env
-OPENAI_API_KEY=<your-api-key>           # For AI features
-DATABASE_URL=./backend/data/grantflow.db # Database path
+### Quick Deploy
+
+For automated deployment on your production server:
+
+```bash
+# Make the deployment script executable
+chmod +x scripts/deploy-production.sh
+
+# Run the deployment
+./scripts/deploy-production.sh
 ```
 
-### 🔒 Security Best Practices
+### Production Checklist
 
-**CRITICAL:** Never commit secrets to version control!
+Before going live, ensure:
+- [ ] Environment variables configured (`.env.production.example` → `.env`)
+- [ ] Strong, random `ANYA_ADMIN_TOKEN` generated
+- [ ] CORS origins set to production domain(s)
+- [ ] SSL/TLS certificates installed
+- [ ] Nginx configured and running
+- [ ] Backend systemd service enabled
+- [ ] Firewall rules configured (ports 80, 443, 22)
+- [ ] DNS records pointing to your server
+- [ ] Health checks passing
 
-1. **Always use `.env` for local development**
-   - Your `.env` file is automatically ignored by git
-   - Use `.env.example` as a template
+### Production Architecture
 
-2. **Generate strong tokens**
-   ```bash
-   # Generate a secure random token
-   openssl rand -hex 32
-   ```
+```
+GoDaddy Domain → Cloudflare CDN → Digital Ocean Server
+                                           ↓
+                                    Nginx (Reverse Proxy)
+                                    ├── /grantflow/* → Frontend (Static)
+                                    └── /grantflow/api/* → Backend (:4000)
+```
 
-3. **Use different secrets for each environment**
-   - Development, staging, and production should have unique credentials
+## 🧪 React + Vite Configuration
 
-4. **Environment Setup Checklist**
-   - [ ] `.env` file created from `.env.example`
-   - [ ] All placeholder values replaced
-   - [ ] Strong token generated for `ANYA_ADMIN_TOKEN`
-   - [ ] Verified `.env` is in `.gitignore`
-   - [ ] Different credentials for dev/staging/production
+This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+
+Currently, two official plugins are available:
+
+- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/)
+- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc/tree/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+
+### Expanding the ESLint configuration
+
+If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+
+```js
+export default defineConfig([
+  globalIgnores(['dist']),
+  {
+    files: ['**/*.{ts,tsx}'],
+    extends: [
+      tseslint.configs.recommendedTypeChecked,
+      // Or for stricter rules:
+      // tseslint.configs.strictTypeChecked,
+    ],
+    languageOptions: {
+      parserOptions: {
+        project: ['./tsconfig.node.json', './tsconfig.app.json'],
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+  },
+])
+```
 
 ## 🤝 Contributing
 
@@ -544,6 +601,10 @@ DATABASE_URL=./backend/data/grantflow.db # Database path
 5. Open a Pull Request
 
 **Security Note:** Never include secrets or API keys in your commits!
+
+## 📄 License
+
+This project is licensed under the MIT License.
 
 ## 🆘 Troubleshooting
 
@@ -560,41 +621,12 @@ DATABASE_URL=./backend/data/grantflow.db # Database path
 
 **Build failures:**
 - Clear node_modules and reinstall: `rm -rf node_modules && npm install`
-- Check for TypeScript errors with build
-
-**Backend not starting:**
-- Verify all required environment variables are set
-- Check backend logs for error messages
-- Ensure port 8080 is available
-
-## 📚 Documentation
-
-- [`README.md`](README.md) - This file (project overview)
-- [`backend/README.md`](backend/README.md) - Backend API documentation
-- [`docs/DNS_MIGRATION.md`](docs/DNS_MIGRATION.md) - Vercel + Railway deployment
-- [`docs/FEATURE_PARITY.md`](docs/FEATURE_PARITY.md) - Feature comparison
-- [`docs/DEVELOPMENT_ROADMAP.md`](docs/DEVELOPMENT_ROADMAP.md) - Development plan
-- [`docs/UI_ARCHITECTURE.md`](docs/UI_ARCHITECTURE.md) - Frontend architecture
-- [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) - Legacy deployment guide
+- Check for TypeScript errors: `npm run type-check` (if configured)
 
 ## 🔗 Resources
 
 - [Vite Documentation](https://vitejs.dev/)
 - [React Documentation](https://react.dev/)
 - [TypeScript Documentation](https://www.typescriptlang.org/)
-- [Tailwind CSS Documentation](https://tailwindcss.com/)
-- [Express.js Documentation](https://expressjs.com/)
-
-## 📄 License
-
-Copyright © 2024 Axiom BioLabs. All rights reserved.
-
-## 🆘 Support
-
-For questions or issues:
-- **GitHub Issues:** https://github.com/buckeye7066/GrantFlow/issues
-- **Email:** support@axiombiolabs.org
-
----
-
-**Built with ❤️ by Axiom BioLabs**
+- [OWASP Secrets Management](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html)
+- [GitHub Secret Scanning](https://docs.github.com/en/code-security/secret-scanning/about-secret-scanning)

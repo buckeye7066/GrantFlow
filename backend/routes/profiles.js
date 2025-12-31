@@ -1,188 +1,555 @@
-import { Router } from 'express'
-import { v4 as uuid } from 'uuid'
-import { getDb } from '../db/index.js'
+import express from 'express'
+import OpenAI from 'openai'
+import multer from 'multer'
+import fs from 'fs'
+import { dirname, join } from 'path'
+import { fileURLToPath } from 'url'
+import { buildProfileSectionPrompt, supportedSectionKeys } from '../prompts/profileSections.js'
+import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
+import { ensureBillingAccount, mapAccountRow } from '../services/billingAccounts.js'
+import { extractCompletionText } from '../utils/openai.js'
 
-const router = Router()
+const router = express.Router()
 
-function resolveDb(res) {
-  try {
-    return getDb()
-  } catch (error) {
-    const status = error.status ?? 503
-    res
-      .status(status)
-      .json({ error: error.message ?? 'Database unavailable. Install better-sqlite3 on the server.' })
-    return null
-  }
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
+const uploadDir = join(__dirname, '..', 'uploads')
+
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true })
 }
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, uploadDir),
+  filename: (_req, file, cb) => {
+    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`
+    const extension = file.originalname.split('.').pop()
+    cb(null, `${unique}.${extension}`)
+  },
+})
+
+const imageFileFilter = (_req, file, cb) => {
+  if (!file.mimetype.startsWith('image/')) {
+    return cb(new Error('Only image uploads are allowed'))
+  }
+  cb(null, true)
+}
+
+const upload = multer({
+  storage,
+  fileFilter: imageFileFilter,
+  limits: { fileSize: 5 * 1024 * 1024 },
+})
+
+const profileSelect = `
+  SELECT 
+    p.id,
+    p.created_at,
+    p.updated_at,
+    p.created_by,
+    p.organization_id,
+    p.user_id,
+    p.primary_type,
+    p.display_name,
+    p.status,
+    p.tags,
+    p.avatar_url,
+    o.name AS organization_name
+  FROM profiles p
+  LEFT JOIN organizations o ON o.id = p.organization_id
+`
 
 function mapProfile(row) {
   if (!row) return null
   return {
     id: row.id,
-    profile_type: row.profile_type,
-    display_name: row.display_name,
-    notes: row.notes,
     created_at: row.created_at,
     updated_at: row.updated_at,
-    full_name: row.full_name,
-    dob: row.dob,
-    address_line1: row.address_line1,
-    address_line2: row.address_line2,
-    city: row.city,
-    state: row.state,
-    zip: row.zip,
+    created_by: row.created_by,
+    organization_id: row.organization_id,
+    organization_name: row.organization_name ?? null,
+    user_id: row.user_id ?? null,
+    primary_type: row.primary_type,
+    display_name: row.display_name,
+    status: row.status,
+    tags: safeParseJSON(row.tags, []),
+    avatar_url: row.avatar_url ?? null,
   }
 }
 
-router.get('/', (req, res, next) => {
+function safeParseJSON(value, fallback) {
+  if (value == null) return fallback
   try {
-    const db = resolveDb(res)
-    if (!db) return
-    const rows = db
-      .prepare(
-        `SELECT * FROM profiles ORDER BY datetime(updated_at) DESC, datetime(created_at) DESC`,
-      )
-      .all()
-    res.json({ data: rows.map(mapProfile) })
-  } catch (error) {
-    next(error)
+    return JSON.parse(value)
+  } catch {
+    return fallback
   }
-})
+}
 
-router.post('/', (req, res, next) => {
-  try {
-    const {
-      display_name: displayName,
-      profile_type: profileType = 'organization',
-      notes = '',
-      full_name: fullName = null,
-      dob = null,
-      address_line1: addressLine1 = null,
-      address_line2: addressLine2 = null,
-      city = null,
-      state = null,
-      zip = null,
-    } = req.body || {}
+function getOpenAI() {
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY environment variable is not set')
+  }
+  return new OpenAI({ apiKey })
+}
 
-    if (!displayName || typeof displayName !== 'string') {
-      return res.status(400).json({ error: 'display_name is required' })
+router.get('/', (req, res) => {
+  const auth = req.user ?? { role: 'guest' }
+
+  if (auth.role !== 'admin') {
+    if (!auth.profileId) {
+      return res.json([])
     }
 
-    const id = uuid()
-    const timestamp = new Date().toISOString()
-    const db = resolveDb(res)
-    if (!db) return
-    const stmt = db.prepare(
-      `INSERT INTO profiles (
-        id, profile_type, display_name, notes, created_at, updated_at,
-        full_name, dob, address_line1, address_line2, city, state, zip
-      ) VALUES (
-        @id, @profile_type, @display_name, @notes, @created_at, @updated_at,
-        @full_name, @dob, @address_line1, @address_line2, @city, @state, @zip
-      )`,
+    const row = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(auth.profileId)
+    if (!row) {
+      return res.json([])
+    }
+
+    return res.json([mapProfile(row)])
+  }
+
+  const stmt = req.db.prepare(`${profileSelect} ORDER BY p.created_at DESC`)
+  const profiles = stmt.all().map(mapProfile)
+  res.json(profiles)
+})
+
+router.post('/', (req, res) => {
+  const auth = req.user ?? { role: 'guest' }
+  if (auth.role !== 'admin') {
+    return res.status(403).json({ error: 'Only admin can create profiles' })
+  }
+  const { display_name, primary_type, organization_id, created_by, status = 'active', tags = [] } = req.body ?? {}
+
+  if (!display_name || typeof display_name !== 'string') {
+    return res.status(400).json({ error: 'display_name is required' })
+  }
+
+  const insert = req.db.prepare(`
+    INSERT INTO profiles (display_name, primary_type, organization_id, created_by, status, tags)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `)
+
+  const info = insert.run(
+    display_name,
+    primary_type ?? null,
+    organization_id ?? null,
+    created_by ?? null,
+    status ?? 'active',
+    JSON.stringify(tags ?? []),
+  )
+
+  const row = req.db.prepare(`${profileSelect} WHERE p.rowid = ?`).get(info.lastInsertRowid)
+  res.status(201).json(mapProfile(row))
+})
+
+router.get('/:id', (req, res) => {
+  const { id } = req.params
+  const auth = req.user ?? { role: 'guest' }
+  const row = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!row) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (auth.role !== 'admin') {
+    const matchesProfileId = auth.profileId === id
+    const matchesUserId = auth.userId && row.user_id && auth.userId === row.user_id
+    if (!matchesProfileId && !matchesUserId) {
+      return res.status(403).json({ error: 'Not authorized to access this profile' })
+    }
+  }
+
+  const sections = req.db
+    .prepare(
+      `
+      SELECT section_key, data, updated_at, updated_by
+      FROM profile_sections
+      WHERE profile_id = ?
+      ORDER BY section_key
+    `,
     )
+    .all(id)
+    .map((section) => ({
+      section_key: section.section_key,
+      data: safeParseJSON(section.data, {}),
+      updated_at: section.updated_at,
+      updated_by: section.updated_by,
+    }))
 
-    stmt.run({
-      id,
-      profile_type: profileType,
-      display_name: displayName,
-      notes,
-      created_at: timestamp,
-      updated_at: timestamp,
-      full_name: fullName,
-      dob,
-      address_line1: addressLine1,
-      address_line2: addressLine2,
-      city,
-      state,
-      zip,
-    })
-
-    const record = db
-      .prepare('SELECT * FROM profiles WHERE id = ?')
-      .get(id)
-    res.status(201).json({ data: mapProfile(record) })
-  } catch (error) {
-    next(error)
-  }
+  res.json({
+    ...mapProfile(row),
+    sections,
+    billing: mapAccountRow(ensureBillingAccount(req.db, id)),
+  })
 })
 
-router.get('/:id', (req, res, next) => {
-  try {
-    const db = resolveDb(res)
-    if (!db) return
-    const record = db
-      .prepare('SELECT * FROM profiles WHERE id = ?')
-      .get(req.params.id)
+router.put('/:id', (req, res) => {
+  const { id } = req.params
+  const { display_name, primary_type, organization_id, status, tags } = req.body ?? {}
+  const auth = req.user ?? { role: 'guest' }
 
-    if (!record) {
+  if (auth.role !== 'admin' && auth.profileId !== id) {
+    return res.status(403).json({ error: 'Not authorized to update this profile' })
+  }
+
+  const existing = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!existing) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  const updates = []
+  const values = []
+
+  if (display_name !== undefined) {
+    if (typeof display_name !== 'string' || display_name.trim() === '') {
+      return res.status(400).json({ error: 'display_name must be a non-empty string' })
+    }
+    updates.push('display_name = ?')
+    values.push(display_name)
+  }
+
+  if (primary_type !== undefined) {
+    updates.push('primary_type = ?')
+    values.push(primary_type || null)
+  }
+
+  if (organization_id !== undefined) {
+    updates.push('organization_id = ?')
+    values.push(organization_id || null)
+  }
+
+  if (status !== undefined) {
+    updates.push('status = ?')
+    values.push(status)
+  }
+
+  if (tags !== undefined) {
+    updates.push('tags = ?')
+    values.push(JSON.stringify(tags ?? []))
+  }
+
+  if (updates.length === 0) {
+    return res.json(mapProfile(existing))
+  }
+
+  const stmt = req.db.prepare(`UPDATE profiles SET ${updates.join(', ')} WHERE id = ?`)
+  stmt.run(...values, id)
+
+  const updated = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  res.json(mapProfile(updated))
+})
+
+router.post('/:id/avatar', upload.single('avatar'), (req, res, next) => {
+  const { id } = req.params
+  const auth = req.user ?? { role: 'guest' }
+
+  if (auth.role !== 'admin' && auth.profileId !== id) {
+    if (req.file) fs.unlink(join(uploadDir, req.file.filename), () => {})
+    return res.status(403).json({ error: 'Not authorized to update this profile' })
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ error: 'Avatar file is required' })
+  }
+
+  try {
+    const profileRow = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+    if (!profileRow) {
+      fs.unlink(join(uploadDir, req.file.filename), () => {})
       return res.status(404).json({ error: 'Profile not found' })
     }
 
-    res.json({ data: mapProfile(record) })
-  } catch (error) {
-    next(error)
-  }
-})
+    const publicPath = `/uploads/${req.file.filename}`
+    req.db
+      .prepare('UPDATE profiles SET avatar_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(publicPath, id)
 
-router.patch('/:id', (req, res, next) => {
-  try {
-    const db = resolveDb(res)
-    if (!db) return
-    const record = db
-      .prepare('SELECT * FROM profiles WHERE id = ?')
-      .get(req.params.id)
-
-    if (!record) {
-      return res.status(404).json({ error: 'Profile not found' })
-    }
-
-    const allowed = [
-      'display_name',
-      'notes',
-      'profile_type',
-      'full_name',
-      'dob',
-      'address_line1',
-      'address_line2',
-      'city',
-      'state',
-      'zip',
-    ]
-
-    const updates = {}
-    for (const key of allowed) {
-      if (Object.prototype.hasOwnProperty.call(req.body, key)) {
-        updates[key] = req.body[key]
+    const previousAvatar = profileRow.avatar_url
+    if (previousAvatar && previousAvatar.startsWith('/uploads/')) {
+      const previousFilename = previousAvatar.replace('/uploads/', '')
+      if (previousFilename && previousFilename !== req.file.filename) {
+        const previousPath = join(uploadDir, previousFilename)
+        fs.unlink(previousPath, () => {})
       }
     }
 
-    if (Object.keys(updates).length === 0) {
-      return res.json({ data: mapProfile(record) })
+    const updated = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+    res.json(mapProfile(updated))
+  } catch (error) {
+    if (req.file) fs.unlink(join(uploadDir, req.file.filename), () => {})
+    next(error)
+  }
+})
+
+router.post('/:id/avatar/ai', (req, res) => {
+  const { id } = req.params
+  const auth = req.user ?? { role: 'guest' }
+
+  if (auth.role !== 'admin' && auth.profileId !== id) {
+    return res.status(403).json({ error: 'Not authorized to update this profile' })
+  }
+
+  const profileRow = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!profileRow) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  const parameters = {
+    display_name: profileRow.display_name,
+    primary_type: profileRow.primary_type,
+  }
+
+  const stmt = req.db.prepare(`
+    INSERT INTO crawler_jobs (
+      type,
+      status,
+      profile_id,
+      organization_id,
+      parameters,
+      requested_by
+    ) VALUES ('avatar_lookup', 'queued', ?, ?, ?, ?)
+  `)
+
+  stmt.run(
+    profileRow.id,
+    profileRow.organization_id ?? null,
+    JSON.stringify(parameters),
+    auth.role === 'admin' ? 'admin' : profileRow.id,
+  )
+
+  const job = req.db
+    .prepare('SELECT * FROM crawler_jobs WHERE rowid = last_insert_rowid()')
+    .get()
+
+  dispatchCrawlerJob({
+    db: req.db,
+    jobId: job.id,
+    uploadDir,
+    getOpenAI,
+  })
+
+  res.status(202).json({
+    id: job.id,
+    status: job.status,
+    type: job.type,
+    created_at: job.created_at,
+  })
+})
+
+router.get('/:id/sections', (req, res) => {
+  const { id } = req.params
+  const auth = req.user ?? { role: 'guest' }
+
+  if (auth.role !== 'admin' && auth.profileId !== id) {
+    return res.status(403).json({ error: 'Not authorized to access this profile' })
+  }
+
+  const profile = req.db.prepare(`SELECT id FROM profiles WHERE id = ?`).get(id)
+  if (!profile) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  const sections = req.db
+    .prepare(
+      `
+      SELECT section_key, data, updated_at, updated_by
+      FROM profile_sections
+      WHERE profile_id = ?
+      ORDER BY section_key
+    `,
+    )
+    .all(id)
+    .map((section) => ({
+      section_key: section.section_key,
+      data: safeParseJSON(section.data, {}),
+      updated_at: section.updated_at,
+      updated_by: section.updated_by,
+    }))
+
+  res.json(sections)
+})
+
+router.get('/:id/sections/:sectionKey', (req, res) => {
+  const { id, sectionKey } = req.params
+  const auth = req.user ?? { role: 'guest' }
+
+  if (auth.role !== 'admin' && auth.profileId !== id) {
+    return res.status(403).json({ error: 'Not authorized to access this profile' })
+  }
+
+  const section = req.db
+    .prepare(
+      `
+      SELECT section_key, data, updated_at, updated_by
+      FROM profile_sections
+      WHERE profile_id = ? AND section_key = ?
+    `,
+    )
+    .get(id, sectionKey)
+
+  if (!section) {
+    return res.status(404).json({ error: 'Section not found' })
+  }
+
+  res.json({
+    section_key: section.section_key,
+    data: safeParseJSON(section.data, {}),
+    updated_at: section.updated_at,
+    updated_by: section.updated_by,
+  })
+})
+
+router.put('/:id/sections/:sectionKey', (req, res) => {
+  const { id, sectionKey } = req.params
+  const { data, updated_by } = req.body ?? {}
+  const auth = req.user ?? { role: 'guest' }
+
+  if (auth.role !== 'admin' && auth.profileId !== id) {
+    return res.status(403).json({ error: 'Not authorized to update this profile' })
+  }
+
+  const profile = req.db.prepare(`SELECT id FROM profiles WHERE id = ?`).get(id)
+  if (!profile) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (typeof data !== 'object' || data === null) {
+    return res.status(400).json({ error: 'data payload must be an object' })
+  }
+
+  const upsert = req.db.prepare(
+    `
+    INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(profile_id, section_key) DO UPDATE SET
+      data = excluded.data,
+      updated_by = excluded.updated_by,
+      updated_at = CURRENT_TIMESTAMP
+  `,
+  )
+
+  upsert.run(id, sectionKey, JSON.stringify(data), updated_by ?? null)
+
+  const section = req.db
+    .prepare(
+      `
+      SELECT section_key, data, updated_at, updated_by
+      FROM profile_sections
+      WHERE profile_id = ? AND section_key = ?
+    `,
+    )
+    .get(id, sectionKey)
+
+  res.json({
+    section_key: section.section_key,
+    data: safeParseJSON(section.data, {}),
+    updated_at: section.updated_at,
+    updated_by: section.updated_by,
+  })
+})
+
+router.delete('/:id/sections/:sectionKey', (req, res) => {
+  const { id, sectionKey } = req.params
+  const auth = req.user ?? { role: 'guest' }
+
+  if (auth.role !== 'admin' && auth.profileId !== id) {
+    return res.status(403).json({ error: 'Not authorized to update this profile' })
+  }
+
+  const stmt = req.db.prepare(`DELETE FROM profile_sections WHERE profile_id = ? AND section_key = ?`)
+  const result = stmt.run(id, sectionKey)
+  if (result.changes === 0) {
+    return res.status(404).json({ error: 'Section not found' })
+  }
+  res.status(204).send()
+})
+
+router.post('/:id/sections/:sectionKey/ai', async (req, res) => {
+  const { id, sectionKey } = req.params
+  const auth = req.user ?? { role: 'guest' }
+
+  if (auth.role !== 'admin' && auth.profileId !== id) {
+    return res.status(403).json({ error: 'Not authorized to access this profile' })
+  }
+
+  try {
+    if (!supportedSectionKeys.includes(sectionKey)) {
+      return res.status(400).json({ error: `Section "${sectionKey}" is not yet AI-enabled.` })
     }
 
-    const assignments = Object.keys(updates)
-      .map((key) => `${key} = @${key}`)
-      .join(', ')
+    const profileRow = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+    if (!profileRow) {
+      return res.status(404).json({ error: 'Profile not found' })
+    }
 
-    const stmt = db.prepare(
-      `UPDATE profiles SET ${assignments}, updated_at = @updated_at WHERE id = @id`,
+    const sectionRows = req.db
+      .prepare(
+        `
+        SELECT section_key, data
+        FROM profile_sections
+        WHERE profile_id = ?
+      `,
+      )
+      .all(id)
+
+    const sections = Object.fromEntries(
+      sectionRows.map((row) => [row.section_key, safeParseJSON(row.data, {})]),
     )
 
-    stmt.run({
-      ...updates,
-      updated_at: new Date().toISOString(),
-      id: req.params.id,
+    const docs = req.db
+      .prepare(
+        `
+        SELECT d.id, d.name, d.type, d.status, d.notes
+        FROM documents d
+        JOIN profile_documents pd ON pd.document_id = d.id
+        WHERE pd.profile_id = ?
+        ORDER BY d.created_at DESC
+      `,
+      )
+      .all(id)
+
+    const promptPayload = buildProfileSectionPrompt(sectionKey, {
+      profile: mapProfile(profileRow),
+      sections,
+      documents: docs,
     })
 
-    const updated = db
-      .prepare('SELECT * FROM profiles WHERE id = ?')
-      .get(req.params.id)
+    if (!promptPayload) {
+      return res.status(400).json({ error: `No prompt mapping for section "${sectionKey}"` })
+    }
 
-    res.json({ data: mapProfile(updated) })
+    const openai = getOpenAI()
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: promptPayload.prompt }],
+      temperature: 0.2,
+      max_tokens: 1200,
+    })
+
+    const raw = extractCompletionText(completion)
+    let suggestion = {}
+
+    try {
+      const jsonMatch = raw.match(/\{[\s\S]*\}/)
+      suggestion = JSON.parse(jsonMatch ? jsonMatch[0] : raw)
+    } catch (parseError) {
+      console.error('Failed to parse AI response:', parseError, raw)
+      return res.status(502).json({
+        error: 'AI response could not be parsed',
+        raw_response: raw,
+      })
+    }
+
+    res.json({
+      section_key: sectionKey,
+      suggestion,
+      usage: completion.usage ?? null,
+      raw_response: raw,
+    })
   } catch (error) {
-    next(error)
+    console.error('Error generating profile section suggestion:', error)
+    res.status(500).json({ error: error.message })
   }
 })
 

@@ -180,7 +180,7 @@ export default function Budgets() {
                           </div>
                         </CardContent>
                         <CardFooter className="bg-slate-50 p-4 mt-4">
-                          <Link to={createPageUrl(`BudgetDetail?id=${grant.id}`)} className="w-full">
+                          <Link to={createPageUrl("BudgetDetail", { id: grant.id })} className="w-full">
                             <Button variant="outline" className="w-full bg-white">
                               Manage Budget
                             </Button>

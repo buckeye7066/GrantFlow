@@ -267,7 +267,7 @@ export default function Proposals() {
                     )}
                   </CardContent>
                   <CardFooter className="bg-slate-50 p-4 border-t">
-                    <Link to={createPageUrl(`GrantDetail?id=${proposal.id}&tab=proposal`)} className="w-full">
+                    <Link to={createPageUrl("GrantDetail", { id: proposal.id, tab: "proposal" })} className="w-full">
                       <Button variant="outline" className="w-full bg-white">View Application</Button>
                     </Link>
                   </CardFooter>

@@ -265,20 +265,9 @@ export default function SourceDirectory() {
   // NEW: Search for specific source mutation
   const searchSourceMutation = useMutation({
     mutationFn: async ({ source_name, location, organization_id }) => {
-      // Validate inputs before sending
-      if (source_name && typeof source_name !== 'string') {
-        throw new Error('Invalid source name');
-      }
-      if (location && typeof location !== 'string') {
-        throw new Error('Invalid location');
-      }
-      if (organization_id && typeof organization_id !== 'number') {
-        throw new Error('Invalid organization ID');
-      }
-      
       const response = await base44.functions.invoke('searchForSource', {
-        source_name: source_name?.trim(),
-        location: location?.trim(),
+        source_name,
+        location,
         organization_id
       });
       return response.data;
@@ -1042,7 +1031,7 @@ export default function SourceDirectory() {
                                                 </Button>
                                               )}
                                               {inPipeline && grant ? (
-                                                <Link to={createPageUrl(`GrantDetail?id=${grant.id}`)}>
+                                                <Link to={createPageUrl("GrantDetail", { id: grant.id })}>
                                                   <Button size="sm" variant="outline">
                                                     <FileText className="w-4 h-4 mr-2" />
                                                     View in Pipeline

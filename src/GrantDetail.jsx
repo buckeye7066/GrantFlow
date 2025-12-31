@@ -392,7 +392,11 @@ export default function GrantDetail() {
                     description: `Please complete ${openItems.length} checklist item${openItems.length > 1 ? 's' : ''} first.`
                 });
                 setActiveTab('checklist');
-                window.history.replaceState(null, '', createPageUrl(`GrantDetail?id=${grantId}&tab=checklist`));
+                window.history.replaceState(
+                  null,
+                  '',
+                  createPageUrl("GrantDetail", { id: grantId, tab: "checklist" }),
+                );
                 return;
             }
         }
@@ -400,7 +404,11 @@ export default function GrantDetail() {
         // Analysis not complete, run it
         console.log('[GrantDetail] Running analysis first');
         setActiveTab('coach');
-        window.history.replaceState(null, '', createPageUrl(`GrantDetail?id=${grantId}&tab=coach`));
+        window.history.replaceState(
+          null,
+          '',
+          createPageUrl("GrantDetail", { id: grantId, tab: "coach" }),
+        );
         
         if (!grant.ai_status || grant.ai_status === 'idle' || grant.ai_status === 'error') {
             toast({
@@ -426,7 +434,7 @@ export default function GrantDetail() {
     
     // Switch to coach tab
     setActiveTab('coach');
-    window.history.replaceState(null, '', createPageUrl(`GrantDetail?id=${grantId}&tab=coach`));
+    window.history.replaceState(null, '', createPageUrl("GrantDetail", { id: grantId, tab: "coach" }));
     
     // If analysis hasn't been run yet, trigger it automatically
     if (!grant.ai_status || grant.ai_status === 'idle' || grant.ai_status === 'error') {
@@ -458,9 +466,9 @@ export default function GrantDetail() {
   const isAnalyzing = analyzeGrantMutation.isPending || ['queued', 'running'].includes(grant.ai_status);
   
   // Build pipeline URL with organization filter
-  const pipelineUrl = grant.organization_id 
-    ? createPageUrl(`Pipeline?organization_id=${grant.organization_id}`)
-    : createPageUrl('Pipeline');
+  const pipelineUrl = grant.organization_id
+    ? createPageUrl("Pipeline", { organization_id: grant.organization_id })
+    : createPageUrl("Pipeline");
   
   return (
     <div className="bg-slate-50 min-h-screen">

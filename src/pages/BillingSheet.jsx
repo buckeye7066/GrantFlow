@@ -190,7 +190,12 @@ export default function BillingSheet() {
     const selectedServiceIds = Array.from(selectedServices).join(',');
     
     // Navigate to create invoice with pre-selected services
-    navigate(createPageUrl(`CreateInvoice?organization_id=${organizationId}&selectedServices=${selectedServiceIds}`));
+    navigate(
+      createPageUrl("CreateInvoice", {
+        organization_id: organizationId,
+        selectedServices: selectedServiceIds,
+      }),
+    );
   };
 
   // Determine client category

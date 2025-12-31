@@ -1,5 +1,8 @@
 import express from 'express';
 import OpenAI from 'openai';
+import { fetchReminderSnapshot } from './reminders.js';
+import { buildReminderPlanPrompt } from '../prompts/reminderPlan.js';
+import { extractCompletionText } from '../utils/openai.js';
 
 const router = express.Router();
 
@@ -246,7 +249,7 @@ Return ONLY valid JSON in this format:
     
     let aiResults;
     try {
-      const content = completion.choices[0].message.content;
+      const content = extractCompletionText(completion);
       // Extract JSON from response
       const jsonMatch = content.match(/\{[\s\S]*\}/);
       aiResults = JSON.parse(jsonMatch ? jsonMatch[0] : content);
@@ -339,7 +342,7 @@ Generate a well-structured, compelling ${section || 'narrative'} of about 300-50
     });
     
     res.json({
-      content: completion.choices[0].message.content,
+      content: extractCompletionText(completion),
       section,
       grant_id,
       tokens_used: completion.usage?.total_tokens || 0
@@ -405,13 +408,13 @@ Return as JSON:
     
     let analysis;
     try {
-      const content = completion.choices[0].message.content;
+    const content = extractCompletionText(completion);
       const jsonMatch = content.match(/\{[\s\S]*\}/);
       analysis = JSON.parse(jsonMatch ? jsonMatch[0] : content);
     } catch {
       analysis = {
         status: 'Analysis unavailable',
-        raw_response: completion.choices[0].message.content
+      raw_response: extractCompletionText(completion)
       };
     }
     
@@ -419,6 +422,75 @@ Return as JSON:
     
   } catch (error) {
     console.error('Error analyzing eligibility:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/reminders/plan', async (req, res) => {
+  try {
+    const openai = getOpenAI();
+    const body = req.body || {};
+
+    const lookahead = Number.isFinite(body.lookaheadDays)
+      ? Math.max(7, Math.min(60, Math.trunc(body.lookaheadDays)))
+      : undefined;
+
+    let deadlines = Array.isArray(body.urgentDeadlines) ? body.urgentDeadlines : null;
+    let milestones = Array.isArray(body.upcomingMilestones) ? body.upcomingMilestones : null;
+
+    if (!deadlines || !milestones || deadlines.length === 0 || milestones.length === 0) {
+      const snapshot = fetchReminderSnapshot(req.db, lookahead);
+      deadlines = deadlines && deadlines.length > 0 ? deadlines : snapshot.urgentDeadlines;
+      milestones = milestones && milestones.length > 0 ? milestones : snapshot.upcomingMilestones;
+    }
+
+    const trimmedDeadlines = (deadlines || []).slice(0, 6);
+    const trimmedMilestones = (milestones || []).slice(0, 6);
+
+    if (trimmedDeadlines.length === 0 && trimmedMilestones.length === 0) {
+      return res.status(400).json({ error: 'No reminders available to generate a plan.' });
+    }
+
+    const prompt = buildReminderPlanPrompt(
+      trimmedDeadlines,
+      trimmedMilestones,
+      { additionalContext: body.additionalContext },
+    );
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are an expert grants operations assistant. Provide actionable, concise plans without extra commentary.',
+        },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0.4,
+      max_tokens: 900,
+    });
+
+    let plan;
+    try {
+    const content = extractCompletionText(completion);
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      plan = JSON.parse(jsonMatch ? jsonMatch[0] : content);
+    } catch (parseError) {
+      console.error('Failed to parse reminder plan response:', parseError);
+      return res.status(502).json({ error: 'AI response could not be parsed.' });
+    }
+
+    res.json({
+      plan,
+      generatedAt: new Date().toISOString(),
+      inputs: {
+        deadlineCount: trimmedDeadlines.length,
+        milestoneCount: trimmedMilestones.length,
+      },
+    });
+  } catch (error) {
+    console.error('Error generating reminder plan:', error);
     res.status(500).json({ error: error.message });
   }
 });

@@ -11,6 +11,7 @@ import { User, Building, Mail, Phone, Globe, DollarSign, Target, Award, Trending
 import OrganizationProfileDetails from './OrganizationProfileDetails';
 import KanbanBoard from "@/components/pipeline/KanbanBoard";
 import PrintablePipeline from "@/components/pipeline/PrintablePipeline";
+import PipelineAutomationPanel from "@/components/pipeline/PipelineAutomationPanel";
 import { usePrintMode } from '@/components/hooks/usePrintMode';
 import { format } from "date-fns";
 import OrganizationEmailComposer from './OrganizationEmailComposer';
@@ -580,7 +581,7 @@ Return a single JSON object with the key "logo_url" containing the absolute, dir
                                 <ExternalLink className="w-4 h-4" />
                               </Button>
                             )}
-                            <Link to={createPageUrl("SourceDetail") + `?id=${source.id}`}>
+                            <Link to={createPageUrl("SourceDetail", { id: source.id })}>
                               <Button variant="outline" size="sm">
                                 View in Directory
                               </Button>
@@ -632,7 +633,7 @@ Return a single JSON object with the key "logo_url" containing the absolute, dir
                         const amount = grant.typical_award || grant.award_ceiling || grant.award_floor;
 
                         return (
-                          <Link key={grant.id} to={createPageUrl(`GrantDetail?id=${grant.id}`)}>
+                          <Link key={grant.id} to={createPageUrl("GrantDetail", { id: grant.id })}>
                             <div className="flex items-center justify-between p-4 border rounded-lg hover:bg-slate-50 hover:border-blue-300 transition-all cursor-pointer">
                               <div className="flex-1 min-w-0 pr-4">
                                 <div className="flex items-center gap-2 mb-1">
@@ -675,8 +676,15 @@ Return a single JSON object with the key "logo_url" containing the absolute, dir
 
             {/* Renamed: Pipeline View Tab */}
             <TabsContent value="pipeline" className="mt-4 print:hidden">
+               {organizationId && (
+                 <div className="mb-6">
+                   <PipelineAutomationPanel
+                     organizationId={organizationId}
+                   />
+                 </div>
+               )}
                <div className="flex justify-end mb-4 printable-hidden">
-                  <Link to={createPageUrl(`PrintPipeline?organizationId=${organizationId}`)} target="_blank">
+                  <Link to={createPageUrl("PrintPipeline", { organizationId })} target="_blank">
                     <Button variant="outline"><Printer className="w-4 h-4 mr-2" />Print Pipeline</Button>
                   </Link>
                </div>
@@ -759,11 +767,10 @@ Return a single JSON object with the key "logo_url" containing the absolute, dir
         />
       )}
 
-      {isHarvesterOpen && (
+      {isHarvesterOpen && orgData && (
         <DocumentHarvester
-          organization={orgData}
-          open={isHarvesterOpen}
-          onClose={() => setIsHarvesterOpen(false)}
+          profileId={orgData.id}
+          organizationId={orgData.id}
           onComplete={handleHarvestComplete}
         />
       )}

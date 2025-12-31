@@ -13,7 +13,19 @@ CREATE TABLE IF NOT EXISTS organizations (
   email TEXT,
   phone TEXT,
   profile_image_url TEXT,
-  applicant_type TEXT CHECK(applicant_type IN ('individual_need', 'nonprofit', 'small_business', 'student', 'government', 'other')),
+  applicant_type TEXT CHECK(applicant_type IN (
+    'individual_need',
+    'family',
+    'organization',
+    'nonprofit',
+    'small_business',
+    'student',
+    'college_student',
+    'high_school_student',
+    'medical_assistance',
+    'government',
+    'other'
+  )),
   pro_bono BOOLEAN DEFAULT FALSE,
   
   -- Demographics
@@ -208,6 +220,7 @@ CREATE TABLE IF NOT EXISTS documents (
   
   organization_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
   grant_id TEXT REFERENCES grants(id) ON DELETE SET NULL,
+  profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
   
   name TEXT NOT NULL,
   type TEXT, -- 'proposal', 'budget', 'letter_of_support', 'form', 'report', etc.
@@ -216,11 +229,131 @@ CREATE TABLE IF NOT EXISTS documents (
   file_path TEXT,
   file_size INTEGER,
   mime_type TEXT,
+  extracted_text TEXT,
+  ai_summary TEXT,
+  ai_sections TEXT,
+  processing_status TEXT DEFAULT 'pending' CHECK(processing_status IN ('pending', 'processing', 'completed', 'failed')),
+  processing_error TEXT,
   
   status TEXT DEFAULT 'draft' CHECK(status IN ('draft', 'review', 'final', 'submitted')),
   version INTEGER DEFAULT 1,
   
   notes TEXT
+);
+
+-- Users & authentication
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  
+  display_name TEXT,
+  primary_email TEXT,
+  primary_phone TEXT,
+  avatar_url TEXT,
+  is_admin BOOLEAN DEFAULT 0,
+  metadata TEXT
+);
+
+CREATE TABLE IF NOT EXISTS user_credentials (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type TEXT NOT NULL CHECK(type IN ('email_otp', 'phone_otp')),
+  identifier TEXT NOT NULL,
+  secret_hash TEXT,
+  verified_at DATETIME,
+  last_sent_at DATETIME,
+  attempt_count INTEGER DEFAULT 0,
+  UNIQUE(type, identifier)
+);
+
+CREATE TABLE IF NOT EXISTS user_verification_codes (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  
+  credential_id TEXT NOT NULL REFERENCES user_credentials(id) ON DELETE CASCADE,
+  code_hash TEXT NOT NULL,
+  expires_at DATETIME NOT NULL,
+  consumed_at DATETIME,
+  attempt_count INTEGER DEFAULT 0,
+  metadata TEXT
+);
+
+CREATE TABLE IF NOT EXISTS user_providers (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  provider_account_id TEXT NOT NULL,
+  access_token TEXT,
+  refresh_token TEXT,
+  expires_at DATETIME,
+  scopes TEXT,
+  metadata TEXT,
+  UNIQUE(provider, provider_account_id)
+);
+
+CREATE TABLE IF NOT EXISTS user_sessions (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+  issued_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  access_expires_at DATETIME,
+  refresh_expires_at DATETIME,
+  refresh_token_hash TEXT NOT NULL,
+  ip_address TEXT,
+  user_agent TEXT,
+  revoked_at DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS oauth_states (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  
+  provider TEXT NOT NULL,
+  state TEXT NOT NULL UNIQUE,
+  code_verifier TEXT,
+  redirect_to TEXT,
+  metadata TEXT,
+  expires_at DATETIME NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_oauth_states_state ON oauth_states(state);
+CREATE INDEX IF NOT EXISTS idx_oauth_states_expires_at ON oauth_states(expires_at);
+
+CREATE TABLE IF NOT EXISTS billing_tiers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  base_monthly_cents INTEGER,
+  hourly_rate_cents INTEGER,
+  enable_pipeline_automation BOOLEAN DEFAULT 0,
+  enable_item_funding BOOLEAN DEFAULT 0,
+  enable_document_ai BOOLEAN DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS grant_pipeline_events (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  grant_id TEXT NOT NULL REFERENCES grants(id) ON DELETE CASCADE,
+  job_id TEXT REFERENCES crawler_jobs(id) ON DELETE SET NULL,
+  previous_status TEXT,
+  suggested_status TEXT,
+  applied_status TEXT,
+  confidence REAL,
+  handoff_required BOOLEAN DEFAULT 0,
+  handoff_reason TEXT,
+  recommended_actions TEXT, -- JSON array
+  ai_summary TEXT
 );
 
 -- Expenses
@@ -335,6 +468,120 @@ CREATE TABLE IF NOT EXISTS ai_artifacts (
   feedback TEXT
 );
 
+INSERT OR IGNORE INTO billing_tiers (
+  id,
+  name,
+  description,
+  base_monthly_cents,
+  hourly_rate_cents,
+  enable_pipeline_automation,
+  enable_item_funding,
+  enable_document_ai
+) VALUES
+  (
+    'foundation',
+    'Foundation',
+    'Baseline research support with curated grant discovery and shared AI document enrichment.',
+    0,
+    0,
+    0,
+    1,
+    1
+  ),
+  (
+    'growth',
+    'Growth',
+    'Expanded automation, itemized funding intelligence, and AI-supported document ingestion.',
+    9900,
+    15000,
+    1,
+    1,
+    1
+  ),
+  (
+    'enterprise',
+    'Enterprise',
+    'Full-service concierge with custom automation rules and dedicated analyst support.',
+    24900,
+    22500,
+    1,
+    1,
+    1
+  );
+
+-- Profiles (comprehensive application records)
+CREATE TABLE IF NOT EXISTS profiles (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  created_by TEXT,
+  organization_id TEXT REFERENCES organizations(id) ON DELETE SET NULL,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  
+  primary_type TEXT, -- e.g. organization, high_school_student, etc.
+  display_name TEXT NOT NULL,
+  status TEXT DEFAULT 'active',
+  tags TEXT DEFAULT '[]',
+  avatar_url TEXT
+);
+
+CREATE TABLE IF NOT EXISTS profile_sections (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  
+  profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  section_key TEXT NOT NULL,
+  data TEXT NOT NULL, -- JSON payload of section fields
+  updated_by TEXT,
+  
+  UNIQUE(profile_id, section_key)
+);
+
+CREATE TABLE IF NOT EXISTS profile_documents (
+  profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  PRIMARY KEY (profile_id, document_id)
+);
+
+CREATE TABLE IF NOT EXISTS billing_accounts (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  
+  profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  tier_id TEXT NOT NULL REFERENCES billing_tiers(id),
+  assigned_by TEXT,
+  assigned_reason TEXT,
+  discount_type TEXT CHECK(discount_type IN ('none', 'student', 'minister')),
+  discount_percent REAL DEFAULT 0,
+  is_pro_bono BOOLEAN DEFAULT 0,
+  pro_bono_reason TEXT,
+  custom_monthly_cents INTEGER,
+  custom_hourly_cents INTEGER,
+  metadata TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_accounts_profile ON billing_accounts(profile_id);
+CREATE INDEX IF NOT EXISTS idx_billing_accounts_tier ON billing_accounts(tier_id);
+
+CREATE TABLE IF NOT EXISTS billing_account_events (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  
+  account_id TEXT NOT NULL REFERENCES billing_accounts(id) ON DELETE CASCADE,
+  changed_by TEXT,
+  previous_tier_id TEXT,
+  new_tier_id TEXT,
+  previous_discount_type TEXT,
+  new_discount_type TEXT,
+  previous_discount_percent REAL,
+  new_discount_percent REAL,
+  previous_pro_bono BOOLEAN,
+  new_pro_bono BOOLEAN,
+  notes TEXT
+);
+
 -- Create indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_organizations_state ON organizations(state);
 CREATE INDEX IF NOT EXISTS idx_organizations_applicant_type ON organizations(applicant_type);
@@ -347,9 +594,117 @@ CREATE INDEX IF NOT EXISTS idx_opportunities_state ON funding_opportunities(stat
 CREATE INDEX IF NOT EXISTS idx_milestones_due_date ON milestones(due_date);
 CREATE INDEX IF NOT EXISTS idx_milestones_grant_id ON milestones(grant_id);
 CREATE INDEX IF NOT EXISTS idx_documents_organization_id ON documents(organization_id);
+CREATE INDEX IF NOT EXISTS idx_grant_pipeline_events_grant ON grant_pipeline_events(grant_id);
+CREATE INDEX IF NOT EXISTS idx_grant_pipeline_events_created ON grant_pipeline_events(created_at);
 CREATE INDEX IF NOT EXISTS idx_expenses_grant_id ON expenses(grant_id);
+CREATE INDEX IF NOT EXISTS idx_profiles_primary_type ON profiles(primary_type);
+CREATE INDEX IF NOT EXISTS idx_profiles_status ON profiles(status);
+CREATE INDEX IF NOT EXISTS idx_profile_sections_profile ON profile_sections(profile_id);
+CREATE INDEX IF NOT EXISTS idx_users_primary_email ON users(primary_email);
+CREATE INDEX IF NOT EXISTS idx_user_credentials_identifier ON user_credentials(identifier);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_refresh_hash ON user_sessions(refresh_token_hash);
+
+-- Crawler jobs
+CREATE TABLE IF NOT EXISTS crawler_jobs (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  started_at DATETIME,
+  completed_at DATETIME,
+  
+  type TEXT NOT NULL CHECK(type IN (
+    'local',
+    'scholarship',
+    'comprehensive',
+    'item_search',
+    'avatar_lookup',
+    'document_ingest',
+    'pipeline_automation',
+    'profile_enrichment'
+  )),
+  status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
+    'queued',
+    'running',
+    'completed',
+    'failed',
+    'cancelled'
+  )),
+  
+  profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+  organization_id TEXT REFERENCES organizations(id) ON DELETE SET NULL,
+  
+  parameters TEXT DEFAULT '{}',
+  result_count INTEGER DEFAULT 0,
+  result_meta TEXT,
+  error TEXT,
+  requested_by TEXT,
+  retry_count INTEGER DEFAULT 0,
+  last_retry_at DATETIME
+);
+
+CREATE INDEX IF NOT EXISTS idx_crawler_jobs_status ON crawler_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_crawler_jobs_profile ON crawler_jobs(profile_id);
+CREATE INDEX IF NOT EXISTS idx_crawler_jobs_type ON crawler_jobs(type);
+
+-- Anya assistant sessions
+CREATE TABLE IF NOT EXISTS anya_sessions (
+  id TEXT PRIMARY KEY,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+  status TEXT DEFAULT 'open' CHECK(status IN ('open', 'closed')),
+  title TEXT,
+  metadata TEXT DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_anya_sessions_user ON anya_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_anya_sessions_profile ON anya_sessions(profile_id);
+
+CREATE TABLE IF NOT EXISTS anya_messages (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES anya_sessions(id) ON DELETE CASCADE,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
+  content TEXT NOT NULL,
+  tool_name TEXT,
+  tool_payload TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_anya_messages_session ON anya_messages(session_id);
+
+CREATE TABLE IF NOT EXISTS anya_tasks (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  session_id TEXT NOT NULL REFERENCES anya_sessions(id) ON DELETE CASCADE,
+  profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  notes TEXT,
+  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'in_progress', 'completed', 'cancelled')),
+  priority TEXT DEFAULT 'normal' CHECK(priority IN ('low', 'normal', 'high', 'urgent')),
+  due_date DATE,
+  completed_at DATETIME,
+  metadata TEXT DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_anya_tasks_session ON anya_tasks(session_id);
+CREATE INDEX IF NOT EXISTS idx_anya_tasks_status ON anya_tasks(status);
 
 -- Triggers to auto-update updated_at
+CREATE TRIGGER IF NOT EXISTS update_anya_sessions_timestamp
+AFTER UPDATE ON anya_sessions
+BEGIN
+  UPDATE anya_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS update_anya_tasks_timestamp
+AFTER UPDATE ON anya_tasks
+BEGIN
+  UPDATE anya_tasks SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
 CREATE TRIGGER IF NOT EXISTS update_organizations_timestamp 
 AFTER UPDATE ON organizations
 BEGIN
@@ -366,4 +721,16 @@ CREATE TRIGGER IF NOT EXISTS update_funding_opportunities_timestamp
 AFTER UPDATE ON funding_opportunities
 BEGIN
   UPDATE funding_opportunities SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS update_profiles_timestamp
+AFTER UPDATE ON profiles
+BEGIN
+  UPDATE profiles SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS update_profile_sections_timestamp
+AFTER UPDATE ON profile_sections
+BEGIN
+  UPDATE profile_sections SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;

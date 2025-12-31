@@ -421,7 +421,7 @@ export default function GrantMonitoring() {
                             </Button>
                           )}
                           {grant && (
-                            <Link to={createPageUrl(`GrantDetail?id=${grant.id}`)}>
+                            <Link to={createPageUrl("GrantDetail", { id: grant.id })}>
                               <Button size="sm" variant="outline" onClick={(e) => e.stopPropagation()}>
                                 <Eye className="w-4 h-4 mr-1" />
                                 View

@@ -8,6 +8,8 @@ class APIClient {
   constructor() {
     this.baseUrl = API_URL;
     this.token = null;
+    this.refreshToken = null;
+    this.onAuthFailure = null;
     this.entityResourceMap = {
       Organization: 'organizations',
       Grant: 'grants',
@@ -16,6 +18,7 @@ class APIClient {
       Milestone: 'milestones',
       Document: 'documents',
       Expense: 'expenses',
+      Profile: 'profiles',
     };
     this.stubStores = new Map();
     this.stubWarnings = new Set();
@@ -23,36 +26,100 @@ class APIClient {
     this.entities = {};
   }
 
+  setAuthFailureHandler(handler) {
+    this.onAuthFailure = handler;
+  }
+
   setToken(token) {
     this.token = token;
     if (typeof window !== 'undefined') {
-      sessionStorage.setItem('grantflow:admin-token', token);
+      localStorage.setItem('grantflow:access-token', token);
+    }
+  }
+
+  setRefreshToken(token) {
+    this.refreshToken = token;
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('grantflow:refresh-token', token);
     }
   }
 
   getToken() {
     if (this.token) return this.token;
     if (typeof window !== 'undefined') {
-      return sessionStorage.getItem('grantflow:admin-token');
+      return localStorage.getItem('grantflow:access-token');
+    }
+    return null;
+  }
+
+  getRefreshToken() {
+    if (this.refreshToken) return this.refreshToken;
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('grantflow:refresh-token');
     }
     return null;
   }
 
   clearToken() {
     this.token = null;
+    this.refreshToken = null;
     if (typeof window !== 'undefined') {
-      sessionStorage.removeItem('grantflow:admin-token');
+      localStorage.removeItem('grantflow:access-token');
+      localStorage.removeItem('grantflow:refresh-token');
+    }
+  }
+
+  async handleUnauthorized(originalRequest) {
+    const refreshToken = this.getRefreshToken();
+    if (!refreshToken) {
+      if (this.onAuthFailure) {
+        this.onAuthFailure('Your session expired. Sign in again to continue.');
+      } else {
+        this.auth.redirectToLogin();
+      }
+      throw new Error('Authentication required');
+    }
+    try {
+      const response = await fetch(`${this.baseUrl}/api/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken }),
+      });
+      if (!response.ok) {
+        throw new Error('Refresh failed');
+      }
+      const data = await response.json();
+      if (data?.accessToken) {
+        this.setToken(data.accessToken);
+      }
+      if (data?.refreshToken) {
+        this.setRefreshToken(data.refreshToken);
+      }
+      return this.fetch(originalRequest.endpoint, originalRequest.options);
+    } catch (error) {
+      this.clearToken();
+      if (this.onAuthFailure) {
+        this.onAuthFailure('Your session expired. Sign in again to continue.');
+      } else {
+        this.auth.redirectToLogin();
+      }
+      throw new Error('Session expired. Please sign in again.');
     }
   }
 
   async fetch(endpoint, options = {}) {
     const url = `${this.baseUrl}${endpoint}`;
     const token = this.getToken();
-    
+    const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+
     const headers = {
-      'Content-Type': 'application/json',
+      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       ...options.headers,
     };
+
+    if (isFormData) {
+      delete headers['Content-Type'];
+    }
 
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
@@ -63,12 +130,25 @@ class APIClient {
       headers,
     });
 
+    if (response.status === 401) {
+      return this.handleUnauthorized({ endpoint, options });
+    }
+
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: response.statusText }));
       throw new Error(error.error || error.message || 'Request failed');
     }
 
-    return response.json();
+    if (response.status === 204) {
+      return null;
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      return response.json();
+    }
+
+    return response.text();
   }
 
   // Entity wrapper for Base44-compatible interface
@@ -215,27 +295,31 @@ class APIClient {
     me: async () => {
       const token = this.getToken();
       if (!token) return null;
-      
+
       try {
-        // Validate token by hitting a protected endpoint
-        await this.fetch('/api/anya/status');
-        return { 
-          email: 'admin@grantflow.app',
-          full_name: 'Admin User',
-          role: 'admin'
-        };
+        return await this.fetch('/api/auth/me');
       } catch {
         return null;
       }
     },
     
-    login: async (token) => {
-      this.setToken(token);
+    loginWithTokens: async ({ accessToken, refreshToken }) => {
+      if (accessToken) {
+        this.setToken(accessToken);
+      }
+      if (refreshToken) {
+        this.setRefreshToken(refreshToken);
+      }
       return this.auth.me();
     },
     
     logout: () => {
       this.clearToken();
+      try {
+        this.fetch('/api/auth/logout', { method: 'POST' });
+      } catch {
+        // non-blocking
+      }
       if (typeof window !== 'undefined') {
         window.location.href = `${APP_BASE.replace(/\/$/, '')}/login`;
       }
@@ -246,20 +330,6 @@ class APIClient {
         window.location.href = `${APP_BASE.replace(/\/$/, '')}/login`;
       }
     }
-  };
-
-  // Entity proxies (Base44 compatibility)
-  entities = {
-    Organization: null,
-    Grant: null,
-    FundingOpportunity: null,
-    Milestone: null,
-    Document: null,
-    Expense: null,
-    Budget: null,
-    Contact: null,
-    CrawlLog: null,
-    ApplicationDraft: null,
   };
 
   // Functions wrapper
@@ -300,6 +370,23 @@ class APIClient {
       has: (obj, prop) => Reflect.has(obj, prop) || prop in this.entityResourceMap,
     });
   }
+
+  profileSectionsClient(profileId) {
+    const base = `/api/profiles/${profileId}/sections`;
+    return {
+      list: async () => this.fetch(base),
+      get: async (sectionKey) => this.fetch(`${base}/${sectionKey}`),
+      update: async (sectionKey, data, updatedBy) =>
+        this.fetch(`${base}/${sectionKey}`, {
+          method: 'PUT',
+          body: JSON.stringify({ data, updated_by: updatedBy ?? null }),
+        }),
+      delete: async (sectionKey) =>
+        this.fetch(`${base}/${sectionKey}`, {
+          method: 'DELETE',
+        }),
+    };
+  }
 }
 
 // Create singleton instance
@@ -321,6 +408,10 @@ export const {
   Contact,
   CrawlLog,
   ApplicationDraft,
+  Profile,
 } = client.entities;
+
+export const getProfileSectionsClient = (profileId) => client.profileSectionsClient(profileId);
+export const apiFetch = (...args) => client.fetch(...args);
 
 export default client;

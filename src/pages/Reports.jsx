@@ -247,7 +247,7 @@ export default function Reports() {
                         </div>
                         <div className="flex items-center gap-3">
                           {daysOverdue !== null && <Badge variant="destructive">{daysOverdue} days overdue</Badge>}
-                          <Link to={createPageUrl(`ComplianceReportDetail?id=${report.id}`)}>
+                          <Link to={createPageUrl("ComplianceReportDetail", { id: report.id })}>
                             <Button size="sm">Review</Button>
                           </Link>
                         </div>
@@ -288,7 +288,7 @@ export default function Reports() {
                         <div className="flex items-center gap-3">
                           {getStatusBadge(report.status)}
                           {daysUntilDue !== null && daysUntilDue <= 7 && <Badge variant="destructive" className="bg-amber-500">{daysUntilDue}d</Badge>}
-                          <Link to={createPageUrl(`ComplianceReportDetail?id=${report.id}`)}>
+                          <Link to={createPageUrl("ComplianceReportDetail", { id: report.id })}>
                             <Button size="sm" variant="outline">
                               {report.status === 'draft' ? 'Continue' : 'Start'}
                             </Button>

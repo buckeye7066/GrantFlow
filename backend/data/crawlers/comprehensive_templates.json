@@ -1,0 +1,49 @@
+{
+  "templates": [
+    {
+      "id": "community-anchor",
+      "title": "Community Anchor Impact Grant (ZIP {zip})",
+      "description": "Supports neighborhood-based initiatives expanding access to education, housing stability, or workforce readiness. Applicants outline how services will reach residents within {zip} and adjacent census tracts.",
+      "amount_min": 20000,
+      "amount_max": 60000,
+      "deadline_offset_days": 75,
+      "categories": ["community", "workforce"],
+      "keywords": ["community", "workforce", "education"],
+      "eligibility_bullets": [
+        "Applicant operates programming within ZIP {zip}",
+        "Funds used for direct services, not capital campaigns",
+        "Submission includes two community partner letters"
+      ]
+    },
+    {
+      "id": "resilience-boost",
+      "title": "Resilience Boost Opportunity (ZIP {zip})",
+      "description": "Provides flexible grants for nonprofits addressing food access, mental health, or emergency financial assistance within the {zip} service area. Award can cover staffing, outreach, and technology tools.",
+      "amount_min": 15000,
+      "amount_max": 45000,
+      "deadline_offset_days": 120,
+      "categories": ["health", "basic_needs"],
+      "keywords": ["resilience", "health", "support"],
+      "eligibility_bullets": [
+        "Applicant demonstrates measurable impact in ZIP {zip}",
+        "Organization has inclusive intake policies",
+        "Quarterly reporting on outcomes is required"
+      ]
+    },
+    {
+      "id": "infrastructure-spark",
+      "title": "Infrastructure Spark Fund (ZIP {zip})",
+      "description": "Capital grants for technology, vehicle, or facility upgrades that accelerate service delivery for residents living in or commuting to {zip}. Priority for projects removing accessibility barriers.",
+      "amount_min": 25000,
+      "amount_max": 90000,
+      "deadline_offset_days": 180,
+      "categories": ["infrastructure", "technology"],
+      "keywords": ["infrastructure", "technology", "capacity"],
+      "eligibility_bullets": [
+        "Project benefits clients residing in ZIP {zip}",
+        "Applicant submits sustainability plan covering 3 years",
+        "Matching funds not required but strengthens competitiveness"
+      ]
+    }
+  ]
+}

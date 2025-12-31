@@ -153,12 +153,12 @@ export default function Organizations() {
     
     setTimeout(() => {
       console.log('[Organizations] Navigating to profile:', organization.id);
-      navigate(createPageUrl(`OrganizationProfile?id=${organization.id}`));
+      navigate(createPageUrl("OrganizationProfile", { id: organization.id }));
     }, 500);
   };
 
   const handleInvoice = (org) => {
-    navigate(createPageUrl(`CreateInvoice?organization_id=${org.id}`));
+    navigate(createPageUrl("CreateInvoice", { organization_id: org.id }));
   };
 
   // Loading state

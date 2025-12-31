@@ -69,7 +69,7 @@ export default function UrgentDeadlinesCard({ urgentDeadlines }) {
               if (!deadlineInfo) return null;
 
               return (
-                <Link key={grant.id} to={createPageUrl(`GrantDetail?id=${grant.id}`)}>
+                <Link key={grant.id} to={createPageUrl("GrantDetail", { id: grant.id })}>
                   <div className="flex items-start justify-between p-4 bg-slate-50 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer">
                     <div className="flex-1">
                       <h4 className="font-semibold text-slate-900">{grant.title}</h4>

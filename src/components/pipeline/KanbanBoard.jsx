@@ -188,7 +188,7 @@ export default function KanbanBoard({ grants, organizations, onGrantUpdate, onGr
                           return (
                             <Draggable key={grant.id} draggableId={grant.id} index={index}>
                               {(provided, snapshot) => (
-                                <Link to={createPageUrl(`GrantDetail?id=${grant.id}`)} className="block focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-lg">
+                                <Link to={createPageUrl("GrantDetail", { id: grant.id })} className="block focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-lg">
                                   <div
                                     ref={provided.innerRef}
                                     {...provided.draggableProps}

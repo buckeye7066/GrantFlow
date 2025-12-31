@@ -83,7 +83,7 @@ export default function InvoicesTab({ invoices, organizations }) {
                       </span>
                     </div>
                     <div className="flex gap-2">
-                      <Link to={createPageUrl(`InvoiceView?id=${invoice.id}`)}>
+                      <Link to={createPageUrl("InvoiceView", { id: invoice.id })}>
                         <Button variant="outline" size="sm">View Invoice</Button>
                       </Link>
                       <Button 
