@@ -123,7 +123,7 @@ const FormMessage = React.forwardRef(({ className, children, ...props }, ref) =>
 FormMessage.displayName = "FormMessage"
 
 export {
-  useFormField,
+  useFormField, // eslint-disable-line react-refresh/only-export-components
   Form,
   FormItem,
   FormLabel,

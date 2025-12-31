@@ -1,11 +1,11 @@
 import { parseAddress } from './helpers.js'
 
 const ORG_REGEX = /(foundation|university|college|school|association|committee)[^\n\r]{0,80}/i
-const CONTACT_REGEX = /(phone|tel\.?|contact)\s*[:\-]?\s*([0-9\-\(\)\s]+)/i
+const CONTACT_REGEX = /(phone|tel\.?|contact)\s*[:-]?\s*([0-9-()\s]+)/i
 const EMAIL_REGEX = /([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/i
 const WEBSITE_REGEX = /(https?:\/\/[^\s]+)/i
 const AMOUNT_REGEX = /\$[\d,]+(\.\d{2})?/i
-const DEADLINE_REGEX = /(deadline|due|submit by)\s*[:\-]?\s*([A-Z0-9 ,\/\-]+)/i
+const DEADLINE_REGEX = /(deadline|due|submit by)\s*[:-]?\s*([A-Z0-9 ,/-]+)/i
 const APPLICANT_REGEX = /(dear|congratulations|recipient)\s+(?:mr\.?|ms\.?|mrs\.)?\s*([A-Z][A-Za-z\s]+)/i
 
 export async function extractScholarshipLetter(text = '') {

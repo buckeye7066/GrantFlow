@@ -14,7 +14,7 @@ export const US_STATES = [
 // Date patterns
 export const DATE_PATTERNS = {
   // MM/DD/YYYY or MM-DD-YYYY
-  slashOrDash: /\b(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})\b/g,
+  slashOrDash: /\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b/g,
   // YYYY-MM-DD
   iso: /\b(\d{4})-(\d{2})-(\d{2})\b/g,
   // Month DD, YYYY
@@ -53,7 +53,7 @@ export function parseDate(dateStr) {
   }
 
   // Try MM/DD/YYYY or MM-DD-YYYY
-  const slashMatch = dateStr.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/)
+  const slashMatch = dateStr.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/)
   if (slashMatch) {
     const [, month, day, year] = slashMatch
     const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day))

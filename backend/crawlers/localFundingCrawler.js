@@ -4,7 +4,7 @@ const { BaseCrawler, DEFAULT_TIMEOUT_MS, DEFAULT_MAX_RETRIES } = require('./base
 let Database;
 try {
   // Prefer better-sqlite3 when available; fall back to no-op persistence otherwise.
-  // eslint-disable-next-line global-require
+   
   Database = require('better-sqlite3');
 } catch (_) {
   Database = null;
@@ -142,7 +142,7 @@ class LocalFundingCrawler extends BaseCrawler {
 
     for (const zip of zipCodes) {
       try {
-        // eslint-disable-next-line no-await-in-loop
+         
         const opportunities = await this.fetchOpportunitiesForZip({
           stateCode,
           zip,
@@ -168,7 +168,7 @@ class LocalFundingCrawler extends BaseCrawler {
    * Fetch opportunities for the given zip code.
    * Override to provide actual fetch logic.
    */
-  // eslint-disable-next-line class-methods-use-this
+   
   async fetchOpportunitiesForZip({ stateCode, zip }) {
     // Placeholder implementation – replace with real HTTP/database logic.
     return [
