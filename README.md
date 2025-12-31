@@ -1,219 +1,49 @@
 # GrantFlow
 
-A professional marketing website for GrantFlow by Axiom BioLabs - Finding funding sources for various financial situations.
+AI-powered grant discovery and application management platform by Axiom BioLabs - Finding funding sources for various financial situations.
 
-## Overview
+## 🎯 Overview
 
-This is a static marketing site built with Vite, React, and Tailwind CSS. It includes:
+GrantFlow is a comprehensive grant management application that helps individuals and organizations discover funding opportunities, manage applications, and increase their success rate through intelligent automation and AI-powered guidance.
 
-- Landing page with hero section, features, and CTAs
-- Pricing page with multiple subscription tiers
-- Complete legal pages (Terms of Service, Privacy Policy, HIPAA Compliance, Data Retention)
-- Responsive design with modern UI components
-- Navigation and footer with all required links
+**Key Features:**
+- 🔍 Advanced grant search and discovery
+- 🤖 ANYA AI assistant for grant guidance
+- 📄 Intelligent document processing and analysis
+- 📊 Application tracking and milestone management
+- 💰 Expense tracking and reporting
+- 🎯 Personalized grant recommendations
 
-## Technology Stack
+## 🏗️ Technology Stack
 
-- **Vite** - Fast build tool and dev server
-- **React** - UI component library
-- **Tailwind CSS** - Utility-first CSS framework
-- **React Router** - Client-side routing
+### Frontend
+- **Framework:** React 19.2.0 with TypeScript 5.9.3
+- **Build Tool:** Vite 7.2.4 (fast HMR and optimized builds)
+- **Styling:** Tailwind CSS 4.1.18 (utility-first CSS)
+- **Routing:** React Router DOM 7.11.0
+- **State Management:** TanStack Query 5.62.7
+- **Icons:** Lucide React 0.470.0
 
-## Getting Started
+### Backend
+- **Runtime:** Node.js 18+
+- **Framework:** Express.js 4.19.2
+- **Database:** SQLite 3 (better-sqlite3 11.8.1)
+- **Document Processing:** pdf-parse, mammoth, tesseract.js
+- **AI Integration:** OpenAI API
+- **Authentication:** Token-based (JWT planned for Phase 1)
 
-### Prerequisites
-
-- Node.js 18+ and npm
-
-### Installation
-
-```bash
-# Install dependencies
-npm install
-```
-
-### Development
-
-```bash
-# Start development server
-npm run dev
-```
-
-The site will be available at `http://localhost:5173/`
-
-### Build for Production
-
-```bash
-# Build optimized production bundle
-npm run build
-```
-
-The production files will be in the `dist/` directory.
-
-### Preview Production Build
-
-```bash
-# Preview production build locally
-npm run preview
-```
-
-### Linting
-
-```bash
-# Run ESLint
-npm run lint
-```
-
-## Deployment
-
-### GoDaddy Hosting
-
-1. **Build the project:**
-   ```bash
-   npm run build
-   ```
-
-2. **Upload to GoDaddy:**
-   - Log in to your GoDaddy account
-   - Navigate to your hosting control panel (cPanel)
-   - Use File Manager or FTP to upload the contents of the `dist/` folder
-   - Upload to your `public_html` directory (or subdirectory)
-   - Ensure the `index.html` is in the root of your web directory
-
-3. **Configure .htaccess for Single Page Application:**
-   Create a `.htaccess` file in your web root with:
-   ```apache
-   <IfModule mod_rewrite.c>
-     RewriteEngine On
-     RewriteBase /
-     RewriteRule ^index\.html$ - [L]
-     RewriteCond %{REQUEST_FILENAME} !-f
-     RewriteCond %{REQUEST_FILENAME} !-d
-     RewriteRule . /index.html [L]
-   </IfModule>
-   ```
-
-### Cloudflare Setup
-
-1. **Add Site to Cloudflare:**
-   - Log in to Cloudflare
-   - Add your domain
-   - Update nameservers at GoDaddy to Cloudflare's nameservers
-
-2. **Configure Caching Rules:**
-   - Go to Caching > Configuration
-   - Set Browser Cache TTL to "Respect Existing Headers"
-   - Enable "Always Online"
-
-3. **Page Rules for SPA:**
-   - Create a page rule for `yourdomain.com/*`
-   - Set Cache Level to "Cache Everything"
-   - Edge Cache TTL: 1 month
-   - Browser Cache TTL: 4 hours
-
-4. **Purge Cache After Updates:**
-   - Go to Caching > Configuration
-   - Click "Purge Everything" after deploying new versions
-   - Or use Cloudflare API for automated cache purging
-
-5. **Performance Optimizations:**
-   - Enable Auto Minify (JavaScript, CSS, HTML)
-   - Enable Brotli compression
-   - Enable HTTP/2 and HTTP/3
-
-6. **Security Settings:**
-   - Enable "Always Use HTTPS"
-   - Set SSL/TLS encryption mode to "Full" or "Full (strict)"
-   - Enable "Automatic HTTPS Rewrites"
-
-## Project Structure
-
-```
-GrantFlow/
-├── src/
-│   ├── components/
-│   │   ├── Navigation.jsx    # Main navigation bar
-│   │   └── Footer.jsx         # Site footer
-│   ├── pages/
-│   │   ├── Home.jsx           # Landing page
-│   │   ├── Pricing.jsx        # Pricing plans
-│   │   ├── Terms.jsx          # Terms of Service
-│   │   ├── Privacy.jsx        # Privacy Policy
-│   │   ├── HIPAA.jsx          # HIPAA Compliance
-│   │   └── DataRetention.jsx  # Data Retention Policy
-│   ├── App.jsx                # Main app component with routing
-│   ├── main.jsx               # Application entry point
-│   └── index.css              # Global styles with Tailwind
-├── public/                    # Static assets
-├── index.html                 # HTML template
-├── tailwind.config.js         # Tailwind configuration
-├── postcss.config.js          # PostCSS configuration
-├── vite.config.js             # Vite configuration
-└── package.json               # Project dependencies
-```
-
-## Placeholder Assets
-
-⚠️ **Note: The following assets need to be replaced with actual assets:**
-
-- Company logo (currently using text-based branding)
-- Hero section background images
-- Feature icons (currently using emoji placeholders: 🔍 📊 🔒)
-- Testimonial photos
-- Any branded imagery
-
-To add real images:
-1. Place images in the `public/` directory
-2. Reference them in components using `/image-name.png`
-3. For optimized images, place in `src/assets/` and import in components
-
-## Customization
-
-### Brand Colors
-
-Edit `tailwind.config.js` to update brand colors:
-
-```javascript
-theme: {
-  extend: {
-    colors: {
-      'axiom-blue': '#1e40af',        // Primary brand color
-      'axiom-light-blue': '#3b82f6',  // Secondary brand color
-    },
-  },
-}
-```
-
-### Content Updates
-
-- **Home page:** Edit `src/pages/Home.jsx`
-- **Pricing:** Edit `src/pages/Pricing.jsx`
-- **Legal pages:** Edit respective files in `src/pages/`
-- **Navigation links:** Edit `src/components/Navigation.jsx`
-- **Footer content:** Edit `src/components/Footer.jsx`
-
-## Browser Support
-
-- Chrome (latest)
-- Firefox (latest)
-- Safari (latest)
-- Edge (latest)
-
-## License
-
-Copyright © 2024 Axiom BioLabs. All rights reserved.
-
-## Support
-
-For questions or issues, contact: support@axiombiolabs.org
-A grant management application built with React, TypeScript, and Vite.
+### Infrastructure
+- **Frontend Hosting:** Vercel (recommended)
+- **Backend Hosting:** Railway (recommended)
+- **CDN & DNS:** Cloudflare
+- **Legacy Option:** Digital Ocean with Nginx (see legacy docs)
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 
-- Node.js (v16 or higher)
-- npm or yarn
+- Node.js 18+ and npm
+- Git
 
 ### Installation
 
@@ -233,97 +63,237 @@ A grant management application built with React, TypeScript, and Vite.
    # Copy the example environment file
    cp .env.example .env
    
-   # Edit .env and replace placeholder values with your actual configuration
-   # IMPORTANT: Never commit your .env file to version control
+   # Edit .env and configure your values
+   # See "Environment Configuration" section below
    ```
 
 4. **Start the development servers**
    
-   **Frontend (Vite dev server):**
+   **Option 1: Full stack (frontend + backend)**
+   ```bash
+   npm run dev:full
+   ```
+   
+   **Option 2: Frontend only**
    ```bash
    npm run dev
    ```
    
-   **Backend (if applicable):**
+   **Option 3: Backend only**
    ```bash
-   cd backend
-   npm start
+   npm run backend
    ```
 
-## 🔐 Environment Configuration
+The frontend will be available at `http://localhost:5173/`
+The backend API will be available at `http://localhost:8080/`
 
-### Required Environment Variables
+## 🚀 Production Deployment
 
-GrantFlow requires several environment variables to run properly. These should be configured in a `.env` file in the root directory.
+### Recommended: Vercel + Railway Architecture
 
-#### Backend Variables
-- `ANYA_ADMIN_TOKEN` - Admin authentication token (⚠️ **Must be a strong, random value**)
-- `PORT` - Backend server port (default: 4000)
-- `CORS_ORIGIN` - Allowed CORS origin for API requests
+For modern, scalable production deployments, we recommend:
 
-#### Frontend Variables
-- `VITE_API_PROXY_TARGET` - Backend API URL for Vite proxy
+**Frontend:** Vercel (optimized for React/Vite apps)
+**Backend:** Railway (modern backend hosting)
+**CDN/DNS:** Cloudflare (free tier available)
 
-#### Optional Variables
-- `OPENAI_API_KEY` - For AI-powered features (if enabled)
-- Database connection strings (if using a database)
+📖 **Complete Migration Guide:** [`docs/DNS_MIGRATION.md`](docs/DNS_MIGRATION.md)
+📋 **Pre-flight Checklist:** [`docs/VERCEL_DOMAIN_CHECKLIST.md`](docs/VERCEL_DOMAIN_CHECKLIST.md)
+🚀 **Quick Reference:** [`DEPLOYMENT_PATH2.md`](DEPLOYMENT_PATH2.md)
 
-### 🔒 Security Best Practices
+**Benefits:**
+- ✅ Zero server maintenance
+- ✅ Automatic SSL/HTTPS
+- ✅ Global CDN distribution
+- ✅ Auto-scaling
+- ✅ Easy rollbacks
+- ✅ Built-in monitoring
+- ✅ Cost-effective (pay only for usage)
 
-**CRITICAL:** Never commit secrets to version control!
+### Architecture Overview
 
-1. **Always use `.env` for local development**
-   - Your `.env` file is automatically ignored by git
-   - Use `.env.example` as a template (safe to commit)
+```
+GoDaddy Domain (axiombiolabs.org)
+           ↓
+   Cloudflare DNS + CDN
+           ↓
+   Origin Rules (Path-based routing)
+   ├── /grantflow/* → Vercel (Frontend Static Files)
+   └── /api/* → Railway (Backend API)
+```
 
-2. **Generate strong tokens**
-   ```bash
-   # Example: Generate a secure random token
-   openssl rand -hex 32
-   ```
+### Legacy: Digital Ocean Deployment
 
-3. **Rotate exposed secrets immediately**
-   - If you accidentally expose an API key, rotate it immediately
-   - Check your git history for accidentally committed secrets
-   - Review access logs for unauthorized usage
+For self-hosted deployments on Digital Ocean with Nginx:
 
-4. **Use different secrets for each environment**
-   - Development, staging, and production should have unique credentials
+⚠️ **LEGACY OPTION**: This deployment method is no longer recommended for new deployments.
 
-5. **Audit your configuration regularly**
-   ```bash
-   # Check that .env is in .gitignore
-   git check-ignore .env
-   
-   # Search for accidentally committed secrets (if you have git-secrets)
-   git secrets --scan
-   ```
+📖 **Legacy Guide:** [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
 
-### 📋 Environment Setup Checklist
+### Production Checklist
 
-- [ ] `.env` file created from `.env.example`
-- [ ] All placeholder values replaced with real credentials
-- [ ] Strong, random token generated for `ANYA_ADMIN_TOKEN`
-- [ ] Verified `.env` is in `.gitignore`
-- [ ] Confirmed no secrets in git history
-- [ ] Different credentials for dev/staging/production
+Before going live:
+- [ ] Environment variables configured for production
+- [ ] Strong, random `ANYA_ADMIN_TOKEN` generated (`openssl rand -hex 32`)
+- [ ] CORS origins set to production domain(s)
+- [ ] SSL/TLS certificates configured
+- [ ] DNS records configured in Cloudflare
+- [ ] Cloudflare Origin Rules set up
+- [ ] Health checks passing
+- [ ] Monitoring and alerting configured
+
+## 🗺️ Feature Roadmap
+
+GrantFlow is actively under development with a phased approach to reach full feature parity with enterprise grant management platforms.
+
+### Current Status (v0.1 - Foundation)
+
+**✅ Completed:**
+- Basic React frontend with modern UI components
+- Express backend API framework  
+- SQLite database with grant schema
+- Document parser infrastructure (PDF, DOCX, OCR)
+- ANYA AI chat interface
+- Authentication stub (admin token)
+- Railway + Vercel deployment configuration
+
+**📊 Feature Parity:** ~27% complete (see [`docs/FEATURE_PARITY.md`](docs/FEATURE_PARITY.md))
+
+### Development Phases
+
+#### Phase 1: User Foundation (Weeks 1-6)
+- [ ] User registration and authentication (JWT)
+- [ ] User profile management
+- [ ] Advanced grant search and filtering
+- [ ] Bookmark and basic tracking
+
+**Goal:** Users can search, discover, and track grants
+
+#### Phase 2: Core Grant Management (Weeks 7-12)
+- [ ] Application status tracking workflow
+- [ ] Email notification system
+- [ ] Deadline reminders
+- [ ] Personal dashboard with real metrics
+
+**Goal:** Users can manage entire grant application lifecycle
+
+#### Phase 3: Intelligence & Automation (Weeks 13-20)
+- [ ] Enhanced ANYA with grant-specific knowledge
+- [ ] Grant recommendation engine
+- [ ] Eligibility matching system
+- [ ] Advanced document extraction
+
+**Goal:** AI-powered assistance throughout process
+
+#### Phase 4: External Integrations (Weeks 21-28)
+- [ ] Grants.gov API integration
+- [ ] Foundation database connections
+- [ ] Local government grant crawlers
+- [ ] Unified grant ingestion pipeline
+
+**Goal:** Comprehensive grant database from multiple sources
+
+#### Phase 5: Application Workflow (Weeks 29-36)
+- [ ] Document library and management
+- [ ] Application form builder
+- [ ] Pre-fill from user profile
+- [ ] Application submission tracking
+
+**Goal:** Complete application lifecycle management
+
+#### Phase 6: Analytics & Premium (Weeks 37-44)
+- [ ] Enhanced dashboard and reporting
+- [ ] Subscription tiers (Free, Pro, Team)
+- [ ] Payment integration (Stripe)
+- [ ] Team collaboration features
+
+**Goal:** Production-ready, revenue-generating product
+
+#### Phase 7: Production Hardening (Weeks 45-48)
+- [ ] Comprehensive monitoring (Sentry, logging)
+- [ ] Automated backups and disaster recovery
+- [ ] Security hardening (OWASP compliance)
+- [ ] Complete API documentation
+
+**Goal:** Enterprise-grade reliability and security
+
+### Detailed Documentation
+
+📖 **Feature Comparison:** [`docs/FEATURE_PARITY.md`](docs/FEATURE_PARITY.md)
+🗓️ **Development Timeline:** [`docs/DEVELOPMENT_ROADMAP.md`](docs/DEVELOPMENT_ROADMAP.md)
+🎨 **UI Architecture:** [`docs/UI_ARCHITECTURE.md`](docs/UI_ARCHITECTURE.md)
+📡 **Backend API:** [`backend/README.md`](backend/README.md)
+
+### Target: v1.0 Production Release
+
+**Timeline:** 48 weeks (1 year from start)
+**Feature Parity:** 95%+ complete
+**Status:** Production-ready, publicly launchable
+
+## 📁 Project Structure
+
+```
+GrantFlow/
+├── backend/                    # Backend API server
+│   ├── anya/                  # ANYA AI assistant
+│   ├── audit/                 # Audit logging
+│   ├── crawlers/              # Grant data crawlers
+│   ├── data/                  # Database and data files
+│   ├── db/                    # Database schema and utilities
+│   ├── middleware/            # Express middleware
+│   ├── parser/                # Document processing
+│   │   ├── text/             # PDF, DOCX, OCR parsers
+│   │   └── extract/          # Field extraction logic
+│   ├── routes/                # API route handlers
+│   ├── services/              # Business logic services
+│   ├── storage/               # File storage utilities
+│   └── server.js              # Backend entry point
+├── docs/                      # Documentation
+│   ├── DNS_MIGRATION.md       # Vercel + Railway migration guide
+│   ├── VERCEL_DOMAIN_CHECKLIST.md  # Pre-migration checklist
+│   ├── FEATURE_PARITY.md      # Feature comparison analysis
+│   ├── DEVELOPMENT_ROADMAP.md # Phased development plan
+│   ├── UI_ARCHITECTURE.md     # Frontend architecture guide
+│   ├── DEPLOYMENT.md          # Legacy Digital Ocean guide
+│   └── GITHUB_SECRETS.md      # GitHub secrets configuration
+├── src/                       # Frontend application
+│   ├── components/            # React components
+│   │   ├── common/           # Reusable UI components
+│   │   ├── layout/           # Layout components
+│   │   └── grants/           # Grant-specific components
+│   ├── pages/                 # Page-level components
+│   ├── hooks/                 # Custom React hooks
+│   ├── contexts/              # React Context providers
+│   ├── api/                   # API client utilities
+│   ├── utils/                 # Utility functions
+│   ├── App.jsx                # Root component with routing
+│   └── main.jsx               # Application entry point
+├── public/                    # Static assets
+├── scripts/                   # Build and deployment scripts
+├── nginx/                     # Nginx configuration (legacy)
+├── systemd/                   # Systemd service files (legacy)
+├── .env.example               # Environment variables template
+├── DEPLOYMENT_PATH2.md        # Vercel + Railway quick reference
+├── package.json               # Dependencies and scripts
+├── vite.config.ts             # Vite configuration
+└── tailwind.config.js         # Tailwind CSS configuration
+```
 
 ## 🛠️ Development
-
-### Tech Stack
-
-- **Frontend:** React + TypeScript + Vite
-- **Styling:** Tailwind CSS
-- **Backend:** Node.js (Express)
-- **Build Tool:** Vite with HMR (Hot Module Replacement)
 
 ### Available Scripts
 
 ```bash
-# Start development server
+# Start frontend development server
 npm run dev
 
-# Build for production
+# Start backend server
+npm run backend
+
+# Start both frontend and backend
+npm run dev:full
+
+# Build frontend for production
 npm run build
 
 # Preview production build
@@ -333,104 +303,47 @@ npm run preview
 npm run lint
 ```
 
-## 📦 Building for Production
+## 🔐 Environment Configuration
 
-```bash
-# Create optimized production build
-npm run build
+### Required Environment Variables
 
-# The build output will be in the `dist` directory
+#### Backend Variables
+```env
+ANYA_ADMIN_TOKEN=<secure-random-token>  # Generate with: openssl rand -hex 32
+PORT=8080                                # Backend server port
+CORS_ORIGIN=http://localhost:5173       # Frontend URL for CORS
+NODE_ENV=development                     # Environment
 ```
 
-**Before deploying:**
-- Ensure all environment variables are properly configured on your hosting platform
-- Use production-grade secrets (not development values)
-- Enable HTTPS for all production deployments
-- Set appropriate CORS origins
-
-## 🚀 Production Deployment
-
-For deploying GrantFlow to a production environment (Digital Ocean, AWS, etc.), see the comprehensive deployment guide:
-
-**[📘 Production Deployment Guide](docs/DEPLOYMENT.md)**
-
-The deployment guide covers:
-- Digital Ocean server setup
-- Cloudflare and DNS configuration
-- Nginx reverse proxy configuration
-- SSL/TLS certificate setup
-- Backend service configuration with systemd
-- Automated deployment scripts
-- Troubleshooting common issues
-- Health checks and monitoring
-
-### Quick Deploy
-
-For automated deployment on your production server:
-
-```bash
-# Make the deployment script executable
-chmod +x scripts/deploy-production.sh
-
-# Run the deployment
-./scripts/deploy-production.sh
+#### Optional Variables
+```env
+OPENAI_API_KEY=<your-api-key>           # For AI features
+DATABASE_URL=./backend/data/grantflow.db # Database path
 ```
 
-### Production Checklist
+### 🔒 Security Best Practices
 
-Before going live, ensure:
-- [ ] Environment variables configured (`.env.production.example` → `.env`)
-- [ ] Strong, random `ANYA_ADMIN_TOKEN` generated
-- [ ] CORS origins set to production domain(s)
-- [ ] SSL/TLS certificates installed
-- [ ] Nginx configured and running
-- [ ] Backend systemd service enabled
-- [ ] Firewall rules configured (ports 80, 443, 22)
-- [ ] DNS records pointing to your server
-- [ ] Health checks passing
+**CRITICAL:** Never commit secrets to version control!
 
-### Production Architecture
+1. **Always use `.env` for local development**
+   - Your `.env` file is automatically ignored by git
+   - Use `.env.example` as a template
 
-```
-GoDaddy Domain → Cloudflare CDN → Digital Ocean Server
-                                           ↓
-                                    Nginx (Reverse Proxy)
-                                    ├── /grantflow/* → Frontend (Static)
-                                    └── /grantflow/api/* → Backend (:4000)
-```
+2. **Generate strong tokens**
+   ```bash
+   # Generate a secure random token
+   openssl rand -hex 32
+   ```
 
-## 🧪 React + Vite Configuration
+3. **Use different secrets for each environment**
+   - Development, staging, and production should have unique credentials
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
-
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc/tree/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
-
-### Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      tseslint.configs.recommendedTypeChecked,
-      // Or for stricter rules:
-      // tseslint.configs.strictTypeChecked,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-    },
-  },
-])
-```
+4. **Environment Setup Checklist**
+   - [ ] `.env` file created from `.env.example`
+   - [ ] All placeholder values replaced
+   - [ ] Strong token generated for `ANYA_ADMIN_TOKEN`
+   - [ ] Verified `.env` is in `.gitignore`
+   - [ ] Different credentials for dev/staging/production
 
 ## 🤝 Contributing
 
@@ -441,10 +354,6 @@ export default defineConfig([
 5. Open a Pull Request
 
 **Security Note:** Never include secrets or API keys in your commits!
-
-## 📄 License
-
-This project is licensed under the MIT License.
 
 ## 🆘 Troubleshooting
 
@@ -461,12 +370,41 @@ This project is licensed under the MIT License.
 
 **Build failures:**
 - Clear node_modules and reinstall: `rm -rf node_modules && npm install`
-- Check for TypeScript errors: `npm run type-check` (if configured)
+- Check for TypeScript errors with build
+
+**Backend not starting:**
+- Verify all required environment variables are set
+- Check backend logs for error messages
+- Ensure port 8080 is available
+
+## 📚 Documentation
+
+- [`README.md`](README.md) - This file (project overview)
+- [`backend/README.md`](backend/README.md) - Backend API documentation
+- [`docs/DNS_MIGRATION.md`](docs/DNS_MIGRATION.md) - Vercel + Railway deployment
+- [`docs/FEATURE_PARITY.md`](docs/FEATURE_PARITY.md) - Feature comparison
+- [`docs/DEVELOPMENT_ROADMAP.md`](docs/DEVELOPMENT_ROADMAP.md) - Development plan
+- [`docs/UI_ARCHITECTURE.md`](docs/UI_ARCHITECTURE.md) - Frontend architecture
+- [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) - Legacy deployment guide
 
 ## 🔗 Resources
 
 - [Vite Documentation](https://vitejs.dev/)
 - [React Documentation](https://react.dev/)
 - [TypeScript Documentation](https://www.typescriptlang.org/)
-- [OWASP Secrets Management](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html)
-- [GitHub Secret Scanning](https://docs.github.com/en/code-security/secret-scanning/about-secret-scanning)
+- [Tailwind CSS Documentation](https://tailwindcss.com/)
+- [Express.js Documentation](https://expressjs.com/)
+
+## 📄 License
+
+Copyright © 2024 Axiom BioLabs. All rights reserved.
+
+## 🆘 Support
+
+For questions or issues:
+- **GitHub Issues:** https://github.com/buckeye7066/GrantFlow/issues
+- **Email:** support@axiombiolabs.org
+
+---
+
+**Built with ❤️ by Axiom BioLabs**

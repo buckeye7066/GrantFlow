@@ -1,6 +1,12 @@
-# Production Deployment Guide
+# Legacy Deployment Guide (Digital Ocean)
+
+> ⚠️ **LEGACY DOCUMENTATION**: This deployment method is no longer recommended for new deployments. Please use the Vercel + Railway architecture instead. See [`docs/DNS_MIGRATION.md`](./DNS_MIGRATION.md) for the recommended deployment approach.
 
 This guide provides step-by-step instructions for deploying GrantFlow to a Digital Ocean droplet with Nginx, behind Cloudflare CDN, using a GoDaddy domain.
+
+**Recommended Alternative:** For new deployments, use the modern Vercel (frontend) + Railway (backend) architecture which offers better performance, easier maintenance, and automatic scaling. See:
+- [`docs/DNS_MIGRATION.md`](./DNS_MIGRATION.md) - Complete migration guide
+- [`DEPLOYMENT_PATH2.md`](../DEPLOYMENT_PATH2.md) - Quick reference for Vercel + Railway
 
 ## Architecture Overview
 

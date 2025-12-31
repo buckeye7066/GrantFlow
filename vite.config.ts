@@ -1,14 +1,32 @@
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
+
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
-  const proxyTarget = env.VITE_API_PROXY_TARGET || 'http://localhost:4000'
-  const basePath = env.VITE_BASE_PATH || (mode === 'production' ? '/grantflow/' : '/')
+  const proxyTarget = env.VITE_API_PROXY_TARGET || 'http://localhost:8080'
+  const assetBase = env.VITE_ASSET_BASE || '/'
 
   return {
-    base: basePath,
+    base: assetBase,
     plugins: [react()],
+    resolve: {
+      alias: {
+        '@': path.resolve(__dirname, 'src'),
+      },
+      extensions: ['.mjs', '.js', '.jsx', '.ts', '.tsx', '.json'],
+    },
+    optimizeDeps: {
+      esbuildOptions: {
+        loader: {
+          '.js': 'jsx',
+        },
+      },
+    },
     server: {
       proxy: {
         '/api': {
@@ -16,6 +34,7 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
         },
       },
+      allowedHosts: true,
     },
     build: {
       sourcemap: true,

@@ -1,9 +1,26 @@
 # GrantFlow Path 2 Deployment (Vercel + Railway + Cloudflare)
 
+**Status:** ✅ Recommended Production Deployment Path
+
 ## Goal
 Serve the app at `https://www.axiombiolabs.org/grantflow` with:
 - Frontend (Vercel) under `/grantflow/*`
 - Backend (Railway) under `/api/*`
+
+## DNS Configuration Status
+
+✅ **Completed Steps:**
+- Cloudflare nameservers configured in GoDaddy
+- SSL/TLS encryption enabled (Full Strict mode)
+- Basic DNS records in place
+
+⚠️ **Pending Configuration:**
+- Cloudflare Origin Rules for path-based routing
+- Vercel deployment and domain verification
+- Railway service deployment and environment setup
+
+📖 **For detailed migration guide:** See [`docs/DNS_MIGRATION.md`](docs/DNS_MIGRATION.md)
+📋 **Pre-migration checklist:** See [`docs/VERCEL_DOMAIN_CHECKLIST.md`](docs/VERCEL_DOMAIN_CHECKLIST.md)
 
 ## 1) Vercel
 - Framework: Vite

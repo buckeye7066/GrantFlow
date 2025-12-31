@@ -1,20 +1,15 @@
 {
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "/grantflow",
+      "permanent": false
+    }
+  ],
   "rewrites": [
     {
-      "source": "/api/:path*",
-      "destination": "https://grantflow-production.up.railway.app/api/:path*"
-    },
-    {
-      "source": "/grantflow/api/:path*",
-      "destination": "https://grantflow-production.up.railway.app/api/:path*"
-    },
-    {
       "source": "/grantflow",
-      "destination": "/grantflow/"
-    },
-    {
-      "source": "/grantflow/assets/:path*",
-      "destination": "/assets/:path*"
+      "destination": "/index.html"
     },
     {
       "source": "/grantflow/:path*",
