@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import Layout from "./Layout.jsx";
 
 import Dashboard from "./Dashboard";
@@ -77,6 +79,23 @@ import AuthCallback from "./AuthCallback";
 
 import { BrowserRouter as Router, Route, Routes, useLocation, Navigate } from 'react-router-dom';
 import { useAuthStore } from "@/stores/authStore";
+
+function EnsureQueryClientProvider({ children }) {
+    const [fallbackClient] = useState(() => new QueryClient());
+    let hasClient = true;
+
+    try {
+        useQueryClient();
+    } catch (error) {
+        hasClient = false;
+    }
+
+    if (!hasClient) {
+        return <QueryClientProvider client={fallbackClient}>{children}</QueryClientProvider>;
+    }
+
+    return children;
+}
 
 const PAGES = {
     
@@ -189,8 +208,9 @@ function LayoutRoutes() {
     }
 
     return (
-        <Layout currentPageName={currentPage}>
-            <Routes>
+        <EnsureQueryClientProvider>
+            <Layout currentPageName={currentPage}>
+                <Routes>
 
                 <Route path="/" element={<Dashboard />} />
 
@@ -273,10 +293,11 @@ function LayoutRoutes() {
 
                 <Route path="/BillingSheet" element={<BillingSheet />} />
 
-                <Route path="/OrganizationProfile" element={<OrganizationProfile />} />
+                    <Route path="/OrganizationProfile" element={<OrganizationProfile />} />
 
-            </Routes>
-        </Layout>
+                </Routes>
+            </Layout>
+        </EnsureQueryClientProvider>
     );
 }
 
