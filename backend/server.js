@@ -28,6 +28,7 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@grantflow.app';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const uploadsDir = join(__dirname, '..', 'uploads');
+const distPath = join(__dirname, '..', 'dist');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -38,7 +39,8 @@ const corsOrigins = process.env.CORS_ORIGIN?.split(',') || [
   'http://localhost:5173',
   'http://localhost:3000',
   'https://grant-flow-three.vercel.app',
-  'https://app.axiombiolabs.org'
+  'https://app.axiombiolabs.org',
+  'https://grantflow-production.up.railway.app'
 ];
 
 app.use(cors({
@@ -57,6 +59,9 @@ try {
   console.warn('Failed to create uploads directory:', error);
 }
 app.use('/uploads', express.static(uploadsDir));
+
+// Serve static files from Vite build
+app.use(express.static(distPath));
 
 // Initialize database
 const dataDir = join(__dirname, 'data');
@@ -437,6 +442,11 @@ app.get('/api/pipeline/stats', (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+// Serve React app for all non-API routes (SPA fallback)
+app.get('*', (req, res) => {
+  res.sendFile(join(distPath, 'index.html'));
 });
 
 // Error handling
