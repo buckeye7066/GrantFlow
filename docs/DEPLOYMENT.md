@@ -1,41 +1,36 @@
 # Production Deployment Guide
 
-This guide provides step-by-step instructions for deploying GrantFlow to a Digital Ocean droplet with Nginx, behind Cloudflare CDN, using a GoDaddy domain.
+This guide provides step-by-step instructions for deploying GrantFlow to a Digital Ocean droplet with Nginx.
 
 ## Architecture Overview
 
 ```
-GoDaddy Domain (axiombiolabs.org)
-           ↓
-   Cloudflare CDN (SSL/CDN)
-           ↓
 Digital Ocean Droplet (Ubuntu/Debian)
-           ↓
-    Nginx (Reverse Proxy)
-    ├── /grantflow/* → Static Files (/var/www/html/grantflow/)
-    └── /grantflow/api/* → Backend (localhost:4000)
+            ↓
+     Nginx (Reverse Proxy)
+     ├── /grantflow/* → Static Files (/var/www/html/grantflow/)
+     └── /grantflow/api/* → Backend (localhost:4000)
 ```
+
+**Note:** For modern deployments, we recommend using Vercel for frontend and Railway for backend. See [`VERCEL_RAILWAY_DEPLOYMENT.md`](VERCEL_RAILWAY_DEPLOYMENT.md) for the recommended cloud deployment approach.
 
 ## Prerequisites
 
 - Digital Ocean droplet running Ubuntu 20.04+ or Debian 11+
 - Root or sudo access to the server
-- Domain configured in GoDaddy and Cloudflare
 - Node.js 16+ installed on the server
 - Nginx installed on the server
 
 ## Table of Contents
 
 1. [Server Setup](#server-setup)
-2. [DNS Configuration](#dns-configuration)
-3. [Cloudflare Configuration](#cloudflare-configuration)
-4. [SSL Certificate Setup](#ssl-certificate-setup)
-5. [Backend Deployment](#backend-deployment)
-6. [Frontend Deployment](#frontend-deployment)
-7. [Nginx Configuration](#nginx-configuration)
-8. [Health Checks](#health-checks)
-9. [Troubleshooting](#troubleshooting)
-10. [Maintenance](#maintenance)
+2. [SSL Certificate Setup](#ssl-certificate-setup)
+3. [Backend Deployment](#backend-deployment)
+4. [Frontend Deployment](#frontend-deployment)
+5. [Nginx Configuration](#nginx-configuration)
+6. [Health Checks](#health-checks)
+7. [Troubleshooting](#troubleshooting)
+8. [Maintenance](#maintenance)
 
 ---
 
@@ -77,89 +72,11 @@ sudo ufw status
 
 ---
 
-## 2. DNS Configuration
+## 2. SSL Certificate Setup
 
-### GoDaddy DNS Settings
+### Using Let's Encrypt
 
-Configure the following DNS records in your GoDaddy domain management:
-
-**Option 1: Using Cloudflare Nameservers (Recommended)**
-
-1. Log in to GoDaddy
-2. Navigate to DNS Management for `axiombiolabs.org`
-3. Update nameservers to Cloudflare's nameservers:
-   ```
-   NS1: abe.ns.cloudflare.com
-   NS2: joy.ns.cloudflare.com
-   ```
-   (Use the nameservers provided by Cloudflare)
-
-**Option 2: Using CNAME/A Records (Alternative)**
-
-If keeping GoDaddy nameservers:
-
-| Type  | Name | Value                | TTL  |
-|-------|------|----------------------|------|
-| A     | app  | YOUR_DROPLET_IP      | 600  |
-| CNAME | www  | app.axiombiolabs.org | 3600 |
-
----
-
-## 3. Cloudflare Configuration
-
-### Add Site to Cloudflare
-
-1. **Add Site:**
-   - Log in to Cloudflare
-   - Click "Add a site"
-   - Enter `axiombiolabs.org`
-   - Select Free plan
-
-2. **DNS Records:**
-   Add the following DNS records in Cloudflare:
-   
-   | Type | Name | Content         | Proxy Status | TTL  |
-   |------|------|-----------------|--------------|------|
-   | A    | app  | YOUR_DROPLET_IP | Proxied      | Auto |
-   | A    | www  | YOUR_DROPLET_IP | Proxied      | Auto |
-
-3. **SSL/TLS Settings:**
-   - Go to SSL/TLS → Overview
-   - Select **"Full"** or **"Full (strict)"** encryption mode
-   - Enable "Always Use HTTPS"
-
-4. **Additional Settings:**
-   - **Speed → Auto Minify:** Enable HTML, CSS, JS
-   - **Security → Security Level:** Medium
-   - **Network → HTTP/2:** Enabled
-   - **Edge Certificates → Always Use HTTPS:** Enabled
-
----
-
-## 4. SSL Certificate Setup
-
-### Option 1: Cloudflare SSL (Recommended)
-
-When using Cloudflare proxy (orange cloud), Cloudflare handles SSL termination. You still need a certificate on your origin server:
-
-```bash
-# Install Cloudflare Origin Certificate
-sudo mkdir -p /etc/nginx/ssl
-
-# Create origin certificate in Cloudflare dashboard:
-# SSL/TLS → Origin Server → Create Certificate
-# Save the certificate and key to:
-sudo nano /etc/nginx/ssl/cloudflare-origin.crt
-sudo nano /etc/nginx/ssl/cloudflare-origin.key
-
-# Set proper permissions
-sudo chmod 600 /etc/nginx/ssl/cloudflare-origin.key
-sudo chmod 644 /etc/nginx/ssl/cloudflare-origin.crt
-```
-
-### Option 2: Let's Encrypt (Alternative)
-
-If not using Cloudflare proxy:
+For self-hosted deployments:
 
 ```bash
 # Obtain Let's Encrypt certificate
@@ -171,7 +88,7 @@ sudo systemctl status certbot.timer
 
 ---
 
-## 5. Backend Deployment
+## 3. Backend Deployment
 
 ### Clone Repository
 
@@ -243,7 +160,7 @@ curl http://localhost:4000/api/health
 
 ---
 
-## 6. Frontend Deployment
+## 4. Frontend Deployment
 
 ### Build Frontend
 
@@ -271,7 +188,7 @@ sudo chmod -R 755 /var/www/html/grantflow
 
 ---
 
-## 7. Nginx Configuration
+## 5. Nginx Configuration
 
 ### Configure Nginx
 
@@ -301,7 +218,7 @@ sudo tail -f /var/log/nginx/error.log
 
 ---
 
-## 8. Health Checks
+## 6. Health Checks
 
 ### Backend Health Check
 
@@ -340,7 +257,7 @@ sudo tail -f /var/log/nginx/access.log
 
 ---
 
-## 9. Troubleshooting
+## 7. Troubleshooting
 
 ### 500 Internal Server Error
 
@@ -451,20 +368,17 @@ sudo systemctl restart grantflow-backend
 
 ### SSL Certificate Issues
 
-**For Cloudflare Origin Certificate:**
+**For Let's Encrypt:**
 ```bash
 # Verify certificate files exist
-sudo ls -la /etc/nginx/ssl/
+sudo ls -la /etc/letsencrypt/live/app.axiombiolabs.org/
 
 # Check certificate validity
-sudo openssl x509 -in /etc/nginx/ssl/cloudflare-origin.crt -noout -dates
+sudo openssl x509 -in /etc/letsencrypt/live/app.axiombiolabs.org/fullchain.pem -noout -dates
 
 # Test nginx SSL config
 sudo nginx -t
-```
 
-**For Let's Encrypt:**
-```bash
 # Renew certificate manually
 sudo certbot renew
 
@@ -490,7 +404,7 @@ sudo systemctl reload nginx
 
 ---
 
-## 10. Maintenance
+## 8. Maintenance
 
 ### Updating the Application
 
@@ -622,7 +536,7 @@ chmod +x /opt/grantflow/scripts/deploy-production.sh
 - [ ] Strong `ANYA_ADMIN_TOKEN` generated and set
 - [ ] `.env` file has restricted permissions (600)
 - [ ] Firewall configured (UFW)
-- [ ] SSL/TLS enabled (via Cloudflare or Let's Encrypt)
+- [ ] SSL/TLS enabled (via Let's Encrypt)
 - [ ] CORS restricted to production domains only
 - [ ] Backend only accessible via localhost (not exposed)
 - [ ] Regular security updates applied
@@ -643,6 +557,5 @@ For issues or questions:
 ## Additional Resources
 
 - [Nginx Documentation](https://nginx.org/en/docs/)
-- [Cloudflare Origin Certificates](https://developers.cloudflare.com/ssl/origin-configuration/origin-ca/)
 - [Digital Ocean Tutorials](https://www.digitalocean.com/community/tutorials)
 - [Let's Encrypt Documentation](https://letsencrypt.org/docs/)

@@ -6,7 +6,7 @@ Mission: Eliminate all errors preventing GrantFlow, the “Anya” agent, and al
 
 Boundaries (Non-Negotiable)
 
-1. No credentials in chat. Do not request or store secrets in the prompt. If a step needs auth, instruct me exactly what to run locally or in CI using my existing secret stores (GitHub Actions/DO/Railway/Vercel/Cloudflare env vars).
+1. No credentials in chat. Do not request or store secrets in the prompt. If a step needs auth, instruct me exactly what to run locally or in CI using my existing secret stores (GitHub Actions/DO/Railway/Vercel env vars).
 
 
 2. No “workarounds” that hide failures. No try/catch that swallows errors, no disabling lint/tests, no “ignore this for now.”
@@ -50,11 +50,9 @@ You may direct me to use:
 
 GitHub (PRs, Issues, Actions)
 
-Vercel (frontend deployments)
+Vercel (frontend deployments and DNS)
 
 Railway or DigitalOcean (backend deployment/runtime)
-
-Cloudflare (DNS/proxy/headers)
 
 Windows PowerShell (local commands)
 

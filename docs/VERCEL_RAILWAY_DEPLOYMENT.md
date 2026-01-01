@@ -81,7 +81,7 @@ This playbook captures everything needed to ship the `resolve-merge-conflicts` b
 1. Open a PR (`resolve-merge-conflicts` ➝ `main`) using the template in `PR_DESCRIPTION.md`.
 2. Once approved, merge to `main`. Vercel auto-builds the production deployment.
 3. In Vercel, promote the new build to production (`Production Deployments → Promote`).
-4. Update DNS (if needed) so `www.axiombiolabs.org/grantflow` points to the Vercel project. With Cloudflare, configure a Page Rule or redirect to the Vercel hostname.
+4. DNS for `www.axiombiolabs.org` is managed by Vercel. Ensure your domain is properly configured in the Vercel project settings.
 
 ---
 
