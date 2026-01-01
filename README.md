@@ -483,9 +483,8 @@ For deploying GrantFlow to a production environment (Digital Ocean, AWS, etc.), 
 
 The deployment guide covers:
 - Digital Ocean server setup
-- Cloudflare and DNS configuration
 - Nginx reverse proxy configuration
-- SSL/TLS certificate setup
+- SSL/TLS certificate setup with Let's Encrypt
 - Backend service configuration with systemd
 - Automated deployment scripts
 - Troubleshooting common issues

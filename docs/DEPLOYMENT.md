@@ -536,7 +536,7 @@ chmod +x /opt/grantflow/scripts/deploy-production.sh
 - [ ] Strong `ANYA_ADMIN_TOKEN` generated and set
 - [ ] `.env` file has restricted permissions (600)
 - [ ] Firewall configured (UFW)
-- [ ] SSL/TLS enabled (via Cloudflare or Let's Encrypt)
+- [ ] SSL/TLS enabled (via Let's Encrypt)
 - [ ] CORS restricted to production domains only
 - [ ] Backend only accessible via localhost (not exposed)
 - [ ] Regular security updates applied
