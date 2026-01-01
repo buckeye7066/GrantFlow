@@ -50,11 +50,9 @@ You may direct me to use:
 
 GitHub (PRs, Issues, Actions)
 
-Vercel (frontend deployments)
+Vercel (frontend deployments and DNS)
 
 Railway or DigitalOcean (backend deployment/runtime)
-
-Cloudflare (DNS/proxy/headers)
 
 Windows PowerShell (local commands)
 

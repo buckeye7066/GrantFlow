@@ -1,13 +1,15 @@
-# GrantFlow Infrastructure Guide (DigitalOcean, Nginx, Cloudflare, GoDaddy)
+# GrantFlow Infrastructure Guide (DigitalOcean, Nginx)
 
-This runbook complements the Railway + Vercel production checklist. It walks through bootstrapping a DigitalOcean Droplet, configuring Nginx as a reverse proxy, setting up Cloudflare for TLS / caching, and pointing a GoDaddy-managed domain at the stack. Use this guide when you need to self-host the backend (or an all-in-one stack) instead of Railway.
+This runbook complements the Railway + Vercel production checklist. It walks through bootstrapping a DigitalOcean Droplet and configuring Nginx as a reverse proxy for self-hosted deployments. Use this guide when you need to self-host the backend (or an all-in-one stack) instead of Railway.
 
 > **Prerequisites**
 >
 > - An already built GrantFlow bundle (`npm run build`) and/or the full repository
 > - `backend/data/grantflow.db` seeded with the 11 baseline profiles (`npm run seed:db`, `npm run seed:profiles -- --force`, `npm run check:profiles`)
-> - DigitalOcean, Cloudflare, and GoDaddy accounts with the necessary permissions
+> - DigitalOcean account with the necessary permissions
 > - SSH keys available on your workstation
+
+> **Note:** For modern cloud deployments, we recommend using Vercel for frontend and Railway for backend. This guide is for self-hosted scenarios where you need more control over the infrastructure.
 
 ---
 
@@ -133,40 +135,18 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-Once Cloudflare is configured (next section), use `certbot --nginx` or Cloudflare’s origin certificates to enable HTTPS. If you terminate TLS at Cloudflare “Full (strict)”, install the origin certificate on the droplet and update the server block to listen on port 443.
+To enable HTTPS, use Let's Encrypt:
+
+```bash
+sudo apt install certbot python3-certbot-nginx
+sudo certbot --nginx -d api.axiombiolabs.org
+```
+
+This will automatically configure SSL and update the Nginx configuration.
 
 ---
 
-## 4. Cloudflare Configuration
-
-1. **Add site**
-   - In Cloudflare, “Add a site” → enter your apex domain (e.g., `axiombiolabs.org`).
-   - Cloudflare scans existing DNS records. Accept or edit as needed.
-2. **Nameservers**
-   - Cloudflare provides two nameservers. Keep them handy—you’ll update GoDaddy shortly.
-3. **DNS records**
-   - `A` record for `api` pointing to the droplet IP (set proxy ON to route through Cloudflare).
-   - Optional `A` record for `app` if you serve the frontend from the droplet; otherwise use Vercel’s CNAME.
-   - `CNAME` record for `www` or `grantflow` pointing to Vercel (if applicable).
-4. **SSL/TLS**
-   - Set SSL mode to **Full (strict)**.
-   - Create an origin certificate for `api.axiombiolabs.org` and install it on the droplet (`/etc/ssl/cloudflare/`), updating Nginx to use the certificate and key.
-5. **Caching / security**
-   - Create a Page Rule or transform rule to cache static assets, leave `/api/*` un-cached.
-   - Enable Web Application Firewall (WAF) as needed.
-
----
-
-## 5. GoDaddy Domain Pointing to Cloudflare
-
-1. Sign in to GoDaddy → Domains → select your domain.
-2. Under “Nameservers”, choose “Change” → “Enter my own nameservers (advanced)”. Paste the two Cloudflare nameservers.
-3. Save changes. Propagation typically completes within a few minutes but can take up to 24 hours. Once propagated, all DNS is managed from Cloudflare.
-4. Verify with `dig api.axiombiolabs.org` or `nslookup` to ensure the Cloudflare nameservers are authoritative.
-
----
-
-## 6. Final Checks
+## 4. Final Checks
 
 1. **Backend health**
    ```bash
@@ -186,12 +166,12 @@ Once Cloudflare is configured (next section), use `certbot --nginx` or Cloudflar
    sudo tail -f /var/log/nginx/access.log
    ```
 5. **TLS**
-   - Confirm Cloudflare “padlock” is green.
+   - Confirm SSL certificate is valid.
    - Run [https://www.ssllabs.com/ssltest/](https://www.ssllabs.com/ssltest/) against `api.axiombiolabs.org` for a final sanity check.
 
 ---
 
-## 7. Operational Tips
+## 5. Operational Tips
 
 | Task | Command |
 | --- | --- |

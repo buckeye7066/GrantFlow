@@ -138,7 +138,7 @@ See `package.json` for the full script catalogue.
 ## Documentation & References
 
 - [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) — Production checklist, env vars, seeding, QA, monitoring.
-- [`docs/INFRASTRUCTURE_GUIDE.md`](docs/INFRASTRUCTURE_GUIDE.md) — DigitalOcean droplet setup, Nginx proxy, Cloudflare TLS, GoDaddy DNS.
+- [`docs/INFRASTRUCTURE_GUIDE.md`](docs/INFRASTRUCTURE_GUIDE.md) — DigitalOcean droplet setup, Nginx proxy configuration.
 - [`docs/AUTH_FRONTEND_PLAN.md`](docs/AUTH_FRONTEND_PLAN.md) — Historical context for the authentication UX overhaul.
 - `scripts/` — Smoke tests (`smoke-login.mjs`, `smoke-auth-callback.mjs`) and database auditing (`check-profiles.mjs`).
 
@@ -245,39 +245,6 @@ npm run lint
      RewriteRule . /index.html [L]
    </IfModule>
    ```
-
-### Cloudflare Setup
-
-1. **Add Site to Cloudflare:**
-   - Log in to Cloudflare
-   - Add your domain
-   - Update nameservers at GoDaddy to Cloudflare's nameservers
-
-2. **Configure Caching Rules:**
-   - Go to Caching > Configuration
-   - Set Browser Cache TTL to "Respect Existing Headers"
-   - Enable "Always Online"
-
-3. **Page Rules for SPA:**
-   - Create a page rule for `yourdomain.com/*`
-   - Set Cache Level to "Cache Everything"
-   - Edge Cache TTL: 1 month
-   - Browser Cache TTL: 4 hours
-
-4. **Purge Cache After Updates:**
-   - Go to Caching > Configuration
-   - Click "Purge Everything" after deploying new versions
-   - Or use Cloudflare API for automated cache purging
-
-5. **Performance Optimizations:**
-   - Enable Auto Minify (JavaScript, CSS, HTML)
-   - Enable Brotli compression
-   - Enable HTTP/2 and HTTP/3
-
-6. **Security Settings:**
-   - Enable "Always Use HTTPS"
-   - Set SSL/TLS encryption mode to "Full" or "Full (strict)"
-   - Enable "Automatic HTTPS Rewrites"
 
 ## Project Structure
 
@@ -552,11 +519,11 @@ Before going live, ensure:
 ### Production Architecture
 
 ```
-GoDaddy Domain → Cloudflare CDN → Digital Ocean Server
-                                           ↓
-                                    Nginx (Reverse Proxy)
-                                    ├── /grantflow/* → Frontend (Static)
-                                    └── /grantflow/api/* → Backend (:4000)
+Vercel (Frontend) → www.axiombiolabs.org/grantflow
+Railway (Backend API) → grantflow-production.up.railway.app
+
+DNS: Managed by Vercel
+Routing: vercel.json handles /grantflow/* → Frontend, /api/* → Railway
 ```
 
 ## 🧪 React + Vite Configuration
