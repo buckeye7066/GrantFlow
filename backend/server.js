@@ -445,7 +445,11 @@ app.get('/api/pipeline/stats', (req, res) => {
 });
 
 // Serve React app for all non-API routes (SPA fallback)
-app.get('*', (req, res) => {
+app.get('*', (req, res, next) => {
+  // Skip API routes - let them fall through to 404 handler
+  if (req.path.startsWith('/api/')) {
+    return next();
+  }
   res.sendFile(join(distPath, 'index.html'));
 });
 
