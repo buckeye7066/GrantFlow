@@ -1,0 +1,78 @@
+[
+  {
+    "id": "scholarship-fafsa-access-oh",
+    "states": ["OH", "KY", "IN", "PA"],
+    "tags": ["first_generation", "low_income"],
+    "title": "FAFSA Completion Boost Award",
+    "sponsor": "Midwest Student Success Collaborative",
+    "description": "Scholarships for first-generation students who complete FAFSA by March 1 and enroll in an accredited two- or four-year institution within the region.",
+    "amount_min": 2000,
+    "amount_max": 5000,
+    "deadline": "2025-03-01",
+    "application_url": "https://mwssc.org/fafsa-boost",
+    "categories": ["scholarship"],
+    "keywords": ["faFSA", "first-generation", "college"],
+    "eligibility_bullets": [
+      "Must be first-generation college student",
+      "FAFSA Student Aid Index below 6000",
+      "Minimum GPA 2.5"
+    ]
+  },
+  {
+    "id": "scholarship-commonapp-career",
+    "states": ["ALL"],
+    "tags": ["healthcare", "stem"],
+    "title": "CommonApp Allied Health Scholars",
+    "sponsor": "CommonApp Foundation",
+    "description": "Supports students entering allied health programs (nursing, occupational therapy, radiology) who submit CommonApp application essays focused on community health impact.",
+    "amount_min": 3000,
+    "amount_max": 7000,
+    "deadline": "2025-02-10",
+    "application_url": "https://commonapp.org/scholarships/allied-health",
+    "categories": ["scholarship"],
+    "keywords": ["healthcare", "commonapp", "nursing"],
+    "eligibility_bullets": [
+      "CommonApp submission with allied health program listed",
+      "Demonstrated volunteer experience in healthcare setting",
+      "Letter of recommendation from science or health teacher"
+    ]
+  },
+  {
+    "id": "scholarship-faith-based-ministry",
+    "states": ["ALL"],
+    "tags": ["faith_based", "clergy_family"],
+    "title": "Faith & Service Ministry Grant",
+    "sponsor": "National Faith Endowment Council",
+    "description": "Tuition support for seminary students, ministers pursuing continuing education, or dependents of licensed clergy enrolled in undergraduate programs.",
+    "amount_min": 1500,
+    "amount_max": 6000,
+    "deadline": "2025-04-15",
+    "application_url": "https://nfec.org/ministry-grants",
+    "categories": ["scholarship"],
+    "keywords": ["minister", "seminary", "faith"],
+    "eligibility_bullets": [
+      "Applicant must demonstrate active ministry or clergy household affiliation",
+      "Essay describing ministry goals (500-700 words)",
+      "Two letters of reference from faith community leaders"
+    ]
+  },
+  {
+    "id": "scholarship-oh-stem-campus",
+    "states": ["OH"],
+    "tags": ["stem", "campus_zip"],
+    "title": "Buckeye STEM Scholars Equipment Award",
+    "sponsor": "Ohio Science & Engineering Alliance",
+    "description": "Funds lab equipment, laptops, or research travel for Ohio students accepted into STEM programs. Priority given to students attending partner universities listed in parameters.",
+    "amount_min": 2500,
+    "amount_max": 8000,
+    "deadline": "2025-05-20",
+    "application_url": "https://osea.org/scholarships/stem-equipment",
+    "categories": ["scholarship"],
+    "keywords": ["stem", "equipment", "ohio"],
+    "eligibility_bullets": [
+      "Must be admitted to an Ohio STEM degree program for Fall 2025",
+      "Submit proof of acceptance letter and FAFSA confirmation",
+      "Provide faculty or counselor recommendation"
+    ]
+  }
+]

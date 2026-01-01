@@ -1,0 +1,1248 @@
+{
+  "profiles": [
+    {
+      "id": "profile-axiom-community-health",
+      "primary_type": "nonprofit",
+      "display_name": "Axiom Community Health Cooperative",
+      "status": "active",
+      "tags": [
+        "healthcare",
+        "rural",
+        "behavioral health"
+      ],
+      "avatar_url": null
+    },
+    {
+      "id": "profile-bright-trails-youth",
+      "primary_type": "nonprofit",
+      "display_name": "Bright Trails Youth Services",
+      "status": "active",
+      "tags": [
+        "youth",
+        "after-school",
+        "STEM"
+      ],
+      "avatar_url": null
+    },
+    {
+      "id": "profile-riverbend-veteran-housing",
+      "primary_type": "nonprofit",
+      "display_name": "Riverbend Veteran Housing Initiative",
+      "status": "active",
+      "tags": [
+        "veterans",
+        "housing"
+      ],
+      "avatar_url": null
+    },
+    {
+      "id": "profile-harper-family-support",
+      "primary_type": "family",
+      "display_name": "Harper Family Support Fund",
+      "status": "active",
+      "tags": [
+        "family stability",
+        "housing"
+      ],
+      "avatar_url": null
+    },
+    {
+      "id": "profile-northside-robotics",
+      "primary_type": "high_school_student",
+      "display_name": "Northside Robotics Scholars",
+      "status": "active",
+      "tags": [
+        "STEM",
+        "first-generation"
+      ],
+      "avatar_url": null
+    },
+    {
+      "id": "profile-camila-ortiz",
+      "primary_type": "college_student",
+      "display_name": "Camila Ortiz",
+      "status": "active",
+      "tags": [
+        "nursing",
+        "latina",
+        "first-generation"
+      ],
+      "avatar_url": null
+    },
+    {
+      "id": "profile-summit-adaptive-sports",
+      "primary_type": "organization",
+      "display_name": "Summit Adaptive Sports Alliance",
+      "status": "active",
+      "tags": [
+        "adaptive sports",
+        "disability inclusion"
+      ],
+      "avatar_url": null
+    },
+    {
+      "id": "profile-oak-street-early-learning",
+      "primary_type": "nonprofit",
+      "display_name": "Oak Street Early Learning Center",
+      "status": "active",
+      "tags": [
+        "early childhood",
+        "dual language"
+      ],
+      "avatar_url": null
+    },
+    {
+      "id": "profile-sierra-tribal-artisans",
+      "primary_type": "small_business",
+      "display_name": "Sierra Tribal Artisans Collaborative",
+      "status": "active",
+      "tags": [
+        "tribal enterprise",
+        "artisan training"
+      ],
+      "avatar_url": null
+    },
+    {
+      "id": "profile-greenline-food-coop",
+      "primary_type": "small_business",
+      "display_name": "Greenline Food Cooperative",
+      "status": "active",
+      "tags": [
+        "food access",
+        "cooperative"
+      ],
+      "avatar_url": null
+    },
+    {
+      "id": "profile-lakeside-recovery-alliance",
+      "primary_type": "medical_assistance",
+      "display_name": "Lakeside Recovery Alliance",
+      "status": "active",
+      "tags": [
+        "behavioral health",
+        "recovery",
+        "peer support"
+      ],
+      "avatar_url": null
+    }
+  ],
+  "sections": [
+    {
+      "profile_id": "profile-axiom-community-health",
+      "section_key": "basic_information",
+      "data": {
+        "full_name": "Axiom Community Health Cooperative",
+        "email": "hello@axiomhealth.org",
+        "phone": "615-555-2010",
+        "website": "https://axiomhealth.org",
+        "address": "125 Maple Street\nCookeville, TN 38501"
+      }
+    },
+    {
+      "profile_id": "profile-axiom-community-health",
+      "section_key": "demographics",
+      "data": {
+        "african_american": false,
+        "native_american": false
+      }
+    },
+    {
+      "profile_id": "profile-axiom-community-health",
+      "section_key": "family_life",
+      "data": {
+        "caregiver": true
+      }
+    },
+    {
+      "profile_id": "profile-axiom-community-health",
+      "section_key": "financial_information",
+      "data": {
+        "financial_need_level": "High",
+        "low_income": false,
+        "notes": "Bridge funding needed until HRSA renewal finalises."
+      }
+    },
+    {
+      "profile_id": "profile-axiom-community-health",
+      "section_key": "government_assistance",
+      "data": {
+        "medicaid_enrolled": true,
+        "snap_recipient": false,
+        "other_programs": "HRSA rural health clinic reimbursement."
+      }
+    },
+    {
+      "profile_id": "profile-axiom-community-health",
+      "section_key": "health_medical",
+      "data": {
+        "support_needs_level": "High",
+        "mental_health_condition": true
+      }
+    },
+    {
+      "profile_id": "profile-axiom-community-health",
+      "section_key": "location_focus",
+      "data": {
+        "rural_resident": true,
+        "appalachian_region": true,
+        "geographic_focus": "Upper Cumberland counties"
+      }
+    },
+    {
+      "profile_id": "profile-axiom-community-health",
+      "section_key": "military_service",
+      "data": {
+        "veteran": false
+      }
+    },
+    {
+      "profile_id": "profile-axiom-community-health",
+      "section_key": "narrative",
+      "data": {
+        "mission": "Expand mobile counseling and case management in Appalachian Tennessee.",
+        "primary_goal": "Deploy two additional mobile teams and onboard telehealth triage.",
+        "funding_amount_needed": "$700,000 for vehicles, clinicians, and remote monitoring."
+      }
+    },
+    {
+      "profile_id": "profile-axiom-community-health",
+      "section_key": "occupation",
+      "data": {
+        "nonprofit_employee": true,
+        "healthcare_worker": true
+      }
+    },
+    {
+      "profile_id": "profile-axiom-community-health",
+      "section_key": "organization_details",
+      "data": {
+        "organization_type": "Federally qualified health center",
+        "mission": "Keep rural families stable through integrated medical and counseling services."
+      }
+    },
+    {
+      "profile_id": "profile-axiom-community-health",
+      "section_key": "university_applications",
+      "data": {
+        "applications": []
+      }
+    },
+    {
+      "profile_id": "profile-bright-trails-youth",
+      "section_key": "basic_information",
+      "data": {
+        "full_name": "Bright Trails Youth Services",
+        "email": "info@brighttrails.org",
+        "phone": "303-555-1188",
+        "website": "https://brighttrails.org",
+        "address": "412 Juniper Avenue\nFort Collins, CO 80521"
+      }
+    },
+    {
+      "profile_id": "profile-bright-trails-youth",
+      "section_key": "demographics",
+      "data": {
+        "african_american": true,
+        "hispanic_latino": true
+      }
+    },
+    {
+      "profile_id": "profile-bright-trails-youth",
+      "section_key": "family_life",
+      "data": {
+        "single_parent": true,
+        "homeless": true
+      }
+    },
+    {
+      "profile_id": "profile-bright-trails-youth",
+      "section_key": "financial_information",
+      "data": {
+        "financial_need_level": "Moderate",
+        "low_income": false,
+        "notes": "Bridge financing required while municipal grant renews."
+      }
+    },
+    {
+      "profile_id": "profile-bright-trails-youth",
+      "section_key": "government_assistance",
+      "data": {
+        "medicaid_enrolled": false,
+        "other_programs": "21st Century Community Learning Centers partner."
+      }
+    },
+    {
+      "profile_id": "profile-bright-trails-youth",
+      "section_key": "health_medical",
+      "data": {
+        "support_needs_level": "Moderate"
+      }
+    },
+    {
+      "profile_id": "profile-bright-trails-youth",
+      "section_key": "location_focus",
+      "data": {
+        "urban_underserved": true,
+        "geographic_focus": "Fort Collins Title I schools"
+      }
+    },
+    {
+      "profile_id": "profile-bright-trails-youth",
+      "section_key": "military_service",
+      "data": {
+        "veteran": false
+      }
+    },
+    {
+      "profile_id": "profile-bright-trails-youth",
+      "section_key": "narrative",
+      "data": {
+        "mission": "Close STEM opportunity gaps for Black and Latino middle school youth.",
+        "primary_goal": "Deploy mobile labs and cover transportation for low-income students.",
+        "funding_amount_needed": "$180,000 for equipment, coaches, and bus contracts."
+      }
+    },
+    {
+      "profile_id": "profile-bright-trails-youth",
+      "section_key": "occupation",
+      "data": {
+        "nonprofit_employee": true,
+        "educator": true
+      }
+    },
+    {
+      "profile_id": "profile-bright-trails-youth",
+      "section_key": "organization_details",
+      "data": {
+        "organization_type": "Youth development nonprofit",
+        "mission": "Deliver bilingual STEM mentoring and outdoor leadership."
+      }
+    },
+    {
+      "profile_id": "profile-bright-trails-youth",
+      "section_key": "university_applications",
+      "data": {
+        "applications": []
+      }
+    },
+    {
+      "profile_id": "profile-camila-ortiz",
+      "section_key": "basic_information",
+      "data": {
+        "full_name": "Camila Ortiz",
+        "email": "camila.ortiz@email.com",
+        "phone": "971-555-3399",
+        "address": "1140 SE Alder Street Apt 3B\nPortland, OR 97214"
+      }
+    },
+    {
+      "profile_id": "profile-camila-ortiz",
+      "section_key": "demographics",
+      "data": {
+        "hispanic_latino": true,
+        "immigrant_status": "permanent_resident"
+      }
+    },
+    {
+      "profile_id": "profile-camila-ortiz",
+      "section_key": "family_life",
+      "data": {
+        "caregiver": true
+      }
+    },
+    {
+      "profile_id": "profile-camila-ortiz",
+      "section_key": "financial_information",
+      "data": {
+        "household_income": 28000,
+        "household_size": 2,
+        "low_income": true,
+        "financial_need_level": "High"
+      }
+    },
+    {
+      "profile_id": "profile-camila-ortiz",
+      "section_key": "government_assistance",
+      "data": {
+        "medicaid_enrolled": true,
+        "snap_recipient": true
+      }
+    },
+    {
+      "profile_id": "profile-camila-ortiz",
+      "section_key": "health_medical",
+      "data": {
+        "support_needs_level": "Low"
+      }
+    },
+    {
+      "profile_id": "profile-camila-ortiz",
+      "section_key": "location_focus",
+      "data": {
+        "urban_underserved": true,
+        "geographic_focus": "Portland community health clinics"
+      }
+    },
+    {
+      "profile_id": "profile-camila-ortiz",
+      "section_key": "military_service",
+      "data": {
+        "veteran": false
+      }
+    },
+    {
+      "profile_id": "profile-camila-ortiz",
+      "section_key": "narrative",
+      "data": {
+        "mission": "Provide bilingual nursing care in East Portland clinics.",
+        "primary_goal": "Complete BSN and pass NCLEX in 2025.",
+        "funding_amount_needed": "$24,000 for tuition, travel, and licensing fees."
+      }
+    },
+    {
+      "profile_id": "profile-camila-ortiz",
+      "section_key": "occupation",
+      "data": {
+        "healthcare_worker": true,
+        "healthcare_worker_type": "Certified nursing assistant"
+      }
+    },
+    {
+      "profile_id": "profile-camila-ortiz",
+      "section_key": "organization_details",
+      "data": {
+        "organization_type": "Individual applicant",
+        "mission": "Finish BSN and enter community health nursing."
+      }
+    },
+    {
+      "profile_id": "profile-camila-ortiz",
+      "section_key": "university_applications",
+      "data": {
+        "applications": [
+          {
+            "name": "Oregon Health & Science University School of Nursing",
+            "status": "planning",
+            "application_type": "regular_decision",
+            "institution_type": "public",
+            "acceptance_rate": 34,
+            "tuition": 17640,
+            "fafsa_code": "003210",
+            "application_fee": 75,
+            "test_optional": true,
+            "essay_required": true,
+            "rec_letters_required": 3,
+            "application_deadline": "2025-01-15",
+            "financial_aid_deadline": "2025-02-01",
+            "interests": [
+              "Community health nursing"
+            ],
+            "notes": "Seeking Nurse Corps scholarship eligibility."
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "profile-greenline-food-coop",
+      "section_key": "basic_information",
+      "data": {
+        "full_name": "Greenline Food Cooperative",
+        "email": "hello@greenlinecoop.org",
+        "phone": "313-555-9087",
+        "website": "https://greenlinecoop.org",
+        "address": "1450 Elmwood Street\nDetroit, MI 48207"
+      }
+    },
+    {
+      "profile_id": "profile-greenline-food-coop",
+      "section_key": "demographics",
+      "data": {
+        "african_american": true,
+        "lgbtq": true
+      }
+    },
+    {
+      "profile_id": "profile-greenline-food-coop",
+      "section_key": "family_life",
+      "data": {
+        "single_parent": true
+      }
+    },
+    {
+      "profile_id": "profile-greenline-food-coop",
+      "section_key": "financial_information",
+      "data": {
+        "financial_need_level": "High",
+        "low_income": true
+      }
+    },
+    {
+      "profile_id": "profile-greenline-food-coop",
+      "section_key": "government_assistance",
+      "data": {
+        "snap_recipient": true,
+        "other_programs": "Double Up Food Bucks incentive partner."
+      }
+    },
+    {
+      "profile_id": "profile-greenline-food-coop",
+      "section_key": "health_medical",
+      "data": {
+        "support_needs_level": "Moderate",
+        "chronic_illness": true
+      }
+    },
+    {
+      "profile_id": "profile-greenline-food-coop",
+      "section_key": "location_focus",
+      "data": {
+        "urban_underserved": true,
+        "geographic_focus": "Detroit east side Opportunity Zone"
+      }
+    },
+    {
+      "profile_id": "profile-greenline-food-coop",
+      "section_key": "military_service",
+      "data": {
+        "veteran": false
+      }
+    },
+    {
+      "profile_id": "profile-greenline-food-coop",
+      "section_key": "narrative",
+      "data": {
+        "mission": "Expand equitable grocery access and worker ownership in Detroit.",
+        "primary_goal": "Renovate expansion space, add cold storage, and grow mobile routes.",
+        "funding_amount_needed": "$520,000 for renovations, equipment, and vehicles."
+      }
+    },
+    {
+      "profile_id": "profile-greenline-food-coop",
+      "section_key": "occupation",
+      "data": {
+        "small_business_owner": true
+      }
+    },
+    {
+      "profile_id": "profile-greenline-food-coop",
+      "section_key": "organization_details",
+      "data": {
+        "organization_type": "Worker-owned grocery cooperative",
+        "mission": "Expand cooperative grocery access and mobile markets on Detroit's east side."
+      }
+    },
+    {
+      "profile_id": "profile-greenline-food-coop",
+      "section_key": "university_applications",
+      "data": {
+        "applications": []
+      }
+    },
+    {
+      "profile_id": "profile-harper-family-support",
+      "section_key": "basic_information",
+      "data": {
+        "full_name": "Tasha Harper household",
+        "email": "tasha.harper@example.com",
+        "phone": "901-555-7821",
+        "address": "278 Willow Crest Drive\nMemphis, TN 38109"
+      }
+    },
+    {
+      "profile_id": "profile-harper-family-support",
+      "section_key": "demographics",
+      "data": {
+        "african_american": true
+      }
+    },
+    {
+      "profile_id": "profile-harper-family-support",
+      "section_key": "family_life",
+      "data": {
+        "single_parent": true
+      }
+    },
+    {
+      "profile_id": "profile-harper-family-support",
+      "section_key": "financial_information",
+      "data": {
+        "household_income": 32000,
+        "household_size": 3,
+        "low_income": true,
+        "financial_need_level": "High"
+      }
+    },
+    {
+      "profile_id": "profile-harper-family-support",
+      "section_key": "government_assistance",
+      "data": {
+        "medicaid_enrolled": true,
+        "snap_recipient": true,
+        "tanf_recipient": true
+      }
+    },
+    {
+      "profile_id": "profile-harper-family-support",
+      "section_key": "health_medical",
+      "data": {
+        "support_needs_level": "Moderate",
+        "mental_health_condition": true
+      }
+    },
+    {
+      "profile_id": "profile-harper-family-support",
+      "section_key": "location_focus",
+      "data": {
+        "urban_underserved": true,
+        "geographic_focus": "South Memphis QCT neighborhoods"
+      }
+    },
+    {
+      "profile_id": "profile-harper-family-support",
+      "section_key": "military_service",
+      "data": {
+        "veteran": false
+      }
+    },
+    {
+      "profile_id": "profile-harper-family-support",
+      "section_key": "narrative",
+      "data": {
+        "mission": "Prevent eviction and rebuild income after medical leave.",
+        "primary_goal": "Fund arrears, childcare deposits, and emergency savings.",
+        "funding_amount_needed": "$12,500 for housing and childcare stabilization."
+      }
+    },
+    {
+      "profile_id": "profile-harper-family-support",
+      "section_key": "occupation",
+      "data": {
+        "healthcare_worker": true
+      }
+    },
+    {
+      "profile_id": "profile-harper-family-support",
+      "section_key": "organization_details",
+      "data": {
+        "organization_type": "Household",
+        "mission": "Secure childcare and housing while returning to work as a CNA."
+      }
+    },
+    {
+      "profile_id": "profile-harper-family-support",
+      "section_key": "university_applications",
+      "data": {
+        "applications": []
+      }
+    },
+    {
+      "profile_id": "profile-lakeside-recovery-alliance",
+      "section_key": "basic_information",
+      "data": {
+        "full_name": "Lakeside Recovery Alliance",
+        "email": "contact@lakesiderecovery.org",
+        "phone": "218-555-6742",
+        "website": "https://lakesiderecovery.org",
+        "address": "401 Lake Street\nDuluth, MN 55802"
+      }
+    },
+    {
+      "profile_id": "profile-lakeside-recovery-alliance",
+      "section_key": "demographics",
+      "data": {
+        "hispanic_latino": true,
+        "native_american": true,
+        "lgbtq": true
+      }
+    },
+    {
+      "profile_id": "profile-lakeside-recovery-alliance",
+      "section_key": "family_life",
+      "data": {
+        "caregiver": true,
+        "homeless": true
+      }
+    },
+    {
+      "profile_id": "profile-lakeside-recovery-alliance",
+      "section_key": "financial_information",
+      "data": {
+        "financial_need_level": "High",
+        "low_income": true,
+        "notes": "Operating on thin reserves as state opioid response contracts renew."
+      }
+    },
+    {
+      "profile_id": "profile-lakeside-recovery-alliance",
+      "section_key": "government_assistance",
+      "data": {
+        "medicaid_enrolled": true,
+        "other_programs": "Minnesota State Opioid Response grant partner."
+      }
+    },
+    {
+      "profile_id": "profile-lakeside-recovery-alliance",
+      "section_key": "health_medical",
+      "data": {
+        "support_needs_level": "High",
+        "mental_health_condition": true
+      }
+    },
+    {
+      "profile_id": "profile-lakeside-recovery-alliance",
+      "section_key": "location_focus",
+      "data": {
+        "rural_resident": true,
+        "geographic_focus": "Lake Superior frontier counties and tribal communities"
+      }
+    },
+    {
+      "profile_id": "profile-lakeside-recovery-alliance",
+      "section_key": "military_service",
+      "data": {
+        "veteran": true
+      }
+    },
+    {
+      "profile_id": "profile-lakeside-recovery-alliance",
+      "section_key": "narrative",
+      "data": {
+        "mission": "Reduce overdose deaths with peer-led supports.",
+        "primary_goal": "Scale mobile coaching, launch telehealth hub, and expand family wraparound services.",
+        "funding_amount_needed": "$315,000 for staffing, telehealth infrastructure, and housing stipends."
+      }
+    },
+    {
+      "profile_id": "profile-lakeside-recovery-alliance",
+      "section_key": "occupation",
+      "data": {
+        "nonprofit_employee": true,
+        "public_servant": true
+      }
+    },
+    {
+      "profile_id": "profile-lakeside-recovery-alliance",
+      "section_key": "organization_details",
+      "data": {
+        "organization_type": "Recovery community organization",
+        "mission": "Deliver peer-led recovery navigation across northern Minnesota."
+      }
+    },
+    {
+      "profile_id": "profile-lakeside-recovery-alliance",
+      "section_key": "university_applications",
+      "data": {
+        "applications": []
+      }
+    },
+    {
+      "profile_id": "profile-northside-robotics",
+      "section_key": "basic_information",
+      "data": {
+        "full_name": "Northside Robotics Scholars",
+        "email": "coach.lee@northsidehs.org",
+        "phone": "502-555-4490",
+        "address": "800 Ridgeway Avenue\nLouisville, KY 40212"
+      }
+    },
+    {
+      "profile_id": "profile-northside-robotics",
+      "section_key": "demographics",
+      "data": {
+        "african_american": true,
+        "lgbtq": true
+      }
+    },
+    {
+      "profile_id": "profile-northside-robotics",
+      "section_key": "family_life",
+      "data": {
+        "single_parent": true
+      }
+    },
+    {
+      "profile_id": "profile-northside-robotics",
+      "section_key": "financial_information",
+      "data": {
+        "financial_need_level": "High",
+        "low_income": true
+      }
+    },
+    {
+      "profile_id": "profile-northside-robotics",
+      "section_key": "government_assistance",
+      "data": {
+        "medicaid_enrolled": true,
+        "snap_recipient": true,
+        "section8_housing": true
+      }
+    },
+    {
+      "profile_id": "profile-northside-robotics",
+      "section_key": "health_medical",
+      "data": {
+        "support_needs_level": "Low"
+      }
+    },
+    {
+      "profile_id": "profile-northside-robotics",
+      "section_key": "location_focus",
+      "data": {
+        "urban_underserved": true,
+        "geographic_focus": "West Louisville Promise Zone"
+      }
+    },
+    {
+      "profile_id": "profile-northside-robotics",
+      "section_key": "military_service",
+      "data": {
+        "veteran": false
+      }
+    },
+    {
+      "profile_id": "profile-northside-robotics",
+      "section_key": "narrative",
+      "data": {
+        "mission": "Help first-generation robotics students enter engineering programs.",
+        "primary_goal": "Fund travel, exam costs, and laptops for three scholars.",
+        "funding_amount_needed": "$32,000 for competition and college access expenses."
+      }
+    },
+    {
+      "profile_id": "profile-northside-robotics",
+      "section_key": "occupation",
+      "data": {
+        "nonprofit_employee": false,
+        "public_servant": false
+      }
+    },
+    {
+      "profile_id": "profile-northside-robotics",
+      "section_key": "organization_details",
+      "data": {
+        "organization_type": "Student leadership cohort",
+        "mission": "Provide STEM mentorship and scholarship coaching."
+      }
+    },
+    {
+      "profile_id": "profile-northside-robotics",
+      "section_key": "university_applications",
+      "data": {
+        "applications": [
+          {
+            "name": "University of Louisville Speed School of Engineering",
+            "status": "interested",
+            "application_type": "early_action",
+            "institution_type": "public",
+            "acceptance_rate": 67,
+            "tuition": 12246,
+            "fafsa_code": "001999",
+            "application_fee": 50,
+            "test_optional": true,
+            "essay_required": true,
+            "rec_letters_required": 2,
+            "application_deadline": "2025-11-15",
+            "financial_aid_deadline": "2025-12-15",
+            "interests": [
+              "Mechanical engineering",
+              "Co-op program"
+            ],
+            "notes": "Team seeking Speed School scholarships and co-op placement."
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "profile-oak-street-early-learning",
+      "section_key": "basic_information",
+      "data": {
+        "full_name": "Oak Street Early Learning Center",
+        "email": "director@oakstreetelc.org",
+        "phone": "414-555-2016",
+        "website": "https://oakstreetelc.org",
+        "address": "932 Oak Street\nMilwaukee, WI 53204"
+      }
+    },
+    {
+      "profile_id": "profile-oak-street-early-learning",
+      "section_key": "demographics",
+      "data": {
+        "african_american": true,
+        "hispanic_latino": true
+      }
+    },
+    {
+      "profile_id": "profile-oak-street-early-learning",
+      "section_key": "family_life",
+      "data": {
+        "single_parent": true,
+        "homeless": true
+      }
+    },
+    {
+      "profile_id": "profile-oak-street-early-learning",
+      "section_key": "financial_information",
+      "data": {
+        "financial_need_level": "High",
+        "low_income": true
+      }
+    },
+    {
+      "profile_id": "profile-oak-street-early-learning",
+      "section_key": "government_assistance",
+      "data": {
+        "medicaid_enrolled": false,
+        "other_programs": "Head Start delegate and city childcare stabilization grant."
+      }
+    },
+    {
+      "profile_id": "profile-oak-street-early-learning",
+      "section_key": "health_medical",
+      "data": {
+        "support_needs_level": "Moderate",
+        "mental_health_condition": true
+      }
+    },
+    {
+      "profile_id": "profile-oak-street-early-learning",
+      "section_key": "location_focus",
+      "data": {
+        "urban_underserved": true,
+        "geographic_focus": "Milwaukee Southside Promise Zone"
+      }
+    },
+    {
+      "profile_id": "profile-oak-street-early-learning",
+      "section_key": "military_service",
+      "data": {
+        "veteran": false
+      }
+    },
+    {
+      "profile_id": "profile-oak-street-early-learning",
+      "section_key": "narrative",
+      "data": {
+        "mission": "Expand dual-language early learning for low-income families.",
+        "primary_goal": "Renovate unused classrooms and purchase infant equipment.",
+        "funding_amount_needed": "$410,000 for renovations and training."
+      }
+    },
+    {
+      "profile_id": "profile-oak-street-early-learning",
+      "section_key": "occupation",
+      "data": {
+        "nonprofit_employee": true,
+        "public_servant": true
+      }
+    },
+    {
+      "profile_id": "profile-oak-street-early-learning",
+      "section_key": "organization_details",
+      "data": {
+        "organization_type": "Early childhood education center",
+        "mission": "Expand dual-language infant care with trauma-informed supports."
+      }
+    },
+    {
+      "profile_id": "profile-oak-street-early-learning",
+      "section_key": "university_applications",
+      "data": {
+        "applications": []
+      }
+    },
+    {
+      "profile_id": "profile-riverbend-veteran-housing",
+      "section_key": "basic_information",
+      "data": {
+        "full_name": "Riverbend Veteran Housing Initiative",
+        "email": "support@riverbendvets.org",
+        "phone": "937-555-4411",
+        "website": "https://riverbendvets.org",
+        "address": "88 Veteran Way\nDayton, OH 45402"
+      }
+    },
+    {
+      "profile_id": "profile-riverbend-veteran-housing",
+      "section_key": "demographics",
+      "data": {
+        "african_american": true
+      }
+    },
+    {
+      "profile_id": "profile-riverbend-veteran-housing",
+      "section_key": "family_life",
+      "data": {
+        "homeless": true
+      }
+    },
+    {
+      "profile_id": "profile-riverbend-veteran-housing",
+      "section_key": "financial_information",
+      "data": {
+        "financial_need_level": "High",
+        "low_income": true,
+        "notes": "Capital needed before winter rehabs begin."
+      }
+    },
+    {
+      "profile_id": "profile-riverbend-veteran-housing",
+      "section_key": "government_assistance",
+      "data": {
+        "medicaid_enrolled": true,
+        "ssi_recipient": true,
+        "section8_housing": true
+      }
+    },
+    {
+      "profile_id": "profile-riverbend-veteran-housing",
+      "section_key": "health_medical",
+      "data": {
+        "support_needs_level": "High",
+        "mental_health_condition": true
+      }
+    },
+    {
+      "profile_id": "profile-riverbend-veteran-housing",
+      "section_key": "location_focus",
+      "data": {
+        "urban_underserved": true,
+        "geographic_focus": "Montgomery County (Dayton West Side)"
+      }
+    },
+    {
+      "profile_id": "profile-riverbend-veteran-housing",
+      "section_key": "military_service",
+      "data": {
+        "veteran": true,
+        "disabled_veteran": true
+      }
+    },
+    {
+      "profile_id": "profile-riverbend-veteran-housing",
+      "section_key": "narrative",
+      "data": {
+        "mission": "Convert vacant duplexes into supportive housing for veterans.",
+        "primary_goal": "Close on properties, complete accessibility upgrades, and staff peer teams.",
+        "funding_amount_needed": "$950,000 for acquisition and renovation."
+      }
+    },
+    {
+      "profile_id": "profile-riverbend-veteran-housing",
+      "section_key": "occupation",
+      "data": {
+        "nonprofit_employee": true,
+        "public_servant": true
+      }
+    },
+    {
+      "profile_id": "profile-riverbend-veteran-housing",
+      "section_key": "organization_details",
+      "data": {
+        "organization_type": "Supportive housing nonprofit",
+        "mission": "Stabilize veteran households with wraparound legal and housing support."
+      }
+    },
+    {
+      "profile_id": "profile-riverbend-veteran-housing",
+      "section_key": "university_applications",
+      "data": {
+        "applications": []
+      }
+    },
+    {
+      "profile_id": "profile-sierra-tribal-artisans",
+      "section_key": "basic_information",
+      "data": {
+        "full_name": "Sierra Tribal Artisans Collaborative",
+        "email": "info@sierratribalarts.com",
+        "phone": "775-555-7022",
+        "website": "https://sierratribalarts.com",
+        "address": "65 Eagle Feather Drive\nSchurz, NV 89427"
+      }
+    },
+    {
+      "profile_id": "profile-sierra-tribal-artisans",
+      "section_key": "demographics",
+      "data": {
+        "native_american": true
+      }
+    },
+    {
+      "profile_id": "profile-sierra-tribal-artisans",
+      "section_key": "family_life",
+      "data": {
+        "caregiver": true
+      }
+    },
+    {
+      "profile_id": "profile-sierra-tribal-artisans",
+      "section_key": "financial_information",
+      "data": {
+        "financial_need_level": "High",
+        "low_income": true
+      }
+    },
+    {
+      "profile_id": "profile-sierra-tribal-artisans",
+      "section_key": "government_assistance",
+      "data": {
+        "medicaid_enrolled": true,
+        "snap_recipient": true
+      }
+    },
+    {
+      "profile_id": "profile-sierra-tribal-artisans",
+      "section_key": "health_medical",
+      "data": {
+        "support_needs_level": "Moderate",
+        "disability_type": [
+          "Mobility limitations"
+        ]
+      }
+    },
+    {
+      "profile_id": "profile-sierra-tribal-artisans",
+      "section_key": "location_focus",
+      "data": {
+        "rural_resident": true,
+        "geographic_focus": "Walker River Paiute Reservation"
+      }
+    },
+    {
+      "profile_id": "profile-sierra-tribal-artisans",
+      "section_key": "military_service",
+      "data": {
+        "veteran": true
+      }
+    },
+    {
+      "profile_id": "profile-sierra-tribal-artisans",
+      "section_key": "narrative",
+      "data": {
+        "mission": "Scale tribal artisan enterprises and preserve cultural design heritage.",
+        "primary_goal": "Upgrade fabrication studio and expand e-commerce logistics.",
+        "funding_amount_needed": "$265,000 for equipment, marketing, and logistics."
+      }
+    },
+    {
+      "profile_id": "profile-sierra-tribal-artisans",
+      "section_key": "occupation",
+      "data": {
+        "small_business_owner": true
+      }
+    },
+    {
+      "profile_id": "profile-sierra-tribal-artisans",
+      "section_key": "organization_details",
+      "data": {
+        "organization_type": "Tribal artisan cooperative",
+        "mission": "Create economic pathways for Walker River Paiute artisans."
+      }
+    },
+    {
+      "profile_id": "profile-sierra-tribal-artisans",
+      "section_key": "university_applications",
+      "data": {
+        "applications": []
+      }
+    },
+    {
+      "profile_id": "profile-summit-adaptive-sports",
+      "section_key": "basic_information",
+      "data": {
+        "full_name": "Summit Adaptive Sports Alliance",
+        "email": "info@summitadaptive.org",
+        "phone": "970-555-2214",
+        "website": "https://summitadaptive.org",
+        "address": "210 Mountain View Circle\nFrisco, CO 80443"
+      }
+    },
+    {
+      "profile_id": "profile-summit-adaptive-sports",
+      "section_key": "demographics",
+      "data": {
+        "hispanic_latino": true,
+        "native_american": true
+      }
+    },
+    {
+      "profile_id": "profile-summit-adaptive-sports",
+      "section_key": "family_life",
+      "data": {
+        "caregiver": true
+      }
+    },
+    {
+      "profile_id": "profile-summit-adaptive-sports",
+      "section_key": "financial_information",
+      "data": {
+        "financial_need_level": "Moderate",
+        "low_income": false
+      }
+    },
+    {
+      "profile_id": "profile-summit-adaptive-sports",
+      "section_key": "government_assistance",
+      "data": {
+        "medicaid_enrolled": false,
+        "other_programs": "Coordinates IDEA Part B inclusion funds."
+      }
+    },
+    {
+      "profile_id": "profile-summit-adaptive-sports",
+      "section_key": "health_medical",
+      "data": {
+        "support_needs_level": "High",
+        "disability_type": [
+          "Mobility impairments"
+        ]
+      }
+    },
+    {
+      "profile_id": "profile-summit-adaptive-sports",
+      "section_key": "location_focus",
+      "data": {
+        "rural_resident": true,
+        "geographic_focus": "Rocky Mountain ski counties"
+      }
+    },
+    {
+      "profile_id": "profile-summit-adaptive-sports",
+      "section_key": "military_service",
+      "data": {
+        "veteran": true
+      }
+    },
+    {
+      "profile_id": "profile-summit-adaptive-sports",
+      "section_key": "narrative",
+      "data": {
+        "mission": "Expand adaptive sports access across the Rockies.",
+        "primary_goal": "Fund equipment trailer, scholarships, and bilingual staff training.",
+        "funding_amount_needed": "$350,000 for equipment and staffing."
+      }
+    },
+    {
+      "profile_id": "profile-summit-adaptive-sports",
+      "section_key": "occupation",
+      "data": {
+        "nonprofit_employee": true
+      }
+    },
+    {
+      "profile_id": "profile-summit-adaptive-sports",
+      "section_key": "organization_details",
+      "data": {
+        "organization_type": "Adaptive sports coalition",
+        "mission": "Remove barriers so youth with disabilities can access year-round recreation."
+      }
+    },
+    {
+      "profile_id": "profile-summit-adaptive-sports",
+      "section_key": "university_applications",
+      "data": {
+        "applications": []
+      }
+    }
+  ]
+}

@@ -14,9 +14,20 @@ import documentsRouter from './routes/documents.js';
 import expensesRouter from './routes/expenses.js';
 import aiRouter from './routes/ai.js';
 import anyaRouter from './routes/anya.js';
+import profilesRouter from './routes/profiles.js';
+import remindersRouter from './routes/reminders.js';
+import crawlersRouter from './routes/crawlers.js';
+import billingRouter from './routes/billing.js';
+import authRouter from './routes/auth.js';
+import jwt from 'jsonwebtoken';
+
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null;
+const ADMIN_NAME = process.env.ADMIN_NAME || 'Admin User';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@grantflow.app';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const uploadsDir = join(__dirname, '..', 'uploads');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -38,6 +49,14 @@ app.use(cors({
 }));
 
 app.use(express.json({ limit: '10mb' }));
+try {
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+} catch (error) {
+  console.warn('Failed to create uploads directory:', error);
+}
+app.use('/uploads', express.static(uploadsDir));
 
 // Initialize database
 const dataDir = join(__dirname, 'data');
@@ -56,10 +75,214 @@ if (fs.existsSync(schemaPath)) {
   db.exec(schema);
   console.log('Database schema initialized');
 }
+try {
+  db.prepare('ALTER TABLE profiles ADD COLUMN avatar_url TEXT').run();
+} catch (error) {
+  // Ignore if the column already exists
+}
+try {
+  db.prepare('ALTER TABLE profiles ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE SET NULL').run();
+} catch (error) {
+  // Ignore if the column already exists
+}
+try {
+  db.prepare('ALTER TABLE crawler_jobs ADD COLUMN result_meta TEXT').run();
+} catch (error) {
+  // Ignore if the column already exists
+}
+try {
+  db.prepare('ALTER TABLE crawler_jobs ADD COLUMN retry_count INTEGER DEFAULT 0').run();
+} catch (error) {
+  // Ignore if the column already exists
+}
+try {
+  db.prepare('ALTER TABLE crawler_jobs ADD COLUMN last_retry_at DATETIME').run();
+} catch (error) {
+  // Ignore if the column already exists
+}
+
+function ensureCrawlerJobsSupportsProfileEnrichment() {
+  try {
+    db.prepare(
+      `
+        INSERT INTO crawler_jobs (id, type, status)
+        VALUES ('__schema_test__', 'profile_enrichment', 'queued')
+      `,
+    ).run()
+    db.prepare(
+      `
+        DELETE FROM crawler_jobs
+        WHERE id = '__schema_test__'
+      `,
+    ).run()
+  } catch (error) {
+    if (error?.message && error.message.includes('CHECK constraint failed')) {
+      const rebuild = db.transaction(() => {
+        db.prepare(
+          `
+            CREATE TABLE crawler_jobs_new (
+              id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+              created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+              started_at DATETIME,
+              completed_at DATETIME,
+              type TEXT NOT NULL CHECK(type IN (
+                'local',
+                'scholarship',
+                'comprehensive',
+                'item_search',
+                'avatar_lookup',
+                'document_ingest',
+                'pipeline_automation',
+                'profile_enrichment'
+              )),
+              status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
+                'queued',
+                'running',
+                'completed',
+                'failed',
+                'cancelled'
+              )),
+              profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+              organization_id TEXT REFERENCES organizations(id) ON DELETE SET NULL,
+              parameters TEXT DEFAULT '{}',
+              result_count INTEGER DEFAULT 0,
+              result_meta TEXT,
+              error TEXT,
+              requested_by TEXT,
+              retry_count INTEGER DEFAULT 0,
+              last_retry_at DATETIME
+            )
+          `,
+        ).run()
+
+        db.prepare(
+          `
+            INSERT INTO crawler_jobs_new (
+              id,
+              created_at,
+              started_at,
+              completed_at,
+              type,
+              status,
+              profile_id,
+              organization_id,
+              parameters,
+              result_count,
+              result_meta,
+              error,
+              requested_by,
+              retry_count,
+              last_retry_at
+            )
+            SELECT
+              id,
+              created_at,
+              started_at,
+              completed_at,
+              type,
+              status,
+              profile_id,
+              organization_id,
+              parameters,
+              result_count,
+              NULL,
+              error,
+              requested_by,
+              COALESCE(retry_count, 0),
+              last_retry_at
+            FROM crawler_jobs
+          `,
+        ).run()
+
+        db.prepare('DROP TABLE crawler_jobs').run()
+        db.prepare('ALTER TABLE crawler_jobs_new RENAME TO crawler_jobs').run()
+        db.prepare('CREATE INDEX IF NOT EXISTS idx_crawler_jobs_status ON crawler_jobs(status)').run()
+        db.prepare('CREATE INDEX IF NOT EXISTS idx_crawler_jobs_profile ON crawler_jobs(profile_id)').run()
+        db.prepare('CREATE INDEX IF NOT EXISTS idx_crawler_jobs_type ON crawler_jobs(type)').run()
+      })
+
+      rebuild()
+    }
+  }
+}
+
+ensureCrawlerJobsSupportsProfileEnrichment()
+
+const JWT_SECRET = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret';
 
 // Make db available to routes
 app.use((req, res, next) => {
   req.db = db;
+  next();
+});
+
+app.use((req, res, next) => {
+  const authHeader = req.headers.authorization || '';
+  let user = { role: 'guest', profileId: null };
+  let handled = false;
+
+  if (authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice(7).trim();
+    if (token) {
+      try {
+        const payload = jwt.verify(token, JWT_SECRET);
+        if (payload?.sid) {
+          const sessionRow = db
+            .prepare(
+              `
+                SELECT s.*, u.display_name, u.primary_email, u.is_admin
+                FROM user_sessions s
+                JOIN users u ON u.id = s.user_id
+                WHERE s.id = ?
+              `,
+            )
+            .get(payload.sid);
+          if (
+            sessionRow &&
+            !sessionRow.revoked_at &&
+            (!sessionRow.refresh_expires_at || new Date(sessionRow.refresh_expires_at) > new Date())
+          ) {
+            user = {
+              role: sessionRow.is_admin ? 'admin' : 'user',
+              userId: sessionRow.user_id,
+              profileId: payload.profile_id ?? sessionRow.profile_id ?? null,
+              sessionId: sessionRow.id,
+              full_name: sessionRow.display_name,
+              email: sessionRow.primary_email,
+            };
+            handled = true;
+          }
+        }
+      } catch (error) {
+        // fall through to legacy handling
+      }
+    }
+
+    if (!handled && token && ADMIN_TOKEN && token === ADMIN_TOKEN) {
+      user = { role: 'admin', full_name: ADMIN_NAME, email: ADMIN_EMAIL };
+      handled = true;
+    }
+
+    if (!handled && token) {
+      try {
+        const profile = db
+          .prepare('SELECT id, display_name FROM profiles WHERE id = ?')
+          .get(token);
+        if (profile) {
+          user = {
+            role: 'user',
+            profileId: profile.id,
+            profileName: profile.display_name,
+          };
+          handled = true;
+        }
+      } catch {
+        // Ignore lookup errors and fall back to guest
+      }
+    }
+  }
+
+  req.user = user;
   next();
 });
 
@@ -68,7 +291,70 @@ app.get('/health', (req, res) => {
   res.json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
+app.get('/api/auth/me', (req, res) => {
+  const user = req.user ?? { role: 'guest' };
+  if (user.role === 'guest') {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+
+  if (user.userId) {
+    const dbUser = db
+      .prepare(
+        `
+          SELECT *
+          FROM users
+          WHERE id = ?
+        `,
+      )
+      .get(user.userId);
+
+    if (!dbUser) {
+      return res.status(401).json({ error: 'User record not found' });
+    }
+
+    const profiles = db
+      .prepare(
+        `
+          SELECT id, display_name, organization_id, status
+          FROM profiles
+          WHERE user_id = ?
+          ORDER BY created_at ASC
+        `,
+      )
+      .all(dbUser.id);
+
+    return res.json({
+      user: {
+        id: dbUser.id,
+        display_name: dbUser.display_name,
+        primary_email: dbUser.primary_email,
+        primary_phone: dbUser.primary_phone,
+        avatar_url: dbUser.avatar_url,
+        is_admin: Boolean(dbUser.is_admin),
+      },
+      profiles,
+      active_profile_id: user.profileId ?? profiles[0]?.id ?? null,
+    });
+  }
+
+  if (user.role === 'admin') {
+    return res.json({
+      role: 'admin',
+      full_name: user.full_name ?? ADMIN_NAME,
+      email: user.email ?? ADMIN_EMAIL,
+    });
+  }
+
+  return res.json({
+    role: 'user',
+    profile_id: user.profileId,
+    full_name: user.profileName ?? 'Profile User',
+  });
+});
+
 // API routes
+app.use('/api/auth', authRouter);
+app.use('/api/billing', billingRouter);
 app.use('/api/organizations', organizationsRouter);
 app.use('/api/grants', grantsRouter);
 app.use('/api/opportunities', opportunitiesRouter);
@@ -77,6 +363,9 @@ app.use('/api/documents', documentsRouter);
 app.use('/api/expenses', expensesRouter);
 app.use('/api/ai', aiRouter);
 app.use('/api/anya', anyaRouter); // Keep existing Anya routes for compatibility
+app.use('/api/profiles', profilesRouter);
+app.use('/api/reminders', remindersRouter);
+app.use('/api/crawlers', crawlersRouter);
 
 // Stats endpoint for dashboard
 app.get('/api/stats', (req, res) => {
@@ -106,30 +395,45 @@ app.get('/api/stats', (req, res) => {
 // Pipeline stats
 app.get('/api/pipeline/stats', (req, res) => {
   try {
-    const stats = db.prepare(`
-      SELECT status, COUNT(*) as count 
-      FROM grants 
+    const rows = db.prepare(`
+      SELECT status, COUNT(*) as count
+      FROM grants
       GROUP BY status
     `).all();
-    
-    const pipeline = {
+
+    const pipelineKeys = {
       discovered: 0,
       interested: 0,
       drafting: 0,
       app_prep: 0,
-      revision: 0,
+      submission_ready: 0,
       submitted: 0,
       awarded: 0,
       rejected: 0
     };
-    
-    stats.forEach(s => {
-      if (pipeline.hasOwnProperty(s.status)) {
-        pipeline[s.status] = s.count;
-      }
+
+    const statusMap = {
+      discovered: 'discovered',
+      interested: 'interested',
+      drafting: 'drafting',
+      revision: 'drafting',
+      app_prep: 'app_prep',
+      submission_ready: 'submission_ready',
+      submitted: 'submitted',
+      under_review: 'submitted',
+      awarded: 'awarded',
+      rejected: 'rejected',
+      closed: 'rejected',
+      archived: 'rejected'
+    };
+
+    rows.forEach((row) => {
+      const normalized = statusMap[row.status] || null;
+      if (!normalized || pipelineKeys[normalized] === undefined) return;
+      pipelineKeys[normalized] += row.count ?? 0;
     });
-    
-    res.json(pipeline);
+
+    res.json(pipelineKeys);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

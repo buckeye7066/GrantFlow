@@ -197,7 +197,7 @@ export default function NOFOParser() {
             description: `Grant "${newGrant.title}" created and sent for AI analysis.`,
         });
 
-        navigate(createPageUrl(`GrantDetail?id=${newGrant.id}`));
+        navigate(createPageUrl("GrantDetail", { id: newGrant.id }));
     } catch (err) {
         const errorMessage = `Failed to save grant or start analysis: ${err.message}`;
         setError(errorMessage);

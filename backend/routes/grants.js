@@ -3,6 +3,65 @@ import crypto from 'crypto';
 
 const router = express.Router();
 
+function ensureGrantAccess(req, res, grantId) {
+  const auth = req.user ?? { role: 'guest' }
+  if (auth.role === 'guest') {
+    res.status(401).json({ error: 'Authentication required' })
+    return null
+  }
+
+  const grant = req.db.prepare('SELECT * FROM grants WHERE id = ?').get(grantId)
+  if (!grant) {
+    res.status(404).json({ error: 'Grant not found' })
+    return null
+  }
+
+  if (auth.role === 'admin') {
+    return grant
+  }
+
+  if (!auth.profileId) {
+    res.status(403).json({ error: 'Not authorized to access this grant' })
+    return null
+  }
+
+  const profile = req.db
+    .prepare('SELECT id FROM profiles WHERE id = ? AND organization_id = ?')
+    .get(auth.profileId, grant.organization_id)
+
+  if (!profile) {
+    res.status(403).json({ error: 'Not authorized to access this grant' })
+    return null
+  }
+
+  return grant
+}
+
+function mapAutomationEvent(row) {
+  if (!row) return null
+  let actions = []
+  try {
+    actions = row.recommended_actions ? JSON.parse(row.recommended_actions) : []
+  } catch {
+    actions = []
+  }
+
+  return {
+    id: row.id,
+    created_at: row.created_at,
+    grant_id: row.grant_id,
+    job_id: row.job_id,
+    previous_status: row.previous_status,
+    suggested_status: row.suggested_status,
+    applied_status: row.applied_status,
+    confidence: row.confidence,
+    handoff_required: Boolean(row.handoff_required),
+    handoff_reason: row.handoff_reason,
+    recommended_actions: actions,
+    ai_summary: row.ai_summary,
+  }
+}
+
 // List all grants
 router.get('/', (req, res) => {
   try {
@@ -98,6 +157,132 @@ router.get('/pipeline', (req, res) => {
   } catch (error) {
     console.error('Error getting pipeline:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/automation/summary', (req, res) => {
+  const auth = req.user ?? { role: 'guest' }
+  if (auth.role === 'guest') {
+    return res.status(401).json({ error: 'Authentication required' })
+  }
+
+  const organizationId = req.query.organization_id
+  if (!organizationId) {
+    return res.status(400).json({ error: 'organization_id query parameter is required' })
+  }
+
+  if (auth.role !== 'admin') {
+    if (!auth.profileId) {
+      return res.status(403).json({ error: 'Not authorized' })
+    }
+    const profile = req.db
+      .prepare('SELECT id FROM profiles WHERE id = ? AND organization_id = ?')
+      .get(auth.profileId, organizationId)
+    if (!profile) {
+      return res.status(403).json({ error: 'Not authorized to access this organization' })
+    }
+  }
+
+  try {
+    const rows = req.db
+      .prepare(
+        `
+          WITH latest AS (
+            SELECT grant_id, MAX(created_at) AS created_at
+            FROM grant_pipeline_events
+            GROUP BY grant_id
+          )
+          SELECT
+            g.id,
+            g.title,
+            g.status,
+            g.deadline,
+            g.priority,
+            e.created_at AS automation_at,
+            e.applied_status AS automation_status,
+            e.handoff_required,
+            e.handoff_reason,
+            e.ai_summary
+          FROM grants g
+          LEFT JOIN latest l ON l.grant_id = g.id
+          LEFT JOIN grant_pipeline_events e
+            ON e.grant_id = l.grant_id AND e.created_at = l.created_at
+          WHERE g.organization_id = ?
+          ORDER BY g.status ASC, g.updated_at DESC
+        `,
+      )
+      .all(organizationId)
+
+    res.json(
+      rows.map((row) => ({
+        id: row.id,
+        title: row.title,
+        status: row.status,
+        deadline: row.deadline,
+        priority: row.priority,
+        automation: row.automation_at
+          ? {
+              processed_at: row.automation_at,
+              status: row.automation_status,
+              handoff_required: Boolean(row.handoff_required),
+              handoff_reason: row.handoff_reason,
+              summary: row.ai_summary,
+            }
+          : null,
+      })),
+    )
+  } catch (error) {
+    console.error('Error building automation summary:', error)
+    res.status(500).json({ error: error.message })
+  }
+});
+
+router.get('/:id/automation/events', (req, res) => {
+  const grant = ensureGrantAccess(req, res, req.params.id)
+  if (!grant) return
+
+  try {
+    const limit = Number.parseInt(req.query.limit ?? 25, 10)
+    const events = req.db
+      .prepare(
+        `
+          SELECT *
+          FROM grant_pipeline_events
+          WHERE grant_id = ?
+          ORDER BY created_at DESC
+          LIMIT ?
+        `,
+      )
+      .all(grant.id, Number.isFinite(limit) ? limit : 25)
+
+    res.json(events.map(mapAutomationEvent))
+  } catch (error) {
+    console.error('Error listing automation events:', error)
+    res.status(500).json({ error: error.message })
+  }
+});
+
+router.get('/:id/automation/latest', (req, res) => {
+  const grant = ensureGrantAccess(req, res, req.params.id)
+  if (!grant) return
+
+  try {
+    const row = req.db
+      .prepare(
+        `
+          SELECT *
+          FROM grant_pipeline_events
+          WHERE grant_id = ?
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+      )
+      .get(grant.id)
+
+    res.json(mapAutomationEvent(row))
+  } catch (error) {
+    console.error('Error fetching latest automation event:', error)
+    res.status(500).json({ error: error.message })
   }
 });
 

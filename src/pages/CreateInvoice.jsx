@@ -118,7 +118,7 @@ export default function CreateInvoice() {
         title: "Invoice Created",
         description: `Invoice ${invoice.invoice_number} has been created successfully.`,
       });
-      navigate(createPageUrl(`InvoiceView?id=${invoice.id}`));
+      navigate(createPageUrl("InvoiceView", { id: invoice.id }));
     },
     onError: (error) => {
       toast({

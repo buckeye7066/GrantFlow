@@ -101,7 +101,7 @@ export default function Checklist({ grantId, organizationId }) {
                     </h4>
                     <p className="text-sm text-blue-800 mt-1">The AI needs more information. Please answer the questions below or update the applicant's profile.</p>
                   </div>
-                  <Link to={createPageUrl(`Organizations?view=${organizationId}&grant_id=${grantId}`)}>
+                  <Link to={createPageUrl("Organizations", { view: organizationId, grant_id: grantId })}>
                     <Button>
                       <Edit className="w-4 h-4 mr-2" />
                       Update Profile

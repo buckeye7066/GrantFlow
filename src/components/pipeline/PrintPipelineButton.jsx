@@ -9,7 +9,7 @@ export function PrintPipelineButton({ orgId }) {
   const onClick = async () => {
     setBusy(true);
     try {
-      const url = createPageUrl(`PrintPipeline?orgId=${orgId}`);
+      const url = createPageUrl("PrintPipeline", { orgId });
       const printWindow = window.open(url, "_blank", "noopener,noreferrer");
       if (!printWindow) {
         alert("Your browser blocked the print tab. Please allow pop-ups for this site and try again.");

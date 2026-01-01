@@ -144,7 +144,7 @@ export default function Billing() {
             
             {selectedOrgId && (
               <>
-                <Link to={createPageUrl(`BillingSheet?organization_id=${selectedOrgId}`)}>
+                <Link to={createPageUrl("BillingSheet", { organization_id: selectedOrgId })}>
                   <Button variant="outline" className="whitespace-nowrap">
                     <FileText className="w-4 h-4 mr-2" />
                     Billing Sheet
@@ -156,7 +156,7 @@ export default function Billing() {
                     Master Sheet
                   </Button>
                 </Link>
-                <Link to={createPageUrl(`CreateInvoice?organization_id=${selectedOrgId}`)}>
+                <Link to={createPageUrl("CreateInvoice", { organization_id: selectedOrgId })}>
                   <Button className="bg-emerald-600 hover:bg-emerald-700 whitespace-nowrap">
                     <Plus className="w-4 h-4 mr-2" />
                     Invoice

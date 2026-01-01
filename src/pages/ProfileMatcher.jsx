@@ -206,7 +206,7 @@ export default function ProfileMatcher() {
                         <div className="flex items-start justify-between mb-3">
                           <div className="flex-1 min-w-0">
                             <Link 
-                              to={createPageUrl(`GrantDetail?id=${match.grant_id}`)}
+                              to={createPageUrl("GrantDetail", { id: match.grant_id })}
                               className="text-lg font-bold text-slate-900 hover:text-blue-600 flex items-center gap-2 group"
                             >
                               {match.title}
@@ -275,7 +275,7 @@ export default function ProfileMatcher() {
                               <span>Due: {format(new Date(match.deadline), 'MMM d, yyyy')}</span>
                             </div>
                           )}
-                          <Link to={createPageUrl(`GrantDetail?id=${match.grant_id}`)}>
+                          <Link to={createPageUrl("GrantDetail", { id: match.grant_id })}>
                             <Button variant="outline" size="sm">
                               View Details
                             </Button>

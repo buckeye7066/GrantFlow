@@ -104,25 +104,18 @@ const AIAddPartnerDialog = ({ open, onOpenChange, onFound }) => {
     const { toast } = useToast();
 
     const aiAssistMutation = useMutation({
-        mutationFn: (name) => {
-            // Sanitize input to prevent prompt injection
-            const sanitizedName = name.replace(/[^\w\s-]/g, '').trim();
-            if (!sanitizedName) {
-                throw new Error('Invalid organization name');
-            }
-            return base44.integrations.Core.InvokeLLM({
-                prompt: `You are a research assistant. Find information about the organization named '${sanitizedName}'. Return its official website URL, a general public-facing contact email, and classify its organization type from this list: university, utility, foundation, municipality, other.`,
-                add_context_from_internet: true,
-                response_json_schema: {
-                    type: "object",
-                    properties: {
-                        org_type: { "type": "string", "enum": ["university", "utility", "foundation", "municipality", "other"] },
-                        api_base_url: { "type": "string", "description": "The main official website URL." },
-                        contact_email: { "type": "string", "description": "A general contact email, like contact@ or info@." }
-                    }
+        mutationFn: (name) => base44.integrations.Core.InvokeLLM({
+            prompt: `You are a research assistant. Find information about the organization named '${name}'. Return its official website URL, a general public-facing contact email, and classify its organization type from this list: university, utility, foundation, municipality, other.`,
+            add_context_from_internet: true,
+            response_json_schema: {
+                type: "object",
+                properties: {
+                    org_type: { "type": "string", "enum": ["university", "utility", "foundation", "municipality", "other"] },
+                    api_base_url: { "type": "string", "description": "The main official website URL." },
+                    contact_email: { "type": "string", "description": "A general contact email, like contact@ or info@." }
                 }
-            });
-        },
+            }
+        }),
         onSuccess: (data) => {
             const newPartnerData = {
                 name: partnerName,

@@ -2539,7 +2539,7 @@ DRAFT for "special circumstances":`}
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <DocumentHarvester organizationId={organization.id} />
+            <DocumentHarvester profileId={organization.id} organizationId={organization.id} />
           </CardContent>
         </Card>
       )}

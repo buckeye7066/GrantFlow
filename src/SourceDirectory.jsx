@@ -1031,7 +1031,7 @@ export default function SourceDirectory() {
                                                 </Button>
                                               )}
                                               {inPipeline && grant ? (
-                                                <Link to={createPageUrl(`GrantDetail?id=${grant.id}`)}>
+                                                <Link to={createPageUrl("GrantDetail", { id: grant.id })}>
                                                   <Button size="sm" variant="outline">
                                                     <FileText className="w-4 h-4 mr-2" />
                                                     View in Pipeline

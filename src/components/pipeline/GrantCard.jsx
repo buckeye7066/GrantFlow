@@ -89,7 +89,7 @@ export default function GrantCard({ grant, organization, organizationName, onSta
                   {grant.starred ? 'Unstar' : 'Star'}
                 </DropdownMenuItem>
               )}
-              <Link to={createPageUrl(`GrantDetail?id=${grant.id}`)}>
+              <Link to={createPageUrl("GrantDetail", { id: grant.id })}>
                 <DropdownMenuItem>
                   <Edit className="w-4 h-4 mr-2" />
                   View Details
@@ -106,7 +106,7 @@ export default function GrantCard({ grant, organization, organizationName, onSta
         )}
       </div>
       
-      <Link to={grant.id ? createPageUrl(`GrantDetail?id=${grant.id}`) : (grant.url || '#')}>
+      <Link to={grant.id ? createPageUrl("GrantDetail", { id: grant.id }) : grant.url || '#'}>
         <div className="p-3 space-y-2 cursor-pointer">
           <h4 className="font-semibold text-slate-900 text-sm line-clamp-2 leading-tight">
             {grant.title}

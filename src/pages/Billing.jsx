@@ -1,384 +1,410 @@
+import React, { useEffect, useMemo, useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
+import { Switch } from "@/components/ui/switch"
+import { Badge } from "@/components/ui/badge"
+import { Loader2, PenSquare, ShieldCheck, Users } from "lucide-react"
+import { useToast } from "@/components/ui/use-toast"
+import { useAuthStore } from "@/stores/authStore"
+import { listBillingTiers, listBillingAccounts, updateBillingAccount, getBillingAccount } from "@/api/billing"
+import { getProfile } from "@/api/profiles"
 
-import React, { useState, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
-import { useQuery } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { 
-  DollarSign, 
-  FileText, 
-  Clock, 
-  Receipt,
-  AlertCircle,
-  Plus,
-  Building2,
-  Loader2,
-  Printer
-} from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Link } from "react-router-dom";
-import { createPageUrl } from "@/utils";
-import TimeTrackingTab from "../components/billing/TimeTrackingTab";
-import ProjectsTab from "../components/billing/ProjectsTab";
-import InvoicesTab from "../components/billing/InvoicesTab";
-import SettingsTab from "../components/billing/SettingsTab";
+const discountOptions = [
+  { value: "none", label: "No discount" },
+  { value: "student", label: "Student discount" },
+  { value: "minister", label: "Minister discount" },
+]
 
-export default function Billing() {
-  const [activeTab, setActiveTab] = useState("overview");
-  const [selectedOrgId, setSelectedOrgId] = useState(null);
+function formatCurrencyFromCents(cents) {
+  if (cents === null || cents === undefined) return "Not set"
+  if (cents === 0) return "$0"
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: cents % 100 === 0 ? 0 : 2,
+  }).format(cents / 100)
+}
 
-  const { data: organizations = [], isLoading: isLoadingOrgs } = useQuery({
-    queryKey: ['organizations'],
-    queryFn: () => base44.entities.Organization.list('name'),
-  });
+function BillingAccountCard({ account, tiers, onSave, saving }) {
+  const [form, setForm] = useState({
+    tier_id: account.tier_id,
+    discount_type: account.discount_type ?? "none",
+    discount_percent: account.discount_percent ?? 0,
+    is_pro_bono: account.is_pro_bono ?? false,
+    pro_bono_reason: account.pro_bono_reason ?? "",
+  })
 
-  const { data: projects = [], isLoading: isLoadingProjects } = useQuery({
-    queryKey: ['projects'],
-    queryFn: () => base44.entities.Project.list('-created_date'),
-  });
-
-  const { data: invoices = [], isLoading: isLoadingInvoices } = useQuery({
-    queryKey: ['invoices'],
-    queryFn: () => base44.entities.Invoice.list('-issue_date'),
-  });
-
-  const { data: timeLogs = [], isLoading: isLoadingTime } = useQuery({
-    queryKey: ['timeLogs'],
-    queryFn: () => base44.entities.TimeEntry.filter({ billed: false }),
-  });
-
-  // Auto-select first organization if none selected
   useEffect(() => {
-    if (!selectedOrgId && organizations.length > 0) {
-      setSelectedOrgId(organizations[0].id);
-    }
-  }, [organizations, selectedOrgId]);
+    setForm({
+      tier_id: account.tier_id,
+      discount_type: account.discount_type ?? "none",
+      discount_percent: account.discount_percent ?? 0,
+      is_pro_bono: account.is_pro_bono ?? false,
+      pro_bono_reason: account.pro_bono_reason ?? "",
+    })
+  }, [account.id, account.tier_id, account.discount_type, account.discount_percent, account.is_pro_bono, account.pro_bono_reason])
 
-  // DIAGNOSIS: Check for weekly invoice generation
-  useEffect(() => {
-    const checkAndGenerateInvoices = async () => {
-      console.log("Checking if draft invoices should be generated...");
-      const nowInNY = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
-      const dayOfWeek = nowInNY.getDay();
-      const hours = nowInNY.getHours();
-      
-      const isFriday = dayOfWeek === 5;
-      const isAfterPrepareTime = hours >= 16;
-
-      const lastCheck = localStorage.getItem('lastInvoiceGenerationCheck');
-      const oneWeekAgo = new Date();
-      oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-
-      if (isFriday && isAfterPrepareTime && (!lastCheck || new Date(lastCheck) < oneWeekAgo)) {
-          console.log("It's time to generate draft invoices!");
-          localStorage.setItem('lastInvoiceGenerationCheck', new Date().toISOString());
-      }
-    };
-    checkAndGenerateInvoices();
-  }, []);
-
-  const isLoading = isLoadingOrgs || isLoadingProjects || isLoadingInvoices || isLoadingTime;
-
-  // Filter data by selected organization
-  const filteredProjects = React.useMemo(() => {
-    if (!selectedOrgId) return [];
-    return projects.filter(p => p.organization_id === selectedOrgId);
-  }, [projects, selectedOrgId]);
-
-  const filteredInvoices = React.useMemo(() => {
-    if (!selectedOrgId) return [];
-    return invoices.filter(i => i.organization_id === selectedOrgId);
-  }, [invoices, selectedOrgId]);
-
-  const filteredTimeLogs = React.useMemo(() => {
-    if (!selectedOrgId) return [];
-    return timeLogs.filter(t => t.organization_id === selectedOrgId);
-  }, [timeLogs, selectedOrgId]);
-
-  const unbilledTime = filteredTimeLogs.filter(t => t.billable);
-  const unbilledAmount = unbilledTime.reduce((sum, t) => sum + (t.total_amount || 0), 0);
-  
-  const unpaidInvoices = filteredInvoices.filter(i => i.status !== 'paid' && i.status !== 'cancelled');
-  const totalAR = unpaidInvoices.reduce((sum, i) => sum + (i.balance_due || 0), 0);
-
-  const overdueInvoices = filteredInvoices.filter(i => 
-    i.status === 'overdue' || 
-    (i.due_date && !isNaN(new Date(i.due_date).getTime()) && new Date(i.due_date) < new Date() && i.status !== 'paid')
-  );
-
-  const selectedOrg = organizations.find(o => o.id === selectedOrgId);
-
-  if (isLoading) {
-    return (
-      <div className="flex justify-center items-center h-screen">
-        <Loader2 className="w-8 h-8 animate-spin text-slate-500" />
-      </div>
-    );
-  }
+  const tier = tiers.find((entry) => entry.id === form.tier_id)
+  const monthly = account.custom_monthly_cents ?? tier?.base_monthly_cents ?? null
+  const hourly = account.custom_hourly_cents ?? tier?.hourly_rate_cents ?? null
 
   return (
-    <div className="p-6 md:p-8">
-      <div className="max-w-7xl mx-auto">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
-          <div>
-            <h1 className="text-3xl font-bold text-slate-900">Billing & Invoicing</h1>
-            <p className="text-slate-600 mt-2">Ethical, transparent grant writing compensation</p>
-          </div>
-          
-          <div className="flex gap-3 w-full md:w-auto">
-            <Select value={selectedOrgId || ""} onValueChange={setSelectedOrgId} className="flex-1 md:flex-none md:w-64">
+    <Card className="border border-slate-200 bg-white/80 backdrop-blur-md shadow-sm">
+      <CardHeader className="pb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div>
+          <CardTitle className="text-lg font-semibold text-slate-900 flex items-center gap-2">
+            {account.profile_name}
+            <Badge variant="outline" className="capitalize text-xs text-slate-500 border-slate-200">
+              {account.profile_type?.replace(/_/g, " ") || "profile"}
+            </Badge>
+          </CardTitle>
+          <CardDescription>
+            Last updated {account.updated_at ? new Date(account.updated_at).toLocaleString() : "recently"}
+          </CardDescription>
+        </div>
+        <Badge className={account.is_pro_bono ? "bg-violet-600 text-white" : "bg-slate-900 text-white"}>
+          {account.is_pro_bono ? "Pro Bono" : tier?.name ?? "Tier pending"}
+        </Badge>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-2">
+            <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Billing tier</label>
+            <Select value={form.tier_id} onValueChange={(value) => setForm((prev) => ({ ...prev, tier_id: value }))}>
               <SelectTrigger>
-                <div className="flex items-center gap-2">
-                  <Building2 className="w-4 h-4 text-slate-500" />
-                  <SelectValue placeholder="Select a profile..." />
-                </div>
+                <SelectValue placeholder="Select tier" />
               </SelectTrigger>
               <SelectContent>
-                {organizations.map(org => (
-                  <SelectItem key={org.id} value={org.id}>{org.name}</SelectItem>
+                {tiers.map((tierOption) => (
+                  <SelectItem key={tierOption.id} value={tierOption.id}>
+                    <div className="flex flex-col items-start gap-1">
+                      <span className="font-medium">{tierOption.name}</span>
+                      <span className="text-xs text-slate-500">
+                        {formatCurrencyFromCents(tierOption.base_monthly_cents)} / mo
+                      </span>
+                    </div>
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            
-            {selectedOrgId && (
-              <>
-                <Link to={createPageUrl(`BillingSheet?organization_id=${selectedOrgId}`)}>
-                  <Button variant="outline" className="whitespace-nowrap">
-                    <FileText className="w-4 h-4 mr-2" />
-                    Billing Sheet
-                  </Button>
-                </Link>
-                <Link to={createPageUrl("BillingSheet")}>
-                  <Button variant="outline" className="whitespace-nowrap">
-                    <Printer className="w-4 h-4 mr-2" />
-                    Master Sheet
-                  </Button>
-                </Link>
-                <Link to={createPageUrl(`CreateInvoice?organization_id=${selectedOrgId}`)}>
-                  <Button className="bg-emerald-600 hover:bg-emerald-700 whitespace-nowrap">
-                    <Plus className="w-4 h-4 mr-2" />
-                    Invoice
-                  </Button>
-                </Link>
-                <Link to={createPageUrl("NewProject")}>
-                  <Button className="bg-blue-600 hover:bg-blue-700 whitespace-nowrap">
-                    <Plus className="w-4 h-4 mr-2" />
-                    Project
-                  </Button>
-                </Link>
-              </>
-            )}
+          </div>
+          <div className="space-y-2">
+            <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Discount</label>
+            <div className="flex gap-3 items-center">
+              <Select
+                value={form.discount_type}
+                onValueChange={(value) => setForm((prev) => ({ ...prev, discount_type: value }))}
+              >
+                <SelectTrigger className="flex-1">
+                  <SelectValue placeholder="No discount" />
+                </SelectTrigger>
+                <SelectContent>
+                  {discountOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Input
+                type="number"
+                min={0}
+                max={100}
+                value={form.discount_percent}
+                onChange={(event) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    discount_percent: Number.parseFloat(event.target.value) || 0,
+                  }))
+                }
+                className="w-24"
+              />
+              <span className="text-xs text-slate-500">%</span>
+            </div>
           </div>
         </div>
 
-        {/* Ethical Standards Banner */}
-        <Card className="mb-6 border-l-4 border-l-emerald-600 bg-emerald-50 border-emerald-200">
-          <CardContent className="p-4">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="w-5 h-5 text-emerald-700 mt-0.5" />
-              <div>
-                <h3 className="font-semibold text-emerald-900 mb-1">Ethical Billing Standards</h3>
-                <p className="text-sm text-emerald-800">
-                  This system enforces ethical grant writing practices: <strong>No percentage-of-award fees</strong>. 
-                  Only fixed-fee, hourly, or milestone billing. All costs must comply with funder rules.
-                </p>
-              </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-2">
+            <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Monthly retainer</label>
+            <p className="text-lg font-semibold text-slate-900">{formatCurrencyFromCents(monthly)}</p>
+            <p className="text-xs text-slate-500">{tier?.description ?? "Tier description pending"}</p>
+          </div>
+          <div className="space-y-2">
+            <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Hourly rate</label>
+            <p className="text-lg font-semibold text-slate-900">{formatCurrencyFromCents(hourly)}</p>
+            <p className="text-xs text-slate-500">Custom rates can be captured during invoice generation.</p>
+          </div>
+        </div>
+
+        <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Switch
+                id={`pro-bono-${account.id}`}
+                checked={form.is_pro_bono}
+                onCheckedChange={(checked) => setForm((prev) => ({ ...prev, is_pro_bono: checked }))}
+              />
+              <label htmlFor={`pro-bono-${account.id}`} className="text-sm font-medium text-slate-700">
+                Mark engagement as pro bono
+              </label>
             </div>
-          </CardContent>
-        </Card>
+            <Badge variant="outline" className="text-xs text-slate-500">
+              Logged for tax reporting
+            </Badge>
+          </div>
+          {form.is_pro_bono ? (
+            <Textarea
+              value={form.pro_bono_reason}
+              onChange={(event) => setForm((prev) => ({ ...prev, pro_bono_reason: event.target.value }))}
+              placeholder="Add internal notes about this pro bono arrangement."
+              className="min-h-[80px]"
+            />
+          ) : null}
+        </div>
 
-        {!selectedOrgId ? (
-          <Card className="shadow-lg border-0">
-            <CardContent className="p-12 text-center">
-              <Building2 className="w-16 h-16 mx-auto text-slate-300 mb-4" />
-              <h3 className="text-xl font-semibold text-slate-900 mb-2">No Profile Selected</h3>
-              <p className="text-slate-600">
-                Please select a profile from the dropdown above to view billing and invoicing information.
-              </p>
-            </CardContent>
-          </Card>
-        ) : (
-          <>
-            {/* Stats Overview */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-              <Card className="border-0 shadow-lg">
-                <CardContent className="p-6">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <p className="text-sm text-slate-600">Active Projects</p>
-                      <p className="text-3xl font-bold text-slate-900 mt-2">
-                        {filteredProjects.filter(p => p.status === 'active').length}
-                      </p>
-                    </div>
-                    <div className="p-3 bg-blue-50 rounded-xl">
-                      <FileText className="w-6 h-6 text-blue-600" />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
+        <div className="flex justify-end gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            onClick={() =>
+              setForm({
+                tier_id: account.tier_id,
+                discount_type: account.discount_type ?? "none",
+                discount_percent: account.discount_percent ?? 0,
+                is_pro_bono: account.is_pro_bono ?? false,
+                pro_bono_reason: account.pro_bono_reason ?? "",
+              })
+            }
+            disabled={saving}
+          >
+            Reset
+          </Button>
+          <Button className="gap-2" onClick={() => onSave(account.profile_id, form)} disabled={saving}>
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <PenSquare className="w-4 h-4" />}
+            {saving ? "Saving…" : "Save changes"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
 
-              <Card className="border-0 shadow-lg">
-                <CardContent className="p-6">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <p className="text-sm text-slate-600">Unbilled Time</p>
-                      <p className="text-3xl font-bold text-slate-900 mt-2">
-                        ${unbilledAmount.toLocaleString()}
-                      </p>
-                    </div>
-                    <div className="p-3 bg-amber-50 rounded-xl">
-                      <Clock className="w-6 h-6 text-amber-600" />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="border-0 shadow-lg">
-                <CardContent className="p-6">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <p className="text-sm text-slate-600">Accounts Receivable</p>
-                      <p className="text-3xl font-bold text-slate-900 mt-2">
-                        ${totalAR.toLocaleString()}
-                      </p>
-                    </div>
-                    <div className="p-3 bg-emerald-50 rounded-xl">
-                      <DollarSign className="w-6 h-6 text-emerald-600" />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="border-0 shadow-lg">
-                <CardContent className="p-6">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <p className="text-sm text-slate-600">Overdue Invoices</p>
-                      <p className="text-3xl font-bold text-red-600 mt-2">
-                        {overdueInvoices.length}
-                      </p>
-                    </div>
-                    <div className="p-3 bg-red-50 rounded-xl">
-                      <Receipt className="w-6 h-6 text-red-600" />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-
-            <Tabs value={activeTab} onValueChange={setActiveTab}>
-              <TabsList className="mb-6">
-                <TabsTrigger value="overview">Overview</TabsTrigger>
-                <TabsTrigger value="projects">Projects</TabsTrigger>
-                <TabsTrigger value="invoices">Invoices</TabsTrigger>
-                <TabsTrigger value="time">Time Tracking</TabsTrigger>
-                <TabsTrigger value="settings">Settings</TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="overview">
-                <div className="grid lg:grid-cols-2 gap-6">
-                  <Card className="shadow-lg border-0">
-                    <CardHeader className="border-b border-slate-100">
-                      <CardTitle>Recent Projects</CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-6">
-                      {filteredProjects.length === 0 ? (
-                        <div className="text-center py-8 text-slate-500">
-                          <FileText className="w-12 h-12 mx-auto mb-3 text-slate-300" />
-                          <p>No projects yet</p>
-                          <Link to={createPageUrl("NewProject")}>
-                            <Button variant="outline" size="sm" className="mt-3">
-                              Create First Project
-                            </Button>
-                          </Link>
-                        </div>
-                      ) : (
-                        <div className="space-y-3">
-                          {filteredProjects.slice(0, 5).map(project => (
-                            <div key={project.id} className="p-4 bg-slate-50 rounded-lg">
-                              <div className="flex justify-between items-start mb-2">
-                                <h4 className="font-semibold text-slate-900">{project.project_name}</h4>
-                                <Badge variant="outline">{project.status}</Badge>
-                              </div>
-                              <p className="text-sm text-slate-600">{selectedOrg?.name}</p>
-                              <div className="flex items-center gap-4 mt-2 text-sm">
-                                <span className="text-slate-600">
-                                  {project.pricing_model?.replace('_', ' ')}
-                                </span>
-                                {project.payment_option === 'bill_to_grant' && (
-                                  <Badge className="bg-emerald-100 text-emerald-700">
-                                    Grant Billable
-                                  </Badge>
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-
-                  <Card className="shadow-lg border-0">
-                    <CardHeader className="border-b border-slate-100">
-                      <CardTitle>Recent Invoices</CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-6">
-                      {filteredInvoices.length === 0 ? (
-                        <div className="text-center py-8 text-slate-500">
-                          <Receipt className="w-12 h-12 mx-auto mb-3 text-slate-300" />
-                          <p>No invoices yet</p>
-                        </div>
-                      ) : (
-                        <div className="space-y-3">
-                          {filteredInvoices.slice(0, 5).map(invoice => (
-                            <div key={invoice.id} className="p-4 bg-slate-50 rounded-lg">
-                              <div className="flex justify-between items-start mb-2">
-                                <h4 className="font-semibold text-slate-900">{invoice.invoice_number}</h4>
-                                <Badge 
-                                  variant={invoice.status === 'paid' ? 'default' : 'outline'}
-                                  className={invoice.status === 'overdue' ? 'bg-red-100 text-red-700' : ''}
-                                >
-                                  {invoice.status}
-                                </Badge>
-                              </div>
-                              <div className="flex justify-between items-center text-sm">
-                                <span className="text-slate-600">
-                                  Due: {invoice.due_date && !isNaN(new Date(invoice.due_date)) ? new Date(invoice.due_date).toLocaleDateString() : 'N/A'}
-                                </span>
-                                <span className="font-bold text-slate-900">
-                                  ${invoice.balance_due?.toLocaleString()}
-                                </span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                </div>
-              </TabsContent>
-
-              <TabsContent value="projects">
-                <ProjectsTab projects={filteredProjects} organizations={[selectedOrg]} />
-              </TabsContent>
-
-              <TabsContent value="invoices">
-                <InvoicesTab invoices={filteredInvoices} organizations={[selectedOrg]} />
-              </TabsContent>
-
-              <TabsContent value="time">
-                <TimeTrackingTab timeLogs={filteredTimeLogs} projects={filteredProjects} />
-              </TabsContent>
-
-              <TabsContent value="settings">
-                <SettingsTab />
-              </TabsContent>
-            </Tabs>
-          </>
-        )}
+function MemberBillingCard({ profileId, billing, isLoading, onRefresh }) {
+  if (isLoading) {
+    return (
+      <div className="flex min-h-[220px] items-center justify-center">
+        <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
       </div>
+    )
+  }
+
+  if (!billing) {
+    return (
+      <Card className="border border-slate-200 bg-white/80">
+        <CardHeader>
+          <CardTitle>Billing details unavailable</CardTitle>
+          <CardDescription>
+            We could not load billing information for this profile. Refresh or contact the GrantFlow admin team.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button variant="outline" onClick={onRefresh}>
+            Refresh
+          </Button>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  const tier = billing.account?.tier
+  const monthly = billing.account?.custom_monthly_cents ?? tier?.base_monthly_cents ?? null
+  const hourly = billing.account?.custom_hourly_cents ?? tier?.hourly_rate_cents ?? null
+
+  return (
+    <Card className="border border-slate-200 bg-white/80 shadow-sm">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-lg font-semibold">
+          Billing details
+          <Badge variant="outline" className="text-xs text-slate-500 border-slate-200">
+            Profile ID {profileId ? `${profileId.slice(0, 8)}…` : "unknown"}
+          </Badge>
+        </CardTitle>
+        <CardDescription>
+          Your plan reflects the onboarding application and any admin overrides. Reach out if circumstances change.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Tier</p>
+            <p className="text-lg font-semibold text-slate-900 mt-1">
+              {billing.account?.is_pro_bono ? "Pro Bono" : tier?.name ?? "Awaiting assignment"}
+            </p>
+            <p className="text-xs text-slate-500 mt-1">
+              {tier?.description ?? "Once assigned, tier capabilities will appear here."}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Monthly Retainer</p>
+            <p className="text-lg font-semibold text-slate-900 mt-1">{formatCurrencyFromCents(monthly)}</p>
+            <p className="text-xs text-slate-500 mt-1">
+              Hourly support billed at {formatCurrencyFromCents(hourly)}.
+            </p>
+          </div>
+        </div>
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4 flex gap-3 items-start">
+          <ShieldCheck className="w-5 h-5 text-emerald-600 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-emerald-700">Ethical billing commitments</p>
+            <p className="text-xs text-emerald-700 mt-1">
+              No percentage-of-award fees. Only transparent hourly, milestone, or retainer billing aligned with funder rules.
+              Discounts for students and ministers are automatically applied where approved.
+            </p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+export default function Billing() {
+  const queryClient = useQueryClient()
+  const { toast } = useToast()
+  const { user, activeProfileId } = useAuthStore((state) => ({
+    user: state.user,
+    activeProfileId: state.activeProfileId,
+  }))
+
+  const isAdmin = Boolean(user?.is_admin || user?.id === "admin")
+
+  const tiersQuery = useQuery({
+    queryKey: ["billing-tiers"],
+    queryFn: listBillingTiers,
+  })
+
+  const accountsQuery = useQuery({
+    queryKey: ["billing-accounts"],
+    queryFn: listBillingAccounts,
+    enabled: isAdmin,
+  })
+
+  const activeAccountQuery = useQuery({
+    queryKey: ["billing-account", activeProfileId],
+    queryFn: () => getBillingAccount(activeProfileId),
+    enabled: !isAdmin && Boolean(activeProfileId),
+  })
+
+  const profileQuery = useQuery({
+    queryKey: ["profile", activeProfileId],
+    queryFn: () => getProfile(activeProfileId),
+    enabled: !isAdmin && Boolean(activeProfileId),
+  })
+
+  const updateMutation = useMutation({
+    mutationFn: ({ profileId, payload }) => updateBillingAccount(profileId, payload),
+    onSuccess: (response, variables) => {
+      toast({
+        title: "Billing updated",
+        description: "The billing assignment was saved successfully.",
+      })
+      queryClient.invalidateQueries({ queryKey: ["billing-accounts"] })
+      if (variables.profileId) {
+        queryClient.invalidateQueries({ queryKey: ["billing-account", variables.profileId] })
+        queryClient.invalidateQueries({ queryKey: ["profile", variables.profileId] })
+      }
+    },
+    onError: (error) => {
+      toast({
+        variant: "destructive",
+        title: "Unable to update billing",
+        description: error instanceof Error ? error.message : "Try again shortly.",
+      })
+    },
+  })
+
+  const handleSaveAccount = (profileId, payload) => {
+    updateMutation.mutate({ profileId, payload })
+  }
+
+  if (isAdmin) {
+    if (tiersQuery.isLoading || accountsQuery.isLoading) {
+      return (
+        <div className="flex min-h-[320px] items-center justify-center">
+          <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+        </div>
+      )
+    }
+
+    const tiers = tiersQuery.data ?? []
+    const accounts = accountsQuery.data ?? []
+
+    return (
+      <div className="p-6 md:p-10 space-y-8">
+        <header className="space-y-2">
+          <h1 className="text-3xl font-bold text-slate-900">Billing Console</h1>
+          <p className="text-sm text-slate-600 max-w-3xl">
+            Assign tiers, apply student or minister discounts, and track pro bono agreements across every onboarding profile.
+            Changes here flow through to invoices, time tracking, and reporting exports.
+          </p>
+        </header>
+
+        <section className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
+              <Users className="w-4 h-4" />
+              Active accounts
+            </h2>
+            <Button variant="outline" size="sm" onClick={() => accountsQuery.refetch()}>
+              Refresh
+            </Button>
+          </div>
+          <div className="grid gap-6">
+            {accounts.map((account) => (
+              <BillingAccountCard
+                key={account.id}
+                account={account}
+                tiers={tiers}
+                onSave={handleSaveAccount}
+                saving={updateMutation.isPending && updateMutation.variables?.profileId === account.profile_id}
+              />
+            ))}
+            {accounts.length === 0 ? (
+              <Card className="border border-slate-200 bg-white/80">
+                <CardContent className="p-8 text-center text-sm text-slate-500">
+                  No billing accounts have been created yet. Profiles will appear here once onboarding begins.
+                </CardContent>
+              </Card>
+            ) : null}
+          </div>
+        </section>
+      </div>
+    )
+  }
+
+  return (
+    <div className="p-6 md:p-10 space-y-8">
+      <header className="space-y-2">
+        <h1 className="text-3xl font-bold text-slate-900">Billing Overview</h1>
+        <p className="text-sm text-slate-600">
+          Review the tier and guardrails tied to your onboarding application. Contact the GrantFlow team if your situation
+          changes or you need to request a different arrangement.
+        </p>
+      </header>
+      <MemberBillingCard
+        profileId={activeProfileId ?? "unknown"}
+        billing={activeAccountQuery.data}
+        isLoading={activeAccountQuery.isLoading || profileQuery.isLoading}
+        onRefresh={() => {
+          activeAccountQuery.refetch()
+          profileQuery.refetch()
+        }}
+      />
     </div>
-  );
+  )
 }

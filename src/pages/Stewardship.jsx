@@ -48,7 +48,7 @@ export default function Stewardship() {
     }, [data, selectedGrantId]);
     
     // Set the first grant as selected by default
-    useEffect(() => {
+    useState(() => {
       if (data?.grants?.length > 0 && !selectedGrantId) {
         setSelectedGrantId(data.grants[0].id);
       }

@@ -11,6 +11,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { X, Loader2, UploadCloud } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useToast } from "@/components/ui/use-toast";
+import { ingestDocument } from "@/api/documents";
 
 const DOCUMENT_TYPES = [
   "nofo", "proposal", "budget", "letter_of_support", "mou", "resume",
@@ -21,21 +23,68 @@ const DOCUMENT_TYPES = [
 const ALLOWED_FILE_TYPES = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'image/png', 'image/jpeg'];
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
 
-export default function DocumentUploader({ organizationId, onClose }) {
+export default function DocumentUploader({ profileId, organizationId, onClose }) {
   const queryClient = useQueryClient();
   const { register, handleSubmit, control, formState: { errors } } = useForm();
   const [file, setFile] = useState(null);
   const [fileError, setFileError] = useState(null);
+  const { toast } = useToast();
 
-  const uploadFileMutation = useMutation({
-    mutationFn: (file) => base44.integrations.Core.UploadPrivateFile({ file }),
-  });
+  const ingestMutation = useMutation({
+    mutationFn: async ({ file, title, documentType, description, tags }) => {
+      if (!profileId) {
+        throw new Error("Select a profile before uploading a document.");
+      }
 
-  const createDocMutation = useMutation({
-    mutationFn: (docData) => base44.entities.Document.create(docData),
+      const { file_uri } = await base44.integrations.Core.UploadPrivateFile({ file });
+
+      const extractionResult = await base44.integrations.Core.ExtractDataFromUploadedFile({
+        file_url: file_uri,
+        json_schema: {
+          type: "object",
+          properties: {
+            full_text: {
+              type: "string",
+              description: "The full, plain text content of the entire document."
+            }
+          }
+        }
+      });
+
+      if (extractionResult.status === 'error') {
+        throw new Error(extractionResult.details || "Failed to extract data from document.");
+      }
+
+      const extractedText = extractionResult.output?.full_text ?? '';
+      const notes = [description?.trim(), tags ? `Tags: ${tags}` : null]
+        .filter(Boolean)
+        .join('\n');
+
+      return ingestDocument({
+        profile_id: profileId,
+        organization_id: organizationId ?? null,
+        name: title || file.name,
+        type: documentType,
+        file_url: file_uri,
+        file_size: file.size,
+        mime_type: file.type,
+        extracted_text: extractedText,
+        notes: notes || null,
+      });
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['documents', organizationId] });
-      onClose();
+      queryClient.invalidateQueries({ queryKey: ['documents', profileId] });
+      queryClient.invalidateQueries({ queryKey: ['profile', profileId] });
+      toast({
+        title: "📄 Document queued for enrichment",
+        description: "AI will analyze the document and update the profile shortly.",
+      });
+      setFile(null);
+      setFileError(null);
+      if (onClose) onClose();
+    },
+    onError: (error) => {
+      setFileError(error instanceof Error ? error.message : String(error));
     },
   });
 
@@ -56,20 +105,16 @@ export default function DocumentUploader({ organizationId, onClose }) {
     }
 
     try {
-      const uploadResult = await uploadFileMutation.mutateAsync(file);
-      const fileUri = uploadResult.file_uri;
-
-      await createDocMutation.mutateAsync({
-        ...data,
-        organization_id: organizationId,
-        file_uri: fileUri,
-        file_type: file.type,
+      await ingestMutation.mutateAsync({
+        file,
+        title: data.title,
+        documentType: data.document_type,
+        description: data.description,
+        tags: data.tags,
       });
-
     } catch (error) {
       console.error("Upload failed", error);
-      // Optionally set an error message for the user if mutation fails
-      setFileError("Document upload failed. Please try again.");
+      setFileError(error instanceof Error ? error.message : "Document upload failed. Please try again.");
     }
   };
 
@@ -95,7 +140,7 @@ export default function DocumentUploader({ organizationId, onClose }) {
     }
   };
   
-  const isSubmitting = uploadFileMutation.isPending || createDocMutation.isPending;
+  const isSubmitting = ingestMutation.isPending;
 
   return (
     <Card className="mb-8 shadow-xl border-0 bg-white">

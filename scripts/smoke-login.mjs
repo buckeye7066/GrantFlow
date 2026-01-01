@@ -2,6 +2,11 @@
 /**
  * Minimal smoke test to ensure the production bundle renders the login page.
  * Requires `npm run preview` (or another static server) to be running locally.
+ *
+ * Environment variables:
+ *   SMOKE_BASE_URL  - Override the preview base URL (default http://127.0.0.1:4173)
+ *   SMOKE_BASE_PATH - Override the base path for the app (default /grantflow)
+ *   SMOKE_TARGET_PATH - Override the page under the base path (default login)
  */
 
 import process from 'node:process'
@@ -9,7 +14,21 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { chromium } from 'playwright'
 
 const PREVIEW_BASE_URL = process.env.SMOKE_BASE_URL ?? 'http://127.0.0.1:4173'
-const TARGET_URL = new URL('/grantflow/login', PREVIEW_BASE_URL).toString()
+
+function buildTargetPath(basePath, leafPath) {
+  const sanitize = (value) => value.replace(/^\/+|\/+$/g, '')
+  const normalizedBase = sanitize(basePath ?? '')
+  const normalizedLeaf = sanitize(leafPath ?? '')
+  const parts = [normalizedBase, normalizedLeaf].filter(Boolean)
+  if (parts.length === 0) {
+    return '/'
+  }
+  return `/${parts.join('/')}`
+}
+
+const basePathEnv = process.env.SMOKE_BASE_PATH ?? '/grantflow'
+const targetLeafEnv = process.env.SMOKE_TARGET_PATH ?? 'login'
+const TARGET_URL = new URL(buildTargetPath(basePathEnv, targetLeafEnv), PREVIEW_BASE_URL).toString()
 
 async function ensurePreviewReachable(url, retries = 5) {
   const fetchFn = globalThis.fetch
@@ -36,15 +55,39 @@ async function run() {
 
   const browser = await chromium.launch({ headless: true })
   const page = await browser.newPage()
+  if (process.env.SMOKE_DEBUG === '1') {
+    page.on('console', (message) => {
+      console.log(`[smoke][debug] console.${message.type()}: ${message.text()}`)
+    })
+    page.on('pageerror', (error) => {
+      console.error('[smoke][debug] page error:', error instanceof Error ? error.stack : error)
+    })
+  }
   try {
     const response = await page.goto(TARGET_URL, { waitUntil: 'networkidle', timeout: 15_000 })
     if (!response || !response.ok()) {
       throw new Error(`Failed to load ${TARGET_URL} (status: ${response?.status() ?? 'no response'})`)
     }
 
-    await page.waitForSelector('text=GrantFlow Control Center', { timeout: 10_000 })
-    await page.waitForSelector('input[type="password"]', { timeout: 10_000 })
-    console.log('[smoke] Login screen rendered successfully.')
+    if (process.env.SMOKE_DEBUG === '1') {
+      const html = await page.content()
+      console.log('[smoke][debug] document snippet:', html.slice(0, 500))
+    }
+
+    await page.waitForSelector('text=Sign in to GrantFlow', { timeout: 10_000 })
+    await page.waitForSelector('role=tab[name="Email"]', { timeout: 5_000 })
+    await page.waitForSelector('role=tab[name="Phone"]', { timeout: 5_000 })
+    await page.waitForSelector('role=tab[name="Social"]', { timeout: 5_000 })
+
+    await page.click('role=tab[name="Phone"]')
+    await page.waitForSelector('text=Text me a code', { timeout: 5_000 })
+
+    await page.click('role=tab[name="Social"]')
+    await page.waitForSelector('text=Continue with Google', { timeout: 5_000 })
+    await page.waitForSelector('text=Continue with Facebook', { timeout: 5_000 })
+    await page.waitForSelector('text=Continue with Yahoo', { timeout: 5_000 })
+
+    console.log('[smoke] GrantFlow login surface rendered all auth methods.')
   } finally {
     await browser.close()
   }

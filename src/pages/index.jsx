@@ -1,14 +1,22 @@
+import { useState } from "react";
+import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import Layout from "./Layout.jsx";
 
 import Dashboard from "./Dashboard";
 
 import Organizations from "./Organizations";
+import Funder from "./Funder";
 
 import DiscoverGrants from "./DiscoverGrants";
+import SmartMatcher from "./SmartMatcher";
+import ItemFunding from "./ItemFunding";
 
 import Pipeline from "./Pipeline";
 
 import Proposals from "./Proposals";
+import ContactAdmin from "./ContactAdmin";
+import Outreach from "./Outreach";
+import GrantDeadline from "./GrantDeadline";
 
 import Budgets from "./Budgets";
 
@@ -17,8 +25,10 @@ import Documents from "./Documents";
 import Calendar from "./Calendar";
 
 import Reports from "./Reports";
+import AdvancedAnalytics from "./AdvancedAnalytics";
 
 import Billing from "./Billing";
+import Automation from "./Automation";
 
 import NewProject from "./NewProject";
 
@@ -62,7 +72,30 @@ import BillingSheet from "./BillingSheet";
 
 import OrganizationProfile from "./OrganizationProfile";
 
-import { BrowserRouter as Router, Route, Routes, useLocation } from 'react-router-dom';
+import FundingOpportunities from "./FundingOpportunities";
+
+import Login from "./Login";
+import AuthCallback from "./AuthCallback";
+
+import { BrowserRouter as Router, Route, Routes, useLocation, Navigate } from 'react-router-dom';
+import { useAuthStore } from "@/stores/authStore";
+
+function EnsureQueryClientProvider({ children }) {
+    const [fallbackClient] = useState(() => new QueryClient());
+    let hasClient = true;
+
+    try {
+        useQueryClient();
+    } catch (error) {
+        hasClient = false;
+    }
+
+    if (!hasClient) {
+        return <QueryClientProvider client={fallbackClient}>{children}</QueryClientProvider>;
+    }
+
+    return children;
+}
 
 const PAGES = {
     
@@ -70,11 +103,23 @@ const PAGES = {
     
     Organizations: Organizations,
     
+    Funder: Funder,
+    
     DiscoverGrants: DiscoverGrants,
+    
+    SmartMatcher: SmartMatcher,
+    
+    ItemFunding: ItemFunding,
     
     Pipeline: Pipeline,
     
     Proposals: Proposals,
+    
+    ContactAdmin: ContactAdmin,
+    
+    Outreach: Outreach,
+    
+    GrantDeadline: GrantDeadline,
     
     Budgets: Budgets,
     
@@ -84,7 +129,11 @@ const PAGES = {
     
     Reports: Reports,
     
+    AdvancedAnalytics: AdvancedAnalytics,
+    
     Billing: Billing,
+    
+    Automation: Automation,
     
     NewProject: NewProject,
     
@@ -120,6 +169,8 @@ const PAGES = {
     
     SourceDirectory: SourceDirectory,
     
+    FundingOpportunities: FundingOpportunities,
+    
     GrantMonitoring: GrantMonitoring,
     
     PrintableApplication: PrintableApplication,
@@ -144,81 +195,109 @@ function _getCurrentPage(url) {
 }
 
 // Create a wrapper component that uses useLocation inside the Router context
-function PagesContent() {
+function LayoutRoutes() {
     const location = useLocation();
     const currentPage = _getCurrentPage(location.pathname);
-    
+    const { isAuthenticated, sessionExpired } = useAuthStore((state) => ({
+        isAuthenticated: state.isAuthenticated,
+        sessionExpired: state.sessionExpired,
+    }));
+
+    if (!isAuthenticated && !sessionExpired) {
+        return <Navigate to="/login" state={{ from: location }} replace />;
+    }
+
     return (
-        <Layout currentPageName={currentPage}>
-            <Routes>            
-                
-                    <Route path="/" element={<Dashboard />} />
-                
-                
+        <EnsureQueryClientProvider>
+            <Layout currentPageName={currentPage}>
+                <Routes>
+
+                <Route path="/" element={<Dashboard />} />
+
+
                 <Route path="/Dashboard" element={<Dashboard />} />
-                
+
                 <Route path="/Organizations" element={<Organizations />} />
-                
+
+                <Route path="/Funder" element={<Funder />} />
+
                 <Route path="/DiscoverGrants" element={<DiscoverGrants />} />
-                
+
+                <Route path="/SmartMatcher" element={<SmartMatcher />} />
+
+                <Route path="/ItemFunding" element={<ItemFunding />} />
+
                 <Route path="/Pipeline" element={<Pipeline />} />
-                
+
                 <Route path="/Proposals" element={<Proposals />} />
-                
+
+                <Route path="/ContactAdmin" element={<ContactAdmin />} />
+
+                <Route path="/Outreach" element={<Outreach />} />
+
+                <Route path="/GrantDeadline" element={<GrantDeadline />} />
+
                 <Route path="/Budgets" element={<Budgets />} />
-                
+
                 <Route path="/Documents" element={<Documents />} />
-                
+
                 <Route path="/Calendar" element={<Calendar />} />
-                
+
                 <Route path="/Reports" element={<Reports />} />
-                
+
+                <Route path="/AdvancedAnalytics" element={<AdvancedAnalytics />} />
+
                 <Route path="/Billing" element={<Billing />} />
-                
+
+                <Route path="/Automation" element={<Automation />} />
+
                 <Route path="/NewProject" element={<NewProject />} />
-                
+
                 <Route path="/GrantDetail" element={<GrantDetail />} />
-                
+
                 <Route path="/InvoiceView" element={<InvoiceView />} />
-                
+
                 <Route path="/CreateInvoice" element={<CreateInvoice />} />
-                
+
                 <Route path="/NOFOParser" element={<NOFOParser />} />
-                
+
                 <Route path="/AIGrantScorer" element={<AIGrantScorer />} />
-                
+
                 <Route path="/BudgetDetail" element={<BudgetDetail />} />
-                
+
                 <Route path="/PrintPipeline" element={<PrintPipeline />} />
-                
+
                 <Route path="/OneTimeFix" element={<OneTimeFix />} />
-                
+
                 <Route path="/DataSources" element={<DataSources />} />
-                
+
                 <Route path="/SourceRegistry" element={<SourceRegistry />} />
-                
+
                 <Route path="/BackfillContacts" element={<BackfillContacts />} />
-                
+
                 <Route path="/Stewardship" element={<Stewardship />} />
-                
+
                 <Route path="/Diagnostics" element={<Diagnostics />} />
-                
+
                 <Route path="/ComplianceReportDetail" element={<ComplianceReportDetail />} />
-                
+
                 <Route path="/ProfileMatcher" element={<ProfileMatcher />} />
-                
+
                 <Route path="/SourceDirectory" element={<SourceDirectory />} />
-                
+
+                <Route path="/FundingOpportunities" element={<FundingOpportunities />} />
+
                 <Route path="/GrantMonitoring" element={<GrantMonitoring />} />
-                
+
                 <Route path="/PrintableApplication" element={<PrintableApplication />} />
-                
+
                 <Route path="/BillingSheet" element={<BillingSheet />} />
-                
-                <Route path="/OrganizationProfile" element={<OrganizationProfile />} />
-                
-            </Routes>
-        </Layout>
+
+                    <Route path="/OrganizationProfile" element={<OrganizationProfile />} />
+
+                </Routes>
+            </Layout>
+        </EnsureQueryClientProvider>
     );
 }
 
@@ -227,7 +306,11 @@ export default function Pages() {
 
     return (
         <Router basename={basename}>
-            <PagesContent />
+            <Routes>
+                <Route path="/login" element={<Login />} />
+                <Route path="/auth/callback" element={<AuthCallback />} />
+                <Route path="/*" element={<LayoutRoutes />} />
+            </Routes>
         </Router>
     );
 }

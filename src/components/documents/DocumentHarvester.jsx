@@ -9,8 +9,9 @@ import { Loader2, UploadCloud, CheckCircle, AlertTriangle, FileUp, Clock } from 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/components/ui/use-toast';
 import { Badge } from '@/components/ui/badge';
+import { ingestDocument } from '@/api/documents';
 
-export default function DocumentHarvester({ organizationId }) {
+export default function DocumentHarvester({ profileId, organizationId, onComplete }) {
   const [file, setFile] = useState(null);
   const [title, setTitle] = useState('');
   const [documentType, setDocumentType] = useState('other');
@@ -20,6 +21,9 @@ export default function DocumentHarvester({ organizationId }) {
 
   const mutation = useMutation({
     mutationFn: async ({ file, title, documentType }) => {
+      if (!profileId) {
+        throw new Error('Profile ID is required for document ingestion.');
+      }
       const docId = Date.now(); // Unique ID for tracking
       
       // Add to processing list immediately
@@ -55,25 +59,23 @@ export default function DocumentHarvester({ organizationId }) {
         }
         
         const extractedText = extractionResult.output?.full_text || '';
-        
-        await base44.entities.Document.create({
-          organization_id: organizationId,
-          title: title || file.name,
-          document_type: documentType,
-          file_uri: file_uri,
-          file_type: file.type,
-          harvested_data: JSON.stringify(extractionResult.output),
-          status: 'processed'
-        });
-        
-        const org = await base44.entities.Organization.get(organizationId);
-        
-        const updatedOrgData = {
-          additional_data: (org.additional_data || '') + `\n\n--- Document: ${title || file.name} ---\n\n` + extractedText,
-        };
-        await base44.entities.Organization.update(organizationId, updatedOrgData);
 
-        return { docId, success: true };
+        setProcessingDocs(prev => prev.map(doc =>
+          doc.id === docId ? { ...doc, status: 'queuing' } : doc
+        ));
+
+        const serverDocument = await ingestDocument({
+          profile_id: profileId,
+          organization_id: organizationId ?? null,
+          name: title || file.name,
+          type: documentType,
+          file_url: file_uri,
+          file_size: file.size,
+          mime_type: file.type,
+          extracted_text: extractedText,
+        });
+
+        return { docId, document: serverDocument };
       } catch (error) {
         setProcessingDocs(prev => prev.map(doc => 
           doc.id === docId ? { ...doc, status: 'failed', error: error.message } : doc
@@ -84,16 +86,20 @@ export default function DocumentHarvester({ organizationId }) {
     onSuccess: ({ docId }) => {
       // Update to success status
       setProcessingDocs(prev => prev.map(doc => 
-        doc.id === docId ? { ...doc, status: 'success' } : doc
+        doc.id === docId ? { ...doc, status: 'queued' } : doc
       ));
 
-      queryClient.invalidateQueries({ queryKey: ['organizations'] });
-      queryClient.invalidateQueries({ queryKey: ['documents'] });
+      queryClient.invalidateQueries({ queryKey: ['documents', profileId] });
+      queryClient.invalidateQueries({ queryKey: ['profile', profileId] });
       
       toast({
-        title: "✅ Document Processed!",
-        description: "AI has extracted the text and updated the profile.",
+        title: "📄 Document queued for enrichment",
+        description: "We’ll parse the document and update the profile automatically.",
       });
+
+      if (onComplete) {
+        onComplete();
+      }
 
       // Remove from list after 3 seconds
       setTimeout(() => {
@@ -208,17 +214,19 @@ export default function DocumentHarvester({ organizationId }) {
                 <div className="flex items-center gap-2 flex-1 min-w-0">
                   {doc.status === 'uploading' && <Loader2 className="w-4 h-4 text-blue-600 animate-spin flex-shrink-0" />}
                   {doc.status === 'extracting' && <Clock className="w-4 h-4 text-purple-600 flex-shrink-0" />}
-                  {doc.status === 'success' && <CheckCircle className="w-4 h-4 text-emerald-600 flex-shrink-0" />}
+                  {doc.status === 'queuing' && <Clock className="w-4 h-4 text-blue-500 flex-shrink-0" />}
+                  {doc.status === 'queued' && <CheckCircle className="w-4 h-4 text-emerald-600 flex-shrink-0" />}
                   {doc.status === 'failed' && <AlertTriangle className="w-4 h-4 text-red-600 flex-shrink-0" />}
                   <span className="text-sm truncate">{doc.name}</span>
                 </div>
-                <Badge 
-                  variant={doc.status === 'success' ? 'default' : doc.status === 'failed' ? 'destructive' : 'secondary'}
+                <Badge
+                  variant={doc.status === 'queued' ? 'default' : doc.status === 'failed' ? 'destructive' : 'secondary'}
                   className="text-xs ml-2 flex-shrink-0"
                 >
                   {doc.status === 'uploading' && 'Uploading'}
                   {doc.status === 'extracting' && 'Extracting'}
-                  {doc.status === 'success' && 'Complete'}
+                  {doc.status === 'queuing' && 'Queuing'}
+                  {doc.status === 'queued' && 'Queued'}
                   {doc.status === 'failed' && 'Failed'}
                 </Badge>
               </div>
