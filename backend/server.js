@@ -4,6 +4,7 @@ import Database from 'better-sqlite3';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
+import rateLimit from 'express-rate-limit';
 
 // Routes
 import organizationsRouter from './routes/organizations.js';
@@ -444,8 +445,17 @@ app.get('/api/pipeline/stats', (req, res) => {
   }
 });
 
+// Rate limiter for SPA fallback route to prevent abuse
+const spaFallbackLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  limit: 100, // Allow 100 requests per minute per IP (generous for normal browsing)
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  skip: (req) => req.path.startsWith('/api/'), // Skip API routes
+});
+
 // Serve React app for all non-API routes (SPA fallback)
-app.get('*', (req, res, next) => {
+app.get('*', spaFallbackLimiter, (req, res, next) => {
   // Skip API routes - let them fall through to 404 handler
   if (req.path.startsWith('/api/')) {
     return next();
