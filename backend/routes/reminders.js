@@ -57,7 +57,7 @@ export function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD) {
         AND JULIANDAY(g.deadline) >= JULIANDAY('now')
         AND JULIANDAY(g.deadline) <= JULIANDAY('now') + ?
         AND g.status IN ('discovered', 'interested', 'drafting', 'app_prep', 'submission_ready')
-      ORDER BY DATE(g.deadline) ASC
+      ORDER BY g.deadline ASC
       LIMIT 10
     `,
   ).all(lookaheadDays);
@@ -83,7 +83,7 @@ export function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD) {
         AND m.due_date IS NOT NULL
         AND JULIANDAY(m.due_date) >= JULIANDAY('now')
         AND JULIANDAY(m.due_date) <= JULIANDAY('now') + ?
-      ORDER BY DATE(m.due_date) ASC
+      ORDER BY m.due_date ASC
       LIMIT 10
     `,
   ).all(lookaheadDays);
