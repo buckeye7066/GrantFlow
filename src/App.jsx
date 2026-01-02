@@ -17,10 +17,13 @@ function App() {
 
     const accessToken = base44.getToken?.()
     if (!accessToken) {
+      // No token present, clear any stale state and mark as bootstrapped
+      clearState()
       setBootstrapped(true)
       return
     }
 
+    // Token exists, validate it with the server
     base44.auth
       .me()
       .then((response) => {
@@ -31,6 +34,7 @@ function App() {
         }
       })
       .catch(() => {
+        // Token is invalid or expired, clear state
         clearState()
       })
       .finally(() => {

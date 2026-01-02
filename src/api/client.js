@@ -71,6 +71,12 @@ class APIClient {
     }
   }
 
+  createAuthError(message) {
+    const error = new Error(message);
+    error.status = 401;
+    return error;
+  }
+
   async handleUnauthorized(originalRequest) {
     const refreshToken = this.getRefreshToken();
     
@@ -79,10 +85,9 @@ class APIClient {
       this.clearToken();
       if (this.onAuthFailure) {
         this.onAuthFailure('Your session expired. Sign in again to continue.');
-      } else {
-        this.auth.redirectToLogin();
       }
-      throw new Error('Authentication required');
+      // Don't redirect automatically - let the app handle it
+      throw this.createAuthError('Authentication required');
     }
     
     // Single-flight refresh: if a refresh is already in progress, await it
@@ -325,7 +330,13 @@ class APIClient {
 
       try {
         return await this.fetch('/api/auth/me');
-      } catch {
+      } catch (error) {
+        // If 401, clear tokens and return null (user not authenticated)
+        if (error.status === 401) {
+          this.clearToken();
+          return null;
+        }
+        // For other errors, return null to avoid breaking the app
         return null;
       }
     },
