@@ -5,6 +5,7 @@ import { Toaster } from '@/components/ui/toaster'
 import SessionExpiredDialog from '@/components/auth/SessionExpiredDialog'
 import { base44 } from '@/api/base44Client'
 import { useAuthStore } from '@/stores/authStore'
+import { AppErrorBoundary } from '@/components/shared/AppErrorBoundary.jsx'
 
 function App() {
   const [bootstrapped, setBootstrapped] = useState(false)
@@ -48,7 +49,9 @@ function App() {
 
   return (
     <>
-      <Pages />
+      <AppErrorBoundary fallbackMessage="Reload the page to keep working.">
+        <Pages />
+      </AppErrorBoundary>
       <Toaster />
       <SessionExpiredDialog />
     </>

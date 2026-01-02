@@ -38,6 +38,7 @@ import {
 import { base44 } from "@/api/base44Client";
 import { useQuery } from "@tanstack/react-query";
 import AutoTimeTracker from "@/components/billing/AutoTimeTracker";
+import { useAuthStore } from "@/stores/authStore";
 
 const navigationItems = [
   {
@@ -142,11 +143,13 @@ const developerItems = [
 
 export default function Layout({ children, currentPageName }) {
   const location = useLocation();
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
 
   const { data: user } = useQuery({
     queryKey: ['currentUser'],
     queryFn: () => base44.auth.me(),
     retry: false,
+    enabled: isAuthenticated,
   });
 
   const handleLogout = () => {

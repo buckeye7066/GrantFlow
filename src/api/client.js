@@ -107,6 +107,7 @@ class APIClient {
       this.refreshPromise = fetch(`${this.baseUrl}/api/auth/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ refreshToken }),
       })
         .then(async (response) => {
@@ -164,6 +165,7 @@ class APIClient {
 
     const response = await fetch(url, {
       ...options,
+      credentials: options?.credentials ?? 'include',
       headers,
     });
 

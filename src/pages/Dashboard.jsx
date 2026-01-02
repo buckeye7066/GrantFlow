@@ -131,14 +131,6 @@ export default function Dashboard() {
     enabled: shouldFetch,
   })
 
-  if (!shouldFetch) {
-    return (
-      <div className="flex min-h-screen items-center justify-center p-6 text-sm text-slate-500">
-        Session ended. Sign back in to keep working.
-      </div>
-    )
-  }
-
   const profileOrganizationId = profileDetail?.organization_id ?? null
 
   const relevantGrants = useMemo(() => {
@@ -245,6 +237,18 @@ export default function Dashboard() {
     ],
     [displayOrganizationsCount, activeGrants.length, totalExpenses, urgentDeadlines.length],
   )
+
+  if (!shouldFetch) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-slate-50 p-6 text-center text-slate-600">
+        <p className="text-base font-medium">Your session ended.</p>
+        <p className="max-w-sm text-sm">
+          Sign back in to pick up where you left off—your work is safe.
+        </p>
+        <Button onClick={() => base44.auth.redirectToLogin()}>Return to login</Button>
+      </div>
+    )
+  }
 
   const isLoading =
     shouldFetch &&
