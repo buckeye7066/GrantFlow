@@ -265,10 +265,15 @@ export const useAuthStore = create((set, get) => ({
     if (typeof window !== 'undefined') {
       localStorage.setItem('grantflow:auth-method', method)
     }
-    set((state) => ({
-      ...state,
-      preferredAuthMethod: method,
-    }))
+    set((state) => {
+      if (state.preferredAuthMethod === method) {
+        return state
+      }
+      return {
+        ...state,
+        preferredAuthMethod: method,
+      }
+    })
   },
 }))
 

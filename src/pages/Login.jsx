@@ -38,8 +38,10 @@ export default function Login() {
   const [activeTab, setActiveTab] = useState(initialTab)
 
   useEffect(() => {
-    setActiveTab(initialTab)
-  }, [initialTab])
+    if (activeTab !== initialTab) {
+      setActiveTab(initialTab)
+    }
+  }, [activeTab, initialTab])
 
   useEffect(() => {
     if (sessionExpired) {
@@ -62,10 +64,10 @@ export default function Login() {
   }, [activeTab, requestedMethod, location.search, setSearchParams])
 
   useEffect(() => {
-    if (AUTH_TABS.has(activeTab) && activeTab !== preferredAuthMethod) {
+    if (!sessionExpired && AUTH_TABS.has(activeTab) && activeTab !== preferredAuthMethod) {
       setPreferredAuthMethod(activeTab)
     }
-  }, [activeTab, preferredAuthMethod, setPreferredAuthMethod])
+  }, [activeTab, preferredAuthMethod, setPreferredAuthMethod, sessionExpired])
 
   const redirectTarget = useMemo(() => {
     const fallback = '/Dashboard'

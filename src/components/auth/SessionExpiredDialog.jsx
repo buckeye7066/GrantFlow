@@ -26,15 +26,23 @@ export default function SessionExpiredDialog() {
   )
 
   useEffect(() => {
+    if (!sessionExpired) {
+      return
+    }
     const preferred = AUTH_TABS.has(preferredAuthMethod) ? preferredAuthMethod : 'email'
-    setActiveTab(preferred)
-  }, [preferredAuthMethod])
+    if (activeTab !== preferred) {
+      setActiveTab(preferred)
+    }
+  }, [sessionExpired, preferredAuthMethod, activeTab])
 
   useEffect(() => {
+    if (!sessionExpired) {
+      return
+    }
     if (AUTH_TABS.has(activeTab) && activeTab !== preferredAuthMethod) {
       setPreferredAuthMethod(activeTab)
     }
-  }, [activeTab, preferredAuthMethod, setPreferredAuthMethod])
+  }, [sessionExpired, activeTab, preferredAuthMethod, setPreferredAuthMethod])
 
   const handleLoginRedirect = () => {
     closeSessionExpired()

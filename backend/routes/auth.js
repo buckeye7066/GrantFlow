@@ -3,7 +3,7 @@ import crypto from 'crypto'
 import rateLimit from 'express-rate-limit'
 import jwt from 'jsonwebtoken'
 import twilio from 'twilio'
-
+import { sendVerificationEmail } from '../services/email. js';
 const router = express.Router()
 
 const JWT_SECRET = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret'
@@ -953,7 +953,10 @@ router.post('/email/start', emailStartLimiter, (req, res) => {
     .run(codeHash, nowISOString(), credential.id)
 
   console.info(`[auth] Email verification code for ${email}: ${code}`)
+console.info(`[auth] Email verification code for ${email}:  ${code}`);
+await sendVerificationEmail(email, code);  // ADD THIS LINE
 
+return res.status(202).json({
   return res.status(202).json({
     message: 'Verification code sent',
     previewCode: process.env.NODE_ENV !== 'production' ? code : undefined,
