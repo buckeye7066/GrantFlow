@@ -9,11 +9,63 @@ const router = express.Router()
 const JWT_SECRET = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret'
 
 function parseSeconds(value, fallback) {
-  if (value === undefined || value === null || `${value}`.trim() === '') {
+  if (value === undefined || value === null) {
     return fallback
   }
-  const parsed = Number.parseInt(`${value}`.trim(), 10)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+
+  const trimmed = `${value}`.trim()
+  if (trimmed === '') {
+    return fallback
+  }
+
+  const directNumber = Number(trimmed)
+  if (Number.isFinite(directNumber) && directNumber > 0) {
+    return Math.round(directNumber)
+  }
+
+  const match = trimmed.match(/^(\d+(?:\.\d+)?)(?:\s*)([a-z]+)?$/i)
+  if (!match) {
+    return fallback
+  }
+
+  const amount = Number(match[1])
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return fallback
+  }
+
+  const unitRaw = (match[2] || 's').toLowerCase()
+  const unitMap = {
+    s: 1,
+    sec: 1,
+    secs: 1,
+    second: 1,
+    seconds: 1,
+    m: 60,
+    min: 60,
+    mins: 60,
+    minute: 60,
+    minutes: 60,
+    h: 60 * 60,
+    hr: 60 * 60,
+    hrs: 60 * 60,
+    hour: 60 * 60,
+    hours: 60 * 60,
+    d: 24 * 60 * 60,
+    day: 24 * 60 * 60,
+    days: 24 * 60 * 60,
+    w: 7 * 24 * 60 * 60,
+    wk: 7 * 24 * 60 * 60,
+    wks: 7 * 24 * 60 * 60,
+    week: 7 * 24 * 60 * 60,
+    weeks: 7 * 24 * 60 * 60,
+  }
+
+  const multiplier = unitMap[unitRaw]
+  if (!multiplier) {
+    return fallback
+  }
+
+  return Math.round(amount * multiplier)
 }
 
 const ACCESS_TOKEN_TTL = parseSeconds(process.env.AUTH_ACCESS_TOKEN_TTL, 900) // seconds
@@ -23,6 +75,16 @@ const EMAIL_RESEND_COOLDOWN = parseSeconds(process.env.AUTH_EMAIL_RESEND_SECONDS
 const PHONE_CODE_TTL = parseSeconds(process.env.AUTH_PHONE_CODE_TTL, 600) // seconds
 const PHONE_RESEND_COOLDOWN = parseSeconds(process.env.AUTH_PHONE_RESEND_SECONDS, 60) // seconds
 const OAUTH_STATE_TTL = parseSeconds(process.env.AUTH_OAUTH_STATE_TTL, 600) // seconds
+
+console.info('[auth] TTL configuration (seconds):', {
+  ACCESS_TOKEN_TTL,
+  REFRESH_TOKEN_TTL,
+  EMAIL_CODE_TTL,
+  EMAIL_RESEND_COOLDOWN,
+  PHONE_CODE_TTL,
+  PHONE_RESEND_COOLDOWN,
+  OAUTH_STATE_TTL,
+})
 
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || null
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || null
