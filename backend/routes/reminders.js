@@ -15,7 +15,6 @@ function normalizeDeadline(row) {
     deadline: row.deadline,
     status: row.status,
     daysRemaining: typeof row.days_until === 'number' ? row.days_until : null,
-    opportunityType: row.opportunity_type ?? null,
     amountRequested: row.amount_requested ?? null,
   };
 }
@@ -46,7 +45,6 @@ export function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD) {
         g.deadline,
         g.status,
         g.amount_requested,
-        g.opportunity_type,
         o.name AS organization_name,
         CAST(
           ROUND(JULIANDAY(g.deadline) - JULIANDAY('now')) AS INTEGER
