@@ -54,7 +54,7 @@ export function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD) {
       FROM grants g
       LEFT JOIN organizations o ON o.id = g.organization_id
       WHERE g.deadline IS NOT NULL
-        AND DATE(g.deadline) >= DATE('now')
+        AND JULIANDAY(g.deadline) >= JULIANDAY('now')
         AND JULIANDAY(g.deadline) <= JULIANDAY('now') + ?
         AND g.status IN ('discovered', 'interested', 'drafting', 'app_prep', 'submission_ready')
       ORDER BY DATE(g.deadline) ASC
@@ -81,7 +81,7 @@ export function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD) {
       LEFT JOIN organizations o ON o.id = m.organization_id
       WHERE m.completed = 0
         AND m.due_date IS NOT NULL
-        AND DATE(m.due_date) >= DATE('now')
+        AND JULIANDAY(m.due_date) >= JULIANDAY('now')
         AND JULIANDAY(m.due_date) <= JULIANDAY('now') + ?
       ORDER BY DATE(m.due_date) ASC
       LIMIT 10
@@ -117,7 +117,14 @@ router.get('/', async (req, res) => {
   } catch (error) {
     console.error('[reminders] Error in GET /:', error);
     console.error('[reminders] Error stack:', error.stack);
-    res.status(500).json({ error: error.message, details: error.stack });
+    
+    // Don't expose stack traces in production
+    const errorResponse = { error: error.message };
+    if (process.env.NODE_ENV === 'development') {
+      errorResponse.details = error.stack;
+    }
+    
+    res.status(500).json(errorResponse);
   }
 });
 
