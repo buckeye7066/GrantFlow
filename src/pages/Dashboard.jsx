@@ -107,6 +107,7 @@ export default function Dashboard() {
   } = useQuery({
     queryKey: ["reminders"],
     queryFn: getReminders,
+    enabled: Boolean(currentUser), // Only fetch reminders when user is authenticated
     staleTime: 60_000,
     retry: 0,
   })

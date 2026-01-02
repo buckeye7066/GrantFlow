@@ -72,12 +72,15 @@ class APIClient {
   async handleUnauthorized(originalRequest) {
     const refreshToken = this.getRefreshToken();
     if (!refreshToken) {
+      // Clear tokens and notify about auth failure
+      this.clearToken();
       if (this.onAuthFailure) {
         this.onAuthFailure('Your session expired. Sign in again to continue.');
-      } else {
-        this.auth.redirectToLogin();
       }
-      throw new Error('Authentication required');
+      // Don't redirect automatically - let the app handle it
+      const error = new Error('Authentication required');
+      error.status = 401;
+      throw error;
     }
     try {
       const response = await fetch(`${this.baseUrl}/api/auth/refresh`, {
@@ -100,10 +103,11 @@ class APIClient {
       this.clearToken();
       if (this.onAuthFailure) {
         this.onAuthFailure('Your session expired. Sign in again to continue.');
-      } else {
-        this.auth.redirectToLogin();
       }
-      throw new Error('Session expired. Please sign in again.');
+      // Don't redirect automatically - let the app handle it
+      const authError = new Error('Session expired. Please sign in again.');
+      authError.status = 401;
+      throw authError;
     }
   }
 
@@ -298,7 +302,13 @@ class APIClient {
 
       try {
         return await this.fetch('/api/auth/me');
-      } catch {
+      } catch (error) {
+        // If 401, clear tokens and return null (user not authenticated)
+        if (error.status === 401) {
+          this.clearToken();
+          return null;
+        }
+        // For other errors, return null to avoid breaking the app
         return null;
       }
     },
