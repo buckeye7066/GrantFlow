@@ -55,7 +55,7 @@ export function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD) {
       LEFT JOIN organizations o ON o.id = g.organization_id
       WHERE g.deadline IS NOT NULL
         AND DATE(g.deadline) >= DATE('now')
-        AND DATE(g.deadline) <= DATE('now', ? || ' days')
+        AND DATE(g.deadline) <= DATE('now', '+' || ? || ' days')
         AND g.status IN ('discovered', 'interested', 'drafting', 'app_prep', 'submission_ready')
       ORDER BY DATE(g.deadline) ASC
       LIMIT 10
@@ -82,7 +82,7 @@ export function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD) {
       WHERE m.completed = 0
         AND m.due_date IS NOT NULL
         AND DATE(m.due_date) >= DATE('now')
-        AND DATE(m.due_date) <= DATE('now', ? || ' days')
+        AND DATE(m.due_date) <= DATE('now', '+' || ? || ' days')
       ORDER BY DATE(m.due_date) ASC
       LIMIT 10
     `,
