@@ -38,10 +38,8 @@ export default function Login() {
   const [activeTab, setActiveTab] = useState(initialTab)
 
   useEffect(() => {
-    if (activeTab !== initialTab) {
-      setActiveTab(initialTab)
-    }
-  }, [activeTab, initialTab])
+    setActiveTab(initialTab)
+  }, [initialTab])
 
   useEffect(() => {
     if (sessionExpired) {
