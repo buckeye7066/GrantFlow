@@ -96,32 +96,32 @@ export function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD) {
 
 router.get('/', async (req, res) => {
   try {
-    console.log('[reminders] GET / called');
+    // AUTH GUARD: Require authentication
+    if (!req.user || req.user.role === 'guest') {
+      return res.status(401).json({ 
+        error: 'Authentication required',
+        message: 'You must be logged in to view reminders'
+      });
+    }
     
     if (!req.db) {
-      console.error('[reminders] req.db is undefined!');
+      console.error('[reminders] Database connection not available');
       return res.status(500).json({ error: 'Database connection not available' });
     }
     
-    console.log('[reminders] Fetching reminder snapshot...');
     const snapshot = fetchReminderSnapshot(req.db);
-    console.log('[reminders] Snapshot fetched successfully:', {
-      deadlines: snapshot.urgentDeadlines.length,
-      milestones: snapshot.upcomingMilestones.length
-    });
-
+    
     res.json({
       generatedAt: new Date().toISOString(),
       ...snapshot,
     });
   } catch (error) {
-    console.error('[reminders] Error in GET /:', error);
-    console.error('[reminders] Error stack:', error.stack);
+    console.error('[reminders] Error:', error.message);
     
-    // Don't expose stack traces in production
-    const errorResponse = { error: error.message };
+    // Never expose stack traces in production
+    const errorResponse = { error: 'Failed to fetch reminders' };
     if (process.env.NODE_ENV === 'development') {
-      errorResponse.details = error.stack;
+      errorResponse.details = error.message;
     }
     
     res.status(500).json(errorResponse);
