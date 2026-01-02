@@ -20,6 +20,7 @@ import { parseDateSafe } from "@/components/shared/dateUtils"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { createPageUrl } from "@/utils"
+import { useAuthStore } from "@/stores/authStore"
 
 import StatCard from "@/components/dashboard/StatCard"
 import UrgentDeadlinesCard from "@/components/dashboard/UrgentDeadlinesCard"
@@ -48,45 +49,62 @@ function LJWMonogram({ className = "" }) {
 }
 
 export default function Dashboard() {
+  const { isAuthenticated, sessionExpired } = useAuthStore((state) => ({
+    isAuthenticated: state.isAuthenticated,
+    sessionExpired: state.sessionExpired,
+  }))
+  const shouldFetch = isAuthenticated && !sessionExpired
+
   const { data: currentUser } = useQuery({
     queryKey: ["currentUser"],
     queryFn: () => base44.auth.me(),
     staleTime: 60_000,
+    enabled: shouldFetch,
+    retry: false,
   })
 
   const { data: profiles = [], isLoading: isLoadingProfiles } = useQuery({
     queryKey: ["dashboard-profiles"],
     queryFn: () => listProfiles(),
-    enabled: Boolean(currentUser),
+    enabled: shouldFetch && Boolean(currentUser),
     staleTime: 30_000,
+    retry: false,
   })
 
   const { data: profileDetail, isLoading: isLoadingProfileDetail } = useQuery({
     queryKey: ["dashboard-profile", currentUser?.profile_id],
     queryFn: () => getProfile(currentUser.profile_id),
-    enabled: Boolean(currentUser?.role === "user" && currentUser.profile_id),
+    enabled: shouldFetch && Boolean(currentUser?.role === "user" && currentUser.profile_id),
     staleTime: 30_000,
+    retry: false,
   })
 
   const { data: organizations = [], isLoading: isLoadingOrgs, error: orgsError } = useQuery({
     queryKey: ["organizations"],
     queryFn: () => base44.entities.Organization.list(),
-    enabled: currentUser?.role === "admin",
+    enabled: shouldFetch && currentUser?.role === "admin",
+    retry: false,
   })
 
   const { data: grants = [], isLoading: isLoadingGrants, error: grantsError } = useQuery({
     queryKey: ["grants"],
     queryFn: () => base44.entities.Grant.list("-created_date"),
+    enabled: shouldFetch,
+    retry: false,
   })
 
   const { data: milestones = [], isLoading: isLoadingMilestones, error: milestonesError } = useQuery({
     queryKey: ["milestones"],
     queryFn: () => base44.entities.Milestone.list("due_date"),
+    enabled: shouldFetch,
+    retry: false,
   })
 
   const { data: expenses = [], isLoading: isLoadingExpenses, error: expensesError } = useQuery({
     queryKey: ["expenses"],
     queryFn: () => base44.entities.Expense.list("-date"),
+    enabled: shouldFetch,
+    retry: false,
   })
 
   const {
@@ -97,7 +115,8 @@ export default function Dashboard() {
     queryKey: ["pipeline-stats"],
     queryFn: getPipelineStats,
     staleTime: 60_000,
-    retry: 0,
+    retry: false,
+    enabled: shouldFetch,
   })
 
   const {
@@ -107,10 +126,18 @@ export default function Dashboard() {
   } = useQuery({
     queryKey: ["reminders"],
     queryFn: getReminders,
-    enabled: Boolean(currentUser), // CRITICAL: Only fetch when authenticated
     staleTime: 60_000,
-    retry: 0,
+    retry: false,
+    enabled: shouldFetch,
   })
+
+  if (!shouldFetch) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-6 text-sm text-slate-500">
+        Session ended. Sign back in to keep working.
+      </div>
+    )
+  }
 
   const profileOrganizationId = profileDetail?.organization_id ?? null
 
@@ -220,14 +247,15 @@ export default function Dashboard() {
   )
 
   const isLoading =
-    isLoadingProfiles ||
-    isLoadingOrgs ||
-    isLoadingGrants ||
-    isLoadingMilestones ||
-    isLoadingExpenses ||
-    isLoadingPipeline ||
-    (isLoadingReminders && !remindersData) ||
-    (currentUser?.role === "user" && isLoadingProfileDetail)
+    shouldFetch &&
+    (isLoadingProfiles ||
+      isLoadingOrgs ||
+      isLoadingGrants ||
+      isLoadingMilestones ||
+      isLoadingExpenses ||
+      isLoadingPipeline ||
+      (isLoadingReminders && !remindersData) ||
+      (currentUser?.role === "user" && isLoadingProfileDetail))
 
   if (isLoading) {
     return (
@@ -237,7 +265,9 @@ export default function Dashboard() {
     )
   }
 
-  const errors = [orgsError, grantsError, milestonesError, expensesError].filter(Boolean)
+  const errors = shouldFetch
+    ? [orgsError, grantsError, milestonesError, expensesError, pipelineError, remindersError].filter(Boolean)
+    : []
   if (errors.length > 0) {
     return (
       <div className="p-6 md:p-8">
