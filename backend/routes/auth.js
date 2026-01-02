@@ -962,11 +962,14 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
     .run(codeHash, nowISOString(), credential.id)
 
   console.info(`[auth] Email verification code for ${email}: ${code}`)
-  await sendVerificationEmail(email, code)
+  const emailSent = await sendVerificationEmail(email, code)
+  if (!emailSent) {
+    console.warn('[auth] Verification email dispatch skipped or failed. Falling back to preview response.')
+  }
 
   return res.status(202).json({
     message: 'Verification code sent',
-    previewCode: process.env.NODE_ENV !== 'production' ? code : undefined,
+    previewCode: process.env.NODE_ENV !== 'production' || !emailSent ? code : undefined,
     user_hint: {
       id: user.id,
       display_name: user.display_name,
