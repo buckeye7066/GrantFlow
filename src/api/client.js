@@ -69,18 +69,22 @@ class APIClient {
     }
   }
 
+  createAuthError(message) {
+    const error = new Error(message);
+    error.status = 401;
+    return error;
+  }
+
   async handleUnauthorized(originalRequest) {
     const refreshToken = this.getRefreshToken();
     if (!refreshToken) {
-      // Clear tokens and notify about auth failure
+      // Clear tokens
       this.clearToken();
       if (this.onAuthFailure) {
         this.onAuthFailure('Your session expired. Sign in again to continue.');
       }
       // Don't redirect automatically - let the app handle it
-      const error = new Error('Authentication required');
-      error.status = 401;
-      throw error;
+      throw this.createAuthError('Authentication required');
     }
     try {
       const response = await fetch(`${this.baseUrl}/api/auth/refresh`, {
@@ -105,9 +109,7 @@ class APIClient {
         this.onAuthFailure('Your session expired. Sign in again to continue.');
       }
       // Don't redirect automatically - let the app handle it
-      const authError = new Error('Session expired. Please sign in again.');
-      authError.status = 401;
-      throw authError;
+      throw this.createAuthError('Session expired. Please sign in again.');
     }
   }
 
