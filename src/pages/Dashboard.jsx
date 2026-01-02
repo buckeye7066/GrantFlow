@@ -107,6 +107,7 @@ export default function Dashboard() {
   } = useQuery({
     queryKey: ["reminders"],
     queryFn: getReminders,
+    enabled: Boolean(currentUser), // CRITICAL: Only fetch when authenticated
     staleTime: 60_000,
     retry: 0,
   })
@@ -322,12 +323,15 @@ export default function Dashboard() {
             <UrgentDeadlinesCard urgentDeadlines={urgentDeadlines} />
             <UpcomingMilestonesCard upcomingMilestones={upcomingMilestones} />
           </div>
-          <ReminderCenterCard
-            urgentDeadlines={remindersData?.urgentDeadlines ?? urgentDeadlines}
-            upcomingMilestones={remindersData?.upcomingMilestones ?? upcomingMilestones}
-            isLoading={isLoadingReminders && !remindersData}
-            hasError={Boolean(remindersError)}
-          />
+          {/* Only render ReminderCenterCard if we have currentUser */}
+          {currentUser && (
+            <ReminderCenterCard
+              urgentDeadlines={remindersData?.urgentDeadlines ?? urgentDeadlines}
+              upcomingMilestones={remindersData?.upcomingMilestones ?? upcomingMilestones}
+              isLoading={isLoadingReminders && !remindersData}
+              hasError={Boolean(remindersError)}
+            />
+          )}
         </div>
 
         <div className="grid gap-6 lg:grid-cols-2">
