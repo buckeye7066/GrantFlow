@@ -49,13 +49,13 @@ export function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD) {
         g.opportunity_type,
         o.name AS organization_name,
         CAST(
-          ROUND(JULIANDAY(g.deadline) - JULIANDAY('now'))
+          ROUND(JULIANDAY(g.deadline) - JULIANDAY('now')) AS INTEGER
         ) AS days_until
       FROM grants g
       LEFT JOIN organizations o ON o.id = g.organization_id
       WHERE g.deadline IS NOT NULL
         AND DATE(g.deadline) >= DATE('now')
-        AND DATE(g.deadline) <= DATE('now', '+' || ? || ' days')
+        AND JULIANDAY(g.deadline) <= JULIANDAY('now') + ?
         AND g.status IN ('discovered', 'interested', 'drafting', 'app_prep', 'submission_ready')
       ORDER BY DATE(g.deadline) ASC
       LIMIT 10
@@ -74,7 +74,7 @@ export function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD) {
         g.title AS grant_title,
         o.name AS organization_name,
         CAST(
-          ROUND(JULIANDAY(m.due_date) - JULIANDAY('now'))
+          ROUND(JULIANDAY(m.due_date) - JULIANDAY('now')) AS INTEGER
         ) AS days_until
       FROM milestones m
       LEFT JOIN grants g ON g.id = m.grant_id
@@ -82,7 +82,7 @@ export function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD) {
       WHERE m.completed = 0
         AND m.due_date IS NOT NULL
         AND DATE(m.due_date) >= DATE('now')
-        AND DATE(m.due_date) <= DATE('now', '+' || ? || ' days')
+        AND JULIANDAY(m.due_date) <= JULIANDAY('now') + ?
       ORDER BY DATE(m.due_date) ASC
       LIMIT 10
     `,
@@ -96,14 +96,28 @@ export function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD) {
 
 router.get('/', async (req, res) => {
   try {
+    console.log('[reminders] GET / called');
+    
+    if (!req.db) {
+      console.error('[reminders] req.db is undefined!');
+      return res.status(500).json({ error: 'Database connection not available' });
+    }
+    
+    console.log('[reminders] Fetching reminder snapshot...');
     const snapshot = fetchReminderSnapshot(req.db);
+    console.log('[reminders] Snapshot fetched successfully:', {
+      deadlines: snapshot.urgentDeadlines.length,
+      milestones: snapshot.upcomingMilestones.length
+    });
 
     res.json({
       generatedAt: new Date().toISOString(),
       ...snapshot,
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('[reminders] Error in GET /:', error);
+    console.error('[reminders] Error stack:', error.stack);
+    res.status(500).json({ error: error.message, details: error.stack });
   }
 });
 
