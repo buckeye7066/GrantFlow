@@ -10,6 +10,8 @@ class APIClient {
     this.token = null;
     this.refreshToken = null;
     this.onAuthFailure = null;
+    this.refreshPromise = null;
+    this.sessionFailureNotified = false;
     this.entityResourceMap = {
       Organization: 'organizations',
       Grant: 'grants',
@@ -32,6 +34,7 @@ class APIClient {
 
   setToken(token) {
     this.token = token;
+    this.sessionFailureNotified = false;
     if (typeof window !== 'undefined') {
       localStorage.setItem('grantflow:access-token', token);
     }
@@ -39,6 +42,7 @@ class APIClient {
 
   setRefreshToken(token) {
     this.refreshToken = token;
+    this.sessionFailureNotified = false;
     if (typeof window !== 'undefined') {
       localStorage.setItem('grantflow:refresh-token', token);
     }
@@ -63,62 +67,86 @@ class APIClient {
   clearToken() {
     this.token = null;
     this.refreshToken = null;
+    this.refreshPromise = null;
     if (typeof window !== 'undefined') {
       localStorage.removeItem('grantflow:access-token');
       localStorage.removeItem('grantflow:refresh-token');
     }
   }
 
+  notifyAuthFailure(message) {
+    if (this.sessionFailureNotified) {
+      return;
+    }
+    this.sessionFailureNotified = true;
+    if (this.onAuthFailure) {
+      this.onAuthFailure(message);
+    } else if (this.auth) {
+      this.auth.redirectToLogin();
+    }
+  }
+
   async handleUnauthorized(originalRequest) {
+    const accessToken = this.getToken();
     const refreshToken = this.getRefreshToken();
-    
-    // CRITICAL: Don't attempt refresh if no token exists
+    const hadSession = Boolean(refreshToken || accessToken);
+
     if (!refreshToken) {
-      this.clearToken();
-      if (this.onAuthFailure) {
-        this.onAuthFailure('Your session expired. Sign in again to continue.');
-      } else {
-        this.auth.redirectToLogin();
+      if (hadSession) {
+        this.clearToken();
+        this.notifyAuthFailure('Your session expired. Sign in again to continue.');
       }
       throw new Error('Authentication required');
     }
-    
-    try {
-      const response = await fetch(`${this.baseUrl}/api/auth/refresh`, {
+
+    if (!this.refreshPromise) {
+      if (this.isDev) {
+        console.info('[api] attempting token refresh');
+      }
+
+      this.refreshPromise = fetch(`${this.baseUrl}/api/auth/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refreshToken }),
-      });
-      
-      if (!response.ok) {
-        throw new Error('Refresh failed');
-      }
-      
-      const data = await response.json();
-      if (data?.accessToken) {
-        this.setToken(data.accessToken);
-      }
-      if (data?.refreshToken) {
-        this.setRefreshToken(data.refreshToken);
-      }
-      
-      // Retry the original request with new token
-      return this.fetch(originalRequest.endpoint, originalRequest.options);
+      })
+        .then(async (response) => {
+          if (!response.ok) {
+            throw new Error('Refresh failed');
+          }
+          const data = await response.json();
+          if (data?.accessToken) {
+            this.setToken(data.accessToken);
+          }
+          if (data?.refreshToken) {
+            this.setRefreshToken(data.refreshToken);
+          }
+          return data;
+        })
+        .catch((error) => {
+          this.clearToken();
+          this.notifyAuthFailure('Your session expired. Sign in again to continue.');
+          throw error;
+        })
+        .finally(() => {
+          this.refreshPromise = null;
+        });
+    }
+
+    try {
+      await this.refreshPromise;
     } catch (error) {
-      // Refresh failed - clear everything and redirect
-      this.clearToken();
-      if (this.onAuthFailure) {
-        this.onAuthFailure('Your session expired. Sign in again to continue.');
-      } else {
-        this.auth.redirectToLogin();
-      }
       throw new Error('Session expired. Please sign in again.');
     }
+
+    return this.fetch(originalRequest.endpoint, originalRequest.options);
   }
 
   async fetch(endpoint, options = {}) {
     const url = `${this.baseUrl}${endpoint}`;
     const token = this.getToken();
+    if (this.sessionFailureNotified && !token) {
+      throw new Error('Session expired. Please sign in again.');
+    }
     const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
 
     const headers = {
