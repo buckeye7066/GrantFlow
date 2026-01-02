@@ -3,17 +3,26 @@ import crypto from 'crypto'
 import rateLimit from 'express-rate-limit'
 import jwt from 'jsonwebtoken'
 import twilio from 'twilio'
-import { sendVerificationEmail } from '../services/email.js';
+import { sendVerificationEmail } from '../services/email.js'
 const router = express.Router()
 
 const JWT_SECRET = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret'
-const ACCESS_TOKEN_TTL = Number.parseInt(process.env.AUTH_ACCESS_TOKEN_TTL ?? '900', 10) // seconds
-const REFRESH_TOKEN_TTL = Number.parseInt(process.env.AUTH_REFRESH_TOKEN_TTL ?? `${30 * 24 * 60 * 60}`, 10) // seconds
-const EMAIL_CODE_TTL = Number.parseInt(process.env.AUTH_EMAIL_CODE_TTL ?? '600', 10) // seconds
-const EMAIL_RESEND_COOLDOWN = Number.parseInt(process.env.AUTH_EMAIL_RESEND_SECONDS ?? '45', 10) // seconds
-const PHONE_CODE_TTL = Number.parseInt(process.env.AUTH_PHONE_CODE_TTL ?? '600', 10) // seconds
-const PHONE_RESEND_COOLDOWN = Number.parseInt(process.env.AUTH_PHONE_RESEND_SECONDS ?? '60', 10) // seconds
-const OAUTH_STATE_TTL = Number.parseInt(process.env.AUTH_OAUTH_STATE_TTL ?? '600', 10) // seconds
+
+function parseSeconds(value, fallback) {
+  if (value === undefined || value === null || `${value}`.trim() === '') {
+    return fallback
+  }
+  const parsed = Number.parseInt(`${value}`.trim(), 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+const ACCESS_TOKEN_TTL = parseSeconds(process.env.AUTH_ACCESS_TOKEN_TTL, 900) // seconds
+const REFRESH_TOKEN_TTL = parseSeconds(process.env.AUTH_REFRESH_TOKEN_TTL, 30 * 24 * 60 * 60) // seconds
+const EMAIL_CODE_TTL = parseSeconds(process.env.AUTH_EMAIL_CODE_TTL, 600) // seconds
+const EMAIL_RESEND_COOLDOWN = parseSeconds(process.env.AUTH_EMAIL_RESEND_SECONDS, 45) // seconds
+const PHONE_CODE_TTL = parseSeconds(process.env.AUTH_PHONE_CODE_TTL, 600) // seconds
+const PHONE_RESEND_COOLDOWN = parseSeconds(process.env.AUTH_PHONE_RESEND_SECONDS, 60) // seconds
+const OAUTH_STATE_TTL = parseSeconds(process.env.AUTH_OAUTH_STATE_TTL, 600) // seconds
 
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || null
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || null
