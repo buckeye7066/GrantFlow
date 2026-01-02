@@ -9,6 +9,7 @@ class APIClient {
     this.baseUrl = API_URL;
     this.token = null;
     this.refreshToken = null;
+    this.refreshPromise = null; // Single-flight refresh promise
     this.onAuthFailure = null;
     this.entityResourceMap = {
       Organization: 'organizations',
@@ -63,6 +64,7 @@ class APIClient {
   clearToken() {
     this.token = null;
     this.refreshToken = null;
+    this.refreshPromise = null; // Clear any pending refresh
     if (typeof window !== 'undefined') {
       localStorage.removeItem('grantflow:access-token');
       localStorage.removeItem('grantflow:refresh-token');
@@ -83,37 +85,53 @@ class APIClient {
       throw new Error('Authentication required');
     }
     
-    try {
-      const response = await fetch(`${this.baseUrl}/api/auth/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refreshToken }),
-      });
-      
-      if (!response.ok) {
-        throw new Error('Refresh failed');
-      }
-      
-      const data = await response.json();
-      if (data?.accessToken) {
-        this.setToken(data.accessToken);
-      }
-      if (data?.refreshToken) {
-        this.setRefreshToken(data.refreshToken);
-      }
-      
-      // Retry the original request with new token
+    // Single-flight refresh: if a refresh is already in progress, await it
+    if (this.refreshPromise) {
+      await this.refreshPromise;
+      // After the refresh completes, retry the original request
       return this.fetch(originalRequest.endpoint, originalRequest.options);
-    } catch (error) {
-      // Refresh failed - clear everything and redirect
-      this.clearToken();
-      if (this.onAuthFailure) {
-        this.onAuthFailure('Your session expired. Sign in again to continue.');
-      } else {
-        this.auth.redirectToLogin();
-      }
-      throw new Error('Session expired. Please sign in again.');
     }
+    
+    // Start a new refresh
+    this.refreshPromise = (async () => {
+      try {
+        const response = await fetch(`${this.baseUrl}/api/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refreshToken }),
+        });
+        
+        if (!response.ok) {
+          throw new Error('Refresh failed');
+        }
+        
+        const data = await response.json();
+        if (data?.accessToken) {
+          this.setToken(data.accessToken);
+        }
+        if (data?.refreshToken) {
+          this.setRefreshToken(data.refreshToken);
+        }
+        
+        return data;
+      } catch (error) {
+        // Refresh failed - clear everything and notify once
+        this.clearToken();
+        if (this.onAuthFailure) {
+          this.onAuthFailure('Your session expired. Sign in again to continue.');
+        } else {
+          this.auth.redirectToLogin();
+        }
+        throw new Error('Session expired. Please sign in again.');
+      } finally {
+        // Clear the promise after completion (success or failure)
+        this.refreshPromise = null;
+      }
+    })();
+    
+    await this.refreshPromise;
+    // Retry the original request with new token
+    return this.fetch(originalRequest.endpoint, originalRequest.options);
   }
 
   async fetch(endpoint, options = {}) {
