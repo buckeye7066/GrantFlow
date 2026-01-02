@@ -20,6 +20,7 @@ import { parseDateSafe } from "@/components/shared/dateUtils"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { createPageUrl } from "@/utils"
+import { useAuthStore } from "@/stores/authStore"
 
 import StatCard from "@/components/dashboard/StatCard"
 import UrgentDeadlinesCard from "@/components/dashboard/UrgentDeadlinesCard"
@@ -48,6 +49,8 @@ function LJWMonogram({ className = "" }) {
 }
 
 export default function Dashboard() {
+  const sessionExpired = useAuthStore((state) => state.sessionExpired)
+  
   const { data: currentUser } = useQuery({
     queryKey: ["currentUser"],
     queryFn: () => base44.auth.me(),
@@ -77,16 +80,19 @@ export default function Dashboard() {
   const { data: grants = [], isLoading: isLoadingGrants, error: grantsError } = useQuery({
     queryKey: ["grants"],
     queryFn: () => base44.entities.Grant.list("-created_date"),
+    enabled: Boolean(currentUser),
   })
 
   const { data: milestones = [], isLoading: isLoadingMilestones, error: milestonesError } = useQuery({
     queryKey: ["milestones"],
     queryFn: () => base44.entities.Milestone.list("due_date"),
+    enabled: Boolean(currentUser),
   })
 
   const { data: expenses = [], isLoading: isLoadingExpenses, error: expensesError } = useQuery({
     queryKey: ["expenses"],
     queryFn: () => base44.entities.Expense.list("-date"),
+    enabled: Boolean(currentUser),
   })
 
   const {
@@ -96,6 +102,7 @@ export default function Dashboard() {
   } = useQuery({
     queryKey: ["pipeline-stats"],
     queryFn: getPipelineStats,
+    enabled: Boolean(currentUser),
     staleTime: 60_000,
     retry: 0,
   })
@@ -107,7 +114,7 @@ export default function Dashboard() {
   } = useQuery({
     queryKey: ["reminders"],
     queryFn: getReminders,
-    enabled: Boolean(currentUser), // Only fetch reminders when user is authenticated
+    enabled: Boolean(currentUser), // CRITICAL: Only fetch when authenticated
     staleTime: 60_000,
     retry: 0,
   })
@@ -229,6 +236,20 @@ export default function Dashboard() {
     (isLoadingReminders && !remindersData) ||
     (currentUser?.role === "user" && isLoadingProfileDetail)
 
+  // Check for session expiration first
+  if (sessionExpired) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-6">
+        <Alert className="max-w-md">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>
+            Your session has ended. Please sign in again to continue.
+          </AlertDescription>
+        </Alert>
+      </div>
+    )
+  }
+
   if (isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -323,12 +344,15 @@ export default function Dashboard() {
             <UrgentDeadlinesCard urgentDeadlines={urgentDeadlines} />
             <UpcomingMilestonesCard upcomingMilestones={upcomingMilestones} />
           </div>
-          <ReminderCenterCard
-            urgentDeadlines={remindersData?.urgentDeadlines ?? urgentDeadlines}
-            upcomingMilestones={remindersData?.upcomingMilestones ?? upcomingMilestones}
-            isLoading={isLoadingReminders && !remindersData}
-            hasError={Boolean(remindersError)}
-          />
+          {/* Only render ReminderCenterCard if we have currentUser */}
+          {currentUser && (
+            <ReminderCenterCard
+              urgentDeadlines={remindersData?.urgentDeadlines ?? urgentDeadlines}
+              upcomingMilestones={remindersData?.upcomingMilestones ?? upcomingMilestones}
+              isLoading={isLoadingReminders && !remindersData}
+              hasError={Boolean(remindersError)}
+            />
+          )}
         </div>
 
         <div className="grid gap-6 lg:grid-cols-2">
