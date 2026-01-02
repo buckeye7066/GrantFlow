@@ -36,20 +36,26 @@ app.set('trust proxy', 1);
 const PORT = process.env.PORT || 8080;
 
 // CORS configuration
-const corsOrigins = process.env.CORS_ORIGIN?.split(',') || [
+const defaultCorsOrigins = [
   'http://localhost:5173',
   'http://localhost:3000',
   'https://grant-flow-three.vercel.app',
   'https://app.axiombiolabs.org',
-  'https://grantflow-production.up.railway.app'
+  'https://grantflow-production.up.railway.app',
 ];
+const configuredCorsOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean)
+  : null;
 
-app.use(cors({
-  origin: corsOrigins,
+const corsOptions = {
+  origin: configuredCorsOrigins && configuredCorsOrigins.length > 0 ? configuredCorsOrigins : defaultCorsOrigins,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Token', 'X-Anya-Token']
-}));
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Token', 'X-Anya-Token'],
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 app.use(express.json({ limit: '10mb' }));
 try {
@@ -477,7 +483,8 @@ app.use((req, res) => {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`GrantFlow API server running on port ${PORT}`);
   console.log(`Database: ${dbPath}`);
-  console.log(`CORS origins: ${corsOrigins.join(', ')}`);
+  const loggedCorsOrigins = Array.isArray(corsOptions.origin) ? corsOptions.origin : [corsOptions.origin];
+  console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
 });
 
 export default app;

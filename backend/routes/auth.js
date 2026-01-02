@@ -913,7 +913,7 @@ function rotateSessionTokens(db, { sessionId, user, profileId }) {
   }
 }
 
-router.post('/email/start', emailStartLimiter, (req, res) => {
+router.post('/email/start', emailStartLimiter, async (req, res) => {
   const emailRaw = req.body?.email
   if (typeof emailRaw !== 'string') {
     return res.status(400).json({ error: 'email is required' })
@@ -953,10 +953,8 @@ router.post('/email/start', emailStartLimiter, (req, res) => {
     .run(codeHash, nowISOString(), credential.id)
 
   console.info(`[auth] Email verification code for ${email}: ${code}`)
-console.info(`[auth] Email verification code for ${email}:  ${code}`);
-await sendVerificationEmail(email, code);  // ADD THIS LINE
+  await sendVerificationEmail(email, code)
 
-return res.status(202).json({
   return res.status(202).json({
     message: 'Verification code sent',
     previewCode: process.env.NODE_ENV !== 'production' ? code : undefined,

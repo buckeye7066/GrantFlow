@@ -1,4 +1,5 @@
 {
+  "type": "module",
   "dependencies": {
     "resend": "^6.6.0"
   }
