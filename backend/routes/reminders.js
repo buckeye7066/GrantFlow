@@ -94,7 +94,7 @@ export function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD) {
   };
 }
 
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const snapshot = fetchReminderSnapshot(req.db);
 
