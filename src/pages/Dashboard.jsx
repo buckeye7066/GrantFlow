@@ -226,6 +226,14 @@ export default function Dashboard() {
     [displayOrganizationsCount, activeGrants.length, totalExpenses, urgentDeadlines.length],
   )
 
+  const activeProfileId = useMemo(() => {
+    if (profileDetail?.id) return profileDetail.id
+    if (currentUser?.active_profile_id) return currentUser.active_profile_id
+    if (currentUser?.profile_id) return currentUser.profile_id
+    if (profiles.length > 0) return profiles[0].id
+    return null
+  }, [profileDetail, currentUser, profiles])
+
   const isLoading =
     isLoadingProfiles ||
     isLoadingOrgs ||
@@ -271,14 +279,6 @@ export default function Dashboard() {
       </div>
     )
   }
-
-  const activeProfileId = useMemo(() => {
-    if (profileDetail?.id) return profileDetail.id
-    if (currentUser?.active_profile_id) return currentUser.active_profile_id
-    if (currentUser?.profile_id) return currentUser.profile_id
-    if (profiles.length > 0) return profiles[0].id
-    return null
-  }, [profileDetail, currentUser, profiles])
 
   const today = format(new Date(), "EEEE, MMM d")
 
