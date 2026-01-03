@@ -539,7 +539,7 @@ export function generatePlaceholderResponse({ content }) {
 
 export function listTools(user) {
   assertAuthenticated(user)
-  return listToolMetadata()
+  return listToolMetadata(user)
 }
 
 export async function invokeTool(db, user, toolName, params, { sessionId } = {}) {
