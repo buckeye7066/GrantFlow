@@ -1,4 +1,3 @@
-
 import React from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
@@ -48,6 +47,7 @@ import {
 } from "@/components/ui/sidebar";
 import AutoTimeTracker from "@/components/billing/AutoTimeTracker";
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx";
+import OnboardingFlow from "@/components/onboarding/OnboardingFlow";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuthStore } from "@/stores/authStore";
@@ -393,6 +393,9 @@ export default function Layout({ children, currentPageName }) {
             </div>
           </div>
         </main>
+
+        {/* Onboarding Flow */}
+        <OnboardingFlow />
 
         {/* Anya AI Assistant Floating Button */}
         <AnyaFloatingButton profileId={activeProfileId} />

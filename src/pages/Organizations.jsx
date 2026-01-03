@@ -103,10 +103,28 @@ export default function Organizations() {
 
   const handleQuickAdd = async (formData) => {
     try {
+      // Create profile first
       const result = await apiFetch('/api/profiles', {
         method: 'POST',
-        body: JSON.stringify(formData),
+        body: JSON.stringify({
+          display_name: formData.display_name,
+          primary_type: formData.primary_type,
+        }),
       })
+      
+      // If avatar file is provided, upload it
+      if (formData.avatarFile && result.id) {
+        const avatarFormData = new FormData()
+        avatarFormData.append('avatar', formData.avatarFile)
+        
+        await fetch(`/api/profiles/${result.id}/avatar`, {
+          method: 'POST',
+          body: avatarFormData,
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('grantflow:access-token')}`,
+          },
+        })
+      }
       
       queryClient.invalidateQueries({ queryKey: ['profiles'] })
       
@@ -212,7 +230,7 @@ export default function Organizations() {
           <OrganizationActions
             onQuickAdd={() => setQuickAddOpen(true)}
             onUpload={() => setUploadFormOpen(true)}
-            onNewApplication={() => showComingSoon("The full comprehensive application builder is under active development.")}
+            onNewApplication={() => navigate(createPageUrl("OrganizationProfile"))}
           />
         </header>
 
@@ -226,7 +244,7 @@ export default function Organizations() {
         {filteredOrgs.length === 0 ? (
           <OrganizationEmptyState
             hasFilters={hasFilters}
-            onCreateFirst={handleNewApplication}
+            onCreateFirst={() => setQuickAddOpen(true)}
           />
         ) : (
           <>
@@ -236,8 +254,14 @@ export default function Organizations() {
                   key={org.id}
                   organization={org}
                   onEdit={() => navigate(createPageUrl("OrganizationProfile", { id: org.id }))}
-                  onDelete={() => toast({ title: "Coming soon", description: "Delete functionality coming soon." })}
-                  onInvoice={() => toast({ title: "Coming soon", description: "Billing integration coming soon." })}
+                  onDelete={() => {
+                    // Navigate to profile page where delete functionality exists
+                    navigate(createPageUrl("OrganizationProfile", { id: org.id }))
+                  }}
+                  onInvoice={() => {
+                    // Navigate to billing page with profile context
+                    navigate(createPageUrl("Billing", { profile_id: org.id }))
+                  }}
                   onClick={() => navigate(createPageUrl("OrganizationProfile", { id: org.id }))}
                 />
               ))}

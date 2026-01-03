@@ -498,9 +498,10 @@ export default function FundingOpportunities() {
   }, [opportunities, filters.profileId, selectedProfile])
 
   const handleAddToPipeline = (opportunity) => {
+    // TODO: Implement add to pipeline - create a grant from this opportunity
     toast({
-      title: "Coming soon",
-      description: "Adding opportunities directly to the pipeline will be enabled after the crawler integration lands.",
+      title: "Add to Pipeline",
+      description: "This will create a grant in your pipeline based on this opportunity. Feature in development.",
     })
   }
 

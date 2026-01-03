@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Dialog,
   DialogContent,
@@ -17,8 +18,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Loader2, Upload, X } from 'lucide-react'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Loader2, User, AlertCircle, Upload, X } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { apiFetch } from '@/api/client'
+import { useToast } from '@/components/ui/use-toast'
 
 const PROFILE_TYPES = [
   { value: 'individual', label: 'Individual' },
@@ -33,37 +37,67 @@ const PROFILE_TYPES = [
   { value: 'other', label: 'Other' },
 ]
 
-export default function QuickAddDialog({ open, onOpenChange, onSubmit }) {
+export default function ProfileCreationWizard({ open, onComplete, onSkip }) {
   const [formData, setFormData] = useState({
     display_name: '',
     primary_type: '',
   })
   const [avatarFile, setAvatarFile] = useState(null)
   const [avatarPreview, setAvatarPreview] = useState(null)
-  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [error, setError] = useState(null)
+  const queryClient = useQueryClient()
+  const { toast } = useToast()
+
+  const createProfileMutation = useMutation({
+    mutationFn: async ({ profileData, avatarFile }) => {
+      // Create profile first
+      const profile = await apiFetch('/api/profiles', {
+        method: 'POST',
+        body: JSON.stringify(profileData),
+      })
+
+      // If avatar file is provided, upload it
+      if (avatarFile && profile.id) {
+        const avatarFormData = new FormData()
+        avatarFormData.append('avatar', avatarFile)
+        
+        await fetch(`/api/profiles/${profile.id}/avatar`, {
+          method: 'POST',
+          body: avatarFormData,
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('grantflow:access-token')}`,
+          },
+        })
+      }
+
+      return profile
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['profiles'] })
+      toast({
+        title: 'Profile Created',
+        description: 'Your profile has been created successfully!',
+      })
+      onComplete?.(data)
+    },
+    onError: (error) => {
+      setError(error.message || 'Failed to create profile')
+    },
+  })
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    
+    setError(null)
+
     if (!formData.display_name || !formData.primary_type) {
+      setError('Please fill in all required fields')
       return
     }
 
-    setIsSubmitting(true)
-    try {
-      await onSubmit({
-        ...formData,
-        avatarFile,
-      })
-      setFormData({ display_name: '', primary_type: '' })
-      setAvatarFile(null)
-      setAvatarPreview(null)
-      onOpenChange(false)
-    } catch (error) {
-      console.error('Failed to create profile:', error)
-    } finally {
-      setIsSubmitting(false)
-    }
+    createProfileMutation.mutate({ 
+      profileData: formData,
+      avatarFile,
+    })
   }
 
   const handleChange = (field, value) => {
@@ -88,28 +122,49 @@ export default function QuickAddDialog({ open, onOpenChange, onSubmit }) {
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
+    <Dialog open={open} onOpenChange={() => {}} modal>
+      <DialogContent 
+        className="sm:max-w-[500px]"
+        onEscapeKeyDown={(e) => e.preventDefault()}
+        onPointerDownOutside={(e) => e.preventDefault()}
+      >
         <DialogHeader>
-          <DialogTitle>Quick Add Profile</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            <User className="h-5 w-5 text-blue-600" />
+            Create Your First Profile
+          </DialogTitle>
           <DialogDescription>
-            Quickly create a new profile with basic information. You can add more details later.
+            Before you can access the dashboard, you need to create at least one profile. 
+            This helps us personalize your experience and find relevant funding opportunities.
           </DialogDescription>
         </DialogHeader>
+
+        <Alert className="bg-blue-50 border-blue-200">
+          <AlertCircle className="h-4 w-4 text-blue-600" />
+          <AlertDescription className="text-blue-900">
+            Don't worry, you can add more details and create additional profiles later.
+          </AlertDescription>
+        </Alert>
+
         <form onSubmit={handleSubmit}>
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
-              <Label htmlFor="display_name">Name *</Label>
+              <Label htmlFor="display_name">
+                Profile Name <span className="text-red-500">*</span>
+              </Label>
               <Input
                 id="display_name"
-                placeholder="Enter profile name"
+                placeholder="e.g., John Doe, ABC Nonprofit, or My Family"
                 value={formData.display_name}
                 onChange={(e) => handleChange('display_name', e.target.value)}
                 required
+                autoFocus
               />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="primary_type">Profile Type *</Label>
+              <Label htmlFor="primary_type">
+                Profile Type <span className="text-red-500">*</span>
+              </Label>
               <Select
                 value={formData.primary_type}
                 onValueChange={(value) => handleChange('primary_type', value)}
@@ -162,27 +217,27 @@ export default function QuickAddDialog({ open, onOpenChange, onSubmit }) {
                 Supported formats: JPG, PNG, GIF (max 5MB)
               </p>
             </div>
+
+            {error && (
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
           </div>
           <DialogFooter>
             <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-              disabled={isSubmitting}
+              type="submit"
+              disabled={createProfileMutation.isPending || !formData.display_name || !formData.primary_type}
+              className="bg-blue-600 hover:bg-blue-700"
             >
-              Cancel
-            </Button>
-            <Button 
-              type="submit" 
-              disabled={isSubmitting || !formData.display_name || !formData.primary_type}
-            >
-              {isSubmitting ? (
+              {createProfileMutation.isPending ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Creating...
+                  Creating Profile...
                 </>
               ) : (
-                'Create Profile'
+                'Create Profile & Continue'
               )}
             </Button>
           </DialogFooter>
