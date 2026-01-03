@@ -52,7 +52,7 @@ GitHub (PRs, Issues, Actions)
 
 Vercel (frontend deployments and DNS)
 
-Railway or DigitalOcean (backend deployment/runtime)
+Railway (backend deployment/runtime)
 
 Windows PowerShell (local commands)
 

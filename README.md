@@ -138,7 +138,8 @@ See `package.json` for the full script catalogue.
 ## Documentation & References
 
 - [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) — Production checklist, env vars, seeding, QA, monitoring.
-- [`docs/INFRASTRUCTURE_GUIDE.md`](docs/INFRASTRUCTURE_GUIDE.md) — DigitalOcean droplet setup, Nginx proxy configuration.
+- [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — Vercel + Railway deployment guide.
+- [`docs/VERCEL_RAILWAY_DEPLOYMENT.md`](docs/VERCEL_RAILWAY_DEPLOYMENT.md) — Detailed deployment instructions.
 - [`docs/AUTH_FRONTEND_PLAN.md`](docs/AUTH_FRONTEND_PLAN.md) — Historical context for the authentication UX overhaul.
 - `scripts/` — Smoke tests (`smoke-login.mjs`, `smoke-auth-callback.mjs`) and database auditing (`check-profiles.mjs`).
 
