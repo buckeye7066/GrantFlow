@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react"
-import { useQuery, useQueryClient } from "@tantml:query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { AlertCircle, Info, Loader2 } from "lucide-react"
