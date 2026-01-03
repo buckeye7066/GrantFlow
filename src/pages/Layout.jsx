@@ -30,6 +30,7 @@ import {
   DatabaseZap,
   Beaker,
   Sun,
+  Settings,
 } from "lucide-react"
 import {
   Sidebar,
@@ -188,6 +189,11 @@ const navigationItems = [
     title: "NOFO Parser",
     url: createPageUrl("NOFOParser"),
     icon: FileStack,
+  },
+  {
+    title: "Settings",
+    url: createPageUrl("Settings"),
+    icon: Settings,
   },
 ]
 

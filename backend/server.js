@@ -20,6 +20,7 @@ import remindersRouter from './routes/reminders.js';
 import crawlersRouter from './routes/crawlers.js';
 import billingRouter from './routes/billing.js';
 import authRouter from './routes/auth.js';
+import preferencesRouter from './routes/preferences.js';
 import jwt from 'jsonwebtoken';
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null;
@@ -378,6 +379,7 @@ app.use('/api/anya', anyaRouter); // Keep existing Anya routes for compatibility
 app.use('/api/profiles', profilesRouter);
 app.use('/api/reminders', remindersRouter);
 app.use('/api/crawlers', crawlersRouter);
+app.use('/api/preferences', preferencesRouter);
 
 // Stats endpoint for dashboard
 app.get('/api/stats', (req, res) => {
