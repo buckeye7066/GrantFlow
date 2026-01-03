@@ -20,17 +20,9 @@ export const USER_PROFILE_MAPPINGS = {
   [ADMIN_EMAIL]: null, // Admin has access to all profiles
   
   // Specific user mappings
-  // TODO: Add Brian's email and profile ID
-  // 'brian@example.com': 'profile-id-here',
-  
-  // TODO: Add Avanell's email and profile ID
-  // 'avanell@example.com': 'profile-id-here',
-  
-  // TODO: Add Olivia's email and profile ID
-  // 'olivia@example.com': 'profile-id-here',
-  
-  // TODO: Add Hollie's email and profile ID
-  // 'hollie@example.com': 'profile-id-here',
+  'isawstars08@yahoo.com': 'profile-brian-client',
+  'oliviabeltran@gmail.com': 'profile-olivia-beltran',
+  'holliet52@gmail.com': 'profile-hollie-knox',
 }
 
 /**
