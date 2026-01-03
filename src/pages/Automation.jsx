@@ -44,6 +44,7 @@ import { useAuthStore } from "@/stores/authStore"
 import { cn } from "@/lib/utils"
 import { getAnyaProfileTasks, updateAnyaTask } from "@/lib/anyaClient"
 import PipelineAutomationPanel from "@/components/pipeline/PipelineAutomationPanel"
+import CrawlerProgressMeter from "@/components/automation/CrawlerProgressMeter"
 import { SECTION_CONFIG } from "@/components/profiles/ProfileSectionEditor"
 
 const JOB_LABELS = {
@@ -1330,8 +1331,8 @@ export default function Automation() {
   const isAdmin = Boolean(user?.is_admin || user?.id === "admin")
   const [jobTypeFilter, setJobTypeFilter] = useState("all")
   const [jobStatusFilter, setJobStatusFilter] = useState("all")
-  const [profileFilter, setProfileFilter] = useState(isAdmin ? "" : activeProfileId ?? "")
-  const [selectedProfile, setSelectedProfile] = useState(activeProfileId ?? "")
+  const [profileFilter, setProfileFilter] = useState(isAdmin ? "all" : activeProfileId ?? "all")
+  const [selectedProfile, setSelectedProfile] = useState(activeProfileId ?? "none")
   const [selectedJob, setSelectedJob] = useState(null)
   const [itemQuery, setItemQuery] = useState("15 passenger van")
   const [selectedSections, setSelectedSections] = useState(["basic_information"])
@@ -1349,7 +1350,7 @@ export default function Automation() {
       listCrawlerMetrics(
         isAdmin
           ? {
-              profile_id: profileFilter || undefined,
+              profile_id: profileFilter && profileFilter !== "all" ? profileFilter : undefined,
             }
           : {},
       ),
@@ -1362,7 +1363,7 @@ export default function Automation() {
       listCrawlerJobs({
         type: jobTypeFilter !== "all" ? jobTypeFilter : undefined,
         status: jobStatusFilter !== "all" ? jobStatusFilter : undefined,
-        profile_id: isAdmin && profileFilter ? profileFilter : undefined,
+        profile_id: isAdmin && profileFilter && profileFilter !== "all" ? profileFilter : undefined,
         limit: 100,
       }),
   })
@@ -1370,7 +1371,7 @@ export default function Automation() {
   const profileDetailQuery = useQuery({
     queryKey: ["automation-profile-detail", isAdmin ? selectedProfile : activeProfileId],
     queryFn: () => getProfile(isAdmin ? selectedProfile : activeProfileId),
-    enabled: Boolean(isAdmin ? selectedProfile : activeProfileId),
+    enabled: Boolean(isAdmin ? (selectedProfile && selectedProfile !== "none") : activeProfileId),
   })
 
   const profileForTasks = isAdmin ? selectedProfile : activeProfileId
@@ -1489,13 +1490,13 @@ export default function Automation() {
   })
 
   const selectedProfileEntity = useMemo(() => {
-    if (!selectedProfile) return null
+    if (!selectedProfile || selectedProfile === "none") return null
     if (!profilesQuery.data) return null
     return profilesQuery.data.find((profile) => profile.id === selectedProfile) ?? null
   }, [profilesQuery.data, selectedProfile])
 
   const handleQueueJob = (type, params = {}) => {
-    const profileId = !isAdmin ? activeProfileId : selectedProfile || undefined
+    const profileId = !isAdmin ? activeProfileId : (selectedProfile && selectedProfile !== "none" ? selectedProfile : undefined)
     createJobMutation.mutate({
       type,
       profile_id: profileId,
@@ -1625,6 +1626,15 @@ export default function Automation() {
         />
       </section>
 
+      {/* Live Progress Meters for Running Jobs */}
+      {runningJobs.length > 0 && (
+        <section className="space-y-4">
+          {runningJobs.slice(0, 3).map((job) => (
+            <CrawlerProgressMeter key={job.id} jobId={job.id} />
+          ))}
+        </section>
+      )}
+
       {profileForTasks ? (
         <AutomationTasksPanel
           tasks={tasksForPanel}
@@ -1725,7 +1735,7 @@ export default function Automation() {
                     <SelectValue placeholder="Filter by profile" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">All profiles</SelectItem>
+                    <SelectItem value="all">All profiles</SelectItem>
                     {(profilesQuery.data ?? []).map((profile) => (
                       <SelectItem key={profile.id} value={profile.id}>
                         {profile.display_name}
@@ -1889,7 +1899,7 @@ export default function Automation() {
                     <SelectValue placeholder="Select profile to run automation" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">Use organization grants</SelectItem>
+                    <SelectItem value="none">Use organization grants</SelectItem>
                     {(profilesQuery.data ?? []).map((profile) => (
                       <SelectItem key={profile.id} value={profile.id}>
                         {profile.display_name}
@@ -1900,7 +1910,7 @@ export default function Automation() {
               ) : null}
                 <PipelineAutomationPanel
                   organizationId={profileDetailQuery.data?.organization_id ?? selectedProfileEntity?.organization_id ?? null}
-                  profileId={isAdmin ? selectedProfile || undefined : activeProfileId}
+                  profileId={isAdmin ? (selectedProfile && selectedProfile !== "none" ? selectedProfile : undefined) : activeProfileId}
                 />
             </CardContent>
           </Card>

@@ -430,7 +430,7 @@ export default function FundingOpportunities() {
     state: "all",
     source: "all",
     nationalOnly: false,
-    profileId: "",
+    profileId: "all",
     compliance: "grant_only",
   })
   const [selectedOpportunity, setSelectedOpportunity] = useState(null)
@@ -466,7 +466,7 @@ export default function FundingOpportunities() {
   const selectedProfileQuery = useQuery({
     queryKey: ["profile-detail", filters.profileId],
     queryFn: () => getProfile(filters.profileId),
-    enabled: Boolean(filters.profileId),
+    enabled: Boolean(filters.profileId) && filters.profileId !== "all",
   })
 
   const opportunitiesResponse = opportunitiesQuery.data ?? null
@@ -481,7 +481,7 @@ export default function FundingOpportunities() {
   const opportunitiesWithMatch = useMemo(() => {
     if (!opportunities.length) return []
     return opportunities.map((opp) => {
-      if (!filters.profileId) {
+      if (!filters.profileId || filters.profileId === "all") {
         return { opportunity: opp, match: null }
       }
       const computedMatch = scoreOpportunity(opp, selectedProfile)
@@ -619,7 +619,7 @@ export default function FundingOpportunities() {
                     <SelectValue placeholder="Select profile" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">All profiles</SelectItem>
+                    <SelectItem value="all">All profiles</SelectItem>
                     {profilesQuery.data?.map((profile) => (
                       <SelectItem key={profile.id} value={profile.id}>
                         {profile.display_name}
@@ -627,7 +627,7 @@ export default function FundingOpportunities() {
                     ))}
                   </SelectContent>
                 </Select>
-                {filters.profileId && selectedProfileQuery.isLoading ? (
+                {filters.profileId && filters.profileId !== "all" && selectedProfileQuery.isLoading ? (
                   <p className="text-[11px] text-slate-400">Loading profile signals…</p>
                 ) : null}
               </div>
