@@ -125,11 +125,6 @@ export default function Dashboard() {
       console.error('Failed to update preferences:', error)
     }
   }
-  
-    queryKey: ["currentUser"],
-    queryFn: () => base44.auth.me(),
-    staleTime: 60_000,
-  })
 
   const { data: profiles = [], isLoading: isLoadingProfiles } = useQuery({
     queryKey: ["dashboard-profiles"],

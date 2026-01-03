@@ -1,6 +1,5 @@
 import React, { useMemo, useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -34,9 +33,6 @@ function mapProfileToOrganization(profile) {
 export default function Organizations() {
   const [searchTerm, setSearchTerm] = useState("")
   const [typeFilter, setTypeFilter] = useState("all")
-  const [showQuickAdd, setShowQuickAdd] = useState(false)
-  const [showUpload, setShowUpload] = useState(false)
-  const [showNewApplication, setShowNewApplication] = useState(false)
   const [quickAddOpen, setQuickAddOpen] = useState(false)
   const [uploadFormOpen, setUploadFormOpen] = useState(false)
   const { toast } = useToast()
@@ -91,8 +87,6 @@ export default function Organizations() {
         title: "Profile created",
         description: "The new profile has been created successfully.",
       })
-      setShowQuickAdd(false)
-      setShowNewApplication(false)
     },
     onError: (error) => {
       toast({
@@ -103,43 +97,10 @@ export default function Organizations() {
     },
   })
 
-  const handleQuickAdd = () => {
-    setShowQuickAdd(true)
-  }
-
-  const handleUpload = () => {
-    setShowUpload(true)
-  }
-
   const handleNewApplication = () => {
-    setShowNewApplication(true)
+    showComingSoon("The full comprehensive application builder is under active development.")
   }
 
-  const handleQuickAddSubmit = (data) => {
-    createProfileMutation.mutate({
-      display_name: data.name,
-      primary_type: data.applicant_type,
-      status: 'active',
-      tags: data.tags || [],
-    })
-  }
-
-  const handleNewApplicationSubmit = (data) => {
-    // Note: This creates a basic profile. Full comprehensive form data
-    // should be saved to profile sections via the profile sections API
-    // in a future enhancement. For now, we create a minimal profile entry.
-    createProfileMutation.mutate({
-      display_name: data.name,
-      primary_type: data.applicant_type,
-      status: 'active',
-      tags: [],
-      // TODO: Store additional form data in profile_sections table
-    })
-  }
-
-  const handleUploadSuccess = () => {
-    queryClient.invalidateQueries({ queryKey: ['profiles'] })
-    setShowUpload(false)
   const handleQuickAdd = async (formData) => {
     try {
       const result = await apiFetch('/api/profiles', {
@@ -249,9 +210,6 @@ export default function Organizations() {
             </p>
           </div>
           <OrganizationActions
-            onQuickAdd={handleQuickAdd}
-            onUpload={handleUpload}
-            onNewApplication={handleNewApplication}
             onQuickAdd={() => setQuickAddOpen(true)}
             onUpload={() => setUploadFormOpen(true)}
             onNewApplication={() => showComingSoon("The full comprehensive application builder is under active development.")}
@@ -291,43 +249,6 @@ export default function Organizations() {
         )}
       </div>
 
-      <Dialog open={showQuickAdd} onOpenChange={setShowQuickAdd}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Quick Add Profile</DialogTitle>
-          </DialogHeader>
-          <OrganizationForm
-            onSubmit={handleQuickAddSubmit}
-            onCancel={() => setShowQuickAdd(false)}
-            isSubmitting={createProfileMutation.isPending}
-          />
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={showUpload} onOpenChange={setShowUpload}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Upload Completed Form</DialogTitle>
-          </DialogHeader>
-          <UploadApplicationForm
-            onSuccess={handleUploadSuccess}
-            onCancel={() => setShowUpload(false)}
-          />
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={showNewApplication} onOpenChange={setShowNewApplication}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>New Application</DialogTitle>
-          </DialogHeader>
-          <ComprehensiveApplicationForm
-            onSubmit={handleNewApplicationSubmit}
-            onCancel={() => setShowNewApplication(false)}
-            isSubmitting={createProfileMutation.isPending}
-          />
-        </DialogContent>
-      </Dialog>
       <QuickAddDialog
         open={quickAddOpen}
         onOpenChange={setQuickAddOpen}
