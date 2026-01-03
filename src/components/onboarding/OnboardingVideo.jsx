@@ -61,7 +61,6 @@ export default function OnboardingVideo({ open, onComplete, onSkip }) {
                 controls
                 className="w-full h-full"
                 onError={handleVideoError}
-                poster="/video-poster.png"
               >
                 <source src={VIDEO_PATH} type="video/mp4" />
                 Your browser does not support the video tag.
