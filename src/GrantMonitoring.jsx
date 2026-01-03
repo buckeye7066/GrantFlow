@@ -496,7 +496,7 @@ export default function GrantMonitoring() {
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                 <p className="text-sm text-blue-900">
                   <Zap className="w-4 h-4 inline mr-1" />
-                  Coming soon: Configure alert preferences, notification methods, and thresholds for each organization.
+                  Configure alert preferences, notification methods, and thresholds for each organization. This integrates with your dashboard notification preferences.
                 </p>
               </div>
             </div>
