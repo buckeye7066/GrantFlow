@@ -193,11 +193,6 @@ const navigationItems = [
 
 const developerItems = [
   {
-    title: "Printable Application",
-    url: createPageUrl("PrintableApplication"),
-    icon: FileText,
-  },
-  {
     title: "Diagnostics",
     url: createPageUrl("Diagnostics"),
     icon: Beaker,

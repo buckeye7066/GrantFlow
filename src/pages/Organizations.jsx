@@ -37,7 +37,7 @@ export default function Organizations() {
     error,
   } = useQuery({
     queryKey: ['profiles', isAdmin],
-    queryFn: () => listProfiles({ admin: isAdmin }),
+    queryFn: () => listProfiles(isAdmin ? { admin: true } : {}),
   })
 
   const organizations = useMemo(

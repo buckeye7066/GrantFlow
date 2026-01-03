@@ -1,15 +1,17 @@
 import React, { useState } from "react"
-import { Sparkles, X } from "lucide-react"
+import { Sparkles, X, AlertCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import AnyaChat from "./AnyaChat"
 import { cn } from "@/lib/utils"
 
 export default function AnyaFloatingButton({ profileId, className }) {
   const [isOpen, setIsOpen] = useState(false)
+  const hasProfile = Boolean(profileId)
 
-  if (!profileId) {
-    return null
+  const handleClick = () => {
+    setIsOpen(true)
   }
 
   return (
@@ -17,15 +19,20 @@ export default function AnyaFloatingButton({ profileId, className }) {
       {/* Floating Action Button with tooltip container */}
       <div className={cn("fixed bottom-6 right-6 z-50 group", className)}>
         <Button
-          onClick={() => setIsOpen(true)}
+          onClick={handleClick}
           className={cn(
             "h-14 w-14 rounded-full shadow-lg hover:shadow-xl transition-all duration-200",
-            "bg-gradient-to-br from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
+            hasProfile 
+              ? "bg-gradient-to-br from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
+              : "bg-gradient-to-br from-slate-400 to-slate-500 hover:from-slate-500 hover:to-slate-600"
           )}
           size="icon"
-          title="Chat with Anya"
+          title={hasProfile ? "Chat with Anya" : "Create a profile to chat with Anya"}
         >
-          <Sparkles className="h-6 w-6 text-white animate-pulse group-hover:scale-110 transition-transform" />
+          <Sparkles className={cn(
+            "h-6 w-6 text-white transition-transform",
+            hasProfile ? "animate-pulse group-hover:scale-110" : ""
+          )} />
           <span className="sr-only">Open Anya AI Assistant</span>
         </Button>
 
@@ -33,12 +40,15 @@ export default function AnyaFloatingButton({ profileId, className }) {
         <div
           className={cn(
             "absolute bottom-3 right-16 px-3 py-2 rounded-full shadow-md",
-            "bg-gradient-to-r from-purple-600 to-blue-600 text-white text-sm font-semibold",
+            "text-white text-sm font-semibold",
             "opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none",
-            "whitespace-nowrap"
+            "whitespace-nowrap",
+            hasProfile 
+              ? "bg-gradient-to-r from-purple-600 to-blue-600"
+              : "bg-gradient-to-r from-slate-400 to-slate-500"
           )}
         >
-          Chat with Anya
+          {hasProfile ? "Chat with Anya" : "Create a profile first"}
         </div>
       </div>
 
@@ -48,20 +58,42 @@ export default function AnyaFloatingButton({ profileId, className }) {
           <SheetHeader className="px-6 py-4 border-b border-slate-200">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-purple-600 to-blue-600">
+                <div className={cn(
+                  "flex h-10 w-10 items-center justify-center rounded-full",
+                  hasProfile 
+                    ? "bg-gradient-to-br from-purple-600 to-blue-600"
+                    : "bg-gradient-to-br from-slate-400 to-slate-500"
+                )}>
                   <Sparkles className="h-5 w-5 text-white" />
                 </div>
                 <div>
                   <SheetTitle className="text-lg font-bold">Anya AI Assistant</SheetTitle>
                   <SheetDescription className="text-xs">
-                    Your intelligent grant management copilot
+                    {hasProfile 
+                      ? "Your intelligent grant management copilot"
+                      : "Create a profile to get started"}
                   </SheetDescription>
                 </div>
               </div>
             </div>
           </SheetHeader>
           <div className="flex-1 overflow-hidden">
-            <AnyaChat profileId={profileId} />
+            {hasProfile ? (
+              <AnyaChat profileId={profileId} />
+            ) : (
+              <div className="p-6 flex items-center justify-center h-full">
+                <Alert className="max-w-md">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription className="mt-2">
+                    <p className="font-semibold mb-2">No profile selected</p>
+                    <p className="text-sm text-slate-600">
+                      To chat with Anya, you need to create or select a profile first. 
+                      Profiles help Anya understand your organization's needs and provide personalized grant recommendations.
+                    </p>
+                  </AlertDescription>
+                </Alert>
+              </div>
+            )}
           </div>
         </SheetContent>
       </Sheet>

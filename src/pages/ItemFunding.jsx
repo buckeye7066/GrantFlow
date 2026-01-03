@@ -311,7 +311,7 @@ export default function ItemFunding() {
     item: "",
     state: "all",
     includeNational: true,
-    profileId: "",
+    profileId: "all",
   })
   const [selectedOpportunity, setSelectedOpportunity] = useState(null)
   const [submittedItem, setSubmittedItem] = useState("")
@@ -329,7 +329,7 @@ export default function ItemFunding() {
   const selectedProfileQuery = useQuery({
     queryKey: ["profile-detail", filters.profileId],
     queryFn: () => getProfile(filters.profileId),
-    enabled: Boolean(filters.profileId),
+    enabled: Boolean(filters.profileId) && filters.profileId !== "all",
   })
 
   const opportunitiesQuery = useQuery({
@@ -510,7 +510,7 @@ export default function ItemFunding() {
                     <SelectValue placeholder="Select profile" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">All profiles</SelectItem>
+                    <SelectItem value="all">All profiles</SelectItem>
                     {profilesQuery.data?.map((profile) => (
                       <SelectItem key={profile.id} value={profile.id}>
                         {profile.display_name}
@@ -518,7 +518,7 @@ export default function ItemFunding() {
                     ))}
                   </SelectContent>
                 </Select>
-                {filters.profileId && selectedProfileQuery.isLoading ? (
+                {filters.profileId && filters.profileId !== "all" && selectedProfileQuery.isLoading ? (
                   <p className="text-[11px] text-slate-400">Loading profile signals…</p>
                 ) : null}
               </div>
