@@ -674,7 +674,14 @@ export async function adminDbQuery({ sql, limit = 100 }, context) {
 
   try {
     const safeLimit = Math.max(1, Math.min(Number(limit) || 100, 500))
-    const results = db.prepare(sql).all()
+    
+    // Append LIMIT clause to the query if not already present
+    let finalSql = sql.trim()
+    if (!finalSql.toLowerCase().includes('limit')) {
+      finalSql += ` LIMIT ${safeLimit}`
+    }
+    
+    const results = db.prepare(finalSql).all()
 
     return {
       query: sql,

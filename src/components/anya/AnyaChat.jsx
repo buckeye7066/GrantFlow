@@ -229,7 +229,7 @@ export default function AnyaChat({ profileId }) {
     async function loadTools() {
       setIsLoadingTools(true)
       try {
-        const available = await listAnyaTools()
+        const available = await listAnyaTools({ includeAdmin: isAdmin })
         if (isMounted) {
           setTools(Array.isArray(available) ? available : [])
         }
@@ -245,7 +245,7 @@ export default function AnyaChat({ profileId }) {
     return () => {
       isMounted = false
     }
-  }, [])
+  }, [isAdmin])
 
   const isDisabled = !sessionId || isLoading
 

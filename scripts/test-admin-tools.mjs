@@ -2,6 +2,9 @@
 /**
  * Simple smoke test for Anya admin tools
  * Tests that admin tools are registered and access control works
+ * 
+ * NOTE: This script must be run from the project root directory:
+ *   node scripts/test-admin-tools.mjs
  */
 
 import { listToolMetadata, invokeTool } from '../backend/services/anyaToolRegistry.js'
