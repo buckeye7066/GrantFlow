@@ -22,6 +22,7 @@ import billingRouter from './routes/billing.js';
 import authRouter from './routes/auth.js';
 import preferencesRouter from './routes/preferences.js';
 import jwt from 'jsonwebtoken';
+import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null;
 const ADMIN_NAME = process.env.ADMIN_NAME || 'Admin User';
@@ -220,6 +221,7 @@ function ensureCrawlerJobsSupportsProfileEnrichment() {
 }
 
 ensureCrawlerJobsSupportsProfileEnrichment()
+ensureDesignatedProfiles(db)
 
 const JWT_SECRET = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret';
 
