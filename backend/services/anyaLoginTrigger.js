@@ -12,8 +12,7 @@ const ADMIN_EMAIL = 'buckeye7066@gmail.com'
  * Check if user is the admin
  */
 function isAdmin(user) {
-  const result = Boolean(user?.is_admin) || user?.primary_email === ADMIN_EMAIL || user?.email === ADMIN_EMAIL || user?.role === 'admin'
-  return result
+  return Boolean(user?.is_admin) || user?.primary_email === ADMIN_EMAIL || user?.email === ADMIN_EMAIL || user?.role === 'admin'
 }
 
 /**
@@ -118,10 +117,10 @@ export function initializeAnyaForAdmin(db, user, profileId = null) {
   
   try {
     // Get the admin's profile if not provided
-    if (!profileId && user.userId) {
+    if (!profileId && user.id) {
       const row = db.prepare(`
         SELECT id FROM profiles WHERE user_id = ? LIMIT 1
-      `).get(user.userId)
+      `).get(user.id)
       
       profileId = row?.id || null
     }
@@ -141,7 +140,7 @@ export function initializeAnyaForAdmin(db, user, profileId = null) {
     }
     
     // Create Anya session
-    const sessionId = createAnyaSession(db, user.userId, profileId)
+    const sessionId = createAnyaSession(db, user.id, profileId)
     
     // Create crawler jobs
     const jobIds = {
