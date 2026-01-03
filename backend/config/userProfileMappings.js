@@ -24,6 +24,9 @@ export const USER_PROFILE_MAPPINGS = {
   'oliviabeltran@gmail.com': 'profile-camila-ortiz',
   'holliet52@gmail.com': 'profile-harper-family-support',
   'allmonkey915@gmail.com': 'profile-bright-trails-youth',
+  'isawstars08@yahoo.com': 'profile-brian-client',
+  'oliviabeltran@gmail.com': 'profile-olivia-beltran',
+  'holliet52@gmail.com': 'profile-hollie-knox',
 }
 
 /**

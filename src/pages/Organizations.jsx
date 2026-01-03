@@ -149,6 +149,10 @@ export default function Organizations() {
     try {
       const formData = new FormData()
       formData.append('document', file)
+      const inferredName = file.name?.replace(/\.[^/.]+$/, '') ?? ''
+      if (inferredName) {
+        formData.append('display_name', inferredName)
+      }
       
       const response = await fetch('/api/documents/ingest', {
         method: 'POST',
