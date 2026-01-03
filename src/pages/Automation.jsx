@@ -44,6 +44,7 @@ import { useAuthStore } from "@/stores/authStore"
 import { cn } from "@/lib/utils"
 import { getAnyaProfileTasks, updateAnyaTask } from "@/lib/anyaClient"
 import PipelineAutomationPanel from "@/components/pipeline/PipelineAutomationPanel"
+import CrawlerProgressMeter from "@/components/automation/CrawlerProgressMeter"
 import { SECTION_CONFIG } from "@/components/profiles/ProfileSectionEditor"
 
 const JOB_LABELS = {
@@ -1624,6 +1625,15 @@ export default function Automation() {
           loading={createJobMutation.isPending && createJobMutation.variables?.type === "profile_enrichment"}
         />
       </section>
+
+      {/* Live Progress Meters for Running Jobs */}
+      {runningJobs.length > 0 && (
+        <section className="space-y-4">
+          {runningJobs.slice(0, 3).map((job) => (
+            <CrawlerProgressMeter key={job.id} jobId={job.id} />
+          ))}
+        </section>
+      )}
 
       {profileForTasks ? (
         <AutomationTasksPanel
