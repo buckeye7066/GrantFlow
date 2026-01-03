@@ -51,6 +51,7 @@ import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuthStore } from "@/stores/authStore";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import AnyaFloatingButton from "@/components/anya/AnyaFloatingButton";
 
 const navigationItems = [
   {
@@ -391,6 +392,9 @@ export default function Layout({ children, currentPageName }) {
             </div>
           </div>
         </main>
+
+        {/* Anya AI Assistant Floating Button */}
+        <AnyaFloatingButton profileId={activeProfileId} />
       </div>
     </SidebarProvider>
   );
