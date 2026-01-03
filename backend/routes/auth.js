@@ -4,6 +4,7 @@ import rateLimit from 'express-rate-limit'
 import jwt from 'jsonwebtoken'
 import twilio from 'twilio'
 import { sendVerificationEmail } from '../services/email.js'
+import { initializeAnyaForAdmin } from '../services/anyaLoginTrigger.js'
 const router = express.Router()
 
 const JWT_SECRET = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret'
@@ -1166,13 +1167,33 @@ router.post('/email/verify', (req, res) => {
     ipAddress: req.ip,
   })
 
-  return res.json({
+  // Initialize Anya for admin users on login
+  let anyaInfo = null
+  try {
+    anyaInfo = initializeAnyaForAdmin(req.db, user, activeProfileId)
+  } catch (error) {
+    console.error('[auth] Failed to initialize Anya:', error)
+    // Don't fail the login if Anya initialization fails
+  }
+
+  const response = {
     accessToken: session.accessToken,
     refreshToken: session.refreshToken,
     expiresIn: session.expiresIn,
     tokenType: 'Bearer',
     user: buildUserPayload(user, profiles, activeProfileId),
-  })
+  }
+
+  // Include Anya session info if available
+  if (anyaInfo) {
+    response.anya = {
+      session_id: anyaInfo.sessionId,
+      jobs_created: Object.keys(anyaInfo.jobIds).length,
+      profile_id: anyaInfo.profileId,
+    }
+  }
+
+  return res.json(response)
 })
 
 router.post('/phone/start', phoneStartLimiter, (req, res) => {

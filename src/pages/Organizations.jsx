@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -11,6 +12,8 @@ import OrganizationEmptyState from "@/components/organizations/OrganizationEmpty
 import ComprehensiveApplicationForm from "@/components/organizations/ComprehensiveApplicationForm"
 import UploadApplicationForm from "@/components/organizations/UploadApplicationForm"
 import OrganizationForm from "@/components/organizations/OrganizationForm"
+import QuickAddDialog from "@/components/organizations/QuickAddDialog"
+import UploadFormDialog from "@/components/organizations/UploadFormDialog"
 import { useToast } from "@/components/ui/use-toast"
 import { listProfiles } from "@/api/profiles"
 import { createPageUrl } from "@/utils"
@@ -34,11 +37,15 @@ export default function Organizations() {
   const [showQuickAdd, setShowQuickAdd] = useState(false)
   const [showUpload, setShowUpload] = useState(false)
   const [showNewApplication, setShowNewApplication] = useState(false)
+  const [quickAddOpen, setQuickAddOpen] = useState(false)
+  const [uploadFormOpen, setUploadFormOpen] = useState(false)
   const { toast } = useToast()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const user = useAuthStore((state) => state.user)
   const isAdmin = user?.is_admin ?? false
+
+  console.log('[Organizations] User:', user, 'isAdmin:', isAdmin)
 
   const {
     data: profiles = [],
@@ -46,7 +53,12 @@ export default function Organizations() {
     error,
   } = useQuery({
     queryKey: ['profiles', isAdmin],
-    queryFn: () => listProfiles(isAdmin ? { admin: true } : {}),
+    queryFn: async () => {
+      console.log('[Organizations] Fetching profiles, isAdmin:', isAdmin)
+      const result = await listProfiles(isAdmin ? { admin: true } : {})
+      console.log('[Organizations] Profiles fetched:', result?.length, 'profiles')
+      return result
+    },
   })
 
   const organizations = useMemo(
@@ -128,6 +140,73 @@ export default function Organizations() {
   const handleUploadSuccess = () => {
     queryClient.invalidateQueries({ queryKey: ['profiles'] })
     setShowUpload(false)
+  const handleQuickAdd = async (formData) => {
+    try {
+      const result = await apiFetch('/api/profiles', {
+        method: 'POST',
+        body: JSON.stringify(formData),
+      })
+      
+      queryClient.invalidateQueries({ queryKey: ['profiles'] })
+      
+      toast({
+        title: "Profile created",
+        description: `Successfully created profile for ${formData.display_name}`,
+      })
+      
+      // Navigate to the new profile
+      navigate(createPageUrl("OrganizationProfile", { id: result.id }))
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to create profile. Please try again.",
+        variant: "destructive",
+      })
+      throw error
+    }
+  }
+
+  const handleUploadForm = async (file) => {
+    try {
+      const formData = new FormData()
+      formData.append('document', file)
+      
+      const response = await fetch('/api/documents/ingest', {
+        method: 'POST',
+        body: formData,
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('grantflow:access-token')}`,
+        },
+      })
+      
+      if (!response.ok) {
+        throw new Error('Upload failed')
+      }
+      
+      const result = await response.json()
+      
+      queryClient.invalidateQueries({ queryKey: ['profiles'] })
+      
+      toast({
+        title: "Form uploaded",
+        description: "Your form has been processed and a profile has been created.",
+      })
+      
+      // Navigate to the new profile if one was created
+      if (result.profile_id) {
+        navigate(createPageUrl("OrganizationProfile", { id: result.profile_id }))
+      }
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to upload form. Please try again.",
+        variant: "destructive",
+      })
+      throw error
+    }
+  }
+
+  const showComingSoon = (message) => {
     toast({
       title: "Form uploaded",
       description: "The form has been uploaded and will be processed shortly.",
@@ -173,6 +252,9 @@ export default function Organizations() {
             onQuickAdd={handleQuickAdd}
             onUpload={handleUpload}
             onNewApplication={handleNewApplication}
+            onQuickAdd={() => setQuickAddOpen(true)}
+            onUpload={() => setUploadFormOpen(true)}
+            onNewApplication={() => showComingSoon("The full comprehensive application builder is under active development.")}
           />
         </header>
 
@@ -246,6 +328,17 @@ export default function Organizations() {
           />
         </DialogContent>
       </Dialog>
+      <QuickAddDialog
+        open={quickAddOpen}
+        onOpenChange={setQuickAddOpen}
+        onSubmit={handleQuickAdd}
+      />
+
+      <UploadFormDialog
+        open={uploadFormOpen}
+        onOpenChange={setUploadFormOpen}
+        onUpload={handleUploadForm}
+      />
     </section>
   )
 }

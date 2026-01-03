@@ -97,21 +97,27 @@ function getOpenAI() {
 router.get('/', (req, res) => {
   const auth = req.user ?? { role: 'guest' }
 
+  console.log('[Profiles GET /] Auth:', auth)
+
   if (auth.role !== 'admin') {
     if (!auth.profileId) {
+      console.log('[Profiles GET /] Non-admin user with no profileId, returning empty array')
       return res.json([])
     }
 
     const row = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(auth.profileId)
     if (!row) {
+      console.log('[Profiles GET /] Profile not found for profileId:', auth.profileId)
       return res.json([])
     }
 
+    console.log('[Profiles GET /] Returning single profile for user')
     return res.json([mapProfile(row)])
   }
 
   const stmt = req.db.prepare(`${profileSelect} ORDER BY p.created_at DESC`)
   const profiles = stmt.all().map(mapProfile)
+  console.log('[Profiles GET /] Admin user, returning', profiles.length, 'profiles')
   res.json(profiles)
 })
 
