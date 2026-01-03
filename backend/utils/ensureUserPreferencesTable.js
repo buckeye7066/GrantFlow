@@ -29,7 +29,7 @@ export default function ensureUserPreferencesTable(db) {
     'custom_preferences',
   ])
 
-  const hasAllColumns = columns.length > 0 && expectedColumns.every((name) => columns.some((col) => col.name === name))
+  const hasAllColumns = columns.length > 0 && Array.from(expectedColumns).every((name) => columns.some((col) => col.name === name))
 
   if (hasAllColumns) {
     return
