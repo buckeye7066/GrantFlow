@@ -282,6 +282,8 @@ export default function Dashboard() {
     )
   }
 
+  const today = format(new Date(), "EEEE, MMM d")
+
   return (
     <section className="relative px-4 pb-12 pt-6 md:px-6 lg:px-10">
       <div className="mx-auto flex max-w-7xl flex-col gap-8">
