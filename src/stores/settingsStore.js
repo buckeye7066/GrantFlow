@@ -118,8 +118,18 @@ export const useSettingsStore = create((set, get) => ({
       }
     }
 
-    // Apply accent color
-    root.style.setProperty('--accent-color', accent_color)
+    // Apply accent color - map to valid Tailwind colors
+    const colorMap = {
+      blue: '#3b82f6',
+      purple: '#a855f7',
+      green: '#22c55e',
+      orange: '#f97316',
+      rose: '#f43f5e',
+      cyan: '#06b6d4',
+      amber: '#f59e0b',
+      pink: '#ec4899',
+    }
+    root.style.setProperty('--accent-color', colorMap[accent_color] || colorMap.blue)
 
     // Apply font size
     const fontSizeMap = {

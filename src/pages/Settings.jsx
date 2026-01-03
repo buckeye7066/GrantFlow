@@ -204,14 +204,24 @@ export default function Settings() {
               <div className="space-y-2">
                 <Label>Accent Color</Label>
                 <div className="grid grid-cols-4 gap-3">
-                  {['blue', 'purple', 'green', 'orange', 'rose', 'cyan', 'amber', 'pink'].map((color) => (
+                  {[
+                    { name: 'blue', hex: '#3b82f6' },
+                    { name: 'purple', hex: '#a855f7' },
+                    { name: 'green', hex: '#22c55e' },
+                    { name: 'orange', hex: '#f97316' },
+                    { name: 'rose', hex: '#f43f5e' },
+                    { name: 'cyan', hex: '#06b6d4' },
+                    { name: 'amber', hex: '#f59e0b' },
+                    { name: 'pink', hex: '#ec4899' },
+                  ].map((color) => (
                     <button
-                      key={color}
-                      onClick={() => updateWithChange('accent_color', color)}
+                      key={color.name}
+                      onClick={() => updateWithChange('accent_color', color.name)}
                       className={`h-12 rounded-lg border-2 ${
-                        preferences.accent_color === color ? 'border-slate-900 ring-2 ring-slate-900' : 'border-slate-200'
-                      } bg-${color}-500 hover:scale-105 transition-transform`}
-                      aria-label={`Select ${color} accent color`}
+                        preferences.accent_color === color.name ? 'border-slate-900 ring-2 ring-slate-900' : 'border-slate-200'
+                      } hover:scale-105 transition-transform`}
+                      style={{ backgroundColor: color.hex }}
+                      aria-label={`Select ${color.name} accent color`}
                     />
                   ))}
                 </div>

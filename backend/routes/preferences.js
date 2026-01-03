@@ -80,7 +80,7 @@ router.get('/', (req, res) => {
     
     if (!preferences) {
       // Create default preferences for user
-      const id = crypto.randomUUID()
+      const id = `pref-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
       req.db.prepare(`
         INSERT INTO user_preferences (id, user_id, custom_preferences)
         VALUES (?, ?, ?)
@@ -160,7 +160,7 @@ router.post('/reset', (req, res) => {
   try {
     req.db.prepare('DELETE FROM user_preferences WHERE user_id = ?').run(auth.userId)
     
-    const id = crypto.randomUUID()
+    const id = `pref-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
     req.db.prepare(`
       INSERT INTO user_preferences (id, user_id, custom_preferences)
       VALUES (?, ?, ?)
