@@ -5,6 +5,7 @@ import Layout from "./Layout.jsx";
 import Dashboard from "./Dashboard";
 
 import Organizations from "./Organizations";
+import MyProfiles from "./MyProfiles";
 import Funder from "./Funder";
 
 import DiscoverGrants from "./DiscoverGrants";
@@ -104,6 +105,8 @@ const PAGES = {
     Dashboard: Dashboard,
     
     Organizations: Organizations,
+    
+    MyProfiles: MyProfiles,
     
     Funder: Funder,
     
@@ -222,6 +225,8 @@ function LayoutRoutes() {
                 <Route path="/Dashboard" element={<Dashboard />} />
 
                 <Route path="/Organizations" element={<Organizations />} />
+
+                <Route path="/MyProfiles" element={<MyProfiles />} />
 
                 <Route path="/Funder" element={<Funder />} />
 

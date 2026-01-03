@@ -86,6 +86,37 @@ function safeParseJSON(value, fallback) {
   }
 }
 
+function enrichProfileWithSummary(db, profile) {
+  // Get billing account info
+  const billingAccount = ensureBillingAccount(db, profile.id)
+  profile.billing = mapAccountRow(billingAccount)
+  
+  // Get section completion stats
+  const sections = db
+    .prepare('SELECT COUNT(*) as total FROM profile_sections WHERE profile_id = ?')
+    .get(profile.id)
+  profile.sections_complete = sections?.total ?? 0
+  
+  // Get pipeline funds total
+  const pipelineFunds = db
+    .prepare(`
+      SELECT COALESCE(SUM(g.amount_requested), 0) as total
+      FROM grants g
+      WHERE g.organization_id = ?
+      AND g.status IN ('interested', 'drafting', 'app_prep', 'revision', 'submitted', 'under_review')
+    `)
+    .get(profile.organization_id)
+  profile.pipeline_funds_total = pipelineFunds?.total ?? 0
+  
+  // Get document count
+  const docs = db
+    .prepare('SELECT COUNT(*) as total FROM profile_documents WHERE profile_id = ?')
+    .get(profile.id)
+  profile.document_count = docs?.total ?? 0
+  
+  return profile
+}
+
 function getOpenAI() {
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) {
@@ -96,8 +127,9 @@ function getOpenAI() {
 
 router.get('/', (req, res) => {
   const auth = req.user ?? { role: 'guest' }
+  const includeSummary = req.query.summary === 'true'
 
-  console.log('[Profiles GET /] Auth:', auth)
+  console.log('[Profiles GET /] Auth:', auth, 'includeSummary:', includeSummary)
 
   if (auth.role !== 'admin') {
     if (!auth.profileId) {
@@ -112,11 +144,20 @@ router.get('/', (req, res) => {
     }
 
     console.log('[Profiles GET /] Returning single profile for user')
-    return res.json([mapProfile(row)])
+    const profile = mapProfile(row)
+    if (includeSummary) {
+      enrichProfileWithSummary(req.db, profile)
+    }
+    return res.json([profile])
   }
 
   const stmt = req.db.prepare(`${profileSelect} ORDER BY p.created_at DESC`)
   const profiles = stmt.all().map(mapProfile)
+  
+  if (includeSummary) {
+    profiles.forEach(profile => enrichProfileWithSummary(req.db, profile))
+  }
+  
   console.log('[Profiles GET /] Admin user, returning', profiles.length, 'profiles')
   res.json(profiles)
 })
