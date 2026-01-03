@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import Layout from "./Layout.jsx";
+import OnboardingFlow from "@/components/onboarding/OnboardingFlow";
 
 import Dashboard from "./Dashboard";
 
@@ -318,6 +319,7 @@ function LayoutRoutes() {
 
                 </Routes>
             </Layout>
+            <OnboardingFlow />
         </EnsureQueryClientProvider>
     );
 }
