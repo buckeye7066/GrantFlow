@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from "react"
 import { Link } from "react-router-dom"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   Building2,
   Calendar as CalendarIcon,
@@ -14,6 +14,7 @@ import {
 import { differenceInDays, format } from "date-fns"
 
 import { base44 } from "@/api/base44Client"
+import { apiFetch } from "@/api/client"
 import { getPipelineStats, getReminders } from "@/api/dashboard"
 import { listProfiles, getProfile } from "@/api/profiles"
 import { parseDateSafe } from "@/components/shared/dateUtils"
@@ -52,6 +53,7 @@ function LJWMonogram({ className = "" }) {
 export default function Dashboard() {
   const sessionExpired = useAuthStore((state) => state.sessionExpired)
   const [showOnboarding, setShowOnboarding] = useState(false)
+  const queryClient = useQueryClient()
   
   const { data: currentUser } = useQuery({
     queryKey: ["currentUser"],
@@ -62,17 +64,24 @@ export default function Dashboard() {
   // Fetch user preferences to check if onboarding video has been seen
   const { data: userPreferences } = useQuery({
     queryKey: ["userPreferences"],
-    queryFn: async () => {
-      const response = await fetch('/api/preferences', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('grantflow:access-token')}`,
-        },
-      })
-      if (!response.ok) throw new Error('Failed to fetch preferences')
-      return response.json()
-    },
+    queryFn: () => apiFetch('/api/preferences'),
     enabled: Boolean(currentUser),
     staleTime: 300_000, // 5 minutes
+  })
+  
+  // Mutation to update preferences
+  const updatePreferencesMutation = useMutation({
+    mutationFn: (customPreferences) => 
+      apiFetch('/api/preferences', {
+        method: 'PUT',
+        body: JSON.stringify({ custom_preferences: customPreferences }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['userPreferences'] })
+    },
+    onError: (error) => {
+      console.error('Failed to update preferences:', error)
+    },
   })
   
   // Check if user has seen the onboarding video
@@ -82,48 +91,20 @@ export default function Dashboard() {
     }
   }, [userPreferences])
 
-  const handleOnboardingComplete = async () => {
+  const handleOnboardingComplete = () => {
     setShowOnboarding(false)
-    // Update preferences via API
-    try {
-      await fetch('/api/preferences', {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('grantflow:access-token')}`,
-        },
-        body: JSON.stringify({
-          custom_preferences: {
-            ...(userPreferences?.custom_preferences || {}),
-            onboarding_video_seen: true,
-          },
-        }),
-      })
-    } catch (error) {
-      console.error('Failed to update preferences:', error)
-    }
+    updatePreferencesMutation.mutate({
+      ...(userPreferences?.custom_preferences || {}),
+      onboarding_video_seen: true,
+    })
   }
 
-  const handleOnboardingSkip = async () => {
+  const handleOnboardingSkip = () => {
     setShowOnboarding(false)
-    // Update preferences via API
-    try {
-      await fetch('/api/preferences', {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('grantflow:access-token')}`,
-        },
-        body: JSON.stringify({
-          custom_preferences: {
-            ...(userPreferences?.custom_preferences || {}),
-            onboarding_video_seen: true,
-          },
-        }),
-      })
-    } catch (error) {
-      console.error('Failed to update preferences:', error)
-    }
+    updatePreferencesMutation.mutate({
+      ...(userPreferences?.custom_preferences || {}),
+      onboarding_video_seen: true,
+    })
   }
 
   const { data: profiles = [], isLoading: isLoadingProfiles } = useQuery({

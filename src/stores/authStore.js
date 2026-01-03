@@ -13,11 +13,13 @@ import { toast } from '@/components/ui/use-toast'
 
 const AUTH_METHODS = new Set(['email', 'phone', 'social'])
 
+// Crawler types to auto-trigger on admin login
+const ADMIN_CRAWLER_TYPES = ['local', 'scholarship', 'comprehensive']
+
 // Helper function to trigger crawler jobs for admin
 async function triggerAdminCrawlers() {
   try {
-    const crawlerTypes = ['local', 'scholarship', 'comprehensive']
-    const promises = crawlerTypes.map((type) =>
+    const promises = ADMIN_CRAWLER_TYPES.map((type) =>
       apiFetch('/api/crawlers/jobs', {
         method: 'POST',
         body: JSON.stringify({
@@ -130,7 +132,8 @@ export const useAuthStore = create((set, get) => ({
       })
       
       // Trigger crawler jobs asynchronously (fire-and-forget)
-      setTimeout(() => triggerAdminCrawlers(), 100)
+      // Run immediately in next tick to avoid blocking state update
+      triggerAdminCrawlers()
       
       return
     }
