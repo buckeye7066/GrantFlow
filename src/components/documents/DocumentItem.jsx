@@ -2,7 +2,7 @@ import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { FileText, Download, Trash2 } from 'lucide-react';
+import { FileText, Download, Trash2, Printer } from 'lucide-react';
 import { format } from 'date-fns';
 import { base44 } from '@/api/base44Client';
 
@@ -14,12 +14,12 @@ export default function DocumentItem({ document, onDelete }) {
     return !isNaN(date.getTime());
   };
 
-  const fileUri = document.file_url ?? document.file_uri
+  const fileUri = document.file_url ?? document.file_uri;
 
   const getSignedUrlAndDownload = async () => {
     if (!fileUri) {
-      alert("This document does not have a stored file URL.")
-      return
+      alert("This document does not have a stored file URL.");
+      return;
     }
     try {
         const { signed_url } = await base44.integrations.Core.CreateFileSignedUrl({ file_uri: fileUri });
@@ -27,6 +27,26 @@ export default function DocumentItem({ document, onDelete }) {
     } catch (error) {
         console.error("Failed to get download URL", error);
         alert("Could not generate download link. Please try again.");
+    }
+  };
+
+  const handlePrint = async () => {
+    if (!fileUri) {
+      alert("This document does not have a stored file URL.");
+      return;
+    }
+    try {
+        const { signed_url } = await base44.integrations.Core.CreateFileSignedUrl({ file_uri: fileUri });
+        // Open in new window and trigger print
+        const printWindow = window.open(signed_url, '_blank');
+        if (printWindow) {
+          printWindow.onload = () => {
+            printWindow.print();
+          };
+        }
+    } catch (error) {
+        console.error("Failed to get print URL", error);
+        alert("Could not generate print link. Please try again.");
     }
   };
 
@@ -78,6 +98,14 @@ export default function DocumentItem({ document, onDelete }) {
           disabled={!fileUri}
         >
           <Download className="w-3 h-3 mr-2" /> Download
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handlePrint}
+          disabled={!fileUri}
+        >
+          <Printer className="w-3 h-3 mr-2" /> Print
         </Button>
         <Button
           variant="destructive-outline"

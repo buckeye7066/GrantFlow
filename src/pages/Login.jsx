@@ -48,6 +48,8 @@ export default function Login() {
   return (
     <AuthShell
       title="Sign in to GrantFlow"
+      subtitle="Enter your email to receive a secure login code."
+    >
       subtitle="Access your scholarships, grants, and partner accounts."
       subtitle="Enter your email address to receive a verification code."
     >

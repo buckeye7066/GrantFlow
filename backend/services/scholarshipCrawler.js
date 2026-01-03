@@ -282,7 +282,7 @@ export function processScholarshipCrawlerJob({
       ...opportunity,
       source: 'scholarship_crawler',
       source_id: opportunity.id,
-      profile_id: profile.id,
+      profile_id: null,
       deadline_type: 'fixed',
       categories: opportunity.categories,
       keywords: opportunity.keywords,
