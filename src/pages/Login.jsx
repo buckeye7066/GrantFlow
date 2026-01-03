@@ -4,7 +4,7 @@ import AuthShell from '@/components/auth/AuthShell'
 import AuthMethodTabs from '@/components/auth/AuthMethodTabs'
 import { useAuthStore } from '@/stores/authStore'
 
-const AUTH_TABS = new Set(['email', 'phone', 'social'])
+const AUTH_TABS = new Set(['email'])
 
 export default function Login() {
   const navigate = useNavigate()
@@ -90,7 +90,7 @@ export default function Login() {
   return (
     <AuthShell
       title="Sign in to GrantFlow"
-      subtitle="Choose how you’d like to access your scholarships, grants, and partner accounts."
+      subtitle="Access your scholarships, grants, and partner accounts."
     >
       <AuthMethodExpiryNotice />
       <AuthMethodTabs value={activeTab} onValueChange={setActiveTab} onComplete={handleComplete} />
@@ -101,8 +101,7 @@ export default function Login() {
 function AuthMethodExpiryNotice() {
   return (
     <div className="mb-6 rounded-lg border border-blue-100 bg-blue-50/70 p-3 text-sm text-slate-700">
-      Email passcodes, SMS verification, and Google / Facebook / Yahoo sign-ins are all available. Choose the option that
-      matches the contact info on your GrantFlow application—tokens refresh automatically once you’re in.
+      Email passcodes are available for authentication. Tokens refresh automatically once you're in.
     </div>
   )
 }

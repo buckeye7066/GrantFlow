@@ -190,7 +190,7 @@ export default function Dashboard() {
     () => [
       {
         title: "Funds Secured",
-        value: "$22,000,000+",
+        value: "$22,514,820.00",
         icon: LJWMonogram,
         color: "from-amber-500 to-amber-600",
       },
