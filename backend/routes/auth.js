@@ -8,6 +8,7 @@ import { initializeAnyaForAdmin } from '../services/anyaLoginTrigger.js'
 const router = express.Router()
 
 const JWT_SECRET = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret'
+const ADMIN_EMAIL = 'buckeye7066@gmail.com'
 
 function parseSeconds(value, fallback) {
   if (value === undefined || value === null) {
@@ -352,6 +353,15 @@ function assignFirstProfileToUser(db, userId) {
   }
 }
 
+function ensureAdminStatus(db, userId, email) {
+  if (email === ADMIN_EMAIL) {
+    const result = db.prepare('UPDATE users SET is_admin = 1 WHERE id = ? AND is_admin = 0').run(userId)
+    if (result.changes > 0) {
+      console.log(`[auth] Set admin status for user ${userId} (${email})`)
+    }
+  }
+}
+
 function ensureEmailCredential(db, email) {
   const existing = db
     .prepare(
@@ -367,15 +377,24 @@ function ensureEmailCredential(db, email) {
 
   if (existing) {
     const user = getUserById(db, existing.user_id)
+    // Ensure admin status is set if this is the admin email
+    ensureAdminStatus(db, existing.user_id, email)
+    // Reload user to get updated admin status
+    const updatedUser = getUserById(db, existing.user_id)
     return {
-      user,
+      user: updatedUser,
       credential: existing,
     }
   }
 
   const displayName = email.split('@')[0] || 'New User'
   const userId = crypto.randomUUID()
-  db.prepare('INSERT INTO users (id, display_name, primary_email) VALUES (?, ?, ?)').run(userId, displayName, email)
+  db.prepare('INSERT INTO users (id, display_name, primary_email, is_admin) VALUES (?, ?, ?, ?)').run(
+    userId, 
+    displayName, 
+    email,
+    email === ADMIN_EMAIL ? 1 : 0
+  )
   
   // Assign new user to first available profile
   assignFirstProfileToUser(db, userId)
@@ -700,14 +719,21 @@ function ensureProviderUser(db, provider, profile) {
 
   if (!user) {
     const userId = crypto.randomUUID()
+    const isAdmin = email === ADMIN_EMAIL ? 1 : 0
     db.prepare(
       `
-        INSERT INTO users (id, display_name, primary_email, avatar_url)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO users (id, display_name, primary_email, avatar_url, is_admin)
+        VALUES (?, ?, ?, ?, ?)
       `,
-    ).run(userId, profile.displayName ?? 'GrantFlow User', email, profile.avatarUrl ?? null)
+    ).run(userId, profile.displayName ?? 'GrantFlow User', email, profile.avatarUrl ?? null, isAdmin)
     user = getUserById(db, userId)
     return user
+  }
+
+  // Ensure admin status is set for existing users
+  if (email) {
+    ensureAdminStatus(db, user.id, email)
+    user = getUserById(db, user.id)
   }
 
   const updates = []
