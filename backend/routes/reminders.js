@@ -27,7 +27,6 @@ function normalizeDeadline(row) {
     deadline: row.deadline,
     status: row.status,
     daysRemaining,
-    opportunityType: row.opportunity_type ?? null,
     amountRequested: row.amount_requested ?? null,
   };
 }
@@ -81,7 +80,6 @@ export function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD) {
         g.deadline,
         g.status,
         g.amount_requested,
-        g.opportunity_type,
         o.name AS organization_name
       FROM grants g
       LEFT JOIN organizations o ON o.id = g.organization_id

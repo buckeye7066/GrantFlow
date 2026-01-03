@@ -11,7 +11,9 @@ import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Info, X, CheckCircle } from 'lucide-react'
 
-const VIDEO_PATH = '/Grant Flow_ Get Started. mp4'
+// Properly encode the video path to handle spaces and special characters in filename
+// The path parts are joined to ensure proper encoding while keeping forward slashes
+const VIDEO_PATH = '/' + encodeURIComponent('Grant Flow_ Get Started. mp4')
 
 export default function OnboardingVideo({ open, onComplete, onSkip }) {
   const [videoError, setVideoError] = useState(false)

@@ -700,8 +700,42 @@ CREATE TABLE IF NOT EXISTS user_preferences (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
-  onboarding_video_seen INTEGER DEFAULT 0,
-  preferences_json TEXT DEFAULT '{}'
+  
+  -- UI Preferences
+  sidebar_position TEXT DEFAULT 'left',
+  sidebar_collapsed INTEGER DEFAULT 0,
+  dashboard_layout TEXT DEFAULT 'grid',
+  card_density TEXT DEFAULT 'comfortable',
+  table_row_density TEXT DEFAULT 'medium',
+  
+  -- Theme Preferences
+  theme TEXT DEFAULT 'system',
+  accent_color TEXT DEFAULT 'blue',
+  sidebar_color_scheme TEXT DEFAULT 'default',
+  high_contrast INTEGER DEFAULT 0,
+  
+  -- Navigation Preferences
+  default_landing_page TEXT DEFAULT '/Dashboard',
+  items_per_page INTEGER DEFAULT 25,
+  
+  -- Display Preferences
+  date_format TEXT DEFAULT 'MM/DD/YYYY',
+  currency_display TEXT DEFAULT 'USD',
+  timezone TEXT DEFAULT 'America/New_York',
+  
+  -- Notification Preferences
+  email_notifications INTEGER DEFAULT 1,
+  grant_deadline_reminder_days INTEGER DEFAULT 7,
+  weekly_digest INTEGER DEFAULT 1,
+  browser_notifications INTEGER DEFAULT 0,
+  
+  -- Accessibility Preferences
+  font_size TEXT DEFAULT 'medium',
+  reduce_motion INTEGER DEFAULT 0,
+  screen_reader_optimized INTEGER DEFAULT 0,
+  
+  -- Custom JSON preferences (for features like onboarding_video_seen)
+  custom_preferences TEXT DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_preferences_user ON user_preferences(user_id);
@@ -767,46 +801,6 @@ AFTER UPDATE ON profile_sections
 BEGIN
   UPDATE profile_sections SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
-
--- User Preferences for onboarding and settings
-CREATE TABLE IF NOT EXISTS user_preferences (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  onboarding_video_seen INTEGER DEFAULT 0,
-  preferences TEXT DEFAULT '{}',
-  
-  UNIQUE(user_id)
-);
-
--- Crawler Schedules for automated job execution
-CREATE TABLE IF NOT EXISTS crawler_schedules (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  
-  profile_id TEXT REFERENCES profiles(id) ON DELETE CASCADE,
-  crawler_type TEXT NOT NULL CHECK(crawler_type IN (
-    'local',
-    'scholarship',
-    'comprehensive',
-    'item_search',
-    'profile_enrichment',
-    'avatar_lookup',
-    'pipeline_automation'
-  )),
-  schedule_cron TEXT NOT NULL,
-  enabled INTEGER DEFAULT 1,
-  last_run_at DATETIME,
-  next_run_at DATETIME,
-  parameters TEXT DEFAULT '{}'
-);
-
-CREATE INDEX IF NOT EXISTS idx_crawler_schedules_profile ON crawler_schedules(profile_id);
-CREATE INDEX IF NOT EXISTS idx_crawler_schedules_enabled ON crawler_schedules(enabled);
-CREATE INDEX IF NOT EXISTS idx_crawler_schedules_next_run ON crawler_schedules(next_run_at);
 
 CREATE TRIGGER IF NOT EXISTS update_user_preferences_timestamp
 AFTER UPDATE ON user_preferences
