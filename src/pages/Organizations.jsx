@@ -37,22 +37,14 @@ export default function Organizations() {
   const user = useAuthStore((state) => state.user)
   const isAdmin = user?.is_admin ?? false
 
-  console.log('[Organizations] User:', user)
-  console.log('[Organizations] isAdmin:', isAdmin)
-
   const {
     data: profiles = [],
     isLoading,
     error,
   } = useQuery({
     queryKey: ['profiles', isAdmin],
-    queryFn: () => {
-      console.log('[Organizations] Fetching profiles with admin:', isAdmin)
-      return listProfiles(isAdmin ? { admin: true } : {})
-    },
+    queryFn: () => listProfiles(isAdmin ? { admin: true } : {}),
   })
-
-  console.log('[Organizations] Profiles loaded:', profiles.length, profiles)
 
   const organizations = useMemo(
     () => profiles.map(mapProfileToOrganization),
