@@ -12,7 +12,8 @@ const ADMIN_EMAIL = 'buckeye7066@gmail.com'
  * Check if user is the admin
  */
 function isAdmin(user) {
-  return user?.is_admin === true || user?.email === ADMIN_EMAIL || user?.role === 'admin'
+  const result = Boolean(user?.is_admin) || user?.primary_email === ADMIN_EMAIL || user?.email === ADMIN_EMAIL || user?.role === 'admin'
+  return result
 }
 
 /**
@@ -36,7 +37,7 @@ function createAnyaSession(db, userId, profileId) {
     sessionId,
     userId || null,
     profileId || null,
-    'active',
+    'open',
     'Admin Login Auto-Crawl Session',
     JSON.stringify({
       auto_created: true,
@@ -58,7 +59,7 @@ function createCrawlerJob(db, profileId, crawlerType, parameters = {}) {
     INSERT INTO crawler_jobs (
       id,
       profile_id,
-      crawler_type,
+      type,
       status,
       parameters
     ) VALUES (?, ?, ?, ?, ?)
@@ -88,20 +89,15 @@ function addAnyaMessage(db, sessionId, role, content) {
       id,
       session_id,
       role,
-      content,
-      metadata
-    ) VALUES (?, ?, ?, ?, ?)
+      content
+    ) VALUES (?, ?, ?, ?)
   `)
   
   stmt.run(
     messageId,
     sessionId,
     role,
-    content,
-    JSON.stringify({
-      auto_generated: true,
-      timestamp: new Date().toISOString(),
-    })
+    content
   )
   
   return messageId
