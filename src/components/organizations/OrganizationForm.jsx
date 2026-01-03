@@ -9,11 +9,12 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { X, Building2, GraduationCap, Heart, Sparkles, ImagePlus, Loader2, Wand2, FileText } from "lucide-react";
+import { X, Building2, GraduationCap, Heart, Sparkles, ImagePlus, Loader2, Wand2, FileText, DollarSign } from "lucide-react";
 import MultiSelectCombobox from "../shared/MultiSelectCombobox";
 import AIFormField from "../shared/AIFormField";
 import { useToast } from '@/components/ui/use-toast';
 import DocumentHarvester from "@/components/documents/DocumentHarvester";
+import { listBillingTiers } from "@/api/billing";
 
 const US_STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
 
@@ -238,6 +239,11 @@ const initializeFormData = (org, contactMethods) => {
     sbe: false, // Small Business Enterprise
     // New Pro Bono field
     pro_bono: false,
+    // Billing and discount fields
+    tier_id: null,
+    custom_monthly_cents: null,
+    discount_type: "none",
+    discount_percent: 0,
   };
 
   const emails = (contactMethods || []).filter(c => c.type === 'email').map(c => c.value);
@@ -322,6 +328,11 @@ export default function OrganizationForm({ organization, onSubmit, onCancel, isS
   const { data: taxonomyItems = [] } = useQuery({
     queryKey: ['taxonomy'],
     queryFn: () => base44.entities.Taxonomy.filter({ active: true }),
+  });
+
+  const { data: billingTiers = [], isLoading: isLoadingTiers } = useQuery({
+    queryKey: ['billingTiers'],
+    queryFn: listBillingTiers,
   });
 
   const assistanceOptions = taxonomyItems
@@ -1152,6 +1163,111 @@ Focus areas should be:
               </div>
             </div>
           </div>
+
+          {/* Billing & Discount Configuration */}
+          <Card className="border-blue-200 bg-blue-50/50">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <DollarSign className="w-5 h-5 text-blue-600" />
+                Billing & Discount Configuration
+              </CardTitle>
+              <CardDescription className="text-xs">
+                Configure billing tier and apply discounts for this profile
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="tier_id">Billing Tier</Label>
+                  <Select
+                    value={formData.tier_id || ""}
+                    onValueChange={(value) => handleSelectChange('tier_id', value || null)}
+                  >
+                    <SelectTrigger id="tier_id">
+                      <SelectValue placeholder={isLoadingTiers ? "Loading tiers..." : "Select billing tier"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">No tier selected</SelectItem>
+                      {billingTiers.map((tier) => (
+                        <SelectItem key={tier.id} value={tier.id}>
+                          <div className="flex flex-col items-start">
+                            <span className="font-medium">{tier.name}</span>
+                            <span className="text-xs text-slate-500">
+                              ${((tier.base_monthly_cents || 0) / 100).toFixed(2)}/month
+                            </span>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="custom_monthly_cents">Custom Monthly Rate (optional)</Label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-slate-500">$</span>
+                    <Input
+                      id="custom_monthly_cents"
+                      name="custom_monthly_cents"
+                      type="number"
+                      step="0.01"
+                      value={formData.custom_monthly_cents ? (formData.custom_monthly_cents / 100).toFixed(2) : ""}
+                      onChange={(e) => {
+                        const dollars = parseFloat(e.target.value) || 0;
+                        const cents = Math.round(dollars * 100);
+                        handleSelectChange('custom_monthly_cents', cents || null);
+                      }}
+                      placeholder="Override tier rate"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="discount_type">Discount Type</Label>
+                  <Select
+                    value={formData.discount_type || "none"}
+                    onValueChange={(value) => handleSelectChange('discount_type', value)}
+                  >
+                    <SelectTrigger id="discount_type">
+                      <SelectValue placeholder="Select discount type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">No Discount</SelectItem>
+                      <SelectItem value="percentage">Percentage Discount</SelectItem>
+                      <SelectItem value="fixed_amount">Fixed Amount Discount</SelectItem>
+                      <SelectItem value="ministry_discount">Ministry/Nonprofit Discount</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="discount_percent">
+                    {formData.discount_type === "percentage" ? "Discount Percentage" : "Discount Value"}
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id="discount_percent"
+                      name="discount_percent"
+                      type="number"
+                      min="0"
+                      max={formData.discount_type === "percentage" ? "100" : undefined}
+                      step={formData.discount_type === "percentage" ? "1" : "0.01"}
+                      value={formData.discount_percent || ""}
+                      onChange={handleChange}
+                      placeholder="0"
+                      disabled={formData.discount_type === "none"}
+                    />
+                    {formData.discount_type === "percentage" && (
+                      <span className="text-sm text-slate-500">%</span>
+                    )}
+                    {formData.discount_type === "fixed_amount" && (
+                      <span className="text-sm text-slate-500">USD</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">

@@ -10,6 +10,7 @@ import OrganizationEmptyState from "@/components/organizations/OrganizationEmpty
 import { useToast } from "@/components/ui/use-toast"
 import { listProfiles } from "@/api/profiles"
 import { createPageUrl } from "@/utils"
+import { useAuthStore } from "@/stores/authStore"
 
 function mapProfileToOrganization(profile) {
   return {
@@ -27,14 +28,16 @@ export default function Organizations() {
   const [typeFilter, setTypeFilter] = useState("all")
   const { toast } = useToast()
   const navigate = useNavigate()
+  const user = useAuthStore((state) => state.user)
+  const isAdmin = user?.is_admin ?? false
 
   const {
     data: profiles = [],
     isLoading,
     error,
   } = useQuery({
-    queryKey: ['profiles'],
-    queryFn: listProfiles,
+    queryKey: ['profiles', isAdmin],
+    queryFn: () => listProfiles({ admin: isAdmin }),
   })
 
   const organizations = useMemo(
