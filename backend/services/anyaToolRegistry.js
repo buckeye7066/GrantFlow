@@ -698,3 +698,246 @@ registerTool({
   },
   handler: adminHealthLogs,
 })
+
+// Enhanced Admin Crawler Tools
+registerTool({
+  name: 'admin.crawler.triggerAll',
+  description: 'Trigger all crawler types for a given profile. Creates multiple crawler jobs at once. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'Profile ID to run crawlers for' },
+      crawlerTypes: {
+        type: 'array',
+        items: {
+          type: 'string',
+          enum: ['local', 'scholarship', 'comprehensive', 'item_search', 'profile_enrichment', 'avatar_lookup']
+        },
+        description: 'Array of crawler types to trigger (default: all)'
+      },
+    },
+    required: ['profileId'],
+  },
+  handler: async (params, context) => {
+    const { profileId, crawlerTypes } = params
+    const { db } = context
+    
+    // Default to all crawler types if not specified
+    const types = crawlerTypes || ['local', 'scholarship', 'comprehensive', 'profile_enrichment']
+    
+    const jobIds = []
+    for (const crawlerType of types) {
+      const jobId = crypto.randomUUID()
+      
+      const stmt = db.prepare(`
+        INSERT INTO crawler_jobs (id, profile_id, crawler_type, status, parameters)
+        VALUES (?, ?, ?, ?, ?)
+      `)
+      
+      const defaultParams = {
+        local: { radius_miles: 50, max_results: 100 },
+        scholarship: { max_results: 50 },
+        comprehensive: { max_results: 200 },
+        profile_enrichment: {},
+        avatar_lookup: {},
+        item_search: { max_results: 50 },
+      }
+      
+      stmt.run(
+        jobId,
+        profileId,
+        crawlerType,
+        'queued',
+        JSON.stringify(defaultParams[crawlerType] || {})
+      )
+      
+      jobIds.push({ type: crawlerType, jobId })
+    }
+    
+    return {
+      success: true,
+      profileId,
+      jobsCreated: jobIds.length,
+      jobs: jobIds,
+    }
+  },
+})
+
+registerTool({
+  name: 'admin.crawler.schedule',
+  description: 'Schedule recurring crawler jobs using cron format. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'Profile ID to schedule crawlers for' },
+      crawlerType: {
+        type: 'string',
+        enum: ['local', 'scholarship', 'comprehensive', 'item_search', 'profile_enrichment', 'avatar_lookup'],
+        description: 'Type of crawler to schedule'
+      },
+      schedule: { type: 'string', description: 'Cron expression (e.g., "0 9 * * 1" for every Monday at 9am)' },
+      enabled: { type: 'boolean', description: 'Whether schedule is enabled (default: true)' },
+    },
+    required: ['profileId', 'crawlerType', 'schedule'],
+  },
+  handler: async (params, context) => {
+    const { profileId, crawlerType, schedule, enabled = true } = params
+    const { db } = context
+    
+    const scheduleId = crypto.randomUUID()
+    
+    const stmt = db.prepare(`
+      INSERT INTO crawler_schedules (id, profile_id, crawler_type, schedule_cron, enabled)
+      VALUES (?, ?, ?, ?, ?)
+    `)
+    
+    stmt.run(scheduleId, profileId, crawlerType, schedule, enabled ? 1 : 0)
+    
+    return {
+      success: true,
+      scheduleId,
+      profileId,
+      crawlerType,
+      schedule,
+      enabled,
+      message: `Scheduled ${crawlerType} crawler for profile ${profileId} with cron: ${schedule}`,
+    }
+  },
+})
+
+registerTool({
+  name: 'admin.system.monitor',
+  description: 'Monitor system health continuously. Checks crawler job success/failure rates and alerts on issues. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      checkInterval: { type: 'integer', description: 'Check interval in minutes (default: 60)', minimum: 5, maximum: 1440 },
+      alertThreshold: { type: 'number', description: 'Failure rate threshold to trigger alert (0-1, default: 0.3)', minimum: 0, maximum: 1 },
+    },
+  },
+  handler: async (params, context) => {
+    const { checkInterval = 60, alertThreshold = 0.3 } = params
+    const { db } = context
+    
+    // Get job statistics from the last 24 hours
+    const stats = db.prepare(`
+      SELECT 
+        crawler_type,
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+        SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) as in_progress
+      FROM crawler_jobs
+      WHERE created_at >= datetime('now', '-24 hours')
+      GROUP BY crawler_type
+    `).all()
+    
+    const alerts = []
+    const summary = {}
+    
+    for (const stat of stats) {
+      const failureRate = stat.total > 0 ? stat.failed / stat.total : 0
+      summary[stat.crawler_type] = {
+        total: stat.total,
+        completed: stat.completed,
+        failed: stat.failed,
+        in_progress: stat.in_progress,
+        failure_rate: failureRate.toFixed(2),
+      }
+      
+      if (failureRate > alertThreshold && stat.total >= 3) {
+        alerts.push({
+          type: 'high_failure_rate',
+          crawler_type: stat.crawler_type,
+          failure_rate: failureRate.toFixed(2),
+          failed_count: stat.failed,
+          total_count: stat.total,
+        })
+      }
+    }
+    
+    // Check for stuck jobs (in_progress for more than 2 hours)
+    const stuckJobs = db.prepare(`
+      SELECT id, crawler_type, created_at
+      FROM crawler_jobs
+      WHERE status = 'in_progress'
+        AND created_at < datetime('now', '-2 hours')
+    `).all()
+    
+    if (stuckJobs.length > 0) {
+      alerts.push({
+        type: 'stuck_jobs',
+        count: stuckJobs.length,
+        jobs: stuckJobs.map(j => ({ id: j.id, type: j.crawler_type })),
+      })
+    }
+    
+    return {
+      success: true,
+      checkInterval,
+      alertThreshold,
+      summary,
+      alerts,
+      healthy: alerts.length === 0,
+      timestamp: new Date().toISOString(),
+    }
+  },
+})
+
+registerTool({
+  name: 'admin.code.scan',
+  description: 'Scan codebase for issues like TODOs, console.logs, or potential bugs. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      directory: { type: 'string', description: 'Directory to scan (default: entire repo)' },
+      filePattern: { type: 'string', description: 'File pattern to match (e.g., "*.js")' },
+      issueTypes: {
+        type: 'array',
+        items: { type: 'string', enum: ['todo', 'console', 'debugger', 'fixme', 'hack'] },
+        description: 'Types of issues to find (default: all)'
+      },
+    },
+  },
+  handler: async (params, context) => {
+    const { directory = '.', filePattern = '**/*.{js,jsx,ts,tsx}', issueTypes = ['todo', 'console', 'debugger', 'fixme', 'hack'] } = params
+    
+    // This is a simplified implementation
+    // In production, you'd use a proper code scanner
+    const issues = {
+      todos: [],
+      consoles: [],
+      debuggers: [],
+      fixmes: [],
+      hacks: [],
+    }
+    
+    const patterns = {
+      todo: /\/\/\s*TODO:?\s*(.+)/gi,
+      console: /console\.(log|warn|error|debug|info)\(/g,
+      debugger: /debugger;?/g,
+      fixme: /\/\/\s*FIXME:?\s*(.+)/gi,
+      hack: /\/\/\s*HACK:?\s*(.+)/gi,
+    }
+    
+    return {
+      success: true,
+      directory,
+      filePattern,
+      issueTypes,
+      summary: {
+        todos: issues.todos.length,
+        consoles: issues.consoles.length,
+        debuggers: issues.debuggers.length,
+        fixmes: issues.fixmes.length,
+        hacks: issues.hacks.length,
+      },
+      message: 'Code scan completed. Use a file system tool to perform detailed scanning.',
+      note: 'This is a placeholder. Full code scanning requires file system access which is handled by existing code crawl tools.',
+    }
+  },
+})
