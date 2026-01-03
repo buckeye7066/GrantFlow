@@ -734,3 +734,55 @@ AFTER UPDATE ON profile_sections
 BEGIN
   UPDATE profile_sections SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
+
+-- User Preferences for onboarding and settings
+CREATE TABLE IF NOT EXISTS user_preferences (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  onboarding_video_seen INTEGER DEFAULT 0,
+  preferences TEXT DEFAULT '{}',
+  
+  UNIQUE(user_id)
+);
+
+-- Crawler Schedules for automated job execution
+CREATE TABLE IF NOT EXISTS crawler_schedules (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  
+  profile_id TEXT REFERENCES profiles(id) ON DELETE CASCADE,
+  crawler_type TEXT NOT NULL CHECK(crawler_type IN (
+    'local',
+    'scholarship',
+    'comprehensive',
+    'item_search',
+    'profile_enrichment',
+    'avatar_lookup',
+    'pipeline_automation'
+  )),
+  schedule_cron TEXT NOT NULL,
+  enabled INTEGER DEFAULT 1,
+  last_run_at DATETIME,
+  next_run_at DATETIME,
+  parameters TEXT DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_crawler_schedules_profile ON crawler_schedules(profile_id);
+CREATE INDEX IF NOT EXISTS idx_crawler_schedules_enabled ON crawler_schedules(enabled);
+CREATE INDEX IF NOT EXISTS idx_crawler_schedules_next_run ON crawler_schedules(next_run_at);
+
+CREATE TRIGGER IF NOT EXISTS update_user_preferences_timestamp
+AFTER UPDATE ON user_preferences
+BEGIN
+  UPDATE user_preferences SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS update_crawler_schedules_timestamp
+AFTER UPDATE ON crawler_schedules
+BEGIN
+  UPDATE crawler_schedules SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;

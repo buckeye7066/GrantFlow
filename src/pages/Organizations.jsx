@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { AlertCircle, Info, Loader2 } from "lucide-react"
@@ -7,10 +7,13 @@ import OrganizationCard from "@/components/organizations/OrganizationCard"
 import OrganizationFilters from "@/components/organizations/OrganizationFilters"
 import OrganizationActions from "@/components/organizations/OrganizationActions"
 import OrganizationEmptyState from "@/components/organizations/OrganizationEmptyState"
+import QuickAddDialog from "@/components/organizations/QuickAddDialog"
+import UploadFormDialog from "@/components/organizations/UploadFormDialog"
 import { useToast } from "@/components/ui/use-toast"
 import { listProfiles } from "@/api/profiles"
 import { createPageUrl } from "@/utils"
 import { useAuthStore } from "@/stores/authStore"
+import { apiFetch } from "@/api/client"
 
 function mapProfileToOrganization(profile) {
   return {
@@ -26,8 +29,11 @@ function mapProfileToOrganization(profile) {
 export default function Organizations() {
   const [searchTerm, setSearchTerm] = useState("")
   const [typeFilter, setTypeFilter] = useState("all")
+  const [quickAddOpen, setQuickAddOpen] = useState(false)
+  const [uploadFormOpen, setUploadFormOpen] = useState(false)
   const { toast } = useToast()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const user = useAuthStore((state) => state.user)
   const isAdmin = user?.is_admin ?? false
 
@@ -56,6 +62,72 @@ export default function Organizations() {
       return matchesSearch && matchesType
     })
   }, [organizations, searchTerm, typeFilter])
+
+  const handleQuickAdd = async (formData) => {
+    try {
+      const result = await apiFetch('/api/profiles', {
+        method: 'POST',
+        body: JSON.stringify(formData),
+      })
+      
+      queryClient.invalidateQueries({ queryKey: ['profiles'] })
+      
+      toast({
+        title: "Profile created",
+        description: `Successfully created profile for ${formData.display_name}`,
+      })
+      
+      // Navigate to the new profile
+      navigate(createPageUrl("OrganizationProfile", { id: result.id }))
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to create profile. Please try again.",
+        variant: "destructive",
+      })
+      throw error
+    }
+  }
+
+  const handleUploadForm = async (file) => {
+    try {
+      const formData = new FormData()
+      formData.append('document', file)
+      
+      const response = await fetch('/api/documents/ingest', {
+        method: 'POST',
+        body: formData,
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('grantflow:access-token')}`,
+        },
+      })
+      
+      if (!response.ok) {
+        throw new Error('Upload failed')
+      }
+      
+      const result = await response.json()
+      
+      queryClient.invalidateQueries({ queryKey: ['profiles'] })
+      
+      toast({
+        title: "Form uploaded",
+        description: "Your form has been processed and a profile has been created.",
+      })
+      
+      // Navigate to the new profile if one was created
+      if (result.profile_id) {
+        navigate(createPageUrl("OrganizationProfile", { id: result.profile_id }))
+      }
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to upload form. Please try again.",
+        variant: "destructive",
+      })
+      throw error
+    }
+  }
 
   const showComingSoon = (message) => {
     toast({
@@ -106,8 +178,8 @@ export default function Organizations() {
             </p>
           </div>
           <OrganizationActions
-            onQuickAdd={() => showComingSoon("Quick Add is being rebuilt to use the new comprehensive profile schema.")}
-            onUpload={() => showComingSoon("Form upload & parsing is coming back once the document pipeline is wired to the new profiles API.")}
+            onQuickAdd={() => setQuickAddOpen(true)}
+            onUpload={() => setUploadFormOpen(true)}
             onNewApplication={() => showComingSoon("The full comprehensive application builder is under active development.")}
           />
         </header>
@@ -144,6 +216,18 @@ export default function Organizations() {
           </>
         )}
       </div>
+
+      <QuickAddDialog
+        open={quickAddOpen}
+        onOpenChange={setQuickAddOpen}
+        onSubmit={handleQuickAdd}
+      />
+
+      <UploadFormDialog
+        open={uploadFormOpen}
+        onOpenChange={setUploadFormOpen}
+        onUpload={handleUploadForm}
+      />
     </section>
   )
 }
