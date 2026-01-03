@@ -1,6 +1,6 @@
 export default function ensureUserPreferencesTable(db) {
   const columns = db.prepare(`PRAGMA table_info(user_preferences)`).all()
-  const expectedColumns = new Set([
+  const expectedColumns = [
     'id',
     'created_at',
     'updated_at',
@@ -27,7 +27,7 @@ export default function ensureUserPreferencesTable(db) {
     'reduce_motion',
     'screen_reader_optimized',
     'custom_preferences',
-  ])
+  ]
 
   const hasAllColumns = columns.length > 0 && expectedColumns.every((name) => columns.some((col) => col.name === name))
 
