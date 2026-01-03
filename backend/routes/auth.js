@@ -1582,6 +1582,25 @@ router.get('/:provider/callback', async (req, res) => {
   }
 })
 
+router.get('/me', (req, res) => {
+  // Return current user information based on the JWT token
+  if (!req.user || !req.user.userId) {
+    return res.status(401).json({ error: 'Not authenticated' })
+  }
+
+  const user = getUserById(req.db, req.user.userId)
+  if (!user) {
+    return res.status(401).json({ error: 'User not found' })
+  }
+
+  const profiles = getUserProfiles(req.db, user.id)
+  const activeProfileId = req.user.profileId || null
+
+  return res.json({
+    user: buildUserPayload(user, profiles, activeProfileId),
+  })
+})
+
 router.post('/refresh', (req, res) => {
   const refreshToken = req.body?.refreshToken
   if (typeof refreshToken !== 'string' || refreshToken.length < 20) {
