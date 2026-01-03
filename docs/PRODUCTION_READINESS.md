@@ -1,6 +1,6 @@
 # GrantFlow Production Readiness Checklist
 
-This playbook captures the exact steps and configuration required to ship the current GrantFlow build to production. It assumes you are deploying the frontend to **Vercel** (served from `/grantflow`) and the backend (Node/Express + SQLite) to **Railway**. Adaptation for other providers is straightforward as long as the environment variables and base paths remain consistent. If you prefer a self-hosted stack (DigitalOcean + Nginx), see [`INFRASTRUCTURE_GUIDE.md`](INFRASTRUCTURE_GUIDE.md) for the complementary instructions.
+This playbook captures the exact steps and configuration required to ship the current GrantFlow build to production. It assumes you are deploying the frontend to **Vercel** (served from `/grantflow`) and the backend (Node/Express + SQLite) to **Railway**. Adaptation for other providers is straightforward as long as the environment variables and base paths remain consistent.
 
 ---
 

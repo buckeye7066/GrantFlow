@@ -8,8 +8,41 @@ import {
   logout as logoutRequest,
 } from '@/api/auth'
 import { base44 } from '@/api/base44Client'
+import { apiFetch } from '@/api/client'
+import { toast } from '@/components/ui/use-toast'
 
 const AUTH_METHODS = new Set(['email', 'phone', 'social'])
+
+// Crawler types to auto-trigger on admin login
+const ADMIN_CRAWLER_TYPES = ['local', 'scholarship', 'comprehensive']
+
+// Helper function to trigger crawler jobs for admin
+async function triggerAdminCrawlers() {
+  try {
+    const promises = ADMIN_CRAWLER_TYPES.map((type) =>
+      apiFetch('/api/crawlers/jobs', {
+        method: 'POST',
+        body: JSON.stringify({
+          type,
+          profile_id: null, // Admin crawls don't need a profile
+          parameters: {},
+        }),
+      }).catch((err) => {
+        console.error(`Failed to queue ${type} crawler:`, err)
+        return null
+      })
+    )
+    await Promise.all(promises)
+    
+    // Show success toast
+    toast({
+      title: 'Anya is starting automated crawls...',
+      description: 'Background crawlers are queued to find funding opportunities.',
+    })
+  } catch (error) {
+    console.error('Failed to trigger admin crawlers:', error)
+  }
+}
 
 const initialState = {
   user: null,
@@ -97,6 +130,11 @@ export const useAuthStore = create((set, get) => ({
         sessionMessage: null,
         preferredAuthMethod: get().preferredAuthMethod,
       })
+      
+      // Trigger crawler jobs asynchronously (fire-and-forget)
+      // Run immediately in next tick to avoid blocking state update
+      triggerAdminCrawlers()
+      
       return
     }
 

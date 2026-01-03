@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from "react"
 import { Link } from "react-router-dom"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   Building2,
   Calendar as CalendarIcon,
@@ -14,6 +14,7 @@ import {
 import { differenceInDays, format } from "date-fns"
 
 import { base44 } from "@/api/base44Client"
+import { apiFetch } from "@/api/client"
 import { getPipelineStats, getReminders } from "@/api/dashboard"
 import { listProfiles, getProfile } from "@/api/profiles"
 import { parseDateSafe } from "@/components/shared/dateUtils"
@@ -52,28 +53,59 @@ function LJWMonogram({ className = "" }) {
 export default function Dashboard() {
   const sessionExpired = useAuthStore((state) => state.sessionExpired)
   const [showOnboarding, setShowOnboarding] = useState(false)
-  
-  // Check if user has seen the onboarding video
-  useEffect(() => {
-    const hasSeenVideo = localStorage.getItem('grantflow:onboarding-video-seen')
-    if (!hasSeenVideo) {
-      setShowOnboarding(true)
-    }
-  }, [])
-
-  const handleOnboardingComplete = () => {
-    setShowOnboarding(false)
-  }
-
-  const handleOnboardingSkip = () => {
-    setShowOnboarding(false)
-  }
+  const queryClient = useQueryClient()
   
   const { data: currentUser } = useQuery({
     queryKey: ["currentUser"],
     queryFn: () => base44.auth.me(),
     staleTime: 60_000,
   })
+
+  // Fetch user preferences to check if onboarding video has been seen
+  const { data: userPreferences } = useQuery({
+    queryKey: ["userPreferences"],
+    queryFn: () => apiFetch('/api/preferences'),
+    enabled: Boolean(currentUser),
+    staleTime: 300_000, // 5 minutes
+  })
+  
+  // Mutation to update preferences
+  const updatePreferencesMutation = useMutation({
+    mutationFn: (customPreferences) => 
+      apiFetch('/api/preferences', {
+        method: 'PUT',
+        body: JSON.stringify({ custom_preferences: customPreferences }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['userPreferences'] })
+    },
+    onError: (error) => {
+      console.error('Failed to update preferences:', error)
+    },
+  })
+  
+  // Check if user has seen the onboarding video
+  useEffect(() => {
+    if (userPreferences && !userPreferences.custom_preferences?.onboarding_video_seen) {
+      setShowOnboarding(true)
+    }
+  }, [userPreferences])
+
+  const handleOnboardingComplete = () => {
+    setShowOnboarding(false)
+    updatePreferencesMutation.mutate({
+      ...(userPreferences?.custom_preferences || {}),
+      onboarding_video_seen: true,
+    })
+  }
+
+  const handleOnboardingSkip = () => {
+    setShowOnboarding(false)
+    updatePreferencesMutation.mutate({
+      ...(userPreferences?.custom_preferences || {}),
+      onboarding_video_seen: true,
+    })
+  }
 
   const { data: profiles = [], isLoading: isLoadingProfiles } = useQuery({
     queryKey: ["dashboard-profiles"],
