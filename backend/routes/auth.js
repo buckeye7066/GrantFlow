@@ -5,6 +5,8 @@ import jwt from 'jsonwebtoken'
 import twilio from 'twilio'
 import { sendVerificationEmail } from '../services/email.js'
 import { initializeAnyaForAdmin } from '../services/anyaLoginTrigger.js'
+import { getDesignatedProfileForEmail, hasDesignatedProfile } from '../config/userProfileMappings.js'
+import { ADMIN_EMAIL, isAdminEmail } from '../config/constants.js'
 const router = express.Router()
 
 const JWT_SECRET = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret'
@@ -344,11 +346,48 @@ function buildUserPayload(userRow, profiles, activeProfileId) {
   }
 }
 
-function assignFirstProfileToUser(db, userId) {
+function assignProfileToUser(db, userId, email) {
+  // Check if this user has a designated profile based on their email
+  if (email) {
+    const designatedProfileId = getDesignatedProfileForEmail(email)
+    if (designatedProfileId) {
+      // Assign the designated profile to this user
+      const designatedProfile = db.prepare('SELECT id, user_id FROM profiles WHERE id = ?').get(designatedProfileId)
+      if (designatedProfile) {
+        if (!designatedProfile.user_id) {
+          db.prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(userId, designatedProfileId)
+          console.log(`[auth] Assigned designated profile ${designatedProfileId} to user ${userId} (${email})`)
+          return designatedProfileId
+        } else if (designatedProfile.user_id === userId) {
+          console.log(`[auth] User ${userId} already linked to designated profile ${designatedProfileId}`)
+          return designatedProfileId
+        } else {
+          console.warn(`[auth] Designated profile ${designatedProfileId} already linked to another user`)
+        }
+      } else {
+        console.warn(`[auth] Designated profile ${designatedProfileId} not found for ${email}`)
+      }
+    }
+  }
+  
+  // Fall back to assigning first available profile if no designated profile
   const firstProfile = db.prepare('SELECT id FROM profiles WHERE user_id IS NULL ORDER BY created_at ASC LIMIT 1').get()
   if (firstProfile) {
     db.prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(userId, firstProfile.id)
-    console.log(`[auth] Assigned profile ${firstProfile.id} to new user ${userId}`)
+    console.log(`[auth] Assigned first available profile ${firstProfile.id} to user ${userId}`)
+    return firstProfile.id
+  }
+  
+  console.log(`[auth] No available profiles to assign to user ${userId}`)
+  return null
+}
+
+function ensureAdminStatus(db, userId, email) {
+  if (isAdminEmail(email)) {
+    const result = db.prepare('UPDATE users SET is_admin = 1 WHERE id = ? AND is_admin = 0').run(userId)
+    if (result.changes > 0) {
+      console.log(`[auth] Set admin status for user ${userId} (${email})`)
+    }
   }
 }
 
@@ -367,18 +406,27 @@ function ensureEmailCredential(db, email) {
 
   if (existing) {
     const user = getUserById(db, existing.user_id)
+    // Ensure admin status is set if this is the admin email
+    ensureAdminStatus(db, existing.user_id, email)
+    // Reload user to get updated admin status
+    const updatedUser = getUserById(db, existing.user_id)
     return {
-      user,
+      user: updatedUser,
       credential: existing,
     }
   }
 
   const displayName = email.split('@')[0] || 'New User'
   const userId = crypto.randomUUID()
-  db.prepare('INSERT INTO users (id, display_name, primary_email) VALUES (?, ?, ?)').run(userId, displayName, email)
+  db.prepare('INSERT INTO users (id, display_name, primary_email, is_admin) VALUES (?, ?, ?, ?)').run(
+    userId, 
+    displayName, 
+    email,
+    isAdminEmail(email) ? 1 : 0
+  )
   
-  // Assign new user to first available profile
-  assignFirstProfileToUser(db, userId)
+  // Assign profile to user (designated or first available)
+  assignProfileToUser(db, userId, email)
   
   const credentialId = crypto.randomUUID()
   db.prepare(
@@ -700,14 +748,21 @@ function ensureProviderUser(db, provider, profile) {
 
   if (!user) {
     const userId = crypto.randomUUID()
+    const isAdmin = isAdminEmail(email) ? 1 : 0
     db.prepare(
       `
-        INSERT INTO users (id, display_name, primary_email, avatar_url)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO users (id, display_name, primary_email, avatar_url, is_admin)
+        VALUES (?, ?, ?, ?, ?)
       `,
-    ).run(userId, profile.displayName ?? 'GrantFlow User', email, profile.avatarUrl ?? null)
+    ).run(userId, profile.displayName ?? 'GrantFlow User', email, profile.avatarUrl ?? null, isAdmin)
     user = getUserById(db, userId)
     return user
+  }
+
+  // Ensure admin status is set for existing users
+  if (email) {
+    ensureAdminStatus(db, user.id, email)
+    user = getUserById(db, user.id)
   }
 
   const updates = []
@@ -858,8 +913,8 @@ function ensurePhoneCredential(db, phone) {
       `,
     ).run(userId, displayName, phone)
     
-    // Assign new user to first available profile
-    assignFirstProfileToUser(db, userId)
+    // Assign profile to user (phone auth doesn't have email, so only first available)
+    assignProfileToUser(db, userId, null)
     
     user = getUserById(db, userId)
   }

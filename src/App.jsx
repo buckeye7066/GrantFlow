@@ -3,6 +3,7 @@ import './App.css'
 import Pages from '@/pages/index.jsx'
 import { Toaster } from '@/components/ui/toaster'
 import SessionExpiredDialog from '@/components/auth/SessionExpiredDialog'
+import OnboardingFlow from '@/components/onboarding/OnboardingFlow'
 import { base44 } from '@/api/base44Client'
 import { useAuthStore } from '@/stores/authStore'
 
@@ -53,6 +54,7 @@ function App() {
   return (
     <>
       <Pages />
+      <OnboardingFlow />
       <Toaster />
       <SessionExpiredDialog />
     </>
