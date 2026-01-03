@@ -1,7 +1,33 @@
 import express from 'express';
 import crypto from 'crypto';
+import multer from 'multer';
+import fs from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 
 const router = express.Router();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const uploadDir = join(__dirname, '..', 'uploads');
+
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, uploadDir),
+  filename: (_req, file, cb) => {
+    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    const extension = file.originalname.includes('.') ? `.${file.originalname.split('.').pop()}` : '';
+    cb(null, `${unique}${extension}`);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
 
 router.get('/', (req, res) => {
   try {
@@ -99,36 +125,68 @@ router.post('/', (req, res) => {
   }
 });
 
-router.post('/ingest', (req, res) => {
+router.post('/ingest', upload.single('document'), (req, res) => {
   try {
     const {
-      profile_id,
-      organization_id,
-      grant_id,
-      name,
-      type,
-      file_url,
-      file_path,
-      file_size,
-      mime_type,
-      extracted_text,
-      notes = null,
+      profile_id: rawProfileId,
+      organization_id: rawOrganizationId,
+      grant_id: rawGrantId,
+      name: rawName,
+      type: rawType,
+      extracted_text: rawExtractedText,
+      notes: rawNotes,
       source = null,
+      display_name: rawDisplayName,
+      primary_type: rawPrimaryType,
     } = req.body ?? {};
 
-    if (!profile_id) {
-      return res.status(400).json({ error: 'profile_id is required' });
-    }
-    if (!name || typeof name !== 'string') {
-      return res.status(400).json({ error: 'name is required' });
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ error: 'document file is required' });
     }
 
-    const profile = req.db
-      .prepare('SELECT id FROM profiles WHERE id = ?')
-      .get(profile_id);
-    if (!profile) {
-      return res.status(404).json({ error: 'Profile not found' });
+    const organization_id = rawOrganizationId || null;
+    const grant_id = rawGrantId || null;
+    const type = rawType || null;
+    const notes = rawNotes || null;
+    const extracted_text = rawExtractedText || null;
+
+    let profileId = rawProfileId || null;
+    let createdProfile = null;
+
+    if (profileId) {
+      const profile = req.db
+        .prepare('SELECT id FROM profiles WHERE id = ?')
+        .get(profileId);
+      if (!profile) {
+        return res.status(404).json({ error: 'Profile not found' });
+      }
+    } else {
+      const generatedProfileId = crypto.randomUUID();
+      const displayNameSource = rawDisplayName || file.originalname || 'New Profile';
+      const displayName = displayNameSource.replace(/\.[^/.]+$/, '').trim() || 'New Profile';
+      const primaryType = rawPrimaryType || null;
+
+      req.db
+        .prepare(
+          `INSERT INTO profiles (
+            id,
+            display_name,
+            primary_type,
+            status,
+            organization_id,
+            tags
+          ) VALUES (?, ?, ?, 'pending', ?, '[]')`
+        )
+        .run(generatedProfileId, displayName, primaryType, organization_id ?? null);
+
+      profileId = generatedProfileId;
+      createdProfile = req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId);
     }
+
+    const storedFilePath = file.path;
+    const publicUrl = `/uploads/${file.filename}`;
+    const docName = (rawName || file.originalname || 'Uploaded Document').trim();
 
     const id = crypto.randomUUID();
     req.db
@@ -154,14 +212,14 @@ router.post('/ingest', (req, res) => {
         id,
         organization_id ?? null,
         grant_id ?? null,
-        profile_id,
-        name,
-        type ?? null,
-        file_url ?? null,
-        file_path ?? null,
-        file_size ?? null,
-        mime_type ?? null,
-        extracted_text ?? null,
+        profileId,
+        docName,
+        type,
+        publicUrl,
+        storedFilePath,
+        file.size ?? null,
+        file.mimetype ?? null,
+        extracted_text,
         notes,
       );
 
@@ -169,12 +227,14 @@ router.post('/ingest', (req, res) => {
       .prepare(
         `INSERT OR IGNORE INTO profile_documents (profile_id, document_id) VALUES (?, ?)`
       )
-      .run(profile_id, id);
+      .run(profileId, id);
 
     const parameters = JSON.stringify({
       document_id: id,
       source,
     });
+
+    const requestedBy = req.user?.profileId ?? req.user?.userId ?? 'system';
 
     req.db
       .prepare(
@@ -187,12 +247,23 @@ router.post('/ingest', (req, res) => {
           requested_by
         ) VALUES ('document_ingest', 'queued', ?, ?, ?, ?)`
       )
-      .run(profile_id, organization_id ?? null, parameters, profile_id);
+      .run(profileId, organization_id ?? null, parameters, requestedBy);
 
     const document = req.db.prepare('SELECT * FROM documents WHERE id = ?').get(id);
-    res.status(202).json(document);
+    res.status(202).json({
+      ...document,
+      profile_id: profileId,
+      created_profile: createdProfile ?? undefined,
+    });
   } catch (error) {
     console.error('Document ingestion enqueue failed:', error);
+    if (req.file) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (unlinkError) {
+        console.warn('Failed to remove uploaded file after error', unlinkError);
+      }
+    }
     res.status(500).json({ error: error.message });
   }
 });
