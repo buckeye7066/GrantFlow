@@ -80,7 +80,7 @@ import Settings from "./Settings";
 import Login from "./Login";
 import AuthCallback from "./AuthCallback";
 
-import { BrowserRouter as Router, Route, Routes, useLocation, Navigate } from 'react-router-dom';
+import { Route, Routes, useLocation, Navigate } from 'react-router-dom';
 import { useAuthStore } from "@/stores/authStore";
 
 function EnsureQueryClientProvider({ children }) {
@@ -323,15 +323,11 @@ function LayoutRoutes() {
 }
 
 export default function Pages() {
-    const basename = import.meta.env.VITE_APP_BASE ?? '/grantflow'
-
     return (
-        <Router basename={basename}>
-            <Routes>
-                <Route path="/login" element={<Login />} />
-                <Route path="/auth/callback" element={<AuthCallback />} />
-                <Route path="/*" element={<LayoutRoutes />} />
-            </Routes>
-        </Router>
+        <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route path="/auth/callback" element={<AuthCallback />} />
+            <Route path="/*" element={<LayoutRoutes />} />
+        </Routes>
     );
 }

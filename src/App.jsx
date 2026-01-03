@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { BrowserRouter as Router } from 'react-router-dom'
 import './App.css'
 import Pages from '@/pages/index.jsx'
 import { Toaster } from '@/components/ui/toaster'
@@ -51,13 +52,15 @@ function App() {
     )
   }
 
+  const basename = import.meta.env.VITE_APP_BASE ?? '/grantflow'
+
   return (
-    <>
+    <Router basename={basename}>
       <Pages />
       <OnboardingFlow />
       <Toaster />
       <SessionExpiredDialog />
-    </>
+    </Router>
   )
 }
 
