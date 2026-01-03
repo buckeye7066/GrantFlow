@@ -368,6 +368,14 @@ function ensureEmailCredential(db, email) {
   const displayName = email.split('@')[0] || 'New User'
   const userId = crypto.randomUUID()
   db.prepare('INSERT INTO users (id, display_name, primary_email) VALUES (?, ?, ?)').run(userId, displayName, email)
+  
+  // Assign new user to first available profile
+  const firstProfile = db.prepare('SELECT id FROM profiles ORDER BY created_at ASC LIMIT 1').get()
+  if (firstProfile) {
+    db.prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(userId, firstProfile.id)
+    console.log(`[auth] Assigned profile ${firstProfile.id} to new user ${userId}`)
+  }
+  
   const credentialId = crypto.randomUUID()
   db.prepare(
     `
@@ -845,6 +853,14 @@ function ensurePhoneCredential(db, phone) {
         VALUES (?, ?, ?)
       `,
     ).run(userId, displayName, phone)
+    
+    // Assign new user to first available profile
+    const firstProfile = db.prepare('SELECT id FROM profiles ORDER BY created_at ASC LIMIT 1').get()
+    if (firstProfile) {
+      db.prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(userId, firstProfile.id)
+      console.log(`[auth] Assigned profile ${firstProfile.id} to new user ${userId}`)
+    }
+    
     user = getUserById(db, userId)
   }
 
@@ -1389,13 +1405,33 @@ router.post('/phone/verify', (req, res) => {
     ipAddress: req.ip,
   })
 
-  return res.json({
+  // Initialize Anya for admin users on login
+  let anyaInfo = null
+  try {
+    anyaInfo = initializeAnyaForAdmin(req.db, user, activeProfileId)
+  } catch (error) {
+    console.error('[auth] Failed to initialize Anya:', error)
+    // Don't fail the login if Anya initialization fails
+  }
+
+  const response = {
     accessToken: session.accessToken,
     refreshToken: session.refreshToken,
     expiresIn: session.expiresIn,
     tokenType: 'Bearer',
     user: buildUserPayload(user, profiles, activeProfileId),
-  })
+  }
+
+  // Include Anya session info if available
+  if (anyaInfo) {
+    response.anya = {
+      session_id: anyaInfo.sessionId,
+      jobs_created: Object.keys(anyaInfo.jobIds).length,
+      profile_id: anyaInfo.profileId,
+    }
+  }
+
+  return res.json(response)
 })
 
 router.get('/:provider/start', (req, res) => {
