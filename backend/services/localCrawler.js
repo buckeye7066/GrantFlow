@@ -248,7 +248,7 @@ export function processLocalCrawlerJob({
       ...opportunity,
       source: 'local_crawler',
       source_id: opportunity.id,
-      profile_id: profile.id,
+      profile_id: null,
       deadline_type: opportunity.deadline ? 'fixed' : 'rolling',
       match_reasons: opportunity.match_reasons ?? [],
       notes: matchSummary,

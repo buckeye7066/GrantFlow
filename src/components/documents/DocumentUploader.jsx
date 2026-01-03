@@ -20,8 +20,22 @@ const DOCUMENT_TYPES = [
   "timeline", "other"
 ];
 
-const ALLOWED_FILE_TYPES = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'image/png', 'image/jpeg'];
-const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
+const ALLOWED_FILE_TYPES = [
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/gif',
+  'image/bmp',
+  'text/plain',
+  'application/rtf',
+  'text/rtf'
+];
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
 export default function DocumentUploader({ profileId, organizationId, onClose }) {
   const queryClient = useQueryClient();
@@ -96,7 +110,7 @@ export default function DocumentUploader({ profileId, organizationId, onClose })
     
     // Additional check for file validation before submission if handleFileChange might be bypassed
     if (!ALLOWED_FILE_TYPES.includes(file.type)) {
-      setFileError(`Invalid file type. Please upload one of: PDF, DOCX, XLSX, PNG, JPG.`);
+      setFileError(`Invalid file type. Please upload one of: PDF, DOCX, DOC, JPEG, JPG, PNG, GIF, BMP, TXT, RTF.`);
       return;
     }
     if (file.size > MAX_FILE_SIZE) {
@@ -124,7 +138,7 @@ export default function DocumentUploader({ profileId, organizationId, onClose })
       setFileError(null); // Clear previous errors
 
       if (!ALLOWED_FILE_TYPES.includes(selectedFile.type)) {
-        setFileError(`Invalid file type. Please upload one of: PDF, DOCX, XLSX, PNG, JPG.`);
+        setFileError(`Invalid file type. Please upload one of: PDF, DOCX, DOC, JPEG, JPG, PNG, GIF, BMP, TXT, RTF.`);
         setFile(null); // Clear selected file if invalid
         return;
       }
@@ -163,7 +177,7 @@ export default function DocumentUploader({ profileId, organizationId, onClose })
                   ) : (
                     <>
                       <p className="mb-2 text-sm text-slate-500"><span className="font-semibold">Click to upload</span> or drag and drop</p>
-                      <p className="text-xs text-slate-500">PDF, DOCX, XLSX, PNG, JPG (Max 5MB)</p>
+                      <p className="text-xs text-slate-500">PDF, DOCX, DOC, JPEG, JPG, PNG, GIF, BMP, TXT, RTF (Max 10MB)</p>
                     </>
                   )}
                 </div>
