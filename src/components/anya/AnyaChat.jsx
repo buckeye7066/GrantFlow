@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react"
 import { v4 as uuid } from "uuid"
-import { Loader2, Search, Send, Sparkles, Plus } from "lucide-react"
+import { Loader2, Search, Send, Sparkles, Plus, Shield, Database, Activity, Code, Wrench } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import { formatDistanceToNow } from "date-fns"
 import { toast } from "@/components/ui/use-toast"
+import { useAuthStore } from "@/stores/authStore"
 import {
   getAnyaSessions,
   createAnyaSession,
@@ -72,6 +73,9 @@ function MessageBubble({ message }) {
 }
 
 export default function AnyaChat({ profileId }) {
+  const user = useAuthStore((state) => state.user)
+  const isAdmin = Boolean(user?.is_admin)
+  
   const [sessionId, setSessionId] = useState(null)
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState("")
@@ -88,6 +92,8 @@ export default function AnyaChat({ profileId }) {
   const [isSavingTask, setIsSavingTask] = useState(false)
   const [taskForm, setTaskForm] = useState({ title: "", dueDate: "" })
   const [updatingTaskId, setUpdatingTaskId] = useState(null)
+  const [isAdminToolsOpen, setIsAdminToolsOpen] = useState(false)
+  const [adminToolForm, setAdminToolForm] = useState({})
 
   const hasMessages = messages.length > 0
   const hasTasks = tasks.length > 0
@@ -100,6 +106,27 @@ export default function AnyaChat({ profileId }) {
     [tools],
   )
   const hasQuickActions = hasCodeSearchTool || hasGrantTool
+  
+  // Group admin tools by category
+  const adminTools = useMemo(() => {
+    if (!isAdmin) return {}
+    
+    const adminToolsList = tools.filter((tool) => tool.requiresAdmin)
+    const grouped = {
+      code: adminToolsList.filter((t) => t.name.startsWith("admin.code.")),
+      crawler: adminToolsList.filter((t) => t.name.startsWith("admin.crawler.")),
+      functions: adminToolsList.filter((t) => t.name.startsWith("admin.functions.")),
+      database: adminToolsList.filter((t) => t.name.startsWith("admin.db.")),
+      health: adminToolsList.filter((t) => t.name.startsWith("admin.health.")),
+    }
+    
+    return grouped
+  }, [tools, isAdmin])
+  
+  const hasAdminTools = useMemo(() => {
+    return isAdmin && Object.values(adminTools).some((group) => group.length > 0)
+  }, [isAdmin, adminTools])
+  
   const sortedTasks = useMemo(() => {
     if (tasks.length === 0) return []
     const statusWeight = {
@@ -202,7 +229,7 @@ export default function AnyaChat({ profileId }) {
     async function loadTools() {
       setIsLoadingTools(true)
       try {
-        const available = await listAnyaTools()
+        const available = await listAnyaTools({ includeAdmin: isAdmin })
         if (isMounted) {
           setTools(Array.isArray(available) ? available : [])
         }
@@ -218,7 +245,7 @@ export default function AnyaChat({ profileId }) {
     return () => {
       isMounted = false
     }
-  }, [])
+  }, [isAdmin])
 
   const isDisabled = !sessionId || isLoading
 
@@ -404,14 +431,22 @@ export default function AnyaChat({ profileId }) {
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="text-sm font-semibold text-slate-800">Anya, your GrantFlow copilot</h2>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold text-slate-800">Anya, your GrantFlow copilot</h2>
+                {isAdmin && (
+                  <Badge variant="default" className="gap-1 text-[10px] bg-purple-600">
+                    <Shield className="h-3 w-3" />
+                    ADMIN
+                  </Badge>
+                )}
+              </div>
               <p className="text-xs text-slate-500">
                 Ask about grant matches, automation jobs, or request code assistance. All actions stay
                 within this profile.
               </p>
             </div>
-            {hasQuickActions || isLoadingTools ? (
-              <div className="flex items-center gap-2">
+            {(hasQuickActions || hasAdminTools || isLoadingTools) ? (
+              <div className="flex items-center gap-2 flex-wrap">
                 {hasGrantTool ? (
                   <Button
                     size="sm"
@@ -441,6 +476,18 @@ export default function AnyaChat({ profileId }) {
                       <Search className="h-4 w-4" />
                     )}
                     Code search
+                  </Button>
+                ) : null}
+                {hasAdminTools ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-2 border-purple-300 bg-purple-50 hover:bg-purple-100"
+                    onClick={() => setIsAdminToolsOpen(true)}
+                    disabled={!sessionId || isLoading}
+                  >
+                    <Wrench className="h-4 w-4" />
+                    Admin Tools
                   </Button>
                 ) : null}
               </div>
@@ -683,6 +730,131 @@ export default function AnyaChat({ profileId }) {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isAdminToolsOpen} onOpenChange={setIsAdminToolsOpen}>
+        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Shield className="h-5 w-5 text-purple-600" />
+              Admin Tools
+            </DialogTitle>
+            <DialogDescription>
+              Advanced diagnostic and management tools for administrators. Use with caution.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-6">
+            {adminTools.code && adminTools.code.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Code className="h-4 w-4 text-slate-600" />
+                  <h3 className="font-semibold text-sm">Code Analysis</h3>
+                </div>
+                <div className="grid gap-2">
+                  {adminTools.code.map((tool) => (
+                    <div
+                      key={tool.name}
+                      className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                    >
+                      <div className="font-mono text-xs text-purple-600">{tool.name}</div>
+                      <div className="text-xs text-slate-600 mt-1">{tool.description}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {adminTools.crawler && adminTools.crawler.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Activity className="h-4 w-4 text-slate-600" />
+                  <h3 className="font-semibold text-sm">Crawler Management</h3>
+                </div>
+                <div className="grid gap-2">
+                  {adminTools.crawler.map((tool) => (
+                    <div
+                      key={tool.name}
+                      className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                    >
+                      <div className="font-mono text-xs text-purple-600">{tool.name}</div>
+                      <div className="text-xs text-slate-600 mt-1">{tool.description}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {adminTools.database && adminTools.database.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Database className="h-4 w-4 text-slate-600" />
+                  <h3 className="font-semibold text-sm">Database & Diagnostics</h3>
+                </div>
+                <div className="grid gap-2">
+                  {adminTools.database.map((tool) => (
+                    <div
+                      key={tool.name}
+                      className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                    >
+                      <div className="font-mono text-xs text-purple-600">{tool.name}</div>
+                      <div className="text-xs text-slate-600 mt-1">{tool.description}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {adminTools.health && adminTools.health.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Activity className="h-4 w-4 text-slate-600" />
+                  <h3 className="font-semibold text-sm">Health & Monitoring</h3>
+                </div>
+                <div className="grid gap-2">
+                  {adminTools.health.map((tool) => (
+                    <div
+                      key={tool.name}
+                      className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                    >
+                      <div className="font-mono text-xs text-purple-600">{tool.name}</div>
+                      <div className="text-xs text-slate-600 mt-1">{tool.description}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {adminTools.functions && adminTools.functions.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Wrench className="h-4 w-4 text-slate-600" />
+                  <h3 className="font-semibold text-sm">Function Testing</h3>
+                </div>
+                <div className="grid gap-2">
+                  {adminTools.functions.map((tool) => (
+                    <div
+                      key={tool.name}
+                      className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                    >
+                      <div className="font-mono text-xs text-purple-600">{tool.name}</div>
+                      <div className="text-xs text-slate-600 mt-1">{tool.description}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <p className="text-xs text-slate-500 text-left flex-1">
+              Ask Anya to use any of these tools by referencing their name in your message.
+            </p>
+            <Button variant="outline" onClick={() => setIsAdminToolsOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

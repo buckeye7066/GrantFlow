@@ -1,6 +1,23 @@
 import path from 'path'
 import { promises as fs } from 'fs'
 import { randomUUID } from 'crypto'
+import {
+  adminCodeCrawl,
+  adminCodeLint,
+  adminCodeAnalyze,
+  adminCodeEdit,
+  adminCrawlerList,
+  adminCrawlerRun,
+  adminCrawlerCheck,
+  adminCrawlerRetry,
+  adminCrawlerCancel,
+  adminFunctionsTest,
+  adminFunctionsDiagnose,
+  adminDbQuery,
+  adminDbStats,
+  adminHealthCheck,
+  adminHealthLogs,
+} from './anyaAdminTools.js'
 
 const tools = new Map()
 
@@ -314,7 +331,7 @@ function summarizeGrants(db, params, context) {
   }
 }
 
-export function registerTool({ name, description, schema, handler }) {
+export function registerTool({ name, description, schema, handler, requiresAdmin = false }) {
   if (!name || typeof name !== 'string') {
     throw new Error('Tool name required')
   }
@@ -327,15 +344,20 @@ export function registerTool({ name, description, schema, handler }) {
     description: description ?? '',
     schema: schema ?? null,
     handler,
+    requiresAdmin: Boolean(requiresAdmin),
   })
 }
 
-export function listToolMetadata() {
-  return Array.from(tools.values()).map(({ name, description, schema }) => ({
-    name,
-    description,
-    schema,
-  }))
+export function listToolMetadata(user = null) {
+  const isAdmin = user?.role === 'admin'
+  return Array.from(tools.values())
+    .filter((tool) => !tool.requiresAdmin || isAdmin)
+    .map(({ name, description, schema, requiresAdmin }) => ({
+      name,
+      description,
+      schema,
+      requiresAdmin,
+    }))
 }
 
 export async function invokeTool(name, params, context) {
@@ -346,6 +368,24 @@ export async function invokeTool(name, params, context) {
   }
 
   const tool = tools.get(name)
+
+  // Check admin access
+  if (tool.requiresAdmin) {
+    const user = context?.user
+    if (!user || user.role !== 'admin') {
+      const error = new Error(`Tool "${name}" requires admin privileges`)
+      error.status = 403
+      throw error
+    }
+
+    // Log admin tool invocation for audit
+    console.log('[anyaToolRegistry] Admin tool invoked:', {
+      tool: name,
+      user: user.userId ?? user.id ?? 'unknown',
+      timestamp: new Date().toISOString(),
+    })
+  }
+
   const result = await tool.handler(params ?? {}, context ?? {})
 
   return {
@@ -408,4 +448,253 @@ registerTool({
     }
     return summarizeGrants(context.db, params, context)
   },
+})
+
+// ============================================================================
+// Admin-only tools
+// ============================================================================
+
+// Code Analysis & Auto-Fix Tools
+registerTool({
+  name: 'admin.code.crawl',
+  description: 'Deep scan the codebase for patterns, potential errors, and anti-patterns. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      pattern: { type: 'string', description: 'Optional regex pattern to search for' },
+      directory: { type: 'string', description: 'Optional directory to scan (relative to repo root)' },
+      includeTests: { type: 'boolean', description: 'Include test files in scan' },
+    },
+  },
+  handler: adminCodeCrawl,
+})
+
+registerTool({
+  name: 'admin.code.lint',
+  description: 'Run ESLint-style checks and report issues. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: 'Path to file or directory to lint' },
+      fix: { type: 'boolean', description: 'Attempt to fix issues automatically' },
+    },
+  },
+  handler: adminCodeLint,
+})
+
+registerTool({
+  name: 'admin.code.analyze',
+  description: 'Analyze a specific file for issues and suggest fixes. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      filePath: { type: 'string', description: 'Path to file to analyze' },
+    },
+    required: ['filePath'],
+  },
+  handler: adminCodeAnalyze,
+})
+
+registerTool({
+  name: 'admin.code.edit',
+  description: 'Propose edits to a specific file (shows diff, does not auto-save). Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      filePath: { type: 'string', description: 'Path to file to edit' },
+      changes: {
+        type: 'array',
+        description: 'Array of change objects',
+        items: {
+          type: 'object',
+          properties: {
+            line: { type: 'integer', description: 'Line number' },
+            oldText: { type: 'string', description: 'Text to replace' },
+            newText: { type: 'string', description: 'Replacement text' },
+          },
+          required: ['line', 'oldText', 'newText'],
+        },
+      },
+    },
+    required: ['filePath', 'changes'],
+  },
+  handler: adminCodeEdit,
+})
+
+// Crawler Management Tools
+registerTool({
+  name: 'admin.crawler.list',
+  description: 'List all crawler jobs with their status. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      status: { type: 'string', enum: ['queued', 'running', 'completed', 'failed', 'cancelled'] },
+      limit: { type: 'integer', minimum: 1, maximum: 200 },
+      type: { type: 'string', description: 'Filter by crawler type' },
+    },
+  },
+  handler: adminCrawlerList,
+})
+
+registerTool({
+  name: 'admin.crawler.run',
+  description: 'Trigger any crawler type with custom parameters. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      type: {
+        type: 'string',
+        enum: [
+          'local',
+          'scholarship',
+          'comprehensive',
+          'item_search',
+          'avatar_lookup',
+          'document_ingest',
+          'pipeline_automation',
+          'profile_enrichment',
+        ],
+      },
+      profileId: { type: 'string', description: 'Profile ID to run crawler for' },
+      parameters: { type: 'object', description: 'Additional crawler parameters' },
+    },
+    required: ['type'],
+  },
+  handler: adminCrawlerRun,
+})
+
+registerTool({
+  name: 'admin.crawler.check',
+  description: 'Validate crawler outputs and check for errors in recent jobs. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      jobId: { type: 'string', description: 'Specific job ID to check' },
+      lastN: { type: 'integer', minimum: 1, maximum: 50, description: 'Check last N jobs' },
+    },
+  },
+  handler: adminCrawlerCheck,
+})
+
+registerTool({
+  name: 'admin.crawler.retry',
+  description: 'Retry a failed crawler job. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      jobId: { type: 'string', description: 'Job ID to retry' },
+    },
+    required: ['jobId'],
+  },
+  handler: adminCrawlerRetry,
+})
+
+registerTool({
+  name: 'admin.crawler.cancel',
+  description: 'Cancel a running crawler job. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      jobId: { type: 'string', description: 'Job ID to cancel' },
+      reason: { type: 'string', description: 'Reason for cancellation' },
+    },
+    required: ['jobId'],
+  },
+  handler: adminCrawlerCancel,
+})
+
+// App Function Execution & Diagnostics
+registerTool({
+  name: 'admin.functions.test',
+  description: 'Execute a backend endpoint/function and capture results. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      route: { type: 'string', description: 'API route to test' },
+      method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] },
+      body: { type: 'object', description: 'Request body' },
+    },
+    required: ['route'],
+  },
+  handler: adminFunctionsTest,
+})
+
+registerTool({
+  name: 'admin.functions.diagnose',
+  description: 'Run a function with detailed error tracing. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      route: { type: 'string', description: 'API route to diagnose' },
+      method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] },
+      body: { type: 'object', description: 'Request body' },
+    },
+    required: ['route'],
+  },
+  handler: adminFunctionsDiagnose,
+})
+
+// Database & System Tools
+registerTool({
+  name: 'admin.db.query',
+  description: 'Run read-only SQL queries for diagnostics (SELECT only). Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      sql: { type: 'string', description: 'SELECT query to execute' },
+      limit: { type: 'integer', minimum: 1, maximum: 500 },
+    },
+    required: ['sql'],
+  },
+  handler: adminDbQuery,
+})
+
+registerTool({
+  name: 'admin.db.stats',
+  description: 'Get database health statistics. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {},
+  },
+  handler: adminDbStats,
+})
+
+// Health & Monitoring Tools
+registerTool({
+  name: 'admin.health.check',
+  description: 'Full system health report. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {},
+  },
+  handler: adminHealthCheck,
+})
+
+registerTool({
+  name: 'admin.health.logs',
+  description: 'Get recent error/warning logs. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      level: { type: 'string', enum: ['error', 'warning', 'info', 'debug'] },
+      limit: { type: 'integer', minimum: 1, maximum: 200 },
+      source: { type: 'string', description: 'Filter logs by source' },
+    },
+  },
+  handler: adminHealthLogs,
 })

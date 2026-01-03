@@ -43,9 +43,17 @@ export async function postAnyaMessage(sessionId, message) {
   })
 }
 
-export async function listAnyaTools() {
+export async function listAnyaTools({ includeAdmin = false } = {}) {
   const response = await apiFetch("/api/anya/tools")
-  return response?.tools || []
+  const tools = response?.tools || []
+  
+  // Filter admin tools on the client side as a fallback
+  // (server should already filter, but this provides defense in depth)
+  if (!includeAdmin) {
+    return tools.filter(tool => !tool.requiresAdmin)
+  }
+  
+  return tools
 }
 
 export async function invokeAnyaTool(toolName, parameters = {}, { sessionId } = {}) {
