@@ -1,24 +1,5 @@
 export const DESIGNATED_PROFILES = [
   {
-    id: 'profile-brian-client',
-    display_name: 'Brian Client',
-    primary_type: 'individual_need',
-    status: 'active',
-    tags: [],
-    sections: {
-      basic_information: {
-        full_name: 'Brian',
-        email: 'isawstars08@yahoo.com',
-      },
-      financial_information: {
-        financial_need_level: 'High',
-      },
-      narrative: {
-        mission: 'Profile imported from Brian.pdf.',
-      },
-    },
-  },
-  {
     id: 'profile-olivia-beltran',
     display_name: 'Olivia Beltran / Hybrid Healing',
     primary_type: 'small_business',
