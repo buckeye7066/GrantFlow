@@ -28,7 +28,6 @@ const ALLOWED_FILE_TYPES = [
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'image/png',
   'image/jpeg',
-  'image/jpg',
   'image/gif',
   'image/bmp',
   'text/plain',

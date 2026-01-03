@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import DocumentItem from './DocumentItem';
 import { useToast } from '@/components/ui/use-toast';
 import { apiFetch } from '@/api/client';
+import { base44 } from '@/api/base44Client';
 
 export default function DocumentList({ profileId }) {
   const queryClient = useQueryClient();
@@ -49,15 +50,28 @@ export default function DocumentList({ profileId }) {
     }
   };
 
-  const handlePrintAll = () => {
-    documents.forEach((doc, index) => {
-      setTimeout(() => {
-        const fileUri = doc.file_url ?? doc.file_uri;
-        if (fileUri) {
-          window.open(fileUri, '_blank');
+  const handlePrintAll = async () => {
+    for (let i = 0; i < documents.length; i++) {
+      const doc = documents[i];
+      const fileUri = doc.file_url ?? doc.file_uri;
+      if (fileUri) {
+        try {
+          const { signed_url } = await base44.integrations.Core.CreateFileSignedUrl({ file_uri: fileUri });
+          const printWindow = window.open(signed_url, '_blank');
+          if (printWindow) {
+            printWindow.onload = () => {
+              printWindow.print();
+            };
+          }
+          // Add delay between opening windows (reduced for better UX)
+          if (i < documents.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 300));
+          }
+        } catch (error) {
+          console.error(`Failed to print document ${doc.name}:`, error);
         }
-      }, index * 500); // Stagger the print windows
-    });
+      }
+    }
   };
 
   if (isLoading) {

@@ -113,12 +113,15 @@ export default function Organizations() {
   }
 
   const handleNewApplicationSubmit = (data) => {
-    // Transform the comprehensive form data to profile format
+    // Note: This creates a basic profile. Full comprehensive form data
+    // should be saved to profile sections via the profile sections API
+    // in a future enhancement. For now, we create a minimal profile entry.
     createProfileMutation.mutate({
       display_name: data.name,
       primary_type: data.applicant_type,
       status: 'active',
       tags: [],
+      // TODO: Store additional form data in profile_sections table
     })
   }
 

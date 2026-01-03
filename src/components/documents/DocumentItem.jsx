@@ -14,12 +14,12 @@ export default function DocumentItem({ document, onDelete }) {
     return !isNaN(date.getTime());
   };
 
-  const fileUri = document.file_url ?? document.file_uri
+  const fileUri = document.file_url ?? document.file_uri;
 
   const getSignedUrlAndDownload = async () => {
     if (!fileUri) {
-      alert("This document does not have a stored file URL.")
-      return
+      alert("This document does not have a stored file URL.");
+      return;
     }
     try {
         const { signed_url } = await base44.integrations.Core.CreateFileSignedUrl({ file_uri: fileUri });
@@ -32,8 +32,8 @@ export default function DocumentItem({ document, onDelete }) {
 
   const handlePrint = async () => {
     if (!fileUri) {
-      alert("This document does not have a stored file URL.")
-      return
+      alert("This document does not have a stored file URL.");
+      return;
     }
     try {
         const { signed_url } = await base44.integrations.Core.CreateFileSignedUrl({ file_uri: fileUri });
