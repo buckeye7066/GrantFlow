@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
+import path from 'path'
 import Database from 'better-sqlite3'
 import ensureDesignatedProfiles from '../backend/utils/ensureDesignatedProfiles.js'
 import { DESIGNATED_PROFILES } from '../backend/config/designatedProfiles.js'
 
-const db = new Database('backend/data/grantflow.db')
+const dbPath = path.resolve('backend/data/grantflow.db')
+const db = new Database(dbPath)
 ensureDesignatedProfiles(db)
 db.close()
 
