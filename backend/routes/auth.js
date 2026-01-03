@@ -345,7 +345,7 @@ function buildUserPayload(userRow, profiles, activeProfileId) {
 }
 
 function assignFirstProfileToUser(db, userId) {
-  const firstProfile = db.prepare('SELECT id FROM profiles ORDER BY created_at ASC LIMIT 1').get()
+  const firstProfile = db.prepare('SELECT id FROM profiles WHERE user_id IS NULL ORDER BY created_at ASC LIMIT 1').get()
   if (firstProfile) {
     db.prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(userId, firstProfile.id)
     console.log(`[auth] Assigned profile ${firstProfile.id} to new user ${userId}`)
