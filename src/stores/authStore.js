@@ -56,6 +56,8 @@ const initialState = {
   sessionExpired: false,
   sessionMessage: null,
   preferredAuthMethod: 'email',
+  hasSeenOnboarding: false,
+  needsProfileCreation: false,
 }
 
 export const useAuthStore = create((set, get) => ({
@@ -66,6 +68,7 @@ export const useAuthStore = create((set, get) => ({
     const accessToken = localStorage.getItem('grantflow:access-token')
     const refreshToken = localStorage.getItem('grantflow:refresh-token')
     const storedMethod = localStorage.getItem('grantflow:auth-method')
+    const hasSeenOnboarding = localStorage.getItem('grantflow:onboarding-complete') === 'true'
     const updates = {}
     if (accessToken) {
       base44.setToken(accessToken)
@@ -78,6 +81,7 @@ export const useAuthStore = create((set, get) => ({
     if (storedMethod && AUTH_METHODS.has(storedMethod)) {
       updates.preferredAuthMethod = storedMethod
     }
+    updates.hasSeenOnboarding = hasSeenOnboarding
     if (Object.keys(updates).length > 0) {
       set((state) => ({ ...state, ...updates }))
     }
@@ -92,7 +96,8 @@ export const useAuthStore = create((set, get) => ({
   setAuthenticatedUser: (payload) => {
     if (!payload) {
       const preferredAuthMethod = get().preferredAuthMethod
-      set({ ...initialState, preferredAuthMethod })
+      const hasSeenOnboarding = get().hasSeenOnboarding
+      set({ ...initialState, preferredAuthMethod, hasSeenOnboarding })
       return
     }
 
@@ -100,6 +105,7 @@ export const useAuthStore = create((set, get) => ({
       const profiles = Array.isArray(payload.profiles) ? payload.profiles : []
       const activeProfileId =
         payload.active_profile_id ?? profiles[0]?.id ?? null
+      const needsProfileCreation = profiles.length === 0 && !get().hasSeenOnboarding
       set({
         user: payload.user,
         profiles,
@@ -109,6 +115,7 @@ export const useAuthStore = create((set, get) => ({
         sessionExpired: false,
         sessionMessage: null,
         preferredAuthMethod: get().preferredAuthMethod,
+        needsProfileCreation,
       })
       return
     }
@@ -129,6 +136,8 @@ export const useAuthStore = create((set, get) => ({
         sessionExpired: false,
         sessionMessage: null,
         preferredAuthMethod: get().preferredAuthMethod,
+        needsProfileCreation: false, // Admins don't need profiles
+        hasSeenOnboarding: true, // Skip onboarding for admins
       })
       
       // Trigger crawler jobs asynchronously (fire-and-forget)
@@ -144,15 +153,18 @@ export const useAuthStore = create((set, get) => ({
         display_name: payload.full_name ?? 'GrantFlow User',
         is_admin: false,
       }
+      const profiles = payload.profiles ?? []
+      const needsProfileCreation = profiles.length === 0 && !get().hasSeenOnboarding
       set({
         user,
-        profiles: payload.profiles ?? [],
+        profiles,
         activeProfileId: payload.profile_id ?? null,
         isAuthenticated: true,
         error: null,
         sessionExpired: false,
         sessionMessage: null,
         preferredAuthMethod: get().preferredAuthMethod,
+        needsProfileCreation,
       })
     }
   },
@@ -312,6 +324,17 @@ export const useAuthStore = create((set, get) => ({
         preferredAuthMethod: method,
       }
     })
+  },
+
+  markOnboardingComplete: () => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('grantflow:onboarding-complete', 'true')
+    }
+    set({ hasSeenOnboarding: true })
+  },
+
+  setNeedsProfileCreation: (needs) => {
+    set({ needsProfileCreation: needs })
   },
 }))
 

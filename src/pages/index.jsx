@@ -205,13 +205,25 @@ function _getCurrentPage(url) {
 function LayoutRoutes() {
     const location = useLocation();
     const currentPage = _getCurrentPage(location.pathname);
-    const { isAuthenticated, sessionExpired } = useAuthStore((state) => ({
+    const { isAuthenticated, sessionExpired, needsProfileCreation, profiles, user } = useAuthStore((state) => ({
         isAuthenticated: state.isAuthenticated,
         sessionExpired: state.sessionExpired,
+        needsProfileCreation: state.needsProfileCreation,
+        profiles: state.profiles,
+        user: state.user,
     }));
 
     if (!isAuthenticated && !sessionExpired) {
         return <Navigate to="/login" state={{ from: location }} replace />;
+    }
+
+    // Block dashboard access if user needs profile creation (unless admin)
+    const isAdmin = user?.is_admin
+    if (isAuthenticated && !isAdmin && needsProfileCreation && profiles.length === 0) {
+        // Only allow access to Organizations page for profile creation
+        if (!location.pathname.includes('/Organizations') && !location.pathname.includes('/MyProfiles')) {
+            return <Navigate to="/Organizations" replace />;
+        }
     }
 
     return (
