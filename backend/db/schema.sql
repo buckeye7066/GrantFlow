@@ -692,6 +692,37 @@ CREATE TABLE IF NOT EXISTS anya_tasks (
 CREATE INDEX IF NOT EXISTS idx_anya_tasks_session ON anya_tasks(session_id);
 CREATE INDEX IF NOT EXISTS idx_anya_tasks_status ON anya_tasks(status);
 
+-- User Preferences
+CREATE TABLE IF NOT EXISTS user_preferences (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  onboarding_video_seen INTEGER DEFAULT 0,
+  preferences_json TEXT DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_preferences_user ON user_preferences(user_id);
+
+-- Crawler Schedules
+CREATE TABLE IF NOT EXISTS crawler_schedules (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  profile_id TEXT REFERENCES profiles(id) ON DELETE CASCADE,
+  crawler_type TEXT NOT NULL,
+  schedule_cron TEXT NOT NULL,
+  enabled INTEGER DEFAULT 1,
+  last_run_at DATETIME,
+  next_run_at DATETIME,
+  last_saved_count INTEGER DEFAULT 0,
+  total_opportunities_saved INTEGER DEFAULT 0,
+  parameters TEXT DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_crawler_schedules_profile ON crawler_schedules(profile_id);
+CREATE INDEX IF NOT EXISTS idx_crawler_schedules_enabled ON crawler_schedules(enabled);
+
 -- Triggers to auto-update updated_at
 CREATE TRIGGER IF NOT EXISTS update_anya_sessions_timestamp
 AFTER UPDATE ON anya_sessions
@@ -733,4 +764,16 @@ CREATE TRIGGER IF NOT EXISTS update_profile_sections_timestamp
 AFTER UPDATE ON profile_sections
 BEGIN
   UPDATE profile_sections SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS update_user_preferences_timestamp
+AFTER UPDATE ON user_preferences
+BEGIN
+  UPDATE user_preferences SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS update_crawler_schedules_timestamp
+AFTER UPDATE ON crawler_schedules
+BEGIN
+  UPDATE crawler_schedules SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
