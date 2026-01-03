@@ -61,8 +61,8 @@ const navigationItems = [
     icon: LayoutDashboard,
   },
   {
-    title: "Organizations",
-    url: createPageUrl("Organizations"),
+    title: "My Profiles",
+    url: createPageUrl("MyProfiles"),
     icon: Building2,
   },
   {
