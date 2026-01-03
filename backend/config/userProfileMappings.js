@@ -20,9 +20,6 @@ export const USER_PROFILE_MAPPINGS = {
   [ADMIN_EMAIL]: null, // Admin has access to all profiles
   
   // Specific user mappings
-  'isawstars08@yahoo.com': 'profile-axiom-community-health',
-  'oliviabeltran@gmail.com': 'profile-camila-ortiz',
-  'holliet52@gmail.com': 'profile-harper-family-support',
   'allmonkey915@gmail.com': 'profile-bright-trails-youth',
   'isawstars08@yahoo.com': 'profile-brian-client',
   'oliviabeltran@gmail.com': 'profile-olivia-beltran',
