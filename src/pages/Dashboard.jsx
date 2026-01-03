@@ -234,6 +234,8 @@ export default function Dashboard() {
     return null
   }, [profileDetail, currentUser, profiles])
 
+  const today = format(new Date(), "EEEE, MMM d")
+
   const isLoading =
     isLoadingProfiles ||
     isLoadingOrgs ||
