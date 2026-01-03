@@ -13,10 +13,36 @@ const defaultState = {
     status: true,
     tags: true,
   },
+  widgetVisibility: {
+    pipelineStatus: true,
+    recentGrants: true,
+    milestones: true,
+    analytics: true,
+    quickActions: true,
+    recentDocuments: true,
+  },
+  widgetOrder: [
+    'pipelineStatus',
+    'recentGrants',
+    'milestones',
+    'analytics',
+    'quickActions',
+    'recentDocuments',
+  ],
   defaultSort: "match_score",
   layoutStyle: "expanded",
+  layoutColumns: 2,
   fontSize: "medium",
+  colorTheme: "blue",
   darkMode: false,
+  notificationPreferences: {
+    email: true,
+    inApp: true,
+    deadlines: true,
+    newOpportunities: true,
+    statusChanges: true,
+  },
+  dataDensity: 25,
 }
 
 const PreferencesContext = createContext(null)
@@ -31,14 +57,41 @@ function reducer(state, action) {
           [action.field]: action.visible,
         },
       }
+    case "SET_WIDGET_VISIBILITY":
+      return {
+        ...state,
+        widgetVisibility: {
+          ...state.widgetVisibility,
+          [action.widget]: action.visible,
+        },
+      }
+    case "SET_WIDGET_ORDER":
+      return {
+        ...state,
+        widgetOrder: action.order,
+      }
     case "SET_SORT":
       return { ...state, defaultSort: action.sort }
     case "SET_LAYOUT":
       return { ...state, layoutStyle: action.layout }
+    case "SET_LAYOUT_COLUMNS":
+      return { ...state, layoutColumns: action.columns }
     case "SET_FONT":
       return { ...state, fontSize: action.font }
+    case "SET_COLOR_THEME":
+      return { ...state, colorTheme: action.theme }
     case "SET_DARK_MODE":
       return { ...state, darkMode: action.enabled }
+    case "SET_NOTIFICATION_PREFERENCE":
+      return {
+        ...state,
+        notificationPreferences: {
+          ...state.notificationPreferences,
+          [action.key]: action.enabled,
+        },
+      }
+    case "SET_DATA_DENSITY":
+      return { ...state, dataDensity: action.density }
     case "RESET":
       return defaultState
     case "HYDRATE":
