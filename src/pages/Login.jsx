@@ -4,6 +4,8 @@ import AuthShell from '@/components/auth/AuthShell'
 import AuthMethodTabs from '@/components/auth/AuthMethodTabs'
 import { useAuthStore } from '@/stores/authStore'
 
+const AUTH_TABS = new Set(['email'])
+
 export default function Login() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -46,6 +48,7 @@ export default function Login() {
   return (
     <AuthShell
       title="Sign in to GrantFlow"
+      subtitle="Access your scholarships, grants, and partner accounts."
       subtitle="Enter your email address to receive a verification code."
     >
       <AuthMethodExpiryNotice />
@@ -57,6 +60,7 @@ export default function Login() {
 function AuthMethodExpiryNotice() {
   return (
     <div className="mb-6 rounded-lg border border-blue-100 bg-blue-50/70 p-3 text-sm text-slate-700">
+      Email passcodes are available for authentication. Tokens refresh automatically once you're in.
       Email passcodes are used for secure authentication. Enter your email to receive a verification code—tokens refresh automatically once you're signed in.
     </div>
   )
