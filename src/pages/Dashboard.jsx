@@ -53,23 +53,79 @@ export default function Dashboard() {
   const sessionExpired = useAuthStore((state) => state.sessionExpired)
   const [showOnboarding, setShowOnboarding] = useState(false)
   
+  const { data: currentUser } = useQuery({
+    queryKey: ["currentUser"],
+    queryFn: () => base44.auth.me(),
+    staleTime: 60_000,
+  })
+
+  // Fetch user preferences to check if onboarding video has been seen
+  const { data: userPreferences } = useQuery({
+    queryKey: ["userPreferences"],
+    queryFn: async () => {
+      const response = await fetch('/api/preferences', {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('grantflow:access-token')}`,
+        },
+      })
+      if (!response.ok) throw new Error('Failed to fetch preferences')
+      return response.json()
+    },
+    enabled: Boolean(currentUser),
+    staleTime: 300_000, // 5 minutes
+  })
+  
   // Check if user has seen the onboarding video
   useEffect(() => {
-    const hasSeenVideo = localStorage.getItem('grantflow:onboarding-video-seen')
-    if (!hasSeenVideo) {
+    if (userPreferences && !userPreferences.custom_preferences?.onboarding_video_seen) {
       setShowOnboarding(true)
     }
-  }, [])
+  }, [userPreferences])
 
-  const handleOnboardingComplete = () => {
+  const handleOnboardingComplete = async () => {
     setShowOnboarding(false)
+    // Update preferences via API
+    try {
+      await fetch('/api/preferences', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('grantflow:access-token')}`,
+        },
+        body: JSON.stringify({
+          custom_preferences: {
+            ...(userPreferences?.custom_preferences || {}),
+            onboarding_video_seen: true,
+          },
+        }),
+      })
+    } catch (error) {
+      console.error('Failed to update preferences:', error)
+    }
   }
 
-  const handleOnboardingSkip = () => {
+  const handleOnboardingSkip = async () => {
     setShowOnboarding(false)
+    // Update preferences via API
+    try {
+      await fetch('/api/preferences', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('grantflow:access-token')}`,
+        },
+        body: JSON.stringify({
+          custom_preferences: {
+            ...(userPreferences?.custom_preferences || {}),
+            onboarding_video_seen: true,
+          },
+        }),
+      })
+    } catch (error) {
+      console.error('Failed to update preferences:', error)
+    }
   }
   
-  const { data: currentUser } = useQuery({
     queryKey: ["currentUser"],
     queryFn: () => base44.auth.me(),
     staleTime: 60_000,

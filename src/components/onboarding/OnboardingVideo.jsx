@@ -17,14 +17,10 @@ export default function OnboardingVideo({ open, onComplete, onSkip }) {
   const [videoError, setVideoError] = useState(false)
 
   const handleComplete = () => {
-    // Mark video as seen in localStorage
-    localStorage.setItem('grantflow:onboarding-video-seen', 'true')
     onComplete?.()
   }
 
   const handleSkip = () => {
-    // Mark video as seen in localStorage
-    localStorage.setItem('grantflow:onboarding-video-seen', 'true')
     onSkip?.()
   }
 
