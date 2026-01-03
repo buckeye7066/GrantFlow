@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Info, X, CheckCircle } from 'lucide-react'
 
-const VIDEO_PATH = '/Grant Flow_ Get Started.mp4'
+const VIDEO_PATH = '/Grant Flow_ Get Started. mp4'
 
 export default function OnboardingVideo({ open, onComplete, onSkip }) {
   const [videoError, setVideoError] = useState(false)
