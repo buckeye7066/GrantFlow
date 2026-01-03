@@ -6,10 +6,10 @@ import twilio from 'twilio'
 import { sendVerificationEmail } from '../services/email.js'
 import { initializeAnyaForAdmin } from '../services/anyaLoginTrigger.js'
 import { getDesignatedProfileForEmail, hasDesignatedProfile } from '../config/userProfileMappings.js'
+import { ADMIN_EMAIL, isAdminEmail } from '../config/constants.js'
 const router = express.Router()
 
 const JWT_SECRET = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret'
-const ADMIN_EMAIL = 'buckeye7066@gmail.com'
 
 function parseSeconds(value, fallback) {
   if (value === undefined || value === null) {
@@ -383,7 +383,7 @@ function assignProfileToUser(db, userId, email) {
 }
 
 function ensureAdminStatus(db, userId, email) {
-  if (email === ADMIN_EMAIL) {
+  if (isAdminEmail(email)) {
     const result = db.prepare('UPDATE users SET is_admin = 1 WHERE id = ? AND is_admin = 0').run(userId)
     if (result.changes > 0) {
       console.log(`[auth] Set admin status for user ${userId} (${email})`)
@@ -422,7 +422,7 @@ function ensureEmailCredential(db, email) {
     userId, 
     displayName, 
     email,
-    email === ADMIN_EMAIL ? 1 : 0
+    isAdminEmail(email) ? 1 : 0
   )
   
   // Assign profile to user (designated or first available)
@@ -748,7 +748,7 @@ function ensureProviderUser(db, provider, profile) {
 
   if (!user) {
     const userId = crypto.randomUUID()
-    const isAdmin = email === ADMIN_EMAIL ? 1 : 0
+    const isAdmin = isAdminEmail(email) ? 1 : 0
     db.prepare(
       `
         INSERT INTO users (id, display_name, primary_email, avatar_url, is_admin)

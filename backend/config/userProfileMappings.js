@@ -11,11 +11,13 @@
  * 3. The user will be automatically linked on their next login/signup
  */
 
+import { ADMIN_EMAIL } from './constants.js'
+
 export const USER_PROFILE_MAPPINGS = {
   // Format: 'user@email.com': 'profile-id-from-database'
   
   // Admin user
-  'buckeye7066@gmail.com': null, // Admin has access to all profiles
+  [ADMIN_EMAIL]: null, // Admin has access to all profiles
   
   // Specific user mappings
   // TODO: Add Brian's email and profile ID
