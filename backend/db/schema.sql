@@ -150,6 +150,8 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   last_crawled DATETIME,
   
   -- For tracking which profiles this was matched to
+  match_reasons TEXT DEFAULT '[]', -- JSON array
+  notes TEXT,
   profile_id TEXT
 );
 
