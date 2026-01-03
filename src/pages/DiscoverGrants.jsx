@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
+import { listProfiles } from '@/api/profiles';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -276,7 +277,7 @@ Religious and faith-based funders
 ];
 
 export default function DiscoverGrants() {
-  const [selectedOrgId, setSelectedOrgId] = useState('');
+  const [selectedProfileId, setSelectedProfileId] = useState('');
   const [selectedTemplate, setSelectedTemplate] = useState('comprehensive');
   const [searchState, setSearchState] = useState('idle'); // 'idle', 'loading', 'success', 'error'
   const [searchResults, setSearchResults] = useState([]);
@@ -286,22 +287,36 @@ export default function DiscoverGrants() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
+  // Fetch profiles instead of organizations
+  const { data: profiles = [], isLoading: isLoadingProfiles } = useQuery({
+    queryKey: ['profiles'],
+    queryFn: () => listProfiles(),
+  });
+
+  // Also fetch organizations to get detailed org data for selected profile
   const { data: organizations = [] } = useQuery({
     queryKey: ['organizations'],
     queryFn: () => base44.entities.Organization.list('name'),
   });
 
-  // Memoized selected organization
+  // Memoized selected profile and organization
+  const selectedProfile = useMemo(() => 
+    profiles.find(p => p.id === selectedProfileId),
+    [profiles, selectedProfileId]
+  );
+
   const selectedOrg = useMemo(() => 
-    organizations.find(o => o.id === selectedOrgId),
-    [organizations, selectedOrgId]
+    selectedProfile?.organization_id 
+      ? organizations.find(o => o.id === selectedProfile.organization_id)
+      : null,
+    [organizations, selectedProfile]
   );
 
   const isECFProfile = selectedOrg?.medicaid_enrolled && selectedOrg?.medicaid_waiver_program === 'ecf_choices';
 
   const handleDiscover = async () => {
     // Validation
-    if (!selectedOrgId) {
+    if (!selectedProfileId) {
       showNoProfileToast(toast);
       return;
     }
@@ -329,11 +344,11 @@ export default function DiscoverGrants() {
         toastSuccess(toast, result.count, 'comprehensive');
       } else if (selectedTemplate === 'ecf_services') {
         toastECFStart(toast);
-        result = await runECFServiceSearch(selectedOrgId, queryClient);
+        result = await runECFServiceSearch(selectedProfile.organization_id, queryClient);
         toastECFSuccess(toast, result.count);
       } else {
         toastSearchStart(toast, false);
-        result = await runStandardSearch(template, selectedOrgId, searchFilters);
+        result = await runStandardSearch(template, selectedProfile.organization_id, searchFilters);
         toastSuccess(toast, result.count, template?.name);
       }
 
@@ -352,10 +367,20 @@ export default function DiscoverGrants() {
   const handleAddToPipeline = async (opportunity) => {
     console.log('[DiscoverGrants] Adding to pipeline:', opportunity);
     
+    const orgId = selectedProfile?.organization_id;
+    if (!orgId) {
+      toast({
+        variant: 'destructive',
+        title: 'No Organization',
+        description: 'Selected profile is not linked to an organization.',
+      });
+      return;
+    }
+    
     // Check for duplicates
     if (opportunity.url) {
       const existingGrants = await base44.entities.Grant.filter({
-        organization_id: selectedOrgId,
+        organization_id: orgId,
         url: opportunity.url
       });
       
@@ -370,7 +395,7 @@ export default function DiscoverGrants() {
     }
     
     const grantData = {
-      organization_id: selectedOrgId,
+      organization_id: orgId,
       title: opportunity.title,
       funder: opportunity.sponsor,
       url: opportunity.url,
@@ -434,33 +459,55 @@ export default function DiscoverGrants() {
               {/* Profile Selector */}
               <div>
                 <Label className="text-base font-semibold mb-3 block">Select Profile</Label>
-                <Select value={selectedOrgId} onValueChange={setSelectedOrgId}>
+                <Select value={selectedProfileId} onValueChange={setSelectedProfileId}>
                   <SelectTrigger className="h-12">
-                    <SelectValue placeholder="Choose an organization or individual..." />
+                    <SelectValue placeholder="Choose a profile..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {organizations.map(org => {
-                      const isOrgECF = org.medicaid_enrolled && org.medicaid_waiver_program === 'ecf_choices';
-                      return (
-                        <SelectItem key={org.id} value={org.id}>
-                          <div className="flex items-center gap-2">
-                            <User className="w-4 h-4 text-slate-500" />
-                            {org.name}
-                            {isOrgECF && (
-                              <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 text-xs">
-                                ECF CHOICES
-                              </Badge>
-                            )}
-                          </div>
-                        </SelectItem>
-                      );
-                    })}
+                    {isLoadingProfiles ? (
+                      <div className="flex items-center justify-center p-4">
+                        <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                        <span className="ml-2 text-sm text-slate-500">Loading profiles...</span>
+                      </div>
+                    ) : profiles.length === 0 ? (
+                      <div className="p-4 text-center text-sm text-slate-500">
+                        No profiles available. Create a profile first.
+                      </div>
+                    ) : (
+                      profiles.map(profile => {
+                        // Get org for this profile to check ECF status
+                        const profileOrg = profile.organization_id 
+                          ? organizations.find(o => o.id === profile.organization_id)
+                          : null;
+                        const isProfileECF = profileOrg?.medicaid_enrolled && 
+                                            profileOrg?.medicaid_waiver_program === 'ecf_choices';
+                        
+                        return (
+                          <SelectItem key={profile.id} value={profile.id}>
+                            <div className="flex items-center gap-2">
+                              <User className="w-4 h-4 text-slate-500" />
+                              {profile.display_name}
+                              {profile.organization_name && (
+                                <span className="text-xs text-slate-500">
+                                  ({profile.organization_name})
+                                </span>
+                              )}
+                              {isProfileECF && (
+                                <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 text-xs">
+                                  ECF CHOICES
+                                </Badge>
+                              )}
+                            </div>
+                          </SelectItem>
+                        );
+                      })
+                    )}
                   </SelectContent>
                 </Select>
               </div>
 
               {/* Selected Profile Info */}
-              {selectedOrg && (
+              {selectedProfile && (
                 <Alert className={
                   isECFProfile
                     ? 'bg-green-50 border-green-200'
@@ -472,11 +519,14 @@ export default function DiscoverGrants() {
                   <AlertDescription className={
                     isECFProfile ? 'text-green-900' : 'text-blue-800'
                   }>
-                    <strong>Selected:</strong> {selectedOrg.name}
-                    {selectedOrg.applicant_type && (
-                      <span className="ml-2">({selectedOrg.applicant_type.replace(/_/g, ' ')})</span>
+                    <strong>Selected:</strong> {selectedProfile.display_name}
+                    {selectedProfile.organization_name && (
+                      <span className="ml-2">({selectedProfile.organization_name})</span>
                     )}
-                    {selectedOrg.state && <span className="ml-2">• {selectedOrg.state}</span>}
+                    {selectedProfile.primary_type && (
+                      <span className="ml-2 text-xs">• {selectedProfile.primary_type.replace(/_/g, ' ')}</span>
+                    )}
+                    {selectedOrg?.state && <span className="ml-2">• {selectedOrg.state}</span>}
                     {isECFProfile && (
                       <span className="block mt-1 font-semibold">
                         🏥 ECF CHOICES Participant
@@ -522,7 +572,7 @@ export default function DiscoverGrants() {
               <div className="flex flex-col sm:flex-row gap-3 pt-4">
                 <Button
                   onClick={handleDiscover}
-                  disabled={!selectedOrgId || isLoading}
+                  disabled={!selectedProfileId || isLoading}
                   className="bg-blue-600 hover:bg-blue-700 flex-1"
                   size="lg"
                 >
@@ -590,9 +640,9 @@ export default function DiscoverGrants() {
         {hasResults && searchResults.length > 0 && (
           <SearchResults
             results={searchResults}
-            profileId={selectedOrgId}
+            profileId={selectedProfileId}
             onAddToPipeline={handleAddToPipeline}
-            organizationName={selectedOrg?.name}
+            organizationName={selectedProfile?.display_name}
           />
         )}
 
