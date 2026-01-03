@@ -1,4 +1,4 @@
-import React, { useMemo } from "react"
+import React, { useMemo, useState, useEffect } from "react"
 import { Link } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import {
@@ -33,6 +33,7 @@ import PersonalizationPanel from "@/components/dashboard/PersonalizationPanel"
 import ReminderCenterCard from "@/components/dashboard/ReminderCenterCard"
 import PipelineActionsCard from "@/components/dashboard/PipelineActionsCard"
 import AnyaChat from "@/components/anya/AnyaChat"
+import OnboardingVideo from "@/components/onboarding/OnboardingVideo"
 import { cn } from "@/lib/utils"
 
 function LJWMonogram({ className = "" }) {
@@ -50,6 +51,23 @@ function LJWMonogram({ className = "" }) {
 
 export default function Dashboard() {
   const sessionExpired = useAuthStore((state) => state.sessionExpired)
+  const [showOnboarding, setShowOnboarding] = useState(false)
+  
+  // Check if user has seen the onboarding video
+  useEffect(() => {
+    const hasSeenVideo = localStorage.getItem('grantflow:onboarding-video-seen')
+    if (!hasSeenVideo) {
+      setShowOnboarding(true)
+    }
+  }, [])
+
+  const handleOnboardingComplete = () => {
+    setShowOnboarding(false)
+  }
+
+  const handleOnboardingSkip = () => {
+    setShowOnboarding(false)
+  }
   
   const { data: currentUser } = useQuery({
     queryKey: ["currentUser"],
@@ -362,6 +380,12 @@ export default function Dashboard() {
 
         {currentUser?.role === "admin" && profiles.length === 0 && <EmptyStateCard />}
       </div>
+
+      <OnboardingVideo
+        open={showOnboarding}
+        onComplete={handleOnboardingComplete}
+        onSkip={handleOnboardingSkip}
+      />
     </section>
   )
 }
