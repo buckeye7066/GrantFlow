@@ -103,10 +103,28 @@ export default function Organizations() {
 
   const handleQuickAdd = async (formData) => {
     try {
+      // Create profile first
       const result = await apiFetch('/api/profiles', {
         method: 'POST',
-        body: JSON.stringify(formData),
+        body: JSON.stringify({
+          display_name: formData.display_name,
+          primary_type: formData.primary_type,
+        }),
       })
+      
+      // If avatar file is provided, upload it
+      if (formData.avatarFile && result.id) {
+        const avatarFormData = new FormData()
+        avatarFormData.append('avatar', formData.avatarFile)
+        
+        await fetch(`/api/profiles/${result.id}/avatar`, {
+          method: 'POST',
+          body: avatarFormData,
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('grantflow:access-token')}`,
+          },
+        })
+      }
       
       queryClient.invalidateQueries({ queryKey: ['profiles'] })
       

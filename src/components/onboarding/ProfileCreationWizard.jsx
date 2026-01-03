@@ -19,7 +19,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Loader2, User, AlertCircle } from 'lucide-react'
+import { Loader2, User, AlertCircle, Upload, X } from 'lucide-react'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { apiFetch } from '@/api/client'
 import { useToast } from '@/components/ui/use-toast'
 
@@ -41,16 +42,35 @@ export default function ProfileCreationWizard({ open, onComplete, onSkip }) {
     display_name: '',
     primary_type: '',
   })
+  const [avatarFile, setAvatarFile] = useState(null)
+  const [avatarPreview, setAvatarPreview] = useState(null)
   const [error, setError] = useState(null)
   const queryClient = useQueryClient()
   const { toast } = useToast()
 
   const createProfileMutation = useMutation({
-    mutationFn: async (profileData) => {
-      return apiFetch('/api/profiles', {
+    mutationFn: async ({ profileData, avatarFile }) => {
+      // Create profile first
+      const profile = await apiFetch('/api/profiles', {
         method: 'POST',
         body: JSON.stringify(profileData),
       })
+
+      // If avatar file is provided, upload it
+      if (avatarFile && profile.id) {
+        const avatarFormData = new FormData()
+        avatarFormData.append('avatar', avatarFile)
+        
+        await fetch(`/api/profiles/${profile.id}/avatar`, {
+          method: 'POST',
+          body: avatarFormData,
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('grantflow:access-token')}`,
+          },
+        })
+      }
+
+      return profile
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['profiles'] })
@@ -74,11 +94,31 @@ export default function ProfileCreationWizard({ open, onComplete, onSkip }) {
       return
     }
 
-    createProfileMutation.mutate(formData)
+    createProfileMutation.mutate({ 
+      profileData: formData,
+      avatarFile,
+    })
   }
 
   const handleChange = (field, value) => {
     setFormData((prev) => ({ ...prev, [field]: value }))
+  }
+
+  const handleAvatarChange = (e) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      setAvatarFile(file)
+      const reader = new FileReader()
+      reader.onloadend = () => {
+        setAvatarPreview(reader.result)
+      }
+      reader.readAsDataURL(file)
+    }
+  }
+
+  const handleRemoveAvatar = () => {
+    setAvatarFile(null)
+    setAvatarPreview(null)
   }
 
   return (
@@ -141,6 +181,41 @@ export default function ProfileCreationWizard({ open, onComplete, onSkip }) {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="avatar">Profile Picture (optional)</Label>
+              <div className="flex items-center gap-4">
+                <Avatar className="h-16 w-16">
+                  <AvatarImage src={avatarPreview} />
+                  <AvatarFallback>
+                    <Upload className="h-6 w-6 text-slate-400" />
+                  </AvatarFallback>
+                </Avatar>
+                <div className="flex-1">
+                  <Input
+                    id="avatar"
+                    type="file"
+                    accept="image/*"
+                    onChange={handleAvatarChange}
+                    className="cursor-pointer"
+                  />
+                  {avatarFile && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleRemoveAvatar}
+                      className="mt-2"
+                    >
+                      <X className="h-4 w-4 mr-1" />
+                      Remove
+                    </Button>
+                  )}
+                </div>
+              </div>
+              <p className="text-xs text-slate-500">
+                Supported formats: JPG, PNG, GIF (max 5MB)
+              </p>
             </div>
 
             {error && (
