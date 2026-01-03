@@ -53,3 +53,10 @@ export function runPipelineAutomation({ grantId, profileId, organizationId } = {
     }),
   })
 }
+
+export function createGrant(payload) {
+  return apiFetch('/api/grants', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}

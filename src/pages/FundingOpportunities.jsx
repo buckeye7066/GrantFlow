@@ -31,6 +31,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { listOpportunities, listOpportunitySources, listOpportunityStates } from "@/api/opportunities"
 import { listProfiles, getProfile } from "@/api/profiles"
 import { createCrawlerJob } from "@/api/crawlers"
+import { createGrant } from "@/api/grants"
 import { cn } from "@/lib/utils"
 
 function formatDeadline(deadline, deadlineType) {
@@ -252,7 +253,16 @@ function OpportunityCard({ opportunity, onSelect, match }) {
   )
 }
 
-function OpportunityDetail({ opportunity, open, onClose, match }) {
+function OpportunityDetail({
+  opportunity,
+  open,
+  onClose,
+  match,
+  onAddToPipeline,
+  isAddingToPipeline = false,
+  canAddToPipeline = false,
+  selectedProfileName,
+}) {
   if (!opportunity) return null
   const matchScore = typeof match?.score === "number" ? match.score : null
   const serverReasons = Array.isArray(opportunity.match_reasons) ? opportunity.match_reasons : []
@@ -278,6 +288,14 @@ function OpportunityDetail({ opportunity, open, onClose, match }) {
     : isReview
     ? "font-semibold text-rose-900 flex items-center gap-2"
     : "font-semibold text-slate-800 flex items-center gap-2"
+  const handleAddClick = async () => {
+    if (!onAddToPipeline) return
+    try {
+      await onAddToPipeline(opportunity)
+    } catch {
+      // Errors are surfaced via toast in the caller.
+    }
+  }
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
@@ -413,10 +431,25 @@ function OpportunityDetail({ opportunity, open, onClose, match }) {
             </section>
           ) : null}
         </ScrollArea>
-        <div className="pt-2 flex justify-end">
-          <Button variant="secondary" onClick={onClose}>
-            Close
-          </Button>
+        <div className="pt-2 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-slate-500">
+            {canAddToPipeline
+              ? `Grant will be added to ${selectedProfileName ?? "the selected profile"}'s pipeline.`
+              : "Select a profile to enable pipeline creation."}
+          </p>
+          <div className="flex gap-2 justify-end">
+            <Button variant="secondary" onClick={onClose}>
+              Close
+            </Button>
+            <Button
+              variant="default"
+              disabled={!canAddToPipeline || isAddingToPipeline}
+              onClick={handleAddClick}
+            >
+              {isAddingToPipeline ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Add to pipeline
+            </Button>
+          </div>
         </div>
       </DialogContent>
     </Dialog>
@@ -434,6 +467,7 @@ export default function FundingOpportunities() {
     compliance: "grant_only",
   })
   const [selectedOpportunity, setSelectedOpportunity] = useState(null)
+  const [addingOpportunityId, setAddingOpportunityId] = useState(null)
 
   const opportunitiesQuery = useQuery({
     queryKey: ["opportunities", filters],
@@ -497,12 +531,88 @@ export default function FundingOpportunities() {
     })
   }, [opportunities, filters.profileId, selectedProfile])
 
-  const handleAddToPipeline = (opportunity) => {
-    // TODO: Implement add to pipeline - create a grant from this opportunity
-    toast({
-      title: "Add to Pipeline",
-      description: "This will create a grant in your pipeline based on this opportunity. Feature in development.",
-    })
+  const handleAddToPipeline = async (opportunity) => {
+    if (!selectedProfile || !filters.profileId || filters.profileId === "all") {
+      toast({
+        variant: "destructive",
+        title: "Select a profile first",
+        description: "Choose a profile to determine which pipeline should receive this opportunity.",
+      })
+      return
+    }
+
+    if (!selectedProfile.organization_id) {
+      toast({
+        variant: "destructive",
+        title: "Missing organization",
+        description: "This profile is not linked to an organization yet. Assign one before adding grants to the pipeline.",
+      })
+      return
+    }
+
+    setAddingOpportunityId(opportunity.id)
+    try {
+      const computedMatch = scoreOpportunity(opportunity, selectedProfile)
+      const serverReasons = Array.isArray(opportunity.match_reasons) ? opportunity.match_reasons : []
+      const preferredReasons =
+        Array.isArray(computedMatch.reasons) && computedMatch.reasons.length > 0
+          ? computedMatch.reasons
+          : serverReasons
+      const normalizedReasons = Array.from(
+        new Set(preferredReasons.filter(Boolean).map((reason) => String(reason))),
+      )
+
+      const notesSegments = [
+        `Imported from Funding Opportunities (${opportunity.source || "crawler"}).`,
+      ]
+      if (normalizedReasons.length) {
+        notesSegments.push(`Match rationale: ${normalizedReasons.slice(0, 3).join("; ")}`)
+      }
+      if (opportunity.description) {
+        notesSegments.push(opportunity.description)
+      }
+      const combinedNotes = notesSegments.join("\n\n")
+      const payload = {
+        funding_opportunity_id: opportunity.id,
+        organization_id: selectedProfile.organization_id,
+        title: opportunity.title || "Untitled opportunity",
+        funder: opportunity.sponsor ?? null,
+        status: "interested",
+        deadline: opportunity.deadline || null,
+        match_score: Number.isFinite(computedMatch?.score) ? computedMatch.score : null,
+        match_reasons: normalizedReasons,
+        notes: combinedNotes.length > 2000 ? `${combinedNotes.slice(0, 1997)}…` : combinedNotes,
+        application_url: opportunity.application_url ?? null,
+      }
+
+      const normalizedAmounts = [opportunity.amount_max, opportunity.amount_min]
+        .map((value) => (value === null || value === undefined ? null : Number(value)))
+        .filter((value) => Number.isFinite(value) && value > 0)
+      if (normalizedAmounts.length > 0) {
+        payload.amount_requested = normalizedAmounts[0]
+      }
+
+      const created = await createGrant(payload)
+
+      toast({
+        title: "Added to pipeline",
+        description: `${
+          opportunity.title
+        } is now in the pipeline for ${selectedProfile.display_name || "the selected profile"}.`,
+      })
+
+      setSelectedOpportunity(null)
+      return created
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Unable to add to pipeline",
+        description: error instanceof Error ? error.message : "Try again in a moment.",
+      })
+      throw error
+    } finally {
+      setAddingOpportunityId(null)
+    }
   }
 
   const handleRequestComprehensiveSweep = async () => {
@@ -744,6 +854,19 @@ export default function FundingOpportunities() {
             ? scoreOpportunity(selectedOpportunity, selectedProfile)
             : null
         }
+        onAddToPipeline={handleAddToPipeline}
+        isAddingToPipeline={
+          Boolean(selectedOpportunity) && addingOpportunityId === selectedOpportunity.id
+        }
+        canAddToPipeline={
+          Boolean(
+            selectedProfile &&
+              selectedProfile.organization_id &&
+              filters.profileId &&
+              filters.profileId !== "all",
+          )
+        }
+        selectedProfileName={selectedProfile?.display_name}
       />
     </div>
   )
