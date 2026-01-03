@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken'
 import twilio from 'twilio'
 import { sendVerificationEmail } from '../services/email.js'
 import { initializeAnyaForAdmin } from '../services/anyaLoginTrigger.js'
+import { getDesignatedProfileForEmail, hasDesignatedProfile } from '../config/userProfileMappings.js'
 const router = express.Router()
 
 const JWT_SECRET = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret'
@@ -345,12 +346,40 @@ function buildUserPayload(userRow, profiles, activeProfileId) {
   }
 }
 
-function assignFirstProfileToUser(db, userId) {
+function assignProfileToUser(db, userId, email) {
+  // Check if this user has a designated profile based on their email
+  if (email) {
+    const designatedProfileId = getDesignatedProfileForEmail(email)
+    if (designatedProfileId) {
+      // Assign the designated profile to this user
+      const designatedProfile = db.prepare('SELECT id, user_id FROM profiles WHERE id = ?').get(designatedProfileId)
+      if (designatedProfile) {
+        if (!designatedProfile.user_id) {
+          db.prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(userId, designatedProfileId)
+          console.log(`[auth] Assigned designated profile ${designatedProfileId} to user ${userId} (${email})`)
+          return designatedProfileId
+        } else if (designatedProfile.user_id === userId) {
+          console.log(`[auth] User ${userId} already linked to designated profile ${designatedProfileId}`)
+          return designatedProfileId
+        } else {
+          console.warn(`[auth] Designated profile ${designatedProfileId} already linked to another user`)
+        }
+      } else {
+        console.warn(`[auth] Designated profile ${designatedProfileId} not found for ${email}`)
+      }
+    }
+  }
+  
+  // Fall back to assigning first available profile if no designated profile
   const firstProfile = db.prepare('SELECT id FROM profiles WHERE user_id IS NULL ORDER BY created_at ASC LIMIT 1').get()
   if (firstProfile) {
     db.prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(userId, firstProfile.id)
-    console.log(`[auth] Assigned profile ${firstProfile.id} to new user ${userId}`)
+    console.log(`[auth] Assigned first available profile ${firstProfile.id} to user ${userId}`)
+    return firstProfile.id
   }
+  
+  console.log(`[auth] No available profiles to assign to user ${userId}`)
+  return null
 }
 
 function ensureAdminStatus(db, userId, email) {
@@ -396,8 +425,8 @@ function ensureEmailCredential(db, email) {
     email === ADMIN_EMAIL ? 1 : 0
   )
   
-  // Assign new user to first available profile
-  assignFirstProfileToUser(db, userId)
+  // Assign profile to user (designated or first available)
+  assignProfileToUser(db, userId, email)
   
   const credentialId = crypto.randomUUID()
   db.prepare(
@@ -884,8 +913,8 @@ function ensurePhoneCredential(db, phone) {
       `,
     ).run(userId, displayName, phone)
     
-    // Assign new user to first available profile
-    assignFirstProfileToUser(db, userId)
+    // Assign profile to user (phone auth doesn't have email, so only first available)
+    assignProfileToUser(db, userId, null)
     
     user = getUserById(db, userId)
   }
