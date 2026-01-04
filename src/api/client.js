@@ -82,6 +82,7 @@ class APIClient {
     
     // CRITICAL: Don't attempt refresh if no token exists
     if (!refreshToken) {
+      console.warn('[APIClient] No refresh token available, clearing auth state');
       this.clearToken();
       if (this.onAuthFailure) {
         this.onAuthFailure('Your session expired. Sign in again to continue.');
@@ -92,28 +93,44 @@ class APIClient {
     
     // Single-flight refresh: if a refresh is already in progress, await it
     if (this.refreshPromise) {
-      await this.refreshPromise;
-      // After the refresh completes, retry the original request
-      return this.fetch(originalRequest.endpoint, originalRequest.options);
+      console.log('[APIClient] Refresh already in progress, waiting...');
+      try {
+        await this.refreshPromise;
+        // After the refresh completes, retry the original request
+        console.log('[APIClient] Refresh complete, retrying original request');
+        return this.fetch(originalRequest.endpoint, originalRequest.options);
+      } catch (error) {
+        console.error('[APIClient] Refresh failed while waiting:', error.message);
+        throw error;
+      }
     }
     
     // Start a new refresh
+    console.log('[APIClient] Starting token refresh...');
     this.refreshPromise = (async () => {
       try {
         const response = await fetch(`${this.baseUrl}/api/auth/refresh`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include', // Include cookies if backend uses them
           body: JSON.stringify({ refreshToken }),
         });
         
         if (!response.ok) {
-          throw new Error('Refresh failed');
+          const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+          console.error('[APIClient] Refresh request failed:', response.status, errorData);
+          throw new Error(errorData.error || `Refresh failed with status ${response.status}`);
         }
         
         const data = await response.json();
+        console.log('[APIClient] Refresh successful, updating tokens');
+        
         if (data?.accessToken) {
           this.setToken(data.accessToken);
+        } else {
+          console.warn('[APIClient] No accessToken in refresh response');
         }
+        
         if (data?.refreshToken) {
           this.setRefreshToken(data.refreshToken);
         }
@@ -121,6 +138,7 @@ class APIClient {
         return data;
       } catch (error) {
         // Refresh failed - clear everything and notify once
+        console.error('[APIClient] Token refresh failed:', error.message);
         this.clearToken();
         if (this.onAuthFailure) {
           this.onAuthFailure('Your session expired. Sign in again to continue.');
@@ -136,6 +154,7 @@ class APIClient {
     
     await this.refreshPromise;
     // Retry the original request with new token
+    console.log('[APIClient] Retrying original request after refresh');
     return this.fetch(originalRequest.endpoint, originalRequest.options);
   }
 
@@ -143,6 +162,9 @@ class APIClient {
     const url = `${this.baseUrl}${endpoint}`;
     const token = this.getToken();
     const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+    
+    // Track if this is a retry attempt to prevent infinite loops
+    const isRetry = options._isRetry || false;
 
     const headers = {
       ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
@@ -163,7 +185,19 @@ class APIClient {
     });
 
     if (response.status === 401) {
-      return this.handleUnauthorized({ endpoint, options });
+      // Prevent infinite retry loops - only retry once
+      if (isRetry) {
+        console.error('[APIClient] Still getting 401 after refresh, giving up');
+        this.clearToken();
+        if (this.onAuthFailure) {
+          this.onAuthFailure('Your session expired. Sign in again to continue.');
+        }
+        throw this.createAuthError('Authentication failed after retry');
+      }
+      
+      // Mark the retry and handle unauthorized
+      const retryOptions = { ...options, _isRetry: true };
+      return this.handleUnauthorized({ endpoint, options: retryOptions });
     }
 
     if (!response.ok) {
