@@ -112,6 +112,11 @@ export default function Organizations() {
         }),
       })
       
+      // Validate that we got a profile ID back
+      if (!result || !result.id) {
+        throw new Error('Profile creation failed: No profile ID returned')
+      }
+      
       // If avatar file is provided, upload it
       if (formData.avatarFile && result.id) {
         const avatarFormData = new FormData()
@@ -163,10 +168,16 @@ export default function Organizations() {
       })
       
       if (!response.ok) {
-        throw new Error('Upload failed')
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `Upload failed with status ${response.status}`)
       }
       
       const result = await response.json()
+      
+      // Validate that we got a profile ID back
+      if (!result || !result.profile_id) {
+        throw new Error('Document upload succeeded but no profile ID was returned')
+      }
       
       queryClient.invalidateQueries({ queryKey: ['profiles'] })
       
@@ -175,10 +186,8 @@ export default function Organizations() {
         description: "Your form has been processed and a profile has been created.",
       })
       
-      // Navigate to the new profile if one was created
-      if (result.profile_id) {
-        navigate(createPageUrl("OrganizationProfile", { id: result.profile_id }))
-      }
+      // Navigate to the new profile
+      navigate(createPageUrl("OrganizationProfile", { id: result.profile_id }))
     } catch (error) {
       toast({
         title: "Error",

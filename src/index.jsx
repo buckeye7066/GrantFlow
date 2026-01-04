@@ -60,7 +60,7 @@ import PrintableApplication from "./PrintableApplication";
 
 import BillingSheet from "./BillingSheet";
 
-import OrganizationProfile from "./OrganizationProfile";
+import OrganizationProfile from "./pages/OrganizationProfile";
 
 import { BrowserRouter as Router, Route, Routes, useLocation } from 'react-router-dom';
 
