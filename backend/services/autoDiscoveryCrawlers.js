@@ -10,22 +10,23 @@ function checkStudentIndicators(profile) {
   
   // Check primary_type for student indicators
   const studentTypes = ['high_school_student', 'college_student', 'graduate_student', 'student']
-  if (profile.primary_type && studentTypes.some(type => 
-    profile.primary_type.toLowerCase().includes(type)
-  )) {
-    return true
+  if (profile.primary_type) {
+    const primaryTypeLower = profile.primary_type.toLowerCase()
+    if (studentTypes.some(type => primaryTypeLower.includes(type))) {
+      return true
+    }
   }
   
-  // Check tags for student indicators
+  // Check tags for student indicators (parse once)
   if (profile.tags) {
     try {
       const tags = typeof profile.tags === 'string' ? JSON.parse(profile.tags) : profile.tags
-      if (Array.isArray(tags)) {
+      if (Array.isArray(tags) && tags.length > 0) {
         const studentKeywords = ['student', 'education', 'scholarship', 'college', 'university', 'school']
-        return tags.some(tag => 
-          studentKeywords.some(keyword => 
-            tag.toLowerCase().includes(keyword)
-          )
+        // Convert tags to lowercase once for efficiency
+        const tagsLower = tags.map(tag => String(tag).toLowerCase())
+        return studentKeywords.some(keyword => 
+          tagsLower.some(tag => tag.includes(keyword))
         )
       }
     } catch (error) {
@@ -104,9 +105,10 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
     console.log(`[auto-discovery] Queued ${jobs.length} jobs for profile ${profileId}:`, jobIds)
     
     // Dispatch jobs asynchronously (fire and forget)
-    // Query the jobs we just created
+    // Query only the fields needed for dispatch
     const queuedJobs = db.prepare(`
-      SELECT * FROM crawler_jobs 
+      SELECT id, type, profile_id, parameters
+      FROM crawler_jobs 
       WHERE profile_id = ? AND status = 'queued' AND requested_by = 'auto-discovery'
       ORDER BY created_at DESC
       LIMIT ?

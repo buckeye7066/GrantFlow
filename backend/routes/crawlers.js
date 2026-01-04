@@ -1198,11 +1198,19 @@ router.patch('/jobs/:id', (req, res) => {
 
 // Get auto-discovery status for a profile
 router.get('/auto-discovery-status/:profileId', (req, res) => {
+  const auth = ensureAuth(req, res)
+  if (!auth) return
+
   try {
     const { profileId } = req.params
     
     if (!profileId) {
       return res.status(400).json({ error: 'profileId is required' })
+    }
+
+    // Non-admin users can only access their own profile's status
+    if (auth.role !== 'admin' && auth.profileId !== profileId) {
+      return res.status(403).json({ error: 'Access denied to this profile' })
     }
 
     // Count jobs created by auto-discovery for this profile
