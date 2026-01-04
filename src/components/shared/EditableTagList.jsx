@@ -4,26 +4,64 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { X, Sparkles, Loader2 } from 'lucide-react';
 
-export default function EditableTagList({ title, description, tags, onTagsChange, onSuggest, isSuggesting }) {
+export default function EditableTagList({ 
+  title = 'Tags', 
+  description = '', 
+  tags, 
+  onTagsChange, 
+  onSuggest, 
+  isSuggesting 
+}) {
   const [newTag, setNewTag] = useState('');
 
+  // Sanitize tags: filter out null, undefined, and empty strings, ensure all are strings
+  const sanitizedTags = (tags || []).filter(
+    (tag) => tag != null && typeof tag === 'string' && tag.trim() !== ''
+  );
+
+  // Safely get lowercase title with fallback
+  const safeTitle = typeof title === 'string' && title.length > 0 ? title : 'Tags';
+  const safeTitleLower = safeTitle.toLowerCase();
+  
+  // Create singular form: remove trailing 's' if present
+  const singularTitle = safeTitleLower.endsWith('s') 
+    ? safeTitleLower.slice(0, -1) 
+    : safeTitleLower;
+
   const handleAddTag = () => {
-    if (newTag.trim()) {
-      const updatedTags = [...new Set([...(tags || []), newTag.trim()])];
+    const trimmedTag = newTag.trim();
+    if (trimmedTag) {
+      // Filter existing tags to remove any invalid values, then add the new tag
+      const validExistingTags = (tags || []).filter(
+        (tag) => tag != null && typeof tag === 'string' && tag.trim() !== ''
+      );
+      const updatedTags = [...new Set([...validExistingTags, trimmedTag])];
       onTagsChange(updatedTags);
       setNewTag('');
     }
   };
 
   const handleRemoveTag = (tagToRemove) => {
-    const updatedTags = (tags || []).filter(tag => tag !== tagToRemove);
+    if (tagToRemove == null) return;
+    
+    // Filter out the tag to remove and any invalid values
+    const updatedTags = (tags || []).filter(
+      (tag) => tag != null && typeof tag === 'string' && tag.trim() !== '' && tag !== tagToRemove
+    );
     onTagsChange(updatedTags);
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleAddTag();
+    }
   };
 
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
-        <h4 className="font-semibold text-slate-800">{title}</h4>
+        <h4 className="font-semibold text-slate-800">{safeTitle}</h4>
         <Button
           variant="ghost"
           size="sm"
@@ -39,38 +77,36 @@ export default function EditableTagList({ title, description, tags, onTagsChange
           Suggest with AI
         </Button>
       </div>
-      <p className="text-sm text-slate-500 mb-4">{description}</p>
+      {description && (
+        <p className="text-sm text-slate-500 mb-4">{description}</p>
+      )}
       
       <div className="flex gap-2 mb-4">
         <Input
           value={newTag}
           onChange={(e) => setNewTag(e.target.value)}
-          onKeyPress={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              handleAddTag();
-            }
-          }}
-          placeholder={`Add a ${title.toLowerCase().slice(0, -1)}...`}
+          onKeyDown={handleKeyDown}
+          placeholder={`Add a ${singularTitle}...`}
         />
         <Button type="button" variant="outline" onClick={handleAddTag}>Add</Button>
       </div>
       
       <div className="flex flex-wrap gap-2">
-        {(tags || []).map((tag, index) => (
-          <Badge key={index} variant="secondary" className="text-base py-1 px-3">
+        {sanitizedTags.map((tag) => (
+          <Badge key={tag} variant="secondary" className="text-base py-1 px-3">
             {tag}
             <button
               type="button"
               onClick={() => handleRemoveTag(tag)}
               className="ml-2 rounded-full hover:bg-black/10 p-0.5"
+              aria-label={`Remove ${tag}`}
             >
               <X className="w-3 h-3" />
             </button>
           </Badge>
         ))}
-        {(!tags || tags.length === 0) && !isSuggesting && (
-             <p className="text-sm text-slate-400 italic">No {title.toLowerCase()} added yet.</p>
+        {sanitizedTags.length === 0 && !isSuggesting && (
+          <p className="text-sm text-slate-400 italic">No {safeTitleLower} added yet.</p>
         )}
       </div>
     </div>
