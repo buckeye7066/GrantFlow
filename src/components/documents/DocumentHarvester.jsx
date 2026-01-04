@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,61 +24,43 @@ export default function DocumentHarvester({ profileId, organizationId, onComplet
         throw new Error('Profile ID is required for document ingestion.');
       }
       const docId = Date.now(); // Unique ID for tracking
-      
-      // Add to processing list immediately
-      setProcessingDocs(prev => [...prev, {
-        id: docId,
-        name: title || file.name,
-        status: 'uploading'
-      }]);
+
+      setProcessingDocs(prev => [
+        ...prev,
+        {
+          id: docId,
+          name: title || file.name,
+          status: 'uploading',
+        },
+      ]);
 
       try {
-        const { file_uri } = await base44.integrations.Core.UploadPrivateFile({ file });
-        
-        // Update to extracting status
-        setProcessingDocs(prev => prev.map(doc => 
-          doc.id === docId ? { ...doc, status: 'extracting' } : doc
-        ));
+        setProcessingDocs(prev =>
+          prev.map(doc => (doc.id === docId ? { ...doc, status: 'extracting' } : doc)),
+        );
 
-        const extractionResult = await base44.integrations.Core.ExtractDataFromUploadedFile({
-          file_url: file_uri,
-          json_schema: {
-            type: "object",
-            properties: {
-              full_text: {
-                type: "string",
-                description: "The full, plain text content of the entire document."
-              }
-            }
-          }
-        });
-        
-        if (extractionResult.status === 'error') {
-          throw new Error(extractionResult.details || "Failed to extract data from document.");
+        const formData = new FormData();
+        formData.append('profile_id', profileId);
+        if (organizationId) {
+          formData.append('organization_id', organizationId);
         }
-        
-        const extractedText = extractionResult.output?.full_text || '';
+        formData.append('document', file);
+        formData.append('name', title || file.name);
+        formData.append('type', documentType);
 
-        setProcessingDocs(prev => prev.map(doc =>
-          doc.id === docId ? { ...doc, status: 'queuing' } : doc
-        ));
+        setProcessingDocs(prev =>
+          prev.map(doc => (doc.id === docId ? { ...doc, status: 'queuing' } : doc)),
+        );
 
-        const serverDocument = await ingestDocument({
-          profile_id: profileId,
-          organization_id: organizationId ?? null,
-          name: title || file.name,
-          type: documentType,
-          file_url: file_uri,
-          file_size: file.size,
-          mime_type: file.type,
-          extracted_text: extractedText,
-        });
+        const serverDocument = await ingestDocument(formData);
 
         return { docId, document: serverDocument };
       } catch (error) {
-        setProcessingDocs(prev => prev.map(doc => 
-          doc.id === docId ? { ...doc, status: 'failed', error: error.message } : doc
-        ));
+        setProcessingDocs(prev =>
+          prev.map(doc =>
+            doc.id === docId ? { ...doc, status: 'failed', error: error.message } : doc,
+          ),
+        );
         throw error;
       }
     },

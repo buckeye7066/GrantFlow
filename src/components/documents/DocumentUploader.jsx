@@ -1,7 +1,6 @@
 
 import React, { useState } from "react";
 import { useForm, Controller } from "react-hook-form";
-import { base44 } from "@/api/base44Client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -49,41 +48,21 @@ export default function DocumentUploader({ profileId, organizationId, onClose })
         throw new Error("Select a profile before uploading a document.");
       }
 
-      const { file_uri } = await base44.integrations.Core.UploadPrivateFile({ file });
+      const formData = new FormData();
+      formData.append("profile_id", profileId);
+      if (organizationId) {
+        formData.append("organization_id", organizationId);
+      }
+      formData.append("document", file);
+      formData.append("name", title || file.name);
+      formData.append("type", documentType);
 
-      const extractionResult = await base44.integrations.Core.ExtractDataFromUploadedFile({
-        file_url: file_uri,
-        json_schema: {
-          type: "object",
-          properties: {
-            full_text: {
-              type: "string",
-              description: "The full, plain text content of the entire document."
-            }
-          }
-        }
-      });
-
-      if (extractionResult.status === 'error') {
-        throw new Error(extractionResult.details || "Failed to extract data from document.");
+      const notesSegments = [description?.trim() || null, tags ? `Tags: ${tags}` : null].filter(Boolean);
+      if (notesSegments.length) {
+        formData.append("notes", notesSegments.join("\n"));
       }
 
-      const extractedText = extractionResult.output?.full_text ?? '';
-      const notes = [description?.trim(), tags ? `Tags: ${tags}` : null]
-        .filter(Boolean)
-        .join('\n');
-
-      return ingestDocument({
-        profile_id: profileId,
-        organization_id: organizationId ?? null,
-        name: title || file.name,
-        type: documentType,
-        file_url: file_uri,
-        file_size: file.size,
-        mime_type: file.type,
-        extracted_text: extractedText,
-        notes: notes || null,
-      });
+      return ingestDocument(formData);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['documents', profileId] });

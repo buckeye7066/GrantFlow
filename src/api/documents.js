@@ -13,9 +13,10 @@ export function listDocuments(filters = {}) {
 }
 
 export function ingestDocument(payload) {
+  const isFormData = typeof FormData !== 'undefined' && payload instanceof FormData
   return apiFetch('/api/documents/ingest', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: isFormData ? payload : JSON.stringify(payload),
   })
 }
 

@@ -2,8 +2,11 @@ import express from 'express';
 import crypto from 'crypto';
 import multer from 'multer';
 import fs from 'fs';
+import { promises as fsp } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import pdfParse from 'pdf-parse';
+import mammoth from 'mammoth';
 
 const router = express.Router();
 
@@ -28,6 +31,36 @@ const upload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 },
 });
+
+async function extractTextFromFile(filePath, mimeType) {
+  if (!filePath || !mimeType) return null;
+
+  try {
+    if (mimeType === 'application/pdf') {
+      const buffer = await fsp.readFile(filePath);
+      const result = await pdfParse(buffer);
+      const text = result?.text?.trim();
+      return text && text.length > 0 ? text : null;
+    }
+
+    if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+      const buffer = await fsp.readFile(filePath);
+      const { value } = await mammoth.extractRawText({ buffer });
+      const text = value?.trim();
+      return text && text.length > 0 ? text : null;
+    }
+
+    if (mimeType === 'text/plain') {
+      const buffer = await fsp.readFile(filePath, 'utf8');
+      const text = buffer?.toString()?.trim();
+      return text && text.length > 0 ? text : null;
+    }
+  } catch (error) {
+    console.warn('Document text extraction failed', { filePath, mimeType, error });
+  }
+
+  return null;
+}
 
 router.get('/', (req, res) => {
   try {
@@ -125,7 +158,7 @@ router.post('/', (req, res) => {
   }
 });
 
-router.post('/ingest', upload.single('document'), (req, res) => {
+router.post('/ingest', upload.single('document'), async (req, res) => {
   try {
     const {
       profile_id: rawProfileId,
@@ -141,7 +174,7 @@ router.post('/ingest', upload.single('document'), (req, res) => {
     } = req.body ?? {};
 
     const file = req.file;
-    if (!file) {
+    if (!file && !rawExtractedText && !req.body?.file_url) {
       return res.status(400).json({ error: 'document file is required' });
     }
 
@@ -149,7 +182,6 @@ router.post('/ingest', upload.single('document'), (req, res) => {
     const grant_id = rawGrantId || null;
     const type = rawType || null;
     const notes = rawNotes || null;
-    const extracted_text = rawExtractedText || null;
 
     let profileId = rawProfileId || null;
     let createdProfile = null;
@@ -184,9 +216,15 @@ router.post('/ingest', upload.single('document'), (req, res) => {
       createdProfile = req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId);
     }
 
-    const storedFilePath = file.path;
-    const publicUrl = `/uploads/${file.filename}`;
-    const docName = (rawName || file.originalname || 'Uploaded Document').trim();
+    const storedFilePath = file ? file.path : null;
+    const publicUrl = file ? `/uploads/${file.filename}` : (req.body?.file_url ?? null);
+    const inferredFileName = file?.originalname || req.body?.file_name || rawName || 'Uploaded Document';
+    const docName = inferredFileName.trim();
+
+    let extracted_text = rawExtractedText || null;
+    if (!extracted_text && storedFilePath && file?.mimetype) {
+      extracted_text = await extractTextFromFile(storedFilePath, file.mimetype);
+    }
 
     const id = crypto.randomUUID();
     req.db
