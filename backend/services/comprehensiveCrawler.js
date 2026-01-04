@@ -48,10 +48,11 @@ export function processComprehensiveCrawlerJob({ db, job, dataDir, profileContex
   }
 
   if (!Array.isArray(zipList) || zipList.length === 0) {
+    // Default to ALL zip codes for nationwide coverage unless a specific limit is provided
     const fallbackLimit = Math.max(
       1,
       Math.min(
-        Number(parameters.fallback_zip_limit ?? 100),
+        Number(parameters.fallback_zip_limit ?? Object.keys(zipCoordinates).length),
         Object.keys(zipCoordinates).length,
       ),
     )
@@ -60,7 +61,7 @@ export function processComprehensiveCrawlerJob({ db, job, dataDir, profileContex
       .map((zip) => zip.trim())
       .filter(Boolean)
     console.warn(
-      `[comprehensive-crawler] No ZIP list provided or derived; defaulting to ${zipList.length} fallback ZIPs.`,
+      `[comprehensive-crawler] No ZIP list provided or derived; defaulting to ${zipList.length} fallback ZIPs for nationwide coverage.`,
     )
   }
 
@@ -73,8 +74,9 @@ export function processComprehensiveCrawlerJob({ db, job, dataDir, profileContex
   )
 
   if (zipList.length === 0) {
+    // Fallback to all valid 5-digit US zip codes for nationwide coverage
     zipList = Object.keys(zipCoordinates)
-      .slice(0, Math.max(1, Number(parameters.fallback_zip_limit ?? 100)))
+      .slice(0, Math.max(1, Number(parameters.fallback_zip_limit ?? Object.keys(zipCoordinates).length)))
       .filter((value) => /^\d{5}$/.test(value))
   }
 
