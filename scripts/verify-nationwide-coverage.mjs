@@ -15,6 +15,9 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const projectRoot = path.resolve(__dirname, '..')
 
+// Test configuration
+const TEST_ZIP_LIMIT = 1000 // Number of zip codes to test for verification
+
 function main() {
   const dbPath = path.resolve(projectRoot, 'backend', 'data', 'grantflow.db')
   const dataDir = path.resolve(projectRoot, 'backend', 'data', 'crawlers')
@@ -51,7 +54,7 @@ function main() {
       id: 'test-default',
       type: 'comprehensive',
       parameters: {
-        fallback_zip_limit: 1000, // Use 1000 for testing to verify the change works
+        fallback_zip_limit: TEST_ZIP_LIMIT, // Use TEST_ZIP_LIMIT for testing to verify the change works
       },
     }
 
@@ -66,11 +69,11 @@ function main() {
     console.log(`✓ Evaluated ${result1.evaluated} opportunities`)
     console.log(`✓ Inserted ${result1.inserted} new opportunities`)
     
-    if (result1.zipsProcessed !== 1000) {
-      console.error(`✗ FAILED: Expected to process 1000 zip codes, but processed ${result1.zipsProcessed}`)
+    if (result1.zipsProcessed !== TEST_ZIP_LIMIT) {
+      console.error(`✗ FAILED: Expected to process ${TEST_ZIP_LIMIT} zip codes, but processed ${result1.zipsProcessed}`)
       process.exitCode = 1
     } else {
-      console.log(`✓ PASSED: Able to process 1000+ zip codes (nationwide coverage enabled)`)
+      console.log(`✓ PASSED: Able to process ${TEST_ZIP_LIMIT}+ zip codes (nationwide coverage enabled)`)
     }
     console.log('')
 
@@ -157,7 +160,7 @@ function main() {
     console.log('=== Summary ===')
     console.log(`Total US zip codes available: ${usZipCodes.length}`)
     console.log(`Default processing: ${result1.zipsProcessed} zip codes`)
-    console.log(`Nationwide coverage: ${result1.zipsProcessed >= 1000 ? '✓ ENABLED' : '✗ LIMITED'}`)
+    console.log(`Nationwide coverage: ${result1.zipsProcessed >= TEST_ZIP_LIMIT ? '✓ ENABLED' : '✗ LIMITED'}`)
     
     if (process.exitCode !== 1) {
       console.log('\n✓ All tests passed! Nationwide zip code coverage is working correctly.')

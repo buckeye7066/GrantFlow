@@ -28,6 +28,7 @@ export function processComprehensiveCrawlerJob({ db, job, dataDir, profileContex
   }
 
   const zipCoordinates = loadJSON(join(dataDir, 'zip_coordinates.json'))
+  const totalZipCount = Object.keys(zipCoordinates).length
 
   let zipList = parameters.zip_list
   if (typeof zipList === 'string') {
@@ -52,8 +53,8 @@ export function processComprehensiveCrawlerJob({ db, job, dataDir, profileContex
     const fallbackLimit = Math.max(
       1,
       Math.min(
-        Number(parameters.fallback_zip_limit ?? Object.keys(zipCoordinates).length),
-        Object.keys(zipCoordinates).length,
+        Number(parameters.fallback_zip_limit ?? totalZipCount),
+        totalZipCount,
       ),
     )
     zipList = Object.keys(zipCoordinates)
@@ -76,7 +77,7 @@ export function processComprehensiveCrawlerJob({ db, job, dataDir, profileContex
   if (zipList.length === 0) {
     // Fallback to all valid 5-digit US zip codes for nationwide coverage
     zipList = Object.keys(zipCoordinates)
-      .slice(0, Math.max(1, Number(parameters.fallback_zip_limit ?? Object.keys(zipCoordinates).length)))
+      .slice(0, Math.max(1, Number(parameters.fallback_zip_limit ?? totalZipCount)))
       .filter((value) => /^\d{5}$/.test(value))
   }
 
