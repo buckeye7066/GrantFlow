@@ -10,6 +10,10 @@ import OpenAI from 'openai';
 
 const router = express.Router();
 
+// Configuration constants
+const MAX_TEXT_LENGTH_FOR_AI = 10000; // Maximum characters to send to OpenAI
+const AI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini'; // Configurable AI model
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const uploadDir = join(__dirname, '..', 'uploads');
@@ -107,28 +111,13 @@ Return your response as a JSON object with the following structure:
 Only include fields where you have found information. If a field is not found in the document, omit it from the JSON.
 Be conservative - only include information you are confident about from the document text.`;
 
-// Admin middleware to verify admin access
-function requireAdmin(req, res, next) {
-  const user = req.user;
-  
-  // Check if user is authenticated and is admin
-  if (!user || user.role !== 'admin') {
-    return res.status(403).json({ 
-      error: 'Access denied',
-      message: 'This endpoint is restricted to administrators only' 
-    });
-  }
-  
-  next();
-}
-
 // POST /api/admin/upload-profile-document
 // Upload a PDF document, extract text, use AI to parse it, and create a profile
 router.post('/upload-profile-document', upload.single('document'), async (req, res) => {
   try {
-    // Check admin access
+    // Check admin access - must match frontend's user.is_admin check
     const user = req.user;
-    if (!user || user.role !== 'admin') {
+    if (!user || !user.is_admin) {
       // Clean up uploaded file
       if (req.file) {
         try {
@@ -170,7 +159,7 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
     // Step 2: Use OpenAI to extract structured profile information
     const openai = getOpenAI();
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: AI_MODEL,
       messages: [
         {
           role: 'system',
@@ -178,7 +167,7 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
         },
         {
           role: 'user',
-          content: `Extract profile information from this document:\n\n${extractedText.slice(0, 10000)}`, // Limit to 10k chars
+          content: `Extract profile information from this document:\n\n${extractedText.slice(0, MAX_TEXT_LENGTH_FOR_AI)}`,
         },
       ],
       response_format: { type: 'json_object' },

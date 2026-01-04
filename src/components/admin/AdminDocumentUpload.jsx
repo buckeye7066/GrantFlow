@@ -31,9 +31,6 @@ export default function AdminDocumentUpload() {
       const response = await apiFetch('/api/admin/upload-profile-document', {
         method: 'POST',
         body: formData,
-        headers: {
-          // Don't set Content-Type - browser will set it with boundary for FormData
-        },
       });
 
       return response;

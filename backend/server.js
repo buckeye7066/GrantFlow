@@ -262,6 +262,7 @@ app.use((req, res, next) => {
           ) {
             user = {
               role: sessionRow.is_admin ? 'admin' : 'user',
+              is_admin: Boolean(sessionRow.is_admin), // Add is_admin flag for consistency
               userId: sessionRow.user_id,
               profileId: payload.profile_id ?? sessionRow.profile_id ?? null,
               sessionId: sessionRow.id,
@@ -277,7 +278,7 @@ app.use((req, res, next) => {
     }
 
     if (!handled && token && ADMIN_TOKEN && token === ADMIN_TOKEN) {
-      user = { role: 'admin', full_name: ADMIN_NAME, email: ADMIN_EMAIL };
+      user = { role: 'admin', is_admin: true, full_name: ADMIN_NAME, email: ADMIN_EMAIL };
       handled = true;
     }
 
