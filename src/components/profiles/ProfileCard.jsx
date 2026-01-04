@@ -56,9 +56,16 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete }) {
   // Check if this is an orphaned profile (no organization_id or invalid reference)
   const isOrphanedProfile = !profile.organization_id;
   
+  // Build card className
+  const cardClassName = [
+    'hover:shadow-lg transition-shadow border-0 shadow-md',
+    !isOrphanedProfile && 'cursor-pointer',
+    isOrphanedProfile && 'border-2 border-orange-300'
+  ].filter(Boolean).join(' ');
+  
   return (
     <Card 
-      className={`hover:shadow-lg transition-shadow ${!isOrphanedProfile ? 'cursor-pointer' : ''} border-0 shadow-md ${isOrphanedProfile ? 'border-2 border-orange-300' : ''}`}
+      className={cardClassName}
       onClick={isOrphanedProfile ? undefined : handleCardClick}
     >
       <CardHeader className="border-b border-slate-100">

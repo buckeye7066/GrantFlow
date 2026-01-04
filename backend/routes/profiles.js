@@ -325,11 +325,7 @@ router.delete('/:id', (req, res) => {
 
   // Delete the profile (CASCADE will handle related records)
   const stmt = req.db.prepare('DELETE FROM profiles WHERE id = ?')
-  const result = stmt.run(id)
-  
-  if (result.changes === 0) {
-    return res.status(404).json({ error: 'Profile not found' })
-  }
+  stmt.run(id)
 
   // Clean up avatar file if it exists
   if (existing.avatar_url && existing.avatar_url.startsWith('/uploads/')) {

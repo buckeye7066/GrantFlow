@@ -18,6 +18,10 @@ import { useToast } from "@/components/ui/use-toast";
 import ProfileCard from "@/components/profiles/ProfileCard";
 import { createPageUrl } from "@/utils";
 
+// Deletion confirmation message
+const DELETE_CONFIRMATION_MESSAGE = 
+  "Are you sure you want to delete this profile? This action cannot be undone and will remove all associated data including sections, documents, and billing information.";
+
 export default function MyProfiles() {
   const [searchTerm, setSearchTerm] = useState("");
   const [profileToDelete, setProfileToDelete] = useState(null);
@@ -190,8 +194,7 @@ export default function MyProfiles() {
             <AlertDialogHeader>
               <AlertDialogTitle>Delete Profile</AlertDialogTitle>
               <AlertDialogDescription>
-                Are you sure you want to delete the profile "{profileToDelete?.display_name}"? 
-                This action cannot be undone and will remove all associated data including sections, documents, and billing information.
+                {DELETE_CONFIRMATION_MESSAGE.replace('this profile', `the profile "${profileToDelete?.display_name}"`)}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
