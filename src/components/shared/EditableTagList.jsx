@@ -92,8 +92,8 @@ export default function EditableTagList({
       </div>
       
       <div className="flex flex-wrap gap-2">
-        {sanitizedTags.map((tag, index) => (
-          <Badge key={`${tag}-${index}`} variant="secondary" className="text-base py-1 px-3">
+        {sanitizedTags.map((tag) => (
+          <Badge key={tag} variant="secondary" className="text-base py-1 px-3">
             {tag}
             <button
               type="button"
