@@ -7,6 +7,7 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import pdfParse from 'pdf-parse';
 import mammoth from 'mammoth';
+import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
 
 const router = express.Router();
 
@@ -217,6 +218,8 @@ router.post('/ingest', upload.single('document'), async (req, res) => {
       profileId = generatedProfileId;
       createdProfile = req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId);
     }
+
+    linkProfileToAdmin(req.db, profileId);
 
     const storedFilePath = file ? file.path : null;
     const publicUrl = file ? `/uploads/${file.filename}` : (req.body?.file_url ?? null);

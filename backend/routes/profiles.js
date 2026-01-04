@@ -8,6 +8,7 @@ import { buildProfileSectionPrompt, supportedSectionKeys } from '../prompts/prof
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
 import { ensureBillingAccount, mapAccountRow } from '../services/billingAccounts.js'
 import { extractCompletionText } from '../utils/openai.js'
+import { linkProfileToAdmin } from '../utils/adminProfileLinks.js'
 
 const router = express.Router()
 
@@ -199,7 +200,11 @@ router.post('/', (req, res) => {
   )
 
   const row = req.db.prepare(`${profileSelect} WHERE p.rowid = ?`).get(info.lastInsertRowid)
-  res.status(201).json(mapProfile(row))
+  if (row?.id) {
+    linkProfileToAdmin(req.db, row.id)
+  }
+  const refreshed = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(row.id)
+  res.status(201).json(mapProfile(refreshed))
 })
 
 router.get('/:id', (req, res) => {

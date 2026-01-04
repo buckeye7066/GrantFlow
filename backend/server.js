@@ -24,6 +24,7 @@ import preferencesRouter from './routes/preferences.js';
 import jwt from 'jsonwebtoken';
 import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
+import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null;
 const ADMIN_NAME = process.env.ADMIN_NAME || 'Admin User';
@@ -223,6 +224,7 @@ function ensureCrawlerJobsSupportsProfileEnrichment() {
 
 ensureCrawlerJobsSupportsProfileEnrichment()
 ensureDesignatedProfiles(db)
+linkAllProfilesToAdmin(db)
 ensureUserPreferencesTable(db)
 
 const JWT_SECRET = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret';

@@ -8,8 +8,9 @@ import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { sendVerificationEmail } from '../services/email.js'
 import { initializeAnyaForAdmin } from '../services/anyaLoginTrigger.js'
-import { getDesignatedProfileForEmail, hasDesignatedProfile } from '../config/userProfileMappings.js'
+import { getDesignatedProfileForEmail } from '../config/userProfileMappings.js'
 import { ADMIN_EMAIL, isAdminEmail } from '../config/constants.js'
+import { ensureAdminUser, isAdminUserId } from '../utils/adminProfileLinks.js'
 import { triggerAutoDiscoveryCrawlers } from '../services/autoDiscoveryCrawlers.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -365,30 +366,33 @@ function buildUserPayload(userRow, profiles, activeProfileId) {
 }
 
 function assignProfileToUser(db, userId, email) {
-  // Check if this user has a designated profile based on their email
+  if (email && isAdminEmail(email)) {
+    ensureAdminUser(db)
+    return null
+  }
+
   if (email) {
     const designatedProfileId = getDesignatedProfileForEmail(email)
     if (designatedProfileId) {
-      // Assign the designated profile to this user
       const designatedProfile = db.prepare('SELECT id, user_id FROM profiles WHERE id = ?').get(designatedProfileId)
       if (designatedProfile) {
-        if (!designatedProfile.user_id) {
+        if (!designatedProfile.user_id || designatedProfile.user_id === userId) {
           db.prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(userId, designatedProfileId)
           console.log(`[auth] Assigned designated profile ${designatedProfileId} to user ${userId} (${email})`)
           return designatedProfileId
-        } else if (designatedProfile.user_id === userId) {
-          console.log(`[auth] User ${userId} already linked to designated profile ${designatedProfileId}`)
-          return designatedProfileId
-        } else {
-          console.warn(`[auth] Designated profile ${designatedProfileId} already linked to another user`)
         }
-      } else {
-        console.warn(`[auth] Designated profile ${designatedProfileId} not found for ${email}`)
+        if (isAdminUserId(db, designatedProfile.user_id)) {
+          db.prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(userId, designatedProfileId)
+          console.log(`[auth] Reassigned designated profile ${designatedProfileId} from admin to user ${userId} (${email})`)
+          return designatedProfileId
+        }
+        console.warn(`[auth] Designated profile ${designatedProfileId} already linked to another user`)
+        return designatedProfileId
       }
+      console.warn(`[auth] Designated profile ${designatedProfileId} not found for ${email}`)
     }
   }
   
-  // Fall back to assigning first available profile if no designated profile
   const firstProfile = db.prepare('SELECT id FROM profiles WHERE user_id IS NULL ORDER BY created_at ASC LIMIT 1').get()
   if (firstProfile) {
     db.prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(userId, firstProfile.id)
