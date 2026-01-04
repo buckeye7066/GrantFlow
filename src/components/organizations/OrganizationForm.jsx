@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from "react";
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { base44 } from "@/api/base44Client";
@@ -13,7 +12,6 @@ import { X, Building2, GraduationCap, Heart, Sparkles, ImagePlus, Loader2, Wand2
 import MultiSelectCombobox from "../shared/MultiSelectCombobox";
 import AIFormField from "../shared/AIFormField";
 import { useToast } from '@/components/ui/use-toast';
-import DocumentHarvester from "@/components/documents/DocumentHarvester";
 import { listBillingTiers } from "@/api/billing";
 
 const US_STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
@@ -2642,23 +2640,6 @@ DRAFT for "special circumstances":`}
           </div>
         </CardContent>
       </Card>
-
-      {organization && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="w-5 h-5" />
-              Document Upload & AI Harvesting
-            </CardTitle>
-            <CardDescription>
-              Upload documents to automatically extract profile information using AI
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <DocumentHarvester profileId={organization.id} organizationId={organization.id} />
-          </CardContent>
-        </Card>
-      )}
 
       <div className="flex justify-end gap-3 pt-8 border-t">
         <Button type="button" variant="outline" onClick={onCancel} disabled={isSubmitting}>

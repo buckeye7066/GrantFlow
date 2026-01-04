@@ -4,8 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, FolderOpen, Loader2, Building2, UploadCloud } from "lucide-react";
-import DocumentUploader from "../components/documents/DocumentUploader";
+import { FolderOpen, Loader2, Building2 } from "lucide-react";
 import DocumentItem from "../components/documents/DocumentItem";
 import {
   AlertDialog,
@@ -19,7 +18,6 @@ import {
 } from "@/components/ui/alert-dialog";
 
 export default function Documents() {
-  const [showUploader, setShowUploader] = useState(false);
   const [selectedOrgId, setSelectedOrgId] = useState(null);
   const [deletingDoc, setDeletingDoc] = useState(null);
   const queryClient = useQueryClient();
@@ -76,23 +74,8 @@ export default function Documents() {
                 </SelectContent>
               </Select>
             )}
-            <Button
-              onClick={() => setShowUploader(true)}
-              disabled={!selectedOrgId}
-              className="bg-blue-600 hover:bg-blue-700"
-            >
-              <UploadCloud className="w-4 h-4 mr-2" />
-              Upload Document
-            </Button>
           </div>
         </div>
-
-        {showUploader && (
-          <DocumentUploader
-            organizationId={selectedOrgId}
-            onClose={() => setShowUploader(false)}
-          />
-        )}
 
         <Card className="shadow-lg border-0">
           <CardHeader>
@@ -112,13 +95,7 @@ export default function Documents() {
                 {!selectedOrgId ? (
                   <p>Please select an organization to view or add documents.</p>
                 ) : (
-                  <>
-                    <p className="mb-4">Get started by uploading your first document for this profile.</p>
-                    <Button onClick={() => setShowUploader(true)}>
-                      <UploadCloud className="w-4 h-4 mr-2" />
-                      Upload First Document
-                    </Button>
-                  </>
+                  <p className="mb-4">No documents available for this organization.</p>
                 )}
               </div>
             ) : (

@@ -5,8 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { FolderOpen, Loader2, Sparkles, UploadCloud, UserCircle2 } from "lucide-react";
-import DocumentUploader from "../components/documents/DocumentUploader";
+import { FolderOpen, Loader2, Sparkles, UserCircle2 } from "lucide-react";
 import DocumentItem from "../components/documents/DocumentItem";
 import {
   AlertDialog,
@@ -26,7 +25,6 @@ import { listDocuments, deleteDocument } from "@/api/documents";
 import { listCrawlerJobs, triggerProfileEnrichment } from "@/api/crawlers";
 
 export default function Documents() {
-  const [showUploader, setShowUploader] = useState(false);
   const [selectedProfileId, setSelectedProfileId] = useState(null);
   const [deletingDoc, setDeletingDoc] = useState(null);
   const queryClient = useQueryClient();
@@ -198,14 +196,6 @@ const latestDuration = describeDuration(latestEnrichmentJob)
               </Select>
             )}
             <Button
-              onClick={() => setShowUploader(true)}
-              disabled={!selectedProfileId}
-              className="bg-blue-600 hover:bg-blue-700"
-            >
-              <UploadCloud className="w-4 h-4 mr-2" />
-              Upload Document
-            </Button>
-            <Button
               variant="outline"
               onClick={() => enrichmentMutation.mutate()}
               disabled={!selectedProfileId || enrichmentBusy}
@@ -331,14 +321,6 @@ const latestDuration = describeDuration(latestEnrichmentJob)
           </Card>
         ) : null}
 
-        {showUploader && selectedProfileId && (
-          <DocumentUploader
-            profileId={selectedProfileId}
-            organizationId={selectedProfile?.organization_id ?? null}
-            onClose={() => setShowUploader(false)}
-          />
-        )}
-
         <Card className="shadow-lg border-0">
           <CardHeader>
             <CardTitle>
@@ -357,13 +339,7 @@ const latestDuration = describeDuration(latestEnrichmentJob)
                 {!selectedProfileId ? (
                   <p>Select a profile to view or add documents.</p>
                 ) : (
-                  <>
-                    <p className="mb-4">Upload a document and we’ll enrich the profile automatically.</p>
-                    <Button onClick={() => setShowUploader(true)}>
-                      <UploadCloud className="w-4 h-4 mr-2" />
-                      Upload First Document
-                    </Button>
-                  </>
+                  <p className="mb-4">No documents available for this profile.</p>
                 )}
               </div>
             ) : (
