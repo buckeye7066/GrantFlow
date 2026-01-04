@@ -76,6 +76,8 @@ import OrganizationProfile from "./OrganizationProfile";
 
 import FundingOpportunities from "./FundingOpportunities";
 
+import Pricing from "./Pricing";
+
 import Settings from "./Settings";
 
 import Login from "./Login";
@@ -184,6 +186,8 @@ const PAGES = {
     BillingSheet: BillingSheet,
     
     OrganizationProfile: OrganizationProfile,
+    
+    Pricing: Pricing,
     
     Settings: Settings,
     

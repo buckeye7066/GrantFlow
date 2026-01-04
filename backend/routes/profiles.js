@@ -603,4 +603,32 @@ router.post('/:id/sections/:sectionKey/ai', async (req, res) => {
   }
 })
 
+// Send application email (for draft applications or completed profiles)
+router.post('/send-application-email', async (req, res) => {
+  try {
+    const { toEmail = 'dr.johnwhite@axiombiolabs.org', applicationData } = req.body
+
+    // Import email service
+    const { sendApplicationEmail } = await import('../services/email.js')
+
+    // Send the email
+    const sent = await sendApplicationEmail(toEmail, applicationData)
+
+    if (!sent) {
+      return res.status(500).json({ 
+        error: 'Email service not configured or failed to send',
+        message: 'Please check email service configuration'
+      })
+    }
+
+    res.json({ 
+      success: true,
+      message: `Application sent to ${toEmail}` 
+    })
+  } catch (error) {
+    console.error('Error sending application email:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 export default router

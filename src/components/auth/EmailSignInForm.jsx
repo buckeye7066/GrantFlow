@@ -113,7 +113,7 @@ export default function EmailSignInForm({ onComplete }) {
       {step === 'email' ? (
         <form onSubmit={handleSendCode} className="space-y-4" noValidate>
           <div className="space-y-2">
-            <Label htmlFor="auth-email">Work email</Label>
+            <Label htmlFor="auth-email">Profile email</Label>
             <Input
               id="auth-email"
               type="email"

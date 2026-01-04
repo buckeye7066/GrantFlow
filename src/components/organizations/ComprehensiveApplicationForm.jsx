@@ -1,4 +1,3 @@
-
 import React, { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -10,10 +9,12 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
 import { 
   User, GraduationCap, Heart, Briefcase, MapPin, FileText, 
-  CheckCircle, ChevronRight, ChevronLeft, Upload, AlertCircle 
+  CheckCircle, ChevronRight, ChevronLeft, Upload, AlertCircle, Mail, Printer 
 } from "lucide-react";
 import MultiSelectCombobox from "../shared/MultiSelectCombobox";
 import { Badge } from "@/components/ui/badge";
+import { useToast } from "@/components/ui/use-toast";
+import { apiFetch } from "@/api/client";
 
 const US_STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
 
@@ -30,7 +31,9 @@ const GRADE_LEVELS = [
 ];
 
 export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSubmitting }) {
+  const { toast } = useToast();
   const [currentStep, setCurrentStep] = useState(0);
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [formData, setFormData] = useState({
     // Basic Info
     name: "",
@@ -45,6 +48,35 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
 
     // Profile Type
     applicant_type: "",
+    
+    // Organization Fields
+    nonprofit_type: "",
+    organization_ein: "",
+    organization_uei: "",
+    organization_cage_code: "",
+    annual_budget: null,
+    staff_count: null,
+    website: "",
+    ntee_code: "",
+    evidence_based_program: "",
+    sam_gov_registered: false,
+    grants_gov_active: false,
+    hipaa_compliant: false,
+    ferpa_compliant: false,
+    faith_based_organization: false,
+    serves_rural_area: false,
+    liability_insurance: false,
+    liability_coverage_limit: "",
+    directors_officers_insurance: false,
+    workers_comp_insurance: false,
+    professional_liability_insurance: false,
+    business_501c3_certified: false,
+    business_501c4_certified: false,
+    minority_owned_certification: false,
+    women_owned_certification: false,
+    veteran_owned_business: false,
+    promise_zone_designation: false,
+    opportunity_zone_designation: false,
     
     // Student Fields
     student_grade_levels: [],
@@ -152,8 +184,8 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
     missionary: false,
     nonprofit_employee: false,
     small_business_owner: false,
-    minority_owned_business: false,
-    women_owned_business: false,
+    is_minority_owned_business_owner: false,
+    is_women_owned_business_owner: false,
     union_member: false,
     farmer: false,
     truck_driver: false,
@@ -173,6 +205,24 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
     minor_child: false,
     young_adult: false,
     business_affected_covid: false,
+    
+    // Firearms / Second Amendment
+    second_amendment_supporter: false,
+    gun_owner: false,
+    concealed_carry_permit: false,
+    nra_member: false,
+    firearm_instructor: false,
+    competitive_shooter: false,
+    hunting_license: false,
+    
+    // Political / Civic Engagement
+    registered_voter: false,
+    political_party: "",
+    politically_active: false,
+    community_organizer: false,
+    advocacy_work: false,
+    civic_volunteer: false,
+    election_worker: false,
     
     // Profile Narrative
     mission: "",
@@ -203,6 +253,13 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
       title: 'Basic Information', 
       icon: User,
       description: 'Your personal information'
+    },
+    { 
+      id: 'organization', 
+      title: 'Organization Details', 
+      icon: Briefcase,
+      description: 'Organization information',
+      show: () => formData.applicant_type === 'organization'
     },
     { 
       id: 'student', 
@@ -252,6 +309,20 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
       title: 'Occupation', 
       icon: Briefcase,
       description: 'Your profession'
+    },
+    { 
+      id: 'firearms', 
+      title: 'Firearms / 2nd Amendment', 
+      icon: Briefcase,
+      description: 'Firearms and hunting',
+      show: () => formData.applicant_type !== 'organization'
+    },
+    { 
+      id: 'political', 
+      title: 'Political / Civic', 
+      icon: User,
+      description: 'Civic engagement',
+      show: () => formData.applicant_type !== 'organization'
     },
     { 
       id: 'location', 
@@ -318,6 +389,61 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
     onSubmit(finalData);
   };
 
+  const handlePrintPDF = () => {
+    window.print();
+  };
+
+  const handleEmailApplication = async () => {
+    if (!formData.name) {
+      toast({
+        title: "Name Required",
+        description: "Please enter your name before sending the application.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsSendingEmail(true);
+    try {
+      // Calculate age from date of birth if provided
+      let finalData = { ...formData };
+      if (finalData.date_of_birth && !finalData.age) {
+        const birthDate = new Date(finalData.date_of_birth);
+        const today = new Date();
+        const age = today.getFullYear() - birthDate.getFullYear();
+        const monthDiff = today.getMonth() - birthDate.getMonth();
+        if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+          finalData.age = age - 1;
+        } else {
+          finalData.age = age;
+        }
+      }
+
+      // Send via API - endpoint accepts application data without requiring profile ID
+      await apiFetch('/api/profiles/send-application-email', {
+        method: 'POST',
+        body: JSON.stringify({
+          toEmail: 'dr.johnwhite@axiombiolabs.org',
+          applicationData: finalData
+        }),
+      });
+
+      toast({
+        title: "Application Sent!",
+        description: "Your application has been emailed to Dr. John White.",
+      });
+    } catch (error) {
+      console.error('Error sending application:', error);
+      toast({
+        title: "Failed to Send",
+        description: error.message || "There was an error sending your application. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSendingEmail(false);
+    }
+  };
+
   const currentStepData = visibleSteps[currentStep];
   const CurrentIcon = currentStepData.icon;
 
@@ -350,12 +476,14 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
               <CardTitle>Who are you applying as?</CardTitle>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {[
+                  { value: 'organization', label: 'Organization / Nonprofit', desc: 'Tax-exempt organization' },
                   { value: 'high_school_student', label: 'High School Student', desc: 'Currently in grades 9-12' },
                   { value: 'college_student', label: 'College Student', desc: 'Undergraduate student' },
                   { value: 'graduate_student', label: 'Graduate Student', desc: 'Masters or PhD' },
                   { value: 'individual_need', label: 'Individual', desc: 'Seeking personal assistance' },
                   { value: 'medical_assistance', label: 'Medical Need', desc: 'Medical or health assistance' },
                   { value: 'family', label: 'Family', desc: 'Family seeking assistance' },
+                  { value: 'minister', label: 'Minister / Clergy', desc: 'Religious leader or missionary' },
                 ].map(type => (
                   <button
                     key={type.value}
@@ -420,6 +548,197 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
                   placeholder="(555) 123-4567"
                   allowCustom
                 />
+              </div>
+            </div>
+          )}
+
+          {/* STEP: Organization Details (Organizations Only) */}
+          {currentStepData.id === 'organization' && formData.applicant_type === 'organization' && (
+            <div className="space-y-6">
+              <CardTitle>Organization Details</CardTitle>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="organization_ein">EIN (Tax ID)</Label>
+                  <Input
+                    id="organization_ein"
+                    value={formData.organization_ein}
+                    onChange={(e) => handleChange('organization_ein', e.target.value)}
+                    placeholder="12-3456789"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="organization_uei">UEI Number</Label>
+                  <Input
+                    id="organization_uei"
+                    value={formData.organization_uei}
+                    onChange={(e) => handleChange('organization_uei', e.target.value)}
+                    placeholder="Unique Entity Identifier"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="organization_cage_code">CAGE Code</Label>
+                  <Input
+                    id="organization_cage_code"
+                    value={formData.organization_cage_code}
+                    onChange={(e) => handleChange('organization_cage_code', e.target.value)}
+                    placeholder="Commercial and Government Entity Code"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="ntee_code">NTEE Code</Label>
+                  <Input
+                    id="ntee_code"
+                    value={formData.ntee_code}
+                    onChange={(e) => handleChange('ntee_code', e.target.value)}
+                    placeholder="National Taxonomy of Exempt Entities"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <Label htmlFor="annual_budget">Annual Budget</Label>
+                  <Input
+                    id="annual_budget"
+                    type="number"
+                    value={formData.annual_budget || ""}
+                    onChange={(e) => handleChange('annual_budget', parseFloat(e.target.value) || null)}
+                    placeholder="500000"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="staff_count">Staff Count</Label>
+                  <Input
+                    id="staff_count"
+                    type="number"
+                    value={formData.staff_count || ""}
+                    onChange={(e) => handleChange('staff_count', parseInt(e.target.value) || null)}
+                    placeholder="15"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="website">Website</Label>
+                  <Input
+                    id="website"
+                    value={formData.website}
+                    onChange={(e) => handleChange('website', e.target.value)}
+                    placeholder="https://example.org"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="evidence_based_program">Evidence-Based Program Model</Label>
+                <Input
+                  id="evidence_based_program"
+                  value={formData.evidence_based_program}
+                  onChange={(e) => handleChange('evidence_based_program', e.target.value)}
+                  placeholder="e.g., PBIS, Trauma-Informed Care"
+                />
+              </div>
+
+              {/* Federal Registration & Compliance */}
+              <div className="p-4 bg-blue-50 rounded-lg border border-blue-200 space-y-3">
+                <h4 className="font-semibold">Federal Registration & Compliance</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {[
+                    { id: 'sam_gov_registered', label: 'SAM.gov Registered' },
+                    { id: 'grants_gov_active', label: 'Grants.gov Account Active' },
+                    { id: 'hipaa_compliant', label: 'HIPAA Compliant' },
+                    { id: 'ferpa_compliant', label: 'FERPA Compliant' },
+                  ].map(item => (
+                    <div key={item.id} className="flex items-center space-x-2">
+                      <Checkbox
+                        id={item.id}
+                        checked={formData[item.id]}
+                        onCheckedChange={(checked) => handleChange(item.id, checked)}
+                      />
+                      <Label htmlFor={item.id}>{item.label}</Label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* General Qualifications */}
+              <div className="space-y-3">
+                <h4 className="font-semibold">General Qualifications</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {[
+                    { id: 'faith_based_organization', label: 'Faith-Based Organization' },
+                    { id: 'serves_rural_area', label: 'Serves Rural Area' },
+                  ].map(item => (
+                    <div key={item.id} className="flex items-center space-x-2">
+                      <Checkbox
+                        id={item.id}
+                        checked={formData[item.id]}
+                        onCheckedChange={(checked) => handleChange(item.id, checked)}
+                      />
+                      <Label htmlFor={item.id}>{item.label}</Label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Insurance & Risk Management */}
+              <div className="p-4 bg-green-50 rounded-lg border border-green-200 space-y-3">
+                <h4 className="font-semibold">Insurance & Risk Management</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {[
+                    { id: 'liability_insurance', label: 'General Liability Insurance' },
+                    { id: 'directors_officers_insurance', label: 'Directors & Officers Insurance' },
+                    { id: 'workers_comp_insurance', label: 'Workers Compensation Insurance' },
+                    { id: 'professional_liability_insurance', label: 'Professional Liability Insurance' },
+                  ].map(item => (
+                    <div key={item.id} className="flex items-center space-x-2">
+                      <Checkbox
+                        id={item.id}
+                        checked={formData[item.id]}
+                        onCheckedChange={(checked) => handleChange(item.id, checked)}
+                      />
+                      <Label htmlFor={item.id}>{item.label}</Label>
+                    </div>
+                  ))}
+                </div>
+                {formData.liability_insurance && (
+                  <div>
+                    <Label htmlFor="liability_coverage_limit">Liability Coverage Limit</Label>
+                    <Input
+                      id="liability_coverage_limit"
+                      value={formData.liability_coverage_limit}
+                      onChange={(e) => handleChange('liability_coverage_limit', e.target.value)}
+                      placeholder="e.g., $1,000,000"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Business Certifications */}
+              <div className="space-y-3">
+                <h4 className="font-semibold">Business Certifications & Designations</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {[
+                    { id: 'business_501c3_certified', label: '501(c)(3) Certified' },
+                    { id: 'business_501c4_certified', label: '501(c)(4) Certified' },
+                    { id: 'minority_owned_certification', label: 'Minority-Owned Business Certification' },
+                    { id: 'women_owned_certification', label: 'Women-Owned Business Certification' },
+                    { id: 'veteran_owned_business', label: 'Veteran-Owned Business' },
+                    { id: 'promise_zone_designation', label: 'Promise Zone Designation' },
+                    { id: 'opportunity_zone_designation', label: 'Opportunity Zone Designation' },
+                  ].map(item => (
+                    <div key={item.id} className="flex items-center space-x-2">
+                      <Checkbox
+                        id={item.id}
+                        checked={formData[item.id]}
+                        onCheckedChange={(checked) => handleChange(item.id, checked)}
+                      />
+                      <Label htmlFor={item.id}>{item.label}</Label>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           )}
@@ -938,8 +1257,8 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
                   { id: 'missionary', label: 'Missionary / Evangelist' },
                   { id: 'nonprofit_employee', label: 'Nonprofit Employee' },
                   { id: 'small_business_owner', label: 'Small Business Owner' },
-                  { id: 'minority_owned_business', label: 'Minority-Owned Business' },
-                  { id: 'women_owned_business', label: 'Women-Owned Business' },
+                  { id: 'is_minority_owned_business_owner', label: 'Minority-Owned Business Owner' },
+                  { id: 'is_women_owned_business_owner', label: 'Women-Owned Business Owner' },
                   { id: 'union_member', label: 'Union Member' },
                   { id: 'farmer', label: 'Farmer / Agricultural Worker' },
                   { id: 'truck_driver', label: 'Truck Driver / Transportation Worker' },
@@ -966,6 +1285,83 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
                   />
                 </div>
               )}
+            </div>
+          )}
+
+          {/* STEP: Firearms / Second Amendment */}
+          {currentStepData.id === 'firearms' && formData.applicant_type !== 'organization' && (
+            <div className="space-y-4">
+              <CardTitle>Firearms / Second Amendment</CardTitle>
+              <p className="text-sm text-slate-600">Optional - helps identify specialized funding opportunities</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {[
+                  { id: 'second_amendment_supporter', label: 'Second Amendment Supporter' },
+                  { id: 'gun_owner', label: 'Gun Owner' },
+                  { id: 'concealed_carry_permit', label: 'Concealed Carry Permit Holder' },
+                  { id: 'nra_member', label: 'NRA Member' },
+                  { id: 'firearm_instructor', label: 'Firearm Safety Instructor' },
+                  { id: 'competitive_shooter', label: 'Competitive Shooter' },
+                  { id: 'hunting_license', label: 'Hunting License Holder' },
+                ].map(item => (
+                  <div key={item.id} className="flex items-center space-x-2">
+                    <Checkbox
+                      id={item.id}
+                      checked={formData[item.id]}
+                      onCheckedChange={(checked) => handleChange(item.id, checked)}
+                    />
+                    <Label htmlFor={item.id}>{item.label}</Label>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* STEP: Political / Civic Engagement */}
+          {currentStepData.id === 'political' && formData.applicant_type !== 'organization' && (
+            <div className="space-y-4">
+              <CardTitle>Political / Civic Engagement</CardTitle>
+              <p className="text-sm text-slate-600">Optional - helps identify civic engagement opportunities</p>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {[
+                  { id: 'registered_voter', label: 'Registered Voter' },
+                  { id: 'politically_active', label: 'Politically Active' },
+                  { id: 'community_organizer', label: 'Community Organizer' },
+                  { id: 'advocacy_work', label: 'Advocacy Work' },
+                  { id: 'civic_volunteer', label: 'Civic Volunteer' },
+                  { id: 'election_worker', label: 'Election Worker / Poll Worker' },
+                ].map(item => (
+                  <div key={item.id} className="flex items-center space-x-2">
+                    <Checkbox
+                      id={item.id}
+                      checked={formData[item.id]}
+                      onCheckedChange={(checked) => handleChange(item.id, checked)}
+                    />
+                    <Label htmlFor={item.id}>{item.label}</Label>
+                  </div>
+                ))}
+              </div>
+
+              <div>
+                <Label htmlFor="political_party">Political Party Affiliation (Optional)</Label>
+                <Select
+                  value={formData.political_party}
+                  onValueChange={(value) => handleChange('political_party', value)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select or skip..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Prefer not to say</SelectItem>
+                    <SelectItem value="democrat">Democrat</SelectItem>
+                    <SelectItem value="republican">Republican</SelectItem>
+                    <SelectItem value="independent">Independent</SelectItem>
+                    <SelectItem value="libertarian">Libertarian</SelectItem>
+                    <SelectItem value="green">Green Party</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           )}
 
@@ -1045,40 +1441,84 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
           {/* STEP: Narrative */}
           {currentStepData.id === 'narrative' && (
             <div className="space-y-4">
-              <CardTitle>Tell Us Your Story</CardTitle>
+              <CardTitle>Your Story & Goals</CardTitle>
               <p className="text-sm text-slate-600">
                 These narrative responses help us find the most relevant opportunities for you.
               </p>
 
               <div>
-                <Label htmlFor="primary_goal">What are your goals?</Label>
+                <Label htmlFor="mission">Your Mission or Purpose</Label>
+                <Textarea
+                  id="mission"
+                  value={formData.mission}
+                  onChange={(e) => handleChange('mission', e.target.value)}
+                  placeholder="Describe your mission, purpose, or what drives you..."
+                  rows={4}
+                />
+                <p className="text-xs text-slate-500 mt-1">
+                  What is your organization's mission or your personal purpose?
+                </p>
+              </div>
+
+              <div>
+                <Label htmlFor="primary_goal">What are your primary goals?</Label>
                 <Textarea
                   id="primary_goal"
                   value={formData.primary_goal}
                   onChange={(e) => handleChange('primary_goal', e.target.value)}
                   placeholder="Describe what you hope to achieve..."
-                  rows={3}
+                  rows={4}
                 />
+                <p className="text-xs text-slate-500 mt-1">
+                  What specific outcomes or achievements are you working toward?
+                </p>
               </div>
 
               <div>
-                <Label htmlFor="funding_amount_needed">How much funding do you need?</Label>
-                <Input
-                  id="funding_amount_needed"
-                  value={formData.funding_amount_needed}
-                  onChange={(e) => handleChange('funding_amount_needed', e.target.value)}
-                  placeholder="e.g., $5,000 for tuition"
+                <Label htmlFor="past_experience">Past Experience & Achievements</Label>
+                <Textarea
+                  id="past_experience"
+                  value={formData.past_experience}
+                  onChange={(e) => handleChange('past_experience', e.target.value)}
+                  placeholder="Describe your relevant experience, accomplishments, or programs you've implemented..."
+                  rows={4}
                 />
+                <p className="text-xs text-slate-500 mt-1">
+                  Share your track record, achievements, or relevant background
+                </p>
               </div>
 
               <div>
-                <Label htmlFor="special_circumstances">Special Circumstances</Label>
+                <Label htmlFor="special_circumstances">Challenges & Special Circumstances</Label>
                 <Textarea
                   id="special_circumstances"
                   value={formData.special_circumstances}
                   onChange={(e) => handleChange('special_circumstances', e.target.value)}
-                  placeholder="Describe any special circumstances, challenges overcome, or unique aspects of your situation..."
+                  placeholder="Describe any challenges overcome, barriers faced, or unique aspects of your situation..."
                   rows={4}
+                />
+                <p className="text-xs text-slate-500 mt-1">
+                  What challenges or barriers have you overcome? What makes your situation unique?
+                </p>
+              </div>
+
+              <div>
+                <Label htmlFor="funding_amount_needed">Funding Needed</Label>
+                <Input
+                  id="funding_amount_needed"
+                  value={formData.funding_amount_needed}
+                  onChange={(e) => handleChange('funding_amount_needed', e.target.value)}
+                  placeholder="e.g., $5,000 for tuition or $50,000 for program expansion"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="target_population">Target Population (if applicable)</Label>
+                <Input
+                  id="target_population"
+                  value={formData.target_population}
+                  onChange={(e) => handleChange('target_population', e.target.value)}
+                  placeholder="e.g., Low-income youth, Veterans, Rural families"
                 />
               </div>
 
@@ -1165,6 +1605,34 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
                     </div>
                   </div>
                 </div>
+
+                {/* PDF & Email Actions */}
+                <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                  <h4 className="font-semibold mb-3 text-blue-900">Application Actions</h4>
+                  <div className="flex flex-wrap gap-3">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handlePrintPDF}
+                      className="flex-1 min-w-[200px]"
+                    >
+                      <Printer className="w-4 h-4 mr-2" />
+                      Save as PDF
+                    </Button>
+                    <Button
+                      type="button"
+                      onClick={handleEmailApplication}
+                      disabled={isSendingEmail}
+                      className="flex-1 min-w-[200px] bg-blue-600 hover:bg-blue-700"
+                    >
+                      <Mail className="w-4 h-4 mr-2" />
+                      {isSendingEmail ? 'Sending...' : 'Email to Dr. White'}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-blue-700 mt-2">
+                    Click "Save as PDF" to download, or "Email to Dr. White" to send directly to dr.johnwhite@axiombiolabs.org
+                  </p>
+                </div>
               </div>
             </div>
           )}
@@ -1203,6 +1671,18 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
           </Button>
         )}
       </div>
+
+      {/* Form Instructions */}
+      <Card className="mt-6">
+        <CardContent className="p-6">
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <h3 className="font-semibold text-blue-900 mb-2">INSTRUCTIONS</h3>
+            <p className="text-sm text-blue-800">
+              After completing this form, hand it back to John White, fax it to: <strong>423-414-5290</strong>, or email it to: <strong>Dr.JohnWhite@axiombiolabs.org</strong>
+            </p>
+          </div>
+        </CardContent>
+      </Card>
     </form>
   );
 }
