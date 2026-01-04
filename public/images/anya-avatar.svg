@@ -1,0 +1,38 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="100" cy="100" r="95" fill="#f8f9fa"/>
+  
+  <!-- Head -->
+  <circle cx="100" cy="80" r="40" fill="#f4c8a8"/>
+  
+  <!-- Hair (dark) -->
+  <ellipse cx="100" cy="60" rx="45" ry="35" fill="#2d2d2d"/>
+  <ellipse cx="70" cy="70" rx="20" ry="30" fill="#2d2d2d"/>
+  <ellipse cx="130" cy="70" rx="20" ry="30" fill="#2d2d2d"/>
+  
+  <!-- Glasses -->
+  <g stroke="#1a1a1a" stroke-width="2" fill="none">
+    <circle cx="85" cy="80" r="12"/>
+    <circle cx="115" cy="80" r="12"/>
+    <line x1="97" y1="80" x2="103" y2="80"/>
+    <line x1="73" y1="80" x2="65" y2="78"/>
+    <line x1="127" y1="80" x2="135" y2="78"/>
+  </g>
+  
+  <!-- Eyes behind glasses -->
+  <circle cx="85" cy="80" r="3" fill="#2d2d2d"/>
+  <circle cx="115" cy="80" r="3" fill="#2d2d2d"/>
+  
+  <!-- Smile -->
+  <path d="M 85 95 Q 100 105 115 95" stroke="#2d2d2d" stroke-width="2" fill="none" stroke-linecap="round"/>
+  
+  <!-- Red shirt/top -->
+  <ellipse cx="100" cy="160" rx="60" ry="45" fill="#dc2626"/>
+  
+  <!-- Neck -->
+  <rect x="90" y="110" width="20" height="25" fill="#f4c8a8"/>
+  
+  <!-- Collar -->
+  <path d="M 80 135 L 70 160 L 85 150 Z" fill="#b91c1c"/>
+  <path d="M 120 135 L 130 160 L 115 150 Z" fill="#b91c1c"/>
+</svg>

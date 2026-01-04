@@ -8,18 +8,20 @@ import { Loader2, UploadCloud, CheckCircle, AlertTriangle, FileUp, Clock } from 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/components/ui/use-toast';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import { ingestDocument } from '@/api/documents';
 
 export default function DocumentHarvester({ profileId, organizationId, onComplete }) {
   const [file, setFile] = useState(null);
   const [title, setTitle] = useState('');
   const [documentType, setDocumentType] = useState('other');
+  const [skipParsing, setSkipParsing] = useState(false); // NEW: State for skip parsing
   const [processingDocs, setProcessingDocs] = useState([]);
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
   const mutation = useMutation({
-    mutationFn: async ({ file, title, documentType }) => {
+    mutationFn: async ({ file, title, documentType, skipParsing }) => {
       if (!profileId) {
         throw new Error('Profile ID is required for document ingestion.');
       }
@@ -47,6 +49,11 @@ export default function DocumentHarvester({ profileId, organizationId, onComplet
         formData.append('document', file);
         formData.append('name', title || file.name);
         formData.append('type', documentType);
+        
+        // NEW: Add skip_parsing parameter
+        if (skipParsing) {
+          formData.append('skip_parsing', 'true');
+        }
 
         setProcessingDocs(prev =>
           prev.map(doc => (doc.id === docId ? { ...doc, status: 'queuing' } : doc)),
@@ -109,12 +116,13 @@ export default function DocumentHarvester({ profileId, organizationId, onComplet
   const handleHarvest = () => {
     if (file && title) {
       // Start the background process
-      mutation.mutate({ file, title, documentType });
+      mutation.mutate({ file, title, documentType, skipParsing });
       
       // Reset the form immediately so user can upload another
       setFile(null);
       setTitle('');
       setDocumentType('other');
+      setSkipParsing(false);
       
       // Reset file input
       const fileInput = document.getElementById('file-upload');
@@ -177,13 +185,27 @@ export default function DocumentHarvester({ profileId, organizationId, onComplet
           </Select>
         </div>
         
+        <div className="flex items-center space-x-2 py-2">
+          <Checkbox 
+            id="skip-parsing-harvester" 
+            checked={skipParsing}
+            onCheckedChange={setSkipParsing}
+          />
+          <Label 
+            htmlFor="skip-parsing-harvester" 
+            className="text-sm font-normal cursor-pointer"
+          >
+            Save without parsing (parse later manually)
+          </Label>
+        </div>
+        
         <Button
           onClick={handleHarvest}
           disabled={!file || !title}
           className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700"
         >
           <UploadCloud className="w-4 h-4 mr-2" />
-          Upload Document
+          {skipParsing ? 'Upload Document' : 'Upload & Parse'}
         </Button>
 
         {/* Processing Queue */}

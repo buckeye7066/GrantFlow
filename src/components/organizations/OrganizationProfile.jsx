@@ -66,8 +66,8 @@ export default function OrganizationProfile({
         // Add delay to allow database propagation
         await new Promise(resolve => setTimeout(resolve, 300));
 
-        // Use .get() instead of .filter() for fetching by ID
-        const result = await base44.entities.Organization.get(organizationId);
+        // FIXED: Use Profile API instead of Organization API since IDs are profile IDs
+        const result = await base44.entities.Profile.get(organizationId);
         console.log('[OrganizationProfile] Query result:', result);
 
         if (!result) {
@@ -153,9 +153,9 @@ export default function OrganizationProfile({
     }
   });
 
-  // Add mutation for updating organization
+  // Add mutation for updating organization (now using Profile API)
   const updateOrgMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.Organization.update(id, data),
+    mutationFn: ({ id, data }) => base44.entities.Profile.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['organization', organizationId] });
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
@@ -175,9 +175,9 @@ export default function OrganizationProfile({
     }
   });
 
-  // Add mutation for deleting organization
+  // Add mutation for deleting organization (now using Profile API)
   const deleteOrgMutation = useMutation({
-    mutationFn: (id) => base44.entities.Organization.delete(id),
+    mutationFn: (id) => base44.entities.Profile.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       toast({

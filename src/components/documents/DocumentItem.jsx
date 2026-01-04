@@ -1,12 +1,18 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { FileText, Download, Trash2, Printer } from 'lucide-react';
+import { FileText, Download, Trash2, Printer, Wand2 } from 'lucide-react';
 import { format } from 'date-fns';
 import { base44 } from '@/api/base44Client';
+import { parseDocument } from '@/api/documents';
+import { useToast } from '@/components/ui/use-toast';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 export default function DocumentItem({ document, onDelete }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [isParsing, setIsParsing] = useState(false);
   // Helper to validate date
   const isValidDate = (dateString) => {
     if (!dateString) return false;
@@ -55,6 +61,35 @@ export default function DocumentItem({ document, onDelete }) {
     : 'Unknown date';
 
   const processingStatus = document.processing_status ?? 'pending';
+  const isUnparsed = processingStatus === 'pending' || processingStatus === 'failed';
+  
+  const parseMutation = useMutation({
+    mutationFn: () => parseDocument(document.id),
+    onSuccess: () => {
+      toast({
+        title: "📄 Document parsing queued",
+        description: "AI will analyze the document and update the profile shortly.",
+      });
+      queryClient.invalidateQueries({ queryKey: ['documents', document.profile_id] });
+      queryClient.invalidateQueries({ queryKey: ['profile', document.profile_id] });
+    },
+    onError: (error) => {
+      toast({
+        variant: "destructive",
+        title: "Failed to queue parsing",
+        description: error.message || "Please try again.",
+      });
+    }
+  });
+  
+  const handleParse = async () => {
+    setIsParsing(true);
+    try {
+      await parseMutation.mutateAsync();
+    } finally {
+      setIsParsing(false);
+    }
+  };
 
   return (
     <Card className="flex flex-col">
@@ -90,10 +125,22 @@ export default function DocumentItem({ document, onDelete }) {
         ) : null}
       </CardContent>
       <CardFooter className="flex gap-2">
+        {isUnparsed && (
+          <Button
+            variant="default"
+            size="sm"
+            className="flex-1"
+            onClick={handleParse}
+            disabled={isParsing || parseMutation.isPending}
+          >
+            <Wand2 className="w-3 h-3 mr-2" /> 
+            {isParsing || parseMutation.isPending ? 'Parsing...' : 'Parse Document'}
+          </Button>
+        )}
         <Button
           variant="outline"
           size="sm"
-          className="flex-1"
+          className={isUnparsed ? "" : "flex-1"}
           onClick={getSignedUrlAndDownload}
           disabled={!fileUri}
         >

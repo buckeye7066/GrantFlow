@@ -21,7 +21,7 @@ export default function AnyaFloatingButton({ profileId, className }) {
         <Button
           onClick={handleClick}
           className={cn(
-            "h-14 w-14 rounded-full shadow-lg hover:shadow-xl transition-all duration-200",
+            "h-14 w-14 rounded-full shadow-lg hover:shadow-xl transition-all duration-200 p-0 overflow-hidden",
             hasProfile 
               ? "bg-gradient-to-br from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
               : "bg-gradient-to-br from-slate-400 to-slate-500 hover:from-slate-500 hover:to-slate-600"
@@ -29,10 +29,14 @@ export default function AnyaFloatingButton({ profileId, className }) {
           size="icon"
           title={hasProfile ? "Chat with Anya" : "Create a profile to chat with Anya"}
         >
-          <Sparkles className={cn(
-            "h-6 w-6 text-white transition-transform",
-            hasProfile ? "animate-pulse group-hover:scale-110" : ""
-          )} />
+          <img 
+            src="/images/anya-avatar.svg" 
+            alt="Anya AI Assistant" 
+            className={cn(
+              "h-full w-full object-cover transition-transform",
+              hasProfile ? "group-hover:scale-110" : ""
+            )}
+          />
           <span className="sr-only">Open Anya AI Assistant</span>
         </Button>
 
@@ -59,12 +63,16 @@ export default function AnyaFloatingButton({ profileId, className }) {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className={cn(
-                  "flex h-10 w-10 items-center justify-center rounded-full",
+                  "flex h-10 w-10 items-center justify-center rounded-full overflow-hidden",
                   hasProfile 
                     ? "bg-gradient-to-br from-purple-600 to-blue-600"
                     : "bg-gradient-to-br from-slate-400 to-slate-500"
                 )}>
-                  <Sparkles className="h-5 w-5 text-white" />
+                  <img 
+                    src="/images/anya-avatar.svg" 
+                    alt="Anya" 
+                    className="h-full w-full object-cover"
+                  />
                 </div>
                 <div>
                   <SheetTitle className="text-lg font-bold">Anya AI Assistant</SheetTitle>

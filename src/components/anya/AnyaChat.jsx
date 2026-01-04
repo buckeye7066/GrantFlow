@@ -432,6 +432,13 @@ export default function AnyaChat({ profileId }) {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <div className="flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full overflow-hidden bg-gradient-to-br from-purple-600 to-blue-600">
+                  <img 
+                    src="/images/anya-avatar.svg" 
+                    alt="Anya" 
+                    className="h-full w-full object-cover"
+                  />
+                </div>
                 <h2 className="text-sm font-semibold text-slate-800">Anya, your GrantFlow copilot</h2>
                 {isAdmin && (
                   <Badge variant="default" className="gap-1 text-[10px] bg-purple-600">

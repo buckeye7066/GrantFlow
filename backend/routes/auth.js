@@ -1259,7 +1259,7 @@ router.post('/email/verify', (req, res) => {
   // Initialize Anya for admin users on login
   let anyaInfo = null
   try {
-    anyaInfo = initializeAnyaForAdmin(req.db, user, activeProfileId)
+    anyaInfo = initializeAnyaForAdmin(req.db, user, activeProfileId, { uploadDir, getOpenAI })
   } catch (error) {
     console.error('[auth] Failed to initialize Anya:', error)
     // Don't fail the login if Anya initialization fails
@@ -1488,7 +1488,7 @@ router.post('/phone/verify', (req, res) => {
   // Initialize Anya for admin users on login
   let anyaInfo = null
   try {
-    anyaInfo = initializeAnyaForAdmin(req.db, user, activeProfileId)
+    anyaInfo = initializeAnyaForAdmin(req.db, user, activeProfileId, { uploadDir, getOpenAI })
   } catch (error) {
     console.error('[auth] Failed to initialize Anya:', error)
     // Don't fail the login if Anya initialization fails
