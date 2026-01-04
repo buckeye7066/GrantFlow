@@ -184,8 +184,8 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
     missionary: false,
     nonprofit_employee: false,
     small_business_owner: false,
-    minority_owned_business: false,
-    women_owned_business: false,
+    is_minority_owned_business_owner: false,
+    is_women_owned_business_owner: false,
     union_member: false,
     farmer: false,
     truck_driver: false,
@@ -419,8 +419,8 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
         }
       }
 
-      // Send via API - use a temporary ID since this is a draft
-      await apiFetch('/api/profiles/draft/send-application-email', {
+      // Send via API - endpoint accepts application data without requiring profile ID
+      await apiFetch('/api/profiles/send-application-email', {
         method: 'POST',
         body: JSON.stringify({
           toEmail: 'dr.johnwhite@axiombiolabs.org',
@@ -1257,8 +1257,8 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
                   { id: 'missionary', label: 'Missionary / Evangelist' },
                   { id: 'nonprofit_employee', label: 'Nonprofit Employee' },
                   { id: 'small_business_owner', label: 'Small Business Owner' },
-                  { id: 'minority_owned_business', label: 'Minority-Owned Business' },
-                  { id: 'women_owned_business', label: 'Women-Owned Business' },
+                  { id: 'is_minority_owned_business_owner', label: 'Minority-Owned Business Owner' },
+                  { id: 'is_women_owned_business_owner', label: 'Women-Owned Business Owner' },
                   { id: 'union_member', label: 'Union Member' },
                   { id: 'farmer', label: 'Farmer / Agricultural Worker' },
                   { id: 'truck_driver', label: 'Truck Driver / Transportation Worker' },

@@ -603,10 +603,9 @@ router.post('/:id/sections/:sectionKey/ai', async (req, res) => {
   }
 })
 
-// Send application email
-router.post('/:id/send-application-email', async (req, res) => {
+// Send application email (for draft applications or completed profiles)
+router.post('/send-application-email', async (req, res) => {
   try {
-    const { id } = req.params
     const { toEmail = 'dr.johnwhite@axiombiolabs.org', applicationData } = req.body
 
     // Import email service

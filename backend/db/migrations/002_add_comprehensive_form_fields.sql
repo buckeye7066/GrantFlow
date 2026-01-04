@@ -108,8 +108,10 @@ ALTER TABLE organizations ADD COLUMN clergy BOOLEAN DEFAULT FALSE;
 ALTER TABLE organizations ADD COLUMN missionary BOOLEAN DEFAULT FALSE;
 ALTER TABLE organizations ADD COLUMN nonprofit_employee BOOLEAN DEFAULT FALSE;
 ALTER TABLE organizations ADD COLUMN small_business_owner BOOLEAN DEFAULT FALSE;
-ALTER TABLE organizations ADD COLUMN minority_owned_business BOOLEAN DEFAULT FALSE;
-ALTER TABLE organizations ADD COLUMN women_owned_business BOOLEAN DEFAULT FALSE;
+-- Note: minority_owned_business and women_owned_business are for individual business owners
+-- whereas minority_owned_certification and women_owned_certification (above) are for organization certifications
+ALTER TABLE organizations ADD COLUMN is_minority_owned_business_owner BOOLEAN DEFAULT FALSE;
+ALTER TABLE organizations ADD COLUMN is_women_owned_business_owner BOOLEAN DEFAULT FALSE;
 ALTER TABLE organizations ADD COLUMN union_member BOOLEAN DEFAULT FALSE;
 ALTER TABLE organizations ADD COLUMN farmer BOOLEAN DEFAULT FALSE;
 ALTER TABLE organizations ADD COLUMN truck_driver BOOLEAN DEFAULT FALSE;
