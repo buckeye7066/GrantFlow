@@ -21,6 +21,7 @@ import crawlersRouter from './routes/crawlers.js';
 import billingRouter from './routes/billing.js';
 import authRouter from './routes/auth.js';
 import preferencesRouter from './routes/preferences.js';
+import adminRouter from './routes/admin.js';
 import jwt from 'jsonwebtoken';
 import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
@@ -384,6 +385,7 @@ app.use('/api/profiles', profilesRouter);
 app.use('/api/reminders', remindersRouter);
 app.use('/api/crawlers', crawlersRouter);
 app.use('/api/preferences', preferencesRouter);
+app.use('/api/admin', adminRouter);
 
 // Stats endpoint for dashboard
 app.get('/api/stats', (req, res) => {

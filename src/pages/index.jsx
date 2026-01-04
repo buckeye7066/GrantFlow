@@ -80,6 +80,8 @@ import Pricing from "./Pricing";
 
 import Settings from "./Settings";
 
+import Admin from "./Admin";
+
 import Login from "./Login";
 import AuthCallback from "./AuthCallback";
 
@@ -190,6 +192,8 @@ const PAGES = {
     Pricing: Pricing,
     
     Settings: Settings,
+    
+    Admin: Admin,
     
 }
 
