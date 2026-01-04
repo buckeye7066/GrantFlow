@@ -44,6 +44,12 @@ export async function listProfileSections(profileId) {
   return getProfileSectionsClient(profileId).list()
 }
 
+export async function deleteProfile(id) {
+  return apiFetch(`/api/profiles/${id}`, {
+    method: 'DELETE',
+  })
+}
+
 export async function requestProfileSectionAI(profileId, sectionKey) {
   return apiFetch(`/api/profiles/${profileId}/sections/${sectionKey}/ai`, {
     method: 'POST',
