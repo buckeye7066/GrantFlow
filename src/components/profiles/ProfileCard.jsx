@@ -53,8 +53,8 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete }) {
     // If no organization_id, don't navigate (orphaned profile)
   };
   
-  // Check if this is an orphaned profile (no organization_id or invalid reference)
-  const isOrphanedProfile = !profile.organization_id;
+  // Treat as orphaned only if it isn't linked to an organization or any user account
+  const isOrphanedProfile = !profile.organization_id && !profile.user_id;
   
   // Build card className
   const cardClassName = [
