@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { base44 } from "@/api/base44Client";
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
@@ -15,7 +14,6 @@ import PipelineAutomationPanel from "@/components/pipeline/PipelineAutomationPan
 import { usePrintMode } from '@/components/hooks/usePrintMode';
 import { format } from "date-fns";
 import OrganizationEmailComposer from './OrganizationEmailComposer';
-import DocumentHarvester from '../documents/DocumentHarvester';
 import DocumentItem from '../documents/DocumentItem';
 import ErrorBoundary from '@/components/shared/ErrorBoundary';
 import AutoTimeTracker from '../billing/AutoTimeTracker';
@@ -41,7 +39,6 @@ export default function OrganizationProfile({
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('details');
   const [isEmailComposerOpen, setIsEmailComposerOpen] = useState(false);
-  const [isHarvesterOpen, setIsHarvesterOpen] = useState(false);
   const [isFindingPicture, setIsFindingPicture] = useState(false);
   const [imgError, setImgError] = React.useState(false);
   const [manualRetryCount, setManualRetryCount] = React.useState(0);
@@ -312,18 +309,6 @@ export default function OrganizationProfile({
 
   const handleUpdate = async ({ id, orgData: updateData }) => {
     updateOrgMutation.mutate({ id, data: updateData });
-  };
-
-  const handleHarvestComplete = () => {
-    setIsHarvesterOpen(false);
-    // Explicitly call parent's refetch function if provided
-    if (onDocumentsRefetch) {
-      onDocumentsRefetch();
-    } else {
-      // Fallback: Invalidate document queries, assuming parent observes them
-      queryClient.invalidateQueries({ queryKey: ['documents', organizationId] }); // Updated queryKey
-    }
-    // No need to invalidate organization query here, as the parent manages the 'organization' prop.
   };
 
   const handleFindPicture = async () => {
@@ -725,12 +710,8 @@ Return a single JSON object with the key "logo_url" containing the absolute, dir
             {/* Documents tab */}
             <TabsContent value="documents" className="mt-4">
               <Card>
-                <CardHeader className="flex flex-row justify-between items-center">
+                <CardHeader>
                   <CardTitle>Document Library</CardTitle>
-                  <Button onClick={() => setIsHarvesterOpen(true)}>
-                    <Sparkles className="w-4 h-4 mr-2" />
-                    Upload & Harvest Data
-                  </Button>
                 </CardHeader>
                 <CardContent>
                   {isLoadingDocuments ? (
@@ -770,14 +751,6 @@ Return a single JSON object with the key "logo_url" containing the absolute, dir
           onClose={() => setIsEmailComposerOpen(false)}
           organization={orgData}
           emails={emails}
-        />
-      )}
-
-      {isHarvesterOpen && orgData && (
-        <DocumentHarvester
-          profileId={orgData.id}
-          organizationId={orgData.id}
-          onComplete={handleHarvestComplete}
         />
       )}
 

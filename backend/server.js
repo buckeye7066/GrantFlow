@@ -21,6 +21,7 @@ import crawlersRouter from './routes/crawlers.js';
 import billingRouter from './routes/billing.js';
 import authRouter from './routes/auth.js';
 import preferencesRouter from './routes/preferences.js';
+import adminRouter from './routes/admin.js';
 import jwt from 'jsonwebtoken';
 import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
@@ -263,6 +264,7 @@ app.use((req, res, next) => {
           ) {
             user = {
               role: sessionRow.is_admin ? 'admin' : 'user',
+              is_admin: Boolean(sessionRow.is_admin), // Add is_admin flag for consistency
               userId: sessionRow.user_id,
               profileId: payload.profile_id ?? sessionRow.profile_id ?? null,
               sessionId: sessionRow.id,
@@ -278,7 +280,7 @@ app.use((req, res, next) => {
     }
 
     if (!handled && token && ADMIN_TOKEN && token === ADMIN_TOKEN) {
-      user = { role: 'admin', full_name: ADMIN_NAME, email: ADMIN_EMAIL };
+      user = { role: 'admin', is_admin: true, full_name: ADMIN_NAME, email: ADMIN_EMAIL };
       handled = true;
     }
 
@@ -386,6 +388,7 @@ app.use('/api/profiles', profilesRouter);
 app.use('/api/reminders', remindersRouter);
 app.use('/api/crawlers', crawlersRouter);
 app.use('/api/preferences', preferencesRouter);
+app.use('/api/admin', adminRouter);
 
 // Stats endpoint for dashboard
 app.get('/api/stats', (req, res) => {

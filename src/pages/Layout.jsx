@@ -30,6 +30,7 @@ import {
   Beaker,
   Sun,
   Settings,
+  Shield,
 } from "lucide-react"
 import {
   Sidebar,
@@ -205,6 +206,14 @@ const developerItems = [
   },
 ];
 
+const adminItems = [
+  {
+    title: "Admin Panel",
+    url: createPageUrl("Admin"),
+    icon: Shield,
+  },
+];
+
 export default function Layout({ children, currentPageName }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -305,6 +314,32 @@ export default function Layout({ children, currentPageName }) {
                 </SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>
+            {user?.is_admin && (
+              <SidebarGroup className="mt-4">
+                <SidebarGroupLabel className="text-xs font-semibold text-amber-600 uppercase tracking-wider px-3 py-2">
+                  Admin
+                </SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {adminItems.map((item) => (
+                      <SidebarMenuItem key={item.title}>
+                        <SidebarMenuButton 
+                          asChild 
+                          className={`hover:bg-amber-50 hover:text-amber-700 transition-all duration-200 rounded-lg mb-1 ${
+                            location.pathname === item.url ? 'bg-amber-600 text-white hover:bg-amber-700 hover:text-white shadow-md' : ''
+                          }`}
+                        >
+                          <Link to={item.url} className="flex items-center gap-3 px-3 py-2.5">
+                            <item.icon className="w-4 h-4" />
+                            <span className="font-medium">{item.title}</span>
+                          </Link>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    ))}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            )}
           </SidebarContent>
 
           <SidebarFooter className="border-t border-slate-200 p-4 space-y-4">
