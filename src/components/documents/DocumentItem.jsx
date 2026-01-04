@@ -9,6 +9,16 @@ import { parseDocument } from '@/api/documents';
 import { useToast } from '@/components/ui/use-toast';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
+function escapeHtml(value) {
+  if (value == null) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export default function DocumentItem({ document, onDelete }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -21,40 +31,6 @@ export default function DocumentItem({ document, onDelete }) {
   };
 
   const fileUri = document.file_url ?? document.file_uri;
-
-  const getSignedUrlAndDownload = async () => {
-    if (!fileUri) {
-      alert("This document does not have a stored file URL.");
-      return;
-    }
-    try {
-        const { signed_url } = await base44.integrations.Core.CreateFileSignedUrl({ file_uri: fileUri });
-        window.open(signed_url, '_blank');
-    } catch (error) {
-        console.error("Failed to get download URL", error);
-        alert("Could not generate download link. Please try again.");
-    }
-  };
-
-  const handlePrint = async () => {
-    if (!fileUri) {
-      alert("This document does not have a stored file URL.");
-      return;
-    }
-    try {
-        const { signed_url } = await base44.integrations.Core.CreateFileSignedUrl({ file_uri: fileUri });
-        // Open in new window and trigger print
-        const printWindow = window.open(signed_url, '_blank');
-        if (printWindow) {
-          printWindow.onload = () => {
-            printWindow.print();
-          };
-        }
-    } catch (error) {
-        console.error("Failed to get print URL", error);
-        alert("Could not generate print link. Please try again.");
-    }
-  };
 
   const uploadedLabel = isValidDate(document.created_at)
     ? format(new Date(document.created_at), 'MMM dd, yyyy')
@@ -89,6 +65,95 @@ export default function DocumentItem({ document, onDelete }) {
     } finally {
       setIsParsing(false);
     }
+  };
+
+  const resolveFileUrl = async () => {
+    if (!fileUri) return null;
+    if (fileUri.startsWith('http://') || fileUri.startsWith('https://')) {
+      return fileUri;
+    }
+    if (fileUri.startsWith('/')) {
+      return fileUri;
+    }
+    if (fileUri.startsWith('uploads/')) {
+      return `/${fileUri}`;
+    }
+    try {
+      if (!base44?.integrations?.Core?.CreateFileSignedUrl) {
+        return null;
+      }
+      const { signed_url } = await base44.integrations.Core.CreateFileSignedUrl({ file_uri: fileUri });
+      return signed_url;
+    } catch (error) {
+      console.error('Failed to resolve remote document URL', error);
+      return null;
+    }
+  };
+
+  const openTextPrintWindow = (title, content) => {
+    const printable = window.open('', '_blank', 'noopener,noreferrer');
+    if (!printable) return;
+    const safeTitle = escapeHtml(title || 'Document');
+    const safeContent = escapeHtml(content || '');
+    printable.document.write(`
+      <html>
+        <head>
+          <title>${safeTitle}</title>
+          <style>
+            body { font-family: Arial, Helvetica, sans-serif; padding: 24px; line-height: 1.5; }
+            h1 { font-size: 20px; margin-bottom: 16px; }
+            pre { white-space: pre-wrap; word-wrap: break-word; font-size: 14px; }
+          </style>
+        </head>
+        <body>
+          <h1>${safeTitle}</h1>
+          <pre>${safeContent}</pre>
+        </body>
+      </html>
+    `);
+    printable.document.close();
+    printable.focus();
+    printable.print();
+  };
+
+  const handleDownload = async () => {
+    const url = await resolveFileUrl();
+    if (url) {
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    if (document.extracted_text) {
+      const blob = new Blob([document.extracted_text], { type: 'text/plain;charset=utf-8' });
+      const fileName = `${document.name || 'document'}.txt`;
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = window.document.createElement('a');
+      link.href = downloadUrl;
+      link.download = fileName;
+      window.document.body.appendChild(link);
+      link.click();
+      window.document.body.removeChild(link);
+      URL.revokeObjectURL(downloadUrl);
+      return;
+    }
+    alert('This document does not have a downloadable file.');
+  };
+
+  const handlePrint = async () => {
+    const url = await resolveFileUrl();
+    if (url) {
+      const printWindow = window.open(url, '_blank', 'noopener,noreferrer');
+      if (printWindow) {
+        printWindow.onload = () => {
+          printWindow.print();
+        };
+      }
+      return;
+    }
+    if (document.extracted_text) {
+      openTextPrintWindow(document.name ?? 'Document', document.extracted_text);
+      return;
+    }
+    alert('This document does not have printable content yet.');
   };
 
   return (
@@ -141,8 +206,8 @@ export default function DocumentItem({ document, onDelete }) {
           variant="outline"
           size="sm"
           className={isUnparsed ? "" : "flex-1"}
-          onClick={getSignedUrlAndDownload}
-          disabled={!fileUri}
+          onClick={handleDownload}
+          disabled={!fileUri && !document.extracted_text}
         >
           <Download className="w-3 h-3 mr-2" /> Download
         </Button>
@@ -150,7 +215,7 @@ export default function DocumentItem({ document, onDelete }) {
           variant="outline"
           size="sm"
           onClick={handlePrint}
-          disabled={!fileUri}
+          disabled={!fileUri && !document.extracted_text}
         >
           <Printer className="w-3 h-3 mr-2" /> Print
         </Button>

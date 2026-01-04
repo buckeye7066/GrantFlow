@@ -50,25 +50,78 @@ export default function DocumentList({ profileId }) {
     }
   };
 
+  const resolveDocumentUrl = async (doc) => {
+    const fileUri = doc.file_url ?? doc.file_uri;
+    if (!fileUri) return null;
+    if (fileUri.startsWith('http://') || fileUri.startsWith('https://')) {
+      return fileUri;
+    }
+    if (fileUri.startsWith('/')) {
+      return fileUri;
+    }
+    if (fileUri.startsWith('uploads/')) {
+      return `/${fileUri}`;
+    }
+    try {
+      if (!base44?.integrations?.Core?.CreateFileSignedUrl) {
+        return null;
+      }
+      const { signed_url } =
+        await base44.integrations.Core.CreateFileSignedUrl({ file_uri: fileUri });
+      return signed_url ?? null;
+    } catch (error) {
+      console.error(`Failed to resolve document URL for ${doc.name}:`, error);
+      return null;
+    }
+  };
+
+  const printDocument = (doc, url) => {
+    if (url) {
+      const printWindow = window.open(url, '_blank', 'noopener,noreferrer');
+      if (printWindow) {
+        printWindow.onload = () => {
+          printWindow.print();
+        };
+      }
+      return;
+    }
+    if (!doc.extracted_text) return;
+    const printable = window.open('', '_blank', 'noopener,noreferrer');
+    if (!printable) return;
+    const safeTitle = (doc.name || 'Document').replace(/[<>]/g, '');
+    const safeContent = doc.extracted_text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    printable.document.write(`
+      <html>
+        <head>
+          <title>${safeTitle}</title>
+          <style>
+            body { font-family: Arial, Helvetica, sans-serif; padding: 24px; line-height: 1.5; }
+            h1 { font-size: 20px; margin-bottom: 16px; }
+            pre { white-space: pre-wrap; word-wrap: break-word; font-size: 14px; }
+          </style>
+        </head>
+        <body>
+          <h1>${safeTitle}</h1>
+          <pre>${safeContent}</pre>
+        </body>
+      </html>
+    `);
+    printable.document.close();
+    printable.focus();
+    printable.print();
+  };
+
   const handlePrintAll = async () => {
     for (let i = 0; i < documents.length; i++) {
       const doc = documents[i];
-      const fileUri = doc.file_url ?? doc.file_uri;
-      if (fileUri) {
-        try {
-          const { signed_url } = await base44.integrations.Core.CreateFileSignedUrl({ file_uri: fileUri });
-          const printWindow = window.open(signed_url, '_blank');
-          if (printWindow) {
-            printWindow.onload = () => {
-              printWindow.print();
-            };
-          }
-          // Add delay between opening windows (reduced for better UX)
-          if (i < documents.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 300));
-          }
-        } catch (error) {
-          console.error(`Failed to print document ${doc.name}:`, error);
+      const url = await resolveDocumentUrl(doc);
+      if (url || doc.extracted_text) {
+        printDocument(doc, url);
+        if (i < documents.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
         }
       }
     }

@@ -5,10 +5,12 @@ import {
   CalendarDays,
   DollarSign,
   ExternalLink,
+  FileText,
   Filter,
   Layers,
   Loader2,
   MapPin,
+  Printer,
   Shield,
   ShieldAlert,
   ShieldCheck,
@@ -33,6 +35,7 @@ import { listOpportunities, listOpportunitySources, listOpportunityStates } from
 import { listProfiles, getProfile } from "@/api/profiles"
 import { createCrawlerJob, fetchCrawlerStatus } from "@/api/crawlers"
 import { createGrant } from "@/api/grants"
+import { createDocument } from "@/api/documents"
 import { cn } from "@/lib/utils"
 
 function formatDeadline(deadline, deadlineType) {
@@ -53,6 +56,61 @@ function formatAmount(min, max) {
   }
   const amount = (min ?? max ?? 0).toLocaleString()
   return `$${amount}`
+}
+
+function buildOpportunitySummary(opportunity, profile, match) {
+  const lines = []
+  const safeTitle = opportunity.title || "Funding opportunity"
+  lines.push(`${safeTitle}`)
+  lines.push(`Source: ${opportunity.source || "Crawler"}`)
+  if (opportunity.sponsor) {
+    lines.push(`Sponsor: ${opportunity.sponsor}`)
+  }
+  if (profile?.display_name) {
+    lines.push(`Profile: ${profile.display_name}`)
+  }
+  if (opportunity.is_national) {
+    lines.push("Coverage: National")
+  } else if (opportunity.state) {
+    lines.push(`Primary state: ${opportunity.state}`)
+  }
+  if (Array.isArray(opportunity.regions) && opportunity.regions.length) {
+    lines.push(`Regions: ${opportunity.regions.join(", ")}`)
+  }
+  const amountText = formatAmount(opportunity.amount_min, opportunity.amount_max)
+  lines.push(`Funding amount: ${amountText}`)
+  if (opportunity.deadline) {
+    lines.push(`Deadline: ${opportunity.deadline}`)
+  } else if (opportunity.deadline_type) {
+    lines.push(`Deadline type: ${opportunity.deadline_type}`)
+  }
+  if (match?.score != null) {
+    lines.push(`Match score: ${match.score}%`)
+  }
+  if (Array.isArray(match?.reasons) && match.reasons.length) {
+    lines.push("")
+    lines.push("Top match reasons:")
+    match.reasons.slice(0, 5).forEach((reason, index) => {
+      lines.push(`  ${index + 1}. ${reason}`)
+    })
+  }
+  if (opportunity.description) {
+    lines.push("")
+    lines.push("Description:")
+    lines.push(opportunity.description)
+  }
+  if (Array.isArray(opportunity.eligibility_bullets) && opportunity.eligibility_bullets.length) {
+    lines.push("")
+    lines.push("Eligibility highlights:")
+    opportunity.eligibility_bullets.slice(0, 8).forEach((item, index) => {
+      lines.push(`  • ${item}`)
+    })
+  }
+  if (opportunity.application_url) {
+    lines.push("")
+    lines.push(`Application URL: ${opportunity.application_url}`)
+  }
+  return lines.join("\n")
 }
 
 function computeProfileSignals(profile) {
@@ -263,6 +321,10 @@ function OpportunityDetail({
   isAddingToPipeline = false,
   canAddToPipeline = false,
   selectedProfileName,
+  onSaveDocument,
+  isSavingDocument = false,
+  canSaveDocument = false,
+  onPrintOpportunity,
 }) {
   if (!opportunity) return null
   const matchScore = typeof match?.score === "number" ? match.score : null
@@ -438,12 +500,40 @@ function OpportunityDetail({
               ? `Grant will be added to ${selectedProfileName ?? "the selected profile"}'s pipeline.`
               : "Select a profile to enable pipeline creation."}
           </p>
-          <div className="flex gap-2 justify-end">
-            <Button variant="secondary" onClick={onClose}>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+            <Button variant="outline" size="sm" onClick={onClose}>
               Close
             </Button>
             <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onPrintOpportunity?.(opportunity)}
+              disabled={!onPrintOpportunity}
+            >
+              <Printer className="w-4 h-4 mr-2" />
+              Print summary
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => onSaveDocument?.(opportunity)}
+              disabled={!canSaveDocument || isSavingDocument || !onSaveDocument}
+            >
+              {isSavingDocument ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Saving…
+                </>
+              ) : (
+                <>
+                  <FileText className="w-4 h-4 mr-2" />
+                  Save to documents
+                </>
+              )}
+            </Button>
+            <Button
               variant="default"
+              size="sm"
               disabled={!canAddToPipeline || isAddingToPipeline}
               onClick={handleAddClick}
             >
@@ -469,6 +559,7 @@ export default function FundingOpportunities() {
   })
   const [selectedOpportunity, setSelectedOpportunity] = useState(null)
   const [addingOpportunityId, setAddingOpportunityId] = useState(null)
+  const [savingOpportunityId, setSavingOpportunityId] = useState(null)
 
   const opportunitiesQuery = useQuery({
     queryKey: ["opportunities", filters],
@@ -527,9 +618,68 @@ export default function FundingOpportunities() {
       ? "Grant funds only — excluding loans and match requirements."
       : "Including opportunities that may require matching funds or repayment."
 
+  const organizedOpportunities = useMemo(() => {
+    if (!opportunities.length) {
+      return opportunities
+    }
+
+    const isComprehensiveFocus =
+      filters.source === "comprehensive_crawler" ||
+      (filters.source === "all" && opportunities.every((opp) => opp.source === "comprehensive_crawler"))
+
+    if (!isComprehensiveFocus) {
+      return opportunities
+    }
+
+    const groupOrder = []
+    const groupedByZip = new Map()
+
+    const getZipKey = (opportunity) => {
+      if (!opportunity) return null
+      const sourceId = typeof opportunity.source_id === "string" ? opportunity.source_id : ""
+      const sourceMatch = sourceId.match(/^(\d{5})/)
+      if (sourceMatch) return sourceMatch[1]
+
+      if (typeof opportunity.title === "string") {
+        const titleMatch = opportunity.title.match(/ZIP\s*(\d{5})/i)
+        if (titleMatch) return titleMatch[1]
+      }
+
+      return null
+    }
+
+    const getTemplateOrder = (opportunity) => {
+      const sourceId = typeof opportunity.source_id === "string" ? opportunity.source_id : ""
+      const parts = sourceId.split("-")
+      const candidate = parts[parts.length - 1]
+      const parsed = Number.parseInt(candidate, 10)
+      return Number.isFinite(parsed) ? parsed : 0
+    }
+
+    opportunities.forEach((opportunity) => {
+      const zipKey = getZipKey(opportunity) ?? `zip-${groupOrder.length}`
+      if (!groupedByZip.has(zipKey)) {
+        groupedByZip.set(zipKey, [])
+        groupOrder.push(zipKey)
+      }
+      groupedByZip.get(zipKey).push(opportunity)
+    })
+
+    const ordered = []
+    groupOrder.forEach((zipKey) => {
+      const group = groupedByZip.get(zipKey) ?? []
+      group
+        .slice()
+        .sort((a, b) => getTemplateOrder(a) - getTemplateOrder(b))
+        .forEach((item) => ordered.push(item))
+    })
+
+    return ordered
+  }, [opportunities, filters.source])
+
   const opportunitiesWithMatch = useMemo(() => {
-    if (!opportunities.length) return []
-    return opportunities.map((opp) => {
+    if (!organizedOpportunities.length) return []
+    return organizedOpportunities.map((opp) => {
       if (!filters.profileId || filters.profileId === "all") {
         return { opportunity: opp, match: null }
       }
@@ -544,7 +694,7 @@ export default function FundingOpportunities() {
         },
       }
     })
-  }, [opportunities, filters.profileId, selectedProfile])
+  }, [organizedOpportunities, filters.profileId, selectedProfile])
 
   const handleAddToPipeline = async (opportunity) => {
     if (!selectedProfile || !filters.profileId || filters.profileId === "all") {
@@ -628,6 +778,95 @@ export default function FundingOpportunities() {
     } finally {
       setAddingOpportunityId(null)
     }
+  }
+
+  const handleSaveOpportunityDocument = async (opportunity) => {
+    if (!selectedProfile || !filters.profileId || filters.profileId === "all") {
+      toast({
+        variant: "destructive",
+        title: "Select a profile first",
+        description: "Choose a profile so we know where to store this opportunity summary.",
+      })
+      return
+    }
+
+    setSavingOpportunityId(opportunity.id)
+    try {
+      const match = scoreOpportunity(opportunity, selectedProfile)
+      const summary = buildOpportunitySummary(opportunity, selectedProfile, match)
+      const timestamp = new Date().toLocaleString()
+      await createDocument({
+        profile_id: selectedProfile.id,
+        organization_id: selectedProfile.organization_id ?? null,
+        name: `${opportunity.title || "Funding opportunity"} summary`,
+        type: "funding_opportunity",
+        extracted_text: summary,
+        ai_summary: opportunity.description ?? null,
+        processing_status: "completed",
+        status: "final",
+        notes: `Saved from Funding Opportunities on ${timestamp}`,
+      })
+
+      toast({
+        title: "Saved to documents",
+        description: "The summary is now available in the Documents library.",
+      })
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Unable to save summary",
+        description: error instanceof Error ? error.message : "Try again shortly.",
+      })
+    } finally {
+      setSavingOpportunityId(null)
+    }
+  }
+
+  const handlePrintOpportunity = (opportunity) => {
+    if (!selectedProfile || !filters.profileId || filters.profileId === "all") {
+      toast({
+        variant: "destructive",
+        title: "Select a profile first",
+        description: "Choose a profile before printing the opportunity summary.",
+      })
+      return
+    }
+    const match = scoreOpportunity(opportunity, selectedProfile)
+    const summary = buildOpportunitySummary(opportunity, selectedProfile, match)
+    const printWindow = window.open("", "_blank", "noopener,noreferrer")
+    if (!printWindow) {
+      toast({
+        variant: "destructive",
+        title: "Unable to open print window",
+        description: "Allow pop-ups for GrantFlow to print summaries.",
+      })
+      return
+    }
+    const safeTitle = (opportunity.title || "Funding opportunity").replace(/[<>]/g, "")
+    const safeContent = summary
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>${safeTitle}</title>
+          <style>
+            body { font-family: Arial, Helvetica, sans-serif; padding: 24px; line-height: 1.6; color: #111827; }
+            h1 { font-size: 20px; margin-bottom: 16px; }
+            pre { white-space: pre-wrap; word-wrap: break-word; font-size: 14px; }
+          </style>
+        </head>
+        <body>
+          <h1>${safeTitle}</h1>
+          <pre>${safeContent}</pre>
+        </body>
+      </html>
+    `)
+    printWindow.document.close()
+    printWindow.focus()
+    printWindow.print()
   }
 
   const handleRequestComprehensiveSweep = async () => {
@@ -896,6 +1135,12 @@ export default function FundingOpportunities() {
           )
         }
         selectedProfileName={selectedProfile?.display_name}
+        onSaveDocument={handleSaveOpportunityDocument}
+        isSavingDocument={
+          Boolean(selectedOpportunity) && savingOpportunityId === selectedOpportunity.id
+        }
+        canSaveDocument={Boolean(selectedProfile && filters.profileId && filters.profileId !== "all")}
+        onPrintOpportunity={handlePrintOpportunity}
       />
     </div>
   )

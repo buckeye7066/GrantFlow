@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { FolderOpen, Loader2, Sparkles, UserCircle2 } from "lucide-react";
+import { FolderOpen, Loader2, Sparkles, UploadCloud, UserCircle2 } from "lucide-react";
 import DocumentItem from "../components/documents/DocumentItem";
 import {
   AlertDialog,
@@ -21,24 +21,51 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/components/ui/use-toast";
 import { listProfiles } from "@/api/profiles";
-import { listDocuments, deleteDocument } from "@/api/documents";
+import { listDocuments, deleteDocument, ingestDocument } from "@/api/documents";
 import { listCrawlerJobs, triggerProfileEnrichment } from "@/api/crawlers";
+import { useAuthStore } from "@/stores/authStore";
 
 export default function Documents() {
-  const [selectedProfileId, setSelectedProfileId] = useState(null);
+  const { user, activeProfileId } = useAuthStore((state) => ({
+    user: state.user,
+    activeProfileId: state.activeProfileId,
+  }));
+  const [selectedProfileId, setSelectedProfileId] = useState(activeProfileId ?? null);
   const [deletingDoc, setDeletingDoc] = useState(null);
+  const [uploadFile, setUploadFile] = useState(null);
+  const [uploadError, setUploadError] = useState(null);
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const fileInputRef = useRef(null);
 
   const { data: profiles = [] } = useQuery({
     queryKey: ['profiles'],
     queryFn: () => listProfiles({ status: 'active' }),
-    onSuccess: (data) => {
-      if (data.length > 0 && !selectedProfileId) {
-        setSelectedProfileId(data[0].id);
-      }
-    }
   });
+
+  const allowProfileSelection = profiles.length > 1;
+
+  useEffect(() => {
+    if (!profiles.length) return;
+    if (selectedProfileId && profiles.some((profile) => profile.id === selectedProfileId)) {
+      return;
+    }
+    if (activeProfileId && profiles.some((profile) => profile.id === activeProfileId)) {
+      setSelectedProfileId(activeProfileId);
+      return;
+    }
+    setSelectedProfileId(profiles[0].id);
+  }, [profiles, activeProfileId, selectedProfileId]);
+
+  useEffect(() => {
+    setUploadError(null);
+    setUploadFile(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  }, [selectedProfileId]);
+
+  const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? null;
 
   const { data: documents = [], isLoading: isLoadingDocuments } = useQuery({
     queryKey: ['documents', selectedProfileId],
@@ -51,6 +78,36 @@ export default function Documents() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['documents', selectedProfileId] });
       setDeletingDoc(null);
+    },
+  });
+
+  const uploadMutation = useMutation({
+    mutationFn: async ({ file, profileId }) => {
+      const formData = new FormData();
+      formData.append('profile_id', profileId);
+      formData.append('document', file);
+      return ingestDocument(formData);
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['documents', variables.profileId] });
+      setUploadFile(null);
+      setUploadError(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+      toast({
+        title: "Document uploaded",
+        description: "We're parsing the file and will update the profile shortly.",
+      });
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : "Upload failed";
+      setUploadError(message);
+      toast({
+        variant: "destructive",
+        title: "Upload failed",
+        description: message,
+      });
     },
   });
 
@@ -87,6 +144,7 @@ export default function Documents() {
   const enrichmentHistory = enrichmentJobsQuery.data ?? [];
   const latestEnrichmentJob = enrichmentHistory[0] ?? null;
   const [selectedJob, setSelectedJob] = useState(null);
+  const isUploading = uploadMutation.isPending;
 
   const enrichmentSections = useMemo(() => {
     if (!latestEnrichmentJob?.result_meta?.sections) return []
@@ -144,6 +202,58 @@ const describeDuration = (job) => {
 
 const latestDuration = describeDuration(latestEnrichmentJob)
 
+  const handleFileChange = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      setUploadFile(null);
+      setUploadError(null);
+      return;
+    }
+
+    const allowedTypes = [
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'text/plain',
+    ];
+    const allowedExtensions = ['pdf', 'doc', 'docx', 'txt'];
+    const extension = file.name?.split('.').pop()?.toLowerCase() ?? '';
+
+    if (!allowedTypes.includes(file.type) && !allowedExtensions.includes(extension)) {
+      setUploadFile(null);
+      setUploadError('Supported formats: PDF, DOC, DOCX, or TXT.');
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      setUploadFile(null);
+      setUploadError('File must be 10MB or smaller.');
+      return;
+    }
+
+    setUploadError(null);
+    setUploadFile(file);
+  };
+
+  const handleUpload = () => {
+    setUploadError(null);
+    if (!selectedProfileId) {
+      toast({
+        variant: "destructive",
+        title: "Select a profile first",
+        description: "Choose a profile before uploading documents.",
+      });
+      return;
+    }
+
+    if (!uploadFile) {
+      setUploadError('Select a file to upload.');
+      return;
+    }
+
+    uploadMutation.mutate({ file: uploadFile, profileId: selectedProfileId });
+  };
+
   const previousStatusRef = useRef(null)
   useEffect(() => {
     const status = latestEnrichmentJob?.status ?? null
@@ -165,8 +275,6 @@ const latestDuration = describeDuration(latestEnrichmentJob)
     setDeletingDoc(doc);
   };
 
-  const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? null;
-
   return (
     <div className="p-6 md:p-8">
       <div className="max-w-7xl mx-auto">
@@ -179,7 +287,11 @@ const latestDuration = describeDuration(latestEnrichmentJob)
           </div>
           <div className="flex gap-4 items-center">
             {profiles.length > 0 && (
-              <Select value={selectedProfileId ?? ''} onValueChange={setSelectedProfileId}>
+              <Select
+                value={selectedProfileId ?? ''}
+                onValueChange={setSelectedProfileId}
+                disabled={!allowProfileSelection}
+              >
                 <SelectTrigger className="w-72">
                   <div className="flex items-center gap-2">
                     <UserCircle2 className="w-4 h-4 text-slate-500" />
@@ -328,6 +440,52 @@ const latestDuration = describeDuration(latestEnrichmentJob)
             </CardTitle>
           </CardHeader>
           <CardContent>
+          <div className="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+              <div className="space-y-1">
+                <h3 className="text-sm font-semibold text-slate-900">Upload and parse a document</h3>
+                <p className="text-sm text-slate-600">
+                  Files stay scoped to {selectedProfile?.display_name ?? "the selected profile"}. Supported formats:
+                  PDF, DOC, DOCX, or TXT (10MB max).
+                </p>
+              </div>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
+                  onChange={handleFileChange}
+                  disabled={!selectedProfileId || isUploading}
+                  className="w-full sm:w-72 text-sm"
+                />
+                <Button
+                  onClick={handleUpload}
+                  disabled={!uploadFile || !selectedProfileId || isUploading}
+                  className="gap-2"
+                >
+                  {isUploading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Uploading…
+                    </>
+                  ) : (
+                    <>
+                      <UploadCloud className="w-4 h-4" />
+                      Upload & parse
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+            {uploadFile ? (
+              <p className="mt-2 text-xs text-slate-600">
+                Ready to upload: <span className="font-medium">{uploadFile.name}</span>
+              </p>
+            ) : null}
+            {uploadError ? (
+              <p className="mt-2 text-xs text-red-600">{uploadError}</p>
+            ) : null}
+          </div>
             {isLoadingDocuments ? (
               <div className="flex justify-center items-center py-16">
                 <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />

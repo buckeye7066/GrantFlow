@@ -75,6 +75,7 @@ function MessageBubble({ message }) {
 export default function AnyaChat({ profileId }) {
   const user = useAuthStore((state) => state.user)
   const isAdmin = Boolean(user?.is_admin)
+  const effectiveProfileId = profileId ?? null
   
   const [sessionId, setSessionId] = useState(null)
   const [messages, setMessages] = useState([])
@@ -192,10 +193,15 @@ export default function AnyaChat({ profileId }) {
       setIsLoading(true)
       try {
         const sessions = await getAnyaSessions()
-        const existing = sessions?.find((session) => session.profile_id === profileId)
+        const existing = sessions?.find((session) => {
+          if (effectiveProfileId) {
+            return session.profile_id === effectiveProfileId
+          }
+          return !session.profile_id
+        })
         let activeSession = existing
         if (!activeSession) {
-          activeSession = await createAnyaSession({ profileId })
+          activeSession = await createAnyaSession({ profileId: effectiveProfileId ?? undefined })
         }
         if (!isMounted) return
         setSessionId(activeSession?.id ?? null)
@@ -215,14 +221,14 @@ export default function AnyaChat({ profileId }) {
       }
     }
 
-    if (profileId) {
+    if (effectiveProfileId || isAdmin) {
       bootstrap()
     }
 
     return () => {
       isMounted = false
     }
-  }, [profileId, refreshMessages, refreshTasks])
+  }, [effectiveProfileId, isAdmin, refreshMessages, refreshTasks])
 
   useEffect(() => {
     let isMounted = true

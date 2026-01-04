@@ -57,6 +57,7 @@ import SourceRegistry from "./SourceRegistry";
 import BackfillContacts from "./BackfillContacts";
 
 import Stewardship from "./Stewardship";
+import ProfileDetail from "./ProfileDetail";
 
 import Diagnostics from "./Diagnostics";
 
@@ -187,6 +188,8 @@ const PAGES = {
     
     BillingSheet: BillingSheet,
     
+    ProfileDetail: ProfileDetail,
+    
     OrganizationProfile: OrganizationProfile,
     
     Pricing: Pricing,
@@ -307,6 +310,8 @@ function LayoutRoutes() {
 
                 <Route path="/Stewardship" element={<Stewardship />} />
 
+                <Route path="/Settings" element={<Settings />} />
+
                 <Route path="/Diagnostics" element={<Diagnostics />} />
 
                 <Route path="/ComplianceReportDetail" element={<ComplianceReportDetail />} />
@@ -323,7 +328,9 @@ function LayoutRoutes() {
 
                 <Route path="/BillingSheet" element={<BillingSheet />} />
 
-                    <Route path="/OrganizationProfile" element={<OrganizationProfile />} />
+                <Route path="/ProfileDetail" element={<ProfileDetail />} />
+
+                <Route path="/OrganizationProfile" element={<OrganizationProfile />} />
 
                 </Routes>
             </Layout>

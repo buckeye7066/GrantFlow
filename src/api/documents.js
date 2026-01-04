@@ -20,6 +20,13 @@ export function ingestDocument(payload) {
   })
 }
 
+export function createDocument(payload) {
+  return apiFetch('/api/documents', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export function deleteDocument(documentId) {
   return apiFetch(`/api/documents/${documentId}`, {
     method: 'DELETE',

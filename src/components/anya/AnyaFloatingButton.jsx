@@ -5,10 +5,13 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import AnyaChat from "./AnyaChat"
 import { cn } from "@/lib/utils"
+import { useAuthStore } from "@/stores/authStore"
 
 export default function AnyaFloatingButton({ profileId, className }) {
   const [isOpen, setIsOpen] = useState(false)
-  const hasProfile = Boolean(profileId)
+  const isAdmin = useAuthStore((state) => Boolean(state.user?.is_admin))
+  const canOpen = isAdmin || Boolean(profileId)
+  const targetProfileId = profileId ?? (isAdmin ? null : undefined)
 
   const handleClick = () => {
     setIsOpen(true)
@@ -22,19 +25,23 @@ export default function AnyaFloatingButton({ profileId, className }) {
           onClick={handleClick}
           className={cn(
             "h-14 w-14 rounded-full shadow-lg hover:shadow-xl transition-all duration-200 p-0 overflow-hidden",
-            hasProfile 
+            canOpen
               ? "bg-gradient-to-br from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
               : "bg-gradient-to-br from-slate-400 to-slate-500 hover:from-slate-500 hover:to-slate-600"
           )}
           size="icon"
-          title={hasProfile ? "Chat with Anya" : "Create a profile to chat with Anya"}
+          title={
+            canOpen
+              ? "Chat with Anya"
+              : "Create a profile to chat with Anya"
+          }
         >
           <img 
             src="/images/anya-avatar.svg" 
             alt="Anya AI Assistant" 
             className={cn(
               "h-full w-full object-cover transition-transform",
-              hasProfile ? "group-hover:scale-110" : ""
+              canOpen ? "group-hover:scale-110" : ""
             )}
           />
           <span className="sr-only">Open Anya AI Assistant</span>
@@ -47,12 +54,12 @@ export default function AnyaFloatingButton({ profileId, className }) {
             "text-white text-sm font-semibold",
             "opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none",
             "whitespace-nowrap",
-            hasProfile 
+            canOpen
               ? "bg-gradient-to-r from-purple-600 to-blue-600"
               : "bg-gradient-to-r from-slate-400 to-slate-500"
           )}
         >
-          {hasProfile ? "Chat with Anya" : "Create a profile first"}
+          {canOpen ? "Chat with Anya" : "Create a profile first"}
         </div>
       </div>
 
@@ -64,7 +71,7 @@ export default function AnyaFloatingButton({ profileId, className }) {
               <div className="flex items-center gap-3">
                 <div className={cn(
                   "flex h-10 w-10 items-center justify-center rounded-full overflow-hidden",
-                  hasProfile 
+                canOpen
                     ? "bg-gradient-to-br from-purple-600 to-blue-600"
                     : "bg-gradient-to-br from-slate-400 to-slate-500"
                 )}>
@@ -77,17 +84,17 @@ export default function AnyaFloatingButton({ profileId, className }) {
                 <div>
                   <SheetTitle className="text-lg font-bold">Anya AI Assistant</SheetTitle>
                   <SheetDescription className="text-xs">
-                    {hasProfile 
-                      ? "Your intelligent grant management copilot"
-                      : "Create a profile to get started"}
+                  {canOpen
+                    ? "Your intelligent grant management copilot"
+                    : "Create a profile to get started"}
                   </SheetDescription>
                 </div>
               </div>
             </div>
           </SheetHeader>
           <div className="flex-1 overflow-hidden">
-            {hasProfile ? (
-              <AnyaChat profileId={profileId} />
+          {canOpen ? (
+            <AnyaChat profileId={targetProfileId ?? undefined} />
             ) : (
               <div className="p-6 flex items-center justify-center h-full">
                 <Alert className="max-w-md">

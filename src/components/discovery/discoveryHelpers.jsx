@@ -7,12 +7,61 @@ import { base44 } from "@/api/base44Client";
 /**
  * Run comprehensive AI match search
  */
+function extractStateList(selectedOrg) {
+  if (!selectedOrg || typeof selectedOrg !== "object") {
+    return []
+  }
+
+  const candidates = new Set()
+
+  // Legacy top-level fields
+  if (selectedOrg.state) {
+    candidates.add(selectedOrg.state)
+  }
+  if (selectedOrg.states && Array.isArray(selectedOrg.states)) {
+    selectedOrg.states.filter(Boolean).forEach((value) => candidates.add(value))
+  }
+
+  // Signals (if enriched)
+  const signalState = selectedOrg?.signals?.location?.state
+  if (signalState) {
+    candidates.add(signalState)
+  }
+
+  // Profile sections
+  const sections = Array.isArray(selectedOrg.sections) ? selectedOrg.sections : []
+  const locationSection = sections.find((section) => section?.section_key === "location_focus")
+  if (locationSection?.data) {
+    const sectionState = locationSection.data.state || locationSection.data.primary_state
+    if (sectionState) {
+      candidates.add(sectionState)
+    }
+    const regions = locationSection.data.regions
+    if (Array.isArray(regions)) {
+      regions.filter(Boolean).forEach((value) => candidates.add(value))
+    }
+  }
+
+  // Basic information fallback
+  const basicSection = sections.find((section) => section?.section_key === "basic_information")
+  if (basicSection?.data?.state) {
+    candidates.add(basicSection.data.state)
+  }
+
+  return Array.from(candidates).filter(Boolean)
+}
+
 export async function runComprehensiveMatch(selectedOrg, searchFilters) {
   console.log('[runComprehensiveMatch] Starting comprehensive search');
+  if (!selectedOrg) {
+    throw new Error('Profile data is required to run comprehensive match.')
+  }
+
+  const stateList = extractStateList(selectedOrg)
   
   const response = await base44.functions.invoke('comprehensiveMatch', {
     profile_json: selectedOrg,
-    states: selectedOrg.state ? [selectedOrg.state] : [],
+    states: stateList,
     page: 1,
     freshness_days: 60
   });
