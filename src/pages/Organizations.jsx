@@ -168,7 +168,7 @@ export default function Organizations() {
       })
       
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
+        const errorData = await response.json().catch(() => ({ error: 'Failed to parse error response' }))
         throw new Error(errorData.error || `Upload failed with status ${response.status}`)
       }
       
