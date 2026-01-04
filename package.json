@@ -13,6 +13,8 @@
     "dev:full": "concurrently \"npm run backend\" \"npm run dev\"",
     "smoke:login": "node ./scripts/smoke-login.mjs",
     "smoke:callback": "node ./scripts/smoke-auth-callback.mjs",
+    "smoke:auth-refresh": "node ./scripts/smoke-auth-refresh.mjs",
+    "smoke:org-profile": "node ./scripts/smoke-organization-profile.mjs",
     "check:profiles": "node ./scripts/check-profiles.mjs",
     "seed:profiles": "node ./scripts/seed-profiles.mjs",
     "seed:db": "node ./scripts/build-seed-db.mjs",
