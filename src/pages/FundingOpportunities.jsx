@@ -27,10 +27,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Progress } from "@/components/ui/progress"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { useToast } from "@/components/ui/use-toast"
 import { listOpportunities, listOpportunitySources, listOpportunityStates } from "@/api/opportunities"
 import { listProfiles, getProfile } from "@/api/profiles"
-import { createCrawlerJob } from "@/api/crawlers"
+import { createCrawlerJob, fetchCrawlerStatus } from "@/api/crawlers"
 import { createGrant } from "@/api/grants"
 import { cn } from "@/lib/utils"
 
@@ -503,10 +504,24 @@ export default function FundingOpportunities() {
     enabled: Boolean(filters.profileId) && filters.profileId !== "all",
   })
 
+  // Auto-discovery status polling
+  const autoDiscoveryQuery = useQuery({
+    queryKey: ["auto-discovery-status", filters.profileId],
+    queryFn: () => fetchCrawlerStatus(filters.profileId),
+    refetchInterval: (data) => {
+      // Poll every 5s if crawlers are running
+      if (data?.running > 0) return 5000
+      // Stop polling after completion
+      return false
+    },
+    enabled: Boolean(filters.profileId) && filters.profileId !== "all",
+  })
+
   const opportunitiesResponse = opportunitiesQuery.data ?? null
   const opportunities = opportunitiesResponse?.data ?? []
   const totalResults = typeof opportunitiesResponse?.total === "number" ? opportunitiesResponse.total : opportunities.length
   const selectedProfile = selectedProfileQuery.data ?? null
+  const autoDiscoveryStatus = autoDiscoveryQuery.data ?? null
   const complianceMessage =
     filters.compliance === "grant_only"
       ? "Grant funds only — excluding loans and match requirements."
@@ -663,6 +678,20 @@ export default function FundingOpportunities() {
             </ul>
           </div>
         </div>
+
+        {/* Auto-discovery status banner */}
+        {autoDiscoveryStatus && autoDiscoveryStatus.total > 0 && (
+          <Alert className="border-blue-200 bg-blue-50">
+            <Sparkles className="w-4 h-4 text-blue-600" />
+            <AlertDescription>
+              {autoDiscoveryStatus.running > 0 ? (
+                <>Discovering opportunities across {autoDiscoveryStatus.running} sources...</>
+              ) : (
+                <>Auto-discovery complete! {autoDiscoveryStatus.completed} crawler{autoDiscoveryStatus.completed === 1 ? '' : 's'} finished. Refresh to see new opportunities.</>
+              )}
+            </AlertDescription>
+          </Alert>
+        )}
 
         <Card className="border border-slate-200 bg-white/80 backdrop-blur shadow-sm">
           <CardContent className="pt-6 space-y-4">

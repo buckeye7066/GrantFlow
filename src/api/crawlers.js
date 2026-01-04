@@ -67,3 +67,10 @@ export async function updateCrawlerJob(id, payload) {
     body: JSON.stringify(payload),
   })
 }
+
+export async function fetchCrawlerStatus(profileId) {
+  if (!profileId) {
+    throw new Error("profileId is required to fetch crawler status")
+  }
+  return apiFetch(`/api/crawlers/auto-discovery-status/${profileId}`)
+}

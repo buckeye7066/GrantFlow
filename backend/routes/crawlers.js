@@ -1196,4 +1196,37 @@ router.patch('/jobs/:id', (req, res) => {
   }
 })
 
+// Get auto-discovery status for a profile
+router.get('/auto-discovery-status/:profileId', (req, res) => {
+  try {
+    const { profileId } = req.params
+    
+    if (!profileId) {
+      return res.status(400).json({ error: 'profileId is required' })
+    }
+
+    // Count jobs created by auto-discovery for this profile
+    const stats = req.db.prepare(`
+      SELECT 
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'running' OR status = 'queued' THEN 1 ELSE 0 END) as running,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
+      FROM crawler_jobs
+      WHERE profile_id = ? AND requested_by = 'auto-discovery'
+    `).get(profileId)
+
+    return res.json({
+      profileId,
+      total: stats.total || 0,
+      running: stats.running || 0,
+      completed: stats.completed || 0,
+      failed: stats.failed || 0,
+    })
+  } catch (error) {
+    console.error('Error fetching auto-discovery status:', error)
+    return res.status(500).json({ error: error.message })
+  }
+})
+
 export default router
