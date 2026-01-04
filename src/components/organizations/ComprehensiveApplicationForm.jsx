@@ -1,4 +1,3 @@
-
 import React, { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -10,10 +9,12 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
 import { 
   User, GraduationCap, Heart, Briefcase, MapPin, FileText, 
-  CheckCircle, ChevronRight, ChevronLeft, Upload, AlertCircle 
+  CheckCircle, ChevronRight, ChevronLeft, Upload, AlertCircle, Mail, Printer 
 } from "lucide-react";
 import MultiSelectCombobox from "../shared/MultiSelectCombobox";
 import { Badge } from "@/components/ui/badge";
+import { useToast } from "@/components/ui/use-toast";
+import { apiFetch } from "@/api/client";
 
 const US_STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
 
@@ -30,7 +31,9 @@ const GRADE_LEVELS = [
 ];
 
 export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSubmitting }) {
+  const { toast } = useToast();
   const [currentStep, setCurrentStep] = useState(0);
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [formData, setFormData] = useState({
     // Basic Info
     name: "",
@@ -384,6 +387,61 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
     }
     
     onSubmit(finalData);
+  };
+
+  const handlePrintPDF = () => {
+    window.print();
+  };
+
+  const handleEmailApplication = async () => {
+    if (!formData.name) {
+      toast({
+        title: "Name Required",
+        description: "Please enter your name before sending the application.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsSendingEmail(true);
+    try {
+      // Calculate age from date of birth if provided
+      let finalData = { ...formData };
+      if (finalData.date_of_birth && !finalData.age) {
+        const birthDate = new Date(finalData.date_of_birth);
+        const today = new Date();
+        const age = today.getFullYear() - birthDate.getFullYear();
+        const monthDiff = today.getMonth() - birthDate.getMonth();
+        if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+          finalData.age = age - 1;
+        } else {
+          finalData.age = age;
+        }
+      }
+
+      // Send via API - use a temporary ID since this is a draft
+      await apiFetch('/api/profiles/draft/send-application-email', {
+        method: 'POST',
+        body: JSON.stringify({
+          toEmail: 'dr.johnwhite@axiombiolabs.org',
+          applicationData: finalData
+        }),
+      });
+
+      toast({
+        title: "Application Sent!",
+        description: "Your application has been emailed to Dr. John White.",
+      });
+    } catch (error) {
+      console.error('Error sending application:', error);
+      toast({
+        title: "Failed to Send",
+        description: error.message || "There was an error sending your application. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSendingEmail(false);
+    }
   };
 
   const currentStepData = visibleSteps[currentStep];
@@ -1546,6 +1604,34 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
                       </p>
                     </div>
                   </div>
+                </div>
+
+                {/* PDF & Email Actions */}
+                <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                  <h4 className="font-semibold mb-3 text-blue-900">Application Actions</h4>
+                  <div className="flex flex-wrap gap-3">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handlePrintPDF}
+                      className="flex-1 min-w-[200px]"
+                    >
+                      <Printer className="w-4 h-4 mr-2" />
+                      Save as PDF
+                    </Button>
+                    <Button
+                      type="button"
+                      onClick={handleEmailApplication}
+                      disabled={isSendingEmail}
+                      className="flex-1 min-w-[200px] bg-blue-600 hover:bg-blue-700"
+                    >
+                      <Mail className="w-4 h-4 mr-2" />
+                      {isSendingEmail ? 'Sending...' : 'Email to Dr. White'}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-blue-700 mt-2">
+                    Click "Save as PDF" to download, or "Email to Dr. White" to send directly to dr.johnwhite@axiombiolabs.org
+                  </p>
                 </div>
               </div>
             </div>
