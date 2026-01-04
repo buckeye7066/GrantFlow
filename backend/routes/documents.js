@@ -171,6 +171,7 @@ router.post('/ingest', upload.single('document'), async (req, res) => {
       source = null,
       display_name: rawDisplayName,
       primary_type: rawPrimaryType,
+      skip_parsing: rawSkipParsing, // NEW: Optional parameter to skip auto-parsing
     } = req.body ?? {};
 
     const file = req.file;
@@ -182,6 +183,7 @@ router.post('/ingest', upload.single('document'), async (req, res) => {
     const grant_id = rawGrantId || null;
     const type = rawType || null;
     const notes = rawNotes || null;
+    const skipParsing = rawSkipParsing === 'true' || rawSkipParsing === true; // Parse boolean
 
     let profileId = rawProfileId || null;
     let createdProfile = null;
@@ -267,31 +269,35 @@ router.post('/ingest', upload.single('document'), async (req, res) => {
       )
       .run(profileId, id);
 
-    const parameters = JSON.stringify({
-      document_id: id,
-      source,
-    });
+    // FIXED: Only queue parsing job if skip_parsing is not true
+    if (!skipParsing) {
+      const parameters = JSON.stringify({
+        document_id: id,
+        source,
+      });
 
-    const requestedBy = req.user?.profileId ?? req.user?.userId ?? 'system';
+      const requestedBy = req.user?.profileId ?? req.user?.userId ?? 'system';
 
-    req.db
-      .prepare(
-        `INSERT INTO crawler_jobs (
-          type,
-          status,
-          profile_id,
-          organization_id,
-          parameters,
-          requested_by
-        ) VALUES ('document_ingest', 'queued', ?, ?, ?, ?)`
-      )
-      .run(profileId, organization_id ?? null, parameters, requestedBy);
+      req.db
+        .prepare(
+          `INSERT INTO crawler_jobs (
+            type,
+            status,
+            profile_id,
+            organization_id,
+            parameters,
+            requested_by
+          ) VALUES ('document_ingest', 'queued', ?, ?, ?, ?)`
+        )
+        .run(profileId, organization_id ?? null, parameters, requestedBy);
+    }
 
     const document = req.db.prepare('SELECT * FROM documents WHERE id = ?').get(id);
     res.status(202).json({
       ...document,
       profile_id: profileId,
       created_profile: createdProfile ?? undefined,
+      parsing_skipped: skipParsing, // Inform client that parsing was skipped
     });
   } catch (error) {
     console.error('Document ingestion enqueue failed:', error);
@@ -314,6 +320,70 @@ router.put('/:id', (req, res) => {
     req.db.prepare(`UPDATE documents SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...values, req.params.id);
     res.json(req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id));
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// NEW: Endpoint to manually trigger document parsing
+router.post('/:id/parse', (req, res) => {
+  try {
+    const docId = req.params.id;
+    const doc = req.db.prepare('SELECT * FROM documents WHERE id = ?').get(docId);
+    
+    if (!doc) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    // Check if already being parsed or completed
+    const existingJob = req.db.prepare(
+      `SELECT * FROM crawler_jobs 
+       WHERE type = 'document_ingest' 
+       AND parameters LIKE ?
+       AND status IN ('queued', 'running')
+       LIMIT 1`
+    ).get(`%"document_id":"${docId}"%`);
+
+    if (existingJob) {
+      return res.status(409).json({ 
+        error: 'Document is already being parsed',
+        job_id: existingJob.id,
+        status: existingJob.status
+      });
+    }
+
+    // Create new parsing job
+    const parameters = JSON.stringify({
+      document_id: docId,
+      source: req.body.source || 'manual',
+    });
+
+    const requestedBy = req.user?.profileId ?? req.user?.userId ?? 'system';
+
+    req.db
+      .prepare(
+        `INSERT INTO crawler_jobs (
+          type,
+          status,
+          profile_id,
+          organization_id,
+          parameters,
+          requested_by
+        ) VALUES ('document_ingest', 'queued', ?, ?, ?, ?)`
+      )
+      .run(doc.profile_id, doc.organization_id ?? null, parameters, requestedBy);
+
+    // Update document status
+    req.db.prepare(
+      `UPDATE documents SET processing_status = 'pending' WHERE id = ?`
+    ).run(docId);
+
+    res.json({ 
+      success: true, 
+      message: 'Document parsing queued',
+      document_id: docId
+    });
+  } catch (error) {
+    console.error('Error queuing document parsing:', error);
     res.status(500).json({ error: error.message });
   }
 });

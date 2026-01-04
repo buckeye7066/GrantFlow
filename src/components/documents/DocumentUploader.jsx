@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import { X, Loader2, UploadCloud } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useToast } from "@/components/ui/use-toast";
@@ -37,13 +38,14 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
 export default function DocumentUploader({ profileId, organizationId, onClose }) {
   const queryClient = useQueryClient();
-  const { register, handleSubmit, control, formState: { errors } } = useForm();
+  const { register, handleSubmit, control, formState: { errors }, watch } = useForm();
   const [file, setFile] = useState(null);
   const [fileError, setFileError] = useState(null);
+  const [skipParsing, setSkipParsing] = useState(false); // NEW: State for skip parsing checkbox
   const { toast } = useToast();
 
   const ingestMutation = useMutation({
-    mutationFn: async ({ file, title, documentType, description, tags }) => {
+    mutationFn: async ({ file, title, documentType, description, tags, skipParsing }) => {
       if (!profileId) {
         throw new Error("Select a profile before uploading a document.");
       }
@@ -56,6 +58,11 @@ export default function DocumentUploader({ profileId, organizationId, onClose })
       formData.append("document", file);
       formData.append("name", title || file.name);
       formData.append("type", documentType);
+      
+      // NEW: Add skip_parsing parameter
+      if (skipParsing) {
+        formData.append("skip_parsing", "true");
+      }
 
       const notesSegments = [description?.trim() || null, tags ? `Tags: ${tags}` : null].filter(Boolean);
       if (notesSegments.length) {
@@ -64,15 +71,25 @@ export default function DocumentUploader({ profileId, organizationId, onClose })
 
       return ingestDocument(formData);
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['documents', profileId] });
       queryClient.invalidateQueries({ queryKey: ['profile', profileId] });
-      toast({
-        title: "📄 Document queued for enrichment",
-        description: "AI will analyze the document and update the profile shortly.",
-      });
+      
+      if (data?.parsing_skipped) {
+        toast({
+          title: "📄 Document saved",
+          description: "Document uploaded successfully. You can parse it later using the 'Parse' button.",
+        });
+      } else {
+        toast({
+          title: "📄 Document queued for enrichment",
+          description: "AI will analyze the document and update the profile shortly.",
+        });
+      }
+      
       setFile(null);
       setFileError(null);
+      setSkipParsing(false);
       if (onClose) onClose();
     },
     onError: (error) => {
@@ -103,6 +120,7 @@ export default function DocumentUploader({ profileId, organizationId, onClose })
         documentType: data.document_type,
         description: data.description,
         tags: data.tags,
+        skipParsing, // NEW: Pass skip parsing flag
       });
     } catch (error) {
       console.error("Upload failed", error);
@@ -202,6 +220,20 @@ export default function DocumentUploader({ profileId, organizationId, onClose })
             <Label htmlFor="description">Description</Label>
             <Textarea id="description" {...register("description")} />
           </div>
+          
+          <div className="flex items-center space-x-2 py-2">
+            <Checkbox 
+              id="skip-parsing" 
+              checked={skipParsing}
+              onCheckedChange={setSkipParsing}
+            />
+            <Label 
+              htmlFor="skip-parsing" 
+              className="text-sm font-normal cursor-pointer"
+            >
+              Save without parsing (parse later manually)
+            </Label>
+          </div>
         </CardContent>
         <CardFooter className="flex justify-end gap-3">
           <Button type="button" variant="outline" onClick={onClose} disabled={isSubmitting}>
@@ -209,7 +241,7 @@ export default function DocumentUploader({ profileId, organizationId, onClose })
           </Button>
           <Button type="submit" disabled={isSubmitting}>
             {isSubmitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <UploadCloud className="w-4 h-4 mr-2" />}
-            {isSubmitting ? "Uploading..." : "Upload & Save"}
+            {isSubmitting ? "Uploading..." : skipParsing ? "Upload & Save" : "Upload & Parse"}
           </Button>
         </CardFooter>
       </form>

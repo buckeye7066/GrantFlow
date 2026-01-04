@@ -5,6 +5,7 @@
  */
 
 import { randomUUID } from 'crypto'
+import { dispatchCrawlerJob } from './crawlerDispatcher.js'
 
 const ADMIN_EMAIL = 'buckeye7066@gmail.com'
 
@@ -106,8 +107,9 @@ function addAnyaMessage(db, sessionId, role, content) {
 /**
  * Initialize Anya for admin user on login
  * Creates crawler jobs and Anya session
+ * @param {object} options - Options object with db, user, profileId, uploadDir, getOpenAI
  */
-export function initializeAnyaForAdmin(db, user, profileId = null) {
+export function initializeAnyaForAdmin(db, user, profileId = null, { uploadDir, getOpenAI } = {}) {
   // Only initialize for admin users
   if (!isAdmin(user)) {
     console.log('[anyaLoginTrigger] User is not admin, skipping Anya initialization')
@@ -157,6 +159,19 @@ export function initializeAnyaForAdmin(db, user, profileId = null) {
       }),
       profile_enrichment: createCrawlerJob(db, profileId, 'profile_enrichment', {}),
     }
+    
+    // FIXED: Dispatch each crawler job to actually start them
+    // Reference: backend/services/autoDiscoveryCrawlers.js lines 117-127
+    Object.entries(jobIds).forEach(([type, jobId]) => {
+      dispatchCrawlerJob({
+        db,
+        jobId,
+        uploadDir,
+        getOpenAI
+      }).catch(err => {
+        console.error(`[anyaLoginTrigger] Job ${jobId} (${type}) dispatch failed:`, err)
+      })
+    })
     
     // Add welcome message from Anya
     const welcomeMessage = `Welcome back! I've automatically started the following background tasks for you:

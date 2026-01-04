@@ -25,3 +25,9 @@ export function deleteDocument(documentId) {
     method: 'DELETE',
   })
 }
+
+export function parseDocument(documentId) {
+  return apiFetch(`/api/documents/${documentId}/parse`, {
+    method: 'POST',
+  })
+}
