@@ -11,11 +11,13 @@ import {
   Heart,
   GraduationCap,
   Church,
-  Receipt
+  Receipt,
+  Trash2,
+  AlertTriangle
 } from "lucide-react";
 import { createPageUrl } from "@/utils";
 
-export default function ProfileCard({ profile, onViewInvoices }) {
+export default function ProfileCard({ profile, onViewInvoices, onDelete }) {
   const navigate = useNavigate();
   const billing = profile.billing || {};
   const tier = billing.tier || {};
@@ -44,15 +46,33 @@ export default function ProfileCard({ profile, onViewInvoices }) {
   };
   
   const handleCardClick = () => {
-    navigate(createPageUrl("OrganizationProfile", { id: profile.id }));
+    // Navigate to organization profile using organization_id if it exists
+    if (profile.organization_id) {
+      navigate(createPageUrl("OrganizationProfile", { id: profile.organization_id }));
+    }
+    // If no organization_id, don't navigate (orphaned profile)
   };
+  
+  // Check if this is an orphaned profile (no organization_id or invalid reference)
+  const isOrphanedProfile = !profile.organization_id;
   
   return (
     <Card 
-      className="hover:shadow-lg transition-shadow cursor-pointer border-0 shadow-md"
-      onClick={handleCardClick}
+      className={`hover:shadow-lg transition-shadow ${!isOrphanedProfile ? 'cursor-pointer' : ''} border-0 shadow-md ${isOrphanedProfile ? 'border-2 border-orange-300' : ''}`}
+      onClick={isOrphanedProfile ? undefined : handleCardClick}
     >
       <CardHeader className="border-b border-slate-100">
+        {isOrphanedProfile && (
+          <div className="mb-3 p-3 bg-orange-50 border border-orange-200 rounded-lg flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-orange-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-orange-900">Orphaned Profile</p>
+              <p className="text-xs text-orange-700 mt-1">
+                This profile is not linked to an organization. You can delete it to remove it from your list.
+              </p>
+            </div>
+          </div>
+        )}
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-start gap-3 flex-1">
             {profile.avatar_url ? (
@@ -147,30 +167,47 @@ export default function ProfileCard({ profile, onViewInvoices }) {
         
         {/* Actions */}
         <div className="flex gap-2 pt-3 border-t border-slate-100">
-          <Button 
-            variant="outline" 
-            size="sm" 
-            className="flex-1"
-            onClick={(e) => {
-              e.stopPropagation();
-              onViewInvoices?.(profile);
-            }}
-          >
-            <Receipt className="w-4 h-4 mr-2" />
-            Invoices
-          </Button>
-          <Button 
-            variant="outline" 
-            size="sm" 
-            className="flex-1"
-            onClick={(e) => {
-              e.stopPropagation();
-              navigate(createPageUrl("Billing", { profile_id: profile.id }));
-            }}
-          >
-            <FileText className="w-4 h-4 mr-2" />
-            Billing
-          </Button>
+          {isOrphanedProfile ? (
+            <Button 
+              variant="destructive" 
+              size="sm" 
+              className="w-full"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete?.(profile);
+              }}
+            >
+              <Trash2 className="w-4 h-4 mr-2" />
+              Delete Profile
+            </Button>
+          ) : (
+            <>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="flex-1"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onViewInvoices?.(profile);
+                }}
+              >
+                <Receipt className="w-4 h-4 mr-2" />
+                Invoices
+              </Button>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="flex-1"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate(createPageUrl("Billing", { profile_id: profile.id }));
+                }}
+              >
+                <FileText className="w-4 h-4 mr-2" />
+                Billing
+              </Button>
+            </>
+          )}
         </div>
       </CardContent>
     </Card>

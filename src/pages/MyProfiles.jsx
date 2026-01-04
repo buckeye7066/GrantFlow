@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { listProfiles } from "@/api/profiles";
+import { listProfiles, deleteProfile } from "@/api/profiles";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,12 +13,17 @@ import {
   Building2
 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { useToast } from "@/components/ui/use-toast";
 import ProfileCard from "@/components/profiles/ProfileCard";
 import { createPageUrl } from "@/utils";
 
 export default function MyProfiles() {
   const [searchTerm, setSearchTerm] = useState("");
+  const [profileToDelete, setProfileToDelete] = useState(null);
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
   
   // Fetch profiles with summary data
   const { 
@@ -42,8 +47,38 @@ export default function MyProfiles() {
     );
   }, [profiles, searchTerm]);
   
+  // Delete mutation
+  const deleteMutation = useMutation({
+    mutationFn: deleteProfile,
+    onSuccess: () => {
+      toast({
+        title: "Profile deleted",
+        description: "The profile has been successfully removed.",
+      });
+      queryClient.invalidateQueries({ queryKey: ['profiles'] });
+      setProfileToDelete(null);
+    },
+    onError: (error) => {
+      toast({
+        title: "Error deleting profile",
+        description: error.message || "Failed to delete the profile. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+  
   const handleViewInvoices = (profile) => {
     navigate(createPageUrl("CreateInvoice", { organization_id: profile.organization_id, profile_id: profile.id }));
+  };
+  
+  const handleDeleteProfile = (profile) => {
+    setProfileToDelete(profile);
+  };
+  
+  const confirmDelete = () => {
+    if (profileToDelete) {
+      deleteMutation.mutate(profileToDelete.id);
+    }
   };
   
   const handleCreateProfile = () => {
@@ -138,6 +173,7 @@ export default function MyProfiles() {
                   key={profile.id}
                   profile={profile}
                   onViewInvoices={handleViewInvoices}
+                  onDelete={handleDeleteProfile}
                 />
               ))}
             </div>
@@ -147,6 +183,36 @@ export default function MyProfiles() {
             </footer>
           </>
         )}
+        
+        {/* Delete Confirmation Dialog */}
+        <AlertDialog open={!!profileToDelete} onOpenChange={(open) => !open && setProfileToDelete(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete Profile</AlertDialogTitle>
+              <AlertDialogDescription>
+                Are you sure you want to delete the profile "{profileToDelete?.display_name}"? 
+                This action cannot be undone and will remove all associated data including sections, documents, and billing information.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={deleteMutation.isPending}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={confirmDelete}
+                disabled={deleteMutation.isPending}
+                className="bg-red-600 hover:bg-red-700"
+              >
+                {deleteMutation.isPending ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  'Delete'
+                )}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </section>
   );

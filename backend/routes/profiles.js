@@ -176,6 +176,14 @@ router.post('/', (req, res) => {
     return res.status(400).json({ error: 'display_name is required' })
   }
 
+  // Validate organization_id if provided
+  if (organization_id) {
+    const org = req.db.prepare('SELECT id FROM organizations WHERE id = ?').get(organization_id)
+    if (!org) {
+      return res.status(400).json({ error: 'Invalid organization_id: organization does not exist' })
+    }
+  }
+
   const insert = req.db.prepare(`
     INSERT INTO profiles (display_name, primary_type, organization_id, created_by, status, tags)
     VALUES (?, ?, ?, ?, ?, ?)
@@ -265,6 +273,13 @@ router.put('/:id', (req, res) => {
   }
 
   if (organization_id !== undefined) {
+    // Validate organization_id if provided and not null
+    if (organization_id) {
+      const org = req.db.prepare('SELECT id FROM organizations WHERE id = ?').get(organization_id)
+      if (!org) {
+        return res.status(400).json({ error: 'Invalid organization_id: organization does not exist' })
+      }
+    }
     updates.push('organization_id = ?')
     values.push(organization_id || null)
   }
@@ -288,6 +303,46 @@ router.put('/:id', (req, res) => {
 
   const updated = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   res.json(mapProfile(updated))
+})
+
+router.delete('/:id', (req, res) => {
+  const { id } = req.params
+  const auth = req.user ?? { role: 'guest' }
+
+  // Check authorization - user must be admin or the profile must belong to them
+  const existing = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!existing) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (auth.role !== 'admin') {
+    const matchesProfileId = auth.profileId === id
+    const matchesUserId = auth.userId && existing.user_id && auth.userId === existing.user_id
+    if (!matchesProfileId && !matchesUserId) {
+      return res.status(403).json({ error: 'Not authorized to delete this profile' })
+    }
+  }
+
+  // Delete the profile (CASCADE will handle related records)
+  const stmt = req.db.prepare('DELETE FROM profiles WHERE id = ?')
+  const result = stmt.run(id)
+  
+  if (result.changes === 0) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  // Clean up avatar file if it exists
+  if (existing.avatar_url && existing.avatar_url.startsWith('/uploads/')) {
+    const filename = existing.avatar_url.replace('/uploads/', '')
+    if (filename) {
+      const avatarPath = join(uploadDir, filename)
+      fs.unlink(avatarPath, (err) => {
+        if (err) console.warn('Failed to delete avatar file:', err)
+      })
+    }
+  }
+
+  res.status(204).send()
 })
 
 router.post('/:id/avatar', upload.single('avatar'), (req, res, next) => {
