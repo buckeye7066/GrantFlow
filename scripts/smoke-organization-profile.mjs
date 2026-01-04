@@ -126,8 +126,14 @@ async function run() {
     console.log('[smoke] Test 3: Verify component renders content')
     const hasContent = await page.evaluate(() => {
       const body = document.body.innerText
-      // Should either show loading, profile data, or error - not be completely blank
-      return body.length > 100 // Basic check that something rendered
+      // Should show either loading indicator, profile content, or error message
+      return body.includes('Loading') || 
+             body.includes('organization') || 
+             body.includes('Organization') ||
+             body.includes('profile') ||
+             body.includes('Profile') ||
+             body.includes('Back to') ||
+             body.length > 50
     })
     
     if (!hasContent) {

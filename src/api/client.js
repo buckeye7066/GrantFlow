@@ -112,7 +112,6 @@ class APIClient {
         const response = await fetch(`${this.baseUrl}/api/auth/refresh`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          credentials: 'include', // Include cookies if backend uses them
           body: JSON.stringify({ refreshToken }),
         });
         
