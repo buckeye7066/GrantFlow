@@ -127,10 +127,10 @@ export default function EmailSignInForm({ onComplete }) {
           </div>
           <Button type="submit" disabled={isLoading} className="w-full">
             {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            Send magic code
+            Continue with Email
           </Button>
           <p className="text-xs text-slate-500">
-            We&apos;ll send a one-time code—no password required. Your email must be associated with a GrantFlow profile.
+            No password required. We'll send a verification code to your email address.
           </p>
         </form>
       ) : null}
