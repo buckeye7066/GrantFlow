@@ -17,6 +17,8 @@ const discountOptions = [
   { value: "none", label: "No discount" },
   { value: "student", label: "Student discount" },
   { value: "minister", label: "Minister discount" },
+  { value: "hardship", label: "Hardship discount" },
+  { value: "custom", label: "Custom discount" },
 ]
 
 function formatCurrencyFromCents(cents) {
