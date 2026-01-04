@@ -10,6 +10,7 @@ import {
   Target,
   Plus,
   Sparkles,
+  LogOut,
 } from "lucide-react"
 import { differenceInDays, format } from "date-fns"
 
@@ -52,6 +53,7 @@ function LJWMonogram({ className = "" }) {
 
 export default function Dashboard() {
   const sessionExpired = useAuthStore((state) => state.sessionExpired)
+  const logout = useAuthStore((state) => state.logout)
   const [showOnboarding, setShowOnboarding] = useState(false)
   const queryClient = useQueryClient()
   
@@ -363,6 +365,14 @@ export default function Dashboard() {
                         <Sparkles className="h-4 w-4" />
                         View Automations
                       </Link>
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      className="gap-2" 
+                      onClick={() => logout()}
+                    >
+                      <LogOut className="h-4 w-4" />
+                      Logout
                     </Button>
                   </div>
                 </div>
