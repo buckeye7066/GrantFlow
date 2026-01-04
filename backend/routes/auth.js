@@ -3,11 +3,29 @@ import crypto from 'crypto'
 import rateLimit from 'express-rate-limit'
 import jwt from 'jsonwebtoken'
 import twilio from 'twilio'
+import OpenAI from 'openai'
+import { fileURLToPath } from 'url'
+import { dirname, join } from 'path'
 import { sendVerificationEmail } from '../services/email.js'
 import { initializeAnyaForAdmin } from '../services/anyaLoginTrigger.js'
 import { getDesignatedProfileForEmail, hasDesignatedProfile } from '../config/userProfileMappings.js'
 import { ADMIN_EMAIL, isAdminEmail } from '../config/constants.js'
+import { triggerAutoDiscoveryCrawlers } from '../services/autoDiscoveryCrawlers.js'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
+const uploadDir = join(__dirname, '..', 'uploads')
+
 const router = express.Router()
+
+function getOpenAI() {
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!apiKey) {
+    console.warn('[auth] OPENAI_API_KEY not set, crawler dispatch may fail')
+    return null
+  }
+  return new OpenAI({ apiKey })
+}
 
 const JWT_SECRET = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret'
 
@@ -1247,6 +1265,13 @@ router.post('/email/verify', (req, res) => {
     // Don't fail the login if Anya initialization fails
   }
 
+  // Auto-trigger discovery crawlers on email login (fire and forget)
+  if (activeProfileId) {
+    triggerAutoDiscoveryCrawlers(req.db, activeProfileId, { uploadDir, getOpenAI }).catch(err => {
+      console.error('[auth/email] Failed to queue auto-discovery crawlers:', err)
+    })
+  }
+
   const response = {
     accessToken: session.accessToken,
     refreshToken: session.refreshToken,
@@ -1469,6 +1494,13 @@ router.post('/phone/verify', (req, res) => {
     // Don't fail the login if Anya initialization fails
   }
 
+  // Auto-trigger discovery crawlers on phone login (fire and forget)
+  if (activeProfileId) {
+    triggerAutoDiscoveryCrawlers(req.db, activeProfileId, { uploadDir, getOpenAI }).catch(err => {
+      console.error('[auth/phone] Failed to queue auto-discovery crawlers:', err)
+    })
+  }
+
   const response = {
     accessToken: session.accessToken,
     refreshToken: session.refreshToken,
@@ -1569,6 +1601,13 @@ router.get('/:provider/callback', async (req, res) => {
       userAgent: req.headers['user-agent'],
       ipAddress: req.ip,
     })
+
+    // Auto-trigger discovery crawlers on OAuth login (fire and forget)
+    if (activeProfileId) {
+      triggerAutoDiscoveryCrawlers(req.db, activeProfileId, { uploadDir, getOpenAI }).catch(err => {
+        console.error(`[auth/${provider}] Failed to queue auto-discovery crawlers:`, err)
+      })
+    }
 
     return redirectWithParams({
       accessToken: session.accessToken,
