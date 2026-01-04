@@ -48,7 +48,7 @@ export default function Login() {
   return (
     <AuthShell
       title="Sign in to GrantFlow"
-      subtitle="Enter your email to receive a secure login code."
+      subtitle="Enter your email address to get started."
     >
       <AuthMethodExpiryNotice />
       <AuthMethodTabs onComplete={handleComplete} />
@@ -59,7 +59,7 @@ export default function Login() {
 function AuthMethodExpiryNotice() {
   return (
     <div className="mb-6 rounded-lg border border-blue-100 bg-blue-50/70 p-3 text-sm text-slate-700">
-      Email passcodes are used for secure authentication. Enter your email to receive a verification code—tokens refresh automatically once you're signed in.
+      We'll send a 6-digit verification code to your email for secure authentication. The code expires after 10 minutes.
     </div>
   )
 }
