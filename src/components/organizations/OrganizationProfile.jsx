@@ -462,6 +462,12 @@ Return a single JSON object with the key "logo_url" containing the absolute, dir
             </div>
         </div>
         <div className="flex items-start gap-2 flex-wrap">
+           <Link to={createPageUrl("Pricing")}>
+             <Button variant="outline">
+               <DollarSign className="w-4 h-4 mr-2" />
+               View Pricing
+             </Button>
+           </Link>
            <Button
              variant="outline"
              onClick={() => {
