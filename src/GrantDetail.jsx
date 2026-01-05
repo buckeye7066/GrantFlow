@@ -142,20 +142,8 @@ export default function GrantDetail() {
   
   const analyzeGrantMutation = useMutation({
     mutationFn: async (payload) => {
-      // TODO: Remove debug log - console.log('[GrantDetail] Calling analyzeGrant with:', {
-        grantId: payload.grantId,
-        title: payload.title?.substring(0, 50),
-        hasDescription: !!payload.description,
-        hasEligibility: !!payload.eligibility
-      });
-      
       try {
         const response = await base44.functions.invoke('analyzeGrant', payload);
-        // TODO: Remove debug log - console.log('[GrantDetail] Function response:', {
-          status: response.status,
-          hasData: !!response.data,
-          success: response.data?.success
-        });
         
         if (response.data && !response.data.success) {
           console.error('[GrantDetail] Function returned error:', response.data);
