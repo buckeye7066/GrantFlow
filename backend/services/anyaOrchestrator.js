@@ -11,7 +11,12 @@ function getOpenAIClient() {
   if (cachedOpenAI) return cachedOpenAI
   const apiKey = process.env.ANYA_OPENAI_KEY || process.env.OPENAI_API_KEY
   if (!apiKey) {
-    throw new Error('OPENAI_API_KEY (or ANYA_OPENAI_KEY) is not configured')
+    const error = new Error(
+      'OpenAI API key is not configured. Please set OPENAI_API_KEY or ANYA_OPENAI_KEY environment variable. ' +
+      'Get your API key from https://platform.openai.com/api-keys'
+    )
+    error.code = 'MISSING_API_KEY'
+    throw error
   }
   cachedOpenAI = new OpenAI({ apiKey })
   return cachedOpenAI
