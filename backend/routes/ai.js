@@ -534,29 +534,25 @@ router.post('/invoke', async (req, res) => {
     const completion = await openai.chat.completions.create(requestParams);
     const content = extractCompletionText(completion);
 
-    // Parse JSON if schema was requested
-    let result = content;
+    // Parse JSON if schema was requested, otherwise return as text
     if (response_json_schema) {
       try {
-        result = JSON.parse(content);
+        const result = JSON.parse(content);
+        res.json(result);
       } catch (parseError) {
         console.error('Failed to parse JSON response:', parseError);
         // Try to extract JSON from the response
         const jsonMatch = content.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
-          result = JSON.parse(jsonMatch[0]);
+          res.json(JSON.parse(jsonMatch[0]));
+        } else {
+          res.status(500).json({ error: 'Failed to parse JSON response from AI' });
         }
       }
+    } else {
+      // Return as plain text (string)
+      res.json(content);
     }
-
-    res.json({
-      result,
-      usage: {
-        prompt_tokens: completion.usage?.prompt_tokens || 0,
-        completion_tokens: completion.usage?.completion_tokens || 0,
-        total_tokens: completion.usage?.total_tokens || 0,
-      },
-    });
   } catch (error) {
     console.error('Error invoking AI:', error);
     res.status(500).json({ error: error.message });
