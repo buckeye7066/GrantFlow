@@ -20,6 +20,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx"
+import { useSettingsStore } from "@/stores/settingsStore"
 
 export default function ProfileDetail() {
   const [searchParams] = useSearchParams()
@@ -28,6 +29,7 @@ export default function ProfileDetail() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
   const { state: dashboardPrefs, dispatch: preferencesDispatch } = useDashboardPreferences()
+  const { preferences: backendPrefs, updatePreference } = useSettingsStore()
   const [appearanceOpen, setAppearanceOpen] = React.useState(false)
   const themeOptions = React.useMemo(
     () => [
@@ -130,20 +132,35 @@ export default function ProfileDetail() {
 
   const handleThemeChange = React.useCallback(
     (theme) => {
+      // Update both local and backend preferences
       preferencesDispatch({ type: "SET_COLOR_THEME", theme })
+      updatePreference("accent_color", theme)
+      
+      toast({
+        title: "Theme updated",
+        description: "Your color theme preference has been saved.",
+      })
     },
-    [preferencesDispatch],
+    [preferencesDispatch, updatePreference, toast],
   )
 
   const handleLayoutChange = React.useCallback(
     (layout) => {
+      // Update both local and backend preferences
       preferencesDispatch({ type: "SET_LAYOUT", layout })
       preferencesDispatch({
         type: "SET_LAYOUT_COLUMNS",
         columns: layout === "compact" ? 3 : 2,
       })
+      updatePreference("dashboard_layout", layout === "compact" ? "grid" : "list")
+      updatePreference("card_density", layout === "compact" ? "compact" : "comfortable")
+      
+      toast({
+        title: "Layout updated",
+        description: "Your layout preference has been saved.",
+      })
     },
-    [preferencesDispatch],
+    [preferencesDispatch, updatePreference, toast],
   )
 
   const handleUploadDocument = React.useCallback(
