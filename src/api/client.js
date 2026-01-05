@@ -112,12 +112,20 @@ class APIClient {
         const response = await fetch(`${this.baseUrl}/api/auth/refresh`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include', // Ensure cookies are sent with the request
           body: JSON.stringify({ refreshToken }),
         });
         
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
           console.error('[APIClient] Refresh request failed:', response.status, errorData);
+          
+          // Clear tokens immediately on 401 from refresh endpoint
+          if (response.status === 401) {
+            console.warn('[APIClient] Invalid refresh token, clearing auth state');
+            this.clearToken();
+          }
+          
           throw new Error(errorData.error || `Refresh failed with status ${response.status}`);
         }
         

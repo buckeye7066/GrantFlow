@@ -1,29 +1,29 @@
 import { randomUUID } from 'crypto'
-import OpenAI from 'openai'
+import Anthropic from '@anthropic-ai/sdk'
 import { listToolMetadata, invokeTool as invokeRegisteredTool } from './anyaToolRegistry.js'
 
 const TASK_STATUSES = new Set(['open', 'in_progress', 'completed', 'cancelled'])
 const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent'])
 
-let cachedOpenAI = null
+let cachedClaudeClient = null
 
-function getOpenAIClient() {
-  if (cachedOpenAI) return cachedOpenAI
-  const apiKey = process.env.ANYA_OPENAI_KEY || process.env.OPENAI_API_KEY
+function getClaudeClient() {
+  if (cachedClaudeClient) return cachedClaudeClient
+  const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) {
     const error = new Error(
-      'OpenAI API key is not configured. Please set OPENAI_API_KEY or ANYA_OPENAI_KEY environment variable. ' +
-      'Get your API key from https://platform.openai.com/api-keys'
+      'Anthropic API key is not configured. Please set ANTHROPIC_API_KEY environment variable. ' +
+      'Get your API key from https://console.anthropic.com/'
     )
     error.code = 'MISSING_API_KEY'
     throw error
   }
-  cachedOpenAI = new OpenAI({ apiKey })
-  return cachedOpenAI
+  cachedClaudeClient = new Anthropic({ apiKey })
+  return cachedClaudeClient
 }
 
 const DEFAULT_ASSISTANT_MODEL =
-  process.env.ANYA_OPENAI_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini'
+  process.env.ANYA_CLAUDE_MODEL || process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514'
 
 function coerceProfileId(requestedProfileId) {
   if (!requestedProfileId) return null
@@ -548,14 +548,14 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     return "I'm here and ready to help—just let me know what you'd like to work on."
   }
 
-  let openai = null
+  let claude = null
   try {
-    openai = getOpenAIClient()
+    claude = getClaudeClient()
   } catch (error) {
-    console.warn('[anya] OpenAI client unavailable; falling back to informational reply:', error.message)
+    console.warn('[anya] Claude client unavailable; falling back to informational reply:', error.message)
     return [
       'I’m running without an AI model configured at the moment.',
-      'Ask an admin to set `OPENAI_API_KEY` (or `ANYA_OPENAI_KEY`) on the backend so I can provide richer assistance.',
+      'Ask an admin to set `ANTHROPIC_API_KEY` on the backend so I can provide richer assistance.',
       'In the meantime I can still point you to relevant screens or scripts if you describe what you need.',
     ].join(' ')
   }
@@ -570,42 +570,55 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     historyMessages = []
   }
 
-  const promptMessages = [
-    {
-      role: 'system',
-      content: [
-        'You are Anya, the GrantFlow AI assistant. Provide concise, actionable help for grant discovery, pipeline management,',
-        'document preparation, crawler operations, and platform troubleshooting. Always ground your guidance in GrantFlow workflows.',
-        'If a task requires human approval or data not currently available, explain the next best step or what additional info is needed.',
-      ].join(' '),
-    },
-    ...historyMessages
-      .filter((msg) => typeof msg?.content === 'string' && msg.content.trim().length > 0)
-      .map((msg) => ({
-        role: msg.role === 'assistant' ? 'assistant' : 'user',
-        content: msg.content,
-      })),
-  ]
+  // Build message history for Claude (excluding system message from messages array)
+  const conversationMessages = historyMessages
+    .filter((msg) => typeof msg?.content === 'string' && msg.content.trim().length > 0)
+    .map((msg) => ({
+      role: msg.role === 'assistant' ? 'assistant' : 'user',
+      content: msg.content,
+    }))
+
+  // Claude system prompt
+  const systemPrompt = [
+    'You are Anya, the GrantFlow AI assistant. Your role is to help users with grant discovery, application management,',
+    'funding opportunity tracking, and document preparation in the GrantFlow platform.',
+    '',
+    'Key capabilities you should highlight:',
+    '- Discovering and tracking grant opportunities',
+    '- Managing grant applications and deadlines',
+    '- Organizing documents and requirements',
+    '- Setting up milestones and tracking progress',
+    '- Providing guidance on grant writing and compliance',
+    '',
+    'Always be concise, actionable, and specific. When users ask for help:',
+    '1. Understand their current situation or goal',
+    '2. Provide clear, step-by-step guidance grounded in GrantFlow features',
+    '3. If you need more information, ask specific questions',
+    '4. If something requires human review or admin access, explain what they need to do',
+    '',
+    'Keep responses focused and practical. Avoid generic advice—tie your suggestions to GrantFlow workflows whenever possible.',
+  ].join('\n')
 
   try {
-    const completion = await openai.chat.completions.create({
+    const response = await claude.messages.create({
       model: DEFAULT_ASSISTANT_MODEL,
-      messages: promptMessages,
+      max_tokens: 1024,
       temperature: 0.35,
-      max_tokens: 700,
+      system: systemPrompt,
+      messages: conversationMessages,
     })
 
-    const reply = completion?.choices?.[0]?.message?.content?.trim()
+    const reply = response?.content?.[0]?.text?.trim()
     if (reply) {
       return reply
     }
   } catch (error) {
-    console.error('[anya] Failed to generate assistant reply via OpenAI:', error)
+    console.error('[anya] Failed to generate assistant reply via Claude:', error)
   }
 
   return [
     "I'm having trouble reaching the AI service right now.",
-    'We can still move forward manually—let me know the specific action you need help with (for example: run a crawler, summarize a profile, draft an email), and I’ll walk through the recommended steps.',
+    'We can still move forward manually—let me know the specific action you need help with (for example: find grants, track applications, organize documents), and I’ll walk through the recommended steps.',
   ].join(' ')
 }
 

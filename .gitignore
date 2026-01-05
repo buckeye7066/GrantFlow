@@ -50,3 +50,4 @@ backend/anya/audit/**/*.log
 *.njsproj
 *.sln
 *.sw?
+.backup
