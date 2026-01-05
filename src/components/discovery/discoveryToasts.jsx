@@ -1,6 +1,9 @@
 /**
  * Toast helper functions for discovery operations
+ * All toasts auto-dismiss after 3 seconds
  */
+
+const AUTO_DISMISS_DELAY = 3000;
 
 export function showNoProfileToast(toast) {
   toast({
