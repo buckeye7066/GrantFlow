@@ -24,6 +24,13 @@ import { linkProfileToAdmin } from '../backend/utils/adminProfileLinks.js'
 
 const EXPECTED_PROFILE_COUNT = 15
 
+// Production safeguard - prevent accidental seeding in production
+if (process.env.NODE_ENV === 'production') {
+  console.error('[seed] ERROR: Cannot run seed script in production environment!')
+  console.error('[seed] Set NODE_ENV to a different value if this is intentional.')
+  process.exit(1)
+}
+
 function getArgValue(flag) {
   const index = process.argv.indexOf(flag)
   if (index === -1) return null

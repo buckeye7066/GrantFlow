@@ -380,7 +380,7 @@ router.get('/jobs', (req, res) => {
     res.json(rows.map(mapJob))
   } catch (error) {
     console.error('Error listing crawler jobs:', error)
-    res.status(500).json({ error: error.message })
+    res.status(500).json(formatError(error))
   }
 })
 
@@ -883,7 +883,7 @@ router.get('/jobs/metrics', (req, res) => {
     })
   } catch (error) {
     console.error('Error building crawler job metrics:', error)
-    res.status(500).json({ error: error.message })
+    res.status(500).json(formatError(error))
   }
 })
 
@@ -910,7 +910,7 @@ router.get('/jobs/:id', (req, res) => {
     })
   } catch (error) {
     console.error('Error fetching crawler job:', error)
-    res.status(500).json({ error: error.message })
+    res.status(500).json(formatError(error))
   }
 })
 
@@ -980,7 +980,7 @@ router.post('/jobs', (req, res) => {
     res.status(201).json(mapJob(job))
   } catch (error) {
     console.error('Error creating crawler job:', error)
-    res.status(500).json({ error: error.message })
+    res.status(500).json(formatError(error))
   }
 })
 
@@ -1075,7 +1075,7 @@ router.post('/jobs/:id/retry', (req, res) => {
     res.status(201).json(mapJob(newJob))
   } catch (error) {
     console.error('Error retrying crawler job:', error)
-    res.status(500).json({ error: error.message })
+    res.status(500).json(formatError(error))
   }
 })
 
@@ -1120,7 +1120,7 @@ router.post('/jobs/:id/cancel', (req, res) => {
     res.json(mapJob(updated))
   } catch (error) {
     console.error('Error cancelling crawler job:', error)
-    res.status(500).json({ error: error.message })
+    res.status(500).json(formatError(error))
   }
 })
 
@@ -1186,7 +1186,7 @@ router.patch('/jobs/:id', (req, res) => {
     res.json(mapJob(updated))
   } catch (error) {
     console.error('Error updating crawler job:', error)
-    res.status(500).json({ error: error.message })
+    res.status(500).json(formatError(error))
   }
 })
 
@@ -1227,7 +1227,7 @@ router.get('/auto-discovery-status/:profileId', (req, res) => {
     })
   } catch (error) {
     console.error('Error fetching auto-discovery status:', error)
-    return res.status(500).json({ error: error.message })
+    return res.status(500).json(formatError(error))
   }
 })
 

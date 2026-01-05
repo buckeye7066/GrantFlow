@@ -11,6 +11,13 @@ import { baselineProfiles } from './seed-data/baselineProfiles.js'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
+// Production safeguard - prevent accidental database overwrite in production
+if (process.env.NODE_ENV === 'production' && process.env.FORCE === 'true') {
+  console.error('[seed] ERROR: Cannot force overwrite database in production environment!')
+  console.error('[seed] Remove FORCE=true or set NODE_ENV to a different value.')
+  process.exit(1)
+}
+
 const expectedSections = [
   'basic_information',
   'organization_details',
