@@ -22,6 +22,7 @@ import billingRouter from './routes/billing.js';
 import authRouter from './routes/auth.js';
 import preferencesRouter from './routes/preferences.js';
 import adminRouter from './routes/admin.js';
+import discoveryRouter from './routes/discovery.js';
 import jwt from 'jsonwebtoken';
 import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
@@ -389,6 +390,7 @@ app.use('/api/reminders', remindersRouter);
 app.use('/api/crawlers', crawlersRouter);
 app.use('/api/preferences', preferencesRouter);
 app.use('/api/admin', adminRouter);
+app.use('/api', discoveryRouter); // Discovery endpoints (comprehensiveMatch, searchOpportunities, etc.)
 
 // Stats endpoint for dashboard
 app.get('/api/stats', (req, res) => {
