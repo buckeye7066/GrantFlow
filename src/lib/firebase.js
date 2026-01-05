@@ -14,15 +14,17 @@ const missingKeys = Object.entries(firebaseConfig)
   .filter(([, value]) => !value)
   .map(([key]) => key)
 
+let app = null
+let db = null
+
 if (missingKeys.length > 0) {
-  throw new Error(
-    `Missing Firebase configuration values: ${missingKeys.join(
-      ", ",
-    )}. Set these environment variables before running Firestore scripts.`,
+  console.warn(
+    `Firebase not configured. Missing: ${missingKeys.join(", ")}. Firestore features will be unavailable.`
   )
+} else {
+  app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig)
+  db = getFirestore(app)
 }
 
-const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig)
-
-export const db = getFirestore(app)
+export { db }
 

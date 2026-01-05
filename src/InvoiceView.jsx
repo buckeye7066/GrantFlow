@@ -2,10 +2,20 @@
 import React, { useRef, useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { ArrowLeft, Download, Printer, Mail, Trash2 } from "lucide-react";
 import { format } from "date-fns";
 import SendInvoiceModal from "../components/billing/SendInvoiceModal";
@@ -15,11 +25,12 @@ export default function InvoiceView() {
   const navigate = useNavigate();
   const printRef = useRef();
   const [isSendModalOpen, setIsSendModalOpen] = useState(false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
   
-  const urlParams = new URLSearchParams(window.location.search);
-  const invoiceId = urlParams.get('id');
+  const [searchParams] = useSearchParams();
+  const invoiceId = searchParams.get('id');
 
   const { data: invoice } = useQuery({
     queryKey: ['invoice', invoiceId],
@@ -77,14 +88,27 @@ export default function InvoiceView() {
     }
   });
 
-  const handleDelete = () => {
-    if (invoice && window.confirm(`Are you sure you want to delete invoice ${invoice.invoice_number}? This action cannot be undone.`)) {
+  const handleDeleteClick = () => {
+    setIsDeleteDialogOpen(true);
+  };
+
+  const handleDeleteConfirm = () => {
+    if (invoice) {
       deleteMutation.mutate(invoice.id);
+      setIsDeleteDialogOpen(false);
     }
   };
 
   const handlePrint = () => {
-    window.print();
+    try {
+      window.print();
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Print Failed',
+        description: 'Unable to open print dialog. Please try again.',
+      });
+    }
   };
 
   if (!invoice) {
@@ -137,7 +161,7 @@ export default function InvoiceView() {
           <div className="flex gap-2">
             <Button 
               variant="outline" 
-              onClick={handleDelete}
+              onClick={handleDeleteClick}
               disabled={deleteMutation.isPending}
               className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
             >
@@ -379,6 +403,23 @@ export default function InvoiceView() {
           onClose={() => setIsSendModalOpen(false)}
         />
       )}
+
+      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Invoice</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete invoice {invoice?.invoice_number}? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteConfirm} className="bg-red-600 hover:bg-red-700">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
