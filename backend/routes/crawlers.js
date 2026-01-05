@@ -4,25 +4,19 @@ import OpenAI from 'openai'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
+import { validatePagination } from '../utils/validation.js'
+import { formatError } from '../middleware/errorHandler.js'
+import { DEFAULT_PAGE_LIMIT, CRAWLER_JOB_TYPES } from '../config/constants.js'
 
 const router = express.Router()
 
-const ALLOWED_TYPES = new Set([
-  'local',
-  'scholarship',
-  'comprehensive',
-  'item_search',
-  'avatar_lookup',
-  'document_ingest',
-  'pipeline_automation',
-  'profile_enrichment',
-])
+const ALLOWED_TYPES = new Set(CRAWLER_JOB_TYPES)
 const ALLOWED_STATUS = new Set(['queued', 'running', 'completed', 'failed', 'cancelled'])
+const MAX_LINEAGE_DEPTH = 15
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const uploadDir = join(__dirname, '..', 'uploads')
-const MAX_LINEAGE_DEPTH = 15
 
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true })
