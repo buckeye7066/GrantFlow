@@ -671,7 +671,16 @@ router.post('/:id/sections/:sectionKey/ai', async (req, res) => {
 // Send application email (for draft applications or completed profiles)
 router.post('/send-application-email', async (req, res) => {
   try {
-    const { toEmail = 'dr.johnwhite@axiombiolabs.org', applicationData } = req.body
+    // Use environment variable with fallback, or require toEmail in request
+    const defaultEmail = process.env.APPLICATION_EMAIL || null
+    const { toEmail = defaultEmail, applicationData } = req.body
+
+    if (!toEmail) {
+      return res.status(400).json({ 
+        error: 'Recipient email required',
+        message: 'Please provide a toEmail in the request body or set APPLICATION_EMAIL environment variable'
+      })
+    }
 
     // Import email service
     const { sendApplicationEmail } = await import('../services/email.js')

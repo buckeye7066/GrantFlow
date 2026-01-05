@@ -777,6 +777,12 @@ export async function adminDbStats(_params, context) {
     const tableCounts = {}
     tables.forEach((table) => {
       try {
+        // Validate table name - only allow alphanumeric, underscores, and dashes
+        // This protects against SQL injection via table name
+        if (!/^[a-zA-Z0-9_-]+$/.test(table.name)) {
+          tableCounts[table.name] = 'Error: Invalid table name'
+          return
+        }
         const count = db.prepare(`SELECT COUNT(*) as count FROM ${table.name}`).get()
         tableCounts[table.name] = count.count
       } catch (error) {
