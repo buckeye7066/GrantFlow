@@ -548,14 +548,14 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     return "I'm here and ready to help—just let me know what you'd like to work on."
   }
 
-  let claude = null
+  let openai = null
   try {
-    claude = getClaudeClient()
+    openai = getOpenAIClient()
   } catch (error) {
-    console.warn('[anya] Claude client unavailable; falling back to informational reply:', error.message)
+    console.warn('[anya] OpenAI client unavailable; falling back to informational reply:', error.message)
     return [
       'I’m running without an AI model configured at the moment.',
-      'Ask an admin to set `ANTHROPIC_API_KEY` on the backend so I can provide richer assistance.',
+      'Ask an admin to set `OPENAI_API_KEY` (or `ANYA_OPENAI_KEY`) on the backend so I can provide richer assistance.',
       'In the meantime I can still point you to relevant screens or scripts if you describe what you need.',
     ].join(' ')
   }
@@ -570,55 +570,42 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     historyMessages = []
   }
 
-  // Build message history for Claude (excluding system message from messages array)
-  const conversationMessages = historyMessages
-    .filter((msg) => typeof msg?.content === 'string' && msg.content.trim().length > 0)
-    .map((msg) => ({
-      role: msg.role === 'assistant' ? 'assistant' : 'user',
-      content: msg.content,
-    }))
-
-  // Claude system prompt
-  const systemPrompt = [
-    'You are Anya, the GrantFlow AI assistant. Your role is to help users with grant discovery, application management,',
-    'funding opportunity tracking, and document preparation in the GrantFlow platform.',
-    '',
-    'Key capabilities you should highlight:',
-    '- Discovering and tracking grant opportunities',
-    '- Managing grant applications and deadlines',
-    '- Organizing documents and requirements',
-    '- Setting up milestones and tracking progress',
-    '- Providing guidance on grant writing and compliance',
-    '',
-    'Always be concise, actionable, and specific. When users ask for help:',
-    '1. Understand their current situation or goal',
-    '2. Provide clear, step-by-step guidance grounded in GrantFlow features',
-    '3. If you need more information, ask specific questions',
-    '4. If something requires human review or admin access, explain what they need to do',
-    '',
-    'Keep responses focused and practical. Avoid generic advice—tie your suggestions to GrantFlow workflows whenever possible.',
-  ].join('\n')
+  const promptMessages = [
+    {
+      role: 'system',
+      content: [
+        'You are Anya, the GrantFlow AI assistant. Provide concise, actionable help for grant discovery, pipeline management,',
+        'document preparation, crawler operations, and platform troubleshooting. Always ground your guidance in GrantFlow workflows.',
+        'If a task requires human approval or data not currently available, explain the next best step or what additional info is needed.',
+      ].join(' '),
+    },
+    ...historyMessages
+      .filter((msg) => typeof msg?.content === 'string' && msg.content.trim().length > 0)
+      .map((msg) => ({
+        role: msg.role === 'assistant' ? 'assistant' : 'user',
+        content: msg.content,
+      })),
+  ]
 
   try {
-    const response = await claude.messages.create({
+    const completion = await openai.chat.completions.create({
       model: DEFAULT_ASSISTANT_MODEL,
-      max_tokens: 1024,
+      messages: promptMessages,
       temperature: 0.35,
-      system: systemPrompt,
-      messages: conversationMessages,
+      max_tokens: 700,
     })
 
-    const reply = response?.content?.[0]?.text?.trim()
+    const reply = completion?.choices?.[0]?.message?.content?.trim()
     if (reply) {
       return reply
     }
   } catch (error) {
-    console.error('[anya] Failed to generate assistant reply via Claude:', error)
+    console.error('[anya] Failed to generate assistant reply via OpenAI:', error)
   }
 
   return [
     "I'm having trouble reaching the AI service right now.",
-    'We can still move forward manually—let me know the specific action you need help with (for example: find grants, track applications, organize documents), and I’ll walk through the recommended steps.',
+    'We can still move forward manually—let me know the specific action you need help with (for example: run a crawler, summarize a profile, draft an email), and I’ll walk through the recommended steps.',
   ].join(' ')
 }
 

@@ -1,6 +1,7 @@
 {
   "type": "module",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.30.0",
     "resend": "^6.6.0"
   }
 }
