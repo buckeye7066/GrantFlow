@@ -67,7 +67,21 @@ export default function EmailSignInForm({ onComplete }) {
         message: `We sent a 6-digit code to ${maskedEmail ?? values.email}. Enter it below to continue.`,
       })
     } catch (error) {
-      const message = error?.error || error?.message || 'Unable to send verification code.'
+      // Provide more specific error messages based on error type
+      let message = 'Unable to send verification code.'
+      
+      if (error?.message?.includes('not configured') || error?.message?.includes('RESEND_API_KEY')) {
+        message = 'Email service is temporarily unavailable. Please contact support or try again later.'
+      } else if (error?.message?.includes('network') || error?.message?.includes('fetch')) {
+        message = 'Network error. Please check your internet connection and try again.'
+      } else if (error?.message?.includes('rate limit')) {
+        message = 'Too many attempts. Please wait a few minutes before trying again.'
+      } else if (error?.error) {
+        message = error.error
+      } else if (error?.message) {
+        message = error.message
+      }
+      
       setStatus({ type: 'error', message })
     } finally {
       setIsLoading(false)
@@ -87,7 +101,21 @@ export default function EmailSignInForm({ onComplete }) {
         message: 'Success! Redirecting you to the dashboard…',
       })
     } catch (error) {
-      const message = error?.error || error?.message || 'The code you entered was not valid. Try again.'
+      // Provide more specific error messages
+      let message = 'The code you entered was not valid. Try again.'
+      
+      if (error?.message?.includes('expired')) {
+        message = 'Your verification code has expired. Please request a new one.'
+      } else if (error?.message?.includes('invalid') || error?.message?.includes('incorrect')) {
+        message = 'Invalid verification code. Please check and try again.'
+      } else if (error?.message?.includes('rate limit')) {
+        message = 'Too many verification attempts. Please wait a few minutes.'
+      } else if (error?.error) {
+        message = error.error
+      } else if (error?.message) {
+        message = error.message
+      }
+      
       setStatus({ type: 'error', message })
     } finally {
       setIsLoading(false)

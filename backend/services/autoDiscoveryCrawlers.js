@@ -57,8 +57,6 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
       return
     }
 
-    // TODO: Remove debug log - console.log(`[auto-discovery] Triggering crawlers for profile ${profileId} (${profile.display_name})`)
-
     const jobs = []
     
     // 1. Local crawler (profile zip + 50 mile radius)
@@ -72,7 +70,6 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
     // 2. Scholarship crawler (if student indicators exist)
     const isStudent = checkStudentIndicators(profile)
     if (isStudent) {
-      // TODO: Remove debug log - console.log(`[auto-discovery] Profile ${profileId} has student indicators, queuing scholarship crawler`)
       jobs.push({
         type: 'scholarship',
         profile_id: profileId,
@@ -102,8 +99,6 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
       jobIds.push(result.lastInsertRowid)
     })
     
-    // TODO: Remove debug log - console.log(`[auto-discovery] Queued ${jobs.length} jobs for profile ${profileId}:`, jobIds)
-    
     // Dispatch jobs asynchronously (fire and forget)
     // Query only the fields needed for dispatch
     const queuedJobs = db.prepare(`
@@ -125,8 +120,6 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
         console.error(`[auto-discovery] Job ${job.id} dispatch failed:`, err)
       })
     })
-    
-    // TODO: Remove debug log - console.log(`[auto-discovery] Dispatched ${queuedJobs.length} crawler jobs`)
   } catch (error) {
     console.error('[auto-discovery] Failed to trigger crawlers:', error)
     // Don't throw - we don't want to block login if auto-discovery fails
