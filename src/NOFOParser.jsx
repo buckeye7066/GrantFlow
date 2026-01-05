@@ -97,31 +97,31 @@ export default function NOFOParser() {
       let fileUrl;
       
       if (inputMode === 'file') {
-        console.log('[NOFOParser] Uploading file:', file.name);
+        // TODO: Remove debug log - console.log('[NOFOParser] Uploading file:', file.name);
         const { file_url } = await base44.integrations.Core.UploadFile({ file });
         fileUrl = file_url;
-        console.log('[NOFOParser] File uploaded:', fileUrl);
+        // TODO: Remove debug log - console.log('[NOFOParser] File uploaded:', fileUrl);
       } else {
         // URL mode - validate URL format
         const trimmedUrl = url.trim();
         if (!trimmedUrl.startsWith('http://') && !trimmedUrl.startsWith('https://')) {
           throw new Error('Please enter a valid URL starting with http:// or https://');
         }
-        console.log('[NOFOParser] Using URL:', trimmedUrl);
+        // TODO: Remove debug log - console.log('[NOFOParser] Using URL:', trimmedUrl);
         fileUrl = trimmedUrl;
       }
 
       setStatus('processing');
 
       // Use custom parseNOFO function
-      console.log('[NOFOParser] Invoking parseNOFO function...');
+      // TODO: Remove debug log - console.log('[NOFOParser] Invoking parseNOFO function...');
       const response = await base44.functions.invoke('parseNOFO', {
         file_url: fileUrl,
         json_schema: grantSchemaForExtraction,
         is_url: inputMode === 'url'
       });
 
-      console.log('[NOFOParser] Response:', response.data);
+      // TODO: Remove debug log - console.log('[NOFOParser] Response:', response.data);
 
       if (response.data.success && response.data.output) {
         setExtractedData(response.data.output);

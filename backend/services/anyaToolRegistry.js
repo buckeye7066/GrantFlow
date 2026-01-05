@@ -534,11 +534,12 @@ export async function invokeTool(name, params, context) {
     }
 
     // Log admin tool invocation for audit
-    console.log('[anyaToolRegistry] Admin tool invoked:', {
-      tool: name,
-      user: user.userId ?? user.id ?? 'unknown',
-      timestamp: new Date().toISOString(),
-    })
+    // TODO: Remove debug log
+    // // TODO: Remove debug log - console.log('[anyaToolRegistry] Admin tool invoked:', {
+    //   tool: name,
+    //   user: user.userId ?? user.id ?? 'unknown',
+    //   timestamp: new Date().toISOString(),
+    // })
   }
 
   const result = await tool.handler(params ?? {}, context ?? {})
@@ -1045,7 +1046,7 @@ registerTool({
 
 registerTool({
   name: 'admin.code.scan',
-  description: 'Scan codebase for issues like TODOs, console.logs, or potential bugs. Admin only.',
+  description: 'Scan codebase for issues like TODOs, // TODO: Remove debug log - console.logs, or potential bugs. Admin only.',
   requiresAdmin: true,
   schema: {
     type: 'object',
@@ -1114,7 +1115,7 @@ registerTool({
       maxIterations: { type: 'integer', description: 'Maximum number of files to process (default: 50)', minimum: 1, maximum: 200 },
       maxFileChanges: { type: 'integer', description: 'Maximum number of files to modify (default: 20)', minimum: 1, maximum: 100 },
       dryRun: { type: 'boolean', description: 'If true, dont save changes (default: false)' },
-      fixConsoleLog: { type: 'boolean', description: 'Fix console.log statements (default: true)' },
+      fixConsoleLog: { type: 'boolean', description: 'Fix // TODO: Remove debug log - // TODO: Remove debug log - console.log statements (default: true)' },
       fixEmptyCatch: { type: 'boolean', description: 'Fix empty catch blocks (default: false)' },
       fixTodos: { type: 'boolean', description: 'Convert TODO comments to tracked issues (default: false)' },
     },

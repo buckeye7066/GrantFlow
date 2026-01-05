@@ -142,7 +142,7 @@ export default function GrantDetail() {
   
   const analyzeGrantMutation = useMutation({
     mutationFn: async (payload) => {
-      console.log('[GrantDetail] Calling analyzeGrant with:', {
+      // TODO: Remove debug log - console.log('[GrantDetail] Calling analyzeGrant with:', {
         grantId: payload.grantId,
         title: payload.title?.substring(0, 50),
         hasDescription: !!payload.description,
@@ -151,7 +151,7 @@ export default function GrantDetail() {
       
       try {
         const response = await base44.functions.invoke('analyzeGrant', payload);
-        console.log('[GrantDetail] Function response:', {
+        // TODO: Remove debug log - console.log('[GrantDetail] Function response:', {
           status: response.status,
           hasData: !!response.data,
           success: response.data?.success
@@ -182,7 +182,7 @@ export default function GrantDetail() {
       }
     },
     onSuccess: async (data) => {
-        console.log('[GrantDetail] Mutation success, saving to database');
+        // TODO: Remove debug log - console.log('[GrantDetail] Mutation success, saving to database');
         
         try {
             const analysis = data.data?.analysis;
@@ -199,7 +199,7 @@ export default function GrantDetail() {
                 ai_error: null
             });
             
-            console.log('[GrantDetail] Analysis saved successfully to grant.');
+            // TODO: Remove debug log - console.log('[GrantDetail] Analysis saved successfully to grant.');
             
             // Force refetch the grant to get the updated AI summary
             queryClient.invalidateQueries({ queryKey: ['grant', grantId] });
@@ -294,7 +294,7 @@ export default function GrantDetail() {
         return;
     }
     
-    console.log('[GrantDetail] Starting analysis for grant:', grant.id);
+    // TODO: Remove debug log - console.log('[GrantDetail] Starting analysis for grant:', grant.id);
     
     const payload = {
         grantId: grant.id,
@@ -304,7 +304,7 @@ export default function GrantDetail() {
         selectionCriteria: grant.selection_criteria || '',
     };
     
-    console.log('[GrantDetail] Payload:', {
+    // TODO: Remove debug log - console.log('[GrantDetail] Payload:', {
       grantId: payload.grantId,
       titleLength: payload.title?.length,
       descLength: payload.description?.length,
@@ -337,11 +337,11 @@ export default function GrantDetail() {
   const handleStarToggle = () => { updateGrantMutation.mutate({ starred: !grant.starred }); };
   
   const handleApplyWithAI = async () => {
-    console.log('[GrantDetail] Start Application clicked, current status:', grant.status);
+    // TODO: Remove debug log - console.log('[GrantDetail] Start Application clicked, current status:', grant.status);
     
     // NEW: If status is application_prep, open submission assistant
     if (grant.status === 'application_prep') {
-      console.log('[GrantDetail] Opening submission assistant');
+      // TODO: Remove debug log - console.log('[GrantDetail] Opening submission assistant');
       setIsSubmissionAssistantOpen(true);
       return;
     }
@@ -355,7 +355,7 @@ export default function GrantDetail() {
     
     // If in portal stage OR detected as portal-based, open portal assistant
     if (grant.status === 'portal' || isPortalBased) {
-        console.log('[GrantDetail] Opening portal assistant');
+        // TODO: Remove debug log - console.log('[GrantDetail] Opening portal assistant');
         setIsPortalAssistantOpen(true);
         toast({
           title: "Portal Assistant Ready",
@@ -375,7 +375,7 @@ export default function GrantDetail() {
             
             // If no checklist OR checklist is complete, start application
             if (hasNoChecklist || checklistComplete) {
-                console.log('[GrantDetail] Opening AI Application Assistant');
+                // TODO: Remove debug log - console.log('[GrantDetail] Opening AI Application Assistant');
                 setIsApplicationAssistantOpen(true);
                 toast({
                     title: "Starting Application Builder",
@@ -386,7 +386,7 @@ export default function GrantDetail() {
             
             // Checklist has open items - need to complete first
             if (openItems.length > 0) {
-                console.log('[GrantDetail] Checklist incomplete, showing checklist tab');
+                // TODO: Remove debug log - console.log('[GrantDetail] Checklist incomplete, showing checklist tab');
                 toast({
                     title: "Action Required",
                     description: `Please complete ${openItems.length} checklist item${openItems.length > 1 ? 's' : ''} first.`
@@ -402,7 +402,7 @@ export default function GrantDetail() {
         }
         
         // Analysis not complete, run it
-        console.log('[GrantDetail] Running analysis first');
+        // TODO: Remove debug log - console.log('[GrantDetail] Running analysis first');
         setActiveTab('coach');
         window.history.replaceState(
           null,
@@ -424,7 +424,7 @@ export default function GrantDetail() {
     
     // Move to drafting if not already in application stages
     if (!['drafting', 'portal', 'application_prep', 'revision', 'submitted'].includes(grant.status)) {
-        console.log('[GrantDetail] Moving grant to drafting stage');
+        // TODO: Remove debug log - console.log('[GrantDetail] Moving grant to drafting stage');
         await updateGrantMutation.mutateAsync({ status: 'drafting' });
         toast({ 
           title: "Application Started", 
@@ -438,7 +438,7 @@ export default function GrantDetail() {
     
     // If analysis hasn't been run yet, trigger it automatically
     if (!grant.ai_status || grant.ai_status === 'idle' || grant.ai_status === 'error') {
-        console.log('[GrantDetail] Analysis not ready, triggering analysis');
+        // TODO: Remove debug log - console.log('[GrantDetail] Analysis not ready, triggering analysis');
         toast({
           title: "Starting AI Analysis",
           description: "The AI is analyzing this opportunity for you..."

@@ -350,7 +350,7 @@ export default function DiscoverGrants() {
   };
 
   const handleAddToPipeline = async (opportunity) => {
-    console.log('[DiscoverGrants] Adding to pipeline:', opportunity);
+    // TODO: Remove debug log - console.log('[DiscoverGrants] Adding to pipeline:', opportunity);
     
     // Check for duplicates
     if (opportunity.url) {

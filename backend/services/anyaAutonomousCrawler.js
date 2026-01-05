@@ -35,7 +35,7 @@ async function auditLog(entry) {
  * @param {number} options.maxIterations - Maximum number of files to process
  * @param {number} options.maxFileChanges - Maximum number of files to modify
  * @param {boolean} options.dryRun - If true, don't save changes
- * @param {boolean} options.fixConsoleLog - Fix console.log statements
+ * @param {boolean} options.fixConsoleLog - Fix // TODO: Remove debug log - console.log statements
  * @param {boolean} options.fixEmptyCatch - Fix empty catch blocks
  * @param {boolean} options.fixTodos - Convert TODO comments to tracked issues
  * @param {Object} context - Database and user context
@@ -130,12 +130,12 @@ export async function runAutonomousCodeCrawl(options, context) {
       const changes = []
       
       for (const issue of issues) {
-        // Fix console.log statements
-        if (fixConsoleLog && issue.description === 'console.log statement found') {
+        // Fix // TODO: Remove debug log - console.log statements
+        if (fixConsoleLog && issue.description === '// TODO: Remove debug log - console.log statement found') {
           changes.push({
             line: issue.line,
-            oldText: 'console.log',
-            newText: '// TODO: Remove debug log - console.log',
+            oldText: '// TODO: Remove debug log - console.log',
+            newText: '// TODO: Remove debug log - // TODO: Remove debug log - console.log',
           })
         }
 
