@@ -921,6 +921,8 @@ router.post('/upload', upload.single('file'), async (req, res) => {
 });
 
 // Create signed URL endpoint for Base44 SDK compatibility
+const SIGNED_URL_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
+
 router.post('/signed-url', (req, res) => {
   try {
     const { file_uri } = req.body;
@@ -929,8 +931,9 @@ router.post('/signed-url', (req, res) => {
       return res.status(400).json({ error: 'file_uri is required' });
     }
 
-    // For now, return the file_uri as the signed_url since files are served statically
-    // In a production environment with cloud storage (S3, GCS), this would generate a time-limited signed URL
+    // NOTE: In production with cloud storage (S3, GCS), this would generate time-limited signed URLs
+    // Currently, files are served statically and remain accessible beyond expiry time
+    // The expires_at field is informational only and does not enforce access restrictions
     let signed_url;
     
     if (file_uri.startsWith('http://') || file_uri.startsWith('https://')) {
@@ -948,7 +951,7 @@ router.post('/signed-url', (req, res) => {
     
     res.json({
       signed_url,
-      expires_at: new Date(Date.now() + 3600000).toISOString(), // 1 hour expiry
+      expires_at: new Date(Date.now() + SIGNED_URL_EXPIRY_MS).toISOString(),
     });
   } catch (error) {
     console.error('Error creating signed URL:', error);

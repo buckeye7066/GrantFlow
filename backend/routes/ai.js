@@ -540,19 +540,13 @@ router.post('/invoke', async (req, res) => {
         const result = JSON.parse(content);
         res.json(result);
       } catch (parseError) {
-        console.error('Failed to parse JSON response:', parseError);
-        // Try to extract JSON from the response - look for first complete JSON object
-        try {
-          const jsonMatch = content.match(/\{(?:[^{}]|(\{(?:[^{}]|\{[^{}]*\})*\}))*\}/);
-          if (jsonMatch) {
-            res.json(JSON.parse(jsonMatch[0]));
-          } else {
-            res.status(500).json({ error: 'Failed to parse JSON response from AI' });
-          }
-        } catch (extractError) {
-          console.error('Failed to extract JSON from response:', extractError);
-          res.status(500).json({ error: 'Failed to parse JSON response from AI' });
-        }
+        console.error('Failed to parse JSON response:', parseError, 'Content:', content);
+        // When using json_schema mode, OpenAI should always return valid JSON
+        // If parsing fails, return error to help debug the issue
+        res.status(500).json({ 
+          error: 'Failed to parse JSON response from AI',
+          details: parseError.message,
+        });
       }
     } else {
       // Return as plain text (string)
