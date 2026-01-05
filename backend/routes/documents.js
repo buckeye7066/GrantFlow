@@ -7,6 +7,7 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import pdfParse from 'pdf-parse';
 import mammoth from 'mammoth';
+import rateLimit from 'express-rate-limit';
 import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
 
 const router = express.Router();
@@ -31,6 +32,15 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 },
+});
+
+// Rate limiter for file uploads to prevent abuse
+const uploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  limit: 20, // Max 20 uploads per 15 minutes per IP
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: 'Too many file uploads from this IP, please try again later.',
 });
 
 async function extractTextFromFile(filePath, mimeType) {
@@ -963,6 +973,74 @@ router.delete('/:id', (req, res) => {
     req.db.prepare('DELETE FROM documents WHERE id = ?').run(req.params.id);
     res.json({ success: true });
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Upload endpoint for Base44 SDK compatibility
+router.post('/upload', uploadLimiter, upload.single('file'), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ error: 'file is required' });
+    }
+
+    const publicUrl = `/uploads/${file.filename}`;
+    
+    res.json({
+      file_url: publicUrl,
+      file_name: file.originalname,
+      file_size: file.size,
+      mime_type: file.mimetype,
+    });
+  } catch (error) {
+    console.error('Error uploading file:', error);
+    if (req.file) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (unlinkError) {
+        console.warn('Failed to remove uploaded file after error', unlinkError);
+      }
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create signed URL endpoint for Base44 SDK compatibility
+const SIGNED_URL_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
+
+router.post('/signed-url', (req, res) => {
+  try {
+    const { file_uri } = req.body;
+    
+    if (!file_uri) {
+      return res.status(400).json({ error: 'file_uri is required' });
+    }
+
+    // NOTE: In production with cloud storage (S3, GCS), this would generate time-limited signed URLs
+    // Currently, files are served statically and remain accessible beyond expiry time
+    // The expires_at field is informational only and does not enforce access restrictions
+    let signed_url;
+    
+    if (file_uri.startsWith('http://') || file_uri.startsWith('https://')) {
+      // Already a full URL
+      signed_url = file_uri;
+    } else if (file_uri.startsWith('/uploads/')) {
+      // Relative path to uploads - make it absolute
+      const baseUrl = process.env.API_URL || `http://localhost:${process.env.PORT || 8080}`;
+      signed_url = `${baseUrl}${file_uri}`;
+    } else {
+      // Assume it's a relative path and prepend the base URL
+      const baseUrl = process.env.API_URL || `http://localhost:${process.env.PORT || 8080}`;
+      signed_url = `${baseUrl}/uploads/${file_uri}`;
+    }
+    
+    res.json({
+      signed_url,
+      expires_at: new Date(Date.now() + SIGNED_URL_EXPIRY_MS).toISOString(),
+    });
+  } catch (error) {
+    console.error('Error creating signed URL:', error);
     res.status(500).json({ error: error.message });
   }
 });

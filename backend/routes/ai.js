@@ -495,6 +495,66 @@ router.post('/reminders/plan', async (req, res) => {
   }
 });
 
+// Generic AI invoke endpoint for Base44 SDK compatibility
+router.post('/invoke', async (req, res) => {
+  try {
+    const openai = getOpenAI();
+    const { prompt, response_json_schema, add_context_from_internet } = req.body;
+
+    if (!prompt) {
+      return res.status(400).json({ error: 'prompt is required' });
+    }
+
+    // Build OpenAI request parameters
+    const requestParams = {
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.7,
+      max_tokens: 2000,
+    };
+
+    // If JSON schema is provided, use structured output
+    if (response_json_schema) {
+      requestParams.response_format = {
+        type: 'json_schema',
+        json_schema: {
+          name: 'response',
+          strict: true,
+          schema: response_json_schema,
+        },
+      };
+    }
+
+    // Note: add_context_from_internet is not directly supported by OpenAI API
+    // If needed, this would require integration with a search API or web scraping
+    if (add_context_from_internet) {
+      console.warn('add_context_from_internet parameter is not yet implemented');
+    }
+
+    const completion = await openai.chat.completions.create(requestParams);
+    const content = extractCompletionText(completion);
+
+    // Parse JSON if schema was requested, otherwise return as text
+    if (response_json_schema) {
+      try {
+        const result = JSON.parse(content);
+        res.json(result);
+      } catch (parseError) {
+        console.error('Failed to parse JSON response:', parseError, 'Content:', content);
+        // When using json_schema mode, OpenAI should always return valid JSON
+        // If parsing fails, return error to help debug the issue
+        res.status(500).json({ 
+          error: 'Failed to parse JSON response from AI',
+          details: parseError.message,
+        });
+      }
+    } else {
+      // Return as plain text (string)
+      res.json(content);
+    }
+  } catch (error) {
+    console.error('Error invoking AI:', error);
+    res.status(500).json({ error: error.message });
 router.post('/invoke', async (req, res) => {
   try {
     const {
