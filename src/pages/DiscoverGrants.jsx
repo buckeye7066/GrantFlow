@@ -1,7 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
-import { listProfiles } from '@/api/profiles';
+import { getProfile, listProfiles } from '@/api/profiles';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -293,6 +293,12 @@ export default function DiscoverGrants() {
     queryFn: () => listProfiles(),
   });
 
+  const { data: profileDetail } = useQuery({
+    queryKey: ['discover-profile', selectedProfileId],
+    queryFn: () => getProfile(selectedProfileId),
+    enabled: Boolean(selectedProfileId),
+  });
+
   // Also fetch organizations to get detailed org data for selected profile
   const { data: organizations = [] } = useQuery({
     queryKey: ['organizations'],
@@ -305,14 +311,20 @@ export default function DiscoverGrants() {
     [profiles, selectedProfileId]
   );
 
-  const selectedOrg = useMemo(() => 
-    selectedProfile?.organization_id 
-      ? organizations.find(o => o.id === selectedProfile.organization_id)
-      : null,
-    [organizations, selectedProfile]
+  const selectedOrg = useMemo(
+    () =>
+      selectedProfile?.organization_id
+        ? organizations.find((o) => o.id === selectedProfile.organization_id)
+        : null,
+    [organizations, selectedProfile],
   );
 
-  const isECFProfile = selectedOrg?.medicaid_enrolled && selectedOrg?.medicaid_waiver_program === 'ecf_choices';
+  const profileForSearch = profileDetail ?? selectedOrg ?? selectedProfile;
+
+  const isECFProfile =
+    (profileForSearch?.medicaid_enrolled || selectedOrg?.medicaid_enrolled) &&
+    (profileForSearch?.medicaid_waiver_program === 'ecf_choices' ||
+      selectedOrg?.medicaid_waiver_program === 'ecf_choices');
 
   const handleDiscover = async () => {
     // Validation
@@ -340,7 +352,14 @@ export default function DiscoverGrants() {
       // Route to appropriate search handler
       if (template?.useComprehensiveMatch) {
         toastSearchStart(toast, true);
-        result = await runComprehensiveMatch(selectedOrg, searchFilters);
+        let comprehensivePayload = profileForSearch
+        if (!comprehensivePayload || Object.keys(comprehensivePayload).length === 0) {
+          comprehensivePayload = await getProfile(selectedProfileId)
+        }
+        if (!comprehensivePayload) {
+          throw new Error('Profile data is required to run comprehensive match.')
+        }
+        result = await runComprehensiveMatch(comprehensivePayload, searchFilters);
         toastSuccess(toast, result.count, 'comprehensive');
       } else if (selectedTemplate === 'ecf_services') {
         toastECFStart(toast);
