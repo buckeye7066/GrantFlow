@@ -15,11 +15,11 @@ const exportPath = process.argv[2] || path.join(__dirname, '../data-export.json'
 
 if (!fs.existsSync(exportPath)) {
   console.error('Export file not found:', exportPath);
-  console.log('Usage: node import-data.js [path-to-export.json]');
+  // TODO: Remove debug log - console.log('Usage: node import-data.js [path-to-export.json]');
   process.exit(1);
 }
 
-console.log('Loading export from:', exportPath);
+// TODO: Remove debug log - console.log('Loading export from:', exportPath);
 const exportData = JSON.parse(fs.readFileSync(exportPath, 'utf8'));
 
 // Initialize database
@@ -37,12 +37,12 @@ const schemaPath = path.join(__dirname, 'db/schema.sql');
 if (fs.existsSync(schemaPath)) {
   const schema = fs.readFileSync(schemaPath, 'utf8');
   db.exec(schema);
-  console.log('Schema initialized');
+  // TODO: Remove debug log - console.log('Schema initialized');
 }
 
 // Import organizations
 if (exportData.entities?.Organization) {
-  console.log(`Importing ${exportData.entities.Organization.length} organizations...`);
+  // TODO: Remove debug log - console.log(`Importing ${exportData.entities.Organization.length} organizations...`);
   
   const insertOrg = db.prepare(`
     INSERT OR REPLACE INTO organizations (
@@ -102,12 +102,12 @@ if (exportData.entities?.Organization) {
   });
   
   insertMany(exportData.entities.Organization);
-  console.log('Organizations imported');
+  // TODO: Remove debug log - console.log('Organizations imported');
 }
 
 // Import Funding Opportunities
 if (exportData.entities?.FundingOpportunity) {
-  console.log(`Importing ${exportData.entities.FundingOpportunity.length} funding opportunities...`);
+  // TODO: Remove debug log - console.log(`Importing ${exportData.entities.FundingOpportunity.length} funding opportunities...`);
   
   const insertOpp = db.prepare(`
     INSERT OR REPLACE INTO funding_opportunities (
@@ -143,12 +143,12 @@ if (exportData.entities?.FundingOpportunity) {
   });
   
   insertMany(exportData.entities.FundingOpportunity);
-  console.log('Funding opportunities imported');
+  // TODO: Remove debug log - console.log('Funding opportunities imported');
 }
 
 // Import Grants
 if (exportData.entities?.Grant) {
-  console.log(`Importing ${exportData.entities.Grant.length} grants...`);
+  // TODO: Remove debug log - console.log(`Importing ${exportData.entities.Grant.length} grants...`);
   
   const insertGrant = db.prepare(`
     INSERT OR REPLACE INTO grants (
@@ -179,12 +179,12 @@ if (exportData.entities?.Grant) {
   });
   
   insertMany(exportData.entities.Grant);
-  console.log('Grants imported');
+  // TODO: Remove debug log - console.log('Grants imported');
 }
 
 // Import Documents
 if (exportData.entities?.Document) {
-  console.log(`Importing ${exportData.entities.Document.length} documents...`);
+  // TODO: Remove debug log - console.log(`Importing ${exportData.entities.Document.length} documents...`);
   
   const insertDoc = db.prepare(`
     INSERT OR REPLACE INTO documents (
@@ -208,12 +208,12 @@ if (exportData.entities?.Document) {
   });
   
   insertMany(exportData.entities.Document);
-  console.log('Documents imported');
+  // TODO: Remove debug log - console.log('Documents imported');
 }
 
 // Import Milestones
 if (exportData.entities?.Milestone) {
-  console.log(`Importing ${exportData.entities.Milestone.length} milestones...`);
+  // TODO: Remove debug log - console.log(`Importing ${exportData.entities.Milestone.length} milestones...`);
   
   const insertMilestone = db.prepare(`
     INSERT OR REPLACE INTO milestones (
@@ -237,11 +237,11 @@ if (exportData.entities?.Milestone) {
   });
   
   insertMany(exportData.entities.Milestone);
-  console.log('Milestones imported');
+  // TODO: Remove debug log - console.log('Milestones imported');
 }
 
 // Summary
-console.log('\n=== Import Complete ===');
+// TODO: Remove debug log - console.log('\n=== Import Complete ===');
 const counts = {
   organizations: db.prepare('SELECT COUNT(*) as c FROM organizations').get().c,
   opportunities: db.prepare('SELECT COUNT(*) as c FROM funding_opportunities').get().c,
@@ -250,10 +250,10 @@ const counts = {
   milestones: db.prepare('SELECT COUNT(*) as c FROM milestones').get().c,
 };
 
-console.log('Database contents:');
+// TODO: Remove debug log - console.log('Database contents:');
 Object.entries(counts).forEach(([table, count]) => {
-  console.log(`  ${table}: ${count} records`);
+  // TODO: Remove debug log - console.log(`  ${table}: ${count} records`);
 });
 
 db.close();
-console.log('\nDone!');
+// TODO: Remove debug log - console.log('\nDone!');

@@ -130,12 +130,12 @@ router.get('/', (req, res) => {
   const auth = req.user ?? { role: 'guest' }
   const includeSummary = req.query.summary === 'true'
 
-  console.log('[Profiles GET /] Auth:', auth, 'includeSummary:', includeSummary)
+  // TODO: Remove debug log - console.log('[Profiles GET /] Auth:', auth, 'includeSummary:', includeSummary)
 
   if (auth.role !== 'admin') {
     // Non-admin users should see all profiles they have access to via user_id
     if (!auth.userId) {
-      console.log('[Profiles GET /] Non-admin user with no userId, returning empty array')
+      // TODO: Remove debug log - console.log('[Profiles GET /] Non-admin user with no userId, returning empty array')
       return res.json([])
     }
 
@@ -143,11 +143,11 @@ router.get('/', (req, res) => {
     const rows = req.db.prepare(`${profileSelect} WHERE p.user_id = ? ORDER BY p.created_at ASC`).all(auth.userId)
     
     if (rows.length === 0) {
-      console.log('[Profiles GET /] No profiles found for userId:', auth.userId)
+      // TODO: Remove debug log - console.log('[Profiles GET /] No profiles found for userId:', auth.userId)
       return res.json([])
     }
 
-    console.log('[Profiles GET /] Returning', rows.length, 'profiles for user')
+    // TODO: Remove debug log - console.log('[Profiles GET /] Returning', rows.length, 'profiles for user')
     const profiles = rows.map(mapProfile)
     if (includeSummary) {
       profiles.forEach(profile => enrichProfileWithSummary(req.db, profile))
@@ -162,7 +162,7 @@ router.get('/', (req, res) => {
     profiles.forEach(profile => enrichProfileWithSummary(req.db, profile))
   }
   
-  console.log('[Profiles GET /] Admin user, returning', profiles.length, 'profiles')
+  // TODO: Remove debug log - console.log('[Profiles GET /] Admin user, returning', profiles.length, 'profiles')
   res.json(profiles)
 })
 

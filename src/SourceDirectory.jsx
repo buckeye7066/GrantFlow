@@ -196,7 +196,7 @@ export default function SourceDirectory() {
         sourceIdsToDelete = typeSources.map(s => s.id);
       }
 
-      console.log('[SourceDirectory] Calling backend to delete sources:', sourceIdsToDelete);
+      // TODO: Remove debug log - console.log('[SourceDirectory] Calling backend to delete sources:', sourceIdsToDelete);
 
       // Call backend function to handle cascade deletion with service role
       const response = await base44.functions.invoke('deleteSourceWithCascade', {

@@ -11,14 +11,14 @@ import path from 'path'
  * @param {Object} db - Database connection
  */
 export async function runStartupOperations(db) {
-  console.log('[startup] Starting Anya autonomous operations...')
+  // TODO: Remove debug log - console.log('[startup] Starting Anya autonomous operations...')
   
   const adminUser = { role: 'admin', userId: 'system' }
   const context = { db, user: adminUser }
   
   try {
     // 1. Run autonomous code crawl and fixes
-    console.log('[startup] Phase 1: Running autonomous code analysis...')
+    // TODO: Remove debug log - console.log('[startup] Phase 1: Running autonomous code analysis...')
     await runAutonomousCodeCrawl({
       dryRun: false,
       fixConsoleLog: true,
@@ -28,7 +28,7 @@ export async function runStartupOperations(db) {
     }, context)
     
     // 2. Run function tests
-    console.log('[startup] Phase 2: Running function tests...')
+    // TODO: Remove debug log - console.log('[startup] Phase 2: Running function tests...')
     await runAutonomousFunctionTests({
       testSuites: ['health', 'profiles', 'opportunities', 'anya'],
       fixErrors: true,
@@ -36,7 +36,7 @@ export async function runStartupOperations(db) {
     }, context)
     
     // 3. Get all active profiles and run crawlers
-    console.log('[startup] Phase 3: Running crawlers for all profiles...')
+    // TODO: Remove debug log - console.log('[startup] Phase 3: Running crawlers for all profiles...')
     const profiles = db.prepare("SELECT id FROM profiles WHERE status = 'active'").all()
     const profileIds = profiles.map(p => p.id)
     
@@ -49,7 +49,7 @@ export async function runStartupOperations(db) {
     }, context)
     
     // 4. Run nationwide comprehensive crawler for ALL ZIP codes
-    console.log('[startup] Phase 4: Running nationwide comprehensive crawler...')
+    // TODO: Remove debug log - console.log('[startup] Phase 4: Running nationwide comprehensive crawler...')
     const dataDir = path.resolve(process.cwd(), 'backend', 'data', 'crawlers')
     const zipFile = path.join(dataDir, 'zip_coordinates.json')
     
@@ -57,7 +57,7 @@ export async function runStartupOperations(db) {
       const zipMap = JSON.parse(fs.readFileSync(zipFile, 'utf8'))
       const allZipCodes = Object.keys(zipMap)
       
-      console.log(`[startup] Processing ${allZipCodes.length} ZIP codes...`)
+      // TODO: Remove debug log - console.log(`[startup] Processing ${allZipCodes.length} ZIP codes...`)
       
       const nationwideJob = {
         id: `startup-nationwide-${Date.now()}`,
@@ -75,11 +75,11 @@ export async function runStartupOperations(db) {
         profileContext: null, // null = save to global opportunities
       })
       
-      console.log(`[startup] Nationwide crawler complete: ${result.inserted} opportunities saved`)
+      // TODO: Remove debug log - console.log(`[startup] Nationwide crawler complete: ${result.inserted} opportunities saved`)
     }
     
     // 5. Save all crawler results to global opportunities
-    console.log('[startup] Phase 5: Syncing to global opportunities...')
+    // TODO: Remove debug log - console.log('[startup] Phase 5: Syncing to global opportunities...')
     const completedJobs = db.prepare(`
       SELECT id FROM crawler_jobs 
       WHERE status = 'completed' 
@@ -94,7 +94,7 @@ export async function runStartupOperations(db) {
       }
     }
     
-    console.log('[startup] All autonomous operations completed successfully!')
+    // TODO: Remove debug log - console.log('[startup] All autonomous operations completed successfully!')
     
   } catch (error) {
     console.error('[startup] Autonomous operations error:', error)

@@ -50,7 +50,7 @@ export default function DataSources() {
 
   const crawlMutation = useMutation({
     mutationFn: async ({ crawlerName, payload }) => {
-      console.log(`[DataSources] Starting ${crawlerName} with payload:`, payload);
+      // TODO: Remove debug log - console.log(`[DataSources] Starting ${crawlerName} with payload:`, payload);
       
       // Fire and forget - don't wait for response
       base44.functions.invoke(crawlerName, payload).catch(err => {
@@ -123,7 +123,7 @@ export default function DataSources() {
     // Add organization_id for crawlers that need profile context
     if (crawler.needsProfile && selectedOrgId) {
       payload.organization_id = selectedOrgId;
-      console.log(`[DataSources] Running ${crawler.function} with profile:`, selectedOrgId);
+      // TODO: Remove debug log - console.log(`[DataSources] Running ${crawler.function} with profile:`, selectedOrgId);
     }
 
     crawlMutation.mutate({ 

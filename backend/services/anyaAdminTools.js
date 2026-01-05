@@ -72,13 +72,13 @@ export async function adminCodeCrawl({ pattern, directory, includeTests = false 
 
               // Common anti-patterns
               lines.forEach((line, idx) => {
-                // console.log in production code
-                if (line.includes('console.log') && !relativePath.includes('test')) {
+                // // TODO: Remove debug log - console.log in production code
+                if (line.includes('// TODO: Remove debug log - console.log') && !relativePath.includes('test')) {
                   findings.push({
                     file: relativePath,
                     line: idx + 1,
                     severity: 'warning',
-                    description: 'console.log statement found',
+                    description: '// TODO: Remove debug log - console.log statement found',
                     preview: line.trim().slice(0, 100),
                   })
                 }
