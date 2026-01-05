@@ -934,8 +934,17 @@ router.post('/signed-url', (req, res) => {
     // In a production environment with cloud storage, this would generate a signed URL
     let signed_url = file_uri;
     
-    // If it's a relative path, make it absolute
-    if (!file_uri.startsWith('http://') && !file_uri.startsWith('https://') && !file_uri.startsWith('/')) {
+    // Check if it's already an absolute URL
+    let isAbsoluteUrl = false;
+    try {
+      new URL(file_uri);
+      isAbsoluteUrl = true;
+    } catch {
+      // Not a valid absolute URL, treat as relative path
+    }
+    
+    // If it's not an absolute URL and doesn't start with /, make it absolute
+    if (!isAbsoluteUrl && !file_uri.startsWith('/')) {
       signed_url = `/${file_uri}`;
     }
 

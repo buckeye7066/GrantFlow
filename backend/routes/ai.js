@@ -529,17 +529,31 @@ router.post('/invoke', async (req, res) => {
     // If JSON schema was requested, parse and return the JSON
     if (response_json_schema) {
       try {
-        const jsonMatch = content.match(/\{[\s\S]*\}/);
-        const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : content);
+        // Try to parse the entire content as JSON first
+        const parsed = JSON.parse(content);
         return res.json(parsed);
       } catch (parseError) {
+        // Fallback: try to extract JSON from markdown code blocks or mixed content
+        const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/) || 
+                         content.match(/```\s*([\s\S]*?)\s*```/) ||
+                         content.match(/(\{[\s\S]*\})/);
+        
+        if (jsonMatch && jsonMatch[1]) {
+          try {
+            const parsed = JSON.parse(jsonMatch[1]);
+            return res.json(parsed);
+          } catch {
+            // Could not parse extracted JSON
+          }
+        }
+        
         console.error('Failed to parse JSON response:', parseError);
         // Return raw content if parsing fails
         return res.json({ error: 'Failed to parse JSON response', raw_content: content });
       }
     }
 
-    // Return plain text response
+    // Return plain text response directly (frontend expects a string, not an object)
     res.json(content);
   } catch (error) {
     console.error('Error invoking LLM:', error);
