@@ -129,25 +129,34 @@ function getOpenAI() {
 router.get('/', (req, res) => {
   const auth = req.user ?? { role: 'guest' }
   const includeSummary = req.query.summary === 'true'
-
-  // TODO: Remove debug log - console.log('[Profiles GET /] Auth:', auth, 'includeSummary:', includeSummary)
+  
+  // Pagination parameters with defaults
+  const limit = parseInt(req.query.limit, 10) || 100
+  const offset = parseInt(req.query.offset, 10) || 0
+  
+  // Validate pagination parameters
+  if (limit < 1 || limit > 1000) {
+    return res.status(400).json({ error: 'limit must be between 1 and 1000' })
+  }
+  if (offset < 0) {
+    return res.status(400).json({ error: 'offset must be non-negative' })
+  }
 
   if (auth.role !== 'admin') {
     // Non-admin users should see all profiles they have access to via user_id
     if (!auth.userId) {
-      // TODO: Remove debug log - console.log('[Profiles GET /] Non-admin user with no userId, returning empty array')
       return res.json([])
     }
 
-    // Get all profiles linked to this user
-    const rows = req.db.prepare(`${profileSelect} WHERE p.user_id = ? ORDER BY p.created_at ASC`).all(auth.userId)
+    // Get all profiles linked to this user (with pagination)
+    const rows = req.db.prepare(
+      `${profileSelect} WHERE p.user_id = ? ORDER BY p.created_at ASC LIMIT ? OFFSET ?`
+    ).all(auth.userId, limit, offset)
     
     if (rows.length === 0) {
-      // TODO: Remove debug log - console.log('[Profiles GET /] No profiles found for userId:', auth.userId)
       return res.json([])
     }
 
-    // TODO: Remove debug log - console.log('[Profiles GET /] Returning', rows.length, 'profiles for user')
     const profiles = rows.map(mapProfile)
     if (includeSummary) {
       profiles.forEach(profile => enrichProfileWithSummary(req.db, profile))
@@ -155,14 +164,14 @@ router.get('/', (req, res) => {
     return res.json(profiles)
   }
 
-  const stmt = req.db.prepare(`${profileSelect} ORDER BY p.created_at DESC`)
-  const profiles = stmt.all().map(mapProfile)
+  // Admin user - return all profiles with pagination
+  const stmt = req.db.prepare(`${profileSelect} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`)
+  const profiles = stmt.all(limit, offset).map(mapProfile)
   
   if (includeSummary) {
     profiles.forEach(profile => enrichProfileWithSummary(req.db, profile))
   }
   
-  // TODO: Remove debug log - console.log('[Profiles GET /] Admin user, returning', profiles.length, 'profiles')
   res.json(profiles)
 })
 

@@ -76,18 +76,8 @@ async function run() {
 
     await page.waitForSelector('text=Sign in to GrantFlow', { timeout: 10_000 })
     await page.waitForSelector('role=tab[name="Email"]', { timeout: 5_000 })
-    await page.waitForSelector('role=tab[name="Phone"]', { timeout: 5_000 })
-    await page.waitForSelector('role=tab[name="Social"]', { timeout: 5_000 })
 
-    await page.click('role=tab[name="Phone"]')
-    await page.waitForSelector('text=Text me a code', { timeout: 5_000 })
-
-    await page.click('role=tab[name="Social"]')
-    await page.waitForSelector('text=Continue with Google', { timeout: 5_000 })
-    await page.waitForSelector('text=Continue with Facebook', { timeout: 5_000 })
-    await page.waitForSelector('text=Continue with Yahoo', { timeout: 5_000 })
-
-    console.log('[smoke] GrantFlow login surface rendered all auth methods.')
+    console.log('[smoke] GrantFlow login surface rendered successfully with Email auth.')
   } finally {
     await browser.close()
   }

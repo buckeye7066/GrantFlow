@@ -55,7 +55,9 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
   // Get user
   const [currentUser, setCurrentUser] = useState(null);
   useEffect(() => {
-    base44.auth.me().then(user => setCurrentUser(user)).catch(() => {});
+    base44.auth.me().then(user => setCurrentUser(user)).catch((error) => {
+      console.error('[AutoTimeTracker] Failed to fetch user:', error)
+    });
   }, []);
 
   // Get billing settings
@@ -65,7 +67,9 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
       if (res && res[0]) {
         setSettings(res[0]);
       }
-    }).catch(() => {});
+    }).catch((error) => {
+      console.error('[AutoTimeTracker] Failed to fetch billing settings:', error)
+    });
   }, []);
 
   const saveTimeMutation = useMutation({

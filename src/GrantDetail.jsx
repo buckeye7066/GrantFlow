@@ -170,6 +170,7 @@ export default function GrantDetail() {
       }
     },
     onSuccess: async (data) => {
+        
         try {
             const analysis = data.data?.analysis;
             
@@ -184,6 +185,7 @@ export default function GrantDetail() {
                 ai_updated_at: new Date().toISOString(),
                 ai_error: null
             });
+            
             
             // Force refetch the grant to get the updated AI summary
             queryClient.invalidateQueries({ queryKey: ['grant', grantId] });
@@ -278,6 +280,7 @@ export default function GrantDetail() {
         return;
     }
     
+    
     const payload = {
         grantId: grant.id,
         title: grant.title,
@@ -312,6 +315,7 @@ export default function GrantDetail() {
   const handleStarToggle = () => { updateGrantMutation.mutate({ starred: !grant.starred }); };
   
   const handleApplyWithAI = async () => {
+    
     // NEW: If status is application_prep, open submission assistant
     if (grant.status === 'application_prep') {
       setIsSubmissionAssistantOpen(true);
