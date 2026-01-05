@@ -420,6 +420,48 @@ class APIClient {
     }
   };
 
+  // Integrations wrapper (for backwards compatibility with Base44 SDK helpers)
+  integrations = {
+    Core: {
+      InvokeLLM: async (payload = {}) => {
+        return this.fetch('/api/ai/invoke', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+      },
+
+      UploadFile: async ({ file, ...metadata } = {}) => {
+        if (!file) {
+          throw new Error('UploadFile requires a file parameter');
+        }
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        Object.entries(metadata || {}).forEach(([key, value]) => {
+          if (value === undefined || value === null) return;
+          formData.append(key, value);
+        });
+
+        return this.fetch('/api/documents/upload', {
+          method: 'POST',
+          body: formData,
+        });
+      },
+
+      CreateFileSignedUrl: async ({ file_uri }) => {
+        if (!file_uri) {
+          throw new Error('CreateFileSignedUrl requires file_uri parameter');
+        }
+
+        return this.fetch('/api/documents/signed-url', {
+          method: 'POST',
+          body: JSON.stringify({ file_uri }),
+        });
+      },
+    },
+  };
+
   // Initialize entity clients
   init() {
     const target = {};

@@ -495,4 +495,86 @@ router.post('/reminders/plan', async (req, res) => {
   }
 });
 
+router.post('/invoke', async (req, res) => {
+  try {
+    const {
+      prompt,
+      system_prompt,
+      model = 'gpt-4o-mini',
+      temperature = 0.3,
+      max_tokens = 1200,
+      response_json_schema,
+      add_context_from_internet,
+    } = req.body ?? {};
+
+    if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
+      return res.status(400).json({ error: 'prompt is required' });
+    }
+
+    const openai = getOpenAI();
+
+    const messages = [
+      {
+        role: 'system',
+        content: 'You are the GrantFlow AI assistant. Provide concise, factual answers that comply with any JSON instructions.',
+      },
+    ];
+
+    if (system_prompt && typeof system_prompt === 'string') {
+      messages.push({ role: 'system', content: system_prompt });
+    }
+
+    if (response_json_schema) {
+      messages.push({
+        role: 'system',
+        content: `You must respond with valid JSON matching this schema: ${JSON.stringify(response_json_schema)}. Do not include any text outside of the JSON.`,
+      });
+    }
+
+    let userPrompt = prompt;
+    if (add_context_from_internet) {
+      userPrompt = `${prompt}\n\n(Note: External web browsing is not available in this environment. Use only the information provided and your trained knowledge base.)`;
+    }
+
+    messages.push({ role: 'user', content: userPrompt });
+
+    const completion = await openai.chat.completions.create({
+      model,
+      messages,
+      temperature: typeof temperature === 'number' ? temperature : 0.3,
+      max_tokens: typeof max_tokens === 'number' ? Math.max(1, Math.min(max_tokens, 4000)) : 1200,
+    });
+
+    const rawText = extractCompletionText(completion);
+
+    if (response_json_schema) {
+      const tryParse = (text) => {
+        const firstBrace = text.indexOf('{');
+        const lastBrace = text.lastIndexOf('}');
+        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+          const candidate = text.slice(firstBrace, lastBrace + 1);
+          return JSON.parse(candidate);
+        }
+        return JSON.parse(text);
+      };
+
+      try {
+        const parsed = tryParse(rawText);
+        return res.json(parsed);
+      } catch (error) {
+        console.error('Failed to parse InvokeLLM JSON response:', rawText, error);
+        return res.status(502).json({ error: 'AI returned invalid JSON response.' });
+      }
+    }
+
+    res.json({
+      output: rawText,
+      text: rawText,
+    });
+  } catch (error) {
+    console.error('AI invoke failed:', error);
+    res.status(500).json({ error: error.message || 'AI invoke failed' });
+  }
+});
+
 export default router;
