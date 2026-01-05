@@ -226,6 +226,82 @@ router.get('/:id', (req, res) => {
   }
 });
 
+// Simple upload endpoint for legacy Base44 compatibility
+router.post('/upload', upload.single('file'), (req, res) => {
+  try {
+    const context = buildAccessContext(req);
+    if (!ensureAuthenticated(res, context)) {
+      if (req.file) {
+        try {
+          fs.unlinkSync(req.file.path);
+        } catch (unlinkError) {
+          console.warn('Failed to clean up uploaded file after auth failure', unlinkError);
+        }
+      }
+      return;
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'file is required' });
+    }
+
+    const relativePath = `/uploads/${req.file.filename}`;
+    const absoluteUrl = `${req.protocol}://${req.get('host')}${relativePath}`;
+
+    res.status(201).json({
+      success: true,
+      file_url: absoluteUrl,
+      file_uri: relativePath,
+      file_path: req.file.path,
+      file_name: req.file.originalname,
+      mime_type: req.file.mimetype,
+      size: req.file.size,
+    });
+  } catch (error) {
+    console.error('Document upload failed:', error);
+    if (req.file) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (unlinkError) {
+        console.warn('Failed to clean up uploaded file after error', unlinkError);
+      }
+    }
+    res.status(500).json({ error: error.message || 'Upload failed' });
+  }
+});
+
+// Signed URL endpoint for legacy Base44 compatibility
+router.post('/signed-url', (req, res) => {
+  try {
+    const context = buildAccessContext(req);
+    if (!ensureAuthenticated(res, context)) {
+      return;
+    }
+
+    const { file_uri } = req.body ?? {};
+    if (!file_uri || typeof file_uri !== 'string' || file_uri.trim().length === 0) {
+      return res.status(400).json({ error: 'file_uri is required' });
+    }
+
+    const trimmed = file_uri.trim();
+    if (/^https?:\/\//i.test(trimmed)) {
+      return res.json({ signed_url: trimmed });
+    }
+
+    const normalized = trimmed.startsWith('/uploads/')
+      ? trimmed
+      : trimmed.startsWith('uploads/')
+        ? `/${trimmed}`
+        : `/uploads/${trimmed.replace(/^\/+/, '')}`;
+
+    const signedUrl = `${req.protocol}://${req.get('host')}${normalized}`;
+    res.json({ signed_url: signedUrl });
+  } catch (error) {
+    console.error('Failed to create signed URL:', error);
+    res.status(500).json({ error: error.message || 'Unable to create signed URL' });
+  }
+});
+
 router.post('/', (req, res) => {
   try {
     const context = buildAccessContext(req);
