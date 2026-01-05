@@ -5,7 +5,7 @@
  */
 
 // Admin Configuration
-export const ADMIN_EMAIL = 'buckeye7066@gmail.com'
+export const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'buckeye7066@gmail.com'
 
 /**
  * Check if an email belongs to an admin user

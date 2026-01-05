@@ -212,6 +212,15 @@ export default function Dashboard() {
     [relevantExpenses],
   )
 
+  const totalFundsSecured = useMemo(
+    () => {
+      return relevantGrants
+        .filter((g) => g.status === 'awarded' && g.amount)
+        .reduce((sum, g) => sum + (Number(g.amount) || 0), 0)
+    },
+    [relevantGrants],
+  )
+
   const urgentDeadlines = useMemo(
     () =>
       relevantGrants.filter((g) => {
@@ -236,14 +245,15 @@ export default function Dashboard() {
     if (currentUser?.role === "admin") {
       return profiles.length || organizations.length
     }
-    return 3144
-  }, [currentUser?.role, profiles.length, organizations.length])
+    // For non-admin users, show their organization count (1 if they belong to one)
+    return profileOrganizationId ? 1 : 0
+  }, [currentUser?.role, profiles.length, organizations.length, profileOrganizationId])
 
   const stats = useMemo(
     () => [
       {
         title: "Funds Secured",
-        value: "$22,804,502.00",
+        value: isLoadingGrants ? "Loading..." : `$${totalFundsSecured.toLocaleString()}`,
         icon: LJWMonogram,
         color: "from-amber-500 to-amber-600",
       },
@@ -276,7 +286,7 @@ export default function Dashboard() {
         link: createPageUrl("Calendar"),
       },
     ],
-    [displayOrganizationsCount, activeGrants.length, totalExpenses, urgentDeadlines.length],
+    [displayOrganizationsCount, activeGrants.length, totalExpenses, urgentDeadlines.length, totalFundsSecured, isLoadingGrants],
   )
 
   const activeProfileId = useMemo(() => {
