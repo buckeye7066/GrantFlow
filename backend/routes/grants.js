@@ -1,7 +1,20 @@
 import express from 'express';
 import crypto from 'crypto';
+import { safeParseJSON } from '../utils/safeJson.js';
+import { validatePagination, validateRequiredFields, sanitizeColumns } from '../utils/validation.js';
+import { formatError } from '../middleware/errorHandler.js';
+import { mutationRateLimiter } from '../middleware/rateLimiting.js';
+import { GRANT_STATUSES } from '../config/constants.js';
 
 const router = express.Router();
+
+// Whitelist of allowed columns for UPDATE operations
+const ALLOWED_GRANT_COLUMNS = new Set([
+  'organization_id', 'funding_opportunity_id', 'title', 'funder', 'deadline',
+  'status', 'priority', 'amount_requested', 'amount_awarded', 'application_url',
+  'match_score', 'match_reasons', 'notes', 'requirements', 'eligibility',
+  'application_steps', 'contact_name', 'contact_email', 'contact_phone'
+]);
 
 function ensureGrantAccess(req, res, grantId) {
   const auth = req.user ?? { role: 'guest' }
@@ -39,12 +52,7 @@ function ensureGrantAccess(req, res, grantId) {
 
 function mapAutomationEvent(row) {
   if (!row) return null
-  let actions = []
-  try {
-    actions = row.recommended_actions ? JSON.parse(row.recommended_actions) : []
-  } catch {
-    actions = []
-  }
+  const actions = safeParseJSON(row.recommended_actions, []);
 
   return {
     id: row.id,
@@ -65,7 +73,8 @@ function mapAutomationEvent(row) {
 // List all grants
 router.get('/', (req, res) => {
   try {
-    const { organization_id, status, limit = 100, offset = 0 } = req.query;
+    const { organization_id, status } = req.query;
+    const { limit, offset } = validatePagination(req.query);
     
     let query = `
       SELECT g.*, o.name as organization_name 
@@ -92,20 +101,20 @@ router.get('/', (req, res) => {
     }
     
     query += ' ORDER BY g.created_at DESC LIMIT ? OFFSET ?';
-    params.push(parseInt(limit), parseInt(offset));
+    params.push(limit, offset);
     
     const grants = req.db.prepare(query).all(...params);
     
-    // Parse JSON fields
+    // Parse JSON fields safely
     const parsed = grants.map(grant => ({
       ...grant,
-      match_reasons: JSON.parse(grant.match_reasons || '[]')
+      match_reasons: safeParseJSON(grant.match_reasons, [])
     }));
     
     res.json(parsed);
   } catch (error) {
     console.error('Error listing grants:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json(formatError(error));
   }
 });
 
@@ -145,7 +154,7 @@ router.get('/pipeline', (req, res) => {
     grants.forEach(grant => {
       const parsed = {
         ...grant,
-        match_reasons: JSON.parse(grant.match_reasons || '[]')
+        match_reasons: safeParseJSON(grant.match_reasons, [])
       };
       
       if (pipeline.hasOwnProperty(grant.status)) {
@@ -156,7 +165,7 @@ router.get('/pipeline', (req, res) => {
     res.json(pipeline);
   } catch (error) {
     console.error('Error getting pipeline:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json(formatError(error));
   }
 });
 
@@ -233,7 +242,7 @@ router.get('/automation/summary', (req, res) => {
     )
   } catch (error) {
     console.error('Error building automation summary:', error)
-    res.status(500).json({ error: error.message })
+    res.status(500).json(formatError(error))
   }
 });
 
@@ -258,7 +267,7 @@ router.get('/:id/automation/events', (req, res) => {
     res.json(events.map(mapAutomationEvent))
   } catch (error) {
     console.error('Error listing automation events:', error)
-    res.status(500).json({ error: error.message })
+    res.status(500).json(formatError(error))
   }
 });
 
@@ -282,7 +291,7 @@ router.get('/:id/automation/latest', (req, res) => {
     res.json(mapAutomationEvent(row))
   } catch (error) {
     console.error('Error fetching latest automation event:', error)
-    res.status(500).json({ error: error.message })
+    res.status(500).json(formatError(error))
   }
 });
 
@@ -303,7 +312,7 @@ router.get('/:id', (req, res) => {
     // Parse JSON fields
     const parsed = {
       ...grant,
-      match_reasons: JSON.parse(grant.match_reasons || '[]')
+      match_reasons: safeParseJSON(grant.match_reasons, [])
     };
     
     // Get related data
@@ -321,24 +330,37 @@ router.get('/:id', (req, res) => {
     });
   } catch (error) {
     console.error('Error getting grant:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json(formatError(error));
   }
 });
 
 // Create grant
-router.post('/', (req, res) => {
+router.post('/', mutationRateLimiter, (req, res) => {
   try {
-    const id = crypto.randomUUID();
     const data = req.body;
     
-    // Stringify JSON fields
-    if (data.match_reasons && Array.isArray(data.match_reasons)) {
-      data.match_reasons = JSON.stringify(data.match_reasons);
+    // Validate required fields
+    const validation = validateRequiredFields(data, ['title', 'organization_id']);
+    if (!validation.valid) {
+      return res.status(400).json({ 
+        error: 'Missing required fields', 
+        missingFields: validation.missingFields 
+      });
     }
     
-    const columns = ['id', ...Object.keys(data)];
+    const id = crypto.randomUUID();
+    
+    // Sanitize columns against whitelist
+    const sanitizedData = sanitizeColumns(data, ALLOWED_GRANT_COLUMNS);
+    
+    // Stringify JSON fields
+    if (sanitizedData.match_reasons && Array.isArray(sanitizedData.match_reasons)) {
+      sanitizedData.match_reasons = JSON.stringify(sanitizedData.match_reasons);
+    }
+    
+    const columns = ['id', ...Object.keys(sanitizedData)];
     const placeholders = columns.map(() => '?').join(', ');
-    const values = [id, ...Object.values(data)];
+    const values = [id, ...Object.values(sanitizedData)];
     
     req.db.prepare(`
       INSERT INTO grants (${columns.join(', ')})
@@ -349,22 +371,29 @@ router.post('/', (req, res) => {
     res.status(201).json(grant);
   } catch (error) {
     console.error('Error creating grant:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json(formatError(error));
   }
 });
 
 // Update grant
-router.put('/:id', (req, res) => {
+router.put('/:id', mutationRateLimiter, (req, res) => {
   try {
     const data = req.body;
     
-    // Stringify JSON fields
-    if (data.match_reasons && Array.isArray(data.match_reasons)) {
-      data.match_reasons = JSON.stringify(data.match_reasons);
+    // Sanitize columns against whitelist
+    const sanitizedData = sanitizeColumns(data, ALLOWED_GRANT_COLUMNS);
+    
+    if (Object.keys(sanitizedData).length === 0) {
+      return res.status(400).json({ error: 'No valid fields to update' });
     }
     
-    const setClause = Object.keys(data).map(key => `${key} = ?`).join(', ');
-    const values = [...Object.values(data), req.params.id];
+    // Stringify JSON fields
+    if (sanitizedData.match_reasons && Array.isArray(sanitizedData.match_reasons)) {
+      sanitizedData.match_reasons = JSON.stringify(sanitizedData.match_reasons);
+    }
+    
+    const setClause = Object.keys(sanitizedData).map(key => `${key} = ?`).join(', ');
+    const values = [...Object.values(sanitizedData), req.params.id];
     
     req.db.prepare(`
       UPDATE grants 
@@ -376,19 +405,16 @@ router.put('/:id', (req, res) => {
     res.json(grant);
   } catch (error) {
     console.error('Error updating grant:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json(formatError(error));
   }
 });
 
 // Update grant status (quick update for drag-and-drop)
-router.patch('/:id/status', (req, res) => {
+router.patch('/:id/status', mutationRateLimiter, (req, res) => {
   try {
     const { status } = req.body;
     
-    const validStatuses = ['discovered', 'interested', 'drafting', 'app_prep', 'revision', 
-                          'submitted', 'under_review', 'awarded', 'rejected', 'closed', 'archived'];
-    
-    if (!validStatuses.includes(status)) {
+    if (!GRANT_STATUSES.includes(status)) {
       return res.status(400).json({ error: 'Invalid status' });
     }
     
@@ -402,12 +428,12 @@ router.patch('/:id/status', (req, res) => {
     res.json(grant);
   } catch (error) {
     console.error('Error updating grant status:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json(formatError(error));
   }
 });
 
 // Delete grant
-router.delete('/:id', (req, res) => {
+router.delete('/:id', mutationRateLimiter, (req, res) => {
   try {
     // Delete related records first
     req.db.prepare('DELETE FROM milestones WHERE grant_id = ?').run(req.params.id);
@@ -423,7 +449,7 @@ router.delete('/:id', (req, res) => {
     res.json({ success: true, message: 'Grant deleted' });
   } catch (error) {
     console.error('Error deleting grant:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json(formatError(error));
   }
 });
 
@@ -462,7 +488,7 @@ router.post('/from-opportunity', (req, res) => {
     res.status(201).json(grant);
   } catch (error) {
     console.error('Error creating grant from opportunity:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json(formatError(error));
   }
 });
 

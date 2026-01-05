@@ -1,14 +1,6 @@
 import { buildProfileSignals, summarizeProfileSignals } from './profileHelpers.js'
 import { extractCompletionText } from '../utils/openai.js'
-
-function safeParseJSON(value, fallback) {
-  if (!value) return fallback
-  try {
-    return JSON.parse(value)
-  } catch {
-    return fallback
-  }
-}
+import { safeParseJSON } from '../utils/safeJson.js'
 
 function mergeValues(existingValue, incomingValue) {
   if (incomingValue === undefined || incomingValue === null) {
@@ -82,6 +74,11 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
     throw new Error('profile_enrichment job requires a profile context')
   }
 
+  // Validate job and parameters exist
+  if (!job || !job.id) {
+    throw new Error('Invalid job object')
+  }
+
   const parameters = job.parameters ?? {}
   const sectionsParam = parameters.sections
   const sectionsToEnrich = Array.isArray(sectionsParam) && sectionsParam.length > 0 ? sectionsParam : ['basic_information']
@@ -123,6 +120,11 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
       'Enrich these sections with factual, structured data. Never fabricate financials or sensitive personal identifiers.',
   }
 
+  // Validate getOpenAI function exists
+  if (!getOpenAI || typeof getOpenAI !== 'function') {
+    throw new Error('getOpenAI function is required')
+  }
+
   const openai = getOpenAI()
 
   let completion
@@ -161,7 +163,10 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
   const content = extractCompletionText(completion) || '{}'
   let parsed = {}
   try {
-    parsed = JSON.parse(content)
+    parsed = safeParseJSON(content, {})
+    if (!parsed || typeof parsed !== 'object') {
+      throw new Error('Invalid parsed JSON')
+    }
   } catch (error) {
     db.prepare(
       `

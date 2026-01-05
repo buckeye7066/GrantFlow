@@ -273,7 +273,7 @@ export default function Settings() {
                 <Label>Items Per Page</Label>
                 <Select 
                   value={preferences.items_per_page.toString()} 
-                  onValueChange={(value) => updateWithChange('items_per_page', parseInt(value))}
+                  onValueChange={(value) => updateWithChange('items_per_page', parseInt(value, 10))}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -368,7 +368,7 @@ export default function Settings() {
                 <p className="text-sm text-slate-500 mb-2">Days before deadline to receive reminder</p>
                 <Select 
                   value={preferences.grant_deadline_reminder_days.toString()} 
-                  onValueChange={(value) => updateWithChange('grant_deadline_reminder_days', parseInt(value))}
+                  onValueChange={(value) => updateWithChange('grant_deadline_reminder_days', parseInt(value, 10))}
                 >
                   <SelectTrigger>
                     <SelectValue />
