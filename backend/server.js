@@ -27,6 +27,7 @@ import jwt from 'jsonwebtoken';
 import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
+import { runStartupOperations } from './services/anyaStartupOperations.js';
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null;
 const ADMIN_NAME = process.env.ADMIN_NAME || 'Admin User';
@@ -97,27 +98,42 @@ if (fs.existsSync(schemaPath)) {
 try {
   db.prepare('ALTER TABLE profiles ADD COLUMN avatar_url TEXT').run();
 } catch (error) {
-  // Ignore if the column already exists
+  // Column already exists - this is expected
+  if (!error.message.includes('duplicate column')) {
+    console.warn('Failed to add avatar_url column:', error.message);
+  }
 }
 try {
   db.prepare('ALTER TABLE profiles ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE SET NULL').run();
 } catch (error) {
-  // Ignore if the column already exists
+  // Column already exists - this is expected
+  if (!error.message.includes('duplicate column')) {
+    console.warn('Failed to add user_id column:', error.message);
+  }
 }
 try {
   db.prepare('ALTER TABLE crawler_jobs ADD COLUMN result_meta TEXT').run();
 } catch (error) {
-  // Ignore if the column already exists
+  // Column already exists - this is expected
+  if (!error.message.includes('duplicate column')) {
+    console.warn('Failed to add result_meta column:', error.message);
+  }
 }
 try {
   db.prepare('ALTER TABLE crawler_jobs ADD COLUMN retry_count INTEGER DEFAULT 0').run();
 } catch (error) {
-  // Ignore if the column already exists
+  // Column already exists - this is expected
+  if (!error.message.includes('duplicate column')) {
+    console.warn('Failed to add retry_count column:', error.message);
+  }
 }
 try {
   db.prepare('ALTER TABLE crawler_jobs ADD COLUMN last_retry_at DATETIME').run();
 } catch (error) {
-  // Ignore if the column already exists
+  // Column already exists - this is expected
+  if (!error.message.includes('duplicate column')) {
+    console.warn('Failed to add last_retry_at column:', error.message);
+  }
 }
 
 function ensureCrawlerJobsSupportsProfileEnrichment() {
@@ -499,6 +515,13 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`Database: ${dbPath}`);
   const loggedCorsOrigins = Array.isArray(corsOptions.origin) ? corsOptions.origin : [corsOptions.origin];
   console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
+  
+  // Start Anya autonomous operations 5 seconds after server is ready
+  setTimeout(() => {
+    runStartupOperations(db).catch(err => {
+      console.error('[Anya Startup] Failed to complete autonomous operations:', err);
+    });
+  }, 5000);
 });
 
 export default app;
