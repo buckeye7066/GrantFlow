@@ -49,8 +49,8 @@ export default function UploadFormDialog({ open, onOpenChange, onUpload }) {
       return
     }
 
-    if (selectedFile.size > 10 * 1024 * 1024) {
-      setError('File size must be less than 10MB.')
+    if (selectedFile.size > 50 * 1024 * 1024) {
+      setError('File size must be less than 50MB.')
       setFile(null)
       return
     }
@@ -145,7 +145,7 @@ export default function UploadFormDialog({ open, onOpenChange, onUpload }) {
             )}
 
             <div className="text-xs text-slate-600 space-y-1">
-              <p>• Maximum file size: 10MB</p>
+              <p>• Maximum file size: 50MB</p>
               <p>• The form will be processed using AI to extract profile information</p>
               <p>• You can review and edit the profile after creation</p>
             </div>

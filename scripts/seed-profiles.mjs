@@ -1,5 +1,5 @@
 /**
- * Seeds the SQLite database with the baseline 11 GrantFlow profiles.
+ * Seeds the SQLite database with the baseline 15 GrantFlow profiles.
  *
  * By default this reads from `seed/baseline-profiles.json` and writes to
  * `backend/data/grantflow.db`. Override paths with the environment variables
@@ -20,8 +20,9 @@ import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
+import { linkProfileToAdmin } from '../backend/utils/adminProfileLinks.js'
 
-const EXPECTED_PROFILE_COUNT = 11
+const EXPECTED_PROFILE_COUNT = 15
 
 function getArgValue(flag) {
   const index = process.argv.indexOf(flag)
@@ -170,6 +171,11 @@ function seedProfiles({ dbPath, seedPath, force, dryRun }) {
           section_key: section.section_key,
           data: JSON.stringify(section.data ?? {}),
         })
+      })
+
+      // Link all profiles to the admin user
+      payload.profiles.forEach((profile) => {
+        linkProfileToAdmin(db, profile.id)
       })
     })
 

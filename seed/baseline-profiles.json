@@ -124,6 +124,38 @@
         "peer support"
       ],
       "avatar_url": null
+    },
+    {
+      "id": "profile-liubov",
+      "primary_type": "individual",
+      "display_name": "Liubov",
+      "status": "active",
+      "tags": [],
+      "avatar_url": null
+    },
+    {
+      "id": "profile-robert",
+      "primary_type": "individual",
+      "display_name": "Robert",
+      "status": "active",
+      "tags": [],
+      "avatar_url": null
+    },
+    {
+      "id": "profile-anastasia",
+      "primary_type": "individual",
+      "display_name": "Anastasia",
+      "status": "active",
+      "tags": [],
+      "avatar_url": null
+    },
+    {
+      "id": "profile-kim",
+      "primary_type": "individual",
+      "display_name": "Kim",
+      "status": "active",
+      "tags": [],
+      "avatar_url": null
     }
   ],
   "sections": [
