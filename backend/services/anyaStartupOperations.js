@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
+import { randomUUID } from 'crypto'
 import fs from 'fs'
 import OpenAI from 'openai'
 import { processComprehensiveCrawlerJob } from './comprehensiveCrawler.js'
@@ -148,7 +149,7 @@ export async function runStartupOperations(db) {
         `).get(opp.title, opp.sponsor)
         
         if (!existing) {
-          const globalId = `global-${Date.now()}-${Math.random().toString(36).slice(2)}`
+          const globalId = `global-${randomUUID()}`
           db.prepare(`
             INSERT INTO funding_opportunities (
               id, title, sponsor, deadline, amount_min, amount_max,
