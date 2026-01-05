@@ -512,6 +512,18 @@ router.post('/invoke', async (req, res) => {
       return res.status(400).json({ error: 'prompt is required' });
     }
 
+    // Add length limits and basic sanitization
+    const MAX_PROMPT_LENGTH = 50000; // ~50K characters max
+    if (prompt.length > MAX_PROMPT_LENGTH) {
+      return res.status(400).json({ 
+        error: 'prompt too long',
+        message: `Prompt must be less than ${MAX_PROMPT_LENGTH} characters`
+      });
+    }
+
+    // Basic sanitization: trim and normalize whitespace
+    const sanitizedPrompt = prompt.trim().replace(/\s+/g, ' ');
+
     const openai = getOpenAI();
 
     const messages = [
@@ -532,9 +544,9 @@ router.post('/invoke', async (req, res) => {
       });
     }
 
-    let userPrompt = prompt;
+    let userPrompt = sanitizedPrompt;
     if (add_context_from_internet) {
-      userPrompt = `${prompt}\n\n(Note: External web browsing is not available in this environment. Use only the information provided and your trained knowledge base.)`;
+      userPrompt = `${sanitizedPrompt}\n\n(Note: External web browsing is not available in this environment. Use only the information provided and your trained knowledge base.)`;
     }
 
     messages.push({ role: 'user', content: userPrompt });
