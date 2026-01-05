@@ -70,6 +70,7 @@ const ALLOWED_EXTENSIONS = new Set([
 ])
 const MAX_FILE_BYTES = 350_000
 const DEFAULT_GRANT_LIMIT = 5
+const BASE_MATCH_SCORE = 40 // Base score for all grant matches before adjustments
 
 function safeParseJSON(value, fallback) {
   if (!value) return fallback
@@ -88,6 +89,19 @@ function cleanList(list, max = 3) {
     .slice(0, max)
 }
 
+function findMatchingCategories(oppCategories, profileCategories) {
+  if (!oppCategories || oppCategories.length === 0 || !profileCategories || profileCategories.length === 0) {
+    return []
+  }
+  
+  return oppCategories.filter(c => 
+    profileCategories.some(pc => 
+      c.toLowerCase().includes(pc.toLowerCase()) || 
+      pc.toLowerCase().includes(c.toLowerCase())
+    )
+  )
+}
+
 function generateMatchReasons(opp, profile) {
   const reasons = []
   
@@ -103,16 +117,9 @@ function generateMatchReasons(opp, profile) {
   // Category alignment
   const oppCategories = cleanList(safeParseJSON(opp.categories, []), 10)
   const profileCategories = cleanList(safeParseJSON(profile?.categories, []), 10)
-  if (oppCategories.length > 0 && profileCategories.length > 0) {
-    const matchingCategories = oppCategories.filter(c => 
-      profileCategories.some(pc => 
-        c.toLowerCase().includes(pc.toLowerCase()) || 
-        pc.toLowerCase().includes(c.toLowerCase())
-      )
-    )
-    if (matchingCategories.length > 0) {
-      reasons.push(`Category alignment: ${matchingCategories.slice(0, 2).join(', ')}`)
-    }
+  const matchingCategories = findMatchingCategories(oppCategories, profileCategories)
+  if (matchingCategories.length > 0) {
+    reasons.push(`Category alignment: ${matchingCategories.slice(0, 2).join(', ')}`)
   }
   
   // Organization type / eligibility
@@ -171,7 +178,7 @@ function generateFitExplanation(opp, profile, matchReasons) {
 }
 
 function calculateMatchScore(opp, profile, matchReasons) {
-  let score = 40 // Base score
+  let score = BASE_MATCH_SCORE
   
   // Location match adds points
   if (opp.state && profile?.state && opp.state.toLowerCase() === profile.state.toLowerCase()) {
@@ -183,15 +190,8 @@ function calculateMatchScore(opp, profile, matchReasons) {
   // Category matches
   const oppCategories = cleanList(safeParseJSON(opp.categories, []), 10)
   const profileCategories = cleanList(safeParseJSON(profile?.categories, []), 10)
-  if (oppCategories.length > 0 && profileCategories.length > 0) {
-    const matchCount = oppCategories.filter(c => 
-      profileCategories.some(pc => 
-        c.toLowerCase().includes(pc.toLowerCase()) || 
-        pc.toLowerCase().includes(c.toLowerCase())
-      )
-    ).length
-    score += Math.min(matchCount * 10, 30)
-  }
+  const matchingCategories = findMatchingCategories(oppCategories, profileCategories)
+  score += Math.min(matchingCategories.length * 10, 30)
   
   // Deadline urgency
   const daysRemaining = daysUntil(opp.deadline)
