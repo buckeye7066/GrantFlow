@@ -977,6 +977,8 @@ router.delete('/:id', (req, res) => {
   }
 });
 
+// Simple file upload endpoint (Base44 SDK compatibility)
+router.post('/upload', upload.single('file'), async (req, res) => {
 // Upload endpoint for Base44 SDK compatibility
 router.post('/upload', uploadLimiter, upload.single('file'), async (req, res) => {
   try {
@@ -985,6 +987,11 @@ router.post('/upload', uploadLimiter, upload.single('file'), async (req, res) =>
       return res.status(400).json({ error: 'file is required' });
     }
 
+    // Return the file URL in the format expected by Base44 SDK
+    const file_url = `/uploads/${file.filename}`;
+    
+    res.json({
+      file_url,
     const publicUrl = `/uploads/${file.filename}`;
     
     res.json({
@@ -994,6 +1001,7 @@ router.post('/upload', uploadLimiter, upload.single('file'), async (req, res) =>
       mime_type: file.mimetype,
     });
   } catch (error) {
+    console.error('File upload failed:', error);
     console.error('Error uploading file:', error);
     if (req.file) {
       try {
@@ -1006,6 +1014,7 @@ router.post('/upload', uploadLimiter, upload.single('file'), async (req, res) =>
   }
 });
 
+// Signed URL endpoint (Base44 SDK compatibility)
 // Create signed URL endpoint for Base44 SDK compatibility
 const SIGNED_URL_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
 
@@ -1017,6 +1026,27 @@ router.post('/signed-url', (req, res) => {
       return res.status(400).json({ error: 'file_uri is required' });
     }
 
+    // For local files, just return the file URI as-is
+    // In a production environment with cloud storage, this would generate a signed URL
+    let signed_url = file_uri;
+    
+    // Check if it's already an absolute URL
+    let isAbsoluteUrl = false;
+    try {
+      new URL(file_uri);
+      isAbsoluteUrl = true;
+    } catch {
+      // Not a valid absolute URL, treat as relative path
+    }
+    
+    // If it's not an absolute URL and doesn't start with /, make it absolute
+    if (!isAbsoluteUrl && !file_uri.startsWith('/')) {
+      signed_url = `/${file_uri}`;
+    }
+
+    res.json({ signed_url });
+  } catch (error) {
+    console.error('Error generating signed URL:', error);
     // NOTE: In production with cloud storage (S3, GCS), this would generate time-limited signed URLs
     // Currently, files are served statically and remain accessible beyond expiry time
     // The expires_at field is informational only and does not enforce access restrictions

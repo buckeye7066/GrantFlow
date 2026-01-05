@@ -420,6 +420,7 @@ class APIClient {
     }
   };
 
+  // Integrations wrapper for Base44 SDK compatibility
   // Integrations wrapper for Base44 compatibility
   integrations = {
     Core: {
