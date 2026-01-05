@@ -2,7 +2,11 @@ import fs from 'fs'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 
-export async function processAvatarLookupJob({ profile, uploadDir, getOpenAI }) {
+export async function processAvatarLookupJob({ profileContext, uploadDir, getOpenAI }) {
+  const profile = profileContext?.profile
+  if (!profile) {
+    throw new Error('Avatar lookup requires a profile context')
+  }
   const openai = getOpenAI()
   const prompt = buildAvatarPrompt(profile)
   const response = await openai.images.generate({

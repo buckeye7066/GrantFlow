@@ -98,27 +98,42 @@ if (fs.existsSync(schemaPath)) {
 try {
   db.prepare('ALTER TABLE profiles ADD COLUMN avatar_url TEXT').run();
 } catch (error) {
-  // Ignore if the column already exists
+  // Column already exists - this is expected
+  if (!error.message.includes('duplicate column')) {
+    console.warn('Failed to add avatar_url column:', error.message);
+  }
 }
 try {
   db.prepare('ALTER TABLE profiles ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE SET NULL').run();
 } catch (error) {
-  // Ignore if the column already exists
+  // Column already exists - this is expected
+  if (!error.message.includes('duplicate column')) {
+    console.warn('Failed to add user_id column:', error.message);
+  }
 }
 try {
   db.prepare('ALTER TABLE crawler_jobs ADD COLUMN result_meta TEXT').run();
 } catch (error) {
-  // Ignore if the column already exists
+  // Column already exists - this is expected
+  if (!error.message.includes('duplicate column')) {
+    console.warn('Failed to add result_meta column:', error.message);
+  }
 }
 try {
   db.prepare('ALTER TABLE crawler_jobs ADD COLUMN retry_count INTEGER DEFAULT 0').run();
 } catch (error) {
-  // Ignore if the column already exists
+  // Column already exists - this is expected
+  if (!error.message.includes('duplicate column')) {
+    console.warn('Failed to add retry_count column:', error.message);
+  }
 }
 try {
   db.prepare('ALTER TABLE crawler_jobs ADD COLUMN last_retry_at DATETIME').run();
 } catch (error) {
-  // Ignore if the column already exists
+  // Column already exists - this is expected
+  if (!error.message.includes('duplicate column')) {
+    console.warn('Failed to add last_retry_at column:', error.message);
+  }
 }
 
 function ensureCrawlerJobsSupportsProfileEnrichment() {
@@ -300,8 +315,9 @@ app.use((req, res, next) => {
           };
           handled = true;
         }
-      } catch {
+      } catch (error) {
         // Ignore lookup errors and fall back to guest
+        console.warn('Failed to lookup profile by token:', error?.message || error);
       }
     }
   }
@@ -499,6 +515,14 @@ app.listen(PORT, '0.0.0.0', () => {
   // TODO: Remove debug log - console.log(`GrantFlow API server running on port ${PORT}`);
   // TODO: Remove debug log - console.log(`Database: ${dbPath}`);
   const loggedCorsOrigins = Array.isArray(corsOptions.origin) ? corsOptions.origin : [corsOptions.origin];
+  console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
+  
+  // Start Anya autonomous operations 5 seconds after server is ready
+  setTimeout(() => {
+    runStartupOperations(db).catch(err => {
+      console.error('[Anya Startup] Failed to complete autonomous operations:', err);
+    });
+  }, 5000);
   // TODO: Remove debug log - console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
   
   // Trigger Anya autonomous operations after startup
