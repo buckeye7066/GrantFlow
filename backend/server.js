@@ -315,8 +315,9 @@ app.use((req, res, next) => {
           };
           handled = true;
         }
-      } catch {
+      } catch (error) {
         // Ignore lookup errors and fall back to guest
+        console.warn('Failed to lookup profile by token:', error?.message || error);
       }
     }
   }

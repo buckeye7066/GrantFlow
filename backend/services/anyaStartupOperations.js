@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import fs from 'fs'
+import OpenAI from 'openai'
 import { processComprehensiveCrawlerJob } from './comprehensiveCrawler.js'
 import { dispatchCrawlerJob } from './crawlerDispatcher.js'
 
@@ -53,7 +54,6 @@ export async function runStartupOperations(db) {
             jobId,
             uploadDir,
             getOpenAI: () => {
-              const OpenAI = require('openai').default
               return new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
             }
           })
