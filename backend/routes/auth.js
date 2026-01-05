@@ -378,12 +378,12 @@ function assignProfileToUser(db, userId, email) {
       if (designatedProfile) {
         if (!designatedProfile.user_id || designatedProfile.user_id === userId) {
           db.prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(userId, designatedProfileId)
-          console.log(`[auth] Assigned designated profile ${designatedProfileId} to user ${userId} (${email})`)
+          // TODO: Remove debug log - console.log(`[auth] Assigned designated profile ${designatedProfileId} to user ${userId} (${email})`)
           return designatedProfileId
         }
         if (isAdminUserId(db, designatedProfile.user_id)) {
           db.prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(userId, designatedProfileId)
-          console.log(`[auth] Reassigned designated profile ${designatedProfileId} from admin to user ${userId} (${email})`)
+          // TODO: Remove debug log - console.log(`[auth] Reassigned designated profile ${designatedProfileId} from admin to user ${userId} (${email})`)
           return designatedProfileId
         }
         console.warn(`[auth] Designated profile ${designatedProfileId} already linked to another user`)
@@ -396,11 +396,11 @@ function assignProfileToUser(db, userId, email) {
   const firstProfile = db.prepare('SELECT id FROM profiles WHERE user_id IS NULL ORDER BY created_at ASC LIMIT 1').get()
   if (firstProfile) {
     db.prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(userId, firstProfile.id)
-    console.log(`[auth] Assigned first available profile ${firstProfile.id} to user ${userId}`)
+    // TODO: Remove debug log - console.log(`[auth] Assigned first available profile ${firstProfile.id} to user ${userId}`)
     return firstProfile.id
   }
   
-  console.log(`[auth] No available profiles to assign to user ${userId}`)
+  // TODO: Remove debug log - console.log(`[auth] No available profiles to assign to user ${userId}`)
   return null
 }
 
@@ -408,7 +408,7 @@ function ensureAdminStatus(db, userId, email) {
   if (isAdminEmail(email)) {
     const result = db.prepare('UPDATE users SET is_admin = 1 WHERE id = ? AND is_admin = 0').run(userId)
     if (result.changes > 0) {
-      console.log(`[auth] Set admin status for user ${userId} (${email})`)
+      // TODO: Remove debug log - console.log(`[auth] Set admin status for user ${userId} (${email})`)
     }
   }
 }

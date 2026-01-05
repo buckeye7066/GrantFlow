@@ -27,6 +27,7 @@ import jwt from 'jsonwebtoken';
 import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
+import { runStartupOperations } from './services/anyaStartupOperations.js';
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null;
 const ADMIN_NAME = process.env.ADMIN_NAME || 'Admin User';
@@ -92,7 +93,7 @@ const schemaPath = join(__dirname, 'db', 'schema.sql');
 if (fs.existsSync(schemaPath)) {
   const schema = fs.readFileSync(schemaPath, 'utf8');
   db.exec(schema);
-  console.log('Database schema initialized');
+  // TODO: Remove debug log - console.log('Database schema initialized');
 }
 try {
   db.prepare('ALTER TABLE profiles ADD COLUMN avatar_url TEXT').run();
@@ -495,10 +496,15 @@ app.use((req, res) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`GrantFlow API server running on port ${PORT}`);
-  console.log(`Database: ${dbPath}`);
+  // TODO: Remove debug log - console.log(`GrantFlow API server running on port ${PORT}`);
+  // TODO: Remove debug log - console.log(`Database: ${dbPath}`);
   const loggedCorsOrigins = Array.isArray(corsOptions.origin) ? corsOptions.origin : [corsOptions.origin];
-  console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
+  // TODO: Remove debug log - console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
+  
+  // Trigger Anya autonomous operations after startup
+  runStartupOperations(db).catch(err => {
+    console.error('[startup] Autonomous operations failed:', err);
+  });
 });
 
 export default app;

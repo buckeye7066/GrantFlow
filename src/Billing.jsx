@@ -59,7 +59,7 @@ export default function Billing() {
   // DIAGNOSIS: Check for weekly invoice generation
   useEffect(() => {
     const checkAndGenerateInvoices = async () => {
-      console.log("Checking if draft invoices should be generated...");
+      // TODO: Remove debug log - console.log("Checking if draft invoices should be generated...");
       const nowInNY = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
       const dayOfWeek = nowInNY.getDay();
       const hours = nowInNY.getHours();
@@ -72,7 +72,7 @@ export default function Billing() {
       oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
 
       if (isFriday && isAfterPrepareTime && (!lastCheck || new Date(lastCheck) < oneWeekAgo)) {
-          console.log("It's time to generate draft invoices!");
+          // TODO: Remove debug log - console.log("It's time to generate draft invoices!");
           localStorage.setItem('lastInvoiceGenerationCheck', new Date().toISOString());
       }
     };

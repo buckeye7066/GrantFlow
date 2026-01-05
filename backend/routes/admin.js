@@ -137,7 +137,7 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
       return res.status(400).json({ error: 'PDF document is required' });
     }
 
-    console.log('[Admin Upload] Processing document:', file.originalname);
+    // TODO: Remove debug log - console.log('[Admin Upload] Processing document:', file.originalname);
 
     // Step 1: Extract text from PDF
     const extractedText = await extractTextFromPDF(file.path);
@@ -154,7 +154,7 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
       });
     }
 
-    console.log('[Admin Upload] Extracted text length:', extractedText.length);
+    // TODO: Remove debug log - console.log('[Admin Upload] Extracted text length:', extractedText.length);
 
     // Step 2: Use OpenAI to extract structured profile information
     const openai = getOpenAI();
@@ -180,7 +180,7 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
     }
 
     const extractedData = JSON.parse(extractedDataStr);
-    console.log('[Admin Upload] Extracted data:', JSON.stringify(extractedData, null, 2));
+    // TODO: Remove debug log - console.log('[Admin Upload] Extracted data:', JSON.stringify(extractedData, null, 2));
 
     // Step 3: Create a new profile with extracted information
     const profileId = crypto.randomUUID();
@@ -200,7 +200,7 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
       ) VALUES (?, ?, ?, ?, ?, ?)`
     ).run(profileId, displayName, primaryType, status, '[]', 'admin');
 
-    console.log('[Admin Upload] Created profile:', profileId);
+    // TODO: Remove debug log - console.log('[Admin Upload] Created profile:', profileId);
 
     // Step 4: Store the document and link it to the profile
     const documentId = crypto.randomUUID();
@@ -240,7 +240,7 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
       `INSERT OR IGNORE INTO profile_documents (profile_id, document_id) VALUES (?, ?)`
     ).run(profileId, documentId);
 
-    console.log('[Admin Upload] Created document:', documentId);
+    // TODO: Remove debug log - console.log('[Admin Upload] Created document:', documentId);
 
     // Step 5: Store extracted fields in profile sections (if relevant)
     // For now, we'll just return them to the frontend

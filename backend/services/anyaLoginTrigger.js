@@ -74,7 +74,7 @@ function createCrawlerJob(db, profileId, crawlerType, parameters = {}) {
     JSON.stringify(parameters)
   )
   
-  console.log(`[anyaLoginTrigger] Created ${crawlerType} crawler job:`, jobId)
+  // TODO: Remove debug log - console.log(`[anyaLoginTrigger] Created ${crawlerType} crawler job:`, jobId)
   
   return jobId
 }
@@ -112,11 +112,11 @@ function addAnyaMessage(db, sessionId, role, content) {
 export function initializeAnyaForAdmin(db, user, profileId = null, { uploadDir, getOpenAI } = {}) {
   // Only initialize for admin users
   if (!isAdmin(user)) {
-    console.log('[anyaLoginTrigger] User is not admin, skipping Anya initialization')
+    // TODO: Remove debug log - console.log('[anyaLoginTrigger] User is not admin, skipping Anya initialization')
     return null
   }
   
-  console.log('[anyaLoginTrigger] Initializing Anya for admin login:', user.email || user.id)
+  // TODO: Remove debug log - console.log('[anyaLoginTrigger] Initializing Anya for admin login:', user.email || user.id)
   
   try {
     // Get the admin's profile if not provided
@@ -138,7 +138,7 @@ export function initializeAnyaForAdmin(db, user, profileId = null, { uploadDir, 
     }
     
     if (!profileId) {
-      console.log('[anyaLoginTrigger] No profile found, cannot create crawler jobs')
+      // TODO: Remove debug log - console.log('[anyaLoginTrigger] No profile found, cannot create crawler jobs')
       return null
     }
     
@@ -187,9 +187,9 @@ How can I help you today?`
     
     addAnyaMessage(db, sessionId, 'assistant', welcomeMessage)
     
-    console.log('[anyaLoginTrigger] Anya initialized successfully')
-    console.log('[anyaLoginTrigger] Session ID:', sessionId)
-    console.log('[anyaLoginTrigger] Job IDs:', jobIds)
+    // TODO: Remove debug log - console.log('[anyaLoginTrigger] Anya initialized successfully')
+    // TODO: Remove debug log - console.log('[anyaLoginTrigger] Session ID:', sessionId)
+    // TODO: Remove debug log - console.log('[anyaLoginTrigger] Job IDs:', jobIds)
     
     return {
       sessionId,
