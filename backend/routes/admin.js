@@ -137,8 +137,6 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
       return res.status(400).json({ error: 'PDF document is required' });
     }
 
-    // TODO: Remove debug log - console.log('[Admin Upload] Processing document:', file.originalname);
-
     // Step 1: Extract text from PDF
     const extractedText = await extractTextFromPDF(file.path);
     if (!extractedText) {

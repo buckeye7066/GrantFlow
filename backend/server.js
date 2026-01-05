@@ -93,7 +93,6 @@ const schemaPath = join(__dirname, 'db', 'schema.sql');
 if (fs.existsSync(schemaPath)) {
   const schema = fs.readFileSync(schemaPath, 'utf8');
   db.exec(schema);
-  // TODO: Remove debug log - console.log('Database schema initialized');
 }
 try {
   db.prepare('ALTER TABLE profiles ADD COLUMN avatar_url TEXT').run();
