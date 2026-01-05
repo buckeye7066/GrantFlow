@@ -7,6 +7,7 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import pdfParse from 'pdf-parse';
 import mammoth from 'mammoth';
+import rateLimit from 'express-rate-limit';
 import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
 
 const router = express.Router();
@@ -31,6 +32,15 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 },
+});
+
+// Rate limiter for file uploads to prevent abuse
+const uploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  limit: 20, // Max 20 uploads per 15 minutes per IP
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: 'Too many file uploads from this IP, please try again later.',
 });
 
 async function extractTextFromFile(filePath, mimeType) {
@@ -213,6 +223,82 @@ router.get('/:id', (req, res) => {
     res.json(doc);
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Simple upload endpoint for legacy Base44 compatibility
+router.post('/upload', upload.single('file'), (req, res) => {
+  try {
+    const context = buildAccessContext(req);
+    if (!ensureAuthenticated(res, context)) {
+      if (req.file) {
+        try {
+          fs.unlinkSync(req.file.path);
+        } catch (unlinkError) {
+          console.warn('Failed to clean up uploaded file after auth failure', unlinkError);
+        }
+      }
+      return;
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'file is required' });
+    }
+
+    const relativePath = `/uploads/${req.file.filename}`;
+    const absoluteUrl = `${req.protocol}://${req.get('host')}${relativePath}`;
+
+    res.status(201).json({
+      success: true,
+      file_url: absoluteUrl,
+      file_uri: relativePath,
+      file_path: req.file.path,
+      file_name: req.file.originalname,
+      mime_type: req.file.mimetype,
+      size: req.file.size,
+    });
+  } catch (error) {
+    console.error('Document upload failed:', error);
+    if (req.file) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (unlinkError) {
+        console.warn('Failed to clean up uploaded file after error', unlinkError);
+      }
+    }
+    res.status(500).json({ error: error.message || 'Upload failed' });
+  }
+});
+
+// Signed URL endpoint for legacy Base44 compatibility
+router.post('/signed-url', (req, res) => {
+  try {
+    const context = buildAccessContext(req);
+    if (!ensureAuthenticated(res, context)) {
+      return;
+    }
+
+    const { file_uri } = req.body ?? {};
+    if (!file_uri || typeof file_uri !== 'string' || file_uri.trim().length === 0) {
+      return res.status(400).json({ error: 'file_uri is required' });
+    }
+
+    const trimmed = file_uri.trim();
+    if (/^https?:\/\//i.test(trimmed)) {
+      return res.json({ signed_url: trimmed });
+    }
+
+    const normalized = trimmed.startsWith('/uploads/')
+      ? trimmed
+      : trimmed.startsWith('uploads/')
+        ? `/${trimmed}`
+        : `/uploads/${trimmed.replace(/^\/+/, '')}`;
+
+    const signedUrl = `${req.protocol}://${req.get('host')}${normalized}`;
+    res.json({ signed_url: signedUrl });
+  } catch (error) {
+    console.error('Failed to create signed URL:', error);
+    res.status(500).json({ error: error.message || 'Unable to create signed URL' });
   }
 });
 
@@ -893,6 +979,8 @@ router.delete('/:id', (req, res) => {
 
 // Simple file upload endpoint (Base44 SDK compatibility)
 router.post('/upload', upload.single('file'), async (req, res) => {
+// Upload endpoint for Base44 SDK compatibility
+router.post('/upload', uploadLimiter, upload.single('file'), async (req, res) => {
   try {
     const file = req.file;
     if (!file) {
@@ -904,12 +992,17 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     
     res.json({
       file_url,
+    const publicUrl = `/uploads/${file.filename}`;
+    
+    res.json({
+      file_url: publicUrl,
       file_name: file.originalname,
       file_size: file.size,
       mime_type: file.mimetype,
     });
   } catch (error) {
     console.error('File upload failed:', error);
+    console.error('Error uploading file:', error);
     if (req.file) {
       try {
         fs.unlinkSync(req.file.path);
@@ -922,6 +1015,9 @@ router.post('/upload', upload.single('file'), async (req, res) => {
 });
 
 // Signed URL endpoint (Base44 SDK compatibility)
+// Create signed URL endpoint for Base44 SDK compatibility
+const SIGNED_URL_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
+
 router.post('/signed-url', (req, res) => {
   try {
     const { file_uri } = req.body;
@@ -951,6 +1047,30 @@ router.post('/signed-url', (req, res) => {
     res.json({ signed_url });
   } catch (error) {
     console.error('Error generating signed URL:', error);
+    // NOTE: In production with cloud storage (S3, GCS), this would generate time-limited signed URLs
+    // Currently, files are served statically and remain accessible beyond expiry time
+    // The expires_at field is informational only and does not enforce access restrictions
+    let signed_url;
+    
+    if (file_uri.startsWith('http://') || file_uri.startsWith('https://')) {
+      // Already a full URL
+      signed_url = file_uri;
+    } else if (file_uri.startsWith('/uploads/')) {
+      // Relative path to uploads - make it absolute
+      const baseUrl = process.env.API_URL || `http://localhost:${process.env.PORT || 8080}`;
+      signed_url = `${baseUrl}${file_uri}`;
+    } else {
+      // Assume it's a relative path and prepend the base URL
+      const baseUrl = process.env.API_URL || `http://localhost:${process.env.PORT || 8080}`;
+      signed_url = `${baseUrl}/uploads/${file_uri}`;
+    }
+    
+    res.json({
+      signed_url,
+      expires_at: new Date(Date.now() + SIGNED_URL_EXPIRY_MS).toISOString(),
+    });
+  } catch (error) {
+    console.error('Error creating signed URL:', error);
     res.status(500).json({ error: error.message });
   }
 });
