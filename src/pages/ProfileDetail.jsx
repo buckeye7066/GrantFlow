@@ -19,6 +19,7 @@ import { createPageUrl } from "@/utils"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx"
 import { useSettingsStore } from "@/stores/settingsStore"
 
@@ -350,21 +351,139 @@ export default function ProfileDetail() {
           </div>
         </div>
 
-        <ProfileOverview
-          profile={profile}
-          billing={profile.billing ?? null}
-          onEditSection={handleOpenSection}
-          onAskSection={handleAskSection}
-          savingSectionKey={savingSectionKey}
-          aiLoadingKey={aiLoadingKey}
-          onUploadAvatar={handleUploadAvatar}
-          onRequestAvatarAI={handleRequestAvatarAI}
-          isUploadingAvatar={uploadAvatarMutation.isPending}
-          isRequestingAvatar={requestAvatarAIMutation.isPending}
-          onUploadDocument={handleUploadDocument}
-          isUploadingDocument={uploadDocumentMutation.isPending}
-          fundsTotal={profile.pipeline_funds_total ?? 0}
-        />
+        <Tabs defaultValue="profile" className="w-full">
+          <TabsList className="grid w-full grid-cols-7 lg:w-auto lg:inline-flex">
+            <TabsTrigger value="profile">Profile Information</TabsTrigger>
+            <TabsTrigger value="pipeline">Pipeline</TabsTrigger>
+            <TabsTrigger value="item-funding">Item Funding</TabsTrigger>
+            <TabsTrigger value="deadlines">Grant Deadline</TabsTrigger>
+            <TabsTrigger value="monitoring">Grant Monitoring</TabsTrigger>
+            <TabsTrigger value="proposals">Proposals & Files</TabsTrigger>
+            <TabsTrigger value="billing">Billing</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="profile" className="mt-6">
+            <ProfileOverview
+              profile={profile}
+              billing={profile.billing ?? null}
+              onEditSection={handleOpenSection}
+              onAskSection={handleAskSection}
+              savingSectionKey={savingSectionKey}
+              aiLoadingKey={aiLoadingKey}
+              onUploadAvatar={handleUploadAvatar}
+              onRequestAvatarAI={handleRequestAvatarAI}
+              isUploadingAvatar={uploadAvatarMutation.isPending}
+              isRequestingAvatar={requestAvatarAIMutation.isPending}
+              onUploadDocument={handleUploadDocument}
+              isUploadingDocument={uploadDocumentMutation.isPending}
+              fundsTotal={profile.pipeline_funds_total ?? 0}
+            />
+          </TabsContent>
+
+          <TabsContent value="pipeline" className="mt-6">
+            <div className="rounded-lg border bg-white p-6">
+              <h3 className="text-lg font-semibold mb-4">Pipeline View</h3>
+              <p className="text-slate-600 mb-4">
+                View and manage grants in your pipeline for this profile.
+              </p>
+              <Button onClick={() => navigate(createPageUrl("Pipeline", { organization_id: profile.organization_id }))}>
+                Go to Pipeline
+              </Button>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="item-funding" className="mt-6">
+            <div className="rounded-lg border bg-white p-6">
+              <h3 className="text-lg font-semibold mb-4">Item Funding</h3>
+              <p className="text-slate-600 mb-4">
+                Search for specific item funding opportunities.
+              </p>
+              <Button onClick={() => navigate(createPageUrl("ItemFunding", { profile_id: profileId }))}>
+                Go to Item Funding
+              </Button>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="deadlines" className="mt-6">
+            <div className="rounded-lg border bg-white p-6">
+              <h3 className="text-lg font-semibold mb-4">Grant Deadlines</h3>
+              <p className="text-slate-600 mb-4">
+                Track upcoming grant deadlines for this profile.
+              </p>
+              <Button onClick={() => navigate(createPageUrl("GrantDeadline", { profile_id: profileId }))}>
+                Go to Grant Deadlines
+              </Button>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="monitoring" className="mt-6">
+            <div className="rounded-lg border bg-white p-6">
+              <h3 className="text-lg font-semibold mb-4">Grant Monitoring</h3>
+              <p className="text-slate-600 mb-4">
+                Monitor awarded grants and compliance requirements.
+              </p>
+              <Button onClick={() => navigate(createPageUrl("GrantMonitoring", { organization_id: profile.organization_id }))}>
+                Go to Grant Monitoring
+              </Button>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="proposals" className="mt-6">
+            <div className="rounded-lg border bg-white p-6">
+              <h3 className="text-lg font-semibold mb-4">Proposals & File Uploads</h3>
+              <p className="text-slate-600 mb-4">
+                Manage proposal documents and file uploads for this profile.
+              </p>
+              <div className="flex gap-3">
+                <Button onClick={() => navigate(createPageUrl("Proposals", { organization_id: profile.organization_id }))}>
+                  View Proposals
+                </Button>
+                <Button variant="outline" onClick={() => navigate(createPageUrl("Documents", { profile_id: profileId }))}>
+                  View Documents
+                </Button>
+              </div>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="billing" className="mt-6">
+            <div className="rounded-lg border bg-white p-6">
+              <h3 className="text-lg font-semibold mb-4">Billing</h3>
+              {profile.billing ? (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-medium">Current Plan: {profile.billing.plan || 'Standard'}</p>
+                      <p className="text-sm text-slate-600">
+                        {profile.billing.is_pro_bono ? 'Pro Bono Account' : `$${profile.billing.monthly_rate || 0}/month`}
+                      </p>
+                    </div>
+                    <Button onClick={() => navigate(createPageUrl("Billing", { organization_id: profile.organization_id }))}>
+                      View Full Billing
+                    </Button>
+                  </div>
+                  {profile.billing.is_pro_bono && (
+                    <Alert>
+                      <AlertDescription>
+                        This is a pro bono account. Invoices will show $0 for tax record purposes.
+                      </AlertDescription>
+                    </Alert>
+                  )}
+                  <div className="mt-4">
+                    <h4 className="font-medium mb-2">Recent Invoice</h4>
+                    <p className="text-sm text-slate-600">
+                      Amount: ${profile.billing.is_pro_bono ? '0.00' : (profile.billing.last_invoice_amount || '0.00')}
+                    </p>
+                    <p className="text-sm text-slate-600">
+                      Date: {profile.billing.last_invoice_date || 'N/A'}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-slate-600">No billing information available for this profile.</p>
+              )}
+            </div>
+          </TabsContent>
+        </Tabs>
       </div>
 
       <ProfileSectionEditor
