@@ -274,9 +274,13 @@ export async function adminCodeAnalyze({ filePath }, context) {
 }
 
 /**
- * Propose edits to a specific file (shows diff, doesn't auto-save)
+ * Propose or apply edits to a specific file
+ * @param {Object} params
+ * @param {string} params.filePath - Path to file to edit
+ * @param {Array} params.changes - Array of change objects
+ * @param {boolean} params.save - If true, apply changes and save file (with backup)
  */
-export async function adminCodeEdit({ filePath, changes }, context) {
+export async function adminCodeEdit({ filePath, changes, save = false }, context) {
   if (!filePath) {
     throw new Error('filePath is required')
   }
@@ -287,11 +291,23 @@ export async function adminCodeEdit({ filePath, changes }, context) {
   const resolvedPath = path.resolve(REPO_ROOT, filePath)
   const relativePath = path.relative(REPO_ROOT, resolvedPath)
 
+  // Ensure file is within allowed directories for safety
+  const allowedDirs = ['backend', 'src', 'scripts']
+  const isInAllowedDir = allowedDirs.some(dir => 
+    relativePath.startsWith(dir + path.sep) || relativePath.startsWith(dir)
+  )
+  
+  if (save && !isInAllowedDir) {
+    throw new Error(`File ${relativePath} is outside allowed directories for editing`)
+  }
+
   try {
     const content = await fs.readFile(resolvedPath, 'utf8')
     const lines = content.split('\n')
     const proposedChanges = []
+    let hasErrors = false
 
+    // Validate all changes first
     changes.forEach((change) => {
       const { line, oldText, newText } = change
       if (line < 1 || line > lines.length) {
@@ -300,6 +316,7 @@ export async function adminCodeEdit({ filePath, changes }, context) {
           status: 'error',
           message: 'Line number out of range',
         })
+        hasErrors = true
         return
       }
 
@@ -311,25 +328,66 @@ export async function adminCodeEdit({ filePath, changes }, context) {
           message: 'Old text not found on this line',
           current: currentLine,
         })
+        hasErrors = true
         return
       }
 
       proposedChanges.push({
         line,
-        status: 'pending',
+        status: save ? 'applied' : 'pending',
         old: currentLine,
         new: currentLine.replace(oldText, newText),
       })
     })
 
+    // If save requested and no errors, apply changes
+    if (save && !hasErrors) {
+      // Create backup
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+      const backupDir = path.join(REPO_ROOT, 'backend', 'data', 'backups')
+      await fs.mkdir(backupDir, { recursive: true })
+      
+      const backupPath = path.join(
+        backupDir,
+        `${path.basename(filePath)}.${timestamp}.backup`
+      )
+      await fs.writeFile(backupPath, content, 'utf8')
+
+      // Apply changes
+      const modifiedLines = [...lines]
+      proposedChanges.forEach((change, idx) => {
+        if (change.status === 'applied') {
+          const originalChange = changes[idx]
+          const lineIdx = originalChange.line - 1
+          modifiedLines[lineIdx] = modifiedLines[lineIdx].replace(
+            originalChange.oldText,
+            originalChange.newText
+          )
+        }
+      })
+
+      const newContent = modifiedLines.join('\n')
+      await fs.writeFile(resolvedPath, newContent, 'utf8')
+
+      return {
+        file: relativePath,
+        changes_applied: proposedChanges.filter(c => c.status === 'applied').length,
+        changes: proposedChanges,
+        backup_created: path.relative(REPO_ROOT, backupPath),
+        saved: true,
+      }
+    }
+
     return {
       file: relativePath,
       changes_proposed: proposedChanges.length,
       changes: proposedChanges,
-      note: 'Changes are proposed only. Use a proper edit tool to apply them.',
+      note: save && hasErrors 
+        ? 'Changes not saved due to errors. Fix errors and try again.'
+        : 'Changes are proposed only. Set save=true to apply them.',
     }
   } catch (error) {
-    throw new Error(`Failed to propose edits: ${error.message}`)
+    throw new Error(`Failed to edit file: ${error.message}`)
   }
 }
 
