@@ -1,8 +1,24 @@
 import { randomUUID } from 'crypto'
+import OpenAI from 'openai'
 import { listToolMetadata, invokeTool as invokeRegisteredTool } from './anyaToolRegistry.js'
 
 const TASK_STATUSES = new Set(['open', 'in_progress', 'completed', 'cancelled'])
 const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent'])
+
+let cachedOpenAI = null
+
+function getOpenAIClient() {
+  if (cachedOpenAI) return cachedOpenAI
+  const apiKey = process.env.ANYA_OPENAI_KEY || process.env.OPENAI_API_KEY
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY (or ANYA_OPENAI_KEY) is not configured')
+  }
+  cachedOpenAI = new OpenAI({ apiKey })
+  return cachedOpenAI
+}
+
+const DEFAULT_ASSISTANT_MODEL =
+  process.env.ANYA_OPENAI_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini'
 
 function coerceProfileId(requestedProfileId) {
   if (!requestedProfileId) return null
@@ -521,20 +537,71 @@ export function updateTask(
   return mapTask(updated)
 }
 
-export function generatePlaceholderResponse({ content }) {
+export async function generateAssistantResponse(db, user, sessionId, { content }) {
   const trimmed = (content ?? '').trim()
   if (!trimmed) {
-    return "I'm ready when you are—let me know how I can help."
+    return "I'm here and ready to help—just let me know what you'd like to work on."
+  }
+
+  let openai = null
+  try {
+    openai = getOpenAIClient()
+  } catch (error) {
+    console.warn('[anya] OpenAI client unavailable; falling back to informational reply:', error.message)
+    return [
+      'I’m running without an AI model configured at the moment.',
+      'Ask an admin to set `OPENAI_API_KEY` (or `ANYA_OPENAI_KEY`) on the backend so I can provide richer assistance.',
+      'In the meantime I can still point you to relevant screens or scripts if you describe what you need.',
+    ].join(' ')
+  }
+
+  let historyMessages = null
+  try {
+    // Ensure the caller has access and load recent history for context.
+    getSession(db, user, sessionId)
+    historyMessages = getMessages(db, user, sessionId, { limit: 20, direction: 'asc' })
+  } catch (historyError) {
+    console.warn('[anya] Unable to load session history; continuing with minimal context:', historyError)
+    historyMessages = []
+  }
+
+  const promptMessages = [
+    {
+      role: 'system',
+      content: [
+        'You are Anya, the GrantFlow AI assistant. Provide concise, actionable help for grant discovery, pipeline management,',
+        'document preparation, crawler operations, and platform troubleshooting. Always ground your guidance in GrantFlow workflows.',
+        'If a task requires human approval or data not currently available, explain the next best step or what additional info is needed.',
+      ].join(' '),
+    },
+    ...historyMessages
+      .filter((msg) => typeof msg?.content === 'string' && msg.content.trim().length > 0)
+      .map((msg) => ({
+        role: msg.role === 'assistant' ? 'assistant' : 'user',
+        content: msg.content,
+      })),
+  ]
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: DEFAULT_ASSISTANT_MODEL,
+      messages: promptMessages,
+      temperature: 0.35,
+      max_tokens: 700,
+    })
+
+    const reply = completion?.choices?.[0]?.message?.content?.trim()
+    if (reply) {
+      return reply
+    }
+  } catch (error) {
+    console.error('[anya] Failed to generate assistant reply via OpenAI:', error)
   }
 
   return [
-    "I'm warming up the tooling pipeline. Here’s what I can do next:",
-    '• Inspect relevant code modules.',
-    '• Propose the safest change set.',
-    '• Run targeted tests once you approve.',
-    '',
-    'Give me a specific task or question and I’ll walk you through it.',
-  ].join('\n')
+    "I'm having trouble reaching the AI service right now.",
+    'We can still move forward manually—let me know the specific action you need help with (for example: run a crawler, summarize a profile, draft an email), and I’ll walk through the recommended steps.',
+  ].join(' ')
 }
 
 export function listTools(user) {

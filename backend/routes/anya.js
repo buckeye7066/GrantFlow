@@ -2,7 +2,7 @@ import express from 'express'
 import {
   addMessage,
   createSession,
-  generatePlaceholderResponse,
+  generateAssistantResponse,
   getMessages,
   getSession,
   listSessions,
@@ -95,7 +95,7 @@ router.get('/sessions/:sessionId/messages', (req, res) => {
   }
 })
 
-router.post('/sessions/:sessionId/messages', (req, res) => {
+router.post('/sessions/:sessionId/messages', async (req, res) => {
   try {
     const content = req.body?.message ?? req.body?.content
     if (!content || typeof content !== 'string') {
@@ -107,10 +107,20 @@ router.post('/sessions/:sessionId/messages', (req, res) => {
       content,
     })
 
-    const assistantReply = generatePlaceholderResponse({ content })
+    let assistantText
+    try {
+      assistantText = await generateAssistantResponse(req.db, req.user, req.params.sessionId, {
+        content,
+      })
+    } catch (assistantError) {
+      console.error('[anya] Unable to generate assistant reply:', assistantError)
+      assistantText =
+        "I hit a snag while reaching the AI service. Try again in a moment or share more details so I can help manually."
+    }
+
     const assistantMessage = addMessage(req.db, req.user, req.params.sessionId, {
       role: 'assistant',
-      content: assistantReply,
+      content: assistantText,
     })
 
     res.status(201).json({
