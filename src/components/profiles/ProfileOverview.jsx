@@ -109,8 +109,31 @@ function SectionPreview({ sectionKey, section, onEdit, onAskAI, isSaving, isAIPr
     .filter(Boolean)
   const hasData = dataEntries.length > 0
 
+  const isInteractive = Boolean(onEdit) && !isSaving && !isAIProcessing
+
+  const handleCardClick = () => {
+    if (!isInteractive || !onEdit) return
+    onEdit(sectionKey, section?.data ?? {})
+  }
+
+  const handleCardKeyDown = (event) => {
+    if (!isInteractive) return
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault()
+      onEdit?.(sectionKey, section?.data ?? {})
+    }
+  }
+
   return (
-    <Card className="border border-slate-200 bg-white/70 backdrop-blur-md shadow-sm">
+    <Card
+      className={`border border-slate-200 bg-white/70 backdrop-blur-md shadow-sm transition ${
+        isInteractive ? "cursor-pointer hover:border-blue-200 focus-within:ring-2 focus-within:ring-blue-200" : ""
+      }`}
+      role={isInteractive ? "button" : undefined}
+      tabIndex={isInteractive ? 0 : undefined}
+      onClick={handleCardClick}
+      onKeyDown={handleCardKeyDown}
+    >
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-1">
@@ -161,7 +184,10 @@ function SectionPreview({ sectionKey, section, onEdit, onAskAI, isSaving, isAIPr
               <Button
                 variant="outline"
                 size="sm"
-                onClick={onAskAI}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onAskAI()
+                }}
                 disabled={isAIProcessing || isSaving}
                 className="h-8 gap-2"
               >
@@ -173,7 +199,10 @@ function SectionPreview({ sectionKey, section, onEdit, onAskAI, isSaving, isAIPr
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => onEdit(sectionKey, section?.data ?? {})}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onEdit(sectionKey, section?.data ?? {})
+                }}
                 disabled={isSaving || isAIProcessing}
                 className="h-8 gap-2"
               >
