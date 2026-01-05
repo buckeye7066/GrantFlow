@@ -36,12 +36,12 @@ export default function UploadApplicationForm({ onSuccess, onCancel, existingOrg
         return;
       }
 
-      // Check file size (max 10MB)
-      if (selectedFile.size > 10 * 1024 * 1024) {
+      // Check file size (max 50MB)
+      if (selectedFile.size > 50 * 1024 * 1024) {
         toast({
           variant: 'destructive',
           title: 'File Too Large',
-          description: 'File must be less than 10MB.',
+          description: 'File must be less than 50MB.',
         });
         return;
       }

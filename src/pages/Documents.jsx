@@ -225,9 +225,9 @@ const latestDuration = describeDuration(latestEnrichmentJob)
       return;
     }
 
-    if (file.size > 10 * 1024 * 1024) {
+    if (file.size > 50 * 1024 * 1024) {
       setUploadFile(null);
-      setUploadError('File must be 10MB or smaller.');
+      setUploadError('File must be 50MB or smaller.');
       return;
     }
 
@@ -446,7 +446,7 @@ const latestDuration = describeDuration(latestEnrichmentJob)
                 <h3 className="text-sm font-semibold text-slate-900">Upload and parse a document</h3>
                 <p className="text-sm text-slate-600">
                   Files stay scoped to {selectedProfile?.display_name ?? "the selected profile"}. Supported formats:
-                  PDF, DOC, DOCX, or TXT (10MB max).
+                  PDF, DOC, DOCX, or TXT (50MB max).
                 </p>
               </div>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
