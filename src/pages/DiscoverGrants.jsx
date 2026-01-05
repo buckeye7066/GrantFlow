@@ -25,6 +25,7 @@ import {
   toastECFSuccess,
   toastError
 } from '@/components/discovery/discoveryToasts';
+import { useAuthStore } from '@/stores/authStore';
 
 const SEARCH_TEMPLATES = [
   {
@@ -286,23 +287,40 @@ export default function DiscoverGrants() {
   
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { isAuthenticated, accessToken, sessionExpired } = useAuthStore((state) => ({
+    isAuthenticated: state.isAuthenticated,
+    accessToken: state.accessToken,
+    sessionExpired: state.sessionExpired,
+  }));
+
+  const tokenAvailable = useMemo(() => {
+    try {
+      return Boolean(accessToken || base44.getToken?.());
+    } catch {
+      return Boolean(accessToken);
+    }
+  }, [accessToken]);
+
+  const authReady = !sessionExpired && (isAuthenticated || tokenAvailable);
 
   // Fetch profiles instead of organizations
   const { data: profiles = [], isLoading: isLoadingProfiles } = useQuery({
     queryKey: ['profiles'],
     queryFn: () => listProfiles(),
+    enabled: authReady,
   });
 
   const { data: profileDetail } = useQuery({
     queryKey: ['discover-profile', selectedProfileId],
     queryFn: () => getProfile(selectedProfileId),
-    enabled: Boolean(selectedProfileId),
+    enabled: authReady && Boolean(selectedProfileId),
   });
 
   // Also fetch organizations to get detailed org data for selected profile
   const { data: organizations = [] } = useQuery({
     queryKey: ['organizations'],
     queryFn: () => base44.entities.Organization.list('name'),
+    enabled: authReady,
   });
 
   // Memoized selected profile and organization
@@ -328,6 +346,15 @@ export default function DiscoverGrants() {
 
   const handleDiscover = async () => {
     // Validation
+    if (!authReady) {
+      toast({
+        variant: 'destructive',
+        title: 'Sign in required',
+        description: 'Your session has expired. Please sign in again to search for funding opportunities.',
+      });
+      return;
+    }
+
     if (!selectedProfileId) {
       showNoProfileToast(toast);
       return;
@@ -385,6 +412,14 @@ export default function DiscoverGrants() {
 
   const handleAddToPipeline = async (opportunity) => {
     console.log('[DiscoverGrants] Adding to pipeline:', opportunity);
+    if (!authReady) {
+      toast({
+        variant: 'destructive',
+        title: 'Sign in required',
+        description: 'Your session has expired. Please sign in again before updating the pipeline.',
+      });
+      return;
+    }
     
     const orgId = selectedProfile?.organization_id;
     if (!orgId) {
