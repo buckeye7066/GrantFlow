@@ -929,9 +929,22 @@ router.post('/signed-url', (req, res) => {
       return res.status(400).json({ error: 'file_uri is required' });
     }
 
-    // For now, just return the file_uri as the signed_url since files are served statically
-    // In a production environment with cloud storage, this would generate a time-limited signed URL
-    const signed_url = file_uri.startsWith('http') ? file_uri : `${file_uri}`;
+    // For now, return the file_uri as the signed_url since files are served statically
+    // In a production environment with cloud storage (S3, GCS), this would generate a time-limited signed URL
+    let signed_url;
+    
+    if (file_uri.startsWith('http://') || file_uri.startsWith('https://')) {
+      // Already a full URL
+      signed_url = file_uri;
+    } else if (file_uri.startsWith('/uploads/')) {
+      // Relative path to uploads - make it absolute
+      const baseUrl = process.env.API_URL || `http://localhost:${process.env.PORT || 8080}`;
+      signed_url = `${baseUrl}${file_uri}`;
+    } else {
+      // Assume it's a relative path and prepend the base URL
+      const baseUrl = process.env.API_URL || `http://localhost:${process.env.PORT || 8080}`;
+      signed_url = `${baseUrl}/uploads/${file_uri}`;
+    }
     
     res.json({
       signed_url,

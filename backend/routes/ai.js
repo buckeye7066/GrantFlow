@@ -541,11 +541,16 @@ router.post('/invoke', async (req, res) => {
         res.json(result);
       } catch (parseError) {
         console.error('Failed to parse JSON response:', parseError);
-        // Try to extract JSON from the response
-        const jsonMatch = content.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          res.json(JSON.parse(jsonMatch[0]));
-        } else {
+        // Try to extract JSON from the response - look for first complete JSON object
+        try {
+          const jsonMatch = content.match(/\{(?:[^{}]|(\{(?:[^{}]|\{[^{}]*\})*\}))*\}/);
+          if (jsonMatch) {
+            res.json(JSON.parse(jsonMatch[0]));
+          } else {
+            res.status(500).json({ error: 'Failed to parse JSON response from AI' });
+          }
+        } catch (extractError) {
+          console.error('Failed to extract JSON from response:', extractError);
           res.status(500).json({ error: 'Failed to parse JSON response from AI' });
         }
       }
