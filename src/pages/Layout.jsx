@@ -29,6 +29,7 @@ import {
   DatabaseZap,
   Beaker,
   Sun,
+  Moon,
   Settings,
   Shield,
 } from "lucide-react"
@@ -217,14 +218,22 @@ const adminItems = [
 export default function Layout({ children, currentPageName }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const { state: dashboardPrefs } = useDashboardPreferences();
-  const { user, profiles, activeProfileId, setActiveProfileId, logout } = useAuthStore((state) => ({
+  const { state: dashboardPrefs, dispatch: preferencesDispatch } = useDashboardPreferences();
+  const { user, profiles, activeProfileId, setActiveProfileId, logout, triggerOnboardingVideo } = useAuthStore((state) => ({
     user: state.user,
     profiles: state.profiles,
     activeProfileId: state.activeProfileId,
     setActiveProfileId: state.setActiveProfileId,
     logout: state.logout,
+    triggerOnboardingVideo: state.triggerOnboardingVideo,
   }));
+
+  const toggleDarkMode = React.useCallback(() => {
+    preferencesDispatch({
+      type: "SET_DARK_MODE",
+      enabled: !dashboardPrefs.darkMode,
+    })
+  }, [dashboardPrefs.darkMode, preferencesDispatch])
 
   const displayName = user?.display_name || user?.full_name || 'User';
   const displayEmail = user?.primary_email || user?.email || undefined;
@@ -400,14 +409,24 @@ export default function Layout({ children, currentPageName }) {
                 <p className="text-xs text-slate-500">AI-assisted grant management workspace</p>
               </div>
             </div>
-            <div className="flex items-center gap-2 md:gap-3">
-              <Button variant="outline" size="sm" className="hidden md:inline-flex">
-                <Sparkles className="w-3.5 h-3.5 mr-2" />
-                Tutorial
-              </Button>
-              <Button variant="outline" size="icon">
-                <Sun className="w-4 h-4" />
-              </Button>
+          <div className="flex items-center gap-2 md:gap-3">
+            <Button
+              variant="outline"
+              size="sm"
+              className="hidden md:inline-flex"
+              onClick={triggerOnboardingVideo}
+            >
+              <Sparkles className="w-3.5 h-3.5 mr-2" />
+              Tutorial
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={toggleDarkMode}
+              title={dashboardPrefs.darkMode ? "Switch to light mode" : "Switch to dark mode"}
+            >
+              {dashboardPrefs.darkMode ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+            </Button>
               <Button variant="ghost" className="flex items-center gap-2 px-2">
                 <Avatar className="w-8 h-8">
                   <AvatarImage src={user?.avatar_url ?? ''} alt={displayName} />

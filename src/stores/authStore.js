@@ -58,6 +58,8 @@ const initialState = {
   preferredAuthMethod: 'email',
   hasSeenOnboarding: false,
   needsProfileCreation: false,
+  onboardingVideoRequested: false,
+  profileWizardRequested: false,
 }
 
 export const useAuthStore = create((set, get) => ({
@@ -335,6 +337,22 @@ export const useAuthStore = create((set, get) => ({
 
   setNeedsProfileCreation: (needs) => {
     set({ needsProfileCreation: needs })
+  },
+
+  triggerOnboardingVideo: () => {
+    set({ onboardingVideoRequested: true })
+  },
+
+  triggerProfileWizard: () => {
+    set({ profileWizardRequested: true })
+  },
+
+  acknowledgeOnboardingVideo: () => {
+    set({ onboardingVideoRequested: false })
+  },
+
+  acknowledgeProfileWizard: () => {
+    set({ profileWizardRequested: false })
   },
 }))
 

@@ -24,8 +24,10 @@ import {
   Building2,
   Loader2,
   Upload,
+  UploadCloud,
 } from "lucide-react"
 import { SECTION_CONFIG } from "@/components/profiles/ProfileSectionEditor.jsx"
+import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx"
 
 const SECTION_ICONS = {
   basic_information: UserCircle,
@@ -57,6 +59,45 @@ function normalizeEntry([key, value]) {
     return null
   }
   return [key, value]
+}
+
+const THEME_PRESETS = {
+  blue: {
+    metric: "bg-blue-50 text-blue-700 border-blue-200",
+    subtleMetric: "bg-blue-50 text-blue-700 border-blue-100",
+    banner: "border-blue-100 bg-blue-50/70",
+    pipelineCard: "border-blue-200 bg-blue-50/80 text-blue-800",
+    pipelineLabel: "text-blue-600",
+    gradient: "bg-gradient-to-br from-blue-500 to-blue-600",
+    iconTone: "text-blue-600",
+  },
+  emerald: {
+    metric: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    subtleMetric: "bg-emerald-50 text-emerald-700 border-emerald-100",
+    banner: "border-emerald-100 bg-emerald-50/70",
+    pipelineCard: "border-emerald-200 bg-emerald-50/80 text-emerald-800",
+    pipelineLabel: "text-emerald-600",
+    gradient: "bg-gradient-to-br from-emerald-500 to-emerald-600",
+    iconTone: "text-emerald-600",
+  },
+  violet: {
+    metric: "bg-violet-50 text-violet-700 border-violet-200",
+    subtleMetric: "bg-violet-50 text-violet-700 border-violet-100",
+    banner: "border-violet-100 bg-violet-50/70",
+    pipelineCard: "border-violet-200 bg-violet-50/80 text-violet-800",
+    pipelineLabel: "text-violet-600",
+    gradient: "bg-gradient-to-br from-violet-500 to-violet-600",
+    iconTone: "text-violet-600",
+  },
+  amber: {
+    metric: "bg-amber-50 text-amber-700 border-amber-200",
+    subtleMetric: "bg-amber-50 text-amber-700 border-amber-100",
+    banner: "border-amber-100 bg-amber-50/70",
+    pipelineCard: "border-amber-200 bg-amber-50/80 text-amber-800",
+    pipelineLabel: "text-amber-600",
+    gradient: "bg-gradient-to-br from-amber-500 to-amber-600",
+    iconTone: "text-amber-600",
+  },
 }
 
 function renderValue(value) {
@@ -227,9 +268,20 @@ export default function ProfileOverview({
   onRequestAvatarAI,
   isUploadingAvatar,
   isRequestingAvatar,
+  onUploadDocument,
+  isUploadingDocument,
   fundsTotal = 0,
   billing = null,
 }) {
+  const { state: dashboardPrefs } = useDashboardPreferences()
+  const theme = THEME_PRESETS[dashboardPrefs.colorTheme] ?? THEME_PRESETS.blue
+  const columnMap = {
+    1: "md:grid-cols-1",
+    2: "md:grid-cols-2",
+    3: "md:grid-cols-3",
+  }
+  const gridColumnsClass = columnMap[dashboardPrefs.layoutColumns] ?? "md:grid-cols-2"
+  const gapClass = dashboardPrefs.layoutStyle === "compact" ? "gap-4" : "gap-6"
   const totalSections = useMemo(() => Object.keys(SECTION_CONFIG).length, [])
   const sectionsMap = useMemo(() => {
     const map = new Map()
@@ -240,6 +292,7 @@ export default function ProfileOverview({
   }, [profile.sections])
 
   const fileInputRef = useRef(null)
+  const documentInputRef = useRef(null)
 
   const avatarInitials = useMemo(() => {
     const words = profile.display_name?.split(/\s+/g) ?? []
@@ -272,6 +325,16 @@ export default function ProfileOverview({
     }
   }
 
+  const handleDocumentFileChange = (event) => {
+    const file = event.target.files?.[0]
+    if (file && onUploadDocument) {
+      onUploadDocument(file)
+    }
+    if (event.target) {
+      event.target.value = ""
+    }
+  }
+
   const completedSections = useMemo(() => {
     return Array.from(sectionsMap.values()).filter((section) => {
       const entries = Object.entries(section?.data ?? {}).map(normalizeEntry).filter(Boolean)
@@ -289,7 +352,7 @@ export default function ProfileOverview({
       label: "Sections Complete",
       value: `${completedSections}/${totalSections}`,
       icon: ClipboardList,
-      tone: "bg-emerald-50 text-emerald-700 border-emerald-200",
+      tone: theme.metric,
     },
     {
       label: "Last Updated",
@@ -301,7 +364,7 @@ export default function ProfileOverview({
       label: "Tags",
       value: `${profile.tags?.length ?? 0}`,
       icon: Tag,
-      tone: "bg-blue-50 text-blue-700 border-blue-200",
+      tone: theme.subtleMetric,
     },
   ]
 
@@ -346,7 +409,9 @@ export default function ProfileOverview({
                   className="h-24 w-24 rounded-2xl border border-slate-200 object-cover shadow-md"
                 />
               ) : (
-                <div className="flex h-24 w-24 items-center justify-center rounded-2xl border border-slate-200 bg-slate-100 text-2xl font-semibold text-slate-600 shadow-inner">
+                <div
+                  className={`flex h-24 w-24 items-center justify-center rounded-2xl text-2xl font-semibold text-white shadow-inner ${theme.gradient}`}
+                >
                   {avatarInitials}
                 </div>
               )}
@@ -381,6 +446,13 @@ export default function ProfileOverview({
                   className="hidden"
                   onChange={handleAvatarFileChange}
                 />
+                <input
+                  ref={documentInputRef}
+                  type="file"
+                  accept=".pdf,.doc,.docx,.txt,.rtf"
+                  className="hidden"
+                  onChange={handleDocumentFileChange}
+                />
                 {onUploadAvatar ? (
                   <Button
                     variant="outline"
@@ -405,6 +477,22 @@ export default function ProfileOverview({
                     {isRequestingAvatar ? "Locating…" : "Use AI to find photo"}
                   </Button>
                 ) : null}
+                {onUploadDocument ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-2"
+                    onClick={() => documentInputRef.current?.click()}
+                    disabled={isUploadingDocument}
+                  >
+                    {isUploadingDocument ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <UploadCloud className="w-4 h-4" />
+                    )}
+                    {isUploadingDocument ? "Uploading…" : "Upload Document"}
+                  </Button>
+                ) : null}
               </div>
             </div>
           </div>
@@ -421,9 +509,11 @@ export default function ProfileOverview({
             ))}
           </div>
         </div>
-        <div className="flex flex-col gap-4 rounded-2xl border border-blue-100 bg-blue-50/70 p-4 text-sm text-blue-900 md:flex-row md:items-center md:justify-between">
+        <div
+          className={`flex flex-col gap-4 rounded-2xl border ${theme.banner} p-4 text-sm text-slate-900 md:flex-row md:items-center md:justify-between`}
+        >
           <div className="flex items-start gap-3">
-            <span className="p-2 rounded-xl bg-white/70 shadow-sm text-blue-600">
+            <span className={`p-2 rounded-xl bg-white/70 shadow-sm ${theme.iconTone}`}>
               <Sparkles className="w-4 h-4" />
             </span>
             <div>
@@ -435,9 +525,9 @@ export default function ProfileOverview({
             </div>
           </div>
           <div className="flex flex-col items-start gap-3 md:flex-row md:items-center">
-            <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 px-4 py-3">
-              <p className="text-xs font-medium uppercase tracking-wide text-emerald-700">Pipeline Potential</p>
-              <p className="text-2xl font-bold text-emerald-900 mt-1">{formattedFundsTotal}</p>
+            <div className={`rounded-2xl border px-4 py-3 ${theme.pipelineCard}`}>
+              <p className={`text-xs font-medium uppercase tracking-wide ${theme.pipelineLabel}`}>Pipeline Potential</p>
+              <p className="text-2xl font-bold mt-1">{formattedFundsTotal}</p>
             </div>
             {onEditSection ? (
               <div className="flex items-center gap-2">
@@ -537,7 +627,7 @@ export default function ProfileOverview({
           </span>
           <span>{lastUpdated}</span>
         </div>
-        <div className="grid gap-5 md:grid-cols-2">
+        <div className={`grid ${gapClass} ${gridColumnsClass}`}>
           {orderedSectionKeys.map((sectionKey) => (
             <SectionPreview
               key={sectionKey}

@@ -13,6 +13,10 @@ export default function OnboardingFlow() {
     markOnboardingComplete,
     setNeedsProfileCreation,
     user,
+    onboardingVideoRequested,
+    profileWizardRequested,
+    acknowledgeOnboardingVideo,
+    acknowledgeProfileWizard,
   } = useAuthStore((state) => ({
     hasSeenOnboarding: state.hasSeenOnboarding,
     needsProfileCreation: state.needsProfileCreation,
@@ -20,26 +24,43 @@ export default function OnboardingFlow() {
     markOnboardingComplete: state.markOnboardingComplete,
     setNeedsProfileCreation: state.setNeedsProfileCreation,
     user: state.user,
+    onboardingVideoRequested: state.onboardingVideoRequested,
+    profileWizardRequested: state.profileWizardRequested,
+    acknowledgeOnboardingVideo: state.acknowledgeOnboardingVideo,
+    acknowledgeProfileWizard: state.acknowledgeProfileWizard,
   }))
 
   const [showVideo, setShowVideo] = useState(false)
   const [showProfileWizard, setShowProfileWizard] = useState(false)
 
   useEffect(() => {
-    // Skip for admins
     if (user?.is_admin) {
       return
     }
 
-    // Show video if not seen onboarding yet
     if (!hasSeenOnboarding) {
       setShowVideo(true)
+      return
     }
-    // Or show profile wizard if needed
-    else if (needsProfileCreation && profiles.length === 0) {
+
+    if (needsProfileCreation && profiles.length === 0) {
       setShowProfileWizard(true)
     }
   }, [hasSeenOnboarding, needsProfileCreation, profiles, user])
+
+  useEffect(() => {
+    if (onboardingVideoRequested) {
+      setShowVideo(true)
+      acknowledgeOnboardingVideo()
+    }
+  }, [onboardingVideoRequested, acknowledgeOnboardingVideo])
+
+  useEffect(() => {
+    if (profileWizardRequested) {
+      setShowProfileWizard(true)
+      acknowledgeProfileWizard()
+    }
+  }, [profileWizardRequested, acknowledgeProfileWizard])
 
   const handleVideoComplete = () => {
     setShowVideo(false)

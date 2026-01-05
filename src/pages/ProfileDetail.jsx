@@ -1,7 +1,7 @@
 import React from "react"
 import { useSearchParams, useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { AlertCircle, Loader2 } from "lucide-react"
+import { AlertCircle, Loader2, Palette } from "lucide-react"
 import {
   getProfile,
   requestProfileSectionAI,
@@ -9,12 +9,17 @@ import {
   uploadProfileAvatar,
   requestProfileAvatarAI,
 } from "@/api/profiles"
+import { ingestDocument } from "@/api/documents"
 import ProfileOverview from "@/components/profiles/ProfileOverview"
 import ProfileSectionEditor from "@/components/profiles/ProfileSectionEditor"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { useToast } from "@/components/ui/use-toast"
 import { createPageUrl } from "@/utils"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Label } from "@/components/ui/label"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx"
 
 export default function ProfileDetail() {
   const [searchParams] = useSearchParams()
@@ -22,6 +27,24 @@ export default function ProfileDetail() {
   const profileId = searchParams.get("id")
   const { toast } = useToast()
   const queryClient = useQueryClient()
+  const { state: dashboardPrefs, dispatch: preferencesDispatch } = useDashboardPreferences()
+  const [appearanceOpen, setAppearanceOpen] = React.useState(false)
+  const themeOptions = React.useMemo(
+    () => [
+      { value: "blue", label: "Blue Horizon", gradient: "bg-gradient-to-br from-blue-500 to-blue-600" },
+      { value: "emerald", label: "Emerald Grove", gradient: "bg-gradient-to-br from-emerald-500 to-emerald-600" },
+      { value: "violet", label: "Violet Focus", gradient: "bg-gradient-to-br from-violet-500 to-violet-600" },
+      { value: "amber", label: "Amber Dawn", gradient: "bg-gradient-to-br from-amber-500 to-amber-600" },
+    ],
+    [],
+  )
+  const layoutOptions = React.useMemo(
+    () => [
+      { value: "expanded", label: "Expanded · 2 columns" },
+      { value: "compact", label: "Compact · 3 columns" },
+    ],
+    [],
+  )
 
   const {
     data: profile,
@@ -79,6 +102,57 @@ export default function ProfileDetail() {
       })
     },
   })
+
+  const uploadDocumentMutation = useMutation({
+    mutationFn: ({ file }) => {
+      const formData = new FormData()
+      formData.append("profile_id", profileId)
+      formData.append("document", file)
+      formData.append("name", file.name)
+      return ingestDocument(formData)
+    },
+    onSuccess: () => {
+      toast({
+        title: "Document uploaded",
+        description: "We'll parse the contents and sync matches shortly.",
+      })
+      queryClient.invalidateQueries({ queryKey: ["profile", profileId] })
+    },
+    onError: (err) => {
+      const message = err instanceof Error ? err.message : "Unable to upload this document."
+      toast({
+        title: "Upload failed",
+        description: message,
+        variant: "destructive",
+      })
+    },
+  })
+
+  const handleThemeChange = React.useCallback(
+    (theme) => {
+      preferencesDispatch({ type: "SET_COLOR_THEME", theme })
+    },
+    [preferencesDispatch],
+  )
+
+  const handleLayoutChange = React.useCallback(
+    (layout) => {
+      preferencesDispatch({ type: "SET_LAYOUT", layout })
+      preferencesDispatch({
+        type: "SET_LAYOUT_COLUMNS",
+        columns: layout === "compact" ? 3 : 2,
+      })
+    },
+    [preferencesDispatch],
+  )
+
+  const handleUploadDocument = React.useCallback(
+    (file) => {
+      if (!file) return
+      uploadDocumentMutation.mutate({ file })
+    },
+    [uploadDocumentMutation],
+  )
 
   const requestAvatarAIMutation = useMutation({
     mutationFn: () => requestProfileAvatarAI(profileId),
@@ -247,6 +321,10 @@ export default function ProfileDetail() {
             <Button variant="outline" onClick={() => navigate(createPageUrl("MyProfiles"))}>
               ← Back to Profiles
             </Button>
+            <Button variant="outline" onClick={() => setAppearanceOpen(true)}>
+              <Palette className="w-4 h-4 mr-2" />
+              Appearance
+            </Button>
             {profile.organization_id && (
               <Button onClick={() => navigate(createPageUrl("OrganizationProfile", { id: profile.organization_id }))}>
                 View Linked Organization
@@ -266,6 +344,8 @@ export default function ProfileDetail() {
           onRequestAvatarAI={handleRequestAvatarAI}
           isUploadingAvatar={uploadAvatarMutation.isPending}
           isRequestingAvatar={requestAvatarAIMutation.isPending}
+          onUploadDocument={handleUploadDocument}
+          isUploadingDocument={uploadDocumentMutation.isPending}
           fundsTotal={profile.pipeline_funds_total ?? 0}
         />
       </div>
@@ -279,6 +359,71 @@ export default function ProfileDetail() {
         isSaving={Boolean(savingSectionKey)}
         onAskAI={handleAskFromEditor}
       />
+
+      <Dialog open={appearanceOpen} onOpenChange={setAppearanceOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Customize profile view</DialogTitle>
+            <DialogDescription>
+              Adjust the accent colors and section layout used across your GrantFlow workspace.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-6">
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Color theme</Label>
+              <RadioGroup
+                value={dashboardPrefs.colorTheme}
+                onValueChange={handleThemeChange}
+                className="grid gap-3 sm:grid-cols-2"
+              >
+                {themeOptions.map((option) => (
+                  <Label
+                    key={option.value}
+                    htmlFor={`theme-${option.value}`}
+                    className={`flex cursor-pointer items-center gap-3 rounded-xl border bg-white px-3 py-2 shadow-sm transition ${
+                      dashboardPrefs.colorTheme === option.value
+                        ? "border-blue-500 ring-2 ring-blue-200"
+                        : "border-slate-200 hover:border-slate-300"
+                    }`}
+                  >
+                    <RadioGroupItem value={option.value} id={`theme-${option.value}`} />
+                    <div className="flex items-center gap-3">
+                      <span className={`h-8 w-8 rounded-full ${option.gradient}`} />
+                      <span className="text-sm font-medium text-slate-700">{option.label}</span>
+                    </div>
+                  </Label>
+                ))}
+              </RadioGroup>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Section layout
+              </Label>
+              <RadioGroup
+                value={dashboardPrefs.layoutStyle}
+                onValueChange={handleLayoutChange}
+                className="grid gap-2"
+              >
+                {layoutOptions.map((option) => (
+                  <Label
+                    key={option.value}
+                    htmlFor={`layout-${option.value}`}
+                    className={`flex cursor-pointer items-center gap-3 rounded-xl border bg-white px-3 py-2 shadow-sm transition ${
+                      dashboardPrefs.layoutStyle === option.value
+                        ? "border-blue-500 ring-2 ring-blue-200"
+                        : "border-slate-200 hover:border-slate-300"
+                    }`}
+                  >
+                    <RadioGroupItem value={option.value} id={`layout-${option.value}`} />
+                    <span className="text-sm font-medium text-slate-700">{option.label}</span>
+                  </Label>
+                ))}
+              </RadioGroup>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
