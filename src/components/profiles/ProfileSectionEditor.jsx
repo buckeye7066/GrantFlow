@@ -594,24 +594,36 @@ export default function ProfileSectionEditor({
     <Dialog open={open} onOpenChange={(next) => !isSaving && !next && onClose()}>
       <DialogContent className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>
-            {config ? config.title : `Editing ${sectionKey}`}
-          </DialogTitle>
-          <DialogDescription>
-            {config ? config.description : "We have not yet mapped this section. You can still edit the raw JSON from the overview until a dedicated form is available."}
+          <div className="flex items-center justify-between">
+            <div className="flex-1">
+              <DialogTitle>
+                {config ? config.title : `Editing ${sectionKey}`}
+              </DialogTitle>
+              <DialogDescription className="mt-1">
+                {config ? config.description : "We have not yet mapped this section. You can still edit the raw JSON from the overview until a dedicated form is available."}
+              </DialogDescription>
+            </div>
             {config && onAskAI && (
               <Button
                 type="button"
-                variant="outline"
+                variant="default"
                 size="sm"
                 onClick={handleAskAI}
                 disabled={aiStatus === 'loading' || isSaving}
-                className="mt-2 w-fit"
+                className="ml-4 shrink-0 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700"
               >
-                {aiStatus === 'loading' ? 'Asking AI…' : 'Ask AI to fill this section'}
+                <svg 
+                  className="w-4 h-4 mr-2" 
+                  fill="none" 
+                  stroke="currentColor" 
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                {aiStatus === 'loading' ? 'Generating...' : 'Assist with AI'}
               </Button>
             )}
-          </DialogDescription>
+          </div>
         </DialogHeader>
 
         {!config ? (
