@@ -170,7 +170,6 @@ export default function GrantDetail() {
       }
     },
     onSuccess: async (data) => {
-        // TODO: Remove debug log - console.log('[GrantDetail] Mutation success, saving to database');
         
         try {
             const analysis = data.data?.analysis;
@@ -187,7 +186,6 @@ export default function GrantDetail() {
                 ai_error: null
             });
             
-            // TODO: Remove debug log - console.log('[GrantDetail] Analysis saved successfully to grant.');
             
             // Force refetch the grant to get the updated AI summary
             queryClient.invalidateQueries({ queryKey: ['grant', grantId] });
@@ -282,7 +280,6 @@ export default function GrantDetail() {
         return;
     }
     
-    // TODO: Remove debug log - console.log('[GrantDetail] Starting analysis for grant:', grant.id);
     
     const payload = {
         grantId: grant.id,
@@ -291,13 +288,6 @@ export default function GrantDetail() {
         eligibility: grant.eligibility_summary || '',
         selectionCriteria: grant.selection_criteria || '',
     };
-    
-    // TODO: Remove debug log - console.log('[GrantDetail] Payload:', {
-      grantId: payload.grantId,
-      titleLength: payload.title?.length,
-      descLength: payload.description?.length,
-      eligLength: payload.eligibility?.length
-    });
 
     // Optimistically update AI status to running
     await updateGrantMutation.mutateAsync({ 
@@ -325,11 +315,9 @@ export default function GrantDetail() {
   const handleStarToggle = () => { updateGrantMutation.mutate({ starred: !grant.starred }); };
   
   const handleApplyWithAI = async () => {
-    // TODO: Remove debug log - console.log('[GrantDetail] Start Application clicked, current status:', grant.status);
     
     // NEW: If status is application_prep, open submission assistant
     if (grant.status === 'application_prep') {
-      // TODO: Remove debug log - console.log('[GrantDetail] Opening submission assistant');
       setIsSubmissionAssistantOpen(true);
       return;
     }
@@ -343,7 +331,6 @@ export default function GrantDetail() {
     
     // If in portal stage OR detected as portal-based, open portal assistant
     if (grant.status === 'portal' || isPortalBased) {
-        // TODO: Remove debug log - console.log('[GrantDetail] Opening portal assistant');
         setIsPortalAssistantOpen(true);
         toast({
           title: "Portal Assistant Ready",
@@ -363,7 +350,6 @@ export default function GrantDetail() {
             
             // If no checklist OR checklist is complete, start application
             if (hasNoChecklist || checklistComplete) {
-                // TODO: Remove debug log - console.log('[GrantDetail] Opening AI Application Assistant');
                 setIsApplicationAssistantOpen(true);
                 toast({
                     title: "Starting Application Builder",
@@ -374,7 +360,6 @@ export default function GrantDetail() {
             
             // Checklist has open items - need to complete first
             if (openItems.length > 0) {
-                // TODO: Remove debug log - console.log('[GrantDetail] Checklist incomplete, showing checklist tab');
                 toast({
                     title: "Action Required",
                     description: `Please complete ${openItems.length} checklist item${openItems.length > 1 ? 's' : ''} first.`
@@ -390,7 +375,6 @@ export default function GrantDetail() {
         }
         
         // Analysis not complete, run it
-        // TODO: Remove debug log - console.log('[GrantDetail] Running analysis first');
         setActiveTab('coach');
         window.history.replaceState(
           null,
@@ -412,7 +396,6 @@ export default function GrantDetail() {
     
     // Move to drafting if not already in application stages
     if (!['drafting', 'portal', 'application_prep', 'revision', 'submitted'].includes(grant.status)) {
-        // TODO: Remove debug log - console.log('[GrantDetail] Moving grant to drafting stage');
         await updateGrantMutation.mutateAsync({ status: 'drafting' });
         toast({ 
           title: "Application Started", 
@@ -426,7 +409,6 @@ export default function GrantDetail() {
     
     // If analysis hasn't been run yet, trigger it automatically
     if (!grant.ai_status || grant.ai_status === 'idle' || grant.ai_status === 'error') {
-        // TODO: Remove debug log - console.log('[GrantDetail] Analysis not ready, triggering analysis');
         toast({
           title: "Starting AI Analysis",
           description: "The AI is analyzing this opportunity for you..."

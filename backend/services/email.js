@@ -8,7 +8,22 @@ if (RESEND_API_KEY) {
   resendClient = new Resend(RESEND_API_KEY)
 }
 
+/**
+ * Send a verification email with a 6-digit code
+ * @param {string} email - Recipient email address
+ * @param {string} code - 6-digit verification code
+ * @returns {Promise<boolean>} True if email was sent successfully
+ * @throws {Error} If email service is not configured or sending fails
+ */
 export async function sendVerificationEmail(email, code) {
+  if (!email || typeof email !== 'string') {
+    throw new Error('Invalid email address')
+  }
+  
+  if (!code || typeof code !== 'string') {
+    throw new Error('Invalid verification code')
+  }
+  
   if (!resendClient) {
     const errorMsg = 'Email service not configured. RESEND_API_KEY is missing from environment variables.'
     console.error('[email]', errorMsg, 'Code would have been:', code)
@@ -34,7 +49,22 @@ export async function sendVerificationEmail(email, code) {
   }
 }
 
+/**
+ * Send an application submission email
+ * @param {string} toEmail - Recipient email address
+ * @param {Object} applicationData - Application data to format and send
+ * @returns {Promise<boolean>} True if email was sent successfully
+ * @throws {Error} If email service is not configured or sending fails
+ */
 export async function sendApplicationEmail(toEmail, applicationData) {
+  if (!toEmail || typeof toEmail !== 'string') {
+    throw new Error('Invalid email address')
+  }
+  
+  if (!applicationData || typeof applicationData !== 'object') {
+    throw new Error('Invalid application data')
+  }
+  
   if (!resendClient) {
     const errorMsg = 'Email service not configured. RESEND_API_KEY is missing from environment variables.'
     console.error('[email]', errorMsg, 'Would send application to:', toEmail)
