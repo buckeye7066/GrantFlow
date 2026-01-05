@@ -247,7 +247,7 @@ export default function Dashboard() {
     }
     // For non-admin users, show their organization count (1 if they belong to one)
     return profileOrganizationId ? 1 : 0
-  }, [currentUser?.role, profiles.length, organizations.length])
+  }, [currentUser?.role, profiles.length, organizations.length, profileOrganizationId])
 
   const stats = useMemo(
     () => [
