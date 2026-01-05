@@ -495,4 +495,56 @@ router.post('/reminders/plan', async (req, res) => {
   }
 });
 
+// General LLM invocation endpoint (Base44 SDK compatibility)
+router.post('/invoke', async (req, res) => {
+  try {
+    const openai = getOpenAI();
+    const { prompt, response_json_schema, model = 'gpt-4o-mini', temperature = 0.7, max_tokens = 2000 } = req.body;
+
+    if (!prompt) {
+      return res.status(400).json({ error: 'prompt is required' });
+    }
+
+    const messages = [{ role: 'user', content: prompt }];
+
+    const completionParams = {
+      model,
+      messages,
+      temperature,
+      max_tokens,
+    };
+
+    // If a JSON schema is provided, use structured output
+    if (response_json_schema) {
+      completionParams.response_format = {
+        type: 'json_object',
+      };
+      // Add instruction to the prompt to output JSON
+      messages[0].content = `${prompt}\n\nPlease respond with valid JSON matching this schema: ${JSON.stringify(response_json_schema)}`;
+    }
+
+    const completion = await openai.chat.completions.create(completionParams);
+    const content = extractCompletionText(completion);
+
+    // If JSON schema was requested, parse and return the JSON
+    if (response_json_schema) {
+      try {
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : content);
+        return res.json(parsed);
+      } catch (parseError) {
+        console.error('Failed to parse JSON response:', parseError);
+        // Return raw content if parsing fails
+        return res.json({ error: 'Failed to parse JSON response', raw_content: content });
+      }
+    }
+
+    // Return plain text response
+    res.json(content);
+  } catch (error) {
+    console.error('Error invoking LLM:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;

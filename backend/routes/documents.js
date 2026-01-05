@@ -891,4 +891,59 @@ router.delete('/:id', (req, res) => {
   }
 });
 
+// Simple file upload endpoint (Base44 SDK compatibility)
+router.post('/upload', upload.single('file'), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ error: 'file is required' });
+    }
+
+    // Return the file URL in the format expected by Base44 SDK
+    const file_url = `/uploads/${file.filename}`;
+    
+    res.json({
+      file_url,
+      file_name: file.originalname,
+      file_size: file.size,
+      mime_type: file.mimetype,
+    });
+  } catch (error) {
+    console.error('File upload failed:', error);
+    if (req.file) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (unlinkError) {
+        console.warn('Failed to remove uploaded file after error', unlinkError);
+      }
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Signed URL endpoint (Base44 SDK compatibility)
+router.post('/signed-url', (req, res) => {
+  try {
+    const { file_uri } = req.body;
+    
+    if (!file_uri) {
+      return res.status(400).json({ error: 'file_uri is required' });
+    }
+
+    // For local files, just return the file URI as-is
+    // In a production environment with cloud storage, this would generate a signed URL
+    let signed_url = file_uri;
+    
+    // If it's a relative path, make it absolute
+    if (!file_uri.startsWith('http://') && !file_uri.startsWith('https://') && !file_uri.startsWith('/')) {
+      signed_url = `/${file_uri}`;
+    }
+
+    res.json({ signed_url });
+  } catch (error) {
+    console.error('Error generating signed URL:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;
