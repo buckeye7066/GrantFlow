@@ -10,8 +10,9 @@ if (RESEND_API_KEY) {
 
 export async function sendVerificationEmail(email, code) {
   if (!resendClient) {
-    console.warn('[email] Resend not configured; code:', code)
-    return false
+    const errorMsg = 'Email service not configured. RESEND_API_KEY is missing from environment variables.'
+    console.error('[email]', errorMsg, 'Code would have been:', code)
+    throw new Error(errorMsg)
   }
 
   try {
@@ -29,14 +30,15 @@ export async function sendVerificationEmail(email, code) {
     return true
   } catch (error) {
     console.error('[email] Failed to send:', error?.message || error)
-    return false
+    throw new Error(`Failed to send verification email: ${error?.message || 'Unknown error'}`)
   }
 }
 
 export async function sendApplicationEmail(toEmail, applicationData) {
   if (!resendClient) {
-    console.warn('[email] Resend not configured; would send application to:', toEmail)
-    return false
+    const errorMsg = 'Email service not configured. RESEND_API_KEY is missing from environment variables.'
+    console.error('[email]', errorMsg, 'Would send application to:', toEmail)
+    throw new Error(errorMsg)
   }
 
   try {
@@ -52,7 +54,7 @@ export async function sendApplicationEmail(toEmail, applicationData) {
     return true
   } catch (error) {
     console.error('[email] Failed to send application:', error?.message || error)
-    return false
+    throw new Error(`Failed to send application email: ${error?.message || 'Unknown error'}`)
   }
 }
 

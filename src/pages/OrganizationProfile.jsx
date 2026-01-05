@@ -5,6 +5,7 @@ import OrganizationProfile from '@/components/organizations/OrganizationProfile'
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { AlertCircle, Loader2 } from 'lucide-react';
+import ErrorBoundary from '@/components/shared/ErrorBoundary';
 
 export default function OrganizationProfilePage() {
   const [searchParams] = useSearchParams();
@@ -46,10 +47,12 @@ export default function OrganizationProfilePage() {
   return (
     <div className="p-6 md:p-8">
       <div className="max-w-7xl mx-auto">
-        <OrganizationProfile 
-          organizationId={organizationId} 
-          retryKey={retryCount}
-        />
+        <ErrorBoundary>
+          <OrganizationProfile 
+            organizationId={organizationId} 
+            retryKey={retryCount}
+          />
+        </ErrorBoundary>
       </div>
     </div>
   );
