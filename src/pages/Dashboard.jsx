@@ -38,6 +38,7 @@ import AnyaChat from "@/components/anya/AnyaChat"
 import OnboardingVideo from "@/components/onboarding/OnboardingVideo"
 import { cn } from "@/lib/utils"
 
+// LJWMonogram component - defined outside Dashboard to maintain stable reference
 function LJWMonogram({ className = "" }) {
   return (
     <div
