@@ -891,4 +891,56 @@ router.delete('/:id', (req, res) => {
   }
 });
 
+// Upload endpoint for Base44 SDK compatibility
+router.post('/upload', upload.single('file'), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ error: 'file is required' });
+    }
+
+    const publicUrl = `/uploads/${file.filename}`;
+    
+    res.json({
+      file_url: publicUrl,
+      file_name: file.originalname,
+      file_size: file.size,
+      mime_type: file.mimetype,
+    });
+  } catch (error) {
+    console.error('Error uploading file:', error);
+    if (req.file) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (unlinkError) {
+        console.warn('Failed to remove uploaded file after error', unlinkError);
+      }
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create signed URL endpoint for Base44 SDK compatibility
+router.post('/signed-url', (req, res) => {
+  try {
+    const { file_uri } = req.body;
+    
+    if (!file_uri) {
+      return res.status(400).json({ error: 'file_uri is required' });
+    }
+
+    // For now, just return the file_uri as the signed_url since files are served statically
+    // In a production environment with cloud storage, this would generate a time-limited signed URL
+    const signed_url = file_uri.startsWith('http') ? file_uri : `${file_uri}`;
+    
+    res.json({
+      signed_url,
+      expires_at: new Date(Date.now() + 3600000).toISOString(), // 1 hour expiry
+    });
+  } catch (error) {
+    console.error('Error creating signed URL:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;

@@ -495,4 +495,72 @@ router.post('/reminders/plan', async (req, res) => {
   }
 });
 
+// Generic AI invoke endpoint for Base44 SDK compatibility
+router.post('/invoke', async (req, res) => {
+  try {
+    const openai = getOpenAI();
+    const { prompt, response_json_schema, add_context_from_internet } = req.body;
+
+    if (!prompt) {
+      return res.status(400).json({ error: 'prompt is required' });
+    }
+
+    // Build OpenAI request parameters
+    const requestParams = {
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.7,
+      max_tokens: 2000,
+    };
+
+    // If JSON schema is provided, use structured output
+    if (response_json_schema) {
+      requestParams.response_format = {
+        type: 'json_schema',
+        json_schema: {
+          name: 'response',
+          strict: true,
+          schema: response_json_schema,
+        },
+      };
+    }
+
+    // Note: add_context_from_internet is not directly supported by OpenAI API
+    // If needed, this would require integration with a search API or web scraping
+    if (add_context_from_internet) {
+      console.warn('add_context_from_internet parameter is not yet implemented');
+    }
+
+    const completion = await openai.chat.completions.create(requestParams);
+    const content = extractCompletionText(completion);
+
+    // Parse JSON if schema was requested
+    let result = content;
+    if (response_json_schema) {
+      try {
+        result = JSON.parse(content);
+      } catch (parseError) {
+        console.error('Failed to parse JSON response:', parseError);
+        // Try to extract JSON from the response
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          result = JSON.parse(jsonMatch[0]);
+        }
+      }
+    }
+
+    res.json({
+      result,
+      usage: {
+        prompt_tokens: completion.usage?.prompt_tokens || 0,
+        completion_tokens: completion.usage?.completion_tokens || 0,
+        total_tokens: completion.usage?.total_tokens || 0,
+      },
+    });
+  } catch (error) {
+    console.error('Error invoking AI:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;

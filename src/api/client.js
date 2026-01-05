@@ -420,6 +420,32 @@ class APIClient {
     }
   };
 
+  // Integrations wrapper for Base44 compatibility
+  integrations = {
+    Core: {
+      InvokeLLM: async (params) => {
+        return this.fetch('/api/ai/invoke', {
+          method: 'POST',
+          body: JSON.stringify(params),
+        });
+      },
+      UploadFile: async ({ file }) => {
+        const formData = new FormData();
+        formData.append('file', file);
+        return this.fetch('/api/documents/upload', {
+          method: 'POST',
+          body: formData,
+        });
+      },
+      CreateFileSignedUrl: async ({ file_uri }) => {
+        return this.fetch('/api/documents/signed-url', {
+          method: 'POST',
+          body: JSON.stringify({ file_uri }),
+        });
+      },
+    },
+  };
+
   // Initialize entity clients
   init() {
     const target = {};
