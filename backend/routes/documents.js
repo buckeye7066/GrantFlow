@@ -7,6 +7,7 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import pdfParse from 'pdf-parse';
 import mammoth from 'mammoth';
+import rateLimit from 'express-rate-limit';
 import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
 
 const router = express.Router();
@@ -31,6 +32,15 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 },
+});
+
+// Rate limiter for file uploads to prevent abuse
+const uploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  limit: 20, // Max 20 uploads per 15 minutes per IP
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: 'Too many file uploads from this IP, please try again later.',
 });
 
 async function extractTextFromFile(filePath, mimeType) {
@@ -892,7 +902,7 @@ router.delete('/:id', (req, res) => {
 });
 
 // Upload endpoint for Base44 SDK compatibility
-router.post('/upload', upload.single('file'), async (req, res) => {
+router.post('/upload', uploadLimiter, upload.single('file'), async (req, res) => {
   try {
     const file = req.file;
     if (!file) {
