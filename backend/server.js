@@ -47,6 +47,7 @@ const defaultCorsOrigins = [
   'http://localhost:3000',
   'https://grant-flow-three.vercel.app',
   'https://app.axiombiolabs.org',
+  'https://www.axiombiolabs.org',
   'https://grantflow-production.up.railway.app',
 ];
 const configuredCorsOrigins = process.env.CORS_ORIGIN
