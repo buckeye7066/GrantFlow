@@ -70,6 +70,7 @@ const ALLOWED_EXTENSIONS = new Set([
 ])
 const MAX_FILE_BYTES = 350_000
 const DEFAULT_GRANT_LIMIT = 5
+const BASE_MATCH_SCORE = 40 // Base score for all grant matches before adjustments
 
 function safeParseJSON(value, fallback) {
   if (!value) return fallback
@@ -86,6 +87,122 @@ function cleanList(list, max = 3) {
     .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
     .filter(Boolean)
     .slice(0, max)
+}
+
+function findMatchingCategories(oppCategories, profileCategories) {
+  if (!oppCategories || oppCategories.length === 0 || !profileCategories || profileCategories.length === 0) {
+    return []
+  }
+  
+  return oppCategories.filter(c => 
+    profileCategories.some(pc => 
+      c.toLowerCase().includes(pc.toLowerCase()) || 
+      pc.toLowerCase().includes(c.toLowerCase())
+    )
+  )
+}
+
+function generateMatchReasons(opp, profile) {
+  const reasons = []
+  
+  // Location match
+  if (opp.state && profile?.state) {
+    if (opp.state.toLowerCase() === profile.state.toLowerCase()) {
+      reasons.push(`Location match: Both in ${opp.state}`)
+    }
+  } else if (opp.is_national || opp.state === 'nationwide') {
+    reasons.push('Available nationwide')
+  }
+  
+  // Category alignment
+  const oppCategories = cleanList(safeParseJSON(opp.categories, []), 10)
+  const profileCategories = cleanList(safeParseJSON(profile?.categories, []), 10)
+  const matchingCategories = findMatchingCategories(oppCategories, profileCategories)
+  if (matchingCategories.length > 0) {
+    reasons.push(`Category alignment: ${matchingCategories.slice(0, 2).join(', ')}`)
+  }
+  
+  // Organization type / eligibility
+  if (profile?.organization_type) {
+    const eligibility = cleanList(safeParseJSON(opp.eligibility_bullets, []), 10)
+    const hasMatch = eligibility.some(e => 
+      e.toLowerCase().includes(profile.organization_type.toLowerCase())
+    )
+    if (hasMatch) {
+      reasons.push(`Eligibility fit: Accepts ${profile.organization_type} organizations`)
+    }
+  }
+  
+  // Check for special profile attributes
+  if (profile?.serves_veterans && opp.keywords) {
+    const keywords = cleanList(safeParseJSON(opp.keywords, []), 20)
+    if (keywords.some(k => k.toLowerCase().includes('veteran'))) {
+      reasons.push('Serves veterans - matching funder priority')
+    }
+  }
+  
+  if (profile?.serves_disabled && opp.keywords) {
+    const keywords = cleanList(safeParseJSON(opp.keywords, []), 20)
+    if (keywords.some(k => k.toLowerCase().includes('disabilit'))) {
+      reasons.push('Serves individuals with disabilities - matching funder focus')
+    }
+  }
+  
+  return reasons
+}
+
+function generateFitExplanation(opp, profile, matchReasons) {
+  if (matchReasons.length === 0) {
+    return 'This opportunity may be relevant based on general criteria.'
+  }
+  
+  const primaryReason = matchReasons[0]
+  const oppType = opp.opportunity_type || 'grant'
+  const sponsor = opp.sponsor || 'this funder'
+  
+  let explanation = `This ${oppType} is a strong match because `
+  
+  if (primaryReason.includes('Location match')) {
+    explanation += `your organization operates in the same geographic area that ${sponsor} serves. `
+  } else if (primaryReason.includes('Category alignment')) {
+    explanation += `your organization's focus areas align with ${sponsor}'s funding priorities. `
+  } else {
+    explanation += `it aligns with your organization's profile. `
+  }
+  
+  if (matchReasons.length > 1) {
+    explanation += `Additionally, ${matchReasons.slice(1).join(', ').toLowerCase()}.`
+  }
+  
+  return explanation
+}
+
+function calculateMatchScore(opp, profile, matchReasons) {
+  let score = BASE_MATCH_SCORE
+  
+  // Location match adds points
+  if (opp.state && profile?.state && opp.state.toLowerCase() === profile.state.toLowerCase()) {
+    score += 20
+  } else if (opp.is_national || opp.state === 'nationwide') {
+    score += 10
+  }
+  
+  // Category matches
+  const oppCategories = cleanList(safeParseJSON(opp.categories, []), 10)
+  const profileCategories = cleanList(safeParseJSON(profile?.categories, []), 10)
+  const matchingCategories = findMatchingCategories(oppCategories, profileCategories)
+  score += Math.min(matchingCategories.length * 10, 30)
+  
+  // Deadline urgency
+  const daysRemaining = daysUntil(opp.deadline)
+  if (daysRemaining !== null && daysRemaining > 0 && daysRemaining < 60) {
+    score += 5
+  }
+  
+  // Match reasons count
+  score += Math.min(matchReasons.length * 5, 15)
+  
+  return Math.min(100, Math.max(0, score))
 }
 
 function formatAmountRange(min, max, description) {
@@ -232,7 +349,8 @@ function collectGrantMatches(db, profileId, limit) {
       `
         SELECT id, title, sponsor, deadline, amount_min, amount_max, amount_description,
                application_url, state, opportunity_type, requires_match, match_percentage,
-               eligibility_bullets, categories, source, source_url, updated_at
+               eligibility_bullets, categories, source, source_url, updated_at, match_reasons,
+               description, regions, keywords
         FROM funding_opportunities
         WHERE is_active = 1 AND profile_id = ?
         ORDER BY updated_at DESC
@@ -253,7 +371,8 @@ function collectGrantMatches(db, profileId, limit) {
       `
         SELECT id, title, sponsor, deadline, amount_min, amount_max, amount_description,
                application_url, state, opportunity_type, requires_match, match_percentage,
-               eligibility_bullets, categories, source, source_url, updated_at
+               eligibility_bullets, categories, source, source_url, updated_at, match_reasons,
+               description, regions, keywords
         FROM funding_opportunities
         WHERE is_active = 1
         ORDER BY updated_at DESC
@@ -273,12 +392,30 @@ function collectGrantMatches(db, profileId, limit) {
   return merged
 }
 
-function formatGrantSummaries(opportunities) {
+function formatGrantSummaries(opportunities, profile = null) {
   return opportunities.map((opp) => {
     const eligibility = cleanList(safeParseJSON(opp.eligibility_bullets, []))
     const categories = cleanList(safeParseJSON(opp.categories, []))
     const amountRange = formatAmountRange(opp.amount_min, opp.amount_max, opp.amount_description)
     const daysRemaining = daysUntil(opp.deadline)
+    
+    // Get or generate match reasons
+    let matchReasons = cleanList(safeParseJSON(opp.match_reasons, []), 10)
+    if (matchReasons.length === 0 && profile) {
+      matchReasons = generateMatchReasons(opp, profile)
+    }
+    
+    // Calculate match score
+    let matchScore = null
+    if (profile) {
+      matchScore = calculateMatchScore(opp, profile, matchReasons)
+    }
+    
+    // Generate fit explanation
+    let fitExplanation = null
+    if (profile) {
+      fitExplanation = generateFitExplanation(opp, profile, matchReasons)
+    }
 
     return {
       id: opp.id,
@@ -296,6 +433,9 @@ function formatGrantSummaries(opportunities) {
       eligibility_highlights: eligibility,
       source: opp.source ?? null,
       updated_at: opp.updated_at ?? null,
+      match_score: matchScore,
+      match_reasons: matchReasons,
+      fit_explanation: fitExplanation,
     }
   })
 }
@@ -318,7 +458,8 @@ function summarizeGrants(db, params, context) {
   const profile = db
     .prepare(
       `
-        SELECT id, display_name, status
+        SELECT id, display_name, status, state, organization_type, 
+               categories, serves_veterans, serves_disabled
         FROM profiles
         WHERE id = ?
       `,
@@ -331,7 +472,7 @@ function summarizeGrants(db, params, context) {
 
   const limit = Math.max(1, Math.min(Number(params?.limit) || DEFAULT_GRANT_LIMIT, 10))
   const opportunities = collectGrantMatches(db, profileId, limit)
-  const formatted = formatGrantSummaries(opportunities)
+  const formatted = formatGrantSummaries(opportunities, profile)
 
   return {
     profile: {

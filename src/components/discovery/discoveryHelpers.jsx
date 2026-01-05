@@ -66,12 +66,12 @@ export async function runComprehensiveMatch(selectedOrg, searchFilters) {
     freshness_days: 60
   });
 
-  if (!response.data?.success) {
-    throw new Error(response.data?.error || 'Comprehensive match failed');
+  if (!response?.success) {
+    throw new Error(response?.error || 'Comprehensive match failed');
   }
 
   // Convert comprehensive match format to standard format
-  const opportunities = (response.data.opportunities || []).map(opp => ({
+  const opportunities = (response.opportunities || []).map(opp => ({
     title: opp.program_name,
     sponsor: opp.sponsor,
     url: opp.url,
@@ -103,8 +103,8 @@ export async function runECFServiceSearch(selectedOrgId, queryClient) {
     profile_id: selectedOrgId
   });
 
-  if (!discoverResponse.data?.success) {
-    throw new Error(discoverResponse.data?.error || 'ECF service discovery failed');
+  if (!discoverResponse?.success) {
+    throw new Error(discoverResponse?.error || 'ECF service discovery failed');
   }
 
   // Invalidate cache to ensure new funding opportunities are fetched
@@ -116,12 +116,12 @@ export async function runECFServiceSearch(selectedOrgId, queryClient) {
     filters: {}
   });
 
-  if (!searchResponse.data?.success) {
-    throw new Error(searchResponse.data?.error || 'Service search failed');
+  if (!searchResponse?.success) {
+    throw new Error(searchResponse?.error || 'Service search failed');
   }
 
   // Filter to only show ECF services
-  const ecfServices = (searchResponse.data.results || []).filter(r => 
+  const ecfServices = (searchResponse.results || []).filter(r => 
     r.source === 'ecf_choices_discovery'
   );
 
@@ -155,13 +155,13 @@ export async function runStandardSearch(template, selectedOrgId, searchFilters) 
 
   // Empty results are a valid success response, not an error
   // Only throw if there's an actual API/network failure (success: false with error)
-  if (response.data?.success === false && response.data?.error) {
-    throw new Error(response.data.error);
+  if (response?.success === false && response?.error) {
+    throw new Error(response.error);
   }
 
   return {
-    opportunities: response.data.results || [],
-    count: response.data.results?.length || 0,
-    message: `Found ${response.data.results?.length || 0} matching opportunities using the "${template?.name}" search.`
+    opportunities: response.results || [],
+    count: response.results?.length || 0,
+    message: `Found ${response.results?.length || 0} matching opportunities using the "${template?.name}" search.`
   };
 }
