@@ -1,7 +1,11 @@
 // API Client - Replaces Base44 SDK
 // This file provides the same interface as base44Client but uses your own backend
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+// Use relative URLs in production (proxied by Vercel) to avoid CORS issues
+// In dev mode, use VITE_API_URL or default to localhost
+const API_URL = import.meta.env.DEV 
+  ? (import.meta.env.VITE_API_URL || 'http://localhost:8080')
+  : '';  // Empty string = relative URLs, proxied by Vercel
 const APP_BASE = import.meta.env.VITE_APP_BASE || '/grantflow';
 
 class APIClient {
@@ -194,6 +198,7 @@ class APIClient {
     const response = await fetch(url, {
       ...options,
       headers,
+      credentials: 'include', // Ensure cookies are sent with the request
     });
 
     if (response.status === 401) {
