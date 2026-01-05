@@ -18,6 +18,8 @@
     "check:profiles": "node ./scripts/check-profiles.mjs",
     "seed:profiles": "node ./scripts/seed-profiles.mjs",
     "seed:db": "node ./scripts/build-seed-db.mjs",
+    "crawl:nationwide": "node ./scripts/nationwide-comprehensive-crawl.mjs",
+    "prepopulate:grants": "node ./scripts/prepopulate-profile-grants.mjs",
     "start": "node backend/server.js"
   },
   "dependencies": {
