@@ -32,7 +32,7 @@ if (!fs.existsSync(dbPath)) {
   process.exit(1)
 }
 
-const TARGET_MATCH_SCORE = 85
+const TARGET_MATCH_SCORE = 80
 const TARGET_COUNT = 50
 
 const ALLOWED_APPLICANT_TYPES = new Set([
@@ -329,6 +329,15 @@ function main() {
 
   const processProfile = db.transaction((profile) => {
     const organizationId = ensureOrganizationForProfile(db, profile)
+    db.prepare(
+      `
+        DELETE FROM grants
+        WHERE organization_id = ?
+          AND status = 'discovered'
+          AND notes LIKE 'Auto-prepopulated%'
+      `,
+    ).run(organizationId)
+
     const existingGrants = db
       .prepare(
         `
