@@ -139,12 +139,17 @@ class APIClient {
         // Refresh failed - clear everything and notify once
         console.error('[APIClient] Token refresh failed:', error.message);
         this.clearToken();
+        
+        // Create a user-friendly error
+        const authError = this.createAuthError('Your session has expired. Please sign in again.');
+        authError.isAuthError = true; // Flag this as an auth error
+        
         if (this.onAuthFailure) {
           this.onAuthFailure('Your session expired. Sign in again to continue.');
         } else {
           this.auth.redirectToLogin();
         }
-        throw new Error('Session expired. Please sign in again.');
+        throw authError;
       } finally {
         // Clear the promise after completion (success or failure)
         this.refreshPromise = null;
@@ -364,12 +369,14 @@ class APIClient {
       try {
         return await this.fetch('/api/auth/me');
       } catch (error) {
-        // If 401, clear tokens and return null (user not authenticated)
-        if (error.status === 401) {
+        // If it's an auth error (401 or session expired), return null gracefully
+        if (error.status === 401 || error.isAuthError) {
+          console.log('[APIClient] Auth check failed, user needs to sign in');
           this.clearToken();
           return null;
         }
-        // For other errors, return null to avoid breaking the app
+        // For other errors, log but return null to avoid breaking the app
+        console.warn('[APIClient] Error checking auth status:', error.message);
         return null;
       }
     },

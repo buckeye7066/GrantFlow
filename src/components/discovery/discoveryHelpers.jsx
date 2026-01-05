@@ -153,8 +153,10 @@ export async function runStandardSearch(template, selectedOrgId, searchFilters) 
 
   const response = await base44.functions.invoke('searchOpportunities', searchParams);
 
-  if (!response.data?.success) {
-    throw new Error(response.data?.message || 'No opportunities matched your criteria');
+  // Empty results are a valid success response, not an error
+  // Only throw if there's an actual API/network failure (success: false with error)
+  if (response.data?.success === false && response.data?.error) {
+    throw new Error(response.data.error);
   }
 
   return {
