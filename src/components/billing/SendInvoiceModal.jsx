@@ -79,7 +79,7 @@ export default function SendInvoiceModal({ invoice, organization, onClose }) {
                   <SelectValue placeholder="Select a recipient" />
                 </SelectTrigger>
                 <SelectContent>
-                  {organization.email?.map(e => <SelectItem key={e} value={e}>{e} (Org Primary)</SelectItem>)}
+                  {(Array.isArray(organization.email) ? organization.email : []).map((e, index) => <SelectItem key={`${e}-${index}`} value={e}>{e} (Org Primary)</SelectItem>)}
                   {contacts.map(c => <SelectItem key={c.id} value={c.email}>{c.full_name} ({c.email})</SelectItem>)}
                 </SelectContent>
               </Select>

@@ -72,13 +72,13 @@ export default function ScoringResultCard({ result }) {
           <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
             <h4 className="font-semibold text-emerald-900 flex items-center gap-2 mb-3"><ThumbsUp className="w-5 h-5"/>Strengths</h4>
             <ul className="space-y-2 list-disc list-inside text-emerald-800">
-              {result.strengths?.map((item, i) => <li key={i}>{item}</li>)}
+              {(result.strengths ?? []).map((item, i) => <li key={i}>{item}</li>)}
             </ul>
           </div>
           <div className="p-4 bg-red-50 border border-red-200 rounded-xl">
             <h4 className="font-semibold text-red-900 flex items-center gap-2 mb-3"><ThumbsDown className="w-5 h-5"/>Areas for Improvement</h4>
             <ul className="space-y-2 list-disc list-inside text-red-800">
-              {result.weaknesses?.map((item, i) => <li key={i}>{item}</li>)}
+              {(result.weaknesses ?? []).map((item, i) => <li key={i}>{item}</li>)}
             </ul>
           </div>
         </div>
@@ -86,7 +86,7 @@ export default function ScoringResultCard({ result }) {
         <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl">
           <h4 className="font-semibold text-blue-900 flex items-center gap-2 mb-3"><Lightbulb className="w-5 h-5"/>Actionable Suggestions</h4>
           <ul className="space-y-2 list-disc list-inside text-blue-800">
-            {result.suggestions?.map((item, i) => <li key={i}>{item}</li>)}
+            {(result.suggestions ?? []).map((item, i) => <li key={i}>{item}</li>)}
           </ul>
         </div>
         
@@ -94,7 +94,7 @@ export default function ScoringResultCard({ result }) {
           <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl">
             <h4 className="font-semibold text-amber-900 flex items-center gap-2 mb-3"><Puzzle className="w-5 h-5"/>Missing Information</h4>
             <ul className="space-y-2 list-disc list-inside text-amber-800">
-              {result.missing_information?.map((item, i) => <li key={i}>{item}</li>)}
+              {(result.missing_information ?? []).map((item, i) => <li key={i}>{item}</li>)}
             </ul>
           </div>
         )}

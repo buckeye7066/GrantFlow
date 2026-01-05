@@ -28,6 +28,8 @@ import { Progress } from "@/components/ui/progress"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useToast } from "@/components/ui/use-toast"
 import { listOpportunities, listOpportunityStates } from "@/api/opportunities"
+
+const NOT_AVAILABLE = 'N/A'
 import { listProfiles, getProfile } from "@/api/profiles"
 import { createCrawlerJob } from "@/api/crawlers"
 import { cn } from "@/lib/utils"
@@ -492,8 +494,8 @@ export default function ItemFunding() {
                   <SelectContent>
                     <SelectItem value="all">All states</SelectItem>
                     {statesQuery.data?.map((state) => (
-                      <SelectItem key={state.state || "N/A"} value={state.state || "N/A"}>
-                        {state.state || "N/A"} ({state.count})
+                      <SelectItem key={state.state || NOT_AVAILABLE} value={state.state || NOT_AVAILABLE}>
+                        {state.state || NOT_AVAILABLE} ({state.count})
                       </SelectItem>
                     ))}
                   </SelectContent>

@@ -4,6 +4,8 @@ import { useAuthStore } from '@/stores/authStore'
 import { Loader2, AlertCircle, CheckCircle2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
+const REDIRECT_DELAY_MS = 1200
+
 function parseParams(location) {
   const searchParams = new URLSearchParams(location.search || '')
   const hash = location.hash?.startsWith('#') ? location.hash.slice(1) : location.hash || ''
@@ -88,7 +90,7 @@ export default function AuthCallback() {
         setMessage('Success! Redirecting you to your workspace…')
         timeoutRef.current = setTimeout(() => {
           navigate('/Dashboard', { replace: true })
-        }, 1200)
+        }, REDIRECT_DELAY_MS)
       })
       .catch(() => {
         setStatus('error')
