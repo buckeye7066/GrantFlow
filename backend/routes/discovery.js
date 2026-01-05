@@ -344,7 +344,17 @@ router.post('/discoverECFServices', async (req, res) => {
     }
     
     // Check if this is an ECF CHOICES profile
-    const isECF = profile.tags && profile.tags.includes('ecf_choices');
+    let tags = [];
+    if (profile.tags) {
+      try {
+        tags = typeof profile.tags === 'string' ? JSON.parse(profile.tags) : profile.tags;
+      } catch (e) {
+        // If parsing fails, treat as empty array
+        tags = [];
+      }
+    }
+    
+    const isECF = Array.isArray(tags) && tags.includes('ecf_choices');
     
     if (!isECF) {
       return res.status(400).json({

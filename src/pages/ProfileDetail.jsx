@@ -30,7 +30,7 @@ export default function ProfileDetail() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
   const { state: dashboardPrefs, dispatch: preferencesDispatch } = useDashboardPreferences()
-  const { preferences: backendPrefs, updatePreference } = useSettingsStore()
+  const { updatePreference } = useSettingsStore()
   const [appearanceOpen, setAppearanceOpen] = React.useState(false)
   const themeOptions = React.useMemo(
     () => [
