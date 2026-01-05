@@ -238,4 +238,54 @@ router.post('/tools/:toolName/invoke', async (req, res) => {
   }
 })
 
+// ============================================================================
+// Autonomous Operations Endpoints
+// ============================================================================
+
+router.post('/autonomous/code', adminAuth, async (req, res) => {
+  try {
+    const result = await invokeTool(req.db, req.user, 'admin.anya.runAutonomous', req.body, {})
+    res.status(201).json(result)
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
+router.post('/autonomous/crawlers', adminAuth, async (req, res) => {
+  try {
+    const result = await invokeTool(req.db, req.user, 'admin.anya.runCrawlers', req.body, {})
+    res.status(201).json(result)
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
+router.post('/autonomous/functions', adminAuth, async (req, res) => {
+  try {
+    const result = await invokeTool(req.db, req.user, 'admin.anya.testFunctions', req.body, {})
+    res.status(201).json(result)
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
+router.post('/autonomous/buttons', adminAuth, async (req, res) => {
+  try {
+    const result = await invokeTool(req.db, req.user, 'admin.anya.testButtons', req.body, {})
+    res.status(201).json(result)
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
+router.get('/autonomous/status', adminAuth, async (req, res) => {
+  try {
+    const operationType = req.query.type || 'all'
+    const result = await invokeTool(req.db, req.user, 'admin.anya.getStatus', { operationType }, {})
+    res.json(result)
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
 export default router

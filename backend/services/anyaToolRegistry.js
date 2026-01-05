@@ -18,6 +18,20 @@ import {
   adminHealthCheck,
   adminHealthLogs,
 } from './anyaAdminTools.js'
+import {
+  runAutonomousCodeCrawl,
+  getAutonomousStatus,
+} from './anyaAutonomousCrawler.js'
+import {
+  runAutonomousCrawlers,
+  saveCrawlerResultsToGlobal,
+  getAutonomousCrawlersStatus,
+} from './anyaAutonomousFunctionRunner.js'
+import {
+  runAutonomousFunctionTests,
+  testButtonFunctionality,
+  getAutonomousFunctionTestsStatus,
+} from './anyaAutonomousFunctionTesting.js'
 
 const tools = new Map()
 
@@ -500,7 +514,7 @@ registerTool({
 
 registerTool({
   name: 'admin.code.edit',
-  description: 'Propose edits to a specific file (shows diff, does not auto-save). Admin only.',
+  description: 'Propose or apply edits to a specific file. Set save=true to apply changes with automatic backup. Admin only.',
   requiresAdmin: true,
   schema: {
     type: 'object',
@@ -519,6 +533,7 @@ registerTool({
           required: ['line', 'oldText', 'newText'],
         },
       },
+      save: { type: 'boolean', description: 'If true, apply changes and save file (creates backup first). Default: false' },
     },
     required: ['filePath', 'changes'],
   },
@@ -939,5 +954,140 @@ registerTool({
       message: 'Code scan completed. Use a file system tool to perform detailed scanning.',
       note: 'This is a placeholder. Full code scanning requires file system access which is handled by existing code crawl tools.',
     }
+  },
+})
+
+// ============================================================================
+// Autonomous Operations Tools
+// ============================================================================
+
+registerTool({
+  name: 'admin.anya.runAutonomous',
+  description: 'Start autonomous code crawl and fix loop. Scans codebase, analyzes issues, and applies fixes with backups. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      directory: { type: 'string', description: 'Directory to scan (relative to repo root, default: entire repo)' },
+      pattern: { type: 'string', description: 'Optional regex pattern to search for' },
+      maxIterations: { type: 'integer', description: 'Maximum number of files to process (default: 50)', minimum: 1, maximum: 200 },
+      maxFileChanges: { type: 'integer', description: 'Maximum number of files to modify (default: 20)', minimum: 1, maximum: 100 },
+      dryRun: { type: 'boolean', description: 'If true, dont save changes (default: false)' },
+      fixConsoleLog: { type: 'boolean', description: 'Fix console.log statements (default: true)' },
+      fixEmptyCatch: { type: 'boolean', description: 'Fix empty catch blocks (default: false)' },
+      fixTodos: { type: 'boolean', description: 'Convert TODO comments to tracked issues (default: false)' },
+    },
+  },
+  handler: runAutonomousCodeCrawl,
+})
+
+registerTool({
+  name: 'admin.anya.runCrawlers',
+  description: 'Run crawlers for all profiles or specific profiles. Saves results to profile opportunities AND global opportunities page. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      profileIds: { 
+        type: 'array', 
+        items: { type: 'string' },
+        description: 'Specific profile IDs to run crawlers for (default: all active profiles)' 
+      },
+      crawlerTypes: {
+        type: 'array',
+        items: { 
+          type: 'string',
+          enum: ['local', 'scholarship', 'comprehensive', 'profile_enrichment', 'avatar_lookup', 'item_search']
+        },
+        description: 'Types of crawlers to run (default: [local, scholarship, comprehensive, profile_enrichment])'
+      },
+      maxRetries: { type: 'integer', description: 'Maximum retries for failed jobs (default: 3)', minimum: 0, maximum: 10 },
+      waitForCompletion: { type: 'boolean', description: 'Wait for jobs to complete (default: false)' },
+      timeoutMinutes: { type: 'integer', description: 'Timeout in minutes (default: 30)', minimum: 5, maximum: 120 },
+    },
+  },
+  handler: runAutonomousCrawlers,
+})
+
+registerTool({
+  name: 'admin.anya.testFunctions',
+  description: 'Test all API endpoints and functions systematically. Find and fix errors. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      testSuites: {
+        type: 'array',
+        items: { type: 'string', enum: ['health', 'profiles', 'opportunities', 'anya'] },
+        description: 'Test suites to run (default: all)'
+      },
+      fixErrors: { type: 'boolean', description: 'Attempt to fix errors found (default: false)' },
+      dryRun: { type: 'boolean', description: 'Dont save fixes (default: true)' },
+    },
+  },
+  handler: runAutonomousFunctionTests,
+})
+
+registerTool({
+  name: 'admin.anya.testButtons',
+  description: 'Test all button functionality in the UI by analyzing component handlers. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      componentPath: { type: 'string', description: 'Path to components directory (default: src/components)' },
+      fixErrors: { type: 'boolean', description: 'Attempt to fix errors found (default: false)' },
+      dryRun: { type: 'boolean', description: 'Dont save fixes (default: true)' },
+    },
+  },
+  handler: testButtonFunctionality,
+})
+
+registerTool({
+  name: 'admin.anya.saveCrawlerToGlobal',
+  description: 'Save crawler results to global opportunities (without profile info bleed). Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      jobId: { type: 'string', description: 'Crawler job ID to process' },
+    },
+    required: ['jobId'],
+  },
+  handler: saveCrawlerResultsToGlobal,
+})
+
+registerTool({
+  name: 'admin.anya.getStatus',
+  description: 'Get status of all autonomous operations (code crawl, crawlers, function tests). Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      operationType: {
+        type: 'string',
+        enum: ['code', 'crawlers', 'functions', 'all'],
+        description: 'Type of operation to get status for (default: all)'
+      },
+    },
+  },
+  handler: async (params, context) => {
+    const { operationType = 'all' } = params
+    
+    const status = {}
+    
+    if (operationType === 'code' || operationType === 'all') {
+      status.code_crawl = await getAutonomousStatus()
+    }
+    
+    if (operationType === 'crawlers' || operationType === 'all') {
+      status.crawlers = await getAutonomousCrawlersStatus()
+    }
+    
+    if (operationType === 'functions' || operationType === 'all') {
+      status.function_tests = await getAutonomousFunctionTestsStatus()
+    }
+    
+    return status
   },
 })

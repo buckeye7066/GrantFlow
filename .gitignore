@@ -22,6 +22,10 @@ backend/storage/profiles/
 
 # Audit logs
 backend/audit/*.log
+backend/data/audit/*.log
+
+# Backups
+backend/data/backups/
 
 # Runtime artifacts
 backend/data/anya-log.json
