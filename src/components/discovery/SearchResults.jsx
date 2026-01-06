@@ -53,7 +53,13 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
+  // Debug logging
+  React.useEffect(() => {
+    console.log('[SearchResults] Selected opportunities:', selectedOpportunities.size, Array.from(selectedOpportunities));
+  }, [selectedOpportunities]);
+
   const handleToggleSelection = (opportunityId) => {
+    console.log('[SearchResults] Toggling selection for:', opportunityId);
     setSelectedOpportunities(prev => {
       const newSet = new Set(prev);
       if (newSet.has(opportunityId)) {
@@ -61,15 +67,20 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
       } else {
         newSet.add(opportunityId);
       }
+      console.log('[SearchResults] New selection size:', newSet.size);
       return newSet;
     });
   };
 
   const handleSelectAll = () => {
-    if (selectedOpportunities.size === results.length) {
+    console.log('[SearchResults] Handle select all, current size:', selectedOpportunities.size, 'results:', results.length);
+    if (selectedOpportunities.size === results.length && results.length > 0) {
+      console.log('[SearchResults] Deselecting all');
       setSelectedOpportunities(new Set());
     } else {
-      setSelectedOpportunities(new Set(results.map(opp => opp.id || opp.source_id)));
+      const allIds = results.map(opp => opp.id || opp.source_id);
+      console.log('[SearchResults] Selecting all:', allIds);
+      setSelectedOpportunities(new Set(allIds));
     }
   };
 
