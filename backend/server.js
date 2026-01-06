@@ -113,7 +113,8 @@ if (fs.existsSync(schemaPath)) {
 }
 
 // Schema migrations - Add columns if they don't exist
-const migrations = [
+// Table and column names are validated against a whitelist for security
+const allowedMigrations = [
   { table: 'profiles', column: 'avatar_url', type: 'TEXT' },
   { table: 'profiles', column: 'user_id', type: 'TEXT REFERENCES users(id) ON DELETE SET NULL' },
   { table: 'crawler_jobs', column: 'result_meta', type: 'TEXT' },
@@ -121,7 +122,16 @@ const migrations = [
   { table: 'crawler_jobs', column: 'last_retry_at', type: 'DATETIME' }
 ];
 
-migrations.forEach(({ table, column, type }) => {
+const validTables = new Set(['profiles', 'crawler_jobs', 'users', 'organizations', 'grants']);
+const validColumnPattern = /^[a-z_]+$/;
+
+allowedMigrations.forEach(({ table, column, type }) => {
+  // Validate table and column names to prevent SQL injection
+  if (!validTables.has(table) || !validColumnPattern.test(column)) {
+    console.error(`Migration error: Invalid table "${table}" or column "${column}"`);
+    return;
+  }
+  
   try {
     db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`).run();
   } catch (error) {

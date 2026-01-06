@@ -164,8 +164,8 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
   let parsed = {}
   try {
     parsed = safeParseJSON(content, {})
-    if (!parsed || typeof parsed !== 'object') {
-      throw new Error('Invalid parsed JSON')
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Invalid parsed JSON - expected object')
     }
   } catch (error) {
     db.prepare(

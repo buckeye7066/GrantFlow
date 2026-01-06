@@ -56,7 +56,8 @@ export function sanitizeColumns(data, allowedColumns) {
 }
 
 /**
- * Validate email format
+ * Validate email format (basic validation)
+ * For production use, consider a comprehensive email validation library
  * @param {string} email - Email address to validate
  * @returns {boolean} True if valid email format
  */
@@ -65,7 +66,8 @@ export function isValidEmail(email) {
     return false;
   }
   
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  // More permissive email regex that handles most common cases
+  const emailRegex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
   return emailRegex.test(email);
 }
 
