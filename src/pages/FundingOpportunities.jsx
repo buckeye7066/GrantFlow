@@ -624,6 +624,8 @@ export default function FundingOpportunities() {
   const [selectedOpportunity, setSelectedOpportunity] = useState(null)
   const [addingOpportunityId, setAddingOpportunityId] = useState(null)
   const [savingOpportunityId, setSavingOpportunityId] = useState(null)
+  const [currentPage, setCurrentPage] = useState(1)
+  const ITEMS_PER_PAGE = 50
 
   const opportunitiesQuery = useQuery({
     queryKey: ["opportunities", filters],
@@ -637,6 +639,11 @@ export default function FundingOpportunities() {
         limit: 100000, // Fetch ALL opportunities - no artificial limit
       }),
   })
+  
+  // Reset to page 1 when filters change
+  React.useEffect(() => {
+    setCurrentPage(1)
+  }, [filters])
 
   const sourcesQuery = useQuery({
     queryKey: ["opportunity-sources", filters.compliance],
@@ -759,6 +766,14 @@ export default function FundingOpportunities() {
       }
     })
   }, [organizedOpportunities, filters.profileId, selectedProfile])
+
+  // Pagination calculations
+  const totalPages = Math.ceil(opportunitiesWithMatch.length / ITEMS_PER_PAGE)
+  const paginatedOpportunities = useMemo(() => {
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE
+    const endIndex = startIndex + ITEMS_PER_PAGE
+    return opportunitiesWithMatch.slice(startIndex, endIndex)
+  }, [opportunitiesWithMatch, currentPage])
 
   const handleAddToPipeline = async (opportunity) => {
     if (!selectedProfile || !filters.profileId || filters.profileId === "all") {
@@ -1151,24 +1166,96 @@ export default function FundingOpportunities() {
           ))}
         </div>
       ) : hasResults ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-          {opportunitiesWithMatch.map(({ opportunity, match }) => (
-            <OpportunityCard
-              key={opportunity.id}
-              opportunity={opportunity}
-              onSelect={setSelectedOpportunity}
-              match={match}
-              onAddToPipeline={handleAddToPipeline}
-              isAddingToPipeline={addingOpportunityId === opportunity.id}
-              canAddToPipeline={Boolean(
-                selectedProfile &&
-                selectedProfile.organization_id &&
-                filters.profileId &&
-                filters.profileId !== "all"
-              )}
-            />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+            {paginatedOpportunities.map(({ opportunity, match }) => (
+              <OpportunityCard
+                key={opportunity.id}
+                opportunity={opportunity}
+                onSelect={setSelectedOpportunity}
+                match={match}
+                onAddToPipeline={handleAddToPipeline}
+                isAddingToPipeline={addingOpportunityId === opportunity.id}
+                canAddToPipeline={Boolean(
+                  selectedProfile &&
+                  selectedProfile.organization_id &&
+                  filters.profileId &&
+                  filters.profileId !== "all"
+                )}
+              />
+            ))}
+          </div>
+          
+          {/* Pagination Controls */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-center gap-2 mt-8 pb-8">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage(1)}
+                disabled={currentPage === 1}
+              >
+                First
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+              >
+                Previous
+              </Button>
+              
+              <div className="flex items-center gap-1 mx-2">
+                {/* Show page numbers */}
+                {Array.from({ length: Math.min(7, totalPages) }, (_, i) => {
+                  let pageNum
+                  if (totalPages <= 7) {
+                    pageNum = i + 1
+                  } else if (currentPage <= 4) {
+                    pageNum = i + 1
+                  } else if (currentPage >= totalPages - 3) {
+                    pageNum = totalPages - 6 + i
+                  } else {
+                    pageNum = currentPage - 3 + i
+                  }
+                  return (
+                    <Button
+                      key={pageNum}
+                      variant={currentPage === pageNum ? "default" : "outline"}
+                      size="sm"
+                      className="w-10"
+                      onClick={() => setCurrentPage(pageNum)}
+                    >
+                      {pageNum}
+                    </Button>
+                  )
+                })}
+              </div>
+              
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+              >
+                Next
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={currentPage === totalPages}
+              >
+                Last
+              </Button>
+              
+              <span className="text-sm text-slate-500 ml-4">
+                Page {currentPage} of {totalPages} ({opportunitiesWithMatch.length.toLocaleString()} total)
+              </span>
+            </div>
+          )}
+        </>
       ) : (
         <Card className="border border-slate-200 bg-white/70 backdrop-blur">
           <CardContent className="p-12 text-center space-y-4">
