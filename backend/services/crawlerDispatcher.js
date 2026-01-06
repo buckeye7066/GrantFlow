@@ -171,5 +171,13 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
     }
   }
 
-  setImmediate(handle)
+  // Return a Promise that resolves when the job completes
+  return new Promise((resolve) => {
+    setImmediate(() => {
+      handle().then(resolve).catch((err) => {
+        console.error('[crawlerDispatcher] Unhandled job error:', err)
+        resolve() // Resolve anyway to not block
+      })
+    })
+  })
 }

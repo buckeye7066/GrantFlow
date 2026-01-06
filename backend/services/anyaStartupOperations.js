@@ -94,7 +94,7 @@ export async function runStartupOperations(db) {
               type: 'comprehensive',
               parameters: {
                 zip_list: batch,
-                limit_per_zip: 3
+                limit_per_zip: 8  // Use all 8 templates per ZIP
               }
             }
             

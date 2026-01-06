@@ -215,7 +215,7 @@ function scoreOpportunity(opportunity, profileDetail) {
   }
 }
 
-function OpportunityCard({ opportunity, onSelect, match }) {
+function OpportunityCard({ opportunity, onSelect, match, onAddToPipeline, isAddingToPipeline, canAddToPipeline }) {
   const matchScore = match?.score ?? 0
   const complianceStatus = opportunity.compliance_status ?? "unknown"
   const complianceReasons = Array.isArray(opportunity.compliance_reasons)
@@ -238,9 +238,24 @@ function OpportunityCard({ opportunity, onSelect, match }) {
     : "Funding review"
   const opportunityTypeLabel = opportunity.opportunity_type || "Funding Opportunity"
 
+  // Get match color based on score
+  const getMatchColor = (score) => {
+    if (score >= 80) return "text-emerald-600 bg-emerald-50 border-emerald-200"
+    if (score >= 60) return "text-blue-600 bg-blue-50 border-blue-200"
+    if (score >= 40) return "text-amber-600 bg-amber-50 border-amber-200"
+    return "text-slate-600 bg-slate-50 border-slate-200"
+  }
+
+  const handleQuickAdd = async (event) => {
+    event.stopPropagation()
+    if (onAddToPipeline) {
+      await onAddToPipeline(opportunity)
+    }
+  }
+
   return (
     <Card
-      className="transition hover:shadow-lg border border-slate-200 bg-white/80 backdrop-blur cursor-pointer flex flex-col"
+      className="transition hover:shadow-lg border border-slate-200 bg-white/80 backdrop-blur cursor-pointer flex flex-col group"
       onClick={() => onSelect(opportunity)}
     >
       <CardHeader className="pb-3 space-y-2">
@@ -257,57 +272,104 @@ function OpportunityCard({ opportunity, onSelect, match }) {
             <Badge className={cn("text-xs border", complianceBadgeClass)}>{complianceBadgeText}</Badge>
           </div>
         </div>
-        <h3 className="text-lg font-semibold text-slate-900 line-clamp-2">{opportunity.title}</h3>
-        <p className="text-sm text-slate-600 flex items-center gap-2">
-          <Building className="w-4 h-4 text-slate-400" />
+        <h3 className="text-lg font-semibold text-slate-900 line-clamp-2 group-hover:text-blue-700 transition-colors">
+          {opportunity.title}
+        </h3>
+        {/* Funding Source / Sponsor */}
+        <div className="flex items-center gap-2 text-sm text-slate-700 font-medium">
+          <Building className="w-4 h-4 text-blue-500" />
           {opportunity.sponsor || "Sponsor pending"}
-        </p>
+        </div>
       </CardHeader>
       <CardContent className="space-y-3 flex-1">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm text-slate-600">
+        {/* Key Details Grid */}
+        <div className="grid grid-cols-2 gap-2 text-sm text-slate-600">
           <div className="flex items-center gap-2">
             <MapPin className="w-4 h-4 text-slate-400" />
-            <span>{opportunity.is_national ? "National" : opportunity.state || "Location varies"}</span>
+            <span className="truncate">{opportunity.is_national ? "National" : opportunity.state || "Location varies"}</span>
           </div>
           <div className="flex items-center gap-2">
-            <DollarSign className="w-4 h-4 text-slate-400" />
-            <span>{formatAmount(opportunity.amount_min, opportunity.amount_max)}</span>
+            <DollarSign className="w-4 h-4 text-emerald-500" />
+            <span className="font-medium text-emerald-700">{formatAmount(opportunity.amount_min, opportunity.amount_max)}</span>
           </div>
-          <div className="flex items-center gap-2">
-            <CalendarDays className="w-4 h-4 text-slate-400" />
+          <div className="flex items-center gap-2 col-span-2">
+            <CalendarDays className="w-4 h-4 text-amber-500" />
             <span>{formatDeadline(opportunity.deadline, opportunity.deadline_type)}</span>
           </div>
         </div>
-        <p className="text-sm text-slate-600 line-clamp-3">{opportunity.description || "Summary coming soon."}</p>
-        {match ? (
-          <div className="space-y-1">
-            <div className="flex items-center justify-between text-xs text-slate-500">
-              <span className="uppercase font-semibold tracking-wide">Match Score</span>
-              <span>{matchScore}%</span>
-            </div>
-            <Progress value={matchScore} className="h-2" />
-          </div>
-        ) : (
-          <div className="rounded-lg border border-dashed border-slate-200 p-2 text-xs text-slate-500">
-            Select a profile to see how well this opportunity fits.
+
+        {/* Synopsis / Description */}
+        <p className="text-sm text-slate-600 line-clamp-2">{opportunity.description || "Summary coming soon."}</p>
+
+        {/* Contact Info - Application URL */}
+        {opportunity.application_url && (
+          <div className="flex items-center gap-2 text-xs text-blue-600">
+            <ExternalLink className="w-3 h-3" />
+            <a 
+              href={opportunity.application_url} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="hover:underline truncate"
+            >
+              Apply / Contact
+            </a>
           </div>
         )}
+
+        {/* Match Score - Prominently displayed */}
+        {match ? (
+          <div className={cn("rounded-lg border p-3 space-y-2", getMatchColor(matchScore))}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Target className="w-4 h-4" />
+                <span className="text-sm font-semibold uppercase tracking-wide">Match Score</span>
+              </div>
+              <span className="text-2xl font-bold">{matchScore}%</span>
+            </div>
+            <Progress value={matchScore} className="h-2" />
+            {match.reasons && match.reasons.length > 0 && (
+              <p className="text-xs opacity-80 line-clamp-1">{match.reasons[0]}</p>
+            )}
+          </div>
+        ) : (
+          <div className="rounded-lg border border-dashed border-slate-200 p-3 text-xs text-slate-500 text-center">
+            <Target className="w-4 h-4 mx-auto mb-1 opacity-50" />
+            Select a profile to see match score
+          </div>
+        )}
+
         {isReview ? (
           <div className="rounded-lg border border-rose-200 bg-rose-50/70 p-2 text-xs text-rose-700">
             {reviewReasons[0] || "Review matching or repayment requirements before proceeding."}
           </div>
         ) : null}
       </CardContent>
-      <CardFooter className="px-6 pb-4">
+      <CardFooter className="px-6 pb-4 gap-2">
         <Button
           variant="outline"
-          className="w-full"
+          className="flex-1"
           onClick={(event) => {
             event.stopPropagation()
             onSelect(opportunity)
           }}
         >
-          View details
+          View Details
+        </Button>
+        <Button
+          variant="default"
+          className="flex-1"
+          disabled={!canAddToPipeline || isAddingToPipeline}
+          onClick={handleQuickAdd}
+        >
+          {isAddingToPipeline ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <>
+              <Sparkles className="w-4 h-4 mr-1" />
+              Add to Pipeline
+            </>
+          )}
         </Button>
       </CardFooter>
     </Card>
@@ -1096,6 +1158,14 @@ export default function FundingOpportunities() {
               opportunity={opportunity}
               onSelect={setSelectedOpportunity}
               match={match}
+              onAddToPipeline={handleAddToPipeline}
+              isAddingToPipeline={addingOpportunityId === opportunity.id}
+              canAddToPipeline={Boolean(
+                selectedProfile &&
+                selectedProfile.organization_id &&
+                filters.profileId &&
+                filters.profileId !== "all"
+              )}
             />
           ))}
         </div>
