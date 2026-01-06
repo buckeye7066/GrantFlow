@@ -34,6 +34,8 @@ async function auditLog(entry) {
  * @param {number} options.maxRetries - Maximum retries for failed jobs (default: 3)
  * @param {boolean} options.waitForCompletion - Wait for jobs to complete (default: false)
  * @param {number} options.timeoutMinutes - Timeout for job completion in minutes (default: 30)
+ * @param {number} options.matchThreshold - Match percentage threshold for profile pipeline (default: 80)
+ * @param {boolean} options.saveAllToGlobal - Save all opportunities to global page (default: true)
  * @param {Object} context - Database and user context
  */
 export async function runAutonomousCrawlers(options, context) {
@@ -43,6 +45,8 @@ export async function runAutonomousCrawlers(options, context) {
     maxRetries = 3,
     waitForCompletion = false,
     timeoutMinutes = 30,
+    matchThreshold = 80,
+    saveAllToGlobal = true,
   } = options
 
   const { db } = context
@@ -173,12 +177,42 @@ export async function runAutonomousCrawlers(options, context) {
           break
         }
 
-        // Wait before next poll
-        await new Promise(resolve => setTimeout(resolve, pollInterval))
-      }
+      // Wait before next poll
+      await new Promise(resolve => setTimeout(resolve, pollInterval))
+    }
 
-      // Handle failed jobs with retries
-      if (report.jobs_failed > 0 && maxRetries > 0) {
+    // Process completed jobs to save opportunities
+    if (report.jobs_completed > 0) {
+      const completedJobs = report.jobs.filter(j => j.status === 'completed')
+      
+      for (const job of completedJobs) {
+        try {
+          // Save results to global opportunities if enabled
+          if (saveAllToGlobal) {
+            const saveResult = await saveCrawlerResultsToGlobal({ jobId: job.job_id }, context)
+            job.global_save = saveResult
+          }
+          
+          // Process opportunities for profile pipeline with match filtering
+          if (matchThreshold > 0) {
+            await saveHighMatchesToProfile({
+              jobId: job.job_id,
+              profileId: job.profile_id,
+              matchThreshold,
+            }, context)
+            job.profile_save = { threshold: matchThreshold, status: 'completed' }
+          }
+        } catch (error) {
+          report.errors.push({
+            job_id: job.job_id,
+            error: `Failed to save opportunities: ${error.message}`,
+          })
+        }
+      }
+    }
+
+    // Handle failed jobs with retries
+    if (report.jobs_failed > 0 && maxRetries > 0) {
         const failedJobs = report.jobs.filter(j => j.status === 'failed')
         
         for (const failedJob of failedJobs) {
@@ -247,6 +281,206 @@ export async function runAutonomousCrawlers(options, context) {
       error: error.message,
     })
     throw error
+  }
+}
+
+/**
+ * Calculate match score between opportunity and profile
+ */
+function calculateMatchScore(opp, profile) {
+  let score = 0
+  let maxScore = 0
+  
+  // Location match (30 points)
+  maxScore += 30
+  if (opp.state && profile.state) {
+    if (opp.state.toLowerCase() === profile.state.toLowerCase()) {
+      score += 30
+    } else if (opp.state === 'nationwide' || opp.is_national) {
+      score += 15
+    }
+  } else if (opp.state === 'nationwide' || opp.is_national) {
+    score += 15
+  }
+  
+  // Category match (40 points)
+  maxScore += 40
+  if (opp.categories && profile.categories) {
+    try {
+      const oppCategories = JSON.parse(opp.categories)
+      const profileCategories = JSON.parse(profile.categories)
+      
+      if (Array.isArray(oppCategories) && Array.isArray(profileCategories)) {
+        const matches = oppCategories.filter(c => 
+          profileCategories.some(pc => 
+            c.toLowerCase().includes(pc.toLowerCase()) || 
+            pc.toLowerCase().includes(c.toLowerCase())
+          )
+        )
+        score += Math.min(40, matches.length * 10)
+      }
+    } catch (e) {
+      // Ignore JSON parse errors
+    }
+  }
+  
+  // Organization type match (20 points)
+  maxScore += 20
+  if (opp.eligibility_bullets && profile.organization_type) {
+    try {
+      const eligibility = JSON.parse(opp.eligibility_bullets)
+      if (Array.isArray(eligibility)) {
+        const hasMatch = eligibility.some(e => 
+          e.toLowerCase().includes(profile.organization_type.toLowerCase())
+        )
+        if (hasMatch) score += 20
+      }
+    } catch (e) {
+      // Ignore JSON parse errors
+    }
+  }
+  
+  // Special attributes (10 points)
+  maxScore += 10
+  if (profile.serves_veterans && opp.keywords) {
+    try {
+      const keywords = JSON.parse(opp.keywords)
+      if (Array.isArray(keywords) && keywords.some(k => k.toLowerCase().includes('veteran'))) {
+        score += 5
+      }
+    } catch (e) {
+      // Ignore
+    }
+  }
+  if (profile.serves_disabled && opp.keywords) {
+    try {
+      const keywords = JSON.parse(opp.keywords)
+      if (Array.isArray(keywords) && keywords.some(k => k.toLowerCase().includes('disabilit'))) {
+        score += 5
+      }
+    } catch (e) {
+      // Ignore
+    }
+  }
+  
+  return maxScore > 0 ? Math.round((score / maxScore) * 100) : 0
+}
+
+/**
+ * Save opportunities with high match scores to profile pipeline
+ * @param {Object} options
+ * @param {string} options.jobId - Crawler job ID
+ * @param {string} options.profileId - Profile ID
+ * @param {number} options.matchThreshold - Minimum match percentage (0-100)
+ * @param {Object} context - Database context
+ */
+async function saveHighMatchesToProfile(options, context) {
+  const { jobId, profileId, matchThreshold } = options
+  const { db } = context
+  
+  if (!db) {
+    throw new Error('Database connection unavailable')
+  }
+  
+  try {
+    // Get the profile
+    const profile = db.prepare(
+      'SELECT * FROM profiles WHERE id = ?'
+    ).get(profileId)
+    
+    if (!profile) {
+      throw new Error('Profile not found')
+    }
+    
+    // Get the crawler job
+    const job = db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
+    
+    if (!job || job.status !== 'completed') {
+      return { message: 'Job not completed or not found' }
+    }
+    
+    // Get opportunities from this job (we'll need to track them somehow)
+    // For now, get recent opportunities
+    const opportunities = db.prepare(
+      `
+      SELECT * FROM funding_opportunities
+      WHERE created_at >= datetime('now', '-1 hour')
+        AND (profile_id = ? OR profile_id IS NULL)
+      ORDER BY created_at DESC
+      LIMIT 100
+      `
+    ).all(profileId)
+    
+    let savedToProfile = 0
+    let highMatchCount = 0
+    
+    for (const opp of opportunities) {
+      const matchScore = calculateMatchScore(opp, profile)
+      
+      if (matchScore >= matchThreshold) {
+        highMatchCount++
+        
+        // Check if already in profile pipeline
+        const existing = db.prepare(
+          'SELECT id FROM funding_opportunities WHERE title = ? AND sponsor = ? AND profile_id = ?'
+        ).get(opp.title, opp.sponsor, profileId)
+        
+        if (!existing) {
+          // Add to profile pipeline with match score
+          const pipelineId = Math.random().toString(36).substring(2, 15)
+          
+          const matchReasons = []
+          if (opp.state === profile.state) matchReasons.push('Location match')
+          if (matchScore >= 90) matchReasons.push('Excellent category alignment')
+          else if (matchScore >= 80) matchReasons.push('Strong category alignment')
+          
+          db.prepare(
+            `
+            INSERT INTO funding_opportunities (
+              id, title, sponsor, deadline, amount_min, amount_max, amount_description,
+              application_url, state, opportunity_type, requires_match, match_percentage,
+              eligibility_bullets, categories, source, source_url, is_active,
+              profile_id, match_score, match_reasons, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            `
+          ).run(
+            pipelineId,
+            opp.title,
+            opp.sponsor,
+            opp.deadline,
+            opp.amount_min,
+            opp.amount_max,
+            opp.amount_description,
+            opp.application_url,
+            opp.state,
+            opp.opportunity_type,
+            opp.requires_match,
+            opp.match_percentage,
+            opp.eligibility_bullets,
+            opp.categories,
+            opp.source,
+            opp.source_url,
+            profileId,
+            matchScore,
+            JSON.stringify(matchReasons)
+          )
+          
+          savedToProfile++
+        }
+      }
+    }
+    
+    return {
+      job_id: jobId,
+      profile_id: profileId,
+      opportunities_checked: opportunities.length,
+      high_match_count: highMatchCount,
+      saved_to_profile: savedToProfile,
+      match_threshold: matchThreshold,
+    }
+  } catch (error) {
+    throw new Error(`Failed to save high matches to profile: ${error.message}`)
   }
 }
 

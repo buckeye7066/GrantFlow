@@ -130,21 +130,52 @@ export async function runAutonomousCodeCrawl(options, context) {
       const changes = []
       
       for (const issue of issues) {
-        // Fix // TODO: Remove debug log - console.log statements
-        if (fixConsoleLog && issue.description === '// TODO: Remove debug log - console.log statement found') {
-          changes.push({
-            line: issue.line,
-            oldText: '// TODO: Remove debug log - console.log',
-            newText: '// TODO: Remove debug log - // TODO: Remove debug log - console.log',
-          })
+        // Fix console.log statements
+        if (fixConsoleLog && issue.description === 'console.log statement found') {
+          // Read the actual line to get the full console.log statement
+          const fileContent = await fs.readFile(path.resolve(REPO_ROOT, filePath), 'utf8')
+          const lines = fileContent.split('\n')
+          const actualLine = lines[issue.line - 1]
+          
+          if (actualLine && actualLine.includes('console.log')) {
+            changes.push({
+              line: issue.line,
+              oldText: actualLine.trim(),
+              newText: '// ' + actualLine.trim() + ' // Disabled by auto-fix',
+            })
+          }
         }
 
-        // Fix empty catch blocks
-        if (fixEmptyCatch && issue.description === 'Empty catch block') {
-          changes.push({
+        // Fix empty catch blocks  
+        if (fixEmptyCatch && issue.description.includes('Empty catch block')) {
+          const variations = [
+            { old: 'catch (error) {}', new: 'catch (error) { console.error("Error:", error) }' },
+            { old: 'catch (e) {}', new: 'catch (e) { console.error("Error:", e) }' },
+            { old: 'catch (err) {}', new: 'catch (err) { console.error("Error:", err) }' },
+            { old: 'catch {}', new: 'catch (error) { console.error("Error:", error) }' },
+          ]
+          
+          for (const variant of variations) {
+            if (issue.preview.includes(variant.old)) {
+              changes.push({
+                line: issue.line,
+                oldText: variant.old,
+                newText: variant.new,
+              })
+              break
+            }
+          }
+        }
+        
+        // Convert TODOs to tracked issues (if enabled)
+        if (fixTodos && issue.description === 'TODO/FIXME comment') {
+          // Log TODO for tracking but don't modify the code
+          await auditLog({
+            action: 'todo_found',
+            file: filePath,
             line: issue.line,
-            oldText: 'catch (error) {}',
-            newText: 'catch (error) { console.error(error) }',
+            content: issue.preview,
+            tracked: true,
           })
         }
       }

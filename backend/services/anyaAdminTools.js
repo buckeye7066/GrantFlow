@@ -70,16 +70,19 @@ export async function adminCodeCrawl({ pattern, directory, includeTests = false 
                 })
               }
 
-              // Common anti-patterns
+              // Common anti-patterns and error detection
               lines.forEach((line, idx) => {
-                // // TODO: Remove debug log - console.log in production code
-                if (line.includes('// TODO: Remove debug log - console.log') && !relativePath.includes('test')) {
+                const trimmedLine = line.trim()
+                
+                // console.log in production code
+                if (line.includes('console.log') && !relativePath.includes('test')) {
                   findings.push({
                     file: relativePath,
                     line: idx + 1,
                     severity: 'warning',
-                    description: '// TODO: Remove debug log - console.log statement found',
-                    preview: line.trim().slice(0, 100),
+                    description: 'console.log statement found',
+                    preview: trimmedLine.slice(0, 100),
+                    fix: '// Remove or replace with proper logging',
                   })
                 }
 
@@ -90,18 +93,83 @@ export async function adminCodeCrawl({ pattern, directory, includeTests = false 
                     line: idx + 1,
                     severity: 'info',
                     description: 'TODO/FIXME comment',
-                    preview: line.trim().slice(0, 100),
+                    preview: trimmedLine.slice(0, 100),
                   })
                 }
 
                 // Empty catch blocks
-                if (line.trim() === 'catch (error) {}' || line.trim() === 'catch {}') {
+                if (trimmedLine === 'catch (error) {}' || trimmedLine === 'catch {}' || 
+                    trimmedLine === 'catch (e) {}' || trimmedLine === 'catch (err) {}') {
+                  findings.push({
+                    file: relativePath,
+                    line: idx + 1,
+                    severity: 'error',
+                    description: 'Empty catch block - errors are silently swallowed',
+                    preview: trimmedLine,
+                    fix: 'Add error logging or handling',
+                  })
+                }
+                
+                // Unhandled promise rejections
+                if (line.match(/\.then\([^)]*\)\s*(?!\.catch)/)) {
                   findings.push({
                     file: relativePath,
                     line: idx + 1,
                     severity: 'warning',
-                    description: 'Empty catch block',
-                    preview: line.trim(),
+                    description: 'Promise without .catch() handler',
+                    preview: trimmedLine.slice(0, 100),
+                    fix: 'Add .catch() to handle promise rejection',
+                  })
+                }
+                
+                // Potential null/undefined access
+                if (line.match(/(\w+)\.(\w+)\.(\w+)/) && !line.includes('?.')) {
+                  const match = line.match(/(\w+)\.(\w+)\.(\w+)/)
+                  if (match && !['console', 'process', 'window', 'document', 'Math', 'JSON', 'Date'].includes(match[1])) {
+                    findings.push({
+                      file: relativePath,
+                      line: idx + 1,
+                      severity: 'info',
+                      description: 'Deep property access without optional chaining',
+                      preview: trimmedLine.slice(0, 100),
+                      fix: 'Consider using optional chaining (?.) for safety',
+                    })
+                  }
+                }
+                
+                // Missing error handling in async functions
+                if (line.includes('await ') && !lines.slice(Math.max(0, idx - 5), idx + 5).some(l => l.includes('try'))) {
+                  findings.push({
+                    file: relativePath,
+                    line: idx + 1,
+                    severity: 'info',
+                    description: 'Await without try-catch block',
+                    preview: trimmedLine.slice(0, 100),
+                    fix: 'Consider wrapping in try-catch for error handling',
+                  })
+                }
+                
+                // Hardcoded API keys or secrets
+                if (line.match(/(api[_-]?key|secret|token|password)\s*=\s*["'][^"']+["']/i)) {
+                  findings.push({
+                    file: relativePath,
+                    line: idx + 1,
+                    severity: 'critical',
+                    description: 'Potential hardcoded secret or API key',
+                    preview: trimmedLine.slice(0, 50) + '...',
+                    fix: 'Move to environment variables',
+                  })
+                }
+                
+                // SQL injection risk
+                if (line.match(/db\.(prepare|run|get|all)\([`"'].*\$\{/)) {
+                  findings.push({
+                    file: relativePath,
+                    line: idx + 1,
+                    severity: 'critical',
+                    description: 'Potential SQL injection - using template literals in query',
+                    preview: trimmedLine.slice(0, 100),
+                    fix: 'Use parameterized queries instead',
                   })
                 }
               })

@@ -44,26 +44,43 @@ export async function sendVerificationEmail(email, code) {
   if (!resendClient) {
     console.warn('[email] Email service not configured. RESEND_API_KEY is missing from environment variables.')
     console.warn('[email] Code for', email, ':', code)
+    // Return false to indicate email wasn't sent, allowing fallback to preview code
     return false
   }
 
   try {
-    const result = await resendClient.emails.send({
-      from: FROM_EMAIL,
-      to: email,
-      subject: 'Your GrantFlow verification code',
-      html: `
-        <h2>GrantFlow Verification</h2>
-        <p>Your verification code is:</p>
-        <h1 style="font-size:32px;letter-spacing:5px;">${code}</h1>
-        <p>This code expires in 10 minutes.</p>
-      `,
+    // Add a timeout wrapper to prevent hanging
+    const sendWithTimeout = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Email send timeout after 5 seconds'))
+      }, 5000) // 5 second timeout
+      
+      resendClient.emails.send({
+        from: FROM_EMAIL,
+        to: email,
+        subject: 'Your GrantFlow verification code',
+        html: `
+          <h2>GrantFlow Verification</h2>
+          <p>Your verification code is:</p>
+          <h1 style="font-size:32px;letter-spacing:5px;">${code}</h1>
+          <p>This code expires in 10 minutes.</p>
+        `,
+      }).then(result => {
+        clearTimeout(timeout)
+        resolve(result)
+      }).catch(error => {
+        clearTimeout(timeout)
+        reject(error)
+      })
     })
+    
+    const result = await sendWithTimeout
     console.info('[email] Verification email sent successfully to', email, 'ID:', result?.id)
     return true
   } catch (error) {
     console.error('[email] Failed to send verification email:', error?.message || error)
     console.error('[email] Error details:', { email, hasCode: !!code, fromEmail: FROM_EMAIL })
+    // Return false instead of throwing, so the code can still be displayed
     return false
   }
 }

@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Loader2, MailCheck, RefreshCw } from 'lucide-react'
+import { Loader2, MailCheck, RefreshCw, Copy } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 
@@ -31,9 +31,10 @@ export default function EmailSignInForm({ onComplete }) {
 
   const [step, setStep] = useState('email')
   const [email, setEmail] = useState('')
-  const [status, setStatus] = useState({ type: 'idle', message: null })
+  const [status, setStatus] = useState({ type: 'idle', message: null, previewCode: null, notice: null })
   const [resendCountdown, setResendCountdown] = useState(0)
   const [isLoading, setIsLoading] = useState(false)
+  const [copyFeedback, setCopyFeedback] = useState(null)
   const authStore = useAuthStore()
 
   useEffect(() => {
@@ -54,17 +55,28 @@ export default function EmailSignInForm({ onComplete }) {
   const handleSendCode = emailForm.handleSubmit(async (values) => {
     try {
       setIsLoading(true)
-      setStatus({ type: 'idle', message: null })
+      setStatus({ type: 'idle', message: null, previewCode: null, notice: null })
       const response = await authStore.startEmailSignIn(values.email)
       setEmail(values.email)
       setStep('code')
       setResendCountdown(45)
-      if (response?.previewCode) {
-        console.info('[auth] preview email code:', response.previewCode)
+      setCopyFeedback(null)
+      const previewCode = response?.previewCode ?? null
+      const notice =
+        response?.notice ??
+        (previewCode
+          ? 'Email delivery is not configured for this environment. Use the generated code below to continue.'
+          : null)
+      if (previewCode) {
+        console.info('[auth] preview email code:', previewCode)
       }
       setStatus({
         type: 'success',
-        message: `We sent a 6-digit code to ${maskedEmail ?? values.email}. Enter it below to continue.`,
+        message: previewCode
+          ? 'A verification code has been generated for you.'
+          : `We sent a 6-digit code to ${maskedEmail ?? values.email}. Enter it below to continue.`,
+        previewCode,
+        notice,
       })
     } catch (error) {
       // Provide more specific error messages based on error type
@@ -82,7 +94,8 @@ export default function EmailSignInForm({ onComplete }) {
         message = error.message
       }
       
-      setStatus({ type: 'error', message })
+      setStatus({ type: 'error', message, previewCode: null, notice: null })
+      setCopyFeedback(null)
     } finally {
       setIsLoading(false)
     }
@@ -99,6 +112,8 @@ export default function EmailSignInForm({ onComplete }) {
       setStatus({
         type: 'success',
         message: 'Success! Redirecting you to the dashboard…',
+        previewCode: null,
+        notice: null,
       })
     } catch (error) {
       // Provide more specific error messages
@@ -116,7 +131,7 @@ export default function EmailSignInForm({ onComplete }) {
         message = error.message
       }
       
-      setStatus({ type: 'error', message })
+      setStatus({ type: 'error', message, previewCode: null, notice: null })
     } finally {
       setIsLoading(false)
     }
@@ -128,13 +143,56 @@ export default function EmailSignInForm({ onComplete }) {
     handleSendCode()
   }
 
+  const handleCopyPreviewCode = async () => {
+    if (!status.previewCode || typeof navigator === 'undefined' || !navigator.clipboard) return
+    try {
+      await navigator.clipboard.writeText(status.previewCode)
+      setCopyFeedback('Copied!')
+      setTimeout(() => setCopyFeedback(null), 1600)
+    } catch (error) {
+      console.error('Failed to copy verification code:', error)
+      setCopyFeedback('Copy failed')
+      setTimeout(() => setCopyFeedback(null), 1600)
+    }
+  }
+
   return (
     <div className="space-y-6">
       {status.type !== 'idle' ? (
         <Alert variant={status.type === 'error' ? 'destructive' : 'default'}>
           {status.type === 'success' ? <MailCheck className="h-4 w-4" /> : null}
           <AlertTitle>{status.type === 'error' ? 'Something went wrong' : 'Check your email'}</AlertTitle>
-          <AlertDescription>{status.message}</AlertDescription>
+          <AlertDescription>
+            {status.message}
+            {status.notice ? (
+              <p className="mt-2 text-xs text-slate-600">{status.notice}</p>
+            ) : null}
+            {status.previewCode ? (
+              <div className="mt-4 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3">
+                <p className="text-xs uppercase tracking-wide text-slate-500">Verification code</p>
+                <div className="mt-2 flex items-center gap-2">
+                  <span className="font-mono text-lg tracking-[0.5em] text-slate-900">{status.previewCode}</span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCopyPreviewCode}
+                    className="shrink-0"
+                  >
+                    <Copy className="mr-1 h-3.5 w-3.5" />
+                    Copy
+                  </Button>
+                </div>
+                {copyFeedback ? (
+                  <p className="mt-1 text-xs text-emerald-600">{copyFeedback}</p>
+                ) : (
+                  <p className="mt-1 text-xs text-slate-500">
+                    Enter this code on the next screen. It expires in 10 minutes.
+                  </p>
+                )}
+              </div>
+            ) : null}
+          </AlertDescription>
         </Alert>
       ) : null}
 

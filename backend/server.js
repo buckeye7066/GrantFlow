@@ -644,11 +644,26 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
   
   // Start Anya autonomous operations 5 seconds after server is ready
-  setTimeout(() => {
-    runStartupOperations(db).catch(err => {
-      console.error('[Anya Startup] Failed to complete autonomous operations:', err);
-    });
-  }, 5000);
+  if (process.env.ANYA_AUTONOMOUS_ENABLED === 'true') {
+    setTimeout(() => {
+      if (process.env.ANYA_RUN_ON_STARTUP === 'true') {
+        // Run full autonomous operations (code scan, tests, crawlers)
+        import('./services/anyaAutonomousScheduler.js').then(({ runOnStartup }) => {
+          console.log('[Anya] Starting autonomous operations on server startup...');
+          runOnStartup(db).catch(err => {
+            console.error('[Anya] Failed to complete autonomous operations:', err);
+          });
+        });
+      } else {
+        // Run original crawler operations only
+        runStartupOperations(db).catch(err => {
+          console.error('[Anya] Failed to complete crawler operations:', err);
+        });
+      }
+    }, 5000);
+  } else {
+    console.log('[Anya] Autonomous operations disabled (set ANYA_AUTONOMOUS_ENABLED=true to enable)');
+  }
 });
 
 export default app;
