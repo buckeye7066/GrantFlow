@@ -1,16 +1,26 @@
-import { Resend } from 'resend'
+// Try to import Resend, but handle if package is not installed
+let Resend = null
+try {
+  const resendModule = await import('resend')
+  Resend = resendModule.Resend
+} catch (error) {
+  console.error('[email] Resend package not installed. Run: npm install resend')
+  console.error('[email] Email service will be disabled until package is installed')
+}
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY || null
 const FROM_EMAIL = process.env.FROM_EMAIL || 'onboarding@resend.dev'
 
 let resendClient = null
-if (RESEND_API_KEY) {
+if (RESEND_API_KEY && Resend) {
   try {
     resendClient = new Resend(RESEND_API_KEY)
     console.info('[email] Email service initialized successfully with FROM_EMAIL:', FROM_EMAIL)
   } catch (error) {
     console.error('[email] Failed to initialize Resend client:', error.message)
   }
+} else if (!Resend) {
+  console.error('[email] Resend package not available - email service disabled')
 } else {
   console.warn('[email] Email service NOT configured - RESEND_API_KEY is missing')
   console.warn('[email] Email authentication will work but codes will only be available in response/logs')
