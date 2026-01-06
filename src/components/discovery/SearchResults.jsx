@@ -55,13 +55,18 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
 
   // Debug logging
   React.useEffect(() => {
+    console.log('[SearchResults] Component mounted/updated');
+    console.log('[SearchResults] Results count:', results.length);
     console.log('[SearchResults] Selected opportunities:', selectedOpportunities.size, Array.from(selectedOpportunities));
-  }, [selectedOpportunities]);
+    // Check if this component is actually being rendered
+    const bulkBar = document.querySelector('.bulk-action-bar-debug');
+    console.log('[SearchResults] Bulk action bar in DOM:', !!bulkBar);
+  }, [selectedOpportunities, results]);
 
   const handleToggleSelection = (opportunityId) => {
     console.log('[SearchResults] Toggling selection for:', opportunityId);
     setSelectedOpportunities(prev => {
-      const newSet = new Set(prev);
+      const newSet = new Set(Array.from(prev)); // Create proper new Set from array
       if (newSet.has(opportunityId)) {
         newSet.delete(opportunityId);
       } else {
@@ -156,7 +161,7 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
   const allSelected = selectedOpportunities.size === results.length && results.length > 0;
 
   return (
-    <>
+    <div data-component="SearchResults" data-results-count={results.length} data-selected-count={selectedOpportunities.size}>
       {/* Background Processing Indicator */}
       {isProcessing && (
         <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
@@ -178,7 +183,7 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
 
       {/* Bulk Action Bar */}
       {results.length > 0 && (
-        <div className="mb-6 p-4 bg-white rounded-lg border shadow-sm">
+        <div className="bulk-action-bar-debug mb-6 p-4 bg-white rounded-lg border shadow-sm">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <Checkbox
@@ -250,6 +255,6 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
           );
         })}
       </div>
-    </>
+    </div>
   );
 }

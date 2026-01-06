@@ -71,7 +71,7 @@ export async function runComprehensiveMatch(selectedOrg, searchFilters) {
   }
 
   // Convert comprehensive match format to standard format
-  const opportunities = (response.opportunities || []).map(opp => ({
+  const allOpportunities = (response.opportunities || []).map(opp => ({
     title: opp.program_name,
     sponsor: opp.sponsor,
     url: opp.url,
@@ -80,15 +80,24 @@ export async function runComprehensiveMatch(selectedOrg, searchFilters) {
     awardMax: opp.amount_max,
     descriptionMd: opp.description,
     eligibilityBullets: opp.eligibility_summary ? [opp.eligibility_summary] : [],
-    match: opp.fit_score,
+    match: opp.fit_score || 0,
     source: 'comprehensive_match',
     matched_fields: opp.matched_fields || []
   }));
 
+  // Filter to only show 80%+ matches as requested
+  const highMatchOpportunities = allOpportunities.filter(opp => {
+    const matchScore = typeof opp.match === 'number' ? opp.match : 0;
+    console.log(`[runComprehensiveMatch] ${opp.title}: ${matchScore}% match`);
+    return matchScore >= 80;
+  });
+
+  console.log(`[runComprehensiveMatch] Filtered ${allOpportunities.length} opportunities to ${highMatchOpportunities.length} with 80%+ match`);
+
   return {
-    opportunities,
-    count: opportunities.length,
-    message: `Found ${opportunities.length} highly relevant opportunities using comprehensive AI matching.`
+    opportunities: highMatchOpportunities,
+    count: highMatchOpportunities.length,
+    message: `Found ${highMatchOpportunities.length} highly relevant opportunities (80%+ match) from ${allOpportunities.length} total.`
   };
 }
 

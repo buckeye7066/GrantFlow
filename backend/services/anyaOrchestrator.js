@@ -9,7 +9,10 @@ let cachedClaudeClient = null
 
 function getClaudeClient() {
   if (cachedClaudeClient) return cachedClaudeClient
+  
   const apiKey = process.env.ANTHROPIC_API_KEY
+  console.log('[Anya] Checking Anthropic API key:', apiKey ? `Found (${apiKey.substring(0, 10)}...)` : 'Missing')
+  
   if (!apiKey) {
     const error = new Error(
       'Anthropic API key is not configured. Please set ANTHROPIC_API_KEY environment variable. ' +
@@ -18,12 +21,23 @@ function getClaudeClient() {
     error.code = 'MISSING_API_KEY'
     throw error
   }
-  cachedClaudeClient = new Anthropic({ apiKey })
-  return cachedClaudeClient
+  
+  if (!apiKey.startsWith('sk-ant-')) {
+    console.warn('[Anya] Warning: API key does not start with "sk-ant-". It may be invalid.')
+  }
+  
+  try {
+    cachedClaudeClient = new Anthropic({ apiKey })
+    console.log('[Anya] Anthropic client initialized successfully')
+    return cachedClaudeClient
+  } catch (error) {
+    console.error('[Anya] Failed to initialize Anthropic client:', error.message)
+    throw error
+  }
 }
 
 const DEFAULT_ASSISTANT_MODEL =
-  process.env.ANYA_CLAUDE_MODEL || process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514'
+  process.env.ANYA_CLAUDE_MODEL || process.env.CLAUDE_MODEL || 'claude-3-sonnet-20240229'
 
 function coerceProfileId(requestedProfileId) {
   if (!requestedProfileId) return null
@@ -627,6 +641,9 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
   ].join('\n')
 
   try {
+    console.log('[Anya] Calling Claude API with model:', DEFAULT_ASSISTANT_MODEL)
+    console.log('[Anya] Message count:', conversationMessages.length)
+    
     const response = await claude.messages.create({
       model: DEFAULT_ASSISTANT_MODEL,
       max_tokens: 1024,
@@ -637,15 +654,30 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
 
     const reply = response?.content?.[0]?.text?.trim()
     if (reply) {
+      console.log('[Anya] Claude API response received successfully')
       return reply
     }
+    console.warn('[Anya] Claude API returned empty response')
   } catch (error) {
-    console.error('[anya] Failed to generate assistant reply via Claude:', error)
+    console.error('[Anya] Claude API Error Details:')
+    console.error('  Error Type:', error.constructor.name)
+    console.error('  Error Message:', error.message)
+    console.error('  Error Status:', error.status)
+    console.error('  Model Used:', DEFAULT_ASSISTANT_MODEL)
+    
+    // Provide more specific error messages based on the error type
+    if (error.status === 401) {
+      return 'Authentication failed. The Anthropic API key may be invalid. Please check ANTHROPIC_API_KEY in Railway.'
+    } else if (error.status === 429) {
+      return 'Rate limit exceeded. Please wait a moment and try again.'
+    } else if (error.message?.includes('model')) {
+      return `Model error: The model "${DEFAULT_ASSISTANT_MODEL}" may not be available. Please check the model name.`
+    }
   }
 
   return [
     "I'm having trouble reaching the AI service right now.",
-    'We can still move forward manually—let me know the specific action you need help with (for example: find grants, track applications, organize documents), and I’ll walk through the recommended steps.',
+    'We can still move forward manually—let me know the specific action you need help with (for example: find grants, track applications, organize documents), and I'll walk through the recommended steps.',
   ].join(' ')
 }
 
