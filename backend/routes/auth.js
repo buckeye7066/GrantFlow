@@ -1527,34 +1527,54 @@ router.post('/phone/verify', (req, res) => {
 
 router.get('/:provider/start', (req, res) => {
   const provider = (req.params?.provider || '').toLowerCase()
+  
+  console.info(`[auth] OAuth start requested for provider: ${provider}`)
+  
   if (!OAUTH_PROVIDERS[provider]) {
+    console.warn(`[auth] Unsupported OAuth provider requested: ${provider}`)
     return res.status(404).json({ error: 'Unsupported provider' })
   }
 
-  const config = getProviderConfig(provider, req)
-  if (!isProviderConfigured(config)) {
-    return res.status(503).json({ error: 'Provider not configured. Contact your administrator.' })
+  try {
+    const config = getProviderConfig(provider, req)
+    if (!isProviderConfigured(config)) {
+      console.warn(`[auth] OAuth provider ${provider} not configured (missing client ID or secret)`)
+      return res.status(503).json({ 
+        error: 'Provider not configured. Contact your administrator.',
+        provider,
+        details: 'OAuth credentials are missing or incomplete'
+      })
+    }
+
+    const requestedRedirect = typeof req.query?.redirect_to === 'string' ? req.query.redirect_to : null
+    const sanitizedRedirect = sanitizeRedirectTarget(req, requestedRedirect)
+
+    const codeVerifier = config.supportsPKCE ? generateCodeVerifier() : null
+    const oauthState = createOAuthState(req.db, {
+      provider,
+      codeVerifier,
+      redirectTo: sanitizedRedirect,
+      metadata: {
+        redirect_to: sanitizedRedirect,
+        user_agent: req.headers['user-agent'] ?? null,
+      },
+    })
+
+    const authorizeUrl = buildAuthorizeUrl(provider, config, {
+      state: oauthState.state,
+      codeVerifier,
+    })
+    
+    console.info(`[auth] Redirecting to ${provider} OAuth authorization page`)
+    return res.redirect(authorizeUrl)
+  } catch (error) {
+    console.error(`[auth] Error starting OAuth flow for ${provider}:`, error)
+    return res.status(500).json({ 
+      error: 'Failed to initiate OAuth flow',
+      provider,
+      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
+    })
   }
-
-  const requestedRedirect = typeof req.query?.redirect_to === 'string' ? req.query.redirect_to : null
-  const sanitizedRedirect = sanitizeRedirectTarget(req, requestedRedirect)
-
-  const codeVerifier = config.supportsPKCE ? generateCodeVerifier() : null
-  const oauthState = createOAuthState(req.db, {
-    provider,
-    codeVerifier,
-    redirectTo: sanitizedRedirect,
-    metadata: {
-      redirect_to: sanitizedRedirect,
-      user_agent: req.headers['user-agent'] ?? null,
-    },
-  })
-
-  const authorizeUrl = buildAuthorizeUrl(provider, config, {
-    state: oauthState.state,
-    codeVerifier,
-  })
-  return res.redirect(authorizeUrl)
 })
 
 router.get('/:provider/callback', async (req, res) => {
