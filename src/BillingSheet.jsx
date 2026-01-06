@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
 import { Button } from '@/components/ui/button';
 import { FileDown, FileText } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 
 const SERVICES = {
@@ -124,8 +124,8 @@ const SERVICES = {
 };
 
 export default function BillingSheet() {
-  const urlParams = new URLSearchParams(window.location.search);
-  const organizationId = urlParams.get('organization_id');
+  const [searchParams] = useSearchParams();
+  const organizationId = searchParams.get('organization_id');
   const isMaster = !organizationId; // Master sheet if no org specified
   const navigate = useNavigate();
 

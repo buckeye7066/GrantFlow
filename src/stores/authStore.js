@@ -144,7 +144,9 @@ export const useAuthStore = create((set, get) => ({
       
       // Trigger crawler jobs asynchronously (fire-and-forget)
       // Run immediately in next tick to avoid blocking state update
-      triggerAdminCrawlers()
+      triggerAdminCrawlers().catch(err => {
+        console.warn('Failed to trigger admin crawlers:', err)
+      })
       
       return
     }

@@ -74,9 +74,7 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
 
   const saveTimeMutation = useMutation({
     mutationFn: async (timeData) => {
-      console.log('[AutoTimeTracker] Saving time entry:', timeData);
       const created = await base44.entities.TimeEntry.create(timeData);
-      console.log('[AutoTimeTracker] Time entry saved:', created);
       return created;
     },
     onSuccess: () => {
@@ -158,7 +156,6 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
       
       // Check for idle timeout
       if (timeSinceActivity >= IDLE_TIMEOUT) {
-        console.log('[AutoTimeTracker] Idle detected, pausing timer');
         setIsPaused(true);
         pauseTimeRef.current = now;
         toast({
@@ -171,7 +168,6 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
       if (lastSaveRef.current) {
         const timeSinceLastSave = now - lastSaveRef.current;
         if (timeSinceLastSave >= SAVE_INTERVAL && elapsedSeconds > 60) {
-          console.log('[AutoTimeTracker] Auto-saving time entry');
           handleAutoSave();
         }
       }
@@ -206,7 +202,6 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
   }, [isTracking, isPaused]);
 
   const handleStart = () => {
-    console.log('[AutoTimeTracker] Starting timer for', organizationName);
     setIsTracking(true);
     setIsPaused(false);
     startTimeRef.current = Date.now();
@@ -221,19 +216,16 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
   };
 
   const handlePause = () => {
-    console.log('[AutoTimeTracker] Pausing timer');
     setIsPaused(true);
     pauseTimeRef.current = Date.now();
   };
 
   const handleResume = () => {
-    console.log('[AutoTimeTracker] Resuming timer');
     setIsPaused(false);
     lastActivityRef.current = Date.now();
   };
 
   const handleStop = () => {
-    console.log('[AutoTimeTracker] Stopping timer, showing save dialog');
     setShowSaveDialog(true);
   };
 
@@ -260,7 +252,6 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
       invoiced: false,
     };
 
-    console.log('[AutoTimeTracker] Auto-saving time entry:', timeData);
     saveTimeMutation.mutate(timeData);
     lastSaveRef.current = now;
   };
@@ -279,7 +270,6 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
     const endTime = pauseTimeRef.current || now;
     const rawMinutes = elapsedSeconds / 60;
     const roundedMinutes = roundTime(rawMinutes);
-    const totalAmount = calculateAmount(roundedMinutes);
 
     const timeData = {
       organization_id: organizationId,
@@ -295,7 +285,6 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
       invoiced: false,
     };
 
-    console.log('[AutoTimeTracker] Saving time entry:', timeData);
     saveTimeMutation.mutate(timeData);
 
     // Reset
@@ -310,7 +299,6 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
   };
 
   const handleDiscard = () => {
-    console.log('[AutoTimeTracker] Discarding time entry');
     setIsTracking(false);
     setIsPaused(false);
     setElapsedSeconds(0);

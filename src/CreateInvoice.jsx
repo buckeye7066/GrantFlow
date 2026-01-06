@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { base44 } from "@/api/base44Client";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -57,8 +57,8 @@ export default function CreateInvoice() {
   const queryClient = useQueryClient();
 
   // Get organization_id from URL if provided
-  const urlParams = new URLSearchParams(window.location.search);
-  const preselectedOrgId = urlParams.get('organization_id');
+  const [searchParams] = useSearchParams();
+  const preselectedOrgId = searchParams.get('organization_id');
 
   const [formData, setFormData] = useState({
     organization_id: preselectedOrgId || "",

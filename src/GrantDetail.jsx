@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import { Button } from '@/components/ui/button';
 import { Loader2, ArrowLeft, Edit, Trash2, Star, CheckSquare, Sparkles, DollarSign, ArrowRightSquare, Shield, Brain, Clock } from 'lucide-react';
@@ -53,9 +53,9 @@ export default function GrantDetail() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const urlParams = new URLSearchParams(window.location.search);
-  const grantId = urlParams.get('id');
-  const initialTab = urlParams.get('tab') || 'coach';
+  const [searchParams] = useSearchParams();
+  const grantId = searchParams.get('id');
+  const initialTab = searchParams.get('tab') || 'coach';
 
   const [isDeleting, setIsDeleting] = useState(false);
   const [isEditing, setIsEditing] = useState(false);

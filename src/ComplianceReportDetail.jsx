@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -14,8 +14,8 @@ import { useToast } from "@/components/ui/use-toast";
 import ReactMarkdown from 'react-markdown';
 
 export default function ComplianceReportDetail() {
-  const urlParams = new URLSearchParams(window.location.search);
-  const reportId = urlParams.get('id');
+  const [searchParams] = useSearchParams();
+  const reportId = searchParams.get('id');
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -26,15 +26,19 @@ export default function ComplianceReportDetail() {
     queryKey: ['complianceReport', reportId],
     queryFn: () => base44.entities.ComplianceReport.get(reportId),
     enabled: !!reportId,
-    onSuccess: (data) => {
+  });
+
+  // Replace onSuccess with useEffect
+  useEffect(() => {
+    if (report) {
       setEditableData({
-        narrative: data.narrative || '',
-        activities_summary: data.activities_summary || '',
-        challenges_faced: data.challenges_faced || '',
-        next_steps: data.next_steps || '',
+        narrative: report.narrative || '',
+        activities_summary: report.activities_summary || '',
+        challenges_faced: report.challenges_faced || '',
+        next_steps: report.next_steps || '',
       });
     }
-  });
+  }, [report]);
 
   const { data: grant } = useQuery({
     queryKey: ['grant', report?.grant_id],

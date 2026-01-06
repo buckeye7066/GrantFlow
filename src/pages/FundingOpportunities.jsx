@@ -38,6 +38,8 @@ import { createGrant } from "@/api/grants"
 import { createDocument } from "@/api/documents"
 import { cn } from "@/lib/utils"
 
+const NOT_AVAILABLE = 'N/A'
+
 function formatDeadline(deadline, deadlineType) {
   if (!deadline) {
     return deadlineType === "rolling" ? "Rolling deadline" : "Deadline TBD"
@@ -981,7 +983,7 @@ export default function FundingOpportunities() {
                     <SelectItem value="all">All states</SelectItem>
                     {statesQuery.data?.map((state) => (
                       <SelectItem key={state.state || "unknown"} value={state.state || "unknown"}>
-                        {state.state || "N/A"} ({state.count})
+                        {state.state || NOT_AVAILABLE} ({state.count})
                       </SelectItem>
                     ))}
                   </SelectContent>
