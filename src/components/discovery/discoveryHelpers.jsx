@@ -72,15 +72,21 @@ export async function runComprehensiveMatch(selectedOrg, searchFilters) {
 
   // Convert comprehensive match format to standard format
   const allOpportunities = (response.opportunities || []).map(opp => ({
+    id: opp.id,
+    source_id: opp.source_id,
     title: opp.program_name,
     sponsor: opp.sponsor,
-    url: opp.url,
+    // Only use URL if it's valid (not a placeholder)
+    url: opp.url && !opp.url.includes('example.org') && !opp.url.includes('example.com') ? opp.url : null,
+    application_url: opp.url && !opp.url.includes('example.org') && !opp.url.includes('example.com') ? opp.url : null,
     deadlineAt: opp.deadline,
     awardMin: opp.amount_min,
     awardMax: opp.amount_max,
+    amount_description: opp.amount_description,
     descriptionMd: opp.description,
-    eligibilityBullets: opp.eligibility_summary ? [opp.eligibility_summary] : [],
+    eligibilityBullets: opp.eligibility_summary ? opp.eligibility_summary.split('; ').filter(Boolean) : [],
     match: opp.fit_score || 0,
+    match_score: opp.fit_score || 0,
     source: 'comprehensive_match',
     matched_fields: opp.matched_fields || []
   }));

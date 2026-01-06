@@ -67,6 +67,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
     // Calculate fit scores for each opportunity
     const scoredOpportunities = opportunities.map(opp => {
       let fit_score = 50; // Base score
+      const matched_fields = [];
       
       // Increase score based on profile matching
       if (profile.organization_type && opp.eligibility_bullets) {
@@ -74,6 +75,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
           const eligibility = JSON.parse(opp.eligibility_bullets || '[]');
           if (eligibility.some(e => e.toLowerCase().includes(profile.organization_type.toLowerCase()))) {
             fit_score += 20;
+            matched_fields.push('organization_type');
           }
         } catch (e) {
           // Ignore parse errors
@@ -83,6 +85,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
       // State match bonus
       if (profileStates.includes(opp.state)) {
         fit_score += 15;
+        matched_fields.push('location');
       }
       
       // Recent deadline bonus
@@ -90,24 +93,54 @@ router.post('/comprehensiveMatch', async (req, res) => {
         const daysUntilDeadline = Math.floor((new Date(opp.deadline) - new Date()) / (1000 * 60 * 60 * 24));
         if (daysUntilDeadline > 30 && daysUntilDeadline < 90) {
           fit_score += 10;
+          matched_fields.push('deadline_timing');
+        }
+      }
+      
+      // Category match bonus
+      if (profile.focus_area && opp.categories) {
+        try {
+          const categories = JSON.parse(opp.categories || '[]');
+          if (categories.some(c => c.toLowerCase().includes(profile.focus_area.toLowerCase()))) {
+            fit_score += 15;
+            matched_fields.push('focus_area');
+          }
+        } catch (e) {
+          // Ignore parse errors
         }
       }
       
       fit_score = Math.min(100, fit_score);
       
+      // Parse eligibility bullets for display
+      let eligibility_summary = '';
+      try {
+        const bullets = JSON.parse(opp.eligibility_bullets || '[]');
+        eligibility_summary = Array.isArray(bullets) ? bullets.join('; ') : opp.eligibility_bullets;
+      } catch (e) {
+        eligibility_summary = opp.eligibility_bullets || '';
+      }
+      
+      // Only return valid URLs (not placeholders)
+      let url = opp.url || opp.application_url;
+      if (url && (url.includes('example.org') || url.includes('example.com') || url.includes('placeholder'))) {
+        url = null;
+      }
+      
       return {
+        id: opp.id,
+        source_id: opp.source_id,
         program_name: opp.title || opp.program_name,
         sponsor: opp.sponsor || opp.funder,
-        url: opp.url || opp.application_url,
+        url: url,
         deadline: opp.deadline,
-        amount_min: opp.award_floor || opp.min_award,
-        amount_max: opp.award_ceiling || opp.max_award,
+        amount_min: opp.amount_min || opp.award_floor || opp.min_award,
+        amount_max: opp.amount_max || opp.award_ceiling || opp.max_award,
+        amount_description: opp.amount_description,
         description: opp.description || opp.summary,
-        eligibility_summary: Array.isArray(opp.eligibility_bullets) 
-          ? opp.eligibility_bullets.join('; ')
-          : (opp.eligibility_bullets || ''),
+        eligibility_summary,
         fit_score,
-        matched_fields: ['location', 'organization_type']
+        matched_fields
       };
     });
     

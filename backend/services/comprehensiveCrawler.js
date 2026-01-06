@@ -159,7 +159,7 @@ export function processComprehensiveCrawlerJob({ db, job, dataDir, profileContex
         amount_description: `Awards between $${formatter.format(template.amount_min)} and $${formatter.format(template.amount_max)}`,
         deadline,
         deadline_type: 'fixed',
-        application_url: `https://funding.example.org/${zip}/${template.id}`,
+        application_url: null, // No direct application URL - use grant search portals
         is_national: 0,
         state: coords.state,
         categories: Array.from(categories),

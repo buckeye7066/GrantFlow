@@ -70,7 +70,8 @@ const ALLOWED_EXTENSIONS = new Set([
 ])
 const MAX_FILE_BYTES = 350_000
 const DEFAULT_GRANT_LIMIT = 5
-const BASE_MATCH_SCORE = 40 // Base score for all grant matches before adjustments
+// Match scoring - no base score, must earn points through actual matches
+const BASE_MATCH_SCORE = 0
 
 function safeParseJSON(value, fallback) {
   if (!value) return fallback
@@ -178,29 +179,58 @@ function generateFitExplanation(opp, profile, matchReasons) {
 }
 
 function calculateMatchScore(opp, profile, matchReasons) {
-  let score = BASE_MATCH_SCORE
+  if (!profile) return 0
   
-  // Location match adds points
-  if (opp.state && profile?.state && opp.state.toLowerCase() === profile.state.toLowerCase()) {
-    score += 20
+  let score = 0
+  
+  // Location match (up to 25 points)
+  if (opp.state && profile.state) {
+    if (opp.state.toLowerCase() === profile.state.toLowerCase()) {
+      score += 25  // Exact state match
+    } else if (opp.is_national || opp.state === 'nationwide') {
+      score += 15  // National availability
+    }
   } else if (opp.is_national || opp.state === 'nationwide') {
-    score += 10
+    score += 15  // National availability when no profile state
   }
   
-  // Category matches
+  // Category matches (up to 40 points)
   const oppCategories = cleanList(safeParseJSON(opp.categories, []), 10)
-  const profileCategories = cleanList(safeParseJSON(profile?.categories, []), 10)
+  const profileCategories = cleanList(safeParseJSON(profile.categories, []), 10)
   const matchingCategories = findMatchingCategories(oppCategories, profileCategories)
-  score += Math.min(matchingCategories.length * 10, 30)
-  
-  // Deadline urgency
-  const daysRemaining = daysUntil(opp.deadline)
-  if (daysRemaining !== null && daysRemaining > 0 && daysRemaining < 60) {
-    score += 5
+  if (matchingCategories.length > 0) {
+    // Require at least 1 category match to get points
+    score += Math.min(matchingCategories.length * 15, 40)
   }
   
-  // Match reasons count
-  score += Math.min(matchReasons.length * 5, 15)
+  // Keywords/focus alignment (up to 20 points)
+  const oppKeywords = cleanList(safeParseJSON(opp.keywords, []), 10)
+  const profileFocus = (profile.primary_goal || '') + ' ' + (profile.mission || '')
+  if (oppKeywords.length > 0 && profileFocus.length > 10) {
+    const focusLower = profileFocus.toLowerCase()
+    const keywordMatches = oppKeywords.filter(k => focusLower.includes(k.toLowerCase())).length
+    score += Math.min(keywordMatches * 10, 20)
+  }
+  
+  // Organization type match (up to 10 points)
+  const oppEligibility = cleanList(safeParseJSON(opp.eligibility_bullets, []), 10)
+  const orgType = profile.organization_type || ''
+  if (oppEligibility.length > 0 && orgType) {
+    const eligibilityText = oppEligibility.join(' ').toLowerCase()
+    if (eligibilityText.includes('501(c)(3)') || eligibilityText.includes('nonprofit')) {
+      if (orgType.toLowerCase().includes('nonprofit') || orgType.toLowerCase().includes('501')) {
+        score += 10
+      }
+    }
+    if (eligibilityText.includes('faith') || eligibilityText.includes('church')) {
+      if (orgType.toLowerCase().includes('faith') || orgType.toLowerCase().includes('church')) {
+        score += 10
+      }
+    }
+  }
+  
+  // Match reasons bonus (up to 5 points)
+  score += Math.min(matchReasons.length * 2, 5)
   
   return Math.min(100, Math.max(0, score))
 }

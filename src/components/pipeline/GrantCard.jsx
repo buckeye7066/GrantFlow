@@ -13,6 +13,43 @@ import { format, isPast } from 'date-fns';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 
+// Helper to get a valid grant detail URL
+function getGrantDetailUrl(grant, isDiscoveryResult = false) {
+  // If grant has an ID, always go to internal detail page
+  if (grant.id) {
+    return createPageUrl("GrantDetail", { id: grant.id });
+  }
+  
+  // For discovery results without ID, go to opportunities page
+  if (isDiscoveryResult) {
+    if (grant.title) {
+      return createPageUrl("FundingOpportunities") + `?search=${encodeURIComponent(grant.title)}`;
+    }
+    return createPageUrl("FundingOpportunities");
+  }
+  
+  // Check if URL is valid and not a placeholder
+  const url = grant.url || grant.application_url || grant.source_url;
+  if (url && !url.includes('example.org') && !url.includes('placeholder') && !url.includes('example.com')) {
+    // External URL - will be handled by the Link component
+    return url;
+  }
+  
+  // No valid URL - go to opportunities page with search
+  if (grant.title) {
+    return createPageUrl("FundingOpportunities") + `?search=${encodeURIComponent(grant.title)}`;
+  }
+  
+  return createPageUrl("FundingOpportunities");
+}
+
+// Check if a URL is a valid external link (not a placeholder)
+function isValidExternalUrl(url) {
+  if (!url) return false;
+  if (url.includes('example.org') || url.includes('example.com') || url.includes('placeholder')) return false;
+  return url.startsWith('http://') || url.startsWith('https://');
+}
+
 export default function GrantCard({ grant, organization, organizationName, onStatusChange, onStarToggle, onDelete, isDragging, checklistProgress, showSummary = false }) {
   const [showMenu, setShowMenu] = useState(false);
   const cardRef = useRef(null);
@@ -106,7 +143,7 @@ export default function GrantCard({ grant, organization, organizationName, onSta
         )}
       </div>
       
-      <Link to={grant.id ? createPageUrl("GrantDetail", { id: grant.id }) : grant.url || '#'}>
+      <Link to={getGrantDetailUrl(grant, showSummary)}>
         <div className="p-3 space-y-2 cursor-pointer">
           <h4 className="font-semibold text-slate-900 text-sm line-clamp-2 leading-tight">
             {grant.title}
@@ -233,12 +270,18 @@ export default function GrantCard({ grant, organization, organizationName, onSta
             </div>
           )}
 
-          {/* External Link for discovery results */}
-          {showSummary && grant.url && (
-            <div className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700">
+          {/* External Link for discovery results - only show if valid URL */}
+          {showSummary && isValidExternalUrl(grant.url || grant.application_url || grant.source_url) && (
+            <a 
+              href={grant.url || grant.application_url || grant.source_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700"
+            >
               <ExternalLink className="w-3 h-3" />
               <span>View full details</span>
-            </div>
+            </a>
           )}
         </div>
       </Link>
