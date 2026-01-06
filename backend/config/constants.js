@@ -28,7 +28,7 @@ export const DEFAULT_OFFSET = 0;
 // Rate limiting
 export const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 export const RATE_LIMIT_MAX_REQUESTS = 100;
-export const MUTATION_RATE_LIMIT_MAX = 50; // Stricter for mutations
+export const MUTATION_RATE_LIMIT_MAX = 500; // Temporarily increased for batch operations
 
 // OpenAI configuration
 export const DEFAULT_OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';

@@ -74,8 +74,6 @@ function createCrawlerJob(db, profileId, crawlerType, parameters = {}) {
     JSON.stringify(parameters)
   )
   
-  // TODO: Remove debug log - console.log(`[anyaLoginTrigger] Created ${crawlerType} crawler job:`, jobId)
-  
   return jobId
 }
 
@@ -112,11 +110,8 @@ function addAnyaMessage(db, sessionId, role, content) {
 export function initializeAnyaForAdmin(db, user, profileId = null, { uploadDir, getOpenAI } = {}) {
   // Only initialize for admin users
   if (!isAdmin(user)) {
-    // TODO: Remove debug log - console.log('[anyaLoginTrigger] User is not admin, skipping Anya initialization')
     return null
   }
-  
-  // TODO: Remove debug log - console.log('[anyaLoginTrigger] Initializing Anya for admin login:', user.email || user.id)
   
   try {
     // Get the admin's profile if not provided
@@ -138,7 +133,6 @@ export function initializeAnyaForAdmin(db, user, profileId = null, { uploadDir, 
     }
     
     if (!profileId) {
-      // TODO: Remove debug log - console.log('[anyaLoginTrigger] No profile found, cannot create crawler jobs')
       return null
     }
     
@@ -160,15 +154,21 @@ export function initializeAnyaForAdmin(db, user, profileId = null, { uploadDir, 
       profile_enrichment: createCrawlerJob(db, profileId, 'profile_enrichment', {}),
     }
     
-    // Dispatch each crawler job
+    // Dispatch each crawler job to actually start them (fire and forget)
     Object.entries(jobIds).forEach(([type, jobId]) => {
       try {
-        dispatchCrawlerJob({
+        const promise = dispatchCrawlerJob({
           db,
           jobId,
           uploadDir,
           getOpenAI
         })
+        // If it returns a Promise, handle errors
+        if (promise && typeof promise.catch === 'function') {
+          promise.catch(err => {
+            console.error(`[anyaLoginTrigger] Job ${jobId} (${type}) dispatch failed:`, err)
+          })
+        }
         console.log(`[anyaLoginTrigger] Dispatched ${type} crawler job: ${jobId}`)
       } catch (err) {
         console.error(`[anyaLoginTrigger] Job ${jobId} (${type}) dispatch failed:`, err)
@@ -188,10 +188,6 @@ I'll notify you when these crawlers complete. You can check their progress anyti
 How can I help you today?`
     
     addAnyaMessage(db, sessionId, 'assistant', welcomeMessage)
-    
-    // TODO: Remove debug log - console.log('[anyaLoginTrigger] Anya initialized successfully')
-    // TODO: Remove debug log - console.log('[anyaLoginTrigger] Session ID:', sessionId)
-    // TODO: Remove debug log - console.log('[anyaLoginTrigger] Job IDs:', jobIds)
     
     return {
       sessionId,

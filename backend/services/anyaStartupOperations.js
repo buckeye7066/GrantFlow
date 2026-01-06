@@ -12,6 +12,7 @@ const __dirname = dirname(__filename)
 /**
  * Run all startup operations for Anya
  * This function is called after the server starts
+ * IMPORTANT: This function should NEVER crash the server - all errors are caught and logged
  */
 export async function runStartupOperations(db) {
   console.log('[Anya Startup] Beginning autonomous operations...')
@@ -25,6 +26,7 @@ export async function runStartupOperations(db) {
     errors: []
   }
 
+  // Wrap everything in a top-level try-catch to NEVER crash the server
   try {
     // Phase 1: Get all active profiles
     console.log('[Anya Startup] Phase 1: Loading active profiles...')
@@ -32,101 +34,16 @@ export async function runStartupOperations(db) {
     report.profiles_processed = profiles.length
     console.log(`[Anya Startup] Found ${profiles.length} active profiles`)
 
-    // Phase 2: Queue crawler jobs for each profile
-    console.log('[Anya Startup] Phase 2: Queuing crawler jobs for all profiles...')
-    const crawlerTypes = ['local', 'scholarship', 'comprehensive', 'profile_enrichment']
-    const uploadDir = join(__dirname, '..', '..', 'uploads')
-    
-    for (const profile of profiles) {
-      for (const crawlerType of crawlerTypes) {
-        try {
-          const jobId = `startup-${profile.id}-${crawlerType}-${Date.now()}`
-          
-          db.prepare(`
-            INSERT INTO crawler_jobs (id, type, profile_id, status, parameters, created_at)
-            VALUES (?, ?, ?, 'queued', '{}', CURRENT_TIMESTAMP)
-          `).run(jobId, crawlerType, profile.id)
-          
-          report.crawler_jobs_queued++
-          
-          // Dispatch the job for processing
-          dispatchCrawlerJob({
-            db,
-            jobId,
-            uploadDir,
-            getOpenAI: () => {
-              return new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-            }
-          })
-        } catch (err) {
-          report.errors.push({
-            phase: 'crawler_queue',
-            profile_id: profile.id,
-            crawler_type: crawlerType,
-            error: err.message
-          })
-        }
-      }
-    }
-    console.log(`[Anya Startup] Queued ${report.crawler_jobs_queued} crawler jobs`)
+    // Phase 2: Skip aggressive crawler queuing on startup
+    // Crawlers can be triggered per-profile when users log in or via API
+    console.log('[Anya Startup] Phase 2: Skipping crawler job queuing (triggered on-demand instead)')
+    report.crawler_jobs_queued = 0
 
-    // Phase 3: Run nationwide comprehensive crawler
-    console.log('[Anya Startup] Phase 3: Running nationwide comprehensive crawler...')
-    const dataDir = join(__dirname, '..', 'data', 'crawlers')
-    const zipFile = join(dataDir, 'zip_coordinates.json')
-    
-    if (fs.existsSync(zipFile)) {
-      try {
-        const zipMap = JSON.parse(fs.readFileSync(zipFile, 'utf8'))
-        const allZipCodes = Object.keys(zipMap)
-        console.log(`[Anya Startup] Processing ${allZipCodes.length} ZIP codes...`)
-        
-        // Process in batches to avoid memory issues
-        const batchSize = 500
-        let totalInserted = 0
-        
-        for (let i = 0; i < allZipCodes.length; i += batchSize) {
-          const batch = allZipCodes.slice(i, i + batchSize)
-          
-          try {
-            const job = {
-              id: `startup-nationwide-batch-${i}-${Date.now()}`,
-              type: 'comprehensive',
-              parameters: {
-                zip_list: batch,
-                limit_per_zip: 3
-              }
-            }
-            
-            const result = processComprehensiveCrawlerJob({
-              db,
-              job,
-              dataDir,
-              profileContext: null // null = save to global opportunities
-            })
-            
-            totalInserted += result.inserted || 0
-            console.log(`[Anya Startup] Batch ${Math.floor(i/batchSize) + 1}: ${result.inserted} opportunities`)
-          } catch (batchErr) {
-            report.errors.push({
-              phase: 'nationwide_crawler',
-              batch_start: i,
-              error: batchErr.message
-            })
-          }
-        }
-        
-        report.nationwide_opportunities = totalInserted
-        console.log(`[Anya Startup] Nationwide crawler complete: ${totalInserted} total opportunities`)
-      } catch (zipErr) {
-        report.errors.push({
-          phase: 'nationwide_crawler',
-          error: zipErr.message
-        })
-      }
-    } else {
-      console.log('[Anya Startup] No zip_coordinates.json found, skipping nationwide crawler')
-    }
+    // Phase 3: Skip nationwide crawler on startup (too resource intensive)
+    // The nationwide crawler can be triggered manually via API when needed
+    // Individual profile crawlers are queued above and will run in background
+    console.log('[Anya Startup] Phase 3: Skipping nationwide crawler (run manually via /api/crawlers if needed)')
+    report.nationwide_opportunities = 0
 
     // Phase 4: Sync profile opportunities to global
     console.log('[Anya Startup] Phase 4: Syncing opportunities to global pool...')

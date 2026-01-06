@@ -1,87 +1,211 @@
 /**
  * Opportunity Matcher and Pipeline Manager
  * Evaluates opportunity matches and saves to appropriate pipelines
+ * ENHANCED: Uses ALL profile data points for comprehensive matching
  */
+
+import { buildProfileSignals } from './profileHelpers.js'
 
 /**
  * Calculate match percentage between opportunity and profile
+ * Uses comprehensive profile signals including:
+ * - Demographics (age, gender, ethnicity, etc.)
+ * - Military/veteran status
+ * - Health/disability status
+ * - Financial need indicators
+ * - Government assistance programs
+ * - Family situation
+ * - Education level
+ * - Geographic location
+ * - Interests and focus areas
  */
 function calculateMatchPercentage(opportunity, profileContext) {
   if (!profileContext) return 0
   
-  const { profile, sections } = profileContext
-  if (!profile || !sections) return 0
+  const { profile, sections, signals: prebuiltSignals } = profileContext
+  if (!profile) return 0
   
-  // Build matching criteria
-  let matchPoints = 0
-  let totalPoints = 0
+  // Use prebuilt signals if available, otherwise build from context
+  const signals = prebuiltSignals || buildProfileSignals({ profile, sections: sections || {} })
   
-  // Location matching (20 points)
-  totalPoints += 20
-  if (opportunity.state && profile.state) {
-    if (opportunity.state === profile.state) {
-      matchPoints += 20
-    } else if (opportunity.is_national) {
-      matchPoints += 15
-    }
-  } else if (opportunity.is_national) {
-    matchPoints += 20
+  let score = 40 // Base score - must earn the rest
+  let matchStrength = 0 // Track category matches
+  const matchedFields = []
+  
+  // Parse opportunity data
+  let oppKeywords = []
+  let oppCategories = []
+  let eligibility = []
+  
+  try { 
+    oppKeywords = Array.isArray(opportunity.keywords) 
+      ? opportunity.keywords 
+      : JSON.parse(opportunity.keywords || '[]')
+  } catch (e) { /* ignore */ }
+  
+  try { 
+    oppCategories = Array.isArray(opportunity.categories) 
+      ? opportunity.categories 
+      : JSON.parse(opportunity.categories || '[]')
+  } catch (e) { /* ignore */ }
+  
+  try { 
+    eligibility = Array.isArray(opportunity.eligibility_bullets) 
+      ? opportunity.eligibility_bullets 
+      : JSON.parse(opportunity.eligibility_bullets || '[]')
+  } catch (e) { /* ignore */ }
+  
+  const oppTerms = new Set([
+    ...oppKeywords.map(k => String(k).toLowerCase()),
+    ...oppCategories.map(c => String(c).toLowerCase()),
+    ...eligibility.map(e => String(e).toLowerCase())
+  ])
+  
+  const oppText = `${opportunity.title || ''} ${opportunity.description || ''} ${opportunity.summary || ''}`.toLowerCase()
+  
+  // KEYWORD MATCHING (up to 20 points)
+  let keywordMatches = 0
+  if (signals.keywordSet && signals.keywordSet.size > 0) {
+    signals.keywordSet.forEach(keyword => {
+      for (const term of oppTerms) {
+        if (term.includes(keyword) || keyword.includes(term)) {
+          keywordMatches++
+          break
+        }
+      }
+      if (oppText.includes(keyword)) keywordMatches += 0.5
+    })
+  }
+  if (keywordMatches > 0) {
+    score += Math.min(20, Math.floor(keywordMatches * 3))
+    matchStrength++
+    matchedFields.push(`${Math.floor(keywordMatches)} keyword matches`)
   }
   
-  // Category/Interest matching (30 points)
-  totalPoints += 30
-  const profileInterests = new Set()
-  sections.forEach(section => {
-    if (section.tags) {
-      section.tags.split(',').forEach(tag => profileInterests.add(tag.trim().toLowerCase()))
-    }
-  })
-  
-  if (opportunity.categories && opportunity.categories.length > 0) {
-    const oppCategories = new Set(opportunity.categories.map(c => c.toLowerCase()))
-    const categoryMatches = [...profileInterests].filter(i => oppCategories.has(i))
-    if (categoryMatches.length > 0) {
-      matchPoints += Math.min(30, categoryMatches.length * 10)
-    }
-  }
-  
-  // Profile type matching (20 points)
-  totalPoints += 20
-  if (profile.profile_type && opportunity.eligibility_bullets) {
-    const profileType = profile.profile_type.toLowerCase()
-    const eligibilityText = opportunity.eligibility_bullets.join(' ').toLowerCase()
-    
-    if (eligibilityText.includes(profileType) || 
-        (profileType === 'nonprofit' && eligibilityText.includes('501c3')) ||
-        (profileType === 'individual' && eligibilityText.includes('individual'))) {
-      matchPoints += 20
-    }
-  }
-  
-  // Keyword matching (30 points)
-  totalPoints += 30
-  if (opportunity.keywords && opportunity.keywords.length > 0) {
-    const oppKeywords = new Set(opportunity.keywords.map(k => k.toLowerCase()))
-    const profileKeywords = new Set()
-    
-    // Extract keywords from profile sections
-    sections.forEach(section => {
-      if (section.content) {
-        // Simple keyword extraction from content
-        const words = section.content.toLowerCase().split(/\s+/)
-        words.forEach(word => {
-          if (word.length > 4) profileKeywords.add(word)
-        })
+  // DEMOGRAPHIC MATCHING (up to 15 points)
+  let demoMatches = 0
+  if (signals.demographics && signals.demographics.size > 0) {
+    signals.demographics.forEach(demo => {
+      for (const term of oppTerms) {
+        if (term.includes(demo) || demo.includes(term) || oppText.includes(demo)) {
+          demoMatches++
+          break
+        }
       }
     })
-    
-    const keywordMatches = [...profileKeywords].filter(k => oppKeywords.has(k))
-    if (keywordMatches.length > 0) {
-      matchPoints += Math.min(30, keywordMatches.length * 5)
+  }
+  if (demoMatches > 0) {
+    score += Math.min(15, demoMatches * 5)
+    matchStrength++
+    matchedFields.push('demographic match')
+  }
+  
+  // MILITARY/VETERAN MATCHING (up to 15 points)
+  let militaryMatches = 0
+  if (signals.military && signals.military.size > 0) {
+    signals.military.forEach(mil => {
+      for (const term of oppTerms) {
+        if (term.includes(mil) || mil.includes(term) || oppText.includes(mil)) {
+          militaryMatches++
+          break
+        }
+      }
+    })
+  }
+  if (militaryMatches > 0) {
+    score += Math.min(15, militaryMatches * 5)
+    matchStrength++
+    matchedFields.push('military/veteran match')
+  }
+  
+  // ASSISTANCE PROGRAM MATCHING (up to 10 points)
+  let assistMatches = 0
+  if (signals.assistance && signals.assistance.size > 0) {
+    signals.assistance.forEach(assist => {
+      const assistNorm = assist.replace(/_/g, ' ')
+      for (const term of oppTerms) {
+        if (term.includes(assistNorm) || assistNorm.includes(term) || oppText.includes(assistNorm)) {
+          assistMatches++
+          break
+        }
+      }
+    })
+  }
+  if (assistMatches > 0) {
+    score += Math.min(10, assistMatches * 5)
+    matchStrength++
+    matchedFields.push('assistance program match')
+  }
+  
+  // INTERESTS/FOCUS AREAS (up to 15 points)
+  let interestMatches = 0
+  if (signals.interests && signals.interests.size > 0) {
+    signals.interests.forEach(interest => {
+      for (const term of oppTerms) {
+        if (term.includes(interest) || interest.includes(term) || oppText.includes(interest)) {
+          interestMatches++
+          break
+        }
+      }
+    })
+  }
+  if (signals.phrases && signals.phrases.size > 0) {
+    signals.phrases.forEach(phrase => {
+      if (oppText.includes(phrase)) interestMatches += 0.5
+    })
+  }
+  if (interestMatches > 0) {
+    score += Math.min(15, Math.floor(interestMatches * 4))
+    matchStrength++
+    matchedFields.push('interest/focus match')
+  }
+  
+  // LOCATION MATCHING (up to 10 points)
+  if (signals.location) {
+    const { state, zip, city } = signals.location
+    if (state && opportunity.state) {
+      if (opportunity.state.toLowerCase() === state.toLowerCase() || 
+          opportunity.state.toLowerCase() === 'nationwide' ||
+          oppText.includes(state.toLowerCase())) {
+        score += 10
+        matchStrength++
+        matchedFields.push('location match')
+      }
+    } else if (opportunity.is_national || opportunity.state === 'nationwide') {
+      score += 8
+      matchStrength++
     }
   }
   
-  return Math.round((matchPoints / totalPoints) * 100)
+  // APPLICANT TYPE MATCHING (up to 10 points)
+  if (signals.applicantTypes && signals.applicantTypes.size > 0) {
+    let typeMatch = false
+    signals.applicantTypes.forEach(type => {
+      for (const term of oppTerms) {
+        if (term.includes(type) || type.includes(term)) {
+          typeMatch = true
+          break
+        }
+      }
+    })
+    if (typeMatch) {
+      score += 10
+      matchStrength++
+      matchedFields.push('applicant type match')
+    }
+  }
+  
+  // MULTI-CATEGORY BONUS (up to 10 points)
+  if (matchStrength >= 5) {
+    score += 10
+    matchedFields.push('excellent multi-category fit')
+  } else if (matchStrength >= 3) {
+    score += 5
+    matchedFields.push('good multi-category fit')
+  }
+  
+  const finalScore = Math.min(100, Math.round(score))
+  return finalScore
 }
 
 /**

@@ -1,29 +1,43 @@
-// Try to import Resend, but handle if package is not installed
-let Resend = null
-try {
-  const resendModule = await import('resend')
-  Resend = resendModule.Resend
-} catch (error) {
-  console.error('[email] Resend package not installed. Run: npm install resend')
-  console.error('[email] Email service will be disabled until package is installed')
-}
+/**
+ * Email service using Resend
+ * Falls back gracefully when Resend is not available or configured
+ */
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY || null
 const FROM_EMAIL = process.env.FROM_EMAIL || 'onboarding@resend.dev'
 
 let resendClient = null
-if (RESEND_API_KEY && Resend) {
-  try {
-    resendClient = new Resend(RESEND_API_KEY)
-    console.info('[email] Email service initialized successfully with FROM_EMAIL:', FROM_EMAIL)
-  } catch (error) {
-    console.error('[email] Failed to initialize Resend client:', error.message)
+let initPromise = null
+
+// Initialize Resend client lazily
+async function getResendClient() {
+  if (resendClient) return resendClient
+  
+  if (!RESEND_API_KEY) {
+    console.warn('[email] Email service NOT configured - RESEND_API_KEY is missing')
+    console.warn('[email] Email authentication will work but codes will only be available in response/logs')
+    return null
   }
-} else if (!Resend) {
-  console.error('[email] Resend package not available - email service disabled')
-} else {
-  console.warn('[email] Email service NOT configured - RESEND_API_KEY is missing')
-  console.warn('[email] Email authentication will work but codes will only be available in response/logs')
+  
+  // If already initializing, wait for it
+  if (initPromise) {
+    return initPromise
+  }
+  
+  initPromise = (async () => {
+    try {
+      const { Resend } = await import('resend')
+      resendClient = new Resend(RESEND_API_KEY)
+      console.info('[email] Email service initialized successfully with FROM_EMAIL:', FROM_EMAIL)
+      return resendClient
+    } catch (error) {
+      console.error('[email] Failed to load Resend package:', error.message)
+      console.error('[email] Run: npm install resend')
+      return null
+    }
+  })()
+  
+  return initPromise
 }
 
 /**
@@ -31,7 +45,7 @@ if (RESEND_API_KEY && Resend) {
  * @returns {boolean} True if email service is available
  */
 export function isEmailServiceConfigured() {
-  return resendClient !== null
+  return !!RESEND_API_KEY
 }
 
 /**
@@ -51,7 +65,9 @@ export async function sendVerificationEmail(email, code) {
     return false
   }
   
-  if (!resendClient) {
+  const client = await getResendClient()
+  
+  if (!client) {
     console.warn('[email] Email service not configured. RESEND_API_KEY is missing from environment variables.')
     console.warn('[email] Code for', email, ':', code)
     // Return false to indicate email wasn't sent, allowing fallback to preview code
@@ -65,7 +81,7 @@ export async function sendVerificationEmail(email, code) {
         reject(new Error('Email send timeout after 5 seconds'))
       }, 5000) // 5 second timeout
       
-      resendClient.emails.send({
+      client.emails.send({
         from: FROM_EMAIL,
         to: email,
         subject: 'Your GrantFlow verification code',
@@ -111,7 +127,9 @@ export async function sendApplicationEmail(toEmail, applicationData) {
     throw new Error('Invalid application data')
   }
   
-  if (!resendClient) {
+  const client = await getResendClient()
+  
+  if (!client) {
     const errorMsg = 'Email service not configured. RESEND_API_KEY is missing from environment variables.'
     console.error('[email]', errorMsg, 'Would send application to:', toEmail)
     throw new Error(errorMsg)
@@ -121,7 +139,7 @@ export async function sendApplicationEmail(toEmail, applicationData) {
     // Format application data as HTML
     const htmlContent = formatApplicationAsHTML(applicationData)
     
-    await resendClient.emails.send({
+    await client.emails.send({
       from: FROM_EMAIL,
       to: toEmail,
       subject: `New Application Submitted - ${applicationData.name || 'Applicant'}`,

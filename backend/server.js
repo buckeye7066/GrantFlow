@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import Database from 'better-sqlite3';
@@ -638,10 +639,9 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 const server = app.listen(PORT, '0.0.0.0', () => {
-  // TODO: Remove debug log - console.log(`GrantFlow API server running on port ${PORT}`);
-  // TODO: Remove debug log - console.log(`Database: ${dbPath}`);
   const loggedCorsOrigins = Array.isArray(corsOptions.origin) ? corsOptions.origin : [corsOptions.origin];
   console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
+  console.log('[Server] Ready on port', PORT);
   
   // Start Anya autonomous operations 5 seconds after server is ready
   if (process.env.ANYA_AUTONOMOUS_ENABLED === 'true') {

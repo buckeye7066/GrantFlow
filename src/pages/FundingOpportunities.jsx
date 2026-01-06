@@ -215,7 +215,7 @@ function scoreOpportunity(opportunity, profileDetail) {
   }
 }
 
-function OpportunityCard({ opportunity, onSelect, match }) {
+function OpportunityCard({ opportunity, onSelect, match, onAddToPipeline, isAddingToPipeline, canAddToPipeline }) {
   const matchScore = match?.score ?? 0
   const complianceStatus = opportunity.compliance_status ?? "unknown"
   const complianceReasons = Array.isArray(opportunity.compliance_reasons)
@@ -238,9 +238,24 @@ function OpportunityCard({ opportunity, onSelect, match }) {
     : "Funding review"
   const opportunityTypeLabel = opportunity.opportunity_type || "Funding Opportunity"
 
+  // Get match color based on score
+  const getMatchColor = (score) => {
+    if (score >= 80) return "text-emerald-600 bg-emerald-50 border-emerald-200"
+    if (score >= 60) return "text-blue-600 bg-blue-50 border-blue-200"
+    if (score >= 40) return "text-amber-600 bg-amber-50 border-amber-200"
+    return "text-slate-600 bg-slate-50 border-slate-200"
+  }
+
+  const handleQuickAdd = async (event) => {
+    event.stopPropagation()
+    if (onAddToPipeline) {
+      await onAddToPipeline(opportunity)
+    }
+  }
+
   return (
     <Card
-      className="transition hover:shadow-lg border border-slate-200 bg-white/80 backdrop-blur cursor-pointer flex flex-col"
+      className="transition hover:shadow-lg border border-slate-200 bg-white/80 backdrop-blur cursor-pointer flex flex-col group"
       onClick={() => onSelect(opportunity)}
     >
       <CardHeader className="pb-3 space-y-2">
@@ -257,57 +272,104 @@ function OpportunityCard({ opportunity, onSelect, match }) {
             <Badge className={cn("text-xs border", complianceBadgeClass)}>{complianceBadgeText}</Badge>
           </div>
         </div>
-        <h3 className="text-lg font-semibold text-slate-900 line-clamp-2">{opportunity.title}</h3>
-        <p className="text-sm text-slate-600 flex items-center gap-2">
-          <Building className="w-4 h-4 text-slate-400" />
+        <h3 className="text-lg font-semibold text-slate-900 line-clamp-2 group-hover:text-blue-700 transition-colors">
+          {opportunity.title}
+        </h3>
+        {/* Funding Source / Sponsor */}
+        <div className="flex items-center gap-2 text-sm text-slate-700 font-medium">
+          <Building className="w-4 h-4 text-blue-500" />
           {opportunity.sponsor || "Sponsor pending"}
-        </p>
+        </div>
       </CardHeader>
       <CardContent className="space-y-3 flex-1">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm text-slate-600">
+        {/* Key Details Grid */}
+        <div className="grid grid-cols-2 gap-2 text-sm text-slate-600">
           <div className="flex items-center gap-2">
             <MapPin className="w-4 h-4 text-slate-400" />
-            <span>{opportunity.is_national ? "National" : opportunity.state || "Location varies"}</span>
+            <span className="truncate">{opportunity.is_national ? "National" : opportunity.state || "Location varies"}</span>
           </div>
           <div className="flex items-center gap-2">
-            <DollarSign className="w-4 h-4 text-slate-400" />
-            <span>{formatAmount(opportunity.amount_min, opportunity.amount_max)}</span>
+            <DollarSign className="w-4 h-4 text-emerald-500" />
+            <span className="font-medium text-emerald-700">{formatAmount(opportunity.amount_min, opportunity.amount_max)}</span>
           </div>
-          <div className="flex items-center gap-2">
-            <CalendarDays className="w-4 h-4 text-slate-400" />
+          <div className="flex items-center gap-2 col-span-2">
+            <CalendarDays className="w-4 h-4 text-amber-500" />
             <span>{formatDeadline(opportunity.deadline, opportunity.deadline_type)}</span>
           </div>
         </div>
-        <p className="text-sm text-slate-600 line-clamp-3">{opportunity.description || "Summary coming soon."}</p>
-        {match ? (
-          <div className="space-y-1">
-            <div className="flex items-center justify-between text-xs text-slate-500">
-              <span className="uppercase font-semibold tracking-wide">Match Score</span>
-              <span>{matchScore}%</span>
-            </div>
-            <Progress value={matchScore} className="h-2" />
-          </div>
-        ) : (
-          <div className="rounded-lg border border-dashed border-slate-200 p-2 text-xs text-slate-500">
-            Select a profile to see how well this opportunity fits.
+
+        {/* Synopsis / Description */}
+        <p className="text-sm text-slate-600 line-clamp-2">{opportunity.description || "Summary coming soon."}</p>
+
+        {/* Contact Info - Application URL */}
+        {opportunity.application_url && (
+          <div className="flex items-center gap-2 text-xs text-blue-600">
+            <ExternalLink className="w-3 h-3" />
+            <a 
+              href={opportunity.application_url} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="hover:underline truncate"
+            >
+              Apply / Contact
+            </a>
           </div>
         )}
+
+        {/* Match Score - Prominently displayed */}
+        {match ? (
+          <div className={cn("rounded-lg border p-3 space-y-2", getMatchColor(matchScore))}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Target className="w-4 h-4" />
+                <span className="text-sm font-semibold uppercase tracking-wide">Match Score</span>
+              </div>
+              <span className="text-2xl font-bold">{matchScore}%</span>
+            </div>
+            <Progress value={matchScore} className="h-2" />
+            {match.reasons && match.reasons.length > 0 && (
+              <p className="text-xs opacity-80 line-clamp-1">{match.reasons[0]}</p>
+            )}
+          </div>
+        ) : (
+          <div className="rounded-lg border border-dashed border-slate-200 p-3 text-xs text-slate-500 text-center">
+            <Target className="w-4 h-4 mx-auto mb-1 opacity-50" />
+            Select a profile to see match score
+          </div>
+        )}
+
         {isReview ? (
           <div className="rounded-lg border border-rose-200 bg-rose-50/70 p-2 text-xs text-rose-700">
             {reviewReasons[0] || "Review matching or repayment requirements before proceeding."}
           </div>
         ) : null}
       </CardContent>
-      <CardFooter className="px-6 pb-4">
+      <CardFooter className="px-6 pb-4 gap-2">
         <Button
           variant="outline"
-          className="w-full"
+          className="flex-1"
           onClick={(event) => {
             event.stopPropagation()
             onSelect(opportunity)
           }}
         >
-          View details
+          View Details
+        </Button>
+        <Button
+          variant="default"
+          className="flex-1"
+          disabled={!canAddToPipeline || isAddingToPipeline}
+          onClick={handleQuickAdd}
+        >
+          {isAddingToPipeline ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <>
+              <Sparkles className="w-4 h-4 mr-1" />
+              Add to Pipeline
+            </>
+          )}
         </Button>
       </CardFooter>
     </Card>
@@ -562,6 +624,8 @@ export default function FundingOpportunities() {
   const [selectedOpportunity, setSelectedOpportunity] = useState(null)
   const [addingOpportunityId, setAddingOpportunityId] = useState(null)
   const [savingOpportunityId, setSavingOpportunityId] = useState(null)
+  const [currentPage, setCurrentPage] = useState(1)
+  const ITEMS_PER_PAGE = 50
 
   const opportunitiesQuery = useQuery({
     queryKey: ["opportunities", filters],
@@ -572,9 +636,14 @@ export default function FundingOpportunities() {
         source: filters.source !== "all" ? filters.source : undefined,
         is_national: filters.nationalOnly ? "true" : undefined,
         compliance: filters.compliance,
-        limit: 50,
+        limit: 100000, // Fetch ALL opportunities - no artificial limit
       }),
   })
+  
+  // Reset to page 1 when filters change
+  React.useEffect(() => {
+    setCurrentPage(1)
+  }, [filters])
 
   const sourcesQuery = useQuery({
     queryKey: ["opportunity-sources", filters.compliance],
@@ -698,21 +767,20 @@ export default function FundingOpportunities() {
     })
   }, [organizedOpportunities, filters.profileId, selectedProfile])
 
+  // Pagination calculations
+  const totalPages = Math.ceil(opportunitiesWithMatch.length / ITEMS_PER_PAGE)
+  const paginatedOpportunities = useMemo(() => {
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE
+    const endIndex = startIndex + ITEMS_PER_PAGE
+    return opportunitiesWithMatch.slice(startIndex, endIndex)
+  }, [opportunitiesWithMatch, currentPage])
+
   const handleAddToPipeline = async (opportunity) => {
     if (!selectedProfile || !filters.profileId || filters.profileId === "all") {
       toast({
         variant: "destructive",
         title: "Select a profile first",
         description: "Choose a profile to determine which pipeline should receive this opportunity.",
-      })
-      return
-    }
-
-    if (!selectedProfile.organization_id) {
-      toast({
-        variant: "destructive",
-        title: "Missing organization",
-        description: "This profile is not linked to an organization yet. Assign one before adding grants to the pipeline.",
       })
       return
     }
@@ -729,37 +797,25 @@ export default function FundingOpportunities() {
         new Set(preferredReasons.filter(Boolean).map((reason) => String(reason))),
       )
 
-      const notesSegments = [
-        `Imported from Funding Opportunities (${opportunity.source || "crawler"}).`,
-      ]
-      if (normalizedReasons.length) {
-        notesSegments.push(`Match rationale: ${normalizedReasons.slice(0, 3).join("; ")}`)
+      // Use the from-opportunity endpoint which auto-creates org if needed
+      const response = await fetch('/api/grants/from-opportunity', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          opportunity_id: opportunity.id,
+          profile_id: selectedProfile.id,
+          organization_id: selectedProfile.organization_id || null,
+          match_score: Number.isFinite(computedMatch?.score) ? computedMatch.score : null,
+          match_reasons: normalizedReasons
+        })
+      })
+      
+      if (!response.ok) {
+        const err = await response.json()
+        throw new Error(err.error || 'Failed to add to pipeline')
       }
-      if (opportunity.description) {
-        notesSegments.push(opportunity.description)
-      }
-      const combinedNotes = notesSegments.join("\n\n")
-      const payload = {
-        funding_opportunity_id: opportunity.id,
-        organization_id: selectedProfile.organization_id,
-        title: opportunity.title || "Untitled opportunity",
-        funder: opportunity.sponsor ?? null,
-        status: "interested",
-        deadline: opportunity.deadline || null,
-        match_score: Number.isFinite(computedMatch?.score) ? computedMatch.score : null,
-        match_reasons: normalizedReasons,
-        notes: combinedNotes.length > 2000 ? `${combinedNotes.slice(0, 1997)}…` : combinedNotes,
-        application_url: opportunity.application_url ?? null,
-      }
-
-      const normalizedAmounts = [opportunity.amount_max, opportunity.amount_min]
-        .map((value) => (value === null || value === undefined ? null : Number(value)))
-        .filter((value) => Number.isFinite(value) && value > 0)
-      if (normalizedAmounts.length > 0) {
-        payload.amount_requested = normalizedAmounts[0]
-      }
-
-      const created = await createGrant(payload)
+      
+      const created = await response.json()
 
       toast({
         title: "Added to pipeline",
@@ -1089,16 +1145,95 @@ export default function FundingOpportunities() {
           ))}
         </div>
       ) : hasResults ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-          {opportunitiesWithMatch.map(({ opportunity, match }) => (
-            <OpportunityCard
-              key={opportunity.id}
-              opportunity={opportunity}
-              onSelect={setSelectedOpportunity}
-              match={match}
-            />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+            {paginatedOpportunities.map(({ opportunity, match }) => (
+              <OpportunityCard
+                key={opportunity.id}
+                opportunity={opportunity}
+                onSelect={setSelectedOpportunity}
+                match={match}
+                onAddToPipeline={handleAddToPipeline}
+                isAddingToPipeline={addingOpportunityId === opportunity.id}
+                canAddToPipeline={Boolean(
+                  selectedProfile &&
+                  filters.profileId &&
+                  filters.profileId !== "all"
+                )}
+              />
+            ))}
+          </div>
+          
+          {/* Pagination Controls */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-center gap-2 mt-8 pb-8">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage(1)}
+                disabled={currentPage === 1}
+              >
+                First
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+              >
+                Previous
+              </Button>
+              
+              <div className="flex items-center gap-1 mx-2">
+                {/* Show page numbers */}
+                {Array.from({ length: Math.min(7, totalPages) }, (_, i) => {
+                  let pageNum
+                  if (totalPages <= 7) {
+                    pageNum = i + 1
+                  } else if (currentPage <= 4) {
+                    pageNum = i + 1
+                  } else if (currentPage >= totalPages - 3) {
+                    pageNum = totalPages - 6 + i
+                  } else {
+                    pageNum = currentPage - 3 + i
+                  }
+                  return (
+                    <Button
+                      key={pageNum}
+                      variant={currentPage === pageNum ? "default" : "outline"}
+                      size="sm"
+                      className="w-10"
+                      onClick={() => setCurrentPage(pageNum)}
+                    >
+                      {pageNum}
+                    </Button>
+                  )
+                })}
+              </div>
+              
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+              >
+                Next
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={currentPage === totalPages}
+              >
+                Last
+              </Button>
+              
+              <span className="text-sm text-slate-500 ml-4">
+                Page {currentPage} of {totalPages} ({opportunitiesWithMatch.length.toLocaleString()} total)
+              </span>
+            </div>
+          )}
+        </>
       ) : (
         <Card className="border border-slate-200 bg-white/70 backdrop-blur">
           <CardContent className="p-12 text-center space-y-4">
@@ -1131,7 +1266,6 @@ export default function FundingOpportunities() {
         canAddToPipeline={
           Boolean(
             selectedProfile &&
-              selectedProfile.organization_id &&
               filters.profileId &&
               filters.profileId !== "all",
           )

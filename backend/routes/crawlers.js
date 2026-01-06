@@ -1231,4 +1231,86 @@ router.get('/auto-discovery-status/:profileId', (req, res) => {
   }
 })
 
+// Bulk populate opportunities from comprehensive crawler templates
+// Admin-only endpoint to generate funding opportunities for all ZIP codes
+router.post('/bulk-populate', async (req, res) => {
+  // Allow admin auth OR a special bulk key for automated population
+  const auth = req.user ?? { role: 'guest' }
+  const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
+  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  
+  const isAdmin = auth.role === 'admin'
+  const hasValidKey = bulkKey === expectedKey
+  
+  if (!isAdmin && !hasValidKey) {
+    return res.status(403).json({ error: 'Admin access or valid bulk key required' })
+  }
+  
+  try {
+    const { limit_per_zip = 8, max_zips = 5000 } = req.body || {}
+    const dataDir = join(__dirname, '..', 'data', 'crawlers')
+    const zipFile = join(dataDir, 'zip_coordinates.json')
+    
+    if (!fs.existsSync(zipFile)) {
+      return res.status(500).json({ error: 'ZIP coordinates file not found' })
+    }
+    
+    const zipMap = JSON.parse(fs.readFileSync(zipFile, 'utf8'))
+    const allZipCodes = Object.keys(zipMap).slice(0, max_zips)
+    
+    console.log(`[bulk-populate] Starting population of ${allZipCodes.length} ZIP codes with ${limit_per_zip} opportunities each`)
+    
+    // Import the crawler function
+    const { processComprehensiveCrawlerJob } = await import('../services/comprehensiveCrawlerOptimized.js')
+    
+    const batchSize = 100
+    let totalInserted = 0
+    let totalEvaluated = 0
+    const errors = []
+    
+    for (let i = 0; i < allZipCodes.length; i += batchSize) {
+      const batch = allZipCodes.slice(i, i + batchSize)
+      
+      try {
+        const job = {
+          id: `bulk-populate-${i}-${Date.now()}`,
+          type: 'comprehensive',
+          parameters: {
+            zip_list: batch,
+            limit_per_zip: limit_per_zip
+          }
+        }
+        
+        const result = await processComprehensiveCrawlerJob({
+          db: req.db,
+          job,
+          dataDir,
+          profileContext: null
+        })
+        
+        totalInserted += result.inserted || 0
+        totalEvaluated += result.evaluated || 0
+        
+        console.log(`[bulk-populate] Batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(allZipCodes.length/batchSize)}: ${result.inserted} opportunities`)
+      } catch (batchErr) {
+        errors.push({ batch: i, error: batchErr.message })
+        console.error(`[bulk-populate] Batch ${i} error:`, batchErr.message)
+      }
+    }
+    
+    console.log(`[bulk-populate] Complete: ${totalInserted} opportunities inserted from ${allZipCodes.length} ZIPs`)
+    
+    res.json({
+      success: true,
+      zip_codes_processed: allZipCodes.length,
+      opportunities_inserted: totalInserted,
+      opportunities_evaluated: totalEvaluated,
+      errors: errors.length > 0 ? errors : undefined
+    })
+  } catch (error) {
+    console.error('Error in bulk populate:', error)
+    res.status(500).json(formatError(error))
+  }
+})
+
 export default router

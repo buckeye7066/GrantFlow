@@ -6,17 +6,14 @@ import twilio from 'twilio'
 import OpenAI from 'openai'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
-// Try to import email service, fall back if not available
-let sendVerificationEmail
-try {
-  const emailModule = await import('../services/email.js')
-  sendVerificationEmail = emailModule.sendVerificationEmail
-} catch (error) {
-  console.error('[auth] Failed to load email service, using fallback:', error.message)
-  const fallbackModule = await import('../services/emailFallback.js')
-  sendVerificationEmail = fallbackModule.sendVerificationEmail
-}
 import { initializeAnyaForAdmin } from '../services/anyaLoginTrigger.js'
+
+// Import email service (with fallback if main service fails to load)
+import { sendVerificationEmail as mainSendEmail } from '../services/email.js'
+import { sendVerificationEmail as fallbackSendEmail } from '../services/emailFallback.js'
+
+// Use main email service if available, otherwise fallback
+const sendVerificationEmail = mainSendEmail || fallbackSendEmail
 import { getDesignatedProfileForEmail } from '../config/userProfileMappings.js'
 import { ADMIN_EMAIL, isAdminEmail } from '../config/constants.js'
 import { ensureAdminUser, isAdminUserId } from '../utils/adminProfileLinks.js'
