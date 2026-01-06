@@ -89,18 +89,22 @@ export default function PrintableProfile({ organization, grants = [], contactMet
   const emails = contactMethods.filter(c => c.type === 'email');
   const phones = contactMethods.filter(c => c.type === 'phone');
 
+  // Disable analytics in print mode using React useEffect instead of script injection
+  React.useEffect(() => {
+    window.__PRINT_MODE__ = true;
+    // Disable analytics calls
+    const noop = function(){};
+    window.dataLayer = window.dataLayer || [];
+    window.gtag = window.gtag || noop;
+    window.mixpanel = window.mixpanel || { init: noop, track: noop, people: { set: noop } };
+    
+    return () => {
+      window.__PRINT_MODE__ = false;
+    };
+  }, []);
+
   return (
     <>
-      <script dangerouslySetInnerHTML={{ __html: `
-        window.__PRINT_MODE__ = true;
-        // kill any accidental analytics calls quietly
-        (function(){
-          const noop = function(){};
-          window.dataLayer = window.dataLayer || [];
-          window.gtag = window.gtag || noop;
-          window.mixpanel = window.mixpanel || { init: noop, track: noop, people: { set: noop } };
-        })();
-      `}} />
       {/* Updated root div className and data-print-ready attribute */}
       <div className="p-4 sm:p-8 gf-print-root" data-print-ready="true">
         <header className="gf-print-header">

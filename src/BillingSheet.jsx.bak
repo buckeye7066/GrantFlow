@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
 import { Button } from '@/components/ui/button';
 import { FileDown, FileText } from 'lucide-react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import '@/styles/print.css';
 
@@ -125,8 +125,8 @@ const SERVICES = {
 };
 
 export default function BillingSheet() {
-  const [searchParams] = useSearchParams();
-  const organizationId = searchParams.get('organization_id');
+  const urlParams = new URLSearchParams(window.location.search);
+  const organizationId = urlParams.get('organization_id');
   const isMaster = !organizationId; // Master sheet if no org specified
   const navigate = useNavigate();
 
@@ -243,15 +243,208 @@ export default function BillingSheet() {
       {/* Screen-specific styles - print styles moved to /styles/print.css */}
       <style>{`
         @media print {
-          .form-box {
-            display: inline-block !important;
+          .no-print { 
+            display: none !important; 
           }
+          @page { 
+            margin: 0.3in 0.4in;
+            size: letter portrait;
+          }
+          body {
+            print-color-adjust: exact;
+            -webkit-print-color-adjust: exact;
+          }
+          .avoid-break {
+            page-break-inside: avoid;
+            break-inside: avoid;
+          }
+          .allow-break {
+            page-break-inside: auto;
+          }
+          
+          /* Ultra-compact print styles */
+          .print-compact {
+            padding: 2px 0 !important;
+            margin: 1px 0 !important;
+          }
+          
+          .print-compact h3 {
+            font-size: 12px !important;
+            margin-bottom: 4px !important;
+            margin-top: 8px !important;
+          }
+          
+          .print-compact table {
+            font-size: 9px !important;
+          }
+          
+          .print-compact td, .print-compact th {
+            padding: 2px 1px !important;
+            line-height: 1.1 !important;
+          }
+          
+          .print-compact .service-description {
+            font-size: 7px !important;
+            line-height: 1.1 !important;
+            margin-top: 1px !important;
+          }
+          
+          /* Compress header */
+          .print-header {
+            margin-bottom: 8px !important;
+            padding-bottom: 4px !important;
+          }
+          
+          .print-header h1 {
+            font-size: 18px !important;
+            margin-bottom: 2px !important;
+          }
+          
+          .print-header h2 {
+            font-size: 14px !important;
+          }
+          
+          .print-header h3 {
+            font-size: 16px !important;
+            margin-bottom: 2px !important;
+          }
+          
+          .print-header p {
+            font-size: 9px !important;
+            margin-top: 2px !important;
+            line-height: 1.2 !important;
+          }
+          
+          /* Compress client info box */
+          .client-info-box {
+            padding: 6px !important;
+            margin-bottom: 8px !important;
+          }
+          
+          .client-info-box h3 {
+            font-size: 11px !important;
+            margin-bottom: 4px !important;
+          }
+          
+          .client-info-box p, .client-info-box .text-sm {
+            font-size: 8px !important;
+            line-height: 1.2 !important;
+          }
+          
+          /* Compress category definitions */
+          .category-box {
+            padding: 6px !important;
+            margin-bottom: 8px !important;
+          }
+          
+          .category-box h3 {
+            font-size: 11px !important;
+            margin-bottom: 4px !important;
+          }
+          
+          .category-box p {
+            font-size: 7px !important;
+            line-height: 1.2 !important;
+            margin-bottom: 2px !important;
+          }
+          
+          /* Compress ethical notice */
+          .ethical-notice {
+            padding: 4px !important;
+            margin-bottom: 8px !important;
+          }
+          
+          .ethical-notice p {
+            font-size: 7px !important;
+            line-height: 1.2 !important;
+          }
+          
+          /* Compress special pricing box */
+          .special-pricing-box {
+            padding: 6px !important;
+            margin-top: 8px !important;
+            margin-bottom: 8px !important;
+          }
+          
+          .special-pricing-box h3 {
+            font-size: 10px !important;
+            margin-bottom: 4px !important;
+          }
+          
+          .special-pricing-box p {
+            font-size: 7px !important;
+            line-height: 1.2 !important;
+            margin-bottom: 1px !important;
+          }
+          
+          /* Compress payment terms */
+          .payment-terms-box {
+            padding: 6px !important;
+            margin-top: 8px !important;
+            margin-bottom: 8px !important;
+          }
+          
+          .payment-terms-box h3 {
+            font-size: 10px !important;
+            margin-bottom: 4px !important;
+          }
+          
+          .payment-terms-box p, .payment-terms-box li {
+            font-size: 7px !important;
+            line-height: 1.2 !important;
+          }
+          
+          .payment-terms-box ul {
+            margin: 2px 0 !important;
+          }
+          
+          /* Signature section */
+          .signature-section {
+            margin-top: 8px !important;
+            padding-top: 6px !important;
+          }
+          
+          .signature-section h3 {
+            font-size: 10px !important;
+            margin-bottom: 4px !important;
+          }
+          
+          .signature-section p {
+            font-size: 7px !important;
+            line-height: 1.2 !important;
+            margin-bottom: 4px !important;
+          }
+          
+          .signature-section .signature-line {
+            height: 30px !important;
+            margin-bottom: 0 !important;
+          }
+          
+          /* Footer */
+          .print-footer {
+            margin-top: 8px !important;
+            padding-top: 4px !important;
+            font-size: 7px !important;
+            line-height: 1.2 !important;
+          }
+          
+          /* Force signature and footer to stay on last page */
+          .print-footer-group {
+            page-break-inside: avoid;
+            margin-top: 12px;
+          }
+          
+          /* Hide interactive checkboxes in print, show styled boxes */
           .interactive-checkbox {
             display: none !important;
+          }
+          .form-box {
+            display: inline-block !important;
           }
         }
 
         @media screen {
+          /* Hide styled boxes on screen, show interactive checkboxes */
           .form-box {
             display: none !important;
           }
@@ -302,7 +495,7 @@ export default function BillingSheet() {
         .service-row.selected {
           background-color: #eff6ff;
         }
-      `}</style>
+      `}} />
 
       {/* Action Buttons */}
       <div className="no-print fixed top-4 right-4 z-50 flex gap-2">
