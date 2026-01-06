@@ -257,7 +257,8 @@ async function processComprehensiveCrawlerJobOptimized({ db, job, dataDir, profi
     UPDATE crawler_jobs
     SET status = 'completed',
         completed_at = CURRENT_TIMESTAMP,
-        results = ?,
+        result_meta = ?,
+        result_count = ?,
         parameters = json_set(
           COALESCE(parameters, '{}'),
           '$.executed_zip_count', ?,
@@ -277,6 +278,7 @@ async function processComprehensiveCrawlerJobOptimized({ db, job, dataDir, profi
       inserted: totalInserted,
       logs: allOpportunityLogs.slice(0, 100), // Keep only first 100 logs to prevent huge DB entries
     }),
+    totalInserted, // result_count
     zipList.length,
     limitPerZip,
     totalEvaluated,
