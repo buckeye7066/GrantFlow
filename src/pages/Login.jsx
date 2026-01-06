@@ -2,6 +2,7 @@ import { useEffect, useMemo } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import AuthShell from '@/components/auth/AuthShell'
 import AuthMethodTabs from '@/components/auth/AuthMethodTabs'
+import AuthErrorBoundary from '@/components/auth/AuthErrorBoundary'
 import { useAuthStore } from '@/stores/authStore'
 
 const AUTH_TABS = new Set(['email'])
@@ -45,14 +46,21 @@ export default function Login() {
     }
   }
 
+  const handleErrorReset = () => {
+    // Optional: Add any cleanup or state reset logic here
+    console.log('[Login] Error boundary reset')
+  }
+
   return (
-    <AuthShell
-      title="Sign in to GrantFlow"
-      subtitle="Enter your email address to get started."
-    >
-      <AuthMethodExpiryNotice />
-      <AuthMethodTabs onComplete={handleComplete} />
-    </AuthShell>
+    <AuthErrorBoundary onReset={handleErrorReset}>
+      <AuthShell
+        title="Sign in to GrantFlow"
+        subtitle="Enter your email address to get started."
+      >
+        <AuthMethodExpiryNotice />
+        <AuthMethodTabs onComplete={handleComplete} />
+      </AuthShell>
+    </AuthErrorBoundary>
   )
 }
 

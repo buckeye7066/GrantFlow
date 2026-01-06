@@ -360,6 +360,53 @@ app.get('/health', (req, res) => {
   res.status(statusCode).json(health);
 });
 
+// Authentication diagnostics endpoint
+app.get('/api/auth/diagnostics', (req, res) => {
+  const diagnostics = {
+    status: 'operational',
+    timestamp: new Date().toISOString(),
+    auth: {
+      jwtSecret: process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET ? 'configured' : 'not configured',
+      routes: 'registered',
+      database: 'unknown'
+    },
+    providers: {}
+  };
+
+  // Check database connection
+  try {
+    db.prepare('SELECT COUNT(*) as count FROM users').get();
+    diagnostics.auth.database = 'connected';
+  } catch (error) {
+    diagnostics.auth.database = 'error: ' + error.message;
+    diagnostics.status = 'degraded';
+  }
+
+  // Check OAuth provider configurations
+  const providers = ['google', 'facebook', 'yahoo'];
+  providers.forEach(provider => {
+    const upper = provider.toUpperCase();
+    const hasClientId = Boolean(
+      process.env[`AUTH_${upper}_CLIENT_ID`] || 
+      process.env[`${upper}_CLIENT_ID`] || 
+      process.env[`OAUTH_${upper}_CLIENT_ID`]
+    );
+    const hasClientSecret = Boolean(
+      process.env[`AUTH_${upper}_CLIENT_SECRET`] || 
+      process.env[`${upper}_CLIENT_SECRET`] || 
+      process.env[`OAUTH_${upper}_CLIENT_SECRET`]
+    );
+    diagnostics.providers[provider] = {
+      configured: hasClientId && hasClientSecret,
+      clientId: hasClientId ? 'present' : 'missing',
+      clientSecret: hasClientSecret ? 'present' : 'missing'
+    };
+  });
+
+  const statusCode = diagnostics.status === 'operational' ? 200 : 503;
+  res.status(statusCode).json(diagnostics);
+});
+
 app.get('/api/auth/me', (req, res) => {
   const user = req.user ?? { role: 'guest' };
   if (user.role === 'guest') {
