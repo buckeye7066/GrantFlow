@@ -3,6 +3,10 @@ import OpenAI from 'openai';
 import { fetchReminderSnapshot } from './reminders.js';
 import { buildReminderPlanPrompt } from '../prompts/reminderPlan.js';
 import { extractCompletionText } from '../utils/openai.js';
+import { safeParseJSON } from '../utils/safeJson.js';
+import { formatError } from '../middleware/errorHandler.js';
+import { validatePagination } from '../utils/validation.js';
+import { DEFAULT_OPENAI_MODEL, OPENAI_TIMEOUT_MS, MAX_PROMPT_LENGTH } from '../config/constants.js';
 
 const router = express.Router();
 
@@ -18,7 +22,8 @@ const getOpenAI = () => {
 // Match opportunities to a profile
 router.post('/match', async (req, res) => {
   try {
-    const { profile_id, limit = 50 } = req.body;
+    const { profile_id } = req.body;
+    const { limit } = validatePagination({ limit: req.body.limit || 50 });
     
     if (!profile_id) {
       return res.status(400).json({ error: 'profile_id is required' });
@@ -30,10 +35,10 @@ router.post('/match', async (req, res) => {
       return res.status(404).json({ error: 'Profile not found' });
     }
     
-    // Parse JSON fields
-    const keywords = JSON.parse(profile.keywords || '[]');
-    const focusAreas = JSON.parse(profile.focus_areas || '[]');
-    const programAreas = JSON.parse(profile.program_areas || '[]');
+    // Parse JSON fields safely
+    const keywords = safeParseJSON(profile.keywords, []);
+    const focusAreas = safeParseJSON(profile.focus_areas, []);
+    const programAreas = safeParseJSON(profile.program_areas, []);
     
     // Get opportunities matching state or national
     let query = `
@@ -47,7 +52,7 @@ router.post('/match', async (req, res) => {
     query += ` AND (deadline >= date('now') OR deadline IS NULL OR deadline_type = 'rolling')`;
     
     query += ' ORDER BY deadline ASC NULLS LAST LIMIT ?';
-    params.push(parseInt(limit) * 2); // Get more than needed for AI scoring
+    params.push(limit * 2); // Get more than needed for AI scoring
     
     const opportunities = req.db.prepare(query).all(...params);
     
@@ -58,7 +63,7 @@ router.post('/match', async (req, res) => {
     // Score opportunities using keyword matching
     const scoredOpportunities = opportunities.map(opp => {
       const oppText = `${opp.title || ''} ${opp.description || ''} ${opp.sponsor || ''}`.toLowerCase();
-      const eligibility = JSON.parse(opp.eligibility_bullets || '[]').join(' ').toLowerCase();
+      const eligibility = safeParseJSON(opp.eligibility_bullets, []).join(' ').toLowerCase();
       const combined = `${oppText} ${eligibility}`;
       
       let score = 50; // Base score
@@ -133,9 +138,9 @@ router.post('/match', async (req, res) => {
       
       return {
         ...opp,
-        eligibility_bullets: JSON.parse(opp.eligibility_bullets || '[]'),
-        categories: JSON.parse(opp.categories || '[]'),
-        keywords: JSON.parse(opp.keywords || '[]'),
+        eligibility_bullets: safeParseJSON(opp.eligibility_bullets, []),
+        categories: safeParseJSON(opp.categories, []),
+        keywords: safeParseJSON(opp.keywords, []),
         match_score: Math.min(score, 100),
         match_reasons: matchReasons.slice(0, 5)
       };
@@ -145,7 +150,7 @@ router.post('/match', async (req, res) => {
     const topMatches = scoredOpportunities
       .filter(o => o.match_score >= 50)
       .sort((a, b) => b.match_score - a.match_score)
-      .slice(0, parseInt(limit));
+      .slice(0, limit);
     
     res.json({
       opportunities: topMatches,
@@ -156,14 +161,15 @@ router.post('/match', async (req, res) => {
     
   } catch (error) {
     console.error('Error matching opportunities:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json(formatError(error));
   }
 });
 
 // AI-enhanced matching using OpenAI
 router.post('/match/ai', async (req, res) => {
   try {
-    const { profile_id, opportunity_ids, limit = 20 } = req.body;
+    const { profile_id, opportunity_ids } = req.body;
+    const { limit } = validatePagination({ limit: req.body.limit || 20 });
     
     const openai = getOpenAI();
     
@@ -199,8 +205,8 @@ router.post('/match/ai', async (req, res) => {
     const profileSummary = {
       type: profile.applicant_type,
       state: profile.state,
-      keywords: JSON.parse(profile.keywords || '[]'),
-      focus_areas: JSON.parse(profile.focus_areas || '[]'),
+      keywords: safeParseJSON(profile.keywords, []),
+      focus_areas: safeParseJSON(profile.focus_areas, []),
       veteran: profile.veteran,
       disabled: profile.disabled,
       first_generation: profile.first_generation,
@@ -215,7 +221,7 @@ router.post('/match/ai', async (req, res) => {
       title: o.title,
       sponsor: o.sponsor,
       description: (o.description || '').substring(0, 500),
-      eligibility: JSON.parse(o.eligibility_bullets || '[]').slice(0, 5),
+      eligibility: safeParseJSON(o.eligibility_bullets, []).slice(0, 5),
       amount: o.amount_max ? `Up to $${o.amount_max}` : 'Varies',
       deadline: o.deadline
     }));
@@ -241,7 +247,7 @@ Return ONLY valid JSON in this format:
 }`;
 
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: DEFAULT_OPENAI_MODEL,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.3,
       max_tokens: 2000
@@ -252,7 +258,10 @@ Return ONLY valid JSON in this format:
       const content = extractCompletionText(completion);
       // Extract JSON from response
       const jsonMatch = content.match(/\{[\s\S]*\}/);
-      aiResults = JSON.parse(jsonMatch ? jsonMatch[0] : content);
+      aiResults = safeParseJSON(jsonMatch ? jsonMatch[0] : content, null);
+      if (!aiResults) {
+        throw new Error('Failed to parse AI response');
+      }
     } catch (parseError) {
       console.error('Failed to parse AI response:', parseError);
       // Fall back to basic matching
@@ -272,9 +281,9 @@ Return ONLY valid JSON in this format:
       const aiMatch = aiResults.matches?.find(m => m.id === opp.id);
       return {
         ...opp,
-        eligibility_bullets: JSON.parse(opp.eligibility_bullets || '[]'),
-        categories: JSON.parse(opp.categories || '[]'),
-        keywords: JSON.parse(opp.keywords || '[]'),
+        eligibility_bullets: safeParseJSON(opp.eligibility_bullets, []),
+        categories: safeParseJSON(opp.categories, []),
+        keywords: safeParseJSON(opp.keywords, []),
         match_score: aiMatch?.score || 50,
         match_reasons: aiMatch?.reasons || ['Geographic match']
       };
@@ -292,7 +301,7 @@ Return ONLY valid JSON in this format:
     
   } catch (error) {
     console.error('Error in AI matching:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json(formatError(error));
   }
 });
 
@@ -332,7 +341,7 @@ FUNDER: ${grant.funder}
 Generate a well-structured, compelling ${section || 'narrative'} of about 300-500 words.`;
 
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: DEFAULT_OPENAI_MODEL,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: prompt }
@@ -350,7 +359,7 @@ Generate a well-structured, compelling ${section || 'narrative'} of about 300-50
     
   } catch (error) {
     console.error('Error generating proposal:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json(formatError(error));
   }
 });
 
@@ -381,7 +390,7 @@ APPLICANT:
 OPPORTUNITY:
 - Title: ${opportunity.title}
 - Sponsor: ${opportunity.sponsor}
-- Eligibility: ${JSON.parse(opportunity.eligibility_bullets || '[]').join('; ')}
+- Eligibility: ${safeParseJSON(opportunity.eligibility_bullets, []).join('; ')}
 - State: ${opportunity.state || 'National'}
 
 Provide:
@@ -400,7 +409,7 @@ Return as JSON:
 }`;
 
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: DEFAULT_OPENAI_MODEL,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.3,
       max_tokens: 1000
@@ -410,7 +419,13 @@ Return as JSON:
     try {
     const content = extractCompletionText(completion);
       const jsonMatch = content.match(/\{[\s\S]*\}/);
-      analysis = JSON.parse(jsonMatch ? jsonMatch[0] : content);
+      analysis = safeParseJSON(jsonMatch ? jsonMatch[0] : content, null);
+      if (!analysis) {
+        analysis = {
+          status: 'Analysis unavailable',
+          raw_response: content
+        };
+      }
     } catch {
       analysis = {
         status: 'Analysis unavailable',
@@ -422,7 +437,7 @@ Return as JSON:
     
   } catch (error) {
     console.error('Error analyzing eligibility:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json(formatError(error));
   }
 });
 
@@ -458,7 +473,7 @@ router.post('/reminders/plan', async (req, res) => {
     );
 
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: DEFAULT_OPENAI_MODEL,
       messages: [
         {
           role: 'system',
@@ -475,7 +490,10 @@ router.post('/reminders/plan', async (req, res) => {
     try {
     const content = extractCompletionText(completion);
       const jsonMatch = content.match(/\{[\s\S]*\}/);
-      plan = JSON.parse(jsonMatch ? jsonMatch[0] : content);
+      plan = safeParseJSON(jsonMatch ? jsonMatch[0] : content, null);
+      if (!plan) {
+        throw new Error('Failed to parse plan');
+      }
     } catch (parseError) {
       console.error('Failed to parse reminder plan response:', parseError);
       return res.status(502).json({ error: 'AI response could not be parsed.' });
@@ -491,7 +509,7 @@ router.post('/reminders/plan', async (req, res) => {
     });
   } catch (error) {
     console.error('Error generating reminder plan:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json(formatError(error));
   }
 });
 
@@ -501,7 +519,7 @@ router.post('/invoke', async (req, res) => {
     const {
       prompt,
       system_prompt,
-      model = 'gpt-4o-mini',
+      model = DEFAULT_OPENAI_MODEL,
       temperature = 0.3,
       max_tokens = 1200,
       response_json_schema,
@@ -513,7 +531,6 @@ router.post('/invoke', async (req, res) => {
     }
 
     // Add length limits and basic sanitization
-    const MAX_PROMPT_LENGTH = 50000; // ~50K characters max
     if (prompt.length > MAX_PROMPT_LENGTH) {
       return res.status(400).json({ 
         error: 'prompt too long',
@@ -566,13 +583,16 @@ router.post('/invoke', async (req, res) => {
         const lastBrace = text.lastIndexOf('}');
         if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
           const candidate = text.slice(firstBrace, lastBrace + 1);
-          return JSON.parse(candidate);
+          return safeParseJSON(candidate, null);
         }
-        return JSON.parse(text);
+        return safeParseJSON(text, null);
       };
 
       try {
         const parsed = tryParse(rawText);
+        if (!parsed) {
+          throw new Error('Failed to parse JSON response');
+        }
         return res.json(parsed);
       } catch (error) {
         console.error('Failed to parse InvokeLLM JSON response:', rawText, error);
@@ -586,7 +606,7 @@ router.post('/invoke', async (req, res) => {
     });
   } catch (error) {
     console.error('AI invoke failed:', error);
-    res.status(500).json({ error: error.message || 'AI invoke failed' });
+    res.status(500).json(formatError(error));
   }
 });
 

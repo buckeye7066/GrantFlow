@@ -7,6 +7,7 @@ import {
   fetchAccountEvents,
   logBillingAccountEvent,
 } from '../services/billingAccounts.js'
+import { formatError } from '../middleware/errorHandler.js'
 
 const router = express.Router()
 
@@ -48,7 +49,7 @@ router.get('/tiers', (req, res) => {
       .map(mapTierRow)
     res.json(tiers)
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    res.status(500).json(formatError(error))
   }
 })
 
@@ -100,7 +101,7 @@ router.post('/tiers', requireAdmin, (req, res) => {
     const tier = req.db.prepare('SELECT * FROM billing_tiers WHERE id = ?').get(tierId)
     res.status(201).json(mapTierRow(tier))
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    res.status(500).json(formatError(error))
   }
 })
 
@@ -151,7 +152,7 @@ router.put('/tiers/:id', requireAdmin, (req, res) => {
     const tier = req.db.prepare('SELECT * FROM billing_tiers WHERE id = ?').get(tierId)
     res.json(mapTierRow(tier))
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    res.status(500).json(formatError(error))
   }
 })
 
@@ -186,7 +187,7 @@ router.get('/accounts', requireAdmin, (req, res) => {
 
     res.json(rows)
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    res.status(500).json(formatError(error))
   }
 })
 
@@ -219,7 +220,7 @@ router.get('/accounts/:profileId', (req, res) => {
       events,
     })
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    res.status(500).json(formatError(error))
   }
 })
 
@@ -327,7 +328,7 @@ router.put('/accounts/:profileId', requireAdmin, (req, res) => {
       events,
     })
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    res.status(500).json(formatError(error))
   }
 })
 

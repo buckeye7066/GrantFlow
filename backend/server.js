@@ -28,6 +28,23 @@ import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
 import { runStartupOperations } from './services/anyaStartupOperations.js';
+import { errorHandler } from './middleware/errorHandler.js';
+import { MAX_JSON_BODY_SIZE } from './config/constants.js';
+
+// Validate required environment variables at startup
+const requiredEnvVars = ['OPENAI_API_KEY'];
+const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+
+if (missingEnvVars.length > 0) {
+  console.error('ERROR: Missing required environment variables:', missingEnvVars.join(', '));
+  console.error('Please check your .env file and ensure all required variables are set.');
+  // Don't exit in development to allow for testing without all services
+  if (process.env.NODE_ENV === 'production') {
+    process.exit(1);
+  } else {
+    console.warn('WARNING: Running in non-production mode without all required environment variables.');
+  }
+}
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null;
 const ADMIN_NAME = process.env.ADMIN_NAME || 'Admin User';
@@ -65,7 +82,7 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({ limit: MAX_JSON_BODY_SIZE }));
 try {
   if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
@@ -94,46 +111,36 @@ if (fs.existsSync(schemaPath)) {
   const schema = fs.readFileSync(schemaPath, 'utf8');
   db.exec(schema);
 }
-try {
-  db.prepare('ALTER TABLE profiles ADD COLUMN avatar_url TEXT').run();
-} catch (error) {
-  // Column already exists - this is expected
-  if (!error.message.includes('duplicate column')) {
-    console.warn('Failed to add avatar_url column:', error.message);
+
+// Schema migrations - Add columns if they don't exist
+// Table and column names are validated against a whitelist for security
+const allowedMigrations = [
+  { table: 'profiles', column: 'avatar_url', type: 'TEXT' },
+  { table: 'profiles', column: 'user_id', type: 'TEXT REFERENCES users(id) ON DELETE SET NULL' },
+  { table: 'crawler_jobs', column: 'result_meta', type: 'TEXT' },
+  { table: 'crawler_jobs', column: 'retry_count', type: 'INTEGER DEFAULT 0' },
+  { table: 'crawler_jobs', column: 'last_retry_at', type: 'DATETIME' }
+];
+
+const validTables = new Set(['profiles', 'crawler_jobs', 'users', 'organizations', 'grants']);
+const validColumnPattern = /^[a-z_]+$/;
+
+allowedMigrations.forEach(({ table, column, type }) => {
+  // Validate table and column names to prevent SQL injection
+  if (!validTables.has(table) || !validColumnPattern.test(column)) {
+    console.error(`Migration error: Invalid table "${table}" or column "${column}"`);
+    return;
   }
-}
-try {
-  db.prepare('ALTER TABLE profiles ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE SET NULL').run();
-} catch (error) {
-  // Column already exists - this is expected
-  if (!error.message.includes('duplicate column')) {
-    console.warn('Failed to add user_id column:', error.message);
+  
+  try {
+    db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`).run();
+  } catch (error) {
+    // Column already exists or other error - log only if not duplicate column error
+    if (!error.message.includes('duplicate column')) {
+      console.warn(`Migration warning for ${table}.${column}:`, error.message);
+    }
   }
-}
-try {
-  db.prepare('ALTER TABLE crawler_jobs ADD COLUMN result_meta TEXT').run();
-} catch (error) {
-  // Column already exists - this is expected
-  if (!error.message.includes('duplicate column')) {
-    console.warn('Failed to add result_meta column:', error.message);
-  }
-}
-try {
-  db.prepare('ALTER TABLE crawler_jobs ADD COLUMN retry_count INTEGER DEFAULT 0').run();
-} catch (error) {
-  // Column already exists - this is expected
-  if (!error.message.includes('duplicate column')) {
-    console.warn('Failed to add retry_count column:', error.message);
-  }
-}
-try {
-  db.prepare('ALTER TABLE crawler_jobs ADD COLUMN last_retry_at DATETIME').run();
-} catch (error) {
-  // Column already exists - this is expected
-  if (!error.message.includes('duplicate column')) {
-    console.warn('Failed to add last_retry_at column:', error.message);
-  }
-}
+});
 
 function ensureCrawlerJobsSupportsProfileEnrichment() {
   try {
@@ -325,9 +332,32 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health check
+// Health check with dependency checks
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+  const health = {
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    dependencies: {
+      database: 'unknown',
+      openai: 'unknown'
+    }
+  };
+  
+  // Check database connection
+  try {
+    db.prepare('SELECT 1').get();
+    health.dependencies.database = 'healthy';
+  } catch (error) {
+    health.dependencies.database = 'unhealthy';
+    health.status = 'degraded';
+  }
+  
+  // Check if OpenAI API key is configured
+  health.dependencies.openai = process.env.OPENAI_API_KEY ? 'configured' : 'not configured';
+  
+  const statusCode = health.status === 'healthy' ? 200 : 503;
+  res.status(statusCode).json(health);
 });
 
 app.get('/api/auth/me', (req, res) => {
@@ -477,7 +507,8 @@ app.get('/api/pipeline/stats', (req, res) => {
 
     res.json(pipelineKeys);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Pipeline stats error:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -499,10 +530,17 @@ app.get('*', spaFallbackLimiter, (req, res, next) => {
   res.sendFile(join(distPath, 'index.html'));
 });
 
+// Use centralized error handler middleware
+app.use(errorHandler);
+
 // Error handling
 app.use((err, req, res, next) => {
-  console.error('Error:', err);
-  res.status(500).json({ error: err.message || 'Internal server error' });
+  console.error('Unhandled error:', err);
+  const isProduction = process.env.NODE_ENV === 'production';
+  res.status(500).json({ 
+    error: isProduction ? 'Internal server error' : err.message,
+    ...(isProduction ? {} : { stack: err.stack })
+  });
 });
 
 // 404 handler
@@ -510,7 +548,35 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+// Graceful shutdown handling
+function gracefulShutdown(signal) {
+  console.log(`\nReceived ${signal}, closing server gracefully...`);
+  
+  server.close(() => {
+    console.log('HTTP server closed');
+    
+    try {
+      db.close();
+      console.log('Database connection closed');
+    } catch (error) {
+      console.error('Error closing database:', error);
+    }
+    
+    console.log('Graceful shutdown complete');
+    process.exit(0);
+  });
+  
+  // Force close after 10 seconds
+  setTimeout(() => {
+    console.error('Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+const server = app.listen(PORT, '0.0.0.0', () => {
   // TODO: Remove debug log - console.log(`GrantFlow API server running on port ${PORT}`);
   // TODO: Remove debug log - console.log(`Database: ${dbPath}`);
   const loggedCorsOrigins = Array.isArray(corsOptions.origin) ? corsOptions.origin : [corsOptions.origin];
@@ -522,12 +588,6 @@ app.listen(PORT, '0.0.0.0', () => {
       console.error('[Anya Startup] Failed to complete autonomous operations:', err);
     });
   }, 5000);
-  // TODO: Remove debug log - console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
-  
-  // Trigger Anya autonomous operations after startup
-  runStartupOperations(db).catch(err => {
-    console.error('[startup] Autonomous operations failed:', err);
-  });
 });
 
 export default app;

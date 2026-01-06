@@ -9,6 +9,9 @@ import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
 import { ensureBillingAccount, mapAccountRow } from '../services/billingAccounts.js'
 import { extractCompletionText } from '../utils/openai.js'
 import { linkProfileToAdmin } from '../utils/adminProfileLinks.js'
+import { safeParseJSON } from '../utils/safeJson.js'
+import { validatePagination } from '../utils/validation.js'
+import { formatError } from '../middleware/errorHandler.js'
 
 const router = express.Router()
 
@@ -78,15 +81,6 @@ function mapProfile(row) {
   }
 }
 
-function safeParseJSON(value, fallback) {
-  if (value == null) return fallback
-  try {
-    return JSON.parse(value)
-  } catch {
-    return fallback
-  }
-}
-
 function enrichProfileWithSummary(db, profile) {
   // Get billing account info
   const billingAccount = ensureBillingAccount(db, profile.id)
@@ -130,17 +124,8 @@ router.get('/', (req, res) => {
   const auth = req.user ?? { role: 'guest' }
   const includeSummary = req.query.summary === 'true'
   
-  // Pagination parameters with defaults
-  const limit = parseInt(req.query.limit, 10) || 100
-  const offset = parseInt(req.query.offset, 10) || 0
-  
   // Validate pagination parameters
-  if (limit < 1 || limit > 1000) {
-    return res.status(400).json({ error: 'limit must be between 1 and 1000' })
-  }
-  if (offset < 0) {
-    return res.status(400).json({ error: 'offset must be non-negative' })
-  }
+  const { limit, offset } = validatePagination(req.query);
 
   if (auth.role !== 'admin') {
     // Non-admin users should see all profiles they have access to via user_id
@@ -664,7 +649,7 @@ router.post('/:id/sections/:sectionKey/ai', async (req, res) => {
     })
   } catch (error) {
     console.error('Error generating profile section suggestion:', error)
-    res.status(500).json({ error: error.message })
+    res.status(500).json(formatError(error))
   }
 })
 
@@ -701,7 +686,7 @@ router.post('/send-application-email', async (req, res) => {
     })
   } catch (error) {
     console.error('Error sending application email:', error)
-    res.status(500).json({ error: error.message })
+    res.status(500).json(formatError(error))
   }
 })
 
