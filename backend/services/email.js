@@ -5,33 +5,50 @@ const FROM_EMAIL = process.env.FROM_EMAIL || 'onboarding@resend.dev'
 
 let resendClient = null
 if (RESEND_API_KEY) {
-  resendClient = new Resend(RESEND_API_KEY)
+  try {
+    resendClient = new Resend(RESEND_API_KEY)
+    console.info('[email] Email service initialized successfully with FROM_EMAIL:', FROM_EMAIL)
+  } catch (error) {
+    console.error('[email] Failed to initialize Resend client:', error.message)
+  }
+} else {
+  console.warn('[email] Email service NOT configured - RESEND_API_KEY is missing')
+  console.warn('[email] Email authentication will work but codes will only be available in response/logs')
+}
+
+/**
+ * Check if email service is configured
+ * @returns {boolean} True if email service is available
+ */
+export function isEmailServiceConfigured() {
+  return resendClient !== null
 }
 
 /**
  * Send a verification email with a 6-digit code
  * @param {string} email - Recipient email address
  * @param {string} code - 6-digit verification code
- * @returns {Promise<boolean>} True if email was sent successfully
- * @throws {Error} If email service is not configured or sending fails
+ * @returns {Promise<boolean>} True if email was sent successfully, false otherwise
  */
 export async function sendVerificationEmail(email, code) {
   if (!email || typeof email !== 'string') {
-    throw new Error('Invalid email address')
+    console.error('[email] Invalid email address provided:', email)
+    return false
   }
   
   if (!code || typeof code !== 'string') {
-    throw new Error('Invalid verification code')
+    console.error('[email] Invalid verification code provided')
+    return false
   }
   
   if (!resendClient) {
-    const errorMsg = 'Email service not configured. RESEND_API_KEY is missing from environment variables.'
-    console.error('[email]', errorMsg, 'Code would have been:', code)
-    throw new Error(errorMsg)
+    console.warn('[email] Email service not configured. RESEND_API_KEY is missing from environment variables.')
+    console.warn('[email] Code for', email, ':', code)
+    return false
   }
 
   try {
-    await resendClient.emails.send({
+    const result = await resendClient.emails.send({
       from: FROM_EMAIL,
       to: email,
       subject: 'Your GrantFlow verification code',
@@ -42,10 +59,12 @@ export async function sendVerificationEmail(email, code) {
         <p>This code expires in 10 minutes.</p>
       `,
     })
+    console.info('[email] Verification email sent successfully to', email, 'ID:', result?.id)
     return true
   } catch (error) {
-    console.error('[email] Failed to send:', error?.message || error)
-    throw new Error(`Failed to send verification email: ${error?.message || 'Unknown error'}`)
+    console.error('[email] Failed to send verification email:', error?.message || error)
+    console.error('[email] Error details:', { email, hasCode: !!code, fromEmail: FROM_EMAIL })
+    return false
   }
 }
 

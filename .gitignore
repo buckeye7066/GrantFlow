@@ -51,3 +51,7 @@ backend/anya/audit/**/*.log
 *.sln
 *.sw?
 .backup
+
+# Test files
+test-*.js
+test-*.mjs
