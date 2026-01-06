@@ -56,43 +56,44 @@ if (recentCompleted.length > 0) {
   })
 }
 
-// Check pipeline entries
-const pipelineCount = db.prepare('SELECT COUNT(*) as count FROM grant_pipeline').get()
-console.log(`\n=== PIPELINE ENTRIES ===`)
-console.log(`Total pipeline items: ${pipelineCount.count}`)
+// Check pipeline entries (grants table)
+const pipelineCount = db.prepare('SELECT COUNT(*) as count FROM grants').get()
+console.log(`\n=== PIPELINE ENTRIES (GRANTS) ===`)
+console.log(`Total grant items: ${pipelineCount.count}`)
 
-// Check pipeline by profile
-const pipelineByProfile = db.prepare(`
-  SELECT p.display_name, COUNT(gp.id) as count
-  FROM profiles p
-  LEFT JOIN grant_pipeline gp ON p.id = gp.profile_id
-  GROUP BY p.id
+// Check grants by organization/profile
+const grantsByOrg = db.prepare(`
+  SELECT o.display_name, COUNT(g.id) as count
+  FROM organizations o
+  LEFT JOIN grants g ON o.id = g.organization_id
+  GROUP BY o.id
   HAVING count > 0
   LIMIT 5
 `).all()
 
-if (pipelineByProfile.length > 0) {
-  console.log('\nProfiles with pipeline items:')
-  pipelineByProfile.forEach(p => {
-    console.log(`  - ${p.display_name}: ${p.count} items`)
+if (grantsByOrg.length > 0) {
+  console.log('\nOrganizations with grants:')
+  grantsByOrg.forEach(org => {
+    console.log(`  - ${org.display_name}: ${org.count} grants`)
   })
 }
 
-// Check high match scores
-const highMatches = db.prepare(`
-  SELECT gp.match_score, o.title, p.display_name
-  FROM grant_pipeline gp
-  JOIN funding_opportunities o ON gp.grant_id = o.id
-  JOIN profiles p ON gp.profile_id = p.id
-  WHERE gp.match_score >= 80
+// Check recent grants added
+const recentGrants = db.prepare(`
+  SELECT g.title, g.status, g.notes, o.display_name
+  FROM grants g
+  JOIN organizations o ON g.organization_id = o.id
+  WHERE g.notes LIKE '%Auto-added%'
+  ORDER BY g.created_at DESC
   LIMIT 5
 `).all()
 
-if (highMatches.length > 0) {
-  console.log('\nHigh match items (≥80%):')
-  highMatches.forEach(m => {
-    console.log(`  - ${m.match_score}%: ${m.title}`)
-    console.log(`    Profile: ${m.display_name}`)
+if (recentGrants.length > 0) {
+  console.log('\nRecent auto-added grants:')
+  recentGrants.forEach(g => {
+    console.log(`  - ${g.title}`)
+    console.log(`    Org: ${g.display_name}`)
+    console.log(`    Status: ${g.status}`)
   })
 }
 
