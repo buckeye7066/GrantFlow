@@ -552,12 +552,39 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
   try {
     claude = getClaudeClient()
   } catch (error) {
-    console.warn('[anya] Claude client unavailable; falling back to informational reply:', error.message)
+    console.warn('[anya] Claude client unavailable; providing guided assistance instead:', error.message)
+    
+    // Provide helpful responses without AI
+    const lowerContent = trimmed.toLowerCase()
+    
+    // Common queries and helpful responses
+    if (lowerContent.includes('grant') || lowerContent.includes('funding')) {
+      return "I can help you discover grants! Try:\n• Click 'Discover Grants' to browse opportunities\n• Use 'Smart Matcher' for AI-powered recommendations\n• Check 'Pipeline' to track your applications\n\nNote: Full AI assistance requires ANTHROPIC_API_KEY configuration."
+    }
+    
+    if (lowerContent.includes('profile') || lowerContent.includes('organization')) {
+      return "To manage your profile:\n• Go to 'My Profiles' to view and edit profile details\n• Upload documents in the profile section\n• Set your organization type and focus areas\n\nNote: Full AI assistance requires ANTHROPIC_API_KEY configuration."
+    }
+    
+    if (lowerContent.includes('crawler') || lowerContent.includes('search')) {
+      return "For grant discovery:\n• Use 'Discover Grants' to search opportunities\n• Filter by state, amount, or deadline\n• Save promising grants to your pipeline\n\nNote: Full AI assistance requires ANTHROPIC_API_KEY configuration."
+    }
+    
+    if (lowerContent.includes('help') || lowerContent.includes('how')) {
+      return "Here's what you can do in GrantFlow:\n• **Discover Grants** - Browse and search funding opportunities\n• **My Profiles** - Manage organization details\n• **Pipeline** - Track application progress\n• **Smart Matcher** - Get AI-powered recommendations\n• **Documents** - Upload and manage files\n\nNote: Full AI assistance requires ANTHROPIC_API_KEY configuration."
+    }
+    
+    // Default response with helpful navigation
     return [
-      'I’m running without an AI model configured at the moment.',
-      'Ask an admin to set `ANTHROPIC_API_KEY` on the backend so I can provide richer assistance.',
-      'In the meantime I can still point you to relevant screens or scripts if you describe what you need.',
-    ].join(' ')
+      "I can help guide you through GrantFlow! Here are key features:",
+      "• **Discover Grants** - Find funding opportunities",
+      "• **Smart Matcher** - Get personalized recommendations", 
+      "• **Pipeline** - Track your applications",
+      "",
+      "What would you like to work on?",
+      "",
+      "Note: For full AI assistance, an admin needs to configure ANTHROPIC_API_KEY."
+    ].join('\n')
   }
 
   let historyMessages = null
