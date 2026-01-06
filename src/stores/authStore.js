@@ -11,6 +11,65 @@ import { base44 } from '@/api/base44Client'
 import { apiFetch } from '@/api/client'
 import { toast } from '@/components/ui/use-toast'
 
+const ACCESS_EXPIRY_STORAGE_KEY = 'grantflow:access-expiry'
+const REFRESH_LEEWAY_MS = 60 * 1000
+const FALLBACK_REFRESH_LEEWAY_MS = 5 * 1000
+const MAX_TIMEOUT_MS = 2_147_000_000
+let refreshTimerId = null
+
+function resolveAccessExpiryMs(meta) {
+  if (!meta) return null
+
+  const { accessExpires, expiresIn } = meta
+
+  if (accessExpires !== undefined && accessExpires !== null) {
+    if (typeof accessExpires === 'number' && Number.isFinite(accessExpires)) {
+      return accessExpires > 1e11 ? accessExpires : Date.now() + accessExpires * 1000
+    }
+
+    const numericValue = Number(accessExpires)
+    if (Number.isFinite(numericValue)) {
+      return numericValue > 1e11 ? numericValue : Date.now() + numericValue * 1000
+    }
+
+    const parsed = Date.parse(String(accessExpires))
+    if (!Number.isNaN(parsed)) {
+      return parsed
+    }
+  }
+
+  if (expiresIn !== undefined && expiresIn !== null) {
+    const numeric = Number(expiresIn)
+    if (Number.isFinite(numeric) && numeric >= 0) {
+      return Date.now() + numeric * 1000
+    }
+  }
+
+  return null
+}
+
+function persistAccessExpiry(expiresAtMs) {
+  if (typeof window === 'undefined') return
+  if (!Number.isFinite(expiresAtMs)) return
+  window.localStorage.setItem(ACCESS_EXPIRY_STORAGE_KEY, String(Math.trunc(expiresAtMs)))
+}
+
+function clearAccessExpiry() {
+  if (typeof window === 'undefined') return
+  window.localStorage.removeItem(ACCESS_EXPIRY_STORAGE_KEY)
+}
+
+function clearRefreshTimer() {
+  if (refreshTimerId !== null) {
+    if (typeof window !== 'undefined' && typeof window.clearTimeout === 'function') {
+      window.clearTimeout(refreshTimerId)
+    } else {
+      clearTimeout(refreshTimerId)
+    }
+    refreshTimerId = null
+  }
+}
+
 const AUTH_METHODS = new Set(['email', 'phone', 'social'])
 
 // Crawler types to auto-trigger on admin login
@@ -50,6 +109,7 @@ const initialState = {
   activeProfileId: null,
   accessToken: null,
   refreshToken: null,
+  accessTokenExpiresAt: null,
   isAuthenticated: false,
   isLoading: false,
   error: null,
@@ -71,6 +131,7 @@ export const useAuthStore = create((set, get) => ({
     const refreshToken = localStorage.getItem('grantflow:refresh-token')
     const storedMethod = localStorage.getItem('grantflow:auth-method')
     const hasSeenOnboarding = localStorage.getItem('grantflow:onboarding-complete') === 'true'
+    const storedExpiry = localStorage.getItem(ACCESS_EXPIRY_STORAGE_KEY)
     const updates = {}
     if (accessToken) {
       base44.setToken(accessToken)
@@ -87,10 +148,20 @@ export const useAuthStore = create((set, get) => ({
     if (Object.keys(updates).length > 0) {
       set((state) => ({ ...state, ...updates }))
     }
+    if (storedExpiry) {
+      const expiryMs = Number(storedExpiry)
+      if (Number.isFinite(expiryMs) && expiryMs > Date.now()) {
+        get().scheduleSessionRefresh({ accessExpires: expiryMs })
+      } else {
+        clearAccessExpiry()
+      }
+    }
   },
 
   clearState: () => {
     const preferredAuthMethod = get().preferredAuthMethod
+    clearRefreshTimer()
+    clearAccessExpiry()
     base44.clearToken()
     set({ ...initialState, preferredAuthMethod })
   },
@@ -173,6 +244,52 @@ export const useAuthStore = create((set, get) => ({
     }
   },
 
+  scheduleSessionRefresh: (sessionMeta = {}) => {
+    clearRefreshTimer()
+
+    const expiresAtMs = resolveAccessExpiryMs(sessionMeta)
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= 0) {
+      set({ accessTokenExpiresAt: null })
+      clearAccessExpiry()
+      return
+    }
+
+    persistAccessExpiry(expiresAtMs)
+    set({ accessTokenExpiresAt: expiresAtMs })
+
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const msUntilExpiry = expiresAtMs - Date.now()
+    if (msUntilExpiry <= 0) {
+      refreshTimerId = window.setTimeout(() => {
+        get()
+          .refreshSession()
+          .catch((error) => {
+            console.error('Automatic session refresh failed:', error)
+            get().markSessionExpired('Your session expired. Please sign in again.')
+          })
+      }, 0)
+      return
+    }
+
+    let refreshDelay = msUntilExpiry - REFRESH_LEEWAY_MS
+    if (refreshDelay <= 0) {
+      refreshDelay = Math.max(0, msUntilExpiry - FALLBACK_REFRESH_LEEWAY_MS)
+    }
+    refreshDelay = Math.min(refreshDelay, MAX_TIMEOUT_MS)
+
+    refreshTimerId = window.setTimeout(() => {
+      get()
+        .refreshSession()
+        .catch((error) => {
+          console.error('Automatic session refresh failed:', error)
+          get().markSessionExpired('Your session expired. Please sign in again.')
+        })
+    }, refreshDelay)
+  },
+
   startEmailSignIn: async (email) => {
     return startEmailSignIn(email)
   },
@@ -190,6 +307,9 @@ export const useAuthStore = create((set, get) => ({
         set({ refreshToken: result.refreshToken })
       }
       get().setAuthenticatedUser(result)
+      if (result) {
+        get().scheduleSessionRefresh(result)
+      }
       set({ isLoading: false })
       return result
     } catch (error) {
@@ -215,6 +335,9 @@ export const useAuthStore = create((set, get) => ({
         set({ refreshToken: result.refreshToken })
       }
       get().setAuthenticatedUser(result)
+      if (result) {
+        get().scheduleSessionRefresh(result)
+      }
       set({ isLoading: false })
       return result
     } catch (error) {
@@ -223,7 +346,13 @@ export const useAuthStore = create((set, get) => ({
     }
   },
 
-  loginWithTokens: async ({ accessToken, refreshToken } = {}) => {
+  loginWithTokens: async ({
+    accessToken,
+    refreshToken,
+    expiresIn,
+    accessExpires,
+    refreshExpires,
+  } = {}) => {
     set({ isLoading: true, error: null })
     try {
       const response = await base44.auth.loginWithTokens({
@@ -236,6 +365,10 @@ export const useAuthStore = create((set, get) => ({
       }
       if (refreshToken) {
         set({ refreshToken })
+      }
+
+      if (expiresIn !== undefined || accessExpires !== undefined || refreshExpires !== undefined) {
+        get().scheduleSessionRefresh({ expiresIn, accessExpires, refreshExpires })
       }
 
       if (response) {
@@ -276,6 +409,9 @@ export const useAuthStore = create((set, get) => ({
         set({ refreshToken: response.refreshToken })
       }
       get().setAuthenticatedUser(response)
+      if (response) {
+        get().scheduleSessionRefresh(response)
+      }
       return response
     } catch (error) {
       get().clearState()
@@ -285,6 +421,8 @@ export const useAuthStore = create((set, get) => ({
 
   markSessionExpired: (message) => {
     base44.clearToken()
+    clearRefreshTimer()
+    clearAccessExpiry()
     set({
       ...initialState,
       sessionExpired: true,

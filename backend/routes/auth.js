@@ -1161,18 +1161,26 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       })
     }
 
-    // Attempt to send email
+    // Attempt to send email with timeout
     console.info('[auth/email/start] Attempting to send verification email to:', email)
     let emailSent = false
     try {
-      emailSent = await sendVerificationEmail(email, code)
-      if (emailSent) {
+      // Add timeout to email sending to prevent hanging
+      const emailPromise = sendVerificationEmail(email, code)
+      const timeoutPromise = new Promise((resolve) => {
+        setTimeout(() => resolve(false), 5000) // 5 second timeout
+      })
+      
+      emailSent = await Promise.race([emailPromise, timeoutPromise])
+      
+      if (emailSent === true) {
         console.info('[auth/email/start] Verification email sent successfully to:', email)
       } else {
-        console.warn('[auth/email/start] Email service unavailable or failed for:', email)
+        console.warn('[auth/email/start] Email service unavailable, timed out, or failed for:', email)
       }
     } catch (emailError) {
       console.error('[auth/email/start] Unexpected error sending email:', emailError)
+      emailSent = false
       // Don't fail the request if email fails - code is stored in DB
     }
 
@@ -1189,12 +1197,15 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       },
     }
 
-    // Include preview code in development or when email wasn't sent
-    if (process.env.NODE_ENV !== 'production' || !emailSent) {
+    // ALWAYS include preview code when email wasn't sent (regardless of environment)
+    // This ensures users can always log in even if email service is down
+    if (!emailSent) {
       responseData.previewCode = code
-      responseData.notice = emailSent 
-        ? 'Code included for development purposes' 
-        : 'Email service is not configured. Use the preview code to continue.'
+      responseData.notice = 'Email service is not configured or unavailable. Use the preview code below to continue.'
+    } else if (process.env.NODE_ENV !== 'production') {
+      // Also include in development even if email was sent
+      responseData.previewCode = code
+      responseData.notice = 'Development mode: Code included for testing'
     }
 
     console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent)
@@ -1357,6 +1368,8 @@ router.post('/email/verify', (req, res) => {
     accessToken: session.accessToken,
     refreshToken: session.refreshToken,
     expiresIn: session.expiresIn,
+    accessExpires: session.accessExpires,
+    refreshExpires: session.refreshExpires,
     tokenType: 'Bearer',
     user: buildUserPayload(user, profiles, activeProfileId),
   }
@@ -1368,6 +1381,15 @@ router.post('/email/verify', (req, res) => {
       jobs_created: Object.keys(anyaInfo.jobIds).length,
       profile_id: anyaInfo.profileId,
     }
+  }
+  
+  // Trigger Anya's autonomous operations for admin login if configured
+  if (user.role === 'admin' && process.env.ANYA_RUN_ON_ADMIN_LOGIN === 'true') {
+    import('../services/anyaAutonomousScheduler.js').then(({ runOnAdminLogin }) => {
+      runOnAdminLogin(db, user.id).catch(err => {
+        console.error('[Anya] Failed to run admin login operations:', err)
+      })
+    })
   }
 
   return res.json(response)
@@ -1586,6 +1608,8 @@ router.post('/phone/verify', (req, res) => {
     accessToken: session.accessToken,
     refreshToken: session.refreshToken,
     expiresIn: session.expiresIn,
+    accessExpires: session.accessExpires,
+    refreshExpires: session.refreshExpires,
     tokenType: 'Bearer',
     user: buildUserPayload(user, profiles, activeProfileId),
   }
@@ -1714,6 +1738,8 @@ router.get('/:provider/callback', async (req, res) => {
       accessToken: session.accessToken,
       refreshToken: session.refreshToken,
       expiresIn: session.expiresIn,
+      accessExpires: session.accessExpires,
+      refreshExpires: session.refreshExpires,
       activeProfileId: activeProfileId ?? undefined,
     })
   } catch (oauthError) {

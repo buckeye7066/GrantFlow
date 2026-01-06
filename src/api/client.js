@@ -195,43 +195,63 @@ class APIClient {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await fetch(url, {
-      ...options,
-      headers,
-      credentials: 'include', // Ensure cookies are sent with the request
-    });
+    // Add timeout to prevent hanging requests
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
 
-    if (response.status === 401) {
-      // Prevent infinite retry loops - only retry once
-      if (isRetry) {
-        console.error('[APIClient] Still getting 401 after refresh, giving up');
-        this.clearToken();
-        if (this.onAuthFailure) {
-          this.onAuthFailure('Your session expired. Sign in again to continue.');
+    try {
+      const response = await fetch(url, {
+        ...options,
+        headers,
+        credentials: 'include', // Ensure cookies are sent with the request
+        signal: controller.signal,
+      });
+      
+      clearTimeout(timeoutId);
+
+      if (response.status === 401) {
+        // Prevent infinite retry loops - only retry once
+        if (isRetry) {
+          console.error('[APIClient] Still getting 401 after refresh, giving up');
+          this.clearToken();
+          if (this.onAuthFailure) {
+            this.onAuthFailure('Your session expired. Sign in again to continue.');
+          }
+          throw this.createAuthError('Authentication failed after retry');
         }
-        throw this.createAuthError('Authentication failed after retry');
+        
+        // Mark the retry and handle unauthorized
+        const retryOptions = { ...options, _isRetry: true };
+        return this.handleUnauthorized({ endpoint, options: retryOptions });
+      }
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: response.statusText }));
+        throw new Error(error.error || error.message || 'Request failed');
+      }
+
+      if (response.status === 204) {
+        return null;
+      }
+
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        return response.json();
+      }
+
+      return response.text();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      
+      // Handle timeout errors specifically
+      if (error.name === 'AbortError') {
+        console.error(`[APIClient] Request timeout for ${endpoint}`);
+        throw new Error('Request timed out. Please check your connection and try again.');
       }
       
-      // Mark the retry and handle unauthorized
-      const retryOptions = { ...options, _isRetry: true };
-      return this.handleUnauthorized({ endpoint, options: retryOptions });
+      // Re-throw other errors
+      throw error;
     }
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: response.statusText }));
-      throw new Error(error.error || error.message || 'Request failed');
-    }
-
-    if (response.status === 204) {
-      return null;
-    }
-
-    const contentType = response.headers.get('content-type') || '';
-    if (contentType.includes('application/json')) {
-      return response.json();
-    }
-
-    return response.text();
   }
 
   // Entity wrapper for Base44-compatible interface

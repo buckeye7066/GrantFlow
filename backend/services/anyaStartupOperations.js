@@ -3,7 +3,7 @@ import { dirname, join } from 'path'
 import { randomUUID } from 'crypto'
 import fs from 'fs'
 import OpenAI from 'openai'
-import { processComprehensiveCrawlerJob } from './comprehensiveCrawler.js'
+import { processComprehensiveCrawlerJob } from './comprehensiveCrawlerOptimized.js'
 import { dispatchCrawlerJob } from './crawlerDispatcher.js'
 
 const __filename = fileURLToPath(import.meta.url)

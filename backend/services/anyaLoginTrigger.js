@@ -160,17 +160,19 @@ export function initializeAnyaForAdmin(db, user, profileId = null, { uploadDir, 
       profile_enrichment: createCrawlerJob(db, profileId, 'profile_enrichment', {}),
     }
     
-    // FIXED: Dispatch each crawler job to actually start them
-    // Reference: backend/services/autoDiscoveryCrawlers.js lines 117-127
+    // Dispatch each crawler job
     Object.entries(jobIds).forEach(([type, jobId]) => {
-      dispatchCrawlerJob({
-        db,
-        jobId,
-        uploadDir,
-        getOpenAI
-      }).catch(err => {
+      try {
+        dispatchCrawlerJob({
+          db,
+          jobId,
+          uploadDir,
+          getOpenAI
+        })
+        console.log(`[anyaLoginTrigger] Dispatched ${type} crawler job: ${jobId}`)
+      } catch (err) {
         console.error(`[anyaLoginTrigger] Job ${jobId} (${type}) dispatch failed:`, err)
-      })
+      }
     })
     
     // Add welcome message from Anya

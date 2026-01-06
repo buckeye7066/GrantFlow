@@ -53,6 +53,9 @@ export default function AuthCallback() {
   const params = useMemo(() => parseParams(location), [location])
   const provider = formatProviderName(params.get('provider'))
   const errorCode = params.get('error')
+  const expiresInParam = params.get('expiresIn')
+  const accessExpiresParam = params.get('accessExpires')
+  const refreshExpiresParam = params.get('refreshExpires')
 
   useEffect(() => {
     if (timeoutRef.current) {
@@ -81,7 +84,21 @@ export default function AuthCallback() {
       window.history.replaceState({}, document.title, cleanUrl)
     }
 
-    loginWithTokens({ accessToken, refreshToken })
+    const sessionMeta = {
+      accessToken,
+      refreshToken,
+    }
+    if (expiresInParam) {
+      sessionMeta.expiresIn = Number(expiresInParam) || expiresInParam
+    }
+    if (accessExpiresParam) {
+      sessionMeta.accessExpires = accessExpiresParam
+    }
+    if (refreshExpiresParam) {
+      sessionMeta.refreshExpires = refreshExpiresParam
+    }
+
+    loginWithTokens(sessionMeta)
       .then((result) => {
         if (!result || typeof result !== 'object') {
           throw new Error('AUTHENTICATION_FAILED')
