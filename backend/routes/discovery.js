@@ -208,10 +208,13 @@ function buildDemographicSignals(profile, organization, sections) {
 
 /**
  * Calculate match score between profile signals and opportunity
+ * ENHANCED: Uses ALL profile data points for comprehensive matching
+ * Scoring designed to achieve 80%+ matches for well-aligned opportunities
  */
 function calculateMatchScore(signals, opp) {
-  let score = 55; // Base score (improved)
+  let score = 40; // Start at 40% base - must earn the rest
   const matchedFields = [];
+  let matchStrength = 0; // Track how many categories match
   
   // Parse opportunity keywords and categories
   let oppKeywords = [];
@@ -337,15 +340,56 @@ function calculateMatchScore(signals, opp) {
   });
   score += Math.min(15, Math.floor(healthMatches * 5));
   
-  // Location matching (up to 5 points)
+  // Location matching (up to 10 points) - INCREASED
   if (opp.state) {
     for (const loc of signals.location) {
       if (opp.state.toLowerCase() === loc || (opp.description && opp.description.toLowerCase().includes(loc))) {
-        score += 5;
-        matchedFields.push('location');
+        score += 10;
+        matchedFields.push('location: ' + loc);
+        matchStrength++;
         break;
       }
     }
+  }
+  
+  // Education level matching (up to 10 points)
+  if (signals.education && signals.education.size > 0) {
+    signals.education.forEach(edu => {
+      for (const term of oppTerms) {
+        if (term.includes(edu) || edu.includes(term) || oppText.includes(edu)) {
+          score += 5;
+          matchedFields.push('education: ' + edu);
+          matchStrength++;
+          break;
+        }
+      }
+    });
+  }
+  
+  // Financial need matching (up to 10 points)
+  if (signals.financial && signals.financial.size > 0) {
+    signals.financial.forEach(fin => {
+      for (const term of oppTerms) {
+        if (term.includes(fin) || fin.includes(term) || oppText.includes(fin)) {
+          score += 5;
+          matchedFields.push('financial: ' + fin);
+          matchStrength++;
+          break;
+        }
+      }
+    });
+  }
+  
+  // BONUS: Multiple category matches (up to 15 points)
+  // If matching in 3+ categories, likely a strong fit
+  if (matchStrength >= 5) {
+    score += 15;
+    matchedFields.push('strong multi-category match');
+  } else if (matchStrength >= 3) {
+    score += 10;
+    matchedFields.push('good multi-category match');
+  } else if (matchStrength >= 2) {
+    score += 5;
   }
   
   return { score: Math.min(100, score), matchedFields };
@@ -460,14 +504,19 @@ router.post('/comprehensiveMatch', async (req, res) => {
       };
     });
     
-    // Filter to only return high-scoring opportunities
-    const highScoring = scoredOpportunities.filter(o => o.fit_score >= 50);
+    // Filter to only return opportunities with 80%+ match score
+    // This ensures only highly relevant opportunities are shown to users
+    const highScoring = scoredOpportunities
+      .filter(o => o.fit_score >= 80)
+      .sort((a, b) => b.fit_score - a.fit_score);
     
     res.json({
       success: true,
       opportunities: highScoring,
       total: highScoring.length,
-      page
+      page,
+      threshold_used: 80,
+      total_evaluated: scoredOpportunities.length
     });
     
   } catch (error) {
