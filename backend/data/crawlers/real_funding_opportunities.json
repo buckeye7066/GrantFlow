@@ -463,5 +463,471 @@
       "requires_501c3": true,
       "state": "nationwide"
     }
+  ],
+  "individual_assistance": [
+    {
+      "id": "ind-tanf",
+      "title": "Temporary Assistance for Needy Families (TANF)",
+      "sponsor": "U.S. Department of Health and Human Services",
+      "description": "Cash assistance and support services for low-income families with children. Provides temporary financial help while aiming for self-sufficiency.",
+      "amount_min": 200,
+      "amount_max": 800,
+      "amount_description": "Monthly benefit varies by state and family size",
+      "deadline": "Rolling",
+      "application_url": "https://www.acf.hhs.gov/ofa/programs/tanf",
+      "categories": ["family", "income_support", "children"],
+      "keywords": ["family", "children", "low income", "cash assistance", "welfare"],
+      "eligibility_bullets": [
+        "Family with dependent children",
+        "Meet income requirements",
+        "Must participate in work activities",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "ind-wic",
+      "title": "Special Supplemental Nutrition Program for Women, Infants, and Children (WIC)",
+      "sponsor": "USDA Food and Nutrition Service",
+      "description": "Provides nutritious foods, nutrition education, and healthcare referrals for pregnant and postpartum women, infants, and children up to age 5.",
+      "amount_min": 30,
+      "amount_max": 75,
+      "amount_description": "Monthly food benefit varies",
+      "deadline": "Rolling",
+      "application_url": "https://www.fns.usda.gov/wic",
+      "categories": ["nutrition", "health", "children", "women"],
+      "keywords": ["nutrition", "pregnant", "infant", "children", "food", "women"],
+      "eligibility_bullets": [
+        "Pregnant, postpartum, or breastfeeding women",
+        "Infants and children under 5",
+        "Meet income guidelines",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "ind-head-start",
+      "title": "Head Start and Early Head Start",
+      "sponsor": "U.S. Department of Health and Human Services",
+      "description": "Free early childhood education, health, and family support services for low-income children from birth to age 5 and their families.",
+      "amount_min": 0,
+      "amount_max": 15000,
+      "amount_description": "Free program services",
+      "deadline": "Rolling enrollment",
+      "application_url": "https://www.acf.hhs.gov/ohs",
+      "categories": ["education", "children", "family"],
+      "keywords": ["children", "preschool", "early childhood", "education", "family"],
+      "eligibility_bullets": [
+        "Children from birth to age 5",
+        "Family income below poverty line",
+        "Priority for homeless and foster children",
+        "Free services - no cost to families"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "ind-medicaid",
+      "title": "Medicaid",
+      "sponsor": "Centers for Medicare & Medicaid Services",
+      "description": "Free or low-cost health coverage for eligible low-income adults, children, pregnant women, elderly adults, and people with disabilities.",
+      "amount_min": 0,
+      "amount_max": null,
+      "amount_description": "Health coverage - not cash benefit",
+      "deadline": "Rolling",
+      "application_url": "https://www.medicaid.gov/",
+      "categories": ["health", "insurance", "disability"],
+      "keywords": ["health", "insurance", "medical", "low income", "disability", "children"],
+      "eligibility_bullets": [
+        "Meet income requirements (varies by state)",
+        "Certain categories: children, pregnant, elderly, disabled",
+        "No premium for most beneficiaries",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "ind-chip",
+      "title": "Children's Health Insurance Program (CHIP)",
+      "sponsor": "Centers for Medicare & Medicaid Services",
+      "description": "Low-cost health coverage for children in families that earn too much to qualify for Medicaid but cannot afford private insurance.",
+      "amount_min": 0,
+      "amount_max": null,
+      "amount_description": "Health coverage - not cash benefit",
+      "deadline": "Rolling",
+      "application_url": "https://www.healthcare.gov/medicaid-chip/childrens-health-insurance-program/",
+      "categories": ["health", "children", "insurance"],
+      "keywords": ["children", "health", "insurance", "medical", "family"],
+      "eligibility_bullets": [
+        "Children under 19",
+        "Family income too high for Medicaid",
+        "Cannot afford private insurance",
+        "No or low-cost coverage"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "ind-section8",
+      "title": "Section 8 Housing Choice Voucher Program",
+      "sponsor": "U.S. Department of Housing and Urban Development",
+      "description": "Rental assistance vouchers to help very low-income families, the elderly, and disabled afford decent, safe housing in the private market.",
+      "amount_min": 200,
+      "amount_max": 2000,
+      "amount_description": "Covers portion of rent based on income",
+      "deadline": "Waitlist - varies by location",
+      "application_url": "https://www.hud.gov/topics/housing_choice_voucher_program_section_8",
+      "categories": ["housing", "rental_assistance"],
+      "keywords": ["housing", "rent", "voucher", "low income", "elderly", "disability"],
+      "eligibility_bullets": [
+        "Income below 50% of area median",
+        "Priority for very low-income",
+        "Elderly and disabled given preference",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "ind-weatherization",
+      "title": "Weatherization Assistance Program",
+      "sponsor": "U.S. Department of Energy",
+      "description": "Free home energy efficiency improvements for low-income households to reduce energy costs and improve comfort and safety.",
+      "amount_min": 2000,
+      "amount_max": 8000,
+      "deadline": "Rolling",
+      "application_url": "https://www.energy.gov/eere/wap/weatherization-assistance-program",
+      "categories": ["housing", "energy", "utilities"],
+      "keywords": ["energy", "home improvement", "utilities", "low income", "weatherization"],
+      "eligibility_bullets": [
+        "Household income at or below 200% poverty level",
+        "Priority for elderly, disabled, families with children",
+        "Free services - no cost to homeowner",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "ind-lifeline",
+      "title": "Lifeline Phone/Internet Discount",
+      "sponsor": "Federal Communications Commission",
+      "description": "Discount on phone or internet service for qualifying low-income consumers. $9.25 monthly discount on service.",
+      "amount_min": 9,
+      "amount_max": 34,
+      "amount_description": "$9.25/month discount, up to $34.25 on Tribal lands",
+      "deadline": "Rolling",
+      "application_url": "https://www.lifelinesupport.org/",
+      "categories": ["utilities", "technology", "communication"],
+      "keywords": ["phone", "internet", "discount", "low income", "communication"],
+      "eligibility_bullets": [
+        "Participate in federal assistance program OR",
+        "Income at or below 135% poverty guideline",
+        "One discount per household",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "ind-acp-internet",
+      "title": "Affordable Connectivity Program",
+      "sponsor": "Federal Communications Commission",
+      "description": "Discount of up to $30/month toward internet service and one-time $100 discount for a laptop, tablet, or desktop computer.",
+      "amount_min": 30,
+      "amount_max": 100,
+      "amount_description": "$30/month internet + $100 device discount",
+      "deadline": "While funding lasts",
+      "application_url": "https://www.fcc.gov/acp",
+      "categories": ["technology", "internet", "education"],
+      "keywords": ["internet", "computer", "laptop", "tablet", "low income", "broadband"],
+      "eligibility_bullets": [
+        "Income at or below 200% poverty guideline",
+        "Participate in assistance programs (SNAP, Medicaid, etc.)",
+        "One benefit per household",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "ind-free-school-meals",
+      "title": "National School Lunch & Breakfast Programs",
+      "sponsor": "USDA Food and Nutrition Service",
+      "description": "Free or reduced-price meals for children from low-income families attending participating schools.",
+      "amount_min": 0,
+      "amount_max": 2000,
+      "amount_description": "Free meals - annual value ~$2,000",
+      "deadline": "Apply through school",
+      "application_url": "https://www.fns.usda.gov/nslp",
+      "categories": ["nutrition", "children", "education"],
+      "keywords": ["children", "school", "meals", "food", "low income", "nutrition"],
+      "eligibility_bullets": [
+        "Family income at or below 185% poverty for reduced price",
+        "At or below 130% poverty for free meals",
+        "Apply through child's school",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    }
+  ],
+  "healthcare_assistance": [
+    {
+      "id": "health-ryan-white",
+      "title": "Ryan White HIV/AIDS Program",
+      "sponsor": "Health Resources and Services Administration",
+      "description": "Medical care, medications, and support services for people living with HIV who lack adequate health coverage.",
+      "amount_min": 0,
+      "amount_max": null,
+      "amount_description": "Services provided at no cost based on need",
+      "deadline": "Rolling",
+      "application_url": "https://ryanwhite.hrsa.gov/",
+      "categories": ["health", "hiv", "medical"],
+      "keywords": ["HIV", "AIDS", "healthcare", "medication", "medical"],
+      "eligibility_bullets": [
+        "Living with HIV",
+        "Low-income and underinsured",
+        "Services are free based on income",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "health-fqhc",
+      "title": "Federally Qualified Health Centers",
+      "sponsor": "Health Resources and Services Administration",
+      "description": "Community health centers providing primary care on a sliding fee scale based on ability to pay, regardless of insurance status.",
+      "amount_min": 0,
+      "amount_max": null,
+      "amount_description": "Sliding scale fees based on income",
+      "deadline": "Rolling",
+      "application_url": "https://findahealthcenter.hrsa.gov/",
+      "categories": ["health", "medical", "primary_care"],
+      "keywords": ["health", "medical", "doctor", "clinic", "low income", "uninsured"],
+      "eligibility_bullets": [
+        "Open to everyone regardless of insurance",
+        "Sliding fee scale based on income",
+        "No one turned away for inability to pay",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "health-hill-burton",
+      "title": "Hill-Burton Free Care Program",
+      "sponsor": "Health Resources and Services Administration",
+      "description": "Free or reduced cost medical services at participating hospitals and healthcare facilities.",
+      "amount_min": 0,
+      "amount_max": null,
+      "amount_description": "Free or reduced cost medical care",
+      "deadline": "Rolling",
+      "application_url": "https://www.hrsa.gov/get-health-care/affordable/hill-burton",
+      "categories": ["health", "hospital", "medical"],
+      "keywords": ["hospital", "medical", "healthcare", "free care", "low income"],
+      "eligibility_bullets": [
+        "Income at or below poverty guidelines",
+        "Apply at participating facility",
+        "Covers inpatient and outpatient services",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "health-maternal-child",
+      "title": "Title V Maternal and Child Health Services",
+      "sponsor": "Health Resources and Services Administration",
+      "description": "Health services for mothers, infants, and children including prenatal care, well-child visits, and services for children with special healthcare needs.",
+      "amount_min": 0,
+      "amount_max": null,
+      "amount_description": "Services provided based on need",
+      "deadline": "Rolling",
+      "application_url": "https://mchb.hrsa.gov/programs-impact/title-v-maternal-child-health-mch-block-grant",
+      "categories": ["health", "children", "women", "prenatal"],
+      "keywords": ["maternal", "child", "health", "prenatal", "infant", "women", "children"],
+      "eligibility_bullets": [
+        "Pregnant women and mothers",
+        "Infants and children",
+        "Children with special health care needs",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    }
+  ],
+  "senior_assistance": [
+    {
+      "id": "senior-meals-on-wheels",
+      "title": "Meals on Wheels",
+      "sponsor": "Administration for Community Living",
+      "description": "Home-delivered nutritious meals and friendly visits for seniors who are homebound or have difficulty preparing meals.",
+      "amount_min": 0,
+      "amount_max": 3000,
+      "amount_description": "Free or low-cost meals",
+      "deadline": "Rolling",
+      "application_url": "https://www.mealsonwheelsamerica.org/",
+      "categories": ["senior", "nutrition", "health"],
+      "keywords": ["senior", "elderly", "meals", "food", "nutrition", "homebound"],
+      "eligibility_bullets": [
+        "Age 60 or older",
+        "Homebound or difficulty preparing meals",
+        "Suggested donation but not required",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "senior-lis",
+      "title": "Medicare Extra Help (Low Income Subsidy)",
+      "sponsor": "Social Security Administration",
+      "description": "Helps pay for Medicare prescription drug costs including premiums, deductibles, and copayments.",
+      "amount_min": 500,
+      "amount_max": 5000,
+      "amount_description": "Annual savings on prescription drugs",
+      "deadline": "Rolling",
+      "application_url": "https://www.ssa.gov/medicare/part-d-extra-help",
+      "categories": ["senior", "health", "medication"],
+      "keywords": ["senior", "medicare", "prescription", "medication", "drugs", "elderly"],
+      "eligibility_bullets": [
+        "Medicare beneficiary",
+        "Income below 150% poverty level",
+        "Limited resources",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "senior-commodity",
+      "title": "Commodity Supplemental Food Program (CSFP)",
+      "sponsor": "USDA Food and Nutrition Service",
+      "description": "Monthly packages of nutritious USDA foods for low-income seniors to supplement their diets.",
+      "amount_min": 50,
+      "amount_max": 100,
+      "amount_description": "Monthly food package value",
+      "deadline": "Rolling",
+      "application_url": "https://www.fns.usda.gov/csfp/commodity-supplemental-food-program",
+      "categories": ["senior", "nutrition", "food"],
+      "keywords": ["senior", "elderly", "food", "nutrition", "commodities"],
+      "eligibility_bullets": [
+        "Age 60 or older",
+        "Income at or below 130% poverty guideline",
+        "Monthly food package provided",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    }
+  ],
+  "emergency_assistance": [
+    {
+      "id": "emerg-erap",
+      "title": "Emergency Rental Assistance Program",
+      "sponsor": "U.S. Department of the Treasury",
+      "description": "Emergency rental and utility assistance for households unable to pay rent or utilities due to pandemic-related financial hardship.",
+      "amount_min": 1000,
+      "amount_max": 18000,
+      "amount_description": "Up to 18 months of rent/utilities",
+      "deadline": "While funds available",
+      "application_url": "https://home.treasury.gov/policy-issues/coronavirus/assistance-for-state-local-and-tribal-governments/emergency-rental-assistance-program",
+      "categories": ["housing", "utilities", "emergency"],
+      "keywords": ["rent", "emergency", "eviction", "utilities", "housing"],
+      "eligibility_bullets": [
+        "Risk of homelessness or housing instability",
+        "Income below 80% area median",
+        "Financial hardship due to pandemic",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "emerg-fema-individual",
+      "title": "FEMA Individual Assistance",
+      "sponsor": "Federal Emergency Management Agency",
+      "description": "Grants for disaster survivors to cover essential needs like temporary housing, home repairs, and other serious needs.",
+      "amount_min": 500,
+      "amount_max": 41000,
+      "deadline": "60 days after disaster declaration",
+      "application_url": "https://www.fema.gov/assistance/individual",
+      "categories": ["emergency", "disaster", "housing"],
+      "keywords": ["disaster", "emergency", "FEMA", "housing", "recovery"],
+      "eligibility_bullets": [
+        "Affected by presidentially declared disaster",
+        "U.S. citizen or qualified alien",
+        "Primary residence was damaged",
+        "No repayment required - it's a grant"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "emerg-salvation-army",
+      "title": "Salvation Army Emergency Assistance",
+      "sponsor": "The Salvation Army",
+      "description": "Emergency assistance for rent, utilities, food, and other basic needs for individuals and families in crisis.",
+      "amount_min": 100,
+      "amount_max": 1500,
+      "deadline": "Rolling",
+      "application_url": "https://www.salvationarmyusa.org/usn/provide-shelter/",
+      "categories": ["emergency", "basic_needs"],
+      "keywords": ["emergency", "rent", "utilities", "food", "crisis"],
+      "eligibility_bullets": [
+        "Experiencing financial crisis",
+        "Contact local Salvation Army",
+        "Assistance based on available funds",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "emerg-catholic-charities",
+      "title": "Catholic Charities Emergency Aid",
+      "sponsor": "Catholic Charities USA",
+      "description": "Emergency financial assistance for rent, utilities, food, and other basic needs regardless of religious affiliation.",
+      "amount_min": 100,
+      "amount_max": 2000,
+      "deadline": "Rolling",
+      "application_url": "https://www.catholiccharitiesusa.org/find-help/",
+      "categories": ["emergency", "basic_needs", "faith"],
+      "keywords": ["emergency", "rent", "utilities", "food", "crisis", "faith"],
+      "eligibility_bullets": [
+        "Experiencing financial hardship",
+        "Open to all regardless of faith",
+        "Contact local Catholic Charities",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    }
   ]
 }

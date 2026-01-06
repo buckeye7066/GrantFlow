@@ -159,5 +159,266 @@
       "No repayment required"
     ],
     "requires_match": false
+  },
+  {
+    "id": "scholarship-hsf",
+    "states": ["ALL"],
+    "title": "Hispanic Scholarship Fund",
+    "sponsor": "Hispanic Scholarship Fund",
+    "description": "Scholarships for Hispanic American students of all backgrounds pursuing higher education.",
+    "amount_min": 500,
+    "amount_max": 5000,
+    "deadline": "February 15",
+    "application_url": "https://www.hsf.net/scholarship",
+    "categories": ["scholarship", "education"],
+    "keywords": ["scholarship", "Hispanic", "Latino", "college", "education"],
+    "eligibility_bullets": [
+      "Hispanic heritage",
+      "Minimum 3.0 GPA",
+      "Enrolled full-time",
+      "No repayment required"
+    ],
+    "requires_match": false
+  },
+  {
+    "id": "scholarship-apia",
+    "states": ["ALL"],
+    "title": "Asian & Pacific Islander American Scholarship Fund",
+    "sponsor": "APIASF",
+    "description": "Scholarships for Asian American and Pacific Islander students from low-income backgrounds.",
+    "amount_min": 2500,
+    "amount_max": 20000,
+    "deadline": "January 11",
+    "application_url": "https://apiascholars.org/scholarship/",
+    "categories": ["scholarship", "education"],
+    "keywords": ["scholarship", "Asian", "Pacific Islander", "AAPI", "college"],
+    "eligibility_bullets": [
+      "Asian American or Pacific Islander",
+      "First-year college student",
+      "U.S. citizen or permanent resident",
+      "No repayment required"
+    ],
+    "requires_match": false
+  },
+  {
+    "id": "scholarship-aises",
+    "states": ["ALL"],
+    "title": "American Indian Science and Engineering Society Scholarships",
+    "sponsor": "AISES",
+    "description": "Scholarships for American Indian, Alaska Native, and Native Hawaiian students in STEM fields.",
+    "amount_min": 1000,
+    "amount_max": 10000,
+    "deadline": "May 31",
+    "application_url": "https://www.aises.org/students/scholarships",
+    "categories": ["scholarship", "stem", "education"],
+    "keywords": ["scholarship", "Native American", "indigenous", "STEM", "engineering"],
+    "eligibility_bullets": [
+      "American Indian, Alaska Native, or Native Hawaiian",
+      "Enrolled in STEM program",
+      "Minimum 3.0 GPA",
+      "No repayment required"
+    ],
+    "requires_match": false
+  },
+  {
+    "id": "scholarship-daniels",
+    "states": ["ALL"],
+    "title": "Daniels Scholarship",
+    "sponsor": "Daniels Fund",
+    "description": "Full four-year scholarship covering tuition, fees, room, board, and books for graduating high school seniors.",
+    "amount_min": 10000,
+    "amount_max": 100000,
+    "deadline": "November 15",
+    "application_url": "https://www.danielsfund.org/scholarships/daniels-scholarship-program",
+    "categories": ["scholarship", "education"],
+    "keywords": ["scholarship", "full ride", "college", "leadership"],
+    "eligibility_bullets": [
+      "Graduating high school senior",
+      "From CO, NM, UT, or WY",
+      "Financial need",
+      "No repayment required"
+    ],
+    "requires_match": false,
+    "state": "CO"
+  },
+  {
+    "id": "scholarship-posse",
+    "states": ["ALL"],
+    "title": "Posse Scholarship",
+    "sponsor": "Posse Foundation",
+    "description": "Full-tuition leadership scholarships for students with extraordinary potential who may be overlooked by traditional selection processes.",
+    "amount_min": 50000,
+    "amount_max": 250000,
+    "deadline": "August - varies by city",
+    "application_url": "https://www.possefoundation.org/",
+    "categories": ["scholarship", "leadership", "education"],
+    "keywords": ["scholarship", "leadership", "full tuition", "college"],
+    "eligibility_bullets": [
+      "High school senior",
+      "Strong leadership potential",
+      "From participating city",
+      "No repayment required"
+    ],
+    "requires_match": false
+  },
+  {
+    "id": "scholarship-elks-mvs",
+    "states": ["ALL"],
+    "title": "Elks Most Valuable Student Scholarship",
+    "sponsor": "Elks National Foundation",
+    "description": "Scholarships of $4,000-$50,000 for high school seniors based on leadership, scholarship, and financial need.",
+    "amount_min": 4000,
+    "amount_max": 50000,
+    "deadline": "November 5",
+    "application_url": "https://www.elks.org/scholars/scholarships/mvs.cfm",
+    "categories": ["scholarship", "education"],
+    "keywords": ["scholarship", "leadership", "high school", "college"],
+    "eligibility_bullets": [
+      "High school senior",
+      "U.S. citizen",
+      "Financial need considered",
+      "No repayment required"
+    ],
+    "requires_match": false
+  },
+  {
+    "id": "scholarship-niche",
+    "states": ["ALL"],
+    "title": "Niche No Essay Scholarship",
+    "sponsor": "Niche",
+    "description": "Easy-entry monthly scholarship drawing. No essay required - just register on Niche.com.",
+    "amount_min": 2000,
+    "amount_max": 2000,
+    "deadline": "Monthly",
+    "application_url": "https://www.niche.com/colleges/scholarship/no-essay-scholarship/",
+    "categories": ["scholarship", "education"],
+    "keywords": ["scholarship", "no essay", "easy", "monthly", "college"],
+    "eligibility_bullets": [
+      "U.S. citizen or permanent resident",
+      "13 years or older",
+      "Register on Niche.com",
+      "No repayment required"
+    ],
+    "requires_match": false
+  },
+  {
+    "id": "scholarship-cappex",
+    "states": ["ALL"],
+    "title": "Cappex Easy Money Scholarship",
+    "sponsor": "Cappex",
+    "description": "Quick-apply scholarship program. Multiple scholarships awarded throughout the year.",
+    "amount_min": 1000,
+    "amount_max": 1000,
+    "deadline": "Monthly",
+    "application_url": "https://www.cappex.com/scholarships",
+    "categories": ["scholarship", "education"],
+    "keywords": ["scholarship", "easy", "college", "student"],
+    "eligibility_bullets": [
+      "High school or college student",
+      "Create Cappex profile",
+      "Multiple drawings per month",
+      "No repayment required"
+    ],
+    "requires_match": false
+  },
+  {
+    "id": "scholarship-veteranchild",
+    "states": ["ALL"],
+    "title": "Children of Fallen Patriots Foundation Scholarship",
+    "sponsor": "Children of Fallen Patriots Foundation",
+    "description": "College funding for military children who lost a parent in the line of duty.",
+    "amount_min": 5000,
+    "amount_max": 100000,
+    "deadline": "Rolling",
+    "application_url": "https://www.fallenpatriots.org/apply",
+    "categories": ["scholarship", "veteran", "military"],
+    "keywords": ["scholarship", "military", "veteran", "gold star", "fallen"],
+    "eligibility_bullets": [
+      "Lost military parent in line of duty",
+      "U.S. citizen",
+      "Accepted to accredited institution",
+      "No repayment required"
+    ],
+    "requires_match": false
+  },
+  {
+    "id": "scholarship-folds-of-honor",
+    "states": ["ALL"],
+    "title": "Folds of Honor Educational Scholarships",
+    "sponsor": "Folds of Honor",
+    "description": "Educational scholarships for spouses and children of America's fallen and disabled service members.",
+    "amount_min": 5000,
+    "amount_max": 5000,
+    "deadline": "March 31",
+    "application_url": "https://www.foldsofhonor.org/scholarships/",
+    "categories": ["scholarship", "veteran", "military"],
+    "keywords": ["scholarship", "military", "veteran", "spouse", "children"],
+    "eligibility_bullets": [
+      "Dependent of fallen or disabled service member",
+      "Pursuing higher education",
+      "U.S. citizen",
+      "No repayment required"
+    ],
+    "requires_match": false
+  },
+  {
+    "id": "scholarship-disability",
+    "states": ["ALL"],
+    "title": "Lime Connect Scholarship for Students with Disabilities",
+    "sponsor": "Lime Connect",
+    "description": "Scholarships for students with disabilities pursuing undergraduate or graduate education.",
+    "amount_min": 1000,
+    "amount_max": 10000,
+    "deadline": "Varies",
+    "application_url": "https://www.limeconnect.com/programs/page/scholarships",
+    "categories": ["scholarship", "disability", "education"],
+    "keywords": ["scholarship", "disability", "college", "graduate"],
+    "eligibility_bullets": [
+      "Student with a disability",
+      "Enrolled full-time",
+      "Pursuing bachelor's or graduate degree",
+      "No repayment required"
+    ],
+    "requires_match": false
+  },
+  {
+    "id": "scholarship-nbmbaa",
+    "states": ["ALL"],
+    "title": "National Black MBA Association Scholarship",
+    "sponsor": "NBMBAA",
+    "description": "Scholarships for African American students pursuing MBA or business-related graduate degrees.",
+    "amount_min": 2500,
+    "amount_max": 15000,
+    "deadline": "April 15",
+    "application_url": "https://nbmbaa.org/scholarship-program/",
+    "categories": ["scholarship", "business", "graduate"],
+    "keywords": ["scholarship", "MBA", "business", "African American", "graduate"],
+    "eligibility_bullets": [
+      "Pursuing MBA or business degree",
+      "U.S. or Canadian citizen",
+      "NBMBAA member",
+      "No repayment required"
+    ],
+    "requires_match": false
+  },
+  {
+    "id": "scholarship-women-stem",
+    "states": ["ALL"],
+    "title": "Society of Women Engineers Scholarships",
+    "sponsor": "Society of Women Engineers",
+    "description": "Multiple scholarships for women pursuing ABET-accredited engineering and computer science programs.",
+    "amount_min": 1000,
+    "amount_max": 17000,
+    "deadline": "February 15 / May 1",
+    "application_url": "https://swe.org/scholarships/",
+    "categories": ["scholarship", "stem", "women", "engineering"],
+    "keywords": ["scholarship", "women", "engineering", "STEM", "computer science"],
+    "eligibility_bullets": [
+      "Woman majoring in engineering/CS",
+      "ABET-accredited program",
+      "SWE membership (free for students)",
+      "No repayment required"
+    ],
+    "requires_match": false
   }
 ]
