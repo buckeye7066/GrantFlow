@@ -1079,59 +1079,136 @@ function rotateSessionTokens(db, { sessionId, user, profileId }) {
 }
 
 router.post('/email/start', emailStartLimiter, async (req, res) => {
-  const emailRaw = req.body?.email
-  if (typeof emailRaw !== 'string') {
-    return res.status(400).json({ error: 'email is required' })
-  }
-  const email = normalizeEmail(emailRaw)
-  if (!isValidEmail(email)) {
-    return res.status(400).json({ error: 'Invalid email address' })
-  }
-
-  const { user, credential } = ensureEmailCredential(req.db, email)
-  const now = new Date()
-
-  if (credential.last_sent_at) {
-    const lastSent = new Date(credential.last_sent_at)
-    if (now - lastSent < EMAIL_RESEND_COOLDOWN * 1000) {
-      return res.status(429).json({
-        error: 'Verification already sent',
-        retry_after_seconds: Math.ceil((EMAIL_RESEND_COOLDOWN * 1000 - (now - lastSent)) / 1000),
+  try {
+    // Validate input
+    const emailRaw = req.body?.email
+    if (typeof emailRaw !== 'string') {
+      console.warn('[auth/email/start] Missing email in request body')
+      return res.status(400).json({ 
+        error: 'email is required',
+        error_type: 'validation_error'
       })
     }
+    
+    const email = normalizeEmail(emailRaw)
+    if (!isValidEmail(email)) {
+      console.warn('[auth/email/start] Invalid email format:', emailRaw)
+      return res.status(400).json({ 
+        error: 'Invalid email address',
+        error_type: 'validation_error'
+      })
+    }
+
+    console.info('[auth/email/start] Processing email authentication request for:', email)
+
+    // Database operations with error handling
+    let user, credential
+    try {
+      const result = ensureEmailCredential(req.db, email)
+      user = result.user
+      credential = result.credential
+      console.info('[auth/email/start] User credential ensured for:', email, 'user_id:', user?.id)
+    } catch (dbError) {
+      console.error('[auth/email/start] Database error ensuring credential:', dbError)
+      return res.status(500).json({ 
+        error: 'Database error occurred. Please try again.',
+        error_type: 'database_error',
+        details: process.env.NODE_ENV !== 'production' ? dbError.message : undefined
+      })
+    }
+
+    // Check rate limiting cooldown
+    const now = new Date()
+    if (credential.last_sent_at) {
+      const lastSent = new Date(credential.last_sent_at)
+      const timeSinceLastSent = now - lastSent
+      if (timeSinceLastSent < EMAIL_RESEND_COOLDOWN * 1000) {
+        const retryAfter = Math.ceil((EMAIL_RESEND_COOLDOWN * 1000 - timeSinceLastSent) / 1000)
+        console.warn('[auth/email/start] Rate limit cooldown for:', email, 'retry after:', retryAfter, 'seconds')
+        return res.status(429).json({
+          error: `Please wait ${retryAfter} seconds before requesting another code`,
+          error_type: 'rate_limit_cooldown',
+          retry_after_seconds: retryAfter,
+        })
+      }
+    }
+
+    // Generate and store verification code
+    const code = generateSixDigitCode()
+    const codeHash = hashValue(`${email}:${code}`)
+    const expiresAt = new Date(now.getTime() + EMAIL_CODE_TTL * 1000).toISOString()
+    
+    try {
+      insertVerificationCode(req.db, credential.id, codeHash, expiresAt)
+      req.db
+        .prepare(
+          `
+            UPDATE user_credentials
+            SET secret_hash = ?,
+                last_sent_at = ?,
+                attempt_count = 0
+            WHERE id = ?
+          `,
+        )
+        .run(codeHash, nowISOString(), credential.id)
+      console.info('[auth/email/start] Verification code stored in database for:', email)
+    } catch (dbError) {
+      console.error('[auth/email/start] Database error storing verification code:', dbError)
+      return res.status(500).json({ 
+        error: 'Failed to create verification code. Please try again.',
+        error_type: 'database_error',
+        details: process.env.NODE_ENV !== 'production' ? dbError.message : undefined
+      })
+    }
+
+    // Attempt to send email
+    console.info('[auth/email/start] Attempting to send verification email to:', email)
+    let emailSent = false
+    try {
+      emailSent = await sendVerificationEmail(email, code)
+      if (emailSent) {
+        console.info('[auth/email/start] Verification email sent successfully to:', email)
+      } else {
+        console.warn('[auth/email/start] Email service unavailable or failed for:', email)
+      }
+    } catch (emailError) {
+      console.error('[auth/email/start] Unexpected error sending email:', emailError)
+      // Don't fail the request if email fails - code is stored in DB
+    }
+
+    // Return success response with code in development/when email fails
+    const responseData = {
+      message: emailSent 
+        ? 'Verification code sent to your email' 
+        : 'Verification code generated (email service unavailable)',
+      email_sent: emailSent,
+      user_hint: {
+        id: user.id,
+        display_name: user.display_name,
+        primary_email: user.primary_email,
+      },
+    }
+
+    // Include preview code in development or when email wasn't sent
+    if (process.env.NODE_ENV !== 'production' || !emailSent) {
+      responseData.previewCode = code
+      responseData.notice = emailSent 
+        ? 'Code included for development purposes' 
+        : 'Email service is not configured. Use the preview code to continue.'
+    }
+
+    console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent)
+    return res.status(202).json(responseData)
+    
+  } catch (error) {
+    // Catch-all for any unexpected errors
+    console.error('[auth/email/start] Unexpected error:', error)
+    return res.status(500).json({ 
+      error: 'An unexpected error occurred. Please try again.',
+      error_type: 'internal_error',
+      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
+    })
   }
-
-  const code = generateSixDigitCode()
-  const codeHash = hashValue(`${email}:${code}`)
-  const expiresAt = new Date(now.getTime() + EMAIL_CODE_TTL * 1000).toISOString()
-  insertVerificationCode(req.db, credential.id, codeHash, expiresAt)
-  req.db
-    .prepare(
-      `
-        UPDATE user_credentials
-        SET secret_hash = ?,
-            last_sent_at = ?,
-            attempt_count = 0
-        WHERE id = ?
-      `,
-    )
-    .run(codeHash, nowISOString(), credential.id)
-
-  console.info(`[auth] Email verification code for ${email}: ${code}`)
-  const emailSent = await sendVerificationEmail(email, code)
-  if (!emailSent) {
-    console.warn('[auth] Verification email dispatch skipped or failed. Falling back to preview response.')
-  }
-
-  return res.status(202).json({
-    message: 'Verification code sent',
-    previewCode: process.env.NODE_ENV !== 'production' || !emailSent ? code : undefined,
-    user_hint: {
-      id: user.id,
-      display_name: user.display_name,
-      primary_email: user.primary_email,
-    },
-  })
 })
 
 router.post('/email/verify', (req, res) => {

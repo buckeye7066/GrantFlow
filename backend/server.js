@@ -580,12 +580,26 @@ app.get('*', spaFallbackLimiter, (req, res, next) => {
 // Use centralized error handler middleware
 app.use(errorHandler);
 
-// Error handling
+// Error handling for route errors
 app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
+  console.error('[server] Unhandled error:', {
+    message: err.message,
+    stack: err.stack,
+    path: req.path,
+    method: req.method,
+    body: req.body,
+    headers: {
+      'content-type': req.headers['content-type'],
+      'authorization': req.headers.authorization ? '[REDACTED]' : undefined
+    }
+  });
+  
   const isProduction = process.env.NODE_ENV === 'production';
-  res.status(500).json({ 
+  const statusCode = err.statusCode || err.status || 500;
+  
+  res.status(statusCode).json({ 
     error: isProduction ? 'Internal server error' : err.message,
+    error_type: err.error_type || 'internal_error',
     ...(isProduction ? {} : { stack: err.stack })
   });
 });
