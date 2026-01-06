@@ -785,15 +785,6 @@ export default function FundingOpportunities() {
       return
     }
 
-    if (!selectedProfile.organization_id) {
-      toast({
-        variant: "destructive",
-        title: "Missing organization",
-        description: "This profile is not linked to an organization yet. Assign one before adding grants to the pipeline.",
-      })
-      return
-    }
-
     setAddingOpportunityId(opportunity.id)
     try {
       const computedMatch = scoreOpportunity(opportunity, selectedProfile)
@@ -806,37 +797,25 @@ export default function FundingOpportunities() {
         new Set(preferredReasons.filter(Boolean).map((reason) => String(reason))),
       )
 
-      const notesSegments = [
-        `Imported from Funding Opportunities (${opportunity.source || "crawler"}).`,
-      ]
-      if (normalizedReasons.length) {
-        notesSegments.push(`Match rationale: ${normalizedReasons.slice(0, 3).join("; ")}`)
+      // Use the from-opportunity endpoint which auto-creates org if needed
+      const response = await fetch('/api/grants/from-opportunity', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          opportunity_id: opportunity.id,
+          profile_id: selectedProfile.id,
+          organization_id: selectedProfile.organization_id || null,
+          match_score: Number.isFinite(computedMatch?.score) ? computedMatch.score : null,
+          match_reasons: normalizedReasons
+        })
+      })
+      
+      if (!response.ok) {
+        const err = await response.json()
+        throw new Error(err.error || 'Failed to add to pipeline')
       }
-      if (opportunity.description) {
-        notesSegments.push(opportunity.description)
-      }
-      const combinedNotes = notesSegments.join("\n\n")
-      const payload = {
-        funding_opportunity_id: opportunity.id,
-        organization_id: selectedProfile.organization_id,
-        title: opportunity.title || "Untitled opportunity",
-        funder: opportunity.sponsor ?? null,
-        status: "interested",
-        deadline: opportunity.deadline || null,
-        match_score: Number.isFinite(computedMatch?.score) ? computedMatch.score : null,
-        match_reasons: normalizedReasons,
-        notes: combinedNotes.length > 2000 ? `${combinedNotes.slice(0, 1997)}…` : combinedNotes,
-        application_url: opportunity.application_url ?? null,
-      }
-
-      const normalizedAmounts = [opportunity.amount_max, opportunity.amount_min]
-        .map((value) => (value === null || value === undefined ? null : Number(value)))
-        .filter((value) => Number.isFinite(value) && value > 0)
-      if (normalizedAmounts.length > 0) {
-        payload.amount_requested = normalizedAmounts[0]
-      }
-
-      const created = await createGrant(payload)
+      
+      const created = await response.json()
 
       toast({
         title: "Added to pipeline",
@@ -1178,7 +1157,6 @@ export default function FundingOpportunities() {
                 isAddingToPipeline={addingOpportunityId === opportunity.id}
                 canAddToPipeline={Boolean(
                   selectedProfile &&
-                  selectedProfile.organization_id &&
                   filters.profileId &&
                   filters.profileId !== "all"
                 )}
@@ -1288,7 +1266,6 @@ export default function FundingOpportunities() {
         canAddToPipeline={
           Boolean(
             selectedProfile &&
-              selectedProfile.organization_id &&
               filters.profileId &&
               filters.profileId !== "all",
           )

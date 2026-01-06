@@ -456,12 +456,40 @@ router.delete('/:id', mutationRateLimiter, (req, res) => {
 // Add grant from opportunity
 router.post('/from-opportunity', (req, res) => {
   try {
-    const { opportunity_id, organization_id, match_score, match_reasons } = req.body;
+    let { opportunity_id, organization_id, profile_id, match_score, match_reasons } = req.body;
     
     // Get the opportunity
     const opportunity = req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunity_id);
     if (!opportunity) {
       return res.status(404).json({ error: 'Opportunity not found' });
+    }
+    
+    // If no organization_id but profile_id provided, auto-create organization
+    if (!organization_id && profile_id) {
+      const profile = req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profile_id);
+      if (profile) {
+        if (profile.organization_id) {
+          // Profile already has an organization
+          organization_id = profile.organization_id;
+        } else {
+          // Create organization for this profile
+          const orgId = crypto.randomUUID();
+          req.db.prepare(`
+            INSERT INTO organizations (id, name, applicant_type, created_at, updated_at)
+            VALUES (?, ?, 'individual', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          `).run(orgId, profile.display_name || 'My Organization');
+          
+          // Link profile to organization
+          req.db.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile_id);
+          
+          organization_id = orgId;
+          console.log(`[grants] Auto-created organization ${orgId} for profile ${profile_id}`);
+        }
+      }
+    }
+    
+    if (!organization_id) {
+      return res.status(400).json({ error: 'Organization ID or Profile ID is required' });
     }
     
     const id = crypto.randomUUID();
@@ -485,7 +513,7 @@ router.post('/from-opportunity', (req, res) => {
     );
     
     const grant = req.db.prepare('SELECT * FROM grants WHERE id = ?').get(id);
-    res.status(201).json(grant);
+    res.status(201).json({ ...grant, organization_id });
   } catch (error) {
     console.error('Error creating grant from opportunity:', error);
     res.status(500).json(formatError(error));

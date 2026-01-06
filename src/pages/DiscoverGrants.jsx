@@ -421,49 +421,66 @@ export default function DiscoverGrants() {
       return;
     }
     
-    const orgId = selectedProfile?.organization_id;
-    if (!orgId) {
+    if (!selectedProfileId) {
       toast({
         variant: 'destructive',
-        title: 'No Organization',
-        description: 'Selected profile is not linked to an organization.',
+        title: 'No Profile Selected',
+        description: 'Please select a profile before adding to pipeline.',
       });
       return;
     }
     
-    // Check for duplicates
-    if (opportunity.url) {
-      const existingGrants = await base44.entities.Grant.filter({
-        organization_id: orgId,
-        url: opportunity.url
-      });
-      
-      if (existingGrants.length > 0) {
-        toast({
-          title: 'Already in Pipeline',
-          description: `"${opportunity.title}" is already in your pipeline.`,
-          variant: 'default',
+    const orgId = selectedProfile?.organization_id;
+    
+    // Check for duplicates if we have an org
+    if (orgId && opportunity.url) {
+      try {
+        const existingGrants = await base44.entities.Grant.filter({
+          organization_id: orgId,
+          url: opportunity.url
         });
-        return existingGrants[0];
+        
+        if (existingGrants.length > 0) {
+          toast({
+            title: 'Already in Pipeline',
+            description: `"${opportunity.title}" is already in your pipeline.`,
+            variant: 'default',
+          });
+          return existingGrants[0];
+        }
+      } catch (e) {
+        // Ignore duplicate check errors, continue to add
+        console.warn('Duplicate check failed:', e);
       }
     }
-    
-    const grantData = {
-      organization_id: orgId,
-      title: opportunity.title,
-      funder: opportunity.sponsor,
-      url: opportunity.url,
-      deadline: opportunity.deadlineAt,
-      award_floor: opportunity.awardMin,
-      award_ceiling: opportunity.awardMax,
-      eligibility_summary: opportunity.eligibilityBullets?.join('\n') || '',
-      program_description: opportunity.descriptionMd,
-      status: 'discovered',
-      match_score: opportunity.match,
-    };
 
     try {
-      const newGrant = await base44.entities.Grant.create(grantData);
+      // Use the from-opportunity endpoint which auto-creates org if needed
+      const response = await fetch('/api/grants/from-opportunity', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          opportunity_id: opportunity.id,
+          profile_id: selectedProfileId,
+          organization_id: orgId || null,
+          match_score: opportunity.match,
+          match_reasons: opportunity.matchReasons || []
+        })
+      });
+      
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || 'Failed to add to pipeline');
+      }
+      
+      const newGrant = await response.json();
+      
+      // If a new org was created, refresh profile data
+      if (newGrant.organization_id && newGrant.organization_id !== orgId) {
+        queryClient.invalidateQueries({ queryKey: ['profiles'] });
+        queryClient.invalidateQueries({ queryKey: ['organizations'] });
+      }
+      
       queryClient.invalidateQueries({ queryKey: ['grants'] });
       toast({
         title: 'Grant Added to Pipeline',
