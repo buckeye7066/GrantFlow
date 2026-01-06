@@ -456,15 +456,28 @@ export default function DiscoverGrants() {
 
     try {
       // Use the from-opportunity endpoint which auto-creates org if needed
+      // Include full opportunity_data for synthetic/discovered opportunities
       const response = await fetch('/api/grants/from-opportunity', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          opportunity_id: opportunity.id,
+          opportunity_id: opportunity.id || null,
           profile_id: selectedProfileId,
           organization_id: orgId || null,
-          match_score: opportunity.match,
-          match_reasons: opportunity.matchReasons || []
+          match_score: opportunity.match || opportunity.match_score,
+          match_reasons: opportunity.matchReasons || opportunity.matched_fields || [],
+          // Include full opportunity data for synthetic opportunities
+          opportunity_data: {
+            title: opportunity.title,
+            sponsor: opportunity.sponsor,
+            deadline: opportunity.deadlineAt || opportunity.deadline,
+            url: opportunity.url || opportunity.application_url,
+            awardMin: opportunity.awardMin || opportunity.amount_min,
+            awardMax: opportunity.awardMax || opportunity.amount_max,
+            descriptionMd: opportunity.descriptionMd || opportunity.description,
+            eligibilityBullets: opportunity.eligibilityBullets || [],
+            source: opportunity.source || 'discovery'
+          }
         })
       });
       
@@ -474,6 +487,15 @@ export default function DiscoverGrants() {
       }
       
       const newGrant = await response.json();
+      
+      // Check if it was already in pipeline
+      if (newGrant.already_exists) {
+        toast({
+          title: 'Already in Pipeline',
+          description: `"${opportunity.title}" is already in your grants pipeline.`,
+        });
+        return newGrant;
+      }
       
       // If a new org was created, refresh profile data
       if (newGrant.organization_id && newGrant.organization_id !== orgId) {

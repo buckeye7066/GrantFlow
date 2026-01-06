@@ -798,15 +798,28 @@ export default function FundingOpportunities() {
       )
 
       // Use the from-opportunity endpoint which auto-creates org if needed
+      // Include full opportunity_data for synthetic/discovered opportunities
       const response = await fetch('/api/grants/from-opportunity', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          opportunity_id: opportunity.id,
+          opportunity_id: opportunity.id || null,
           profile_id: selectedProfile.id,
           organization_id: selectedProfile.organization_id || null,
           match_score: Number.isFinite(computedMatch?.score) ? computedMatch.score : null,
-          match_reasons: normalizedReasons
+          match_reasons: normalizedReasons,
+          // Include full opportunity data for synthetic opportunities
+          opportunity_data: {
+            title: opportunity.title,
+            sponsor: opportunity.sponsor || opportunity.funder,
+            deadline: opportunity.deadline,
+            url: opportunity.url || opportunity.application_url,
+            awardMin: opportunity.award_floor || opportunity.amount_min,
+            awardMax: opportunity.award_ceiling || opportunity.amount_max,
+            descriptionMd: opportunity.description,
+            eligibilityBullets: opportunity.eligibility_bullets || [],
+            source: opportunity.source || 'database'
+          }
         })
       })
       

@@ -453,15 +453,43 @@ router.delete('/:id', mutationRateLimiter, (req, res) => {
   }
 });
 
-// Add grant from opportunity
+// Add grant from opportunity (supports both database opportunities and direct data)
 router.post('/from-opportunity', (req, res) => {
   try {
-    let { opportunity_id, organization_id, profile_id, match_score, match_reasons } = req.body;
+    let { 
+      opportunity_id, 
+      organization_id, 
+      profile_id, 
+      match_score, 
+      match_reasons,
+      // Direct opportunity data (for synthetic/discovered opportunities)
+      opportunity_data
+    } = req.body;
     
-    // Get the opportunity
-    const opportunity = req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunity_id);
+    // Try to get opportunity from database first
+    let opportunity = null;
+    if (opportunity_id) {
+      opportunity = req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunity_id);
+    }
+    
+    // If not found in DB, use provided opportunity_data
+    if (!opportunity && opportunity_data) {
+      opportunity = {
+        title: opportunity_data.title,
+        sponsor: opportunity_data.sponsor,
+        deadline: opportunity_data.deadline || opportunity_data.deadlineAt,
+        application_url: opportunity_data.url || opportunity_data.application_url,
+        amount_min: opportunity_data.awardMin || opportunity_data.amount_min,
+        amount_max: opportunity_data.awardMax || opportunity_data.amount_max,
+        description: opportunity_data.descriptionMd || opportunity_data.description,
+        eligibility_bullets: JSON.stringify(opportunity_data.eligibilityBullets || []),
+        source: opportunity_data.source || 'discovery'
+      };
+      console.log('[grants] Using direct opportunity data for:', opportunity.title);
+    }
+    
     if (!opportunity) {
-      return res.status(404).json({ error: 'Opportunity not found' });
+      return res.status(404).json({ error: 'Opportunity not found and no opportunity_data provided' });
     }
     
     // If no organization_id but profile_id provided, auto-create organization
@@ -492,24 +520,41 @@ router.post('/from-opportunity', (req, res) => {
       return res.status(400).json({ error: 'Organization ID or Profile ID is required' });
     }
     
+    // Check for duplicate grants by title for this organization
+    const existingGrant = req.db.prepare(
+      'SELECT id, title FROM grants WHERE organization_id = ? AND title = ?'
+    ).get(organization_id, opportunity.title);
+    
+    if (existingGrant) {
+      return res.status(200).json({ 
+        ...existingGrant, 
+        organization_id,
+        already_exists: true,
+        message: 'Grant already in pipeline'
+      });
+    }
+    
     const id = crypto.randomUUID();
     
     req.db.prepare(`
       INSERT INTO grants (
         id, organization_id, funding_opportunity_id, title, funder, 
-        deadline, status, match_score, match_reasons, application_url
+        deadline, status, match_score, match_reasons, application_url,
+        amount_requested, notes
       )
-      VALUES (?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?)
     `).run(
       id, 
       organization_id, 
-      opportunity_id, 
+      opportunity_id || null,
       opportunity.title,
       opportunity.sponsor,
       opportunity.deadline,
       match_score || null,
       JSON.stringify(match_reasons || []),
-      opportunity.application_url
+      opportunity.application_url,
+      opportunity.amount_max || opportunity.amount_min || null,
+      opportunity.description ? opportunity.description.substring(0, 500) : null
     );
     
     const grant = req.db.prepare('SELECT * FROM grants WHERE id = ?').get(id);
