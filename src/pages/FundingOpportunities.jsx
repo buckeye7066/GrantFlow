@@ -634,7 +634,7 @@ export default function FundingOpportunities() {
         source: filters.source !== "all" ? filters.source : undefined,
         is_national: filters.nationalOnly ? "true" : undefined,
         compliance: filters.compliance,
-        limit: 50,
+        limit: 100000, // Fetch ALL opportunities - no artificial limit
       }),
   })
 

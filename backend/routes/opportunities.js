@@ -164,7 +164,8 @@ router.get('/', (req, res) => {
       compliance,
     } = req.query;
 
-    const parsedLimit = Math.min(Number.parseInt(limit, 10) || 50, 200);
+    // Allow fetching all opportunities - no arbitrary cap
+    const parsedLimit = Number.parseInt(limit, 10) || 10000;
     const parsedOffset = Math.max(Number.parseInt(offset, 10) || 0, 0);
 
     const conditions = ['is_active = 1'];
