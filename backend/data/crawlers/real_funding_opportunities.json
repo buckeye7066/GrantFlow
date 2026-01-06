@@ -1,0 +1,467 @@
+{
+  "federal_grants": [
+    {
+      "id": "fed-snap-employment",
+      "title": "SNAP Employment & Training Program",
+      "sponsor": "USDA Food and Nutrition Service",
+      "description": "Provides funding to states for employment and training programs that help SNAP recipients gain skills, training, work experience, and job placement assistance.",
+      "amount_min": null,
+      "amount_max": null,
+      "amount_description": "Varies by state allocation",
+      "deadline": "Rolling",
+      "application_url": "https://www.fns.usda.gov/snap/et",
+      "categories": ["employment", "training", "food_security"],
+      "keywords": ["SNAP", "employment", "job training", "workforce"],
+      "eligibility_bullets": [
+        "Must be a SNAP recipient",
+        "Age 16-59 unless exempt",
+        "No matching funds required for participants"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "fed-liheap",
+      "title": "Low Income Home Energy Assistance Program (LIHEAP)",
+      "sponsor": "U.S. Department of Health and Human Services",
+      "description": "Helps low-income households pay for heating and cooling costs. Benefits are provided directly to eligible households or to energy vendors on their behalf.",
+      "amount_min": 200,
+      "amount_max": 2000,
+      "deadline": "Varies by state",
+      "application_url": "https://www.acf.hhs.gov/ocs/programs/liheap",
+      "categories": ["utilities", "basic_needs", "housing"],
+      "keywords": ["energy", "utilities", "heating", "cooling", "low income"],
+      "eligibility_bullets": [
+        "Household income at or below 150% of federal poverty level",
+        "Must be responsible for home energy costs",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "fed-pell-grant",
+      "title": "Federal Pell Grant",
+      "sponsor": "U.S. Department of Education",
+      "description": "Need-based federal grant for undergraduate students. Unlike loans, Pell Grants do not have to be repaid. Maximum award for 2024-2025 is $7,395.",
+      "amount_min": 750,
+      "amount_max": 7395,
+      "deadline": "June 30 annually",
+      "application_url": "https://studentaid.gov/understand-aid/types/grants/pell",
+      "categories": ["education", "scholarship"],
+      "keywords": ["college", "university", "undergraduate", "financial aid", "education"],
+      "eligibility_bullets": [
+        "Must demonstrate financial need via FAFSA",
+        "Must be enrolled in eligible degree program",
+        "No repayment required - it's a grant, not a loan"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "fed-teach-grant",
+      "title": "TEACH Grant",
+      "sponsor": "U.S. Department of Education",
+      "description": "Provides up to $4,000 per year to students who plan to become teachers in high-need fields at low-income schools.",
+      "amount_min": 1000,
+      "amount_max": 4000,
+      "deadline": "Rolling with academic year",
+      "application_url": "https://studentaid.gov/understand-aid/types/grants/teach",
+      "categories": ["education", "teaching"],
+      "keywords": ["teacher", "education", "teaching", "high-need"],
+      "eligibility_bullets": [
+        "Must agree to teach 4 years in high-need field",
+        "Must complete FAFSA",
+        "No repayment if teaching commitment fulfilled"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "fed-fseog",
+      "title": "Federal Supplemental Educational Opportunity Grant (FSEOG)",
+      "sponsor": "U.S. Department of Education",
+      "description": "Campus-based grant for undergraduate students with exceptional financial need. Priority given to Pell Grant recipients.",
+      "amount_min": 100,
+      "amount_max": 4000,
+      "deadline": "Varies by school",
+      "application_url": "https://studentaid.gov/understand-aid/types/grants/fseog",
+      "categories": ["education", "scholarship"],
+      "keywords": ["college", "financial aid", "undergraduate"],
+      "eligibility_bullets": [
+        "Must demonstrate exceptional financial need",
+        "Must complete FAFSA",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    }
+  ],
+  "foundation_grants": [
+    {
+      "id": "found-kresge",
+      "title": "Kresge Foundation Arts & Culture Program",
+      "sponsor": "The Kresge Foundation",
+      "description": "Supports arts organizations building creative capacity in underserved communities. No matching requirement for planning grants.",
+      "amount_min": 50000,
+      "amount_max": 500000,
+      "deadline": "Rolling",
+      "application_url": "https://kresge.org/our-work/arts-culture/",
+      "categories": ["arts", "culture", "community"],
+      "keywords": ["arts", "culture", "community development", "nonprofit"],
+      "eligibility_bullets": [
+        "501(c)(3) nonprofit organization",
+        "Demonstrated track record in arts programming",
+        "No matching funds required for planning grants"
+      ],
+      "requires_match": false,
+      "requires_501c3": true,
+      "state": "nationwide"
+    },
+    {
+      "id": "found-gates-scholarship",
+      "title": "Gates Scholarship",
+      "sponsor": "Bill & Melinda Gates Foundation",
+      "description": "Full-ride scholarship for outstanding minority high school seniors from low-income households. Covers full cost of attendance not covered by other aid.",
+      "amount_min": 10000,
+      "amount_max": 75000,
+      "deadline": "September 15 annually",
+      "application_url": "https://www.thegatesscholarship.org/",
+      "categories": ["scholarship", "education"],
+      "keywords": ["scholarship", "college", "minority", "low income"],
+      "eligibility_bullets": [
+        "High school senior from low-income household",
+        "Pell Grant eligible",
+        "Minimum 3.3 GPA",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "found-walmart",
+      "title": "Walmart Community Grant Program",
+      "sponsor": "Walmart Foundation",
+      "description": "Local grants of $250-$5,000 for nonprofits serving communities where Walmart operates. Focus on hunger relief, workforce development, and disaster response.",
+      "amount_min": 250,
+      "amount_max": 5000,
+      "deadline": "Rolling - apply through local store",
+      "application_url": "https://walmart.org/how-we-give/local-community-grants",
+      "categories": ["community", "hunger", "workforce"],
+      "keywords": ["community", "hunger relief", "workforce", "disaster"],
+      "eligibility_bullets": [
+        "501(c)(3) tax-exempt organization",
+        "Organization must operate in a Walmart service area",
+        "No matching funds required"
+      ],
+      "requires_match": false,
+      "requires_501c3": true,
+      "state": "nationwide"
+    },
+    {
+      "id": "found-target",
+      "title": "Target Circle Community Giving",
+      "sponsor": "Target Corporation",
+      "description": "Quarterly grants to local nonprofits selected by Target Circle members. Focus on education, basic needs, and community safety.",
+      "amount_min": 1000,
+      "amount_max": 10000,
+      "deadline": "Quarterly voting periods",
+      "application_url": "https://corporate.target.com/sustainability-governance/grants",
+      "categories": ["community", "education", "basic_needs"],
+      "keywords": ["community", "education", "local"],
+      "eligibility_bullets": [
+        "501(c)(3) nonprofit organization",
+        "Serve communities near Target stores",
+        "No matching funds required"
+      ],
+      "requires_match": false,
+      "requires_501c3": true,
+      "state": "nationwide"
+    }
+  ],
+  "state_programs": [
+    {
+      "id": "state-oh-ofc",
+      "title": "Ohio Family and Children First (OFCF) Council Grants",
+      "sponsor": "Ohio Department of Job and Family Services",
+      "description": "Grants for organizations serving at-risk children and families in Ohio. Covers prevention, early intervention, and family support services.",
+      "amount_min": 10000,
+      "amount_max": 100000,
+      "deadline": "Varies by funding cycle",
+      "application_url": "https://jfs.ohio.gov/ofc/",
+      "categories": ["family", "children", "social_services"],
+      "keywords": ["family", "children", "Ohio", "social services"],
+      "eligibility_bullets": [
+        "Ohio-based nonprofit or government entity",
+        "Serves families with children",
+        "No matching funds required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "OH"
+    },
+    {
+      "id": "state-oh-osfa",
+      "title": "Ohio College Opportunity Grant",
+      "sponsor": "Ohio Department of Higher Education",
+      "description": "Need-based grant for Ohio residents attending Ohio colleges. Awards up to $7,500 annually for eligible students.",
+      "amount_min": 1000,
+      "amount_max": 7500,
+      "deadline": "October 1 annually",
+      "application_url": "https://highered.ohio.gov/students/pay-for-college/ohio-college-opportunity-grant",
+      "categories": ["education", "scholarship"],
+      "keywords": ["college", "Ohio", "financial aid", "undergraduate"],
+      "eligibility_bullets": [
+        "Ohio resident for 12+ months",
+        "Expected Family Contribution of $2,190 or less",
+        "Enrolled at eligible Ohio institution",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "OH"
+    },
+    {
+      "id": "state-ca-calgrant",
+      "title": "Cal Grant",
+      "sponsor": "California Student Aid Commission",
+      "description": "California's largest state financial aid program. Provides grants up to $14,296 for eligible California students.",
+      "amount_min": 1000,
+      "amount_max": 14296,
+      "deadline": "March 2 annually",
+      "application_url": "https://www.csac.ca.gov/cal-grants",
+      "categories": ["education", "scholarship"],
+      "keywords": ["California", "college", "financial aid"],
+      "eligibility_bullets": [
+        "California resident",
+        "Meet income and asset ceilings",
+        "Minimum 2.0-3.0 GPA depending on grant type",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "CA"
+    },
+    {
+      "id": "state-ny-tap",
+      "title": "New York Tuition Assistance Program (TAP)",
+      "sponsor": "New York State Higher Education Services Corporation",
+      "description": "Grants for eligible New York residents attending approved schools in New York State. Awards up to $5,665 annually.",
+      "amount_min": 500,
+      "amount_max": 5665,
+      "deadline": "Rolling with academic year",
+      "application_url": "https://www.hesc.ny.gov/pay-for-college/financial-aid/types-of-financial-aid/grants/tap-tuition-assistance-program.html",
+      "categories": ["education", "scholarship"],
+      "keywords": ["New York", "college", "tuition", "financial aid"],
+      "eligibility_bullets": [
+        "New York State resident",
+        "Meet income eligibility requirements",
+        "Enrolled full-time at approved NY institution",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "NY"
+    },
+    {
+      "id": "state-tx-tpeg",
+      "title": "Texas Public Educational Grant (TPEG)",
+      "sponsor": "Texas Higher Education Coordinating Board",
+      "description": "Need-based grants for Texas residents attending public colleges and universities. No repayment required.",
+      "amount_min": 500,
+      "amount_max": 5000,
+      "deadline": "Varies by institution",
+      "application_url": "https://www.highered.texas.gov/institutional-resources-programs/student-financial-aid-programs/",
+      "categories": ["education", "scholarship"],
+      "keywords": ["Texas", "college", "financial aid"],
+      "eligibility_bullets": [
+        "Texas resident",
+        "Demonstrate financial need",
+        "Enrolled in Texas public institution",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "TX"
+    }
+  ],
+  "disability_assistance": [
+    {
+      "id": "dis-ssi",
+      "title": "Supplemental Security Income (SSI)",
+      "sponsor": "Social Security Administration",
+      "description": "Monthly cash benefits for disabled adults and children with limited income and resources. Not a loan - no repayment required.",
+      "amount_min": 100,
+      "amount_max": 943,
+      "amount_description": "Up to $943/month for individuals in 2024",
+      "deadline": "Rolling - apply anytime",
+      "application_url": "https://www.ssa.gov/ssi/",
+      "categories": ["disability", "income_support"],
+      "keywords": ["disability", "SSI", "income", "monthly benefit"],
+      "eligibility_bullets": [
+        "Disabled, blind, or age 65+",
+        "Limited income and resources",
+        "U.S. citizen or qualifying non-citizen",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "dis-able-account",
+      "title": "ABLE Account Program",
+      "sponsor": "Various State Programs",
+      "description": "Tax-advantaged savings accounts for individuals with disabilities. Contributions up to $18,000/year without affecting SSI eligibility.",
+      "amount_min": 0,
+      "amount_max": 18000,
+      "deadline": "Rolling",
+      "application_url": "https://www.ablenrc.org/",
+      "categories": ["disability", "savings"],
+      "keywords": ["disability", "ABLE", "savings", "tax-advantaged"],
+      "eligibility_bullets": [
+        "Disability onset before age 26",
+        "Eligible for SSI/SSDI or meet disability criteria",
+        "Not a grant but tax-advantaged savings"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "dis-vocational-rehab",
+      "title": "State Vocational Rehabilitation Services",
+      "sponsor": "U.S. Department of Education / State VR Agencies",
+      "description": "Free employment services for individuals with disabilities including job training, education, job placement, and assistive technology.",
+      "amount_min": null,
+      "amount_max": null,
+      "amount_description": "Services provided at no cost",
+      "deadline": "Rolling",
+      "application_url": "https://rsa.ed.gov/about/programs/vocational-rehabilitation-state-grants",
+      "categories": ["disability", "employment", "training"],
+      "keywords": ["disability", "vocational rehabilitation", "employment", "job training"],
+      "eligibility_bullets": [
+        "Have a physical or mental disability",
+        "Disability creates barrier to employment",
+        "Require VR services to work",
+        "No cost to eligible individuals"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    }
+  ],
+  "veteran_assistance": [
+    {
+      "id": "vet-gi-bill",
+      "title": "Post-9/11 GI Bill",
+      "sponsor": "U.S. Department of Veterans Affairs",
+      "description": "Provides education benefits for veterans who served after September 10, 2001. Covers tuition, housing, and books.",
+      "amount_min": 5000,
+      "amount_max": 27120,
+      "amount_description": "Up to full tuition + monthly housing allowance",
+      "deadline": "Rolling",
+      "application_url": "https://www.va.gov/education/about-gi-bill-benefits/post-9-11/",
+      "categories": ["education", "veteran"],
+      "keywords": ["veteran", "GI Bill", "education", "military"],
+      "eligibility_bullets": [
+        "Served at least 90 days after September 10, 2001",
+        "Honorable discharge",
+        "No repayment required - earned benefit"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "vet-voc-rehab",
+      "title": "Veteran Readiness and Employment (VR&E)",
+      "sponsor": "U.S. Department of Veterans Affairs",
+      "description": "Provides job training, employment assistance, and education support for veterans with service-connected disabilities.",
+      "amount_min": null,
+      "amount_max": null,
+      "amount_description": "Full program costs covered",
+      "deadline": "Rolling",
+      "application_url": "https://www.va.gov/careers-employment/vocational-rehabilitation/",
+      "categories": ["veteran", "disability", "employment"],
+      "keywords": ["veteran", "disability", "employment", "training"],
+      "eligibility_bullets": [
+        "Service-connected disability rating",
+        "Employment handicap determination",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    },
+    {
+      "id": "vet-aid-attendance",
+      "title": "Aid and Attendance Pension",
+      "sponsor": "U.S. Department of Veterans Affairs",
+      "description": "Additional monthly pension for wartime veterans who need help with daily activities or are housebound.",
+      "amount_min": 800,
+      "amount_max": 2431,
+      "deadline": "Rolling",
+      "application_url": "https://www.va.gov/pension/aid-attendance-housebound/",
+      "categories": ["veteran", "health", "senior"],
+      "keywords": ["veteran", "pension", "aid and attendance", "elder care"],
+      "eligibility_bullets": [
+        "Wartime veteran or surviving spouse",
+        "Meet income and net worth limits",
+        "Require assistance with daily activities",
+        "No repayment required"
+      ],
+      "requires_match": false,
+      "requires_501c3": false,
+      "state": "nationwide"
+    }
+  ],
+  "nonprofit_grants": [
+    {
+      "id": "np-americorps",
+      "title": "AmeriCorps State and National Grants",
+      "sponsor": "AmeriCorps",
+      "description": "Grants for organizations to engage AmeriCorps members in service activities. Members receive living allowance and education award.",
+      "amount_min": 50000,
+      "amount_max": 1000000,
+      "deadline": "Varies by program",
+      "application_url": "https://americorps.gov/funding-opportunity/fy-2024-americorps-state-national",
+      "categories": ["nonprofit", "service", "community"],
+      "keywords": ["AmeriCorps", "service", "volunteer", "nonprofit"],
+      "eligibility_bullets": [
+        "501(c)(3) or government entity",
+        "Capacity to manage federal grant",
+        "Match requirement may apply for some programs"
+      ],
+      "requires_match": false,
+      "requires_501c3": true,
+      "state": "nationwide"
+    },
+    {
+      "id": "np-united-way",
+      "title": "United Way Community Impact Grants",
+      "sponsor": "United Way Worldwide",
+      "description": "Local United Way chapters provide grants to nonprofits addressing education, income, and health priorities in their communities.",
+      "amount_min": 5000,
+      "amount_max": 100000,
+      "deadline": "Varies by local United Way",
+      "application_url": "https://www.unitedway.org/get-involved/give/apply-for-a-grant",
+      "categories": ["community", "education", "health"],
+      "keywords": ["United Way", "community", "education", "health", "income"],
+      "eligibility_bullets": [
+        "501(c)(3) nonprofit organization",
+        "Align with local United Way priorities",
+        "No matching funds typically required"
+      ],
+      "requires_match": false,
+      "requires_501c3": true,
+      "state": "nationwide"
+    }
+  ]
+}

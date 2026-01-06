@@ -1,78 +1,163 @@
 [
   {
-    "id": "scholarship-fafsa-access-oh",
-    "states": ["OH", "KY", "IN", "PA"],
-    "tags": ["first_generation", "low_income"],
-    "title": "FAFSA Completion Boost Award",
-    "sponsor": "Midwest Student Success Collaborative",
-    "description": "Scholarships for first-generation students who complete FAFSA by March 1 and enroll in an accredited two- or four-year institution within the region.",
+    "id": "scholarship-dell-scholars",
+    "states": ["ALL"],
+    "title": "Dell Scholars Program",
+    "sponsor": "Michael & Susan Dell Foundation",
+    "description": "Full scholarship for low-income, highly motivated students who demonstrate need, grit, and potential. Covers unmet financial need up to $20,000.",
+    "amount_min": 5000,
+    "amount_max": 20000,
+    "deadline": "December 1",
+    "application_url": "https://www.dellscholars.org/scholarship/",
+    "categories": ["scholarship", "education"],
+    "keywords": ["scholarship", "college", "low income", "financial need"],
+    "eligibility_bullets": [
+      "High school senior from low-income family",
+      "Minimum 2.4 GPA",
+      "Plan to enroll full-time at accredited institution",
+      "No repayment required"
+    ],
+    "requires_match": false
+  },
+  {
+    "id": "scholarship-coca-cola",
+    "states": ["ALL"],
+    "title": "Coca-Cola Scholars Program",
+    "sponsor": "Coca-Cola Scholars Foundation",
+    "description": "Achievement-based scholarship for high school seniors who demonstrate leadership and service. 150 students receive $20,000 each.",
+    "amount_min": 20000,
+    "amount_max": 20000,
+    "deadline": "October 31",
+    "application_url": "https://www.coca-colascholarsfoundation.org/apply/",
+    "categories": ["scholarship", "leadership"],
+    "keywords": ["scholarship", "leadership", "service", "high school"],
+    "eligibility_bullets": [
+      "Current high school senior",
+      "U.S. citizen or permanent resident",
+      "Minimum 3.0 GPA",
+      "No repayment required"
+    ],
+    "requires_match": false
+  },
+  {
+    "id": "scholarship-jack-kent-cooke",
+    "states": ["ALL"],
+    "title": "Jack Kent Cooke Foundation Scholarship",
+    "sponsor": "Jack Kent Cooke Foundation",
+    "description": "One of the largest scholarships in the U.S. for high-achieving students with financial need. Up to $55,000 per year.",
+    "amount_min": 40000,
+    "amount_max": 55000,
+    "deadline": "November 18",
+    "application_url": "https://www.jkcf.org/our-scholarships/",
+    "categories": ["scholarship", "education"],
+    "keywords": ["scholarship", "financial need", "college", "high achieving"],
+    "eligibility_bullets": [
+      "High school senior with financial need",
+      "Minimum 3.5 GPA",
+      "Strong academic record",
+      "No repayment required"
+    ],
+    "requires_match": false
+  },
+  {
+    "id": "scholarship-qb-national",
+    "states": ["ALL"],
+    "title": "QuestBridge National College Match",
+    "sponsor": "QuestBridge",
+    "description": "Full four-year scholarship to top partner colleges for high-achieving, low-income students. Covers tuition, room, and board.",
+    "amount_min": 50000,
+    "amount_max": 300000,
+    "amount_description": "Full ride for 4 years",
+    "deadline": "September 27",
+    "application_url": "https://www.questbridge.org/high-school-students/national-college-match",
+    "categories": ["scholarship", "education"],
+    "keywords": ["scholarship", "low income", "full ride", "college"],
+    "eligibility_bullets": [
+      "High school senior from low-income household",
+      "Strong academic achievement",
+      "Household income typically under $65,000",
+      "No repayment required"
+    ],
+    "requires_match": false
+  },
+  {
+    "id": "scholarship-horatio-alger",
+    "states": ["ALL"],
+    "title": "Horatio Alger Scholarship",
+    "sponsor": "Horatio Alger Association",
+    "description": "Scholarships of $25,000 for students who have overcome significant adversity and demonstrate financial need.",
+    "amount_min": 10000,
+    "amount_max": 25000,
+    "deadline": "October 25",
+    "application_url": "https://scholars.horatioalger.org/scholarships/",
+    "categories": ["scholarship", "education"],
+    "keywords": ["scholarship", "adversity", "financial need", "college"],
+    "eligibility_bullets": [
+      "High school senior with financial need",
+      "Demonstrated adversity overcome",
+      "Minimum 2.0 GPA",
+      "No repayment required"
+    ],
+    "requires_match": false
+  },
+  {
+    "id": "scholarship-buick-achievers",
+    "states": ["ALL"],
+    "title": "Buick Achievers Scholarship",
+    "sponsor": "General Motors",
+    "description": "Scholarships for students pursuing STEM or design fields, with emphasis on financial need and community involvement.",
     "amount_min": 2000,
-    "amount_max": 5000,
-    "deadline": "2025-03-01",
-    "application_url": "https://mwssc.org/fafsa-boost",
-    "categories": ["scholarship"],
-    "keywords": ["faFSA", "first-generation", "college"],
+    "amount_max": 25000,
+    "deadline": "February 28",
+    "application_url": "https://gmscholarship.com/",
+    "categories": ["scholarship", "stem", "education"],
+    "keywords": ["scholarship", "STEM", "engineering", "design"],
     "eligibility_bullets": [
-      "Must be first-generation college student",
-      "FAFSA Student Aid Index below 6000",
-      "Minimum GPA 2.5"
-    ]
+      "High school senior or current undergraduate",
+      "Pursuing STEM or design degree",
+      "Financial need considered",
+      "No repayment required"
+    ],
+    "requires_match": false
   },
   {
-    "id": "scholarship-commonapp-career",
+    "id": "scholarship-cobell",
     "states": ["ALL"],
-    "tags": ["healthcare", "stem"],
-    "title": "CommonApp Allied Health Scholars",
-    "sponsor": "CommonApp Foundation",
-    "description": "Supports students entering allied health programs (nursing, occupational therapy, radiology) who submit CommonApp application essays focused on community health impact.",
-    "amount_min": 3000,
-    "amount_max": 7000,
-    "deadline": "2025-02-10",
-    "application_url": "https://commonapp.org/scholarships/allied-health",
-    "categories": ["scholarship"],
-    "keywords": ["healthcare", "commonapp", "nursing"],
+    "title": "Cobell Scholarship",
+    "sponsor": "Indigenous Education, Inc.",
+    "description": "Scholarships for Native American students pursuing undergraduate or graduate education at accredited institutions.",
+    "amount_min": 1000,
+    "amount_max": 20000,
+    "deadline": "Varies",
+    "application_url": "https://cobellscholar.org/",
+    "categories": ["scholarship", "native american", "education"],
+    "keywords": ["scholarship", "Native American", "indigenous", "tribal"],
     "eligibility_bullets": [
-      "CommonApp submission with allied health program listed",
-      "Demonstrated volunteer experience in healthcare setting",
-      "Letter of recommendation from science or health teacher"
-    ]
+      "Enrolled member of federally recognized tribe",
+      "Pursuing higher education",
+      "Financial need considered",
+      "No repayment required"
+    ],
+    "requires_match": false
   },
   {
-    "id": "scholarship-faith-based-ministry",
+    "id": "scholarship-uncf",
     "states": ["ALL"],
-    "tags": ["faith_based", "clergy_family"],
-    "title": "Faith & Service Ministry Grant",
-    "sponsor": "National Faith Endowment Council",
-    "description": "Tuition support for seminary students, ministers pursuing continuing education, or dependents of licensed clergy enrolled in undergraduate programs.",
-    "amount_min": 1500,
-    "amount_max": 6000,
-    "deadline": "2025-04-15",
-    "application_url": "https://nfec.org/ministry-grants",
-    "categories": ["scholarship"],
-    "keywords": ["minister", "seminary", "faith"],
+    "title": "UNCF Scholarships",
+    "sponsor": "United Negro College Fund",
+    "description": "Multiple scholarship programs for African American students and others attending UNCF member institutions.",
+    "amount_min": 500,
+    "amount_max": 10000,
+    "deadline": "Varies by program",
+    "application_url": "https://uncf.org/scholarships",
+    "categories": ["scholarship", "education"],
+    "keywords": ["scholarship", "African American", "HBCU", "college"],
     "eligibility_bullets": [
-      "Applicant must demonstrate active ministry or clergy household affiliation",
-      "Essay describing ministry goals (500-700 words)",
-      "Two letters of reference from faith community leaders"
-    ]
-  },
-  {
-    "id": "scholarship-oh-stem-campus",
-    "states": ["OH"],
-    "tags": ["stem", "campus_zip"],
-    "title": "Buckeye STEM Scholars Equipment Award",
-    "sponsor": "Ohio Science & Engineering Alliance",
-    "description": "Funds lab equipment, laptops, or research travel for Ohio students accepted into STEM programs. Priority given to students attending partner universities listed in parameters.",
-    "amount_min": 2500,
-    "amount_max": 8000,
-    "deadline": "2025-05-20",
-    "application_url": "https://osea.org/scholarships/stem-equipment",
-    "categories": ["scholarship"],
-    "keywords": ["stem", "equipment", "ohio"],
-    "eligibility_bullets": [
-      "Must be admitted to an Ohio STEM degree program for Fall 2025",
-      "Submit proof of acceptance letter and FAFSA confirmation",
-      "Provide faculty or counselor recommendation"
-    ]
+      "U.S. citizen or permanent resident",
+      "Attending accredited institution",
+      "Financial need considered",
+      "No repayment required"
+    ],
+    "requires_match": false
   }
 ]

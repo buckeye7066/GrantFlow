@@ -1,78 +1,126 @@
 [
   {
-    "id": "item-van-transit-foundation",
-    "keywords": ["van", "vehicle", "transportation", "passenger"],
+    "id": "item-mobility-works",
+    "keywords": ["van", "vehicle", "transportation", "wheelchair", "accessible"],
     "states": ["ALL"],
-    "title": "Transit Innovation Fleet Grant",
-    "sponsor": "AmeriTransit Mobility Foundation",
-    "description": "Supports nonprofits purchasing or leasing passenger vans to expand community shuttle services. Funds cover vehicles, adaptive equipment, driver training, and insurance.",
-    "amount_min": 35000,
-    "amount_max": 85000,
-    "deadline": "2025-06-30",
-    "application_url": "https://ameritransit.org/fleet-grants",
-    "categories": ["transportation"],
-    "keywords_extra": ["mobility", "accessibility"],
-    "eligibility_bullets": [
-      "Applicant operates at least one year of transportation services",
-      "Vehicle must meet ADA accessibility requirements",
-      "Quarterly ridership reporting required"
-    ]
-  },
-  {
-    "id": "item-refrigeration-community",
-    "keywords": ["refrigerator", "freezer", "cold storage", "food"],
-    "states": ["ALL"],
-    "title": "Community Pantry Equipment Fund",
-    "sponsor": "Feeding Forward Coalition",
-    "description": "Provides cold storage equipment for food pantries, shelters, or nutrition hubs expanding perishable food distribution.",
+    "title": "MobilityWorks Wheelchair Accessible Vehicle Grant",
+    "sponsor": "MobilityWorks Foundation",
+    "description": "Grants to help individuals and nonprofits acquire wheelchair accessible vehicles. Covers purchase assistance and modifications.",
     "amount_min": 5000,
-    "amount_max": 20000,
-    "deadline": "2025-01-31",
-    "application_url": "https://feedingforward.org/equipment",
-    "categories": ["food_security"],
-    "keywords_extra": ["nutrition", "pantry"],
-    "eligibility_bullets": [
-      "Must document increase in fresh food distribution capacity",
-      "Provide floor plan showing electrical requirements",
-      "Upload food safety certification for staff"
-    ]
-  },
-  {
-    "id": "item-laptop-learning",
-    "keywords": ["laptop", "chromebook", "tablet", "technology"],
-    "states": ["OH", "PA", "IN", "IL"],
-    "title": "Digital Bridge Student Device Grant",
-    "sponsor": "Great Lakes Learning Collaborative",
-    "description": "Funds laptops or tablets for students participating in out-of-school tutoring, college access, or workforce readiness programs.",
-    "amount_min": 8000,
-    "amount_max": 30000,
-    "deadline": "2025-03-20",
-    "application_url": "https://gllc.org/digital-bridge",
-    "categories": ["education", "technology"],
-    "keywords_extra": ["digital", "device", "student"],
-    "eligibility_bullets": [
-      "Program must serve at least 25 students annually",
-      "Provide device distribution and accountability plan",
-      "At least 50% of students qualify for free/reduced lunch"
-    ]
-  },
-  {
-    "id": "item-accessible-vehicle",
-    "keywords": ["accessible", "wheelchair", "lift", "van"],
-    "states": ["ALL"],
-    "title": "National Accessible Vehicle Challenge",
-    "sponsor": "Access Now Initiative",
-    "description": "Awards nonprofits modernizing fleets with wheelchair-accessible vehicles or retrofitting vans with ramps and securement systems.",
-    "amount_min": 40000,
-    "amount_max": 95000,
-    "deadline": "2025-08-01",
-    "application_url": "https://accessnow.org/grants/vehicles",
+    "amount_max": 25000,
+    "deadline": "Rolling",
+    "application_url": "https://www.mobilityworks.com/mobility-works-foundation/",
     "categories": ["transportation", "disability"],
-    "keywords_extra": ["ramp", "mobility", "access"],
     "eligibility_bullets": [
-      "Organization must provide proof of insurance and maintenance plan",
-      "Vehicle must be placed into service within 6 months",
-      "Annual accessibility impact report required"
-    ]
+      "Individuals or nonprofits with mobility needs",
+      "Demonstrated financial need",
+      "Vehicle will be used for disability transportation",
+      "No repayment required"
+    ],
+    "requires_match": false
+  },
+  {
+    "id": "item-feeding-america",
+    "keywords": ["food", "refrigerator", "freezer", "cold storage", "pantry"],
+    "states": ["ALL"],
+    "title": "Feeding America Capacity Building Grants",
+    "sponsor": "Feeding America",
+    "description": "Equipment grants for food banks and pantries to expand cold storage, refrigeration, and food distribution capacity.",
+    "amount_min": 5000,
+    "amount_max": 50000,
+    "deadline": "Varies",
+    "application_url": "https://www.feedingamerica.org/our-work/food-bank-network",
+    "categories": ["food_security", "equipment"],
+    "eligibility_bullets": [
+      "Feeding America member food bank or affiliate",
+      "Project expands food distribution capacity",
+      "No matching funds required"
+    ],
+    "requires_match": false,
+    "requires_501c3": true
+  },
+  {
+    "id": "item-tech-soup",
+    "keywords": ["laptop", "computer", "technology", "software", "hardware"],
+    "states": ["ALL"],
+    "title": "TechSoup Product Donations",
+    "sponsor": "TechSoup Global",
+    "description": "Discounted and donated technology products for nonprofits including computers, software, and hardware from major tech companies.",
+    "amount_min": 0,
+    "amount_max": 5000,
+    "deadline": "Rolling",
+    "application_url": "https://www.techsoup.org/get-started",
+    "categories": ["technology", "nonprofit"],
+    "eligibility_bullets": [
+      "501(c)(3) nonprofit organization",
+      "Register for free TechSoup account",
+      "Pay small administrative fee only",
+      "Massive discounts on technology"
+    ],
+    "requires_match": false,
+    "requires_501c3": true
+  },
+  {
+    "id": "item-computers-for-learning",
+    "keywords": ["computer", "laptop", "technology", "school", "education"],
+    "states": ["ALL"],
+    "title": "Computers for Learning Program",
+    "sponsor": "U.S. General Services Administration",
+    "description": "Free excess government computers and equipment donated to schools and educational nonprofits.",
+    "amount_min": 0,
+    "amount_max": 10000,
+    "deadline": "Rolling",
+    "application_url": "https://computersforlearning.gov/",
+    "categories": ["technology", "education"],
+    "eligibility_bullets": [
+      "Public schools or educational nonprofits",
+      "Must be registered in program",
+      "Equipment is free - pay only shipping",
+      "No repayment required"
+    ],
+    "requires_match": false,
+    "requires_501c3": false
+  },
+  {
+    "id": "item-good360",
+    "keywords": ["supplies", "equipment", "products", "donations"],
+    "states": ["ALL"],
+    "title": "Good360 Product Donations",
+    "sponsor": "Good360",
+    "description": "Connects nonprofits with donated products from corporate partners including office supplies, cleaning products, and general merchandise.",
+    "amount_min": 0,
+    "amount_max": 50000,
+    "deadline": "Rolling",
+    "application_url": "https://good360.org/nonprofits/",
+    "categories": ["supplies", "nonprofit"],
+    "eligibility_bullets": [
+      "501(c)(3) nonprofit organization",
+      "Pay small administrative fee",
+      "Products donated by major retailers",
+      "No repayment required"
+    ],
+    "requires_match": false,
+    "requires_501c3": true
+  },
+  {
+    "id": "item-kaboom-playground",
+    "keywords": ["playground", "equipment", "recreation", "children"],
+    "states": ["ALL"],
+    "title": "KABOOM! Playground Grants",
+    "sponsor": "KABOOM!",
+    "description": "Grants to build playgrounds in underserved communities. Includes equipment, construction support, and community engagement.",
+    "amount_min": 15000,
+    "amount_max": 90000,
+    "deadline": "Varies",
+    "application_url": "https://kaboom.org/grants",
+    "categories": ["recreation", "community", "children"],
+    "eligibility_bullets": [
+      "Serve low-income community",
+      "Community involvement required",
+      "Site must meet safety requirements",
+      "No matching funds for some programs"
+    ],
+    "requires_match": false,
+    "requires_501c3": true
   }
 ]

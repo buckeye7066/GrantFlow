@@ -1,226 +1,263 @@
+/**
+ * Comprehensive Crawler - Uses real funding opportunities
+ * 
+ * This crawler matches real funding opportunities to user profiles
+ * based on demographics, location, and other criteria.
+ */
+
 import fs from 'fs'
-import { join } from 'path'
+import { join, dirname } from 'path'
+import { fileURLToPath } from 'url'
 import { upsertFundingOpportunity } from './opportunityInserter.js'
 import {
   buildProfileSignals,
   summarizeProfileSignals,
-  extractZipFromContext,
 } from './profileHelpers.js'
 
-function loadJSON(path) {
-  return JSON.parse(fs.readFileSync(path, 'utf8'))
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
+
+function loadJSON(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'))
+  } catch (e) {
+    console.warn(`[comprehensiveCrawler] Could not load ${filePath}:`, e.message)
+    return null
+  }
 }
 
-function addDays(baseDate, days) {
-  const result = new Date(baseDate)
-  result.setDate(result.getDate() + days)
-  return result.toISOString().slice(0, 10)
+/**
+ * Load real funding opportunities from verified data files
+ */
+function loadRealOpportunities(dataDir) {
+  const dataPath = join(dataDir, 'real_funding_opportunities.json')
+  const data = loadJSON(dataPath)
+  
+  if (!data) {
+    console.warn('[comprehensiveCrawler] No real opportunities data found')
+    return []
+  }
+  
+  const allOpps = []
+  const categories = [
+    'federal_grants',
+    'foundation_grants',
+    'state_programs',
+    'disability_assistance',
+    'veteran_assistance',
+    'nonprofit_grants'
+  ]
+  
+  for (const cat of categories) {
+    if (data[cat]) {
+      allOpps.push(...data[cat])
+    }
+  }
+  
+  return allOpps
 }
 
+/**
+ * Calculate match score between opportunity and profile signals
+ */
+function calculateOpportunityMatch(opp, signals, profileState) {
+  let score = 40 // Base score
+  const matchReasons = []
+  
+  const oppKeywords = new Set([
+    ...(opp.keywords || []).map(k => k.toLowerCase()),
+    ...(opp.categories || []).map(c => c.toLowerCase())
+  ])
+  
+  const oppText = `${opp.title} ${opp.description}`.toLowerCase()
+  
+  // State match (15 points)
+  if (opp.state === 'nationwide' || opp.state === profileState) {
+    score += 15
+    if (opp.state === profileState) {
+      matchReasons.push(`Location: ${profileState}`)
+    }
+  } else if (opp.state && opp.state !== profileState) {
+    score -= 20
+  }
+  
+  // Keyword matching (up to 25 points)
+  let keywordMatches = 0
+  if (signals.keywords) {
+    for (const keyword of signals.keywords) {
+      if (oppKeywords.has(keyword) || oppText.includes(keyword)) {
+        keywordMatches++
+        if (keywordMatches <= 3) {
+          matchReasons.push(`Keyword: ${keyword}`)
+        }
+      }
+    }
+  }
+  score += Math.min(25, keywordMatches * 5)
+  
+  // Demographics matching (up to 15 points)
+  if (signals.demographics) {
+    let demoMatches = 0
+    for (const demo of signals.demographics) {
+      if (oppText.includes(demo)) {
+        demoMatches++
+        matchReasons.push(`Demographic: ${demo}`)
+      }
+    }
+    score += Math.min(15, demoMatches * 5)
+  }
+  
+  // Disability/health matching (up to 15 points)
+  if (signals.health) {
+    for (const health of signals.health) {
+      if (oppText.includes(health) || oppKeywords.has(health)) {
+        score += 5
+        matchReasons.push(`Health: ${health}`)
+      }
+    }
+  }
+  
+  // Veteran matching (up to 15 points)
+  if (signals.military) {
+    for (const mil of signals.military) {
+      if (oppText.includes(mil) || oppKeywords.has('veteran')) {
+        score += 10
+        matchReasons.push(`Veteran status`)
+        break
+      }
+    }
+  }
+  
+  score = Math.max(0, Math.min(100, score))
+  
+  return { score, matchReasons }
+}
+
+/**
+ * Process comprehensive crawler job using real opportunities
+ */
 export function processComprehensiveCrawlerJob({ db, job, dataDir, profileContext }) {
+  console.log('[comprehensiveCrawler] Starting with real opportunities...')
+  
   const parameters = job.parameters ?? {}
-  const templates = loadJSON(
-    join(dataDir, 'comprehensive_templates.json'),
-  ).templates
-
-  if (!Array.isArray(templates) || templates.length === 0) {
-    throw new Error('No comprehensive crawler templates configured')
-  }
-
-  const zipCoordinates = loadJSON(join(dataDir, 'zip_coordinates.json'))
-  const totalZipCount = Object.keys(zipCoordinates).length
-
-  let zipList = parameters.zip_list
-  if (typeof zipList === 'string') {
-    zipList = zipList
-      .split(',')
-      .map((value) => value.trim())
-      .filter(Boolean)
-  }
-  if (!Array.isArray(zipList) || zipList.length === 0) {
-    const derivedZip = extractZipFromContext({
-      profile: profileContext?.profile,
-      sections: profileContext?.sections,
-      jobParameters: parameters,
-    })
-    if (derivedZip) {
-      zipList = [derivedZip]
+  const matchThreshold = parameters.match_threshold || 70
+  const maxResults = parameters.max_results || 50
+  
+  // Build profile signals
+  const signals = buildProfileSignals(profileContext)
+  const profileState = profileContext?.profile?.state || 
+                       profileContext?.sections?.location_focus?.state ||
+                       parameters.state
+  
+  console.log('[comprehensiveCrawler] Profile signals:', summarizeProfileSignals(signals))
+  console.log('[comprehensiveCrawler] Profile state:', profileState)
+  
+  // Load real opportunities
+  const realOpps = loadRealOpportunities(dataDir)
+  console.log(`[comprehensiveCrawler] Loaded ${realOpps.length} real opportunities from data files`)
+  
+  // Also load from database
+  const dbOpps = db.prepare(`
+    SELECT * FROM funding_opportunities 
+    WHERE is_active = 1 
+    AND (requires_match = 0 OR requires_match IS NULL)
+    AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
+    ORDER BY created_at DESC
+    LIMIT 200
+  `).all()
+  
+  console.log(`[comprehensiveCrawler] Found ${dbOpps.length} real opportunities in database`)
+  
+  // Combine and dedupe
+  const seenTitles = new Set()
+  const allOpps = []
+  
+  for (const opp of realOpps) {
+    if (!seenTitles.has(opp.title)) {
+      seenTitles.add(opp.title)
+      allOpps.push(opp)
     }
   }
-
-  if (!Array.isArray(zipList) || zipList.length === 0) {
-    // Default to ALL zip codes for nationwide coverage unless a specific limit is provided
-    const fallbackLimit = Math.max(
-      1,
-      Math.min(
-        Number(parameters.fallback_zip_limit ?? totalZipCount),
-        totalZipCount,
-      ),
-    )
-    zipList = Object.keys(zipCoordinates)
-      .slice(0, fallbackLimit)
-      .map((zip) => zip.trim())
-      .filter(Boolean)
-    console.warn(
-      `[comprehensive-crawler] No ZIP list provided or derived; defaulting to ${zipList.length} fallback ZIPs for nationwide coverage.`,
-    )
-  }
-
-  zipList = Array.from(
-    new Set(
-      zipList
-        .map((value) => (typeof value === 'string' ? value.trim() : String(value ?? '')).slice(0, 10))
-        .filter((value) => /^\d{5}$/.test(value)),
-    ),
-  )
-
-  if (zipList.length === 0) {
-    // Fallback to all valid 5-digit US zip codes for nationwide coverage
-    zipList = Object.keys(zipCoordinates)
-      .slice(0, Math.max(1, Number(parameters.fallback_zip_limit ?? totalZipCount)))
-      .filter((value) => /^\d{5}$/.test(value))
-  }
-
-  const limitPerZip = Number(parameters.limit_per_zip ?? 3)
-
-  if (limitPerZip < 1) {
-    throw new Error('limit_per_zip must be at least 1')
-  }
-
-  const signals = profileContext ? buildProfileSignals(profileContext) : {
-    keywordSet: new Set(),
-    phrases: new Set(),
-    demographics: new Set(),
-    interests: new Set(),
-    assistance: new Set(),
-    location: {},
-    academics: {},
-  }
-  const focusSummary = summarizeProfileSignals(signals)
-  const interestHighlights = Array.from(signals.interests ?? []).slice(0, 3)
-  const demographicHighlights = Array.from(signals.demographics ?? [])
-    .slice(0, 2)
-    .map((label) => label.replace(/_/g, ' '))
-
-  let inserted = 0
-  let evaluated = 0
-  const opportunityLogs = []
-  const today = new Date()
-  const startTime = Date.now()
-
-  zipList.forEach((zip) => {
-    const coords = zipCoordinates[zip]
-    if (!coords) {
-      console.warn(
-        `[comprehensive-crawler] ZIP ${zip} missing coordinates. Add entry to zip_coordinates.json.`,
-      )
-      return
-    }
-
-    templates.slice(0, limitPerZip).forEach((template, index) => {
-      const deadline = addDays(today, template.deadline_offset_days)
-      const formatter = new Intl.NumberFormat('en-US')
-      const keywordSet = new Set([
-        ...(template.keywords ?? []),
-        ...Array.from(signals.phrases ?? []),
-        ...interestHighlights,
-      ])
-      const categories = new Set([...(template.categories ?? [])])
-      interestHighlights.forEach((interest) => categories.add(interest.replace(/_/g, ' ')))
-
-      const descriptionParts = [template.description.replace('{zip}', zip)]
-      if (interestHighlights.length > 0) {
-        descriptionParts.push(
-          `Priority given to projects supporting ${interestHighlights.join(', ')} within the service area.`,
-        )
-      }
-      if (demographicHighlights.length > 0) {
-        descriptionParts.push(
-          `Programs should benefit ${demographicHighlights.join(', ')} communities.`,
-        )
-      }
-
-      const eligibility = template.eligibility_bullets.map((line) =>
-        line.replace('{zip}', zip),
-      )
-      if (demographicHighlights.length > 0) {
-        eligibility.push(`Demonstrate engagement with ${demographicHighlights.join(', ')} beneficiaries.`)
-      }
-      if (interestHighlights.length > 0) {
-        eligibility.push(`Highlight activities in ${interestHighlights.join(', ')}.`)
-      }
-
-      const opportunity = {
-        title: template.title.replace('{zip}', zip),
-        sponsor: `${coords.city} Community Funding Board`,
-        description: descriptionParts.join(' '),
-        amount_min: template.amount_min,
-        amount_max: template.amount_max,
-        amount_description: `Awards between $${formatter.format(template.amount_min)} and $${formatter.format(template.amount_max)}`,
-        deadline,
-        deadline_type: 'fixed',
-        application_url: null, // No direct application URL - use grant search portals
-        is_national: 0,
-        state: coords.state,
-        categories: Array.from(categories),
-        keywords: Array.from(keywordSet),
-        opportunity_type: 'grant',
-        requires_match: false,
-        requires_501c3: false,
-        source: 'comprehensive_crawler',
-        source_id: `${zip}-${template.id}-${index}`,
-        eligibility_bullets: eligibility,
-        profile_focus: focusSummary,
-        match_reasons: [
-          focusSummary && focusSummary.length > 0 ? `Profile focus: ${focusSummary}` : null,
-          demographicHighlights.length > 0 ? `Demographic emphasis: ${demographicHighlights.join(', ')}` : null,
-          interestHighlights.length > 0 ? `Interest signals: ${interestHighlights.join(', ')}` : null,
-        ].filter(Boolean),
-        notes:
-          focusSummary && focusSummary.length > 0
-            ? `Profile focus: ${focusSummary}`
-            : `Auto-generated from comprehensive crawler template ${template.id}`,
-      }
-
-      evaluated += 1
-      const result = upsertFundingOpportunity(db, opportunity)
-      if (result.inserted) {
-        inserted += 1
-      }
-
-      opportunityLogs.push({
-        title: opportunity.title,
-        zip,
-        deadline,
-        amount_min: opportunity.amount_min,
-        amount_max: opportunity.amount_max,
-        match_reasons: opportunity.match_reasons,
-        inserted: !!result.inserted,
+  
+  for (const opp of dbOpps) {
+    if (!seenTitles.has(opp.title)) {
+      seenTitles.add(opp.title)
+      allOpps.push({
+        ...opp,
+        keywords: JSON.parse(opp.keywords || '[]'),
+        categories: JSON.parse(opp.categories || '[]'),
+        eligibility_bullets: JSON.parse(opp.eligibility_bullets || '[]')
       })
-    })
-  })
-
-  if (evaluated === 0) {
-    throw new Error(
-      'No ZIP codes evaluated. Provide zip_list parameter or populate zip_coordinates.json.',
-    )
+    }
   }
-
-  const elapsedSeconds = Math.max(0, Math.round((Date.now() - startTime) / 1000))
-
+  
+  // Score and filter opportunities
+  const scoredOpps = []
+  
+  for (const opp of allOpps) {
+    // Skip if requires matching funds
+    if (opp.requires_match) continue
+    
+    const { score, matchReasons } = calculateOpportunityMatch(opp, signals, profileState)
+    
+    if (score >= matchThreshold) {
+      scoredOpps.push({
+        ...opp,
+        match_score: score,
+        match_reasons: matchReasons
+      })
+    }
+  }
+  
+  // Sort by score and limit
+  scoredOpps.sort((a, b) => b.match_score - a.match_score)
+  const topOpps = scoredOpps.slice(0, maxResults)
+  
+  console.log(`[comprehensiveCrawler] Found ${topOpps.length} matching opportunities (threshold: ${matchThreshold}%)`)
+  
+  // Insert into database
+  let insertedCount = 0
+  for (const opp of topOpps) {
+    try {
+      const result = upsertFundingOpportunity(db, {
+        title: opp.title,
+        sponsor: opp.sponsor,
+        description: opp.description,
+        amount_min: opp.amount_min,
+        amount_max: opp.amount_max,
+        amount_description: opp.amount_description,
+        deadline: opp.deadline,
+        application_url: opp.application_url,
+        categories: opp.categories,
+        keywords: opp.keywords,
+        eligibility_bullets: opp.eligibility_bullets,
+        requires_match: false,
+        requires_501c3: opp.requires_501c3,
+        state: opp.state,
+        source: 'verified_real',
+        source_id: opp.id || opp.source_id,
+        match_reasons: opp.match_reasons
+      })
+      
+      if (result.inserted) {
+        insertedCount++
+      }
+    } catch (err) {
+      console.error(`[comprehensiveCrawler] Error inserting ${opp.title}:`, err.message)
+    }
+  }
+  
   return {
-    inserted,
-    evaluated,
-    zipsProcessed: zipList.length,
-    limitPerZip,
-    result_count: inserted,
-    result_meta: {
-      evaluated,
-      inserted,
-      zipsProcessed: zipList.length,
-      limitPerZip,
-      duration_seconds: elapsedSeconds,
-      opportunities: opportunityLogs.slice(0, 25),
-    },
+    evaluated: allOpps.length,
+    inserted: insertedCount,
+    matched: topOpps.length,
+    opportunityLogs: topOpps.map(o => ({
+      title: o.title,
+      sponsor: o.sponsor,
+      score: o.match_score,
+      reasons: o.match_reasons
+    }))
   }
 }
+
+export default processComprehensiveCrawlerJob

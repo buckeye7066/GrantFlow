@@ -461,6 +461,12 @@ router.post('/comprehensiveMatch', async (req, res) => {
     const conditions = [];
     const params = [];
     
+    // Exclude fake/synthetic sources
+    conditions.push(`(source IS NULL OR source NOT IN ('comprehensive_crawler', 'synthetic', 'template', 'fake'))`);
+    
+    // Exclude opportunities that require matching funds
+    conditions.push(`(requires_match = 0 OR requires_match IS NULL)`);
+    
     // State filtering
     if (profileStates.length > 0) {
       const statePlaceholders = profileStates.map(() => '?').join(',');
@@ -475,9 +481,9 @@ router.post('/comprehensiveMatch', async (req, res) => {
     }
     
     // Build the query
-    let query = 'SELECT * FROM funding_opportunities';
+    let query = 'SELECT * FROM funding_opportunities WHERE is_active = 1';
     if (conditions.length > 0) {
-      query += ' WHERE ' + conditions.join(' AND ');
+      query += ' AND ' + conditions.join(' AND ');
     }
     query += ' ORDER BY RANDOM() LIMIT 100';
     
