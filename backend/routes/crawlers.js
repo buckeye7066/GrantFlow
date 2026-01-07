@@ -1313,6 +1313,99 @@ router.post('/bulk-populate', async (req, res) => {
   }
 })
 
+// Seed verified real funding opportunities from curated JSON file
+router.post('/seed-real-opportunities', async (req, res) => {
+  const auth = req.user ?? { role: 'guest' }
+  const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
+  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  
+  const isAdmin = auth.role === 'admin'
+  const hasValidKey = bulkKey === expectedKey
+  
+  if (!isAdmin && !hasValidKey) {
+    return res.status(403).json({ error: 'Admin access or valid bulk key required' })
+  }
+  
+  try {
+    const dataPath = join(__dirname, '..', 'data', 'real_funding_opportunities.json')
+    
+    if (!fs.existsSync(dataPath)) {
+      return res.status(404).json({ error: 'Real opportunities data file not found' })
+    }
+    
+    const data = JSON.parse(fs.readFileSync(dataPath, 'utf8'))
+    const opportunities = data.opportunities || []
+    
+    let inserted = 0
+    let updated = 0
+    const errors = []
+    
+    for (const opp of opportunities) {
+      try {
+        const existing = req.db.prepare(
+          'SELECT id FROM funding_opportunities WHERE id = ? OR (source = ? AND source_id = ?)'
+        ).get(opp.id, opp.source, opp.source_id || opp.id)
+        
+        if (existing) {
+          req.db.prepare(`
+            UPDATE funding_opportunities SET
+              title = ?, sponsor = ?, description = ?, amount_min = ?, amount_max = ?,
+              deadline = ?, deadline_type = ?, application_url = ?, source_url = ?,
+              is_national = ?, state = ?, categories = ?, keywords = ?,
+              eligibility_bullets = ?, opportunity_type = ?, requires_501c3 = ?,
+              requires_match = ?, match_percentage = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).run(
+            opp.title, opp.sponsor, opp.description, opp.amount_min, opp.amount_max,
+            opp.deadline, opp.deadline_type, opp.application_url, opp.source_url,
+            opp.is_national ? 1 : 0, opp.state || 'nationwide',
+            JSON.stringify(opp.categories || []), JSON.stringify(opp.keywords || []),
+            JSON.stringify(opp.eligibility_bullets || []), opp.opportunity_type || 'grant',
+            opp.requires_501c3 ? 1 : 0, opp.requires_match ? 1 : 0, opp.match_percentage || null,
+            existing.id
+          )
+          updated++
+        } else {
+          req.db.prepare(`
+            INSERT INTO funding_opportunities (
+              id, title, sponsor, source, source_id, source_url, description,
+              amount_min, amount_max, deadline, deadline_type, application_url,
+              is_national, state, categories, keywords, eligibility_bullets,
+              opportunity_type, requires_501c3, requires_match, match_percentage, is_active,
+              created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          `).run(
+            opp.id, opp.title, opp.sponsor, opp.source || 'verified_real',
+            opp.source_id || opp.id, opp.source_url, opp.description,
+            opp.amount_min, opp.amount_max, opp.deadline, opp.deadline_type,
+            opp.application_url, opp.is_national ? 1 : 0, opp.state || 'nationwide',
+            JSON.stringify(opp.categories || []), JSON.stringify(opp.keywords || []),
+            JSON.stringify(opp.eligibility_bullets || []), opp.opportunity_type || 'grant',
+            opp.requires_501c3 ? 1 : 0, opp.requires_match ? 1 : 0, opp.match_percentage || null
+          )
+          inserted++
+        }
+      } catch (dbErr) {
+        errors.push({ id: opp.id, error: dbErr.message })
+        console.error(`[seed-real] Error for ${opp.id}:`, dbErr.message)
+      }
+    }
+    
+    console.log(`[seed-real] Complete: ${inserted} inserted, ${updated} updated`)
+    
+    res.json({
+      success: true,
+      total: opportunities.length,
+      inserted,
+      updated,
+      errors: errors.length > 0 ? errors : undefined
+    })
+  } catch (error) {
+    console.error('[seed-real] Error:', error)
+    res.status(500).json(formatError(error))
+  }
+})
+
 // Real funding opportunity crawler - fetches actual grants from real databases
 router.post('/real-crawl', async (req, res) => {
   // Allow admin auth OR bulk key for automated crawling
