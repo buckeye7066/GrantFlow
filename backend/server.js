@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
 import rateLimit from 'express-rate-limit';
+import crypto from 'crypto';
 
 // Routes
 import organizationsRouter from './routes/organizations.js';
@@ -324,6 +325,82 @@ ensureCrawlerJobsSupportsProfileEnrichment()
 ensureDesignatedProfiles(db)
 linkAllProfilesToAdmin(db)
 ensureUserPreferencesTable(db)
+
+// Auto-seed funding opportunities if database is empty
+try {
+  const oppCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get();
+  if (oppCount && oppCount.count === 0) {
+    console.info('[startup] No funding opportunities found, auto-seeding...');
+    
+    // Load opportunity files
+    const crawlersDir = join(__dirname, 'data', 'crawlers');
+    const files = [
+      { path: join(crawlersDir, 'real_funding_opportunities.json'), type: 'structured' },
+      { path: join(crawlersDir, 'scholarship_opportunities.json'), type: 'array' },
+      { path: join(crawlersDir, 'local_opportunities.json'), type: 'array' },
+      { path: join(crawlersDir, 'item_funding_sources.json'), type: 'array' },
+    ];
+    
+    const allOpportunities = [];
+    for (const file of files) {
+      try {
+        if (fs.existsSync(file.path)) {
+          const content = fs.readFileSync(file.path, 'utf8');
+          const data = JSON.parse(content);
+          if (file.type === 'structured') {
+            Object.values(data).forEach(category => {
+              if (Array.isArray(category)) allOpportunities.push(...category);
+            });
+          } else if (Array.isArray(data)) {
+            allOpportunities.push(...data);
+          }
+        }
+      } catch (e) {
+        console.warn(`[startup] Failed to load ${file.path}:`, e.message);
+      }
+    }
+    
+    if (allOpportunities.length > 0) {
+      const upsert = db.prepare(`
+        INSERT INTO funding_opportunities (
+          id, source, source_id, title, sponsor, description,
+          application_url, source_url, deadline, amount_min, amount_max,
+          categories, keywords, eligibility_bullets, match_reasons,
+          state, requires_match, requires_501c3, is_active, is_national,
+          opportunity_type, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO NOTHING
+      `);
+      
+      const transaction = db.transaction(() => {
+        for (const opp of allOpportunities) {
+          try {
+            const id = opp.id || crypto.randomUUID();
+            upsert.run(
+              id, opp.source || 'seeded_real', opp.source_id || id,
+              opp.title || opp.program_name, opp.sponsor || opp.funder, opp.description || opp.summary,
+              opp.application_url || opp.url, opp.url || opp.source_url || opp.application_url, opp.deadline,
+              opp.amount_min || opp.award_floor, opp.amount_max || opp.award_ceiling,
+              JSON.stringify(opp.categories || []), JSON.stringify(opp.keywords || []),
+              JSON.stringify(opp.eligibility_bullets || []), JSON.stringify(opp.match_reasons || []),
+              opp.state || (opp.is_national ? 'nationwide' : null),
+              opp.requires_match ? 1 : 0, opp.requires_501c3 ? 1 : 0, opp.is_national ? 1 : 0,
+              opp.opportunity_type || 'grant'
+            );
+          } catch (e) { /* ignore individual errors */ }
+        }
+      });
+      
+      transaction();
+      const newCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get();
+      console.info(`[startup] Seeded ${newCount.count} funding opportunities`);
+    }
+  } else {
+    console.info(`[startup] Found ${oppCount.count} existing funding opportunities`);
+  }
+} catch (seedError) {
+  console.warn('[startup] Error during auto-seed:', seedError.message);
+}
 
 const JWT_SECRET = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret';
 

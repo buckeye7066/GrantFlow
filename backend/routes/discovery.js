@@ -542,10 +542,11 @@ router.post('/comprehensiveMatch', async (req, res) => {
       console.log(`[comprehensiveMatch] Top 5 scores:`, JSON.stringify(topScores));
     }
     
-    // Filter to only return opportunities with 80%+ match score
-    // This ensures only highly relevant opportunities are shown to users
+    // Filter opportunities - lowered threshold to 60% for better results
+    // Veterans, disabled, and single parents should match many opportunities
+    const matchThreshold = 60;
     const highScoring = scoredOpportunities
-      .filter(o => o.fit_score >= 80)
+      .filter(o => o.fit_score >= matchThreshold)
       .sort((a, b) => b.fit_score - a.fit_score);
     
     res.json({
@@ -553,7 +554,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
       opportunities: highScoring,
       total: highScoring.length,
       page,
-      threshold_used: 80,
+      threshold_used: matchThreshold,
       total_evaluated: scoredOpportunities.length
     });
     
