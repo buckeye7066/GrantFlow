@@ -24,6 +24,8 @@ export const USER_PROFILE_MAPPINGS = {
   'isawstars08@yahoo.com': 'profile-brian-client',
   'allmonkey915@gmail.com': 'profile-avanell-leamon',
   'oliviabeltran@gmail.com': 'profile-olivia-beltran',
+  'joshua.dasher@gmail.com': 'profile-josh-dasher',
+  'rdashermiller@gmail.com': 'profile-rachel-miller',
 }
 
 /**
