@@ -403,11 +403,12 @@ try {
   console.warn('[startup] Error during auto-seed:', seedError.message);
 }
 
-// Auto-seed grants for profiles if database has no grants
-try {
-  const grantCount = db.prepare('SELECT COUNT(*) as count FROM grants').get();
-  if (grantCount && grantCount.count === 0) {
-    console.info('[startup] No grants found, auto-seeding profile grants...');
+// Auto-seed grants for profiles if database has no grants (non-blocking)
+setTimeout(() => {
+  try {
+    const grantCount = db.prepare('SELECT COUNT(*) as count FROM grants').get();
+    if (grantCount && grantCount.count === 0) {
+      console.info('[startup] No grants found, auto-seeding profile grants...');
     
     const profiles = db.prepare('SELECT * FROM profiles WHERE status = ?').all('active');
     const opportunities = db.prepare(`
@@ -506,12 +507,13 @@ try {
       totalGrantsAdded += added;
     }
     console.info(`[startup] Total grants seeded: ${totalGrantsAdded}`);
-  } else {
-    console.info(`[startup] Found ${grantCount.count} existing grants`);
+    } else {
+      console.info(`[startup] Found ${grantCount.count} existing grants`);
+    }
+  } catch (grantSeedError) {
+    console.warn('[startup] Error during grant seeding:', grantSeedError.message);
   }
-} catch (grantSeedError) {
-  console.warn('[startup] Error during grant seeding:', grantSeedError.message);
-}
+}, 5000); // Run grant seeding 5 seconds after server starts
 
 const JWT_SECRET = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret';
 
