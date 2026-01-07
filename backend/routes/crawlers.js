@@ -1313,6 +1313,76 @@ router.post('/bulk-populate', async (req, res) => {
   }
 })
 
+// Seed local assistance networks (food banks, community agencies, etc.)
+router.post('/seed-local-networks', async (req, res) => {
+  const auth = req.user ?? { role: 'guest' }
+  const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
+  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  
+  if (auth.role !== 'admin' && bulkKey !== expectedKey) {
+    return res.status(403).json({ error: 'Admin access or valid bulk key required' })
+  }
+  
+  try {
+    const fs = await import('fs')
+    const path = await import('path')
+    const { fileURLToPath } = await import('url')
+    
+    const __filename = fileURLToPath(import.meta.url)
+    const __dirname = path.dirname(__filename)
+    const dataPath = path.join(__dirname, '..', 'data', 'local_assistance_networks.json')
+    
+    const data = JSON.parse(fs.readFileSync(dataPath, 'utf-8'))
+    
+    let inserted = 0, updated = 0, errors = 0
+    
+    for (const net of data.networks) {
+      try {
+        const existing = req.db.prepare('SELECT id FROM funding_opportunities WHERE id = ?').get(net.id)
+        const categoriesJson = JSON.stringify(net.categories || [])
+        const keywordsJson = JSON.stringify([...net.categories, 'local', 'assistance', 'community'].filter(Boolean))
+        
+        if (existing) {
+          req.db.prepare(`
+            UPDATE funding_opportunities SET
+              title = ?, sponsor = ?, description = ?, application_url = ?, source_url = ?,
+              is_national = ?, state = ?, categories = ?, keywords = ?,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).run(net.title, net.sponsor, net.description, net.url, net.url, net.is_national ? 1 : 0, net.state || 'nationwide', categoriesJson, keywordsJson, net.id)
+          updated++
+        } else {
+          req.db.prepare(`
+            INSERT INTO funding_opportunities (
+              id, title, sponsor, source, source_id, source_url, description,
+              application_url, is_national, state, categories, keywords,
+              opportunity_type, is_active, created_at, updated_at
+            ) VALUES (?, ?, ?, 'verified_real', ?, ?, ?, ?, ?, ?, ?, ?, 'program', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          `).run(net.id, net.title, net.sponsor, net.id, net.url, net.description, net.url, net.is_national ? 1 : 0, net.state || 'nationwide', categoriesJson, keywordsJson)
+          inserted++
+        }
+      } catch (e) {
+        console.error(`[seed-local-networks] Error for ${net.id}:`, e.message)
+        errors++
+      }
+    }
+    
+    const totalCount = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get().count
+    
+    res.json({
+      success: true,
+      message: `Seeded local networks: ${inserted} new, ${updated} updated`,
+      inserted,
+      updated,
+      errors,
+      total_opportunities: totalCount
+    })
+  } catch (error) {
+    console.error('[seed-local-networks] Error:', error)
+    res.status(500).json(formatError(error))
+  }
+})
+
 // Seed state assistance programs (211, SNAP, etc.)
 router.post('/seed-state-assistance', async (req, res) => {
   const auth = req.user ?? { role: 'guest' }
