@@ -403,7 +403,7 @@ export default function ServiceApplication() {
             <div className="flex justify-between items-center">
               <span className="text-lg font-semibold text-slate-900">Estimated Total:</span>
               <span className="text-2xl font-bold text-blue-600">
-                ${total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                ${total.toFixed(2)}
               </span>
             </div>
           </div>

@@ -199,7 +199,7 @@ function formatServiceApplicationAsHTML(data) {
   sections.push(`
     <h2 style="color: #2563eb; border-bottom: 2px solid #2563eb; padding-bottom: 8px;">Estimated Total Cost</h2>
     <p style="font-size: 24px; font-weight: bold; color: #2563eb; margin: 10px 0 20px 0;">
-      $${typeof data.totalCost === 'number' ? data.totalCost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+      $${typeof data.totalCost === 'number' ? data.totalCost.toFixed(2) : '0.00'}
     </p>
   `)
 

@@ -32,6 +32,15 @@ router.post('/submit', async (req, res) => {
       })
     }
 
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid email format',
+      })
+    }
+
     // Format the application data for email
     const applicationData = {
       fullName,
