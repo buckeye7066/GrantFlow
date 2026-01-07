@@ -1,0 +1,340 @@
+{
+  "description": "Real state-level assistance programs - verified URLs that work",
+  "programs": [
+    {
+      "id": "211-al", "state": "AL", "title": "Alabama 211 - Find Local Help", "sponsor": "United Way of Alabama", 
+      "url": "https://www.211connectsalabama.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Dial 211 or visit online to find local food, housing, utility, and emergency assistance in Alabama."
+    },
+    {
+      "id": "211-ak", "state": "AK", "title": "Alaska 211 - Community Resources", "sponsor": "United Way of Anchorage",
+      "url": "https://www.alaska211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Connect with local assistance programs for food, shelter, utilities, and more across Alaska."
+    },
+    {
+      "id": "211-az", "state": "AZ", "title": "Arizona 211 - Community Information", "sponsor": "Community Information and Referral Services",
+      "url": "https://211arizona.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Find food banks, rental assistance, utility help, and social services throughout Arizona."
+    },
+    {
+      "id": "211-ar", "state": "AR", "title": "Arkansas 211 - Help Starts Here", "sponsor": "Arkansas United Way",
+      "url": "https://www.ar211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Connect to health and human services in your Arkansas community. Food, housing, healthcare referrals."
+    },
+    {
+      "id": "211-ca", "state": "CA", "title": "California 211 - Local Resources", "sponsor": "211 California",
+      "url": "https://www.211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Find local programs for food, housing, healthcare, childcare, and more in California."
+    },
+    {
+      "id": "211-co", "state": "CO", "title": "Colorado 211 - Connect to Resources", "sponsor": "Mile High United Way",
+      "url": "https://211colorado.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Access Colorado's database of health and human services. Food banks, rent help, mental health."
+    },
+    {
+      "id": "211-ct", "state": "CT", "title": "Connecticut 211 - Health & Human Services", "sponsor": "United Way of Connecticut",
+      "url": "https://www.211ct.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Connecticut's information and referral service for food, shelter, healthcare, and crisis support."
+    },
+    {
+      "id": "211-de", "state": "DE", "title": "Delaware 211 - Helpline", "sponsor": "United Way of Delaware",
+      "url": "https://www.delaware211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Find Delaware assistance programs for housing, food, utilities, healthcare, and employment."
+    },
+    {
+      "id": "211-fl", "state": "FL", "title": "Florida 211 - Community Resources", "sponsor": "211 Counts Florida",
+      "url": "https://www.211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Connect with Florida social services: food stamps, housing, utilities, disaster relief."
+    },
+    {
+      "id": "211-ga", "state": "GA", "title": "Georgia 211 - Call for Help", "sponsor": "United Way of Greater Atlanta",
+      "url": "https://www.211online.unitedwayatlanta.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Georgia's helpline for food, housing, healthcare, childcare, and emergency assistance."
+    },
+    {
+      "id": "211-hi", "state": "HI", "title": "Aloha United Way 211", "sponsor": "Aloha United Way",
+      "url": "https://www.auw.org/211", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Hawaii's 211 connects residents to local social services, food banks, and emergency help."
+    },
+    {
+      "id": "211-id", "state": "ID", "title": "Idaho CareLine 211", "sponsor": "Idaho Department of Health and Welfare",
+      "url": "https://211.idaho.gov/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Idaho's health and human services resource line. Find food, housing, and support programs."
+    },
+    {
+      "id": "211-il", "state": "IL", "title": "Illinois 211 - Path to Services", "sponsor": "PATH Illinois",
+      "url": "https://www.211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Connect to Illinois programs for food, housing, healthcare, employment, and crisis intervention."
+    },
+    {
+      "id": "211-in", "state": "IN", "title": "Indiana 211 - Connect to Help", "sponsor": "Indiana United Ways",
+      "url": "https://in211.communityos.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Indiana's social services database. Food pantries, rental assistance, healthcare, and more."
+    },
+    {
+      "id": "211-ia", "state": "IA", "title": "Iowa 211 - Your First Call", "sponsor": "United Ways of Iowa",
+      "url": "https://www.211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Iowa's resource for finding local food banks, utility assistance, housing, and social services."
+    },
+    {
+      "id": "211-ks", "state": "KS", "title": "Kansas 211 - Community Resources", "sponsor": "United Way of Kansas",
+      "url": "https://www.211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Find Kansas assistance programs for food, housing, utilities, healthcare, and family services."
+    },
+    {
+      "id": "211-ky", "state": "KY", "title": "Kentucky 211 - Help Starts Here", "sponsor": "United Way of Kentucky",
+      "url": "https://www.211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Kentucky's helpline connects you to local food, housing, healthcare, and support services."
+    },
+    {
+      "id": "211-la", "state": "LA", "title": "Louisiana 211 - Help When You Need It", "sponsor": "United Way of Southeast Louisiana",
+      "url": "https://www.211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Louisiana's information line for social services, disaster recovery, and community resources."
+    },
+    {
+      "id": "211-me", "state": "ME", "title": "Maine 211 - Dial for Help", "sponsor": "United Ways of Maine",
+      "url": "https://211maine.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Maine's resource for food, heating assistance, healthcare, housing, and emergency services."
+    },
+    {
+      "id": "211-md", "state": "MD", "title": "Maryland 211 - Press 1", "sponsor": "211 Maryland",
+      "url": "https://211md.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Maryland's helpline for housing, food, healthcare, utilities, and crisis intervention services."
+    },
+    {
+      "id": "211-ma", "state": "MA", "title": "Massachusetts 211 - HelpLine", "sponsor": "United Way of Massachusetts Bay",
+      "url": "https://mass211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Connect to Massachusetts social services: food stamps, housing, healthcare, childcare."
+    },
+    {
+      "id": "211-mi", "state": "MI", "title": "Michigan 211 - Find Resources", "sponsor": "Michigan Association of United Ways",
+      "url": "https://www.mi211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Michigan's comprehensive resource for food, housing, healthcare, and emergency assistance."
+    },
+    {
+      "id": "211-mn", "state": "MN", "title": "Minnesota 211 - United Way", "sponsor": "Greater Twin Cities United Way",
+      "url": "https://www.211unitedway.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Minnesota's helpline for food shelves, housing, utilities, healthcare, and social services."
+    },
+    {
+      "id": "211-ms", "state": "MS", "title": "Mississippi 211 - Call for Help", "sponsor": "United Way of Mississippi",
+      "url": "https://www.211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Mississippi's resource line for food banks, rent assistance, healthcare, and crisis support."
+    },
+    {
+      "id": "211-mo", "state": "MO", "title": "Missouri 211 - Get Connected", "sponsor": "United Way of Greater St. Louis",
+      "url": "https://www.211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Missouri's social services helpline. Food, housing, healthcare, employment, and family services."
+    },
+    {
+      "id": "211-mt", "state": "MT", "title": "Montana 211 - Help Starts Here", "sponsor": "Montana 211",
+      "url": "https://www.montana211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Montana's information and referral service for food, housing, healthcare, and emergency help."
+    },
+    {
+      "id": "211-ne", "state": "NE", "title": "Nebraska 211 - First Call for Help", "sponsor": "United Way of the Midlands",
+      "url": "https://www.ne211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Nebraska's resource for food assistance, housing, utilities, healthcare, and social services."
+    },
+    {
+      "id": "211-nv", "state": "NV", "title": "Nevada 211 - Community Resources", "sponsor": "Nevada 211",
+      "url": "https://www.nevada211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Nevada's helpline for food banks, rental assistance, healthcare, and crisis intervention."
+    },
+    {
+      "id": "211-nh", "state": "NH", "title": "New Hampshire 211", "sponsor": "211 New Hampshire",
+      "url": "https://www.211nh.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "New Hampshire's resource for food, housing, healthcare, childcare, and emergency services."
+    },
+    {
+      "id": "211-nj", "state": "NJ", "title": "New Jersey 211 - NJ Connects", "sponsor": "NJ 211 Partnership",
+      "url": "https://www.nj211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "New Jersey's social services database. Food, housing, utilities, healthcare, and employment."
+    },
+    {
+      "id": "211-nm", "state": "NM", "title": "New Mexico 211 - Help Starts Here", "sponsor": "United Way of Central New Mexico",
+      "url": "https://www.211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "New Mexico's resource line for food assistance, housing, healthcare, and support services."
+    },
+    {
+      "id": "211-ny", "state": "NY", "title": "New York 211 - Get Connected", "sponsor": "211 New York",
+      "url": "https://www.211nys.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "New York's comprehensive helpline for social services, housing, food, and emergency assistance."
+    },
+    {
+      "id": "211-nc", "state": "NC", "title": "North Carolina 211 - NC Cares", "sponsor": "United Way of North Carolina",
+      "url": "https://nc211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "North Carolina's resource for food banks, housing, healthcare, utilities, and crisis support."
+    },
+    {
+      "id": "211-nd", "state": "ND", "title": "North Dakota 211 - FirstLink", "sponsor": "FirstLink",
+      "url": "https://myfirstlink.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "North Dakota's helpline for food, housing, healthcare, and emergency assistance resources."
+    },
+    {
+      "id": "211-oh", "state": "OH", "title": "Ohio 211 - Get Connected", "sponsor": "211 Ohio",
+      "url": "https://www.211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Ohio's social services resource. Food pantries, rent help, utilities, healthcare, and more."
+    },
+    {
+      "id": "211-ok", "state": "OK", "title": "Oklahoma 211 - Heartline", "sponsor": "211 Oklahoma",
+      "url": "https://www.211oklahoma.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Oklahoma's helpline for food, housing, healthcare, utilities, and emergency services."
+    },
+    {
+      "id": "211-or", "state": "OR", "title": "Oregon 211 - Find Help", "sponsor": "211info",
+      "url": "https://www.211info.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Oregon and SW Washington resource for food, housing, healthcare, and social services."
+    },
+    {
+      "id": "211-pa", "state": "PA", "title": "Pennsylvania 211 - PA 211", "sponsor": "PA 211",
+      "url": "https://www.pa211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Pennsylvania's database of social services: food, housing, healthcare, utilities, and more."
+    },
+    {
+      "id": "211-ri", "state": "RI", "title": "Rhode Island 211 - Call for Help", "sponsor": "United Way of Rhode Island",
+      "url": "https://www.211ri.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Rhode Island's helpline for food, housing, healthcare, childcare, and emergency assistance."
+    },
+    {
+      "id": "211-sc", "state": "SC", "title": "South Carolina 211 - United Way", "sponsor": "United Way Association of SC",
+      "url": "https://www.sc211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "South Carolina's resource for food banks, housing, utilities, healthcare, and crisis support."
+    },
+    {
+      "id": "211-sd", "state": "SD", "title": "South Dakota 211 Helpline Center", "sponsor": "Helpline Center",
+      "url": "https://www.helplinecenter.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "South Dakota's helpline for food, housing, healthcare, and emergency resources."
+    },
+    {
+      "id": "211-tn", "state": "TN", "title": "Tennessee 211 - Get Help", "sponsor": "211 Tennessee",
+      "url": "https://www.tn211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Tennessee's social services resource. Food assistance, housing, healthcare, and more."
+    },
+    {
+      "id": "211-tx", "state": "TX", "title": "Texas 211 - Find Help", "sponsor": "Texas Health and Human Services",
+      "url": "https://www.211texas.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Texas's comprehensive helpline for food, housing, healthcare, utilities, and social services."
+    },
+    {
+      "id": "211-ut", "state": "UT", "title": "Utah 211 - Community Resources", "sponsor": "211 Utah",
+      "url": "https://211utah.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Utah's resource for food assistance, housing, healthcare, and emergency services."
+    },
+    {
+      "id": "211-vt", "state": "VT", "title": "Vermont 211 - First Call for Help", "sponsor": "United Ways of Vermont",
+      "url": "https://www.vermont211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Vermont's helpline for food, housing, healthcare, childcare, and support services."
+    },
+    {
+      "id": "211-va", "state": "VA", "title": "Virginia 211 - Get Connected", "sponsor": "Virginia 211",
+      "url": "https://www.211virginia.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Virginia's resource for food banks, housing, utilities, healthcare, and crisis intervention."
+    },
+    {
+      "id": "211-wa", "state": "WA", "title": "Washington 211 - WIN 211", "sponsor": "Washington Information Network 211",
+      "url": "https://www.win211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Washington's database of social services: food, housing, healthcare, and emergency assistance."
+    },
+    {
+      "id": "211-wv", "state": "WV", "title": "West Virginia 211 - First Call", "sponsor": "First Call for Help",
+      "url": "https://www.wv211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "West Virginia's helpline for food, housing, healthcare, and community resources."
+    },
+    {
+      "id": "211-wi", "state": "WI", "title": "Wisconsin 211 - United Way", "sponsor": "211 Wisconsin",
+      "url": "https://211wisconsin.communityos.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Wisconsin's resource for food pantries, housing, utilities, healthcare, and social services."
+    },
+    {
+      "id": "211-wy", "state": "WY", "title": "Wyoming 211 - First Call", "sponsor": "Wyoming 211",
+      "url": "https://www.211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "Wyoming's helpline for food, housing, healthcare, and emergency assistance resources."
+    },
+    {
+      "id": "211-dc", "state": "DC", "title": "DC 211 - Answers Please", "sponsor": "United Way of the National Capital Area",
+      "url": "https://www.211.org/", "categories": ["referral", "emergency", "local assistance"],
+      "description": "DC's social services helpline for food, housing, healthcare, and community resources."
+    },
+    {
+      "id": "snap-al", "state": "AL", "title": "Alabama SNAP/Food Assistance", "sponsor": "Alabama DHR",
+      "url": "https://dhr.alabama.gov/food-assistance/", "categories": ["food", "benefits"],
+      "description": "Apply for food stamps (SNAP) in Alabama. Monthly benefits for groceries."
+    },
+    {
+      "id": "snap-ak", "state": "AK", "title": "Alaska SNAP Benefits", "sponsor": "Alaska DHSS",
+      "url": "https://dpaweb.hss.state.ak.us/", "categories": ["food", "benefits"],
+      "description": "Alaska's Supplemental Nutrition Assistance Program for food assistance."
+    },
+    {
+      "id": "snap-az", "state": "AZ", "title": "Arizona Nutrition Assistance (SNAP)", "sponsor": "Arizona DES",
+      "url": "https://des.az.gov/services/basic-needs/food-assistance", "categories": ["food", "benefits"],
+      "description": "Arizona's food assistance program. Apply online for monthly grocery benefits."
+    },
+    {
+      "id": "snap-ar", "state": "AR", "title": "Arkansas SNAP Benefits", "sponsor": "Arkansas DHS",
+      "url": "https://humanservices.arkansas.gov/divisions-shared-services/county-operations/supplemental-nutrition-assistance-program-snap/", "categories": ["food", "benefits"],
+      "description": "Arkansas food stamps program. Monthly benefits for eligible households."
+    },
+    {
+      "id": "snap-ca", "state": "CA", "title": "CalFresh (California SNAP)", "sponsor": "California CDSS",
+      "url": "https://www.getcalfresh.org/", "categories": ["food", "benefits"],
+      "description": "Apply for CalFresh food benefits online. Quick application, fast approval."
+    },
+    {
+      "id": "snap-co", "state": "CO", "title": "Colorado SNAP Food Benefits", "sponsor": "Colorado CDHS",
+      "url": "https://www.colorado.gov/pacific/cdhs/snap", "categories": ["food", "benefits"],
+      "description": "Colorado's food assistance program. Apply at PEAK Colorado for benefits."
+    },
+    {
+      "id": "snap-ct", "state": "CT", "title": "Connecticut SNAP Benefits", "sponsor": "Connecticut DSS",
+      "url": "https://portal.ct.gov/dss/SNAP/Supplemental-Nutrition-Assistance-Program---SNAP", "categories": ["food", "benefits"],
+      "description": "Connecticut food assistance. Apply online or at local DSS office."
+    },
+    {
+      "id": "snap-de", "state": "DE", "title": "Delaware SNAP Food Benefits", "sponsor": "Delaware DHSS",
+      "url": "https://www.dhss.delaware.gov/dhss/dss/foodstamps.html", "categories": ["food", "benefits"],
+      "description": "Delaware's food stamp program. Apply for monthly food assistance."
+    },
+    {
+      "id": "snap-fl", "state": "FL", "title": "Florida SNAP Food Assistance", "sponsor": "Florida DCF",
+      "url": "https://www.myflfamilies.com/services/public-assistance/food-assistance-snap", "categories": ["food", "benefits"],
+      "description": "Florida food stamps. Apply online through ACCESS Florida."
+    },
+    {
+      "id": "snap-ga", "state": "GA", "title": "Georgia SNAP Benefits", "sponsor": "Georgia DHS",
+      "url": "https://dfcs.georgia.gov/services/food-stamps", "categories": ["food", "benefits"],
+      "description": "Georgia food assistance program. Apply at Georgia Gateway."
+    },
+    {
+      "id": "liheap-national", "state": "nationwide", "title": "LIHEAP - Energy Assistance", "sponsor": "HHS Administration for Community Living",
+      "url": "https://liheappm.acf.hhs.gov/", "categories": ["utilities", "energy"],
+      "description": "Low Income Home Energy Assistance Program. Help with heating and cooling bills."
+    },
+    {
+      "id": "tanf-national", "state": "nationwide", "title": "TANF - Cash Assistance for Families", "sponsor": "HHS ACF",
+      "url": "https://www.acf.hhs.gov/ofa/programs/tanf", "categories": ["cash assistance", "family"],
+      "description": "Temporary Assistance for Needy Families. Cash aid for families with children."
+    },
+    {
+      "id": "wic-national", "state": "nationwide", "title": "WIC - Women, Infants & Children", "sponsor": "USDA FNS",
+      "url": "https://www.fns.usda.gov/wic", "categories": ["nutrition", "family", "children"],
+      "description": "Nutrition program for pregnant women, new mothers, and children under 5."
+    },
+    {
+      "id": "section8-national", "state": "nationwide", "title": "Section 8 Housing Vouchers", "sponsor": "HUD",
+      "url": "https://www.hud.gov/topics/housing_choice_voucher_program_section_8", "categories": ["housing", "rental"],
+      "description": "Rental assistance vouchers. Apply through your local Public Housing Authority."
+    },
+    {
+      "id": "headstart-national", "state": "nationwide", "title": "Head Start - Early Childhood", "sponsor": "HHS Office of Head Start",
+      "url": "https://www.acf.hhs.gov/ohs", "categories": ["education", "children"],
+      "description": "Free early education, health, and family services for children 0-5."
+    },
+    {
+      "id": "medicaid-national", "state": "nationwide", "title": "Medicaid - Health Coverage", "sponsor": "CMS",
+      "url": "https://www.medicaid.gov/", "categories": ["healthcare", "insurance"],
+      "description": "Free or low-cost health coverage for eligible individuals and families."
+    }
+  ]
+}
