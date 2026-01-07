@@ -37,7 +37,7 @@ function getClaudeClient() {
 }
 
 const DEFAULT_ASSISTANT_MODEL =
-  process.env.ANYA_CLAUDE_MODEL || process.env.CLAUDE_MODEL || 'claude-3-sonnet-20240229'
+  process.env.ANYA_CLAUDE_MODEL || process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20241022'
 
 function coerceProfileId(requestedProfileId) {
   if (!requestedProfileId) return null
@@ -612,12 +612,26 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
   }
 
   // Build message history for Claude (excluding system message from messages array)
-  const conversationMessages = historyMessages
+  let conversationMessages = historyMessages
     .filter((msg) => typeof msg?.content === 'string' && msg.content.trim().length > 0)
     .map((msg) => ({
       role: msg.role === 'assistant' ? 'assistant' : 'user',
       content: msg.content,
     }))
+
+  // CRITICAL: Ensure the current user message is included
+  // This fixes the bug where the message might not be in history yet
+  const hasCurrentMessage = conversationMessages.some(
+    (msg) => msg.role === 'user' && msg.content === trimmed
+  )
+  if (!hasCurrentMessage) {
+    conversationMessages.push({ role: 'user', content: trimmed })
+  }
+
+  // Claude requires at least one message
+  if (conversationMessages.length === 0) {
+    conversationMessages = [{ role: 'user', content: trimmed }]
+  }
 
   // Claude system prompt
   const systemPrompt = [
