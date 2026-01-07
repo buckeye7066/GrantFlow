@@ -5,12 +5,14 @@ import { getProfile, listProfiles } from '@/api/profiles';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Loader2, Search, User, Heart, Target, TrendingUp, Sparkles } from 'lucide-react';
+import { Loader2, Search, User, Heart, Target, TrendingUp, Sparkles, Globe } from 'lucide-react';
 import SearchResults from '@/components/discovery/SearchResults';
+import CrawlerSelection from '@/components/discovery/CrawlerSelection';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/components/ui/use-toast';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Label } from '@/components/ui/label';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { 
   runComprehensiveMatch, 
   runECFServiceSearch, 
@@ -408,6 +410,33 @@ export default function DiscoverGrants() {
       setSearchState('error');
       toastError(toast, message);
     }
+  };
+
+  const handleCrawlerResults = async (opportunities) => {
+    console.log('[DiscoverGrants] Processing crawler results:', opportunities.length);
+    
+    // Add all 80%+ matches to pipeline automatically
+    let addedCount = 0;
+    for (const opp of opportunities) {
+      if (opp.match_score >= 80) {
+        try {
+          await handleAddToPipeline(opp);
+          addedCount++;
+        } catch (error) {
+          console.error('[DiscoverGrants] Error adding to pipeline:', error);
+        }
+      }
+    }
+    
+    toast({
+      title: 'Crawler Complete',
+      description: `Found ${opportunities.length} opportunities, added ${addedCount} to pipeline (80%+ matches)`,
+      variant: 'success'
+    });
+    
+    // Update search results to show crawler results
+    setSearchResults(opportunities);
+    setSearchState('success');
   };
 
   const handleAddToPipeline = async (opportunity) => {

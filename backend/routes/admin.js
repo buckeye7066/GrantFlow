@@ -615,7 +615,7 @@ router.post('/seed-profile-grants', async (req, res) => {
         orgId = crypto.randomUUID();
         req.db.prepare(`
           INSERT INTO organizations (id, name, applicant_type, created_at, updated_at)
-          VALUES (?, ?, 'individual', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          VALUES (?, ?, 'individual_need', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         `).run(orgId, profile.display_name || 'My Organization');
         req.db.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile.id);
       }
