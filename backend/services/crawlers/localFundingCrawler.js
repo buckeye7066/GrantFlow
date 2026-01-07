@@ -113,6 +113,15 @@ export async function crawlLocalFunding(profile, options = {}) {
 async function searchLocalSource(source, coords, profile) {
   const opportunities = []
   
+  // Use mock data if axios/cheerio not available
+  if (!axios || !cheerio) {
+    return mockLocalFunding.map(opp => ({
+      ...opp,
+      latitude: opp.latitude || coords.lat,
+      longitude: opp.longitude || coords.lng
+    }))
+  }
+  
   if (source.type === 'community_foundation') {
     // Search community foundations near coordinates
     const url = `${source.baseUrl}?lat=${coords.lat}&lng=${coords.lng}&radius=50`

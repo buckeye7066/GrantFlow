@@ -665,6 +665,12 @@ export default function AnyaChat({ profileId }) {
         <Textarea
           value={input}
           onChange={(event) => setInput(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault()
+              handleSend()
+            }
+          }}
           placeholder="Ask Anya for help…"
           rows={3}
           className="resize-none text-sm"
