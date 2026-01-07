@@ -257,8 +257,13 @@ export default function AnyaChat({ profileId }) {
 
   async function handleSend() {
     const trimmed = input.trim()
-    if (!trimmed || isDisabled) return
+    console.log('[AnyaChat] handleSend called', { trimmed, isDisabled, sessionId, isLoading, input })
+    if (!trimmed || isDisabled) {
+      console.warn('[AnyaChat] handleSend returning early', { trimmed: !!trimmed, isDisabled })
+      return
+    }
     setIsSending(true)
+    console.log('[AnyaChat] Sending message to session', sessionId)
     let optimisticId = null
     try {
       optimisticId = uuid()
@@ -272,10 +277,13 @@ export default function AnyaChat({ profileId }) {
       setMessages((prev) => [...prev, optimisticMessage])
       setInput("")
 
+      console.log('[AnyaChat] Calling postAnyaMessage...')
       await postAnyaMessage(sessionId, trimmed)
+      console.log('[AnyaChat] postAnyaMessage completed, refreshing messages...')
       await refreshMessages(sessionId)
+      console.log('[AnyaChat] Messages refreshed successfully')
     } catch (error) {
-      console.error("[AnyaChat] send failed", error)
+      console.error("[AnyaChat] send failed:", error)
       if (optimisticId) {
         setMessages((prev) => prev.filter((message) => message.id !== optimisticId))
       }

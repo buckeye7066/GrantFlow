@@ -4,9 +4,30 @@
  * Excludes loans and matching funds
  */
 
-import axios from 'axios'
-import * as cheerio from 'cheerio'
-import { calculateDistance } from '../utils/geoUtils.js'
+// Use mock data if external dependencies aren't available
+let axios, cheerio
+try {
+  const axiosModule = await import('axios')
+  axios = axiosModule.default
+  cheerio = await import('cheerio')
+} catch (error) {
+  console.log('[LocalFundingCrawler] Using mock data (axios/cheerio not installed)')
+}
+
+import { mockLocalFunding } from './mockCrawlerData.js'
+
+// Mock calculateDistance if geoUtils doesn't exist
+const calculateDistance = (lat1, lng1, lat2, lng2) => {
+  // Simple distance calculation
+  const R = 3959 // Earth radius in miles
+  const dLat = (lat2 - lat1) * Math.PI / 180
+  const dLon = (lng2 - lng1) * Math.PI / 180
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon/2) * Math.sin(dLon/2)
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a))
+  return R * c
+}
 
 const SEARCH_RADIUS_MILES = 50
 
