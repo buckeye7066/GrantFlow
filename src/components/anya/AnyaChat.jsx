@@ -253,7 +253,8 @@ export default function AnyaChat({ profileId }) {
     }
   }, [isAdmin])
 
-  const isDisabled = !sessionId || isLoading
+  // Enable input/button as soon as we have a sessionId, even if messages are still loading
+  const isDisabled = !sessionId
 
   async function handleSend() {
     const trimmed = input.trim()

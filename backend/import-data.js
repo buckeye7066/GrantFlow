@@ -15,11 +15,11 @@ const exportPath = process.argv[2] || path.join(__dirname, '../data-export.json'
 
 if (!fs.existsSync(exportPath)) {
   console.error('Export file not found:', exportPath);
-  // TODO: Remove debug log - console.log('Usage: node import-data.js [path-to-export.json]');
+  // // TODO: Remove debug log - console.log('Usage: node import-data.js [path-to-export.json]'); // Disabled by auto-fix
   process.exit(1);
 }
 
-// TODO: Remove debug log - console.log('Loading export from:', exportPath);
+// // TODO: Remove debug log - console.log('Loading export from:', exportPath); // Disabled by auto-fix
 const exportData = JSON.parse(fs.readFileSync(exportPath, 'utf8'));
 
 // Initialize database
@@ -37,12 +37,12 @@ const schemaPath = path.join(__dirname, 'db/schema.sql');
 if (fs.existsSync(schemaPath)) {
   const schema = fs.readFileSync(schemaPath, 'utf8');
   db.exec(schema);
-  // TODO: Remove debug log - console.log('Schema initialized');
+  // // TODO: Remove debug log - console.log('Schema initialized'); // Disabled by auto-fix
 }
 
 // Import organizations
 if (exportData.entities?.Organization) {
-  // TODO: Remove debug log - console.log(`Importing ${exportData.entities.Organization.length} organizations...`);
+  // // TODO: Remove debug log - console.log(`Importing ${exportData.entities.Organization.length} organizations...`); // Disabled by auto-fix
   
   const insertOrg = db.prepare(`
     INSERT OR REPLACE INTO organizations (
@@ -102,12 +102,12 @@ if (exportData.entities?.Organization) {
   });
   
   insertMany(exportData.entities.Organization);
-  // TODO: Remove debug log - console.log('Organizations imported');
+  // // TODO: Remove debug log - console.log('Organizations imported'); // Disabled by auto-fix
 }
 
 // Import Funding Opportunities
 if (exportData.entities?.FundingOpportunity) {
-  // TODO: Remove debug log - console.log(`Importing ${exportData.entities.FundingOpportunity.length} funding opportunities...`);
+  // // TODO: Remove debug log - console.log(`Importing ${exportData.entities.FundingOpportunity.length} funding opportunities...`); // Disabled by auto-fix
   
   const insertOpp = db.prepare(`
     INSERT OR REPLACE INTO funding_opportunities (
@@ -143,12 +143,12 @@ if (exportData.entities?.FundingOpportunity) {
   });
   
   insertMany(exportData.entities.FundingOpportunity);
-  // TODO: Remove debug log - console.log('Funding opportunities imported');
+  // // TODO: Remove debug log - console.log('Funding opportunities imported'); // Disabled by auto-fix
 }
 
 // Import Grants
 if (exportData.entities?.Grant) {
-  // TODO: Remove debug log - console.log(`Importing ${exportData.entities.Grant.length} grants...`);
+  // // TODO: Remove debug log - console.log(`Importing ${exportData.entities.Grant.length} grants...`); // Disabled by auto-fix
   
   const insertGrant = db.prepare(`
     INSERT OR REPLACE INTO grants (
@@ -179,12 +179,12 @@ if (exportData.entities?.Grant) {
   });
   
   insertMany(exportData.entities.Grant);
-  // TODO: Remove debug log - console.log('Grants imported');
+  // // TODO: Remove debug log - console.log('Grants imported'); // Disabled by auto-fix
 }
 
 // Import Documents
 if (exportData.entities?.Document) {
-  // TODO: Remove debug log - console.log(`Importing ${exportData.entities.Document.length} documents...`);
+  // // TODO: Remove debug log - console.log(`Importing ${exportData.entities.Document.length} documents...`); // Disabled by auto-fix
   
   const insertDoc = db.prepare(`
     INSERT OR REPLACE INTO documents (
@@ -208,12 +208,12 @@ if (exportData.entities?.Document) {
   });
   
   insertMany(exportData.entities.Document);
-  // TODO: Remove debug log - console.log('Documents imported');
+  // // TODO: Remove debug log - console.log('Documents imported'); // Disabled by auto-fix
 }
 
 // Import Milestones
 if (exportData.entities?.Milestone) {
-  // TODO: Remove debug log - console.log(`Importing ${exportData.entities.Milestone.length} milestones...`);
+  // // TODO: Remove debug log - console.log(`Importing ${exportData.entities.Milestone.length} milestones...`); // Disabled by auto-fix
   
   const insertMilestone = db.prepare(`
     INSERT OR REPLACE INTO milestones (
@@ -237,11 +237,11 @@ if (exportData.entities?.Milestone) {
   });
   
   insertMany(exportData.entities.Milestone);
-  // TODO: Remove debug log - console.log('Milestones imported');
+  // // TODO: Remove debug log - console.log('Milestones imported'); // Disabled by auto-fix
 }
 
 // Summary
-// TODO: Remove debug log - console.log('\n=== Import Complete ===');
+// // TODO: Remove debug log - console.log('\n=== Import Complete ==='); // Disabled by auto-fix
 const counts = {
   organizations: db.prepare('SELECT COUNT(*) as c FROM organizations').get().c,
   opportunities: db.prepare('SELECT COUNT(*) as c FROM funding_opportunities').get().c,
@@ -250,10 +250,10 @@ const counts = {
   milestones: db.prepare('SELECT COUNT(*) as c FROM milestones').get().c,
 };
 
-// TODO: Remove debug log - console.log('Database contents:');
+// // TODO: Remove debug log - console.log('Database contents:'); // Disabled by auto-fix
 Object.entries(counts).forEach(([table, count]) => {
-  // TODO: Remove debug log - console.log(`  ${table}: ${count} records`);
+  // // TODO: Remove debug log - console.log(`  ${table}: ${count} records`); // Disabled by auto-fix
 });
 
 db.close();
-// TODO: Remove debug log - console.log('\nDone!');
+// // TODO: Remove debug log - console.log('\nDone!'); // Disabled by auto-fix
