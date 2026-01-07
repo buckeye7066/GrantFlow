@@ -248,19 +248,7 @@ const NATIONAL_PROGRAMS = [
     opportunity_type: 'benefit',
     eligibility: ['Served after 9/10/2001', 'At least 90 days active duty', 'Honorable discharge']
   },
-  {
-    id: 'nat-va-home-loan',
-    title: 'VA Home Loan',
-    sponsor: 'U.S. Department of Veterans Affairs',
-    source_url: 'https://www.va.gov/housing-assistance/home-loans/',
-    application_url: 'https://www.va.gov/housing-assistance/home-loans/how-to-apply/',
-    description: 'Home loans with no down payment required for eligible veterans and service members.',
-    amount_min: 100000, amount_max: null,
-    categories: ['veterans', 'housing', 'home loan'],
-    keywords: ['va loan', 'veterans', 'home loan', 'mortgage', 'military'],
-    opportunity_type: 'loan',
-    eligibility: ['Veteran or active military with qualifying service', 'Certificate of Eligibility required', 'No down payment required']
-  },
+  // VA Home Loan removed - loans not included per user request
   {
     id: 'nat-va-disability',
     title: 'VA Disability Compensation',
@@ -288,45 +276,7 @@ const NATIONAL_PROGRAMS = [
     eligibility: ['Wartime veteran', 'Age 65+ or permanently disabled', 'Limited income']
   },
   // SMALL BUSINESS
-  {
-    id: 'nat-sba-7a',
-    title: 'SBA 7(a) Loan Program',
-    sponsor: 'U.S. Small Business Administration',
-    source_url: 'https://www.sba.gov/funding-programs/loans/7a-loans',
-    application_url: 'https://www.sba.gov/funding-programs/loans/lender-match',
-    description: 'SBA-guaranteed loans up to $5 million for small businesses that cannot get conventional loans.',
-    amount_min: 25000, amount_max: 5000000,
-    categories: ['small business', 'loan', 'capital'],
-    keywords: ['sba', 'small business', 'loan', '7a', 'business loan'],
-    opportunity_type: 'loan',
-    eligibility: ['For-profit U.S. business', 'Meet SBA size standards', 'Demonstrate need for loan']
-  },
-  {
-    id: 'nat-sba-microloan',
-    title: 'SBA Microloan Program',
-    sponsor: 'U.S. Small Business Administration',
-    source_url: 'https://www.sba.gov/funding-programs/loans/microloans',
-    application_url: 'https://www.sba.gov/funding-programs/loans/microloans',
-    description: 'Small loans up to $50,000 for small businesses and nonprofits. Average loan around $13,000.',
-    amount_min: 500, amount_max: 50000,
-    categories: ['small business', 'microloan', 'startup'],
-    keywords: ['sba', 'microloan', 'small business', 'startup'],
-    opportunity_type: 'loan',
-    eligibility: ['Small business or nonprofit', 'Apply through SBA intermediary lender', 'Maximum 6-year term']
-  },
-  {
-    id: 'nat-sba-disaster',
-    title: 'SBA Disaster Loans',
-    sponsor: 'U.S. Small Business Administration',
-    source_url: 'https://www.sba.gov/funding-programs/disaster-assistance',
-    application_url: 'https://disasterloanassistance.sba.gov/',
-    description: 'Low-interest loans for businesses, homeowners, and renters in declared disaster areas.',
-    amount_min: 1000, amount_max: 2000000,
-    categories: ['disaster', 'business', 'recovery'],
-    keywords: ['sba', 'disaster loan', 'recovery', 'business'],
-    opportunity_type: 'loan',
-    eligibility: ['Located in declared disaster area', 'Physical or economic damage', 'Creditworthy']
-  },
+  // SBA 7(a), Microloan, and Disaster Loans removed - loans not included per user request
   // MAJOR SCHOLARSHIPS
   {
     id: 'nat-gates-scholarship',
