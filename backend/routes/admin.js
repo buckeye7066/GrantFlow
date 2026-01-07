@@ -273,4 +273,193 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
   }
 });
 
+/**
+ * Admin endpoint to seed funding opportunities
+ * Loads real opportunities from JSON files and inserts them into the database
+ */
+router.post('/seed-opportunities', async (req, res) => {
+  try {
+    const dataDir = join(__dirname, '..', 'data', 'crawlers');
+    
+    // Load all opportunity files
+    const files = [
+      { path: join(dataDir, 'real_funding_opportunities.json'), type: 'structured' },
+      { path: join(dataDir, 'scholarship_opportunities.json'), type: 'array' },
+      { path: join(dataDir, 'local_opportunities.json'), type: 'array' },
+      { path: join(dataDir, 'item_funding_sources.json'), type: 'array' },
+    ];
+    
+    const allOpportunities = [];
+    
+    for (const file of files) {
+      try {
+        const content = await fsp.readFile(file.path, 'utf8');
+        const data = JSON.parse(content);
+        
+        if (file.type === 'structured') {
+          // Handle the structured file with multiple categories
+          Object.values(data).forEach(category => {
+            if (Array.isArray(category)) {
+              allOpportunities.push(...category);
+            }
+          });
+        } else if (Array.isArray(data)) {
+          allOpportunities.push(...data);
+        }
+      } catch (e) {
+        console.warn(`Failed to load ${file.path}:`, e.message);
+      }
+    }
+    
+    console.log(`[admin/seed-opportunities] Loaded ${allOpportunities.length} opportunities`);
+    
+    // Prepare the upsert statement
+    const upsert = req.db.prepare(`
+      INSERT INTO funding_opportunities (
+        id, source, source_id, title, sponsor, description,
+        application_url, url, deadline, award_floor, award_ceiling,
+        categories, keywords, eligibility_bullets, match_reasons,
+        state, requires_match, requires_501c3, is_active, is_national,
+        opportunity_type, created_at, updated_at
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?,
+        ?, ?, ?, 1, ?,
+        ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+      )
+      ON CONFLICT(id) DO UPDATE SET
+        title = excluded.title,
+        sponsor = excluded.sponsor,
+        description = excluded.description,
+        application_url = excluded.application_url,
+        url = excluded.url,
+        categories = excluded.categories,
+        keywords = excluded.keywords,
+        eligibility_bullets = excluded.eligibility_bullets,
+        updated_at = CURRENT_TIMESTAMP
+    `);
+    
+    let inserted = 0;
+    let updated = 0;
+    
+    const transaction = req.db.transaction(() => {
+      for (const opp of allOpportunities) {
+        try {
+          const id = opp.id || crypto.randomUUID();
+          const result = upsert.run(
+            id,
+            opp.source || 'seeded_real',
+            opp.source_id || id,
+            opp.title || opp.program_name,
+            opp.sponsor || opp.funder,
+            opp.description || opp.summary,
+            opp.application_url || opp.url,
+            opp.url || opp.application_url,
+            opp.deadline,
+            opp.award_floor || opp.amount_min,
+            opp.award_ceiling || opp.amount_max,
+            JSON.stringify(opp.categories || []),
+            JSON.stringify(opp.keywords || []),
+            JSON.stringify(opp.eligibility_bullets || []),
+            JSON.stringify(opp.match_reasons || []),
+            opp.state || (opp.is_national ? 'nationwide' : null),
+            opp.requires_match ? 1 : 0,
+            opp.requires_501c3 ? 1 : 0,
+            opp.is_national ? 1 : 0,
+            opp.opportunity_type || 'grant'
+          );
+          
+          if (result.changes > 0) {
+            inserted++;
+          }
+        } catch (e) {
+          console.warn(`Failed to insert opportunity ${opp.title}:`, e.message);
+        }
+      }
+    });
+    
+    transaction();
+    
+    // Count total opportunities in database
+    const total = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get();
+    
+    res.json({
+      success: true,
+      message: `Seeded ${inserted} opportunities`,
+      total_in_database: total.count,
+      loaded_from_files: allOpportunities.length
+    });
+    
+  } catch (error) {
+    console.error('[admin/seed-opportunities] Error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Admin endpoint to sync designated profiles
+ * Ensures all designated profiles are in the database with their sections
+ */
+router.post('/sync-profiles', async (req, res) => {
+  try {
+    const { ensureDesignatedProfiles } = await import('../utils/ensureDesignatedProfiles.js');
+    ensureDesignatedProfiles(req.db);
+    
+    const profiles = req.db.prepare('SELECT id, display_name FROM profiles').all();
+    const sections = req.db.prepare('SELECT COUNT(*) as count FROM profile_sections').get();
+    
+    res.json({
+      success: true,
+      message: 'Profiles synchronized',
+      profiles: profiles.length,
+      total_sections: sections.count
+    });
+  } catch (error) {
+    console.error('[admin/sync-profiles] Error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Admin endpoint to get database stats
+ */
+router.get('/db-stats', (req, res) => {
+  try {
+    const stats = {
+      profiles: req.db.prepare('SELECT COUNT(*) as c FROM profiles').get().c,
+      profile_sections: req.db.prepare('SELECT COUNT(*) as c FROM profile_sections').get().c,
+      funding_opportunities: req.db.prepare('SELECT COUNT(*) as c FROM funding_opportunities WHERE is_active = 1').get().c,
+      grants: req.db.prepare('SELECT COUNT(*) as c FROM grants').get().c,
+      organizations: req.db.prepare('SELECT COUNT(*) as c FROM organizations').get().c,
+    };
+    
+    // Sample funding opportunities
+    const sampleOpps = req.db.prepare(`
+      SELECT title, keywords, categories 
+      FROM funding_opportunities 
+      WHERE is_active = 1 
+      LIMIT 5
+    `).all();
+    
+    res.json({
+      success: true,
+      stats,
+      sample_opportunities: sampleOpps
+    });
+  } catch (error) {
+    console.error('[admin/db-stats] Error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 export default router;

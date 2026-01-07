@@ -489,6 +489,14 @@ router.post('/comprehensiveMatch', async (req, res) => {
     
     const opportunities = req.db.prepare(query).all(...params);
     
+    console.log(`[comprehensiveMatch] Query found ${opportunities.length} opportunities`);
+    console.log(`[comprehensiveMatch] Profile signals:`, JSON.stringify({
+      keywords: [...demographicSignals.keywords].slice(0, 15),
+      military: [...demographicSignals.military],
+      health: [...demographicSignals.health],
+      family: [...demographicSignals.family]
+    }));
+    
     // Calculate fit scores for each opportunity using comprehensive demographic signals
     const scoredOpportunities = opportunities.map(opp => {
       // Use the new comprehensive scoring function
@@ -517,6 +525,22 @@ router.post('/comprehensiveMatch', async (req, res) => {
         matched_fields: matchedFields.slice(0, 10) // Return top 10 matched fields
       };
     });
+    
+    // Debug: Log score distribution
+    const scoreSummary = scoredOpportunities.reduce((acc, o) => {
+      const bucket = Math.floor(o.fit_score / 10) * 10;
+      acc[bucket] = (acc[bucket] || 0) + 1;
+      return acc;
+    }, {});
+    console.log(`[comprehensiveMatch] Score distribution:`, scoreSummary);
+    
+    if (scoredOpportunities.length > 0) {
+      const topScores = scoredOpportunities
+        .sort((a, b) => b.fit_score - a.fit_score)
+        .slice(0, 5)
+        .map(o => ({ title: o.program_name?.substring(0, 30), score: o.fit_score, matched: o.matched_fields }));
+      console.log(`[comprehensiveMatch] Top 5 scores:`, JSON.stringify(topScores));
+    }
     
     // Filter to only return opportunities with 80%+ match score
     // This ensures only highly relevant opportunities are shown to users
