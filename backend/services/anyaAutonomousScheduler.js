@@ -1,6 +1,7 @@
 import { runAutonomousCodeCrawl } from './anyaAutonomousCrawler.js'
 import { runAutonomousCrawlers } from './anyaAutonomousFunctionRunner.js'
 import { runAutonomousFunctionTests } from './anyaAutonomousFunctionTesting.js'
+import { repairFailingTests } from './anyaTestRepair.js'
 import { promises as fs } from 'fs'
 import path from 'path'
 
@@ -122,6 +123,39 @@ export async function runAllAutonomousOperations(context, trigger = 'manual') {
           tests_failed: result.tests_failed,
         }
         console.log(`[Anya Scheduler] Function tests complete: ${result.tests_passed}/${result.total_tests} passed`)
+        
+        // Phase 2b: Auto-repair failing tests
+        if (result.failed_tests && result.failed_tests.length > 0) {
+          console.log(`[Anya Scheduler] Phase 2b: Attempting to repair ${result.failed_tests.length} failing tests...`)
+          try {
+            const repairResult = await repairFailingTests(result.failed_tests, context.db)
+            report.operations.testRepair = {
+              status: 'completed',
+              repaired: repairResult.repaired.length,
+              unable_to_repair: repairResult.unable_to_repair.length,
+              actions: repairResult.actions_taken
+            }
+            console.log(`[Anya Scheduler] Test repair complete: ${repairResult.repaired.length}/${result.failed_tests.length} fixed`)
+            
+            // Re-run tests if any were repaired
+            if (repairResult.repaired.length > 0) {
+              console.log('[Anya Scheduler] Re-running tests after repairs...')
+              const retestResult = await runAutonomousFunctionTests(
+                AUTONOMOUS_CONFIG.params.functionTests,
+                context
+              )
+              report.operations.functionTestsAfterRepair = {
+                tests_passed: retestResult.tests_passed,
+                tests_failed: retestResult.tests_failed,
+                improvement: retestResult.tests_passed - result.tests_passed
+              }
+              console.log(`[Anya Scheduler] After repair: ${retestResult.tests_passed}/${retestResult.total_tests} passing (+${retestResult.tests_passed - result.tests_passed})`)
+            }
+          } catch (repairError) {
+            console.error('[Anya Scheduler] Test repair error:', repairError)
+            report.operations.testRepair = { status: 'failed', error: repairError.message }
+          }
+        }
       } catch (error) {
         report.errors.push({ phase: 'functionTests', error: error.message })
         report.operations.functionTests = { status: 'failed', error: error.message }

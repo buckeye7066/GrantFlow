@@ -355,6 +355,22 @@ export async function runAutonomousFunctionTests(options, context) {
       report,
     })
 
+    // Extract failed tests for potential repair
+    const failedTests = []
+    report.results.forEach(suite => {
+      if (suite.tests) {
+        suite.tests.forEach(test => {
+          if (test.status === 'failed' || test.status === 'error') {
+            failedTests.push({
+              ...test,
+              suite: suite.suite
+            })
+          }
+        })
+      }
+    })
+    report.failed_tests = failedTests
+
     return report
   } catch (error) {
     await auditLog({

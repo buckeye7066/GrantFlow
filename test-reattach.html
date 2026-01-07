@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Test Reattach Users</title>
+</head>
+<body>
+  <h1>Reattach Users Test</h1>
+  <button id="runReattach">Run Reattach Users</button>
+  <pre id="output"></pre>
+  
+  <script>
+    document.getElementById('runReattach').addEventListener('click', async () => {
+      const output = document.getElementById('output');
+      output.textContent = 'Running reattach users...\n\n';
+      
+      try {
+        const response = await fetch('/api/admin/reattach-users', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          credentials: 'include'
+        });
+        
+        const data = await response.json();
+        output.textContent += 'Response:\n' + JSON.stringify(data, null, 2);
+      } catch (error) {
+        output.textContent += 'Error:\n' + error.message;
+      }
+    });
+  </script>
+</body>
+</html>
