@@ -118,7 +118,7 @@ export default function CrawlerSelection({
     const crawlerPromises = crawlersToRun.map(async (crawlerId) => {
       try {
         // Call the crawler API
-        const response = await fetch('/api/crawlers/run', {
+        const response = await fetch('/api/real-crawlers/run', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
