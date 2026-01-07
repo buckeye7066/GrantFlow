@@ -1313,4 +1313,51 @@ router.post('/bulk-populate', async (req, res) => {
   }
 })
 
+// Real funding opportunity crawler - fetches actual grants from real databases
+router.post('/real-crawl', async (req, res) => {
+  // Allow admin auth OR bulk key for automated crawling
+  const auth = req.user ?? { role: 'guest' }
+  const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
+  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  
+  const isAdmin = auth.role === 'admin'
+  const hasValidKey = bulkKey === expectedKey
+  
+  if (!isAdmin && !hasValidKey) {
+    return res.status(403).json({ error: 'Admin access or valid bulk key required' })
+  }
+  
+  try {
+    const { state = null, all_states = false } = req.body || {}
+    
+    // Dynamic import of the real crawler
+    const { crawlRealOpportunities, crawlAllStates } = await import('../services/realFundingCrawler.js')
+    
+    console.log(`[real-crawl] Starting real opportunity crawl${state ? ` for ${state}` : all_states ? ' for all states' : ' (national)'}...`)
+    
+    let result
+    if (all_states) {
+      result = await crawlAllStates(req.db, (progress) => {
+        console.log(`[real-crawl] Progress: ${JSON.stringify(progress)}`)
+      })
+    } else {
+      result = await crawlRealOpportunities(req.db, state, {
+        onProgress: (progress) => {
+          console.log(`[real-crawl] Progress: ${JSON.stringify(progress)}`)
+        }
+      })
+    }
+    
+    console.log(`[real-crawl] Complete: ${result.inserted || result.total_inserted} inserted`)
+    
+    res.json({
+      success: true,
+      ...result
+    })
+  } catch (error) {
+    console.error('[real-crawl] Error:', error)
+    res.status(500).json(formatError(error))
+  }
+})
+
 export default router
