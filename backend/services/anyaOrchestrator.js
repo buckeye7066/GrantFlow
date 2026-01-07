@@ -677,7 +677,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
 
   return [
     "I'm having trouble reaching the AI service right now.",
-    'We can still move forward manually—let me know the specific action you need help with (for example: find grants, track applications, organize documents), and I'll walk through the recommended steps.',
+    'We can still move forward manually—let me know the specific action you need help with (for example: find grants, track applications, organize documents), and I\'ll walk through the recommended steps.',
   ].join(' ')
 }
 
