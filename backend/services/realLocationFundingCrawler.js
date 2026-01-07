@@ -563,6 +563,406 @@ const NATIONAL_PROGRAMS = [
  * These are added based on the ZIP code's state
  */
 const STATE_PROGRAMS = {
+  'AL': [
+    {
+      id: 'al-go-grant',
+      title: 'Alabama GO Grant',
+      sponsor: 'Alabama Commission on Higher Education',
+      source_url: 'https://ache.edu/che_grant.aspx',
+      application_url: 'https://ache.edu/che_grant.aspx',
+      description: 'Grant for Alabama residents attending Alabama public 2-year colleges.',
+      amount_min: 500, amount_max: 2000,
+      categories: ['education', 'community college'],
+      keywords: ['alabama', 'go grant', 'community college'],
+      eligibility: ['AL resident', 'Attend public 2-year AL college', 'Financial need']
+    }
+  ],
+  'AK': [
+    {
+      id: 'ak-performance',
+      title: 'Alaska Performance Scholarship',
+      sponsor: 'Alaska Commission on Postsecondary Education',
+      source_url: 'https://acpe.alaska.gov/FINANCIAL_AID/AK_Performance_Scholarship',
+      application_url: 'https://acpe.alaska.gov/',
+      description: 'Merit scholarship for Alaska high school graduates attending Alaska schools.',
+      amount_min: 2378, amount_max: 4755,
+      categories: ['education', 'merit scholarship'],
+      keywords: ['alaska', 'performance scholarship', 'merit'],
+      eligibility: ['AK resident', 'AK high school graduate', 'Meet curriculum/GPA/test requirements']
+    }
+  ],
+  'AZ': [
+    {
+      id: 'az-leveraging',
+      title: 'Arizona Leveraging Educational Assistance Partnership',
+      sponsor: 'Arizona Department of Education',
+      source_url: 'https://www.azed.gov/financialassistance/leap',
+      application_url: 'https://www.azed.gov/financialassistance',
+      description: 'Need-based grant for Arizona residents attending AZ public postsecondary institutions.',
+      amount_min: 100, amount_max: 2500,
+      categories: ['education', 'need-based'],
+      keywords: ['arizona', 'leap', 'financial aid'],
+      eligibility: ['AZ resident', 'Attend AZ public school', 'Demonstrate financial need']
+    }
+  ],
+  'AR': [
+    {
+      id: 'ar-academic-challenge',
+      title: 'Arkansas Academic Challenge Scholarship',
+      sponsor: 'Arkansas Division of Higher Education',
+      source_url: 'https://scholarships.adhe.edu/scholarships-and-programs/academic-challenge/',
+      application_url: 'https://scholarships.adhe.edu/',
+      description: 'Scholarship for AR high school graduates attending AR colleges. Based on merit and need.',
+      amount_min: 1000, amount_max: 5000,
+      categories: ['education', 'merit/need'],
+      keywords: ['arkansas', 'academic challenge', 'scholarship'],
+      eligibility: ['AR resident', 'AR high school graduate', 'Minimum 19 ACT', 'Meet income requirements']
+    }
+  ],
+  'CO': [
+    {
+      id: 'co-student-grant',
+      title: 'Colorado Student Grant',
+      sponsor: 'Colorado Department of Higher Education',
+      source_url: 'https://cdhe.colorado.gov/students/preparing-for-college/financial-aid/state-financial-aid-programs',
+      application_url: 'https://cdhe.colorado.gov/students',
+      description: 'Need-based grant for Colorado residents attending eligible CO institutions.',
+      amount_min: 300, amount_max: 7000,
+      categories: ['education', 'need-based'],
+      keywords: ['colorado', 'student grant', 'financial aid'],
+      eligibility: ['CO resident', 'Attend eligible CO school', 'Demonstrate financial need']
+    }
+  ],
+  'CT': [
+    {
+      id: 'ct-roberta-willis',
+      title: 'Roberta B. Willis Scholarship',
+      sponsor: 'Connecticut Office of Higher Education',
+      source_url: 'https://www.ctohe.org/SFA/sfa.shtml',
+      application_url: 'https://www.ctohe.org/SFA/',
+      description: 'Need and merit-based scholarship for CT residents attending CT colleges.',
+      amount_min: 500, amount_max: 5250,
+      categories: ['education', 'need/merit'],
+      keywords: ['connecticut', 'roberta willis', 'scholarship'],
+      eligibility: ['CT resident', 'Attend CT college', 'Need or merit-based criteria']
+    }
+  ],
+  'DE': [
+    {
+      id: 'de-seed',
+      title: 'Delaware SEED Scholarship',
+      sponsor: 'Delaware Department of Education',
+      source_url: 'https://www.doe.k12.de.us/seed',
+      application_url: 'https://www.doe.k12.de.us/seed',
+      description: 'Free tuition at DE State and Community College for DE high school graduates.',
+      amount_min: null, amount_max: null,
+      categories: ['education', 'free tuition'],
+      keywords: ['delaware', 'seed', 'free tuition'],
+      eligibility: ['DE resident', 'DE high school graduate', 'Attend DTCC or DSU']
+    }
+  ],
+  'HI': [
+    {
+      id: 'hi-b-plus',
+      title: 'Hawaii B Plus Scholarship',
+      sponsor: 'University of Hawaii Foundation',
+      source_url: 'https://www.hawaii.edu/tuition/scholarships/b-plus/',
+      application_url: 'https://www.hawaii.edu/tuition/scholarships/',
+      description: 'Scholarship for Hawaii high school graduates with 3.0+ GPA attending UH system.',
+      amount_min: 1000, amount_max: 2000,
+      categories: ['education', 'merit'],
+      keywords: ['hawaii', 'b plus', 'scholarship', 'uh'],
+      eligibility: ['HI resident', 'HI high school graduate', 'Minimum 3.0 GPA', 'Attend UH']
+    }
+  ],
+  'ID': [
+    {
+      id: 'id-opportunity',
+      title: 'Idaho Opportunity Scholarship',
+      sponsor: 'Idaho State Board of Education',
+      source_url: 'https://boardofed.idaho.gov/scholarships/idaho-opportunity-scholarship/',
+      application_url: 'https://boardofed.idaho.gov/scholarships/',
+      description: 'Need-based scholarship for Idaho residents attending Idaho postsecondary institutions.',
+      amount_min: 1000, amount_max: 3500,
+      categories: ['education', 'need-based'],
+      keywords: ['idaho', 'opportunity scholarship', 'financial aid'],
+      eligibility: ['ID resident', 'Attend eligible ID school', 'Demonstrate financial need']
+    }
+  ],
+  'IN': [
+    {
+      id: 'in-21st-century',
+      title: 'Indiana 21st Century Scholars',
+      sponsor: 'Indiana Commission for Higher Education',
+      source_url: 'https://learnmoreindiana.org/scholars/',
+      application_url: 'https://scholars.in.gov/',
+      description: 'Full tuition at IN public colleges for low-income students who enroll in 8th grade.',
+      amount_min: null, amount_max: null,
+      categories: ['education', 'free tuition'],
+      keywords: ['indiana', '21st century', 'scholars', 'free tuition'],
+      eligibility: ['IN resident', 'Enrolled in 8th grade', 'Family income qualifies for free lunch', 'Fulfill Scholar Pledge']
+    },
+    {
+      id: 'in-frank-obannon',
+      title: 'Frank O\'Bannon Grant',
+      sponsor: 'Indiana Commission for Higher Education',
+      source_url: 'https://www.in.gov/che/state-financial-aid/state-financial-aid-programs/frank-obannon-grant/',
+      application_url: 'https://www.in.gov/che/state-financial-aid/',
+      description: 'Need-based grant for Indiana residents attending Indiana colleges.',
+      amount_min: 200, amount_max: 9600,
+      categories: ['education', 'need-based'],
+      keywords: ['indiana', 'frank obannon', 'grant', 'financial aid'],
+      eligibility: ['IN resident', 'Attend eligible IN school', 'Demonstrate financial need']
+    }
+  ],
+  'IA': [
+    {
+      id: 'ia-tuition-grant',
+      title: 'Iowa Tuition Grant',
+      sponsor: 'Iowa College Student Aid Commission',
+      source_url: 'https://www.iowacollegeaid.gov/IowaGrantPrograms',
+      application_url: 'https://www.iowacollegeaid.gov/',
+      description: 'Grant for Iowa residents attending private colleges in Iowa.',
+      amount_min: 100, amount_max: 7500,
+      categories: ['education', 'private college'],
+      keywords: ['iowa', 'tuition grant', 'private college'],
+      eligibility: ['IA resident', 'Attend eligible private IA college', 'Demonstrate financial need']
+    }
+  ],
+  'KS': [
+    {
+      id: 'ks-comprehensive',
+      title: 'Kansas Comprehensive Grant',
+      sponsor: 'Kansas Board of Regents',
+      source_url: 'https://www.kansasregents.org/students/student_financial_aid/scholarships_and_grants',
+      application_url: 'https://www.kansasregents.org/students/student_financial_aid',
+      description: 'Need-based grant for Kansas residents attending state universities.',
+      amount_min: 200, amount_max: 3500,
+      categories: ['education', 'need-based'],
+      keywords: ['kansas', 'comprehensive grant', 'state university'],
+      eligibility: ['KS resident', 'Attend KS state university', 'Demonstrate financial need']
+    }
+  ],
+  'KY': [
+    {
+      id: 'ky-cap',
+      title: 'Kentucky College Access Program (CAP) Grant',
+      sponsor: 'Kentucky Higher Education Assistance Authority',
+      source_url: 'https://www.kheaa.com/website/kheaa/cap',
+      application_url: 'https://www.kheaa.com/',
+      description: 'Need-based grant for Kentucky residents at participating KY schools.',
+      amount_min: 50, amount_max: 2100,
+      categories: ['education', 'need-based'],
+      keywords: ['kentucky', 'cap grant', 'college access'],
+      eligibility: ['KY resident', 'Attend participating KY school', 'Demonstrate financial need']
+    }
+  ],
+  'LA': [
+    {
+      id: 'la-tops',
+      title: 'Louisiana TOPS Scholarship',
+      sponsor: 'Louisiana Office of Student Financial Assistance',
+      source_url: 'https://mylosfa.la.gov/students-parents/scholarships-grants/tops/',
+      application_url: 'https://mylosfa.la.gov/',
+      description: 'Merit-based scholarship covering tuition at Louisiana public colleges.',
+      amount_min: null, amount_max: null,
+      categories: ['education', 'merit', 'free tuition'],
+      keywords: ['louisiana', 'tops', 'merit', 'scholarship'],
+      eligibility: ['LA resident', 'LA high school graduate', 'Minimum 2.5 GPA', 'Minimum 20 ACT', 'Attend LA public school']
+    }
+  ],
+  'ME': [
+    {
+      id: 'me-state-grant',
+      title: 'Maine State Grant',
+      sponsor: 'Finance Authority of Maine',
+      source_url: 'https://www.famemaine.com/education/maine-grants-scholarships/maine-state-grant-program/',
+      application_url: 'https://www.famemaine.com/',
+      description: 'Need-based grant for Maine residents attending Maine schools.',
+      amount_min: 250, amount_max: 1500,
+      categories: ['education', 'need-based'],
+      keywords: ['maine', 'state grant', 'financial aid'],
+      eligibility: ['ME resident', 'Attend approved ME school', 'Demonstrate financial need']
+    }
+  ],
+  'MD': [
+    {
+      id: 'md-senatorial',
+      title: 'Maryland Senatorial Scholarship',
+      sponsor: 'Maryland Higher Education Commission',
+      source_url: 'https://mhec.maryland.gov/preparing/Pages/FinancialAid/descriptions.aspx',
+      application_url: 'https://mhec.maryland.gov/',
+      description: 'Scholarship awarded by state senators for Maryland residents at MD schools.',
+      amount_min: 400, amount_max: 9000,
+      categories: ['education', 'legislative'],
+      keywords: ['maryland', 'senatorial', 'scholarship'],
+      eligibility: ['MD resident', 'Attend MD 2 or 4-year school', 'Apply through state senator']
+    }
+  ],
+  'MA': [
+    {
+      id: 'ma-mass-grant',
+      title: 'MASSGrant',
+      sponsor: 'Massachusetts Office of Student Financial Assistance',
+      source_url: 'https://www.mass.edu/osfa/programs/massgrant.asp',
+      application_url: 'https://www.mass.edu/osfa/',
+      description: 'Need-based grant for Massachusetts residents attending MA institutions.',
+      amount_min: 300, amount_max: 1900,
+      categories: ['education', 'need-based'],
+      keywords: ['massachusetts', 'massgrant', 'financial aid'],
+      eligibility: ['MA resident', 'Attend approved MA school', 'Demonstrate financial need', 'No bachelor\'s degree']
+    }
+  ],
+  'MN': [
+    {
+      id: 'mn-state-grant',
+      title: 'Minnesota State Grant',
+      sponsor: 'Minnesota Office of Higher Education',
+      source_url: 'https://www.ohe.state.mn.us/mPg.cfm?pageID=138',
+      application_url: 'https://www.ohe.state.mn.us/',
+      description: 'Need-based grant for Minnesota residents. Largest state grant program in MN.',
+      amount_min: 100, amount_max: 11891,
+      categories: ['education', 'need-based'],
+      keywords: ['minnesota', 'state grant', 'financial aid'],
+      eligibility: ['MN resident', 'Attend eligible MN school', 'Demonstrate financial need']
+    }
+  ],
+  'MS': [
+    {
+      id: 'ms-mtag',
+      title: 'Mississippi Tuition Assistance Grant (MTAG)',
+      sponsor: 'Mississippi Institutions of Higher Learning',
+      source_url: 'https://www.msfinancialaid.org/mtag/',
+      application_url: 'https://www.msfinancialaid.org/',
+      description: 'Grant for Mississippi residents attending private colleges in Mississippi.',
+      amount_min: 500, amount_max: 500,
+      categories: ['education', 'private college'],
+      keywords: ['mississippi', 'mtag', 'private college'],
+      eligibility: ['MS resident', 'Attend private MS college', 'Full-time student']
+    }
+  ],
+  'MO': [
+    {
+      id: 'mo-access',
+      title: 'Missouri Access Grant',
+      sponsor: 'Missouri Department of Higher Education',
+      source_url: 'https://dhewd.mo.gov/ppc/grants/accessmissouri.php',
+      application_url: 'https://dhewd.mo.gov/ppc/grants/',
+      description: 'Need-based grant for Missouri residents at approved MO schools.',
+      amount_min: 300, amount_max: 2850,
+      categories: ['education', 'need-based'],
+      keywords: ['missouri', 'access grant', 'financial aid'],
+      eligibility: ['MO resident', 'Attend approved MO school', 'Demonstrate financial need']
+    },
+    {
+      id: 'mo-a-plus',
+      title: 'Missouri A+ Scholarship',
+      sponsor: 'Missouri Department of Higher Education',
+      source_url: 'https://dhewd.mo.gov/ppc/grants/aplusscholarship.php',
+      application_url: 'https://dhewd.mo.gov/ppc/grants/',
+      description: 'Scholarship for tuition and fees at MO public community colleges and vocational schools.',
+      amount_min: null, amount_max: null,
+      categories: ['education', 'community college'],
+      keywords: ['missouri', 'a plus', 'community college', 'free tuition'],
+      eligibility: ['Graduate from A+ designated MO high school', '2.5 GPA', '95% attendance', '50 hours tutoring']
+    }
+  ],
+  'MT': [
+    {
+      id: 'mt-merit',
+      title: 'Montana University System Honor Scholarship',
+      sponsor: 'Montana University System',
+      source_url: 'https://mus.edu/Prepare/Pay/Scholarships/',
+      application_url: 'https://mus.edu/Prepare/Pay/',
+      description: 'Merit scholarship for Montana high school graduates attending Montana public colleges.',
+      amount_min: 4000, amount_max: 4000,
+      categories: ['education', 'merit'],
+      keywords: ['montana', 'honor', 'merit', 'scholarship'],
+      eligibility: ['MT resident', 'MT high school graduate', 'Attend MUS institution', 'Merit-based criteria']
+    }
+  ],
+  'NE': [
+    {
+      id: 'ne-opportunity',
+      title: 'Nebraska Opportunity Grant',
+      sponsor: 'Coordinating Commission for Postsecondary Education',
+      source_url: 'https://ccpe.nebraska.gov/nebraska-opportunity-grant',
+      application_url: 'https://ccpe.nebraska.gov/',
+      description: 'Need-based grant for Nebraska residents at eligible Nebraska schools.',
+      amount_min: 100, amount_max: 4800,
+      categories: ['education', 'need-based'],
+      keywords: ['nebraska', 'opportunity grant', 'financial aid'],
+      eligibility: ['NE resident', 'Attend eligible NE school', 'Demonstrate financial need', 'Pell-eligible']
+    }
+  ],
+  'NV': [
+    {
+      id: 'nv-millennium',
+      title: 'Nevada Millennium Scholarship',
+      sponsor: 'Nevada State Treasurer',
+      source_url: 'https://www.nevadatreasurer.gov/Millennium/Home/',
+      application_url: 'https://www.nevadatreasurer.gov/Millennium/',
+      description: 'Merit scholarship for Nevada high school graduates at Nevada schools.',
+      amount_min: 40, amount_max: 10000,
+      categories: ['education', 'merit'],
+      keywords: ['nevada', 'millennium', 'scholarship'],
+      eligibility: ['NV resident for 2+ years', 'NV high school graduate', 'Minimum 3.25 GPA', 'Attend eligible NV school']
+    }
+  ],
+  'NH': [
+    {
+      id: 'nh-granite-guarantee',
+      title: 'Granite Guarantee',
+      sponsor: 'University System of New Hampshire',
+      source_url: 'https://www.usnh.edu/tuition-financial-aid/granite-guarantee',
+      application_url: 'https://www.usnh.edu/tuition-financial-aid/',
+      description: 'Free in-state tuition for Pell-eligible NH students at USNH schools.',
+      amount_min: null, amount_max: null,
+      categories: ['education', 'free tuition'],
+      keywords: ['new hampshire', 'granite guarantee', 'free tuition'],
+      eligibility: ['NH resident', 'Pell Grant eligible', 'Attend USNH institution', 'First bachelor\'s degree']
+    }
+  ],
+  'NJ': [
+    {
+      id: 'nj-tag',
+      title: 'New Jersey Tuition Aid Grant (TAG)',
+      sponsor: 'NJ Higher Education Student Assistance Authority',
+      source_url: 'https://www.hesaa.org/Pages/NJTuitionAidGrant.aspx',
+      application_url: 'https://www.hesaa.org/',
+      description: 'Need-based grant for NJ residents at eligible NJ schools. Largest state grant program.',
+      amount_min: 500, amount_max: 13656,
+      categories: ['education', 'need-based'],
+      keywords: ['new jersey', 'tag', 'tuition aid grant'],
+      eligibility: ['NJ resident', 'Attend eligible NJ school', 'Demonstrate financial need']
+    },
+    {
+      id: 'nj-community-college',
+      title: 'NJ Community College Opportunity Grant',
+      sponsor: 'NJ Higher Education Student Assistance Authority',
+      source_url: 'https://www.hesaa.org/Pages/CCOG.aspx',
+      application_url: 'https://www.hesaa.org/',
+      description: 'Free community college for NJ residents with adjusted gross income up to $65,000.',
+      amount_min: null, amount_max: null,
+      categories: ['education', 'free tuition', 'community college'],
+      keywords: ['new jersey', 'community college', 'free tuition'],
+      eligibility: ['NJ resident', 'AGI up to $65,000', 'Attend NJ county college']
+    }
+  ],
+  'NM': [
+    {
+      id: 'nm-opportunity',
+      title: 'New Mexico Opportunity Scholarship',
+      sponsor: 'New Mexico Higher Education Department',
+      source_url: 'https://hed.nm.gov/financial-aid/scholarships/lottery-scholarship',
+      application_url: 'https://hed.nm.gov/financial-aid/',
+      description: 'Free tuition at NM public colleges for NM residents.',
+      amount_min: null, amount_max: null,
+      categories: ['education', 'free tuition'],
+      keywords: ['new mexico', 'opportunity', 'free tuition'],
+      eligibility: ['NM resident', 'Attend NM public college', 'Complete scholarship application']
+    }
+  ],
   'NY': [
     {
       id: 'ny-tap',
@@ -775,6 +1175,114 @@ const STATE_PROGRAMS = {
       eligibility: ['NC resident', 'Attend UNC system school', 'Demonstrate financial need']
     }
   ],
+  'ND': [
+    {
+      id: 'nd-scholars',
+      title: 'North Dakota Scholars Program',
+      sponsor: 'North Dakota University System',
+      source_url: 'https://ndus.edu/students/paying-for-college/north-dakota-scholars-program/',
+      application_url: 'https://ndus.edu/students/',
+      description: 'Full tuition scholarship for top ND high school graduates.',
+      amount_min: null, amount_max: null,
+      categories: ['education', 'merit', 'free tuition'],
+      keywords: ['north dakota', 'scholars', 'merit', 'free tuition'],
+      eligibility: ['ND resident', 'Top 5% of class or ACT composite 24+', 'Complete rigorous curriculum']
+    }
+  ],
+  'OK': [
+    {
+      id: 'ok-promise',
+      title: 'Oklahoma\'s Promise',
+      sponsor: 'Oklahoma State Regents for Higher Education',
+      source_url: 'https://www.okhighered.org/okpromise/',
+      application_url: 'https://www.okhighered.org/okpromise/',
+      description: 'Free tuition at OK public colleges for students who enroll in 8th-10th grade.',
+      amount_min: null, amount_max: null,
+      categories: ['education', 'free tuition'],
+      keywords: ['oklahoma', 'promise', 'free tuition'],
+      eligibility: ['OK resident', 'Enroll in 8th-10th grade', 'Family income under $60,000', 'Minimum 2.5 GPA']
+    }
+  ],
+  'OR': [
+    {
+      id: 'or-opportunity',
+      title: 'Oregon Opportunity Grant',
+      sponsor: 'Oregon Student Aid',
+      source_url: 'https://oregonstudentaid.gov/grants/oregon-opportunity-grant/',
+      application_url: 'https://oregonstudentaid.gov/',
+      description: 'Oregon\'s largest state need-based grant for residents at OR schools.',
+      amount_min: 1100, amount_max: 3612,
+      categories: ['education', 'need-based'],
+      keywords: ['oregon', 'opportunity grant', 'financial aid'],
+      eligibility: ['OR resident', 'Attend eligible OR school', 'Demonstrate financial need']
+    },
+    {
+      id: 'or-promise',
+      title: 'Oregon Promise',
+      sponsor: 'Oregon Higher Education Coordinating Commission',
+      source_url: 'https://oregonstudentaid.gov/grants/oregon-promise/',
+      application_url: 'https://oregonstudentaid.gov/',
+      description: 'Grant to cover tuition at Oregon community colleges.',
+      amount_min: 1000, amount_max: 4000,
+      categories: ['education', 'community college'],
+      keywords: ['oregon', 'promise', 'community college'],
+      eligibility: ['OR resident', 'OR GED or high school graduate', 'Attend OR community college']
+    }
+  ],
+  'RI': [
+    {
+      id: 'ri-promise',
+      title: 'Rhode Island Promise Scholarship',
+      sponsor: 'Rhode Island Office of Postsecondary Commissioner',
+      source_url: 'https://www.riopc.edu/page/ri_promise/',
+      application_url: 'https://www.riopc.edu/',
+      description: 'Free tuition at Community College of Rhode Island.',
+      amount_min: null, amount_max: null,
+      categories: ['education', 'free tuition', 'community college'],
+      keywords: ['rhode island', 'promise', 'free tuition', 'ccri'],
+      eligibility: ['RI resident', 'RI high school graduate', 'Attend CCRI', 'Complete within 3 years']
+    }
+  ],
+  'SC': [
+    {
+      id: 'sc-life',
+      title: 'South Carolina LIFE Scholarship',
+      sponsor: 'SC Commission on Higher Education',
+      source_url: 'https://www.che.sc.gov/CHE_Docs/studentservices/LIFE/life_scholarship.htm',
+      application_url: 'https://www.che.sc.gov/',
+      description: 'Merit scholarship for SC high school graduates at SC colleges.',
+      amount_min: 2500, amount_max: 5000,
+      categories: ['education', 'merit'],
+      keywords: ['south carolina', 'life', 'scholarship', 'merit'],
+      eligibility: ['SC resident', 'SC high school graduate', 'Minimum 3.0 GPA', '1100 SAT or 24 ACT']
+    },
+    {
+      id: 'sc-palmetto',
+      title: 'SC Palmetto Fellows Scholarship',
+      sponsor: 'SC Commission on Higher Education',
+      source_url: 'https://www.che.sc.gov/CHE_Docs/studentservices/palmettofellows/palmetto_fellows.htm',
+      application_url: 'https://www.che.sc.gov/',
+      description: 'Top merit scholarship for SC high achievers.',
+      amount_min: 6700, amount_max: 7500,
+      categories: ['education', 'merit', 'high achiever'],
+      keywords: ['south carolina', 'palmetto', 'fellows', 'merit'],
+      eligibility: ['SC resident', 'SC high school graduate', '3.5 GPA', '1200 SAT or 27 ACT', 'Top 6% of class']
+    }
+  ],
+  'SD': [
+    {
+      id: 'sd-opportunity',
+      title: 'South Dakota Opportunity Scholarship',
+      sponsor: 'South Dakota Board of Regents',
+      source_url: 'https://www.sdbor.edu/student-information/Pages/SD-Opportunity-Scholarship.aspx',
+      application_url: 'https://www.sdbor.edu/',
+      description: 'Merit scholarship for SD high school graduates at SD public universities.',
+      amount_min: 1300, amount_max: 6500,
+      categories: ['education', 'merit'],
+      keywords: ['south dakota', 'opportunity', 'scholarship'],
+      eligibility: ['SD resident', 'SD high school graduate', 'Minimum 24 ACT', 'Minimum 3.0 GPA']
+    }
+  ],
   'TN': [
     {
       id: 'tn-promise',
@@ -799,6 +1307,156 @@ const STATE_PROGRAMS = {
       categories: ['education', 'merit scholarship'],
       keywords: ['tennessee hope', 'scholarship', 'merit'],
       eligibility: ['TN resident', 'Minimum 21 ACT or 3.0 GPA', 'Attend eligible TN school']
+    }
+  ],
+  'UT': [
+    {
+      id: 'ut-regents',
+      title: 'Utah Regents\' Scholarship',
+      sponsor: 'Utah System of Higher Education',
+      source_url: 'https://ushe.edu/initiatives/regents-scholarship/',
+      application_url: 'https://ushe.edu/initiatives/regents-scholarship/',
+      description: 'Base and Exemplary scholarship for Utah high school graduates.',
+      amount_min: 1000, amount_max: 2000,
+      categories: ['education', 'merit'],
+      keywords: ['utah', 'regents', 'scholarship', 'merit'],
+      eligibility: ['UT high school graduate', 'Complete specific curriculum', 'Attend UT public school']
+    }
+  ],
+  'VT': [
+    {
+      id: 'vt-incentive',
+      title: 'Vermont Incentive Grant',
+      sponsor: 'Vermont Student Assistance Corporation',
+      source_url: 'https://www.vsac.org/pay/grants-and-scholarships/vsac-grants',
+      application_url: 'https://www.vsac.org/',
+      description: 'Need-based grant for Vermont residents attending approved schools.',
+      amount_min: 500, amount_max: 12000,
+      categories: ['education', 'need-based'],
+      keywords: ['vermont', 'incentive grant', 'financial aid'],
+      eligibility: ['VT resident', 'Attend approved school', 'Demonstrate financial need']
+    }
+  ],
+  'VA': [
+    {
+      id: 'va-commonwealth',
+      title: 'Virginia Commonwealth Award',
+      sponsor: 'State Council of Higher Education for Virginia',
+      source_url: 'https://www.schev.edu/students/financial-aid/undergraduate',
+      application_url: 'https://www.schev.edu/',
+      description: 'Need-based grant for Virginia residents at VA public schools.',
+      amount_min: 500, amount_max: 5000,
+      categories: ['education', 'need-based'],
+      keywords: ['virginia', 'commonwealth', 'grant', 'financial aid'],
+      eligibility: ['VA resident', 'Attend VA public school', 'Demonstrate financial need']
+    },
+    {
+      id: 'va-gtf',
+      title: 'Virginia Tuition Assistance Grant (VTAG)',
+      sponsor: 'State Council of Higher Education for Virginia',
+      source_url: 'https://www.schev.edu/students/financial-aid/undergraduate',
+      application_url: 'https://www.schev.edu/',
+      description: 'Grant for VA residents at private, non-profit VA colleges.',
+      amount_min: 1000, amount_max: 4000,
+      categories: ['education', 'private college'],
+      keywords: ['virginia', 'vtag', 'private college', 'grant'],
+      eligibility: ['VA resident', 'Attend eligible private VA college', 'Full-time student']
+    }
+  ],
+  'WA': [
+    {
+      id: 'wa-college-grant',
+      title: 'Washington College Grant',
+      sponsor: 'Washington Student Achievement Council',
+      source_url: 'https://wsac.wa.gov/wcg',
+      application_url: 'https://wsac.wa.gov/',
+      description: 'State\'s largest financial aid program. Need-based for WA residents.',
+      amount_min: 500, amount_max: 11666,
+      categories: ['education', 'need-based'],
+      keywords: ['washington', 'college grant', 'financial aid'],
+      eligibility: ['WA resident', 'Attend eligible WA school', 'Family income up to median']
+    }
+  ],
+  'WV': [
+    {
+      id: 'wv-promise',
+      title: 'West Virginia PROMISE Scholarship',
+      sponsor: 'West Virginia Higher Education Policy Commission',
+      source_url: 'https://www.wvhepc.edu/promise-scholarship/',
+      application_url: 'https://www.wvhepc.edu/',
+      description: 'Merit scholarship for WV high school graduates at WV schools.',
+      amount_min: 2500, amount_max: 4750,
+      categories: ['education', 'merit'],
+      keywords: ['west virginia', 'promise', 'scholarship', 'merit'],
+      eligibility: ['WV resident', 'WV high school graduate', 'Minimum 3.0 GPA and 22 ACT']
+    },
+    {
+      id: 'wv-higher-ed-grant',
+      title: 'West Virginia Higher Education Grant',
+      sponsor: 'West Virginia Higher Education Policy Commission',
+      source_url: 'https://www.wvhepc.edu/west-virginia-higher-education-grant/',
+      application_url: 'https://www.wvhepc.edu/',
+      description: 'Need-based grant for WV residents at WV schools.',
+      amount_min: 200, amount_max: 2600,
+      categories: ['education', 'need-based'],
+      keywords: ['west virginia', 'higher ed grant', 'financial aid'],
+      eligibility: ['WV resident', 'Attend WV school', 'Demonstrate financial need']
+    }
+  ],
+  'WI': [
+    {
+      id: 'wi-grant',
+      title: 'Wisconsin Grant',
+      sponsor: 'Wisconsin Higher Educational Aids Board',
+      source_url: 'https://heab.state.wi.us/programs.html',
+      application_url: 'https://heab.state.wi.us/',
+      description: 'Need-based grant for Wisconsin residents at Wisconsin schools.',
+      amount_min: 250, amount_max: 3150,
+      categories: ['education', 'need-based'],
+      keywords: ['wisconsin', 'grant', 'financial aid'],
+      eligibility: ['WI resident', 'Attend WI school', 'Demonstrate financial need']
+    }
+  ],
+  'WY': [
+    {
+      id: 'wy-hathaway',
+      title: 'Wyoming Hathaway Scholarship',
+      sponsor: 'Wyoming Department of Education',
+      source_url: 'https://edu.wyoming.gov/for-parents-students/hathaway-scholarship/',
+      application_url: 'https://edu.wyoming.gov/for-parents-students/hathaway-scholarship/',
+      description: 'Merit scholarship for WY high school graduates at WY community colleges and UW.',
+      amount_min: 840, amount_max: 1680,
+      categories: ['education', 'merit'],
+      keywords: ['wyoming', 'hathaway', 'scholarship', 'merit'],
+      eligibility: ['WY high school graduate', 'Complete success curriculum', 'Attend UW or WY community college']
+    }
+  ],
+  'DC': [
+    {
+      id: 'dc-tag',
+      title: 'DC Tuition Assistance Grant (DC TAG)',
+      sponsor: 'DC Office of the State Superintendent of Education',
+      source_url: 'https://osse.dc.gov/dctag',
+      application_url: 'https://osse.dc.gov/dctag',
+      description: 'Up to $10,000/year at public schools nationwide, or $2,500 at private schools.',
+      amount_min: 2500, amount_max: 10000,
+      categories: ['education', 'national access'],
+      keywords: ['dc', 'tag', 'tuition assistance', 'washington dc'],
+      eligibility: ['DC resident', 'High school graduate', 'Attend eligible school', 'Meet income requirements']
+    }
+  ],
+  'PR': [
+    {
+      id: 'pr-pell',
+      title: 'Federal Pell Grant (Puerto Rico)',
+      sponsor: 'U.S. Department of Education',
+      source_url: 'https://studentaid.gov/understand-aid/types/grants/pell',
+      application_url: 'https://studentaid.gov/h/apply-for-aid/fafsa',
+      description: 'Federal Pell Grants available for Puerto Rico residents attending eligible PR institutions.',
+      amount_min: 750, amount_max: 7395,
+      categories: ['education', 'federal'],
+      keywords: ['pell', 'puerto rico', 'federal', 'grant'],
+      eligibility: ['PR resident', 'Attend eligible PR school', 'Financial need via FAFSA']
     }
   ]
 };
