@@ -428,6 +428,70 @@ router.post('/sync-profiles', async (req, res) => {
 });
 
 /**
+ * Admin endpoint to check profile sections for a specific profile
+ */
+router.get('/profile-sections/:profileId', (req, res) => {
+  try {
+    const { profileId } = req.params;
+    
+    const profile = req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId);
+    if (!profile) {
+      return res.status(404).json({ success: false, error: 'Profile not found' });
+    }
+    
+    const sections = req.db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId);
+    
+    res.json({
+      success: true,
+      profile: {
+        id: profile.id,
+        display_name: profile.display_name,
+        tags: profile.tags,
+        primary_type: profile.primary_type,
+      },
+      sections: sections.map(s => ({
+        key: s.section_key,
+        data: JSON.parse(s.data || '{}')
+      }))
+    });
+  } catch (error) {
+    console.error('[admin/profile-sections] Error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Admin endpoint to search opportunities by keyword
+ */
+router.get('/opportunities-search', (req, res) => {
+  try {
+    const { keyword } = req.query;
+    
+    const opportunities = req.db.prepare(`
+      SELECT id, title, keywords, categories 
+      FROM funding_opportunities 
+      WHERE is_active = 1 
+        AND (
+          LOWER(title) LIKE ? 
+          OR LOWER(keywords) LIKE ?
+          OR LOWER(categories) LIKE ?
+        )
+      LIMIT 20
+    `).all(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`);
+    
+    res.json({
+      success: true,
+      keyword,
+      count: opportunities.length,
+      opportunities
+    });
+  } catch (error) {
+    console.error('[admin/opportunities-search] Error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
  * Admin endpoint to get database stats
  */
 router.get('/db-stats', (req, res) => {
