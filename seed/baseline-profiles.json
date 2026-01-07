@@ -156,6 +156,22 @@
       "status": "active",
       "tags": [],
       "avatar_url": null
+    },
+    {
+      "id": "profile-josh-dasher",
+      "primary_type": "individual",
+      "display_name": "Josh Dasher",
+      "status": "active",
+      "tags": [],
+      "avatar_url": null
+    },
+    {
+      "id": "profile-rachel-miller",
+      "primary_type": "individual",
+      "display_name": "Rachel Miller",
+      "status": "active",
+      "tags": [],
+      "avatar_url": null
     }
   ],
   "sections": [
@@ -1274,6 +1290,22 @@
       "section_key": "university_applications",
       "data": {
         "applications": []
+      }
+    },
+    {
+      "profile_id": "profile-josh-dasher",
+      "section_key": "basic_information",
+      "data": {
+        "full_name": "Josh Dasher",
+        "email": "joshua.dasher@gmail.com"
+      }
+    },
+    {
+      "profile_id": "profile-rachel-miller",
+      "section_key": "basic_information",
+      "data": {
+        "full_name": "Rachel Miller",
+        "email": "rdashermiller@gmail.com"
       }
     }
   ]
