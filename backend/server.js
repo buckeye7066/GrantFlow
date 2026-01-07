@@ -480,7 +480,16 @@ app.get('/api/auth/diagnostics', (req, res) => {
   res.status(statusCode).json(diagnostics);
 });
 
-app.get('/api/auth/me', (req, res) => {
+// Rate limiter for /api/auth/me endpoint to prevent abuse
+const authMeLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  limit: 100, // Allow 100 requests per 5 minutes per IP
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' }
+});
+
+app.get('/api/auth/me', authMeLimiter, (req, res) => {
   try {
     const user = req.user ?? { role: 'guest' };
     if (user.role === 'guest') {
