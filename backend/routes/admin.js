@@ -492,6 +492,58 @@ router.get('/opportunities-search', (req, res) => {
 });
 
 /**
+ * Admin endpoint to link admin user to all organizations
+ */
+router.post('/link-admin-to-orgs', async (req, res) => {
+  try {
+    // Get the admin user
+    const adminUser = req.db.prepare('SELECT id FROM users WHERE role = ? OR email LIKE ?').get('admin', '%admin%');
+    if (!adminUser) {
+      // Use the first user or create admin relationship via user_id from token
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(400).json({ success: false, error: 'No admin user found' });
+      }
+    }
+    
+    // Get all organizations
+    const orgs = req.db.prepare('SELECT id, name FROM organizations').all();
+    
+    // Link admin to all organizations via organization_members
+    let linked = 0;
+    const userId = adminUser?.id || req.user?.id;
+    
+    for (const org of orgs) {
+      const existing = req.db.prepare(
+        'SELECT 1 FROM organization_members WHERE organization_id = ? AND user_id = ?'
+      ).get(org.id, userId);
+      
+      if (!existing) {
+        try {
+          req.db.prepare(`
+            INSERT INTO organization_members (organization_id, user_id, role, created_at)
+            VALUES (?, ?, 'admin', CURRENT_TIMESTAMP)
+          `).run(org.id, userId);
+          linked++;
+        } catch (e) {
+          console.warn(`Could not link org ${org.name}:`, e.message);
+        }
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Linked admin to ${linked} organizations`,
+      total_organizations: orgs.length,
+      newly_linked: linked
+    });
+  } catch (error) {
+    console.error('[link-admin-to-orgs] Error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
  * Admin endpoint to seed all profiles with matching grants
  * Runs comprehensive match for each profile and adds top matches to their pipeline
  */
