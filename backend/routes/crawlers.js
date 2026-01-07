@@ -1313,6 +1313,42 @@ router.post('/bulk-populate', async (req, res) => {
   }
 })
 
+// Seed ALL real funding opportunities - national + state programs
+router.post('/seed-all-real', async (req, res) => {
+  const auth = req.user ?? { role: 'guest' }
+  const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
+  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  
+  if (auth.role !== 'admin' && bulkKey !== expectedKey) {
+    return res.status(403).json({ error: 'Admin access or valid bulk key required' })
+  }
+  
+  try {
+    console.log('[seed-all-real] Starting comprehensive real funding seed...')
+    
+    const { seedAllRealFunding, getOpportunityCountsByState } = await import('../services/realLocationFundingCrawler.js')
+    
+    const result = await seedAllRealFunding(req.db)
+    const counts = getOpportunityCountsByState(req.db)
+    
+    // Count minimum available per ZIP (national programs available everywhere)
+    const minPerZip = counts.nationwide
+    
+    res.json({
+      success: true,
+      message: `Seeded ${result.total} REAL funding opportunities`,
+      national_programs: result.national.inserted + result.national.updated,
+      state_programs: result.states.inserted + result.states.updated,
+      total_opportunities: result.total,
+      minimum_per_zip: minPerZip,
+      note: 'All opportunities have verified, clickable URLs to real funding sources'
+    })
+  } catch (error) {
+    console.error('[seed-all-real] Error:', error)
+    res.status(500).json(formatError(error))
+  }
+})
+
 // Seed verified real funding opportunities from curated JSON file
 router.post('/seed-real-opportunities', async (req, res) => {
   const auth = req.user ?? { role: 'guest' }
