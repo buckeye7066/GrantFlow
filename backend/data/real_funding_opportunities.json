@@ -676,58 +676,6 @@
       ]
     },
     {
-      "id": "sba-7a-loans",
-      "title": "SBA 7(a) Loan Program",
-      "sponsor": "U.S. Small Business Administration",
-      "source": "verified_real",
-      "source_url": "https://www.sba.gov/funding-programs/loans/7a-loans",
-      "application_url": "https://www.sba.gov/funding-programs/loans/7a-loans",
-      "description": "SBA's primary business loan program provides loan guarantees to help small businesses access capital they cannot get elsewhere.",
-      "amount_min": 25000,
-      "amount_max": 5000000,
-      "deadline": "Ongoing",
-      "deadline_type": "rolling",
-      "is_national": true,
-      "state": "nationwide",
-      "categories": ["small business", "loan", "capital"],
-      "keywords": ["sba", "small business", "loan", "7a", "capital", "business loan"],
-      "opportunity_type": "loan",
-      "requires_501c3": false,
-      "requires_match": false,
-      "eligibility_bullets": [
-        "For-profit business in the U.S.",
-        "Meet SBA size standards",
-        "Demonstrate need for the loan",
-        "Loan - requires repayment with interest"
-      ]
-    },
-    {
-      "id": "sba-microloans",
-      "title": "SBA Microloan Program",
-      "sponsor": "U.S. Small Business Administration",
-      "source": "verified_real",
-      "source_url": "https://www.sba.gov/funding-programs/loans/microloans",
-      "application_url": "https://www.sba.gov/funding-programs/loans/microloans",
-      "description": "Small loans up to $50,000 for small businesses and certain nonprofit childcare centers. Average loan is about $13,000.",
-      "amount_min": 500,
-      "amount_max": 50000,
-      "deadline": "Ongoing",
-      "deadline_type": "rolling",
-      "is_national": true,
-      "state": "nationwide",
-      "categories": ["small business", "microloan", "startup"],
-      "keywords": ["sba", "microloan", "small business", "startup", "entrepreneur"],
-      "opportunity_type": "loan",
-      "requires_501c3": false,
-      "requires_match": false,
-      "eligibility_bullets": [
-        "Small business or childcare nonprofit",
-        "Apply through SBA-approved intermediary lender",
-        "Maximum 6-year term",
-        "Loan - requires repayment with interest"
-      ]
-    },
-    {
       "id": "americorps",
       "title": "AmeriCorps Service Programs",
       "sponsor": "AmeriCorps",
@@ -856,32 +804,6 @@
         "Service members on active duty",
         "Dependents of certain veterans",
         "Multiple programs available"
-      ]
-    },
-    {
-      "id": "va-home-loan",
-      "title": "VA Home Loan Guaranty",
-      "sponsor": "U.S. Department of Veterans Affairs",
-      "source": "verified_real",
-      "source_url": "https://www.va.gov/housing-assistance/home-loans/",
-      "application_url": "https://www.va.gov/housing-assistance/home-loans/how-to-apply/",
-      "description": "VA-guaranteed home loans help veterans, active military, and surviving spouses buy, build, repair, or refinance homes with no down payment required.",
-      "amount_min": 100000,
-      "amount_max": null,
-      "deadline": "Apply anytime",
-      "deadline_type": "rolling",
-      "is_national": true,
-      "state": "nationwide",
-      "categories": ["veterans", "housing", "home loan"],
-      "keywords": ["va loan", "veterans", "home loan", "mortgage", "military", "housing"],
-      "opportunity_type": "loan",
-      "requires_501c3": false,
-      "requires_match": false,
-      "eligibility_bullets": [
-        "Veteran or active military with qualifying service",
-        "Surviving spouse in some cases",
-        "Certificate of Eligibility required",
-        "No down payment required"
       ]
     },
     {

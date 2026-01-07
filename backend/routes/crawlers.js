@@ -1313,6 +1313,49 @@ router.post('/bulk-populate', async (req, res) => {
   }
 })
 
+// Remove all loans and matching-fund opportunities from the database
+router.post('/remove-loans', async (req, res) => {
+  const auth = req.user ?? { role: 'guest' }
+  const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
+  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  
+  if (auth.role !== 'admin' && bulkKey !== expectedKey) {
+    return res.status(403).json({ error: 'Admin access or valid bulk key required' })
+  }
+  
+  try {
+    console.log('[remove-loans] Removing loans and matching-fund opportunities...')
+    
+    // Delete loans
+    const loansDeleted = req.db.prepare(`
+      DELETE FROM funding_opportunities 
+      WHERE opportunity_type = 'loan' 
+         OR title LIKE '%Loan%' 
+         OR title LIKE '%loan%'
+         OR categories LIKE '%loan%'
+    `).run()
+    
+    // Delete matching-fund opportunities
+    const matchingDeleted = req.db.prepare(`
+      DELETE FROM funding_opportunities 
+      WHERE requires_match = 1
+    `).run()
+    
+    const totalRemaining = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get().count
+    
+    res.json({
+      success: true,
+      loans_removed: loansDeleted.changes,
+      matching_removed: matchingDeleted.changes,
+      total_remaining: totalRemaining,
+      message: 'All loans and matching-fund opportunities have been removed'
+    })
+  } catch (error) {
+    console.error('[remove-loans] Error:', error)
+    res.status(500).json(formatError(error))
+  }
+})
+
 // Seed ALL real funding opportunities - national + state programs
 router.post('/seed-all-real', async (req, res) => {
   const auth = req.user ?? { role: 'guest' }
