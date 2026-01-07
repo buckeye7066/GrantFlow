@@ -492,6 +492,181 @@ router.get('/opportunities-search', (req, res) => {
 });
 
 /**
+ * Admin endpoint to seed all profiles with matching grants
+ * Runs comprehensive match for each profile and adds top matches to their pipeline
+ */
+router.post('/seed-profile-grants', async (req, res) => {
+  try {
+    const { excludeProfiles = [] } = req.body;
+    const excludeNames = excludeProfiles.map(n => n.toLowerCase());
+    
+    // Get all profiles
+    const profiles = req.db.prepare('SELECT * FROM profiles WHERE status = ?').all('active');
+    console.log(`[seed-profile-grants] Found ${profiles.length} profiles`);
+    
+    const results = [];
+    
+    for (const profile of profiles) {
+      // Skip excluded profiles
+      const displayName = (profile.display_name || '').toLowerCase();
+      if (excludeNames.some(ex => displayName.includes(ex))) {
+        results.push({ profile: profile.display_name, status: 'skipped', reason: 'excluded' });
+        continue;
+      }
+      
+      // Get profile sections
+      const sections = {};
+      const sectionRows = req.db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profile.id);
+      sectionRows.forEach(row => {
+        try { sections[row.section_key] = JSON.parse(row.data || '{}'); } catch (e) { sections[row.section_key] = {}; }
+      });
+      
+      // Build profile signals (simplified)
+      const signals = {
+        keywords: new Set(),
+        demographics: new Set(),
+        military: new Set(),
+        health: new Set(),
+        family: new Set(),
+      };
+      
+      // Add tags as keywords
+      try {
+        const tags = JSON.parse(profile.tags || '[]');
+        tags.forEach(t => signals.keywords.add(t.toLowerCase()));
+      } catch (e) { /* ignore */ }
+      
+      // Military
+      if (sections.military_service) {
+        if (sections.military_service.veteran) { signals.military.add('veteran'); signals.keywords.add('veteran'); }
+        if (sections.military_service.disabled_veteran) { signals.military.add('disabled veteran'); signals.keywords.add('disabled veteran'); }
+      }
+      
+      // Health
+      if (sections.health_medical) {
+        if (sections.health_medical.chronic_illness) { signals.health.add('chronic illness'); signals.keywords.add('chronic'); }
+        if (sections.health_medical.disability_type) {
+          const types = Array.isArray(sections.health_medical.disability_type) ? sections.health_medical.disability_type : [];
+          types.forEach(t => { signals.health.add(t.toLowerCase()); signals.keywords.add(t.toLowerCase()); });
+        }
+      }
+      
+      // Family
+      if (sections.family_life?.single_parent) { signals.family.add('single parent'); signals.keywords.add('single parent'); }
+      
+      // Get opportunities
+      const opportunities = req.db.prepare(`
+        SELECT * FROM funding_opportunities 
+        WHERE is_active = 1 
+        AND (requires_match = 0 OR requires_match IS NULL)
+        LIMIT 100
+      `).all();
+      
+      // Score opportunities
+      const scored = opportunities.map(opp => {
+        let score = 40;
+        const matchedFields = [];
+        
+        let oppKeywords = [], oppCategories = [];
+        try { oppKeywords = JSON.parse(opp.keywords || '[]'); } catch (e) {}
+        try { oppCategories = JSON.parse(opp.categories || '[]'); } catch (e) {}
+        
+        const oppTerms = new Set([
+          ...oppKeywords.map(k => k.toLowerCase()),
+          ...oppCategories.map(c => c.toLowerCase())
+        ]);
+        
+        // Keyword matching
+        let keywordMatches = 0;
+        signals.keywords.forEach(kw => {
+          for (const term of oppTerms) {
+            if (term.includes(kw) || kw.includes(term)) {
+              keywordMatches++;
+              matchedFields.push(kw);
+              break;
+            }
+          }
+        });
+        score += Math.min(30, keywordMatches * 5);
+        
+        // Military matching
+        signals.military.forEach(mil => {
+          for (const term of oppTerms) {
+            if (term.includes(mil) || mil.includes(term)) {
+              score += 7;
+              matchedFields.push('military: ' + mil);
+              break;
+            }
+          }
+        });
+        
+        return { opp, score: Math.min(100, score), matchedFields };
+      });
+      
+      // Filter and sort
+      const topMatches = scored
+        .filter(s => s.score >= 50)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 50);
+      
+      // Ensure organization exists
+      let orgId = profile.organization_id;
+      if (!orgId) {
+        orgId = crypto.randomUUID();
+        req.db.prepare(`
+          INSERT INTO organizations (id, name, applicant_type, created_at, updated_at)
+          VALUES (?, ?, 'individual', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `).run(orgId, profile.display_name || 'My Organization');
+        req.db.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile.id);
+      }
+      
+      // Add grants to pipeline
+      let added = 0;
+      for (const { opp, score, matchedFields } of topMatches) {
+        // Check for duplicates
+        const existing = req.db.prepare(`
+          SELECT id FROM grants 
+          WHERE organization_id = ? AND (funding_opportunity_id = ? OR title = ?)
+        `).get(orgId, opp.id, opp.title);
+        
+        if (!existing) {
+          const grantId = crypto.randomUUID();
+          req.db.prepare(`
+            INSERT INTO grants (
+              id, organization_id, funding_opportunity_id, title, funder,
+              deadline, status, match_score, match_reasons, application_url,
+              created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          `).run(
+            grantId, orgId, opp.id, opp.title, opp.sponsor,
+            opp.deadline, score, JSON.stringify(matchedFields.slice(0, 10)),
+            opp.application_url
+          );
+          added++;
+        }
+      }
+      
+      results.push({
+        profile: profile.display_name,
+        status: 'seeded',
+        opportunities_found: topMatches.length,
+        grants_added: added
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: 'Profile seeding complete',
+      results
+    });
+    
+  } catch (error) {
+    console.error('[seed-profile-grants] Error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
  * Admin endpoint to get database stats
  */
 router.get('/db-stats', (req, res) => {
