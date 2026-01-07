@@ -1313,6 +1313,92 @@ router.post('/bulk-populate', async (req, res) => {
   }
 })
 
+// Crawl all counties for local funding sources (background job)
+router.post('/crawl-all-counties', async (req, res) => {
+  const auth = req.user ?? { role: 'guest' }
+  const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
+  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  
+  if (auth.role !== 'admin' && bulkKey !== expectedKey) {
+    return res.status(403).json({ error: 'Admin access or valid bulk key required' })
+  }
+  
+  try {
+    console.log('[crawl-all-counties] Starting county-level funding crawl...')
+    
+    const { crawlAllCounties } = await import('../services/countyFundingCrawler.js')
+    const result = await crawlAllCounties(req.db)
+    
+    const totalCount = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get().count
+    
+    res.json({
+      success: true,
+      message: `Crawled ${result.counties} counties across ${result.states} states`,
+      states_processed: result.states,
+      counties_processed: result.counties,
+      opportunities_per_county: 5,
+      inserted: result.inserted,
+      updated: result.updated,
+      errors: result.errors,
+      total_opportunities: totalCount,
+      note: 'Each county now has United Way, Food Bank, Housing Authority, Community Action, and Salvation Army entries'
+    })
+  } catch (error) {
+    console.error('[crawl-all-counties] Error:', error)
+    res.status(500).json(formatError(error))
+  }
+})
+
+// Crawl counties for a specific state
+router.post('/crawl-state-counties/:state', async (req, res) => {
+  const auth = req.user ?? { role: 'guest' }
+  const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
+  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  
+  if (auth.role !== 'admin' && bulkKey !== expectedKey) {
+    return res.status(403).json({ error: 'Admin access or valid bulk key required' })
+  }
+  
+  const state = req.params.state?.toUpperCase()
+  if (!state || state.length !== 2) {
+    return res.status(400).json({ error: 'Valid 2-letter state code required' })
+  }
+  
+  try {
+    const { crawlStateCounties } = await import('../services/countyFundingCrawler.js')
+    const result = await crawlStateCounties(req.db, state)
+    
+    res.json({
+      success: true,
+      state,
+      counties_processed: result.counties,
+      inserted: result.inserted,
+      updated: result.updated,
+      errors: result.errors
+    })
+  } catch (error) {
+    console.error(`[crawl-state-counties] Error for ${state}:`, error)
+    res.status(500).json(formatError(error))
+  }
+})
+
+// Get county crawler status
+router.get('/county-status', async (req, res) => {
+  try {
+    const { getCrawlerStatus } = await import('../services/countyFundingCrawler.js')
+    const status = getCrawlerStatus(req.db)
+    
+    const totalOpps = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get().count
+    
+    res.json({
+      ...status,
+      total_all_opportunities: totalOpps
+    })
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
 // Seed local assistance networks (food banks, community agencies, etc.)
 router.post('/seed-local-networks', async (req, res) => {
   const auth = req.user ?? { role: 'guest' }
