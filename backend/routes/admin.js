@@ -317,7 +317,7 @@ router.post('/seed-opportunities', async (req, res) => {
     const upsert = req.db.prepare(`
       INSERT INTO funding_opportunities (
         id, source, source_id, title, sponsor, description,
-        application_url, url, deadline, award_floor, award_ceiling,
+        application_url, source_url, deadline, amount_min, amount_max,
         categories, keywords, eligibility_bullets, match_reasons,
         state, requires_match, requires_501c3, is_active, is_national,
         opportunity_type, created_at, updated_at
@@ -333,7 +333,7 @@ router.post('/seed-opportunities', async (req, res) => {
         sponsor = excluded.sponsor,
         description = excluded.description,
         application_url = excluded.application_url,
-        url = excluded.url,
+        source_url = excluded.source_url,
         categories = excluded.categories,
         keywords = excluded.keywords,
         eligibility_bullets = excluded.eligibility_bullets,
@@ -355,10 +355,10 @@ router.post('/seed-opportunities', async (req, res) => {
             opp.sponsor || opp.funder,
             opp.description || opp.summary,
             opp.application_url || opp.url,
-            opp.url || opp.application_url,
+            opp.url || opp.source_url || opp.application_url, // source_url fallback
             opp.deadline,
-            opp.award_floor || opp.amount_min,
-            opp.award_ceiling || opp.amount_max,
+            opp.amount_min || opp.award_floor,
+            opp.amount_max || opp.award_ceiling,
             JSON.stringify(opp.categories || []),
             JSON.stringify(opp.keywords || []),
             JSON.stringify(opp.eligibility_bullets || []),
