@@ -1313,6 +1313,41 @@ router.post('/bulk-populate', async (req, res) => {
   }
 })
 
+// Crawl Grants.gov for REAL federal funding opportunities
+router.post('/crawl-grants-gov', async (req, res) => {
+  const auth = req.user ?? { role: 'guest' }
+  const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
+  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  
+  if (auth.role !== 'admin' && bulkKey !== expectedKey) {
+    return res.status(403).json({ error: 'Admin access or valid bulk key required' })
+  }
+  
+  try {
+    console.log('[crawl-grants-gov] Starting Grants.gov crawl...')
+    
+    const { crawlGrantsGov } = await import('../services/grantsDotGovCrawler.js')
+    
+    const maxPages = req.body?.max_pages || 5
+    const result = await crawlGrantsGov(req.db, { maxPages, rowsPerPage: 100 })
+    
+    const totalCount = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get().count
+    
+    res.json({
+      success: true,
+      message: `Crawled Grants.gov: ${result.inserted} new, ${result.updated} updated`,
+      inserted: result.inserted,
+      updated: result.updated,
+      errors: result.errors,
+      total_opportunities: totalCount,
+      note: 'All opportunities are REAL federal grants from Grants.gov'
+    })
+  } catch (error) {
+    console.error('[crawl-grants-gov] Error:', error)
+    res.status(500).json(formatError(error))
+  }
+})
+
 // Remove all loans and matching-fund opportunities from the database
 router.post('/remove-loans', async (req, res) => {
   const auth = req.user ?? { role: 'guest' }
