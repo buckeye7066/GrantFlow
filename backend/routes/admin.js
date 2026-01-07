@@ -521,7 +521,7 @@ router.post('/seed-profile-grants', async (req, res) => {
         try { sections[row.section_key] = JSON.parse(row.data || '{}'); } catch (e) { sections[row.section_key] = {}; }
       });
       
-      // Build profile signals (simplified)
+      // Build profile signals (comprehensive)
       const signals = {
         keywords: new Set(),
         demographics: new Set(),
@@ -536,6 +536,17 @@ router.post('/seed-profile-grants', async (req, res) => {
         tags.forEach(t => signals.keywords.add(t.toLowerCase()));
       } catch (e) { /* ignore */ }
       
+      // Add general keywords based on profile type
+      if (profile.primary_type === 'individual') {
+        signals.keywords.add('individual');
+        signals.keywords.add('personal');
+      }
+      if (profile.primary_type === 'organization' || profile.primary_type === 'nonprofit') {
+        signals.keywords.add('nonprofit');
+        signals.keywords.add('organization');
+        signals.keywords.add('community');
+      }
+      
       // Military
       if (sections.military_service) {
         if (sections.military_service.veteran) { signals.military.add('veteran'); signals.keywords.add('veteran'); }
@@ -544,15 +555,47 @@ router.post('/seed-profile-grants', async (req, res) => {
       
       // Health
       if (sections.health_medical) {
-        if (sections.health_medical.chronic_illness) { signals.health.add('chronic illness'); signals.keywords.add('chronic'); }
+        if (sections.health_medical.chronic_illness) { signals.health.add('chronic illness'); signals.keywords.add('chronic'); signals.keywords.add('health'); }
         if (sections.health_medical.disability_type) {
           const types = Array.isArray(sections.health_medical.disability_type) ? sections.health_medical.disability_type : [];
           types.forEach(t => { signals.health.add(t.toLowerCase()); signals.keywords.add(t.toLowerCase()); });
+          if (types.length > 0) { signals.keywords.add('disability'); }
         }
       }
       
       // Family
-      if (sections.family_life?.single_parent) { signals.family.add('single parent'); signals.keywords.add('single parent'); }
+      if (sections.family_life?.single_parent) { signals.family.add('single parent'); signals.keywords.add('single parent'); signals.keywords.add('family'); }
+      if (sections.family_life?.caregiver) { signals.keywords.add('caregiver'); signals.keywords.add('family'); }
+      
+      // Financial need
+      if (sections.financial_information) {
+        const fin = sections.financial_information;
+        if (fin.financial_need_level) { signals.keywords.add('financial'); signals.keywords.add('assistance'); }
+        if (fin.household_income && fin.household_income < 75000) { signals.keywords.add('low income'); }
+      }
+      
+      // Narrative/mission keywords
+      if (sections.narrative?.mission) {
+        const missionTerms = ['wellness', 'health', 'education', 'community', 'youth', 'senior', 
+          'disability', 'veteran', 'faith', 'ministry', 'food', 'housing', 'employment'];
+        missionTerms.forEach(term => {
+          if (sections.narrative.mission.toLowerCase().includes(term)) {
+            signals.keywords.add(term);
+          }
+        });
+      }
+      
+      // Organization details
+      if (sections.organization_details?.organization_type) {
+        signals.keywords.add(sections.organization_details.organization_type.toLowerCase());
+      }
+      
+      // Demographics
+      if (sections.demographics) {
+        if (sections.demographics.us_citizen) { signals.keywords.add('citizen'); }
+        if (sections.demographics.first_generation) { signals.keywords.add('first generation'); }
+        if (sections.demographics.religious_affiliation) { signals.keywords.add('faith'); signals.keywords.add('religious'); }
+      }
       
       // Get opportunities
       const opportunities = req.db.prepare(`
@@ -603,9 +646,9 @@ router.post('/seed-profile-grants', async (req, res) => {
         return { opp, score: Math.min(100, score), matchedFields };
       });
       
-      // Filter and sort
+      // Filter and sort - lower threshold to 45% for better coverage
       const topMatches = scored
-        .filter(s => s.score >= 50)
+        .filter(s => s.score >= 45)
         .sort((a, b) => b.score - a.score)
         .slice(0, 50);
       

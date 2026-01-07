@@ -577,11 +577,20 @@ export default function DiscoverGrants() {
             </CardDescription>
           </CardHeader>
           <CardContent className="p-6">
-            <div className="space-y-4">
-              {/* Profile Selector */}
-              <div>
-                <Label className="text-base font-semibold mb-3 block">Select Profile</Label>
-                <Select value={selectedProfileId} onValueChange={setSelectedProfileId}>
+            <Tabs defaultValue="template" className="w-full">
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="template">Template Search</TabsTrigger>
+                <TabsTrigger value="crawlers">
+                  <Globe className="w-4 h-4 mr-2" />
+                  Real Web Crawlers
+                </TabsTrigger>
+              </TabsList>
+              
+              <TabsContent value="template" className="space-y-4 mt-6">
+                {/* Profile Selector */}
+                <div>
+                  <Label className="text-base font-semibold mb-3 block">Select Profile</Label>
+                  <Select value={selectedProfileId} onValueChange={setSelectedProfileId}>
                   <SelectTrigger className="h-12">
                     <SelectValue placeholder="Choose a profile..." />
                   </SelectTrigger>
@@ -711,7 +720,16 @@ export default function DiscoverGrants() {
                   )}
                 </Button>
               </div>
-            </div>
+              </TabsContent>
+              
+              <TabsContent value="crawlers" className="mt-6">
+                <CrawlerSelection
+                  profileId={selectedProfileId}
+                  profileData={profileForSearch}
+                  onCrawlComplete={handleCrawlerResults}
+                />
+              </TabsContent>
+            </Tabs>
           </CardContent>
         </Card>
 
