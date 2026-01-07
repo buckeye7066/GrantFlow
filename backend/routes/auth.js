@@ -1755,24 +1755,52 @@ router.get('/:provider/callback', async (req, res) => {
 })
 
 router.get('/me', (req, res) => {
-  // Return current user information based on the JWT token
-  // The server middleware populates req.user from the Authorization header
-  if (!req.user || !req.user.userId) {
-    return res.status(401).json({ error: 'Not authenticated' })
+  try {
+    // Return current user information based on the JWT token
+    // The server middleware populates req.user from the Authorization header
+    if (!req.user || !req.user.userId) {
+      return res.status(401).json({ error: 'Not authenticated' })
+    }
+
+    let user, profiles
+    
+    try {
+      user = getUserById(req.db, req.user.userId)
+    } catch (dbError) {
+      console.error('[auth/me] Database error fetching user:', dbError)
+      return res.status(500).json({ 
+        error: 'Database error occurred',
+        error_type: 'database_error',
+        details: process.env.NODE_ENV !== 'production' ? dbError.message : undefined
+      })
+    }
+    
+    if (!user) {
+      // User was authenticated but no longer exists in the database
+      return res.status(404).json({ error: 'User not found' })
+    }
+
+    try {
+      profiles = getUserProfiles(req.db, user.id)
+    } catch (dbError) {
+      console.error('[auth/me] Database error fetching profiles:', dbError)
+      // Return user data without profiles if profiles query fails
+      profiles = []
+    }
+    
+    const activeProfileId = req.user.profileId || null
+
+    return res.json({
+      user: buildUserPayload(user, profiles, activeProfileId),
+    })
+  } catch (error) {
+    console.error('[auth/me] Unexpected error:', error)
+    return res.status(500).json({ 
+      error: 'An unexpected error occurred',
+      error_type: 'internal_error',
+      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
+    })
   }
-
-  const user = getUserById(req.db, req.user.userId)
-  if (!user) {
-    // User was authenticated but no longer exists in the database
-    return res.status(404).json({ error: 'User not found' })
-  }
-
-  const profiles = getUserProfiles(req.db, user.id)
-  const activeProfileId = req.user.profileId || null
-
-  return res.json({
-    user: buildUserPayload(user, profiles, activeProfileId),
-  })
 })
 
 router.post('/refresh', (req, res) => {

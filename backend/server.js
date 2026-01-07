@@ -83,6 +83,36 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
+// Request timeout middleware - prevent hanging requests from causing 502 errors
+const REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT_MS || '30000', 10); // Default 30 seconds
+app.use((req, res, next) => {
+  // Set a timeout for the request
+  req.setTimeout(REQUEST_TIMEOUT, () => {
+    console.error('[timeout] Request timeout:', req.method, req.url);
+    if (!res.headersSent) {
+      res.status(504).json({ 
+        error: 'Request timeout',
+        error_type: 'timeout',
+        message: 'The request took too long to process'
+      });
+    }
+  });
+  
+  // Set a timeout for the response
+  res.setTimeout(REQUEST_TIMEOUT, () => {
+    console.error('[timeout] Response timeout:', req.method, req.url);
+    if (!res.headersSent) {
+      res.status(504).json({ 
+        error: 'Response timeout',
+        error_type: 'timeout',
+        message: 'The server took too long to respond'
+      });
+    }
+  });
+  
+  next();
+});
+
 app.use(express.json({ limit: MAX_JSON_BODY_SIZE }));
 try {
   if (!fs.existsSync(uploadsDir)) {
@@ -103,14 +133,56 @@ if (!fs.existsSync(dataDir)) {
 }
 
 const dbPath = process.env.DATABASE_URL || join(dataDir, 'grantflow.db');
-export const db = new Database(dbPath);
-db.pragma('journal_mode = WAL');
+
+// Validate database initialization with proper error handling
+let db;
+try {
+  db = new Database(dbPath);
+  db.pragma('journal_mode = WAL');
+  
+  // Validate database connection on startup
+  console.info('[database] Validating database connection...');
+  const testResult = db.prepare('SELECT 1 as test').get();
+  if (testResult && testResult.test === 1) {
+    console.info('[database] Database connection validated successfully');
+    console.info('[database] Database path:', dbPath);
+  } else {
+    throw new Error('Database connection test failed');
+  }
+} catch (dbError) {
+  console.error('[database] CRITICAL: Failed to initialize database:', dbError);
+  console.error('[database] Database path:', dbPath);
+  
+  if (process.env.NODE_ENV === 'production') {
+    console.error('[database] Cannot start server without database connection');
+    process.exit(1);
+  } else {
+    console.warn('[database] WARNING: Running in development mode with database errors');
+    // Create a minimal mock db for development
+    db = {
+      prepare: () => ({ get: () => null, all: () => [], run: () => ({ changes: 0 }) }),
+      pragma: () => {},
+      exec: () => {},
+      transaction: (fn) => fn
+    };
+  }
+}
+
+export { db };
 
 // Run schema migration
 const schemaPath = join(__dirname, 'db', 'schema.sql');
 if (fs.existsSync(schemaPath)) {
-  const schema = fs.readFileSync(schemaPath, 'utf8');
-  db.exec(schema);
+  try {
+    const schema = fs.readFileSync(schemaPath, 'utf8');
+    db.exec(schema);
+    console.info('[database] Schema migrations completed');
+  } catch (schemaError) {
+    console.error('[database] Error running schema migrations:', schemaError);
+    if (process.env.NODE_ENV === 'production') {
+      process.exit(1);
+    }
+  }
 }
 
 // Schema migrations - Add columns if they don't exist
@@ -409,64 +481,90 @@ app.get('/api/auth/diagnostics', (req, res) => {
 });
 
 app.get('/api/auth/me', (req, res) => {
-  const user = req.user ?? { role: 'guest' };
-  if (user.role === 'guest') {
-    return res.status(401).json({ error: 'Not authenticated' });
-  }
-
-  if (user.userId) {
-    const dbUser = db
-      .prepare(
-        `
-          SELECT *
-          FROM users
-          WHERE id = ?
-        `,
-      )
-      .get(user.userId);
-
-    if (!dbUser) {
-      return res.status(401).json({ error: 'User record not found' });
+  try {
+    const user = req.user ?? { role: 'guest' };
+    if (user.role === 'guest') {
+      return res.status(401).json({ error: 'Not authenticated' });
     }
 
-    const profiles = db
-      .prepare(
-        `
-          SELECT id, display_name, organization_id, status
-          FROM profiles
-          WHERE user_id = ?
-          ORDER BY created_at ASC
-        `,
-      )
-      .all(dbUser.id);
+    if (user.userId) {
+      let dbUser, profiles;
+      
+      try {
+        dbUser = db
+          .prepare(
+            `
+              SELECT *
+              FROM users
+              WHERE id = ?
+            `,
+          )
+          .get(user.userId);
+      } catch (dbError) {
+        console.error('[/api/auth/me] Database error fetching user:', dbError);
+        return res.status(500).json({ 
+          error: 'Database error occurred',
+          error_type: 'database_error',
+          details: process.env.NODE_ENV !== 'production' ? dbError.message : undefined
+        });
+      }
+
+      if (!dbUser) {
+        return res.status(401).json({ error: 'User record not found' });
+      }
+
+      try {
+        profiles = db
+          .prepare(
+            `
+              SELECT id, display_name, organization_id, status
+              FROM profiles
+              WHERE user_id = ?
+              ORDER BY created_at ASC
+            `,
+          )
+          .all(dbUser.id);
+      } catch (dbError) {
+        console.error('[/api/auth/me] Database error fetching profiles:', dbError);
+        // Return user data without profiles if profiles query fails
+        profiles = [];
+      }
+
+      return res.json({
+        user: {
+          id: dbUser.id,
+          display_name: dbUser.display_name,
+          primary_email: dbUser.primary_email,
+          primary_phone: dbUser.primary_phone,
+          avatar_url: dbUser.avatar_url,
+          is_admin: Boolean(dbUser.is_admin),
+        },
+        profiles,
+        active_profile_id: user.profileId ?? profiles[0]?.id ?? null,
+      });
+    }
+
+    if (user.role === 'admin') {
+      return res.json({
+        role: 'admin',
+        full_name: user.full_name ?? ADMIN_NAME,
+        email: user.email ?? ADMIN_EMAIL,
+      });
+    }
 
     return res.json({
-      user: {
-        id: dbUser.id,
-        display_name: dbUser.display_name,
-        primary_email: dbUser.primary_email,
-        primary_phone: dbUser.primary_phone,
-        avatar_url: dbUser.avatar_url,
-        is_admin: Boolean(dbUser.is_admin),
-      },
-      profiles,
-      active_profile_id: user.profileId ?? profiles[0]?.id ?? null,
+      role: 'user',
+      profile_id: user.profileId,
+      full_name: user.profileName ?? 'Profile User',
+    });
+  } catch (error) {
+    console.error('[/api/auth/me] Unexpected error:', error);
+    return res.status(500).json({ 
+      error: 'An unexpected error occurred',
+      error_type: 'internal_error',
+      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
     });
   }
-
-  if (user.role === 'admin') {
-    return res.json({
-      role: 'admin',
-      full_name: user.full_name ?? ADMIN_NAME,
-      email: user.email ?? ADMIN_EMAIL,
-    });
-  }
-
-  return res.json({
-    role: 'user',
-    profile_id: user.profileId,
-    full_name: user.profileName ?? 'Profile User',
-  });
 });
 
 // API routes
