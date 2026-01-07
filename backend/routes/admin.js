@@ -273,526 +273,106 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
   }
 });
 
-/**
- * Admin endpoint to seed funding opportunities
- * Loads real opportunities from JSON files and inserts them into the database
- */
-router.post('/seed-opportunities', async (req, res) => {
+// Reattach users to profiles
+router.post('/reattach-users', (req, res) => {
   try {
-    const dataDir = join(__dirname, '..', 'data', 'crawlers');
+    const db = req.db;
     
-    // Load all opportunity files
-    const files = [
-      { path: join(dataDir, 'real_funding_opportunities.json'), type: 'structured' },
-      { path: join(dataDir, 'scholarship_opportunities.json'), type: 'array' },
-      { path: join(dataDir, 'local_opportunities.json'), type: 'array' },
-      { path: join(dataDir, 'item_funding_sources.json'), type: 'array' },
+    // Get admin user
+    const adminUser = db.prepare(`
+      SELECT id, display_name, primary_email
+      FROM users
+      WHERE is_admin = 1 OR LOWER(primary_email) LIKE '%buckeye7066%'
+      LIMIT 1
+    `).get();
+    
+    if (!adminUser) {
+      return res.status(404).json({ error: 'Admin user not found' });
+    }
+    
+    const results = {
+      admin: adminUser,
+      linked: [],
+      errors: []
+    };
+    
+    // User mappings
+    const userMappings = [
+      { name: 'Rachel', emailPattern: 'rachel' },
+      { name: 'Josh', emailPattern: 'josh' },
+      { name: 'Olivia', emailPattern: 'olivia' },
+      { name: 'Avanell', emailPattern: 'avanell' },
+      { name: 'Hollie', emailPattern: 'hollie' },
+      { name: 'Brian', emailPattern: 'brian' },
     ];
     
-    const allOpportunities = [];
-    
-    for (const file of files) {
-      try {
-        const content = await fsp.readFile(file.path, 'utf8');
-        const data = JSON.parse(content);
-        
-        if (file.type === 'structured') {
-          // Handle the structured file with multiple categories
-          Object.values(data).forEach(category => {
-            if (Array.isArray(category)) {
-              allOpportunities.push(...category);
-            }
-          });
-        } else if (Array.isArray(data)) {
-          allOpportunities.push(...data);
-        }
-      } catch (e) {
-        console.warn(`Failed to load ${file.path}:`, e.message);
-      }
-    }
-    
-    console.log(`[admin/seed-opportunities] Loaded ${allOpportunities.length} opportunities`);
-    
-    // Prepare the upsert statement
-    const upsert = req.db.prepare(`
-      INSERT INTO funding_opportunities (
-        id, source, source_id, title, sponsor, description,
-        application_url, source_url, deadline, amount_min, amount_max,
-        categories, keywords, eligibility_bullets, match_reasons,
-        state, requires_match, requires_501c3, is_active, is_national,
-        opportunity_type, created_at, updated_at
-      ) VALUES (
-        ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?,
-        ?, ?, ?, ?,
-        ?, ?, ?, 1, ?,
-        ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-      )
-      ON CONFLICT(id) DO UPDATE SET
-        title = excluded.title,
-        sponsor = excluded.sponsor,
-        description = excluded.description,
-        application_url = excluded.application_url,
-        source_url = excluded.source_url,
-        categories = excluded.categories,
-        keywords = excluded.keywords,
-        eligibility_bullets = excluded.eligibility_bullets,
-        updated_at = CURRENT_TIMESTAMP
-    `);
-    
-    let inserted = 0;
-    let updated = 0;
-    
-    const transaction = req.db.transaction(() => {
-      for (const opp of allOpportunities) {
-        try {
-          const id = opp.id || crypto.randomUUID();
-          const result = upsert.run(
-            id,
-            opp.source || 'seeded_real',
-            opp.source_id || id,
-            opp.title || opp.program_name,
-            opp.sponsor || opp.funder,
-            opp.description || opp.summary,
-            opp.application_url || opp.url,
-            opp.url || opp.source_url || opp.application_url, // source_url fallback
-            opp.deadline,
-            opp.amount_min || opp.award_floor,
-            opp.amount_max || opp.award_ceiling,
-            JSON.stringify(opp.categories || []),
-            JSON.stringify(opp.keywords || []),
-            JSON.stringify(opp.eligibility_bullets || []),
-            JSON.stringify(opp.match_reasons || []),
-            opp.state || (opp.is_national ? 'nationwide' : null),
-            opp.requires_match ? 1 : 0,
-            opp.requires_501c3 ? 1 : 0,
-            opp.is_national ? 1 : 0,
-            opp.opportunity_type || 'grant'
-          );
-          
-          if (result.changes > 0) {
-            inserted++;
-          }
-        } catch (e) {
-          console.warn(`Failed to insert opportunity ${opp.title}:`, e.message);
-        }
-      }
-    });
-    
-    transaction();
-    
-    // Count total opportunities in database
-    const total = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get();
-    
-    res.json({
-      success: true,
-      message: `Seeded ${inserted} opportunities`,
-      total_in_database: total.count,
-      loaded_from_files: allOpportunities.length
-    });
-    
-  } catch (error) {
-    console.error('[admin/seed-opportunities] Error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-/**
- * Admin endpoint to sync designated profiles
- * Ensures all designated profiles are in the database with their sections
- */
-router.post('/sync-profiles', async (req, res) => {
-  try {
-    const { ensureDesignatedProfiles } = await import('../utils/ensureDesignatedProfiles.js');
-    ensureDesignatedProfiles(req.db);
-    
-    const profiles = req.db.prepare('SELECT id, display_name FROM profiles').all();
-    const sections = req.db.prepare('SELECT COUNT(*) as count FROM profile_sections').get();
-    
-    res.json({
-      success: true,
-      message: 'Profiles synchronized',
-      profiles: profiles.length,
-      total_sections: sections.count
-    });
-  } catch (error) {
-    console.error('[admin/sync-profiles] Error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-/**
- * Admin endpoint to check profile sections for a specific profile
- */
-router.get('/profile-sections/:profileId', (req, res) => {
-  try {
-    const { profileId } = req.params;
-    
-    const profile = req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId);
-    if (!profile) {
-      return res.status(404).json({ success: false, error: 'Profile not found' });
-    }
-    
-    const sections = req.db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId);
-    
-    res.json({
-      success: true,
-      profile: {
-        id: profile.id,
-        display_name: profile.display_name,
-        tags: profile.tags,
-        primary_type: profile.primary_type,
-      },
-      sections: sections.map(s => ({
-        key: s.section_key,
-        data: JSON.parse(s.data || '{}')
-      }))
-    });
-  } catch (error) {
-    console.error('[admin/profile-sections] Error:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-/**
- * Admin endpoint to search opportunities by keyword
- */
-router.get('/opportunities-search', (req, res) => {
-  try {
-    const { keyword } = req.query;
-    
-    const opportunities = req.db.prepare(`
-      SELECT id, title, keywords, categories 
-      FROM funding_opportunities 
-      WHERE is_active = 1 
-        AND (
-          LOWER(title) LIKE ? 
-          OR LOWER(keywords) LIKE ?
-          OR LOWER(categories) LIKE ?
-        )
-      LIMIT 20
-    `).all(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`);
-    
-    res.json({
-      success: true,
-      keyword,
-      count: opportunities.length,
-      opportunities
-    });
-  } catch (error) {
-    console.error('[admin/opportunities-search] Error:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-/**
- * Admin endpoint to link admin user to all organizations
- */
-router.post('/link-admin-to-orgs', async (req, res) => {
-  try {
-    // Get the admin user
-    const adminUser = req.db.prepare('SELECT id FROM users WHERE role = ? OR email LIKE ?').get('admin', '%admin%');
-    if (!adminUser) {
-      // Use the first user or create admin relationship via user_id from token
-      const userId = req.user?.id;
-      if (!userId) {
-        return res.status(400).json({ success: false, error: 'No admin user found' });
-      }
-    }
-    
-    // Get all organizations
-    const orgs = req.db.prepare('SELECT id, name FROM organizations').all();
-    
-    // Link admin to all organizations via organization_members
-    let linked = 0;
-    const userId = adminUser?.id || req.user?.id;
-    
-    for (const org of orgs) {
-      const existing = req.db.prepare(
-        'SELECT 1 FROM organization_members WHERE organization_id = ? AND user_id = ?'
-      ).get(org.id, userId);
+    // Process each user
+    for (const mapping of userMappings) {
+      const user = db.prepare(`
+        SELECT id, display_name, primary_email
+        FROM users
+        WHERE LOWER(display_name) LIKE LOWER(?) OR LOWER(primary_email) LIKE LOWER(?)
+        LIMIT 1
+      `).get(`%${mapping.name}%`, `%${mapping.emailPattern}%`);
       
-      if (!existing) {
-        try {
-          req.db.prepare(`
-            INSERT INTO organization_members (organization_id, user_id, role, created_at)
-            VALUES (?, ?, 'admin', CURRENT_TIMESTAMP)
-          `).run(org.id, userId);
-          linked++;
-        } catch (e) {
-          console.warn(`Could not link org ${org.name}:`, e.message);
-        }
-      }
-    }
-    
-    res.json({
-      success: true,
-      message: `Linked admin to ${linked} organizations`,
-      total_organizations: orgs.length,
-      newly_linked: linked
-    });
-  } catch (error) {
-    console.error('[link-admin-to-orgs] Error:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-/**
- * Admin endpoint to seed all profiles with matching grants
- * Runs comprehensive match for each profile and adds top matches to their pipeline
- */
-router.post('/seed-profile-grants', async (req, res) => {
-  try {
-    const { excludeProfiles = [] } = req.body;
-    const excludeNames = excludeProfiles.map(n => n.toLowerCase());
-    
-    // Get all profiles
-    const profiles = req.db.prepare('SELECT * FROM profiles WHERE status = ?').all('active');
-    console.log(`[seed-profile-grants] Found ${profiles.length} profiles`);
-    
-    const results = [];
-    
-    for (const profile of profiles) {
-      // Skip excluded profiles
-      const displayName = (profile.display_name || '').toLowerCase();
-      if (excludeNames.some(ex => displayName.includes(ex))) {
-        results.push({ profile: profile.display_name, status: 'skipped', reason: 'excluded' });
+      if (!user) {
+        results.errors.push(`User not found: ${mapping.name}`);
         continue;
       }
       
-      // Get profile sections
-      const sections = {};
-      const sectionRows = req.db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profile.id);
-      sectionRows.forEach(row => {
-        try { sections[row.section_key] = JSON.parse(row.data || '{}'); } catch (e) { sections[row.section_key] = {}; }
-      });
+      const profiles = db.prepare(`
+        SELECT id, display_name
+        FROM profiles
+        WHERE LOWER(display_name) LIKE LOWER(?)
+      `).all(`%${mapping.name}%`);
       
-      // Build profile signals (comprehensive)
-      const signals = {
-        keywords: new Set(),
-        demographics: new Set(),
-        military: new Set(),
-        health: new Set(),
-        family: new Set(),
-      };
-      
-      // Add tags as keywords
-      try {
-        const tags = JSON.parse(profile.tags || '[]');
-        tags.forEach(t => signals.keywords.add(t.toLowerCase()));
-      } catch (e) { /* ignore */ }
-      
-      // Add general keywords based on profile type
-      if (profile.primary_type === 'individual') {
-        signals.keywords.add('individual');
-        signals.keywords.add('personal');
-      }
-      if (profile.primary_type === 'organization' || profile.primary_type === 'nonprofit') {
-        signals.keywords.add('nonprofit');
-        signals.keywords.add('organization');
-        signals.keywords.add('community');
+      if (profiles.length === 0) {
+        results.errors.push(`No profiles found for: ${mapping.name}`);
+        continue;
       }
       
-      // Military
-      if (sections.military_service) {
-        if (sections.military_service.veteran) { signals.military.add('veteran'); signals.keywords.add('veteran'); }
-        if (sections.military_service.disabled_veteran) { signals.military.add('disabled veteran'); signals.keywords.add('disabled veteran'); }
-      }
+      const updateStmt = db.prepare(`
+        UPDATE profiles
+        SET user_id = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `);
       
-      // Health
-      if (sections.health_medical) {
-        if (sections.health_medical.chronic_illness) { signals.health.add('chronic illness'); signals.keywords.add('chronic'); signals.keywords.add('health'); }
-        if (sections.health_medical.disability_type) {
-          const types = Array.isArray(sections.health_medical.disability_type) ? sections.health_medical.disability_type : [];
-          types.forEach(t => { signals.health.add(t.toLowerCase()); signals.keywords.add(t.toLowerCase()); });
-          if (types.length > 0) { signals.keywords.add('disability'); }
-        }
-      }
-      
-      // Family
-      if (sections.family_life?.single_parent) { signals.family.add('single parent'); signals.keywords.add('single parent'); signals.keywords.add('family'); }
-      if (sections.family_life?.caregiver) { signals.keywords.add('caregiver'); signals.keywords.add('family'); }
-      
-      // Financial need
-      if (sections.financial_information) {
-        const fin = sections.financial_information;
-        if (fin.financial_need_level) { signals.keywords.add('financial'); signals.keywords.add('assistance'); }
-        if (fin.household_income && fin.household_income < 75000) { signals.keywords.add('low income'); }
-      }
-      
-      // Narrative/mission keywords
-      if (sections.narrative?.mission) {
-        const missionTerms = ['wellness', 'health', 'education', 'community', 'youth', 'senior', 
-          'disability', 'veteran', 'faith', 'ministry', 'food', 'housing', 'employment'];
-        missionTerms.forEach(term => {
-          if (sections.narrative.mission.toLowerCase().includes(term)) {
-            signals.keywords.add(term);
-          }
+      for (const profile of profiles) {
+        updateStmt.run(user.id, profile.id);
+        results.linked.push({
+          user: user.display_name,
+          profile: profile.display_name,
+          profileId: profile.id
         });
       }
-      
-      // Organization details
-      if (sections.organization_details?.organization_type) {
-        signals.keywords.add(sections.organization_details.organization_type.toLowerCase());
-      }
-      
-      // Demographics
-      if (sections.demographics) {
-        if (sections.demographics.us_citizen) { signals.keywords.add('citizen'); }
-        if (sections.demographics.first_generation) { signals.keywords.add('first generation'); }
-        if (sections.demographics.religious_affiliation) { signals.keywords.add('faith'); signals.keywords.add('religious'); }
-      }
-      
-      // Get opportunities
-      const opportunities = req.db.prepare(`
-        SELECT * FROM funding_opportunities 
-        WHERE is_active = 1 
-        AND (requires_match = 0 OR requires_match IS NULL)
-        LIMIT 100
-      `).all();
-      
-      // Score opportunities
-      const scored = opportunities.map(opp => {
-        let score = 40;
-        const matchedFields = [];
-        
-        let oppKeywords = [], oppCategories = [];
-        try { oppKeywords = JSON.parse(opp.keywords || '[]'); } catch (e) {}
-        try { oppCategories = JSON.parse(opp.categories || '[]'); } catch (e) {}
-        
-        const oppTerms = new Set([
-          ...oppKeywords.map(k => k.toLowerCase()),
-          ...oppCategories.map(c => c.toLowerCase())
-        ]);
-        
-        // Keyword matching
-        let keywordMatches = 0;
-        signals.keywords.forEach(kw => {
-          for (const term of oppTerms) {
-            if (term.includes(kw) || kw.includes(term)) {
-              keywordMatches++;
-              matchedFields.push(kw);
-              break;
-            }
-          }
-        });
-        score += Math.min(30, keywordMatches * 5);
-        
-        // Military matching
-        signals.military.forEach(mil => {
-          for (const term of oppTerms) {
-            if (term.includes(mil) || mil.includes(term)) {
-              score += 7;
-              matchedFields.push('military: ' + mil);
-              break;
-            }
-          }
-        });
-        
-        return { opp, score: Math.min(100, score), matchedFields };
-      });
-      
-      // Filter and sort - lower threshold to 45% for better coverage
-      const topMatches = scored
-        .filter(s => s.score >= 45)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 50);
-      
-      // Ensure organization exists
-      let orgId = profile.organization_id;
-      if (!orgId) {
-        orgId = crypto.randomUUID();
-        req.db.prepare(`
-          INSERT INTO organizations (id, name, applicant_type, created_at, updated_at)
-          VALUES (?, ?, 'individual_need', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        `).run(orgId, profile.display_name || 'My Organization');
-        req.db.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile.id);
-      }
-      
-      // Add grants to pipeline
-      let added = 0;
-      for (const { opp, score, matchedFields } of topMatches) {
-        // Check for duplicates
-        const existing = req.db.prepare(`
-          SELECT id FROM grants 
-          WHERE organization_id = ? AND (funding_opportunity_id = ? OR title = ?)
-        `).get(orgId, opp.id, opp.title);
-        
-        if (!existing) {
-          const grantId = crypto.randomUUID();
-          req.db.prepare(`
-            INSERT INTO grants (
-              id, organization_id, funding_opportunity_id, title, funder,
-              deadline, status, match_score, match_reasons, application_url,
-              created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-          `).run(
-            grantId, orgId, opp.id, opp.title, opp.sponsor,
-            opp.deadline, score, JSON.stringify(matchedFields.slice(0, 10)),
-            opp.application_url
-          );
-          added++;
-        }
-      }
-      
-      results.push({
-        profile: profile.display_name,
-        status: 'seeded',
-        opportunities_found: topMatches.length,
-        grants_added: added
-      });
     }
     
+    // Link admin to all unlinked profiles
+    const linkAdminStmt = db.prepare(`
+      UPDATE profiles
+      SET user_id = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE user_id IS NULL
+    `);
+    const adminResult = linkAdminStmt.run(adminUser.id);
+    results.adminLinked = adminResult.changes;
+    
+    // Get final stats
+    const stats = db.prepare(`
+      SELECT 
+        COUNT(*) as total,
+        COUNT(user_id) as linked
+      FROM profiles
+    `).get();
+    results.stats = stats;
+    
     res.json({
       success: true,
-      message: 'Profile seeding complete',
+      message: `Reattached ${results.linked.length} profiles to users, ${results.adminLinked} to admin`,
       results
     });
-    
   } catch (error) {
-    console.error('[seed-profile-grants] Error:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-/**
- * Admin endpoint to get database stats
- */
-router.get('/db-stats', (req, res) => {
-  try {
-    const stats = {
-      profiles: req.db.prepare('SELECT COUNT(*) as c FROM profiles').get().c,
-      profile_sections: req.db.prepare('SELECT COUNT(*) as c FROM profile_sections').get().c,
-      funding_opportunities: req.db.prepare('SELECT COUNT(*) as c FROM funding_opportunities WHERE is_active = 1').get().c,
-      grants: req.db.prepare('SELECT COUNT(*) as c FROM grants').get().c,
-      organizations: req.db.prepare('SELECT COUNT(*) as c FROM organizations').get().c,
-    };
-    
-    // Sample funding opportunities
-    const sampleOpps = req.db.prepare(`
-      SELECT title, keywords, categories 
-      FROM funding_opportunities 
-      WHERE is_active = 1 
-      LIMIT 5
-    `).all();
-    
-    res.json({
-      success: true,
-      stats,
-      sample_opportunities: sampleOpps
-    });
-  } catch (error) {
-    console.error('[admin/db-stats] Error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    console.error('[admin] Reattach users error:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
