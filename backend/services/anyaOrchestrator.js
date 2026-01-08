@@ -1,70 +1,32 @@
 import { randomUUID } from 'crypto'
-import Anthropic from '@anthropic-ai/sdk'
+import OpenAI from 'openai'
 import { listToolMetadata, invokeTool as invokeRegisteredTool } from './anyaToolRegistry.js'
 
 const TASK_STATUSES = new Set(['open', 'in_progress', 'completed', 'cancelled'])
 const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent'])
 
-let cachedClaudeClient = null
+let cachedOpenAI = null
 
-function getClaudeClient() {
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:10',message:'getClaudeClient ENTRY',data:{hasCachedClient:!!cachedClaudeClient,envKeys:Object.keys(process.env).filter(k=>k.includes('ANTHROPIC')||k.includes('OPENAI')||k.includes('API'))},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,B,E'})}).catch(()=>{});
-  // #endregion
+function getOpenAIClient() {
+  if (cachedOpenAI) return cachedOpenAI
   
-  if (cachedClaudeClient) return cachedClaudeClient
-  
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  console.log('[Anya] Checking Anthropic API key:', apiKey ? `Found (${apiKey.substring(0, 10)}...)` : 'Missing')
-  
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:13',message:'API key check',data:{hasKey:!!apiKey,keyPrefix:apiKey?apiKey.substring(0,10):'N/A',keyStartsWith:apiKey?apiKey.startsWith('sk-ant-'):false},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,E'})}).catch(()=>{});
-  // #endregion
-  
+  const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:16',message:'API key MISSING - throwing error',data:{code:'MISSING_API_KEY'},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,E'})}).catch(()=>{});
-    // #endregion
-    const error = new Error(
-      'Anthropic API key is not configured. Please set ANTHROPIC_API_KEY environment variable. ' +
-      'Get your API key from https://console.anthropic.com/'
-    )
+    const error = new Error('OPENAI_API_KEY environment variable is not set')
     error.code = 'MISSING_API_KEY'
     throw error
   }
   
-  if (!apiKey.startsWith('sk-ant-')) {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:25',message:'API key format WARNING',data:{keyPrefix:apiKey.substring(0,10)},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
-    console.warn('[Anya] Warning: API key does not start with "sk-ant-". It may be invalid.')
-  }
-  
   try {
-    cachedClaudeClient = new Anthropic({ apiKey })
-    console.log('[Anya] Anthropic client initialized successfully')
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:30',message:'Anthropic client initialized SUCCESS',data:{clientCreated:!!cachedClaudeClient},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
-    // #endregion
-    return cachedClaudeClient
+    cachedOpenAI = new OpenAI({ apiKey })
+    return cachedOpenAI
   } catch (error) {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:34',message:'Anthropic client init FAILED',data:{errorType:error.constructor.name,errorMsg:error.message},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
-    // #endregion
-    console.error('[Anya] Failed to initialize Anthropic client:', error.message)
+    console.error('[Anya] Failed to initialize OpenAI client:', error.message)
     throw error
   }
 }
 
-const DEFAULT_ASSISTANT_MODEL =
-  process.env.ANYA_CLAUDE_MODEL || process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20240620'
-
-// Fallback models in order of preference
-const FALLBACK_MODELS = [
-  'claude-3-5-sonnet-20240620',
-  'claude-3-sonnet-20240229',
-  'claude-3-haiku-20240307',
-]
+const DEFAULT_ASSISTANT_MODEL = process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini'
 
 function coerceProfileId(requestedProfileId) {
   if (!requestedProfileId) return null
@@ -584,60 +546,35 @@ export function updateTask(
 }
 
 export async function generateAssistantResponse(db, user, sessionId, { content }) {
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:559',message:'generateAssistantResponse ENTRY',data:{hasContent:!!content,contentLength:content?.length||0,sessionId,userId:user?.userId,userRole:user?.role},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'D'})}).catch(()=>{});
-  // #endregion
-  
   const trimmed = (content ?? '').trim()
   if (!trimmed) {
     return "I'm here and ready to help—just let me know what you'd like to work on."
   }
 
-  let claude = null
+  let openai = null
   try {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:565',message:'BEFORE getClaudeClient call',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
-    // #endregion
-    claude = getClaudeClient()
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:567',message:'AFTER getClaudeClient call SUCCESS',data:{hasClient:!!claude},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
-    // #endregion
+    openai = getOpenAIClient()
   } catch (error) {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:568',message:'getClaudeClient FAILED - returning fallback',data:{errorType:error.constructor.name,errorMsg:error.message,errorCode:error.code},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,B,E'})}).catch(()=>{});
-    // #endregion
-    console.warn('[anya] Claude client unavailable; providing guided assistance instead:', error.message)
+    console.warn('[anya] OpenAI client unavailable; providing guided assistance instead:', error.message)
     
     // Provide helpful responses without AI
     const lowerContent = trimmed.toLowerCase()
     
-    // Common queries and helpful responses
     if (lowerContent.includes('grant') || lowerContent.includes('funding')) {
-      return "I can help you discover grants! Try:\n• Click 'Discover Grants' to browse opportunities\n• Use 'Smart Matcher' for AI-powered recommendations\n• Check 'Pipeline' to track your applications\n\nNote: Full AI assistance requires ANTHROPIC_API_KEY configuration."
+      return "I can help you discover grants! Try:\n• Click 'Discover Grants' to browse opportunities\n• Use 'Smart Matcher' for AI-powered recommendations\n• Check 'Pipeline' to track your applications"
     }
     
     if (lowerContent.includes('profile') || lowerContent.includes('organization')) {
-      return "To manage your profile:\n• Go to 'My Profiles' to view and edit profile details\n• Upload documents in the profile section\n• Set your organization type and focus areas\n\nNote: Full AI assistance requires ANTHROPIC_API_KEY configuration."
+      return "To manage your profile:\n• Go to 'My Profiles' to view and edit profile details\n• Upload documents in the profile section\n• Set your organization type and focus areas"
     }
     
-    if (lowerContent.includes('crawler') || lowerContent.includes('search')) {
-      return "For grant discovery:\n• Use 'Discover Grants' to search opportunities\n• Filter by state, amount, or deadline\n• Save promising grants to your pipeline\n\nNote: Full AI assistance requires ANTHROPIC_API_KEY configuration."
-    }
-    
-    if (lowerContent.includes('help') || lowerContent.includes('how')) {
-      return "Here's what you can do in GrantFlow:\n• **Discover Grants** - Browse and search funding opportunities\n• **My Profiles** - Manage organization details\n• **Pipeline** - Track application progress\n• **Smart Matcher** - Get AI-powered recommendations\n• **Documents** - Upload and manage files\n\nNote: Full AI assistance requires ANTHROPIC_API_KEY configuration."
-    }
-    
-    // Default response with helpful navigation
     return [
       "I can help guide you through GrantFlow! Here are key features:",
       "• **Discover Grants** - Find funding opportunities",
       "• **Smart Matcher** - Get personalized recommendations", 
       "• **Pipeline** - Track your applications",
       "",
-      "What would you like to work on?",
-      "",
-      "Note: For full AI assistance, an admin needs to configure ANTHROPIC_API_KEY."
+      "What would you like to work on?"
     ].join('\n')
   }
 
@@ -651,135 +588,49 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     historyMessages = []
   }
 
-  // Build message history for Claude (excluding system message from messages array)
-  let conversationMessages = historyMessages
+  // Build message history for OpenAI
+  const conversationMessages = historyMessages
     .filter((msg) => typeof msg?.content === 'string' && msg.content.trim().length > 0)
     .map((msg) => ({
       role: msg.role === 'assistant' ? 'assistant' : 'user',
       content: msg.content,
     }))
 
-  // CRITICAL: Ensure the current user message is included
-  // This fixes the bug where the message might not be in history yet
-  const hasCurrentMessage = conversationMessages.some(
-    (msg) => msg.role === 'user' && msg.content === trimmed
-  )
-  if (!hasCurrentMessage) {
+  // Ensure current message is included (CRITICAL BUG FIX)
+  if (!conversationMessages.some(msg => msg.role === 'user' && msg.content === trimmed)) {
     conversationMessages.push({ role: 'user', content: trimmed })
   }
 
-  // Claude requires at least one message
-  if (conversationMessages.length === 0) {
-    conversationMessages = [{ role: 'user', content: trimmed }]
-  }
-
-  // Claude system prompt
   const systemPrompt = [
     'You are Anya, the GrantFlow AI assistant. Your role is to help users with grant discovery, application management,',
     'funding opportunity tracking, and document preparation in the GrantFlow platform.',
     '',
-    'Key capabilities you should highlight:',
-    '- Discovering and tracking grant opportunities',
-    '- Managing grant applications and deadlines',
-    '- Organizing documents and requirements',
-    '- Setting up milestones and tracking progress',
-    '- Providing guidance on grant writing and compliance',
-    '',
-    'Always be concise, actionable, and specific. When users ask for help:',
-    '1. Understand their current situation or goal',
-    '2. Provide clear, step-by-step guidance grounded in GrantFlow features',
-    '3. If you need more information, ask specific questions',
-    '4. If something requires human review or admin access, explain what they need to do',
-    '',
-    'Keep responses focused and practical. Avoid generic advice—tie your suggestions to GrantFlow workflows whenever possible.',
+    'Always be concise, actionable, and specific. Ground your guidance in GrantFlow features.',
+    'Keep responses focused and practical. Avoid generic advice.',
   ].join('\n')
 
   try {
-    console.log('[Anya] Calling Claude API with model:', DEFAULT_ASSISTANT_MODEL)
-    console.log('[Anya] Message count:', conversationMessages.length)
-    
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:661',message:'BEFORE Claude API call',data:{model:DEFAULT_ASSISTANT_MODEL,messageCount:conversationMessages.length,hasClaudeClient:!!claude},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
-    // #endregion
-    
-    let lastError = null
-    let modelToTry = DEFAULT_ASSISTANT_MODEL
-    
-    // Try the default model first, then fallbacks
-    const modelsToTry = [DEFAULT_ASSISTANT_MODEL, ...FALLBACK_MODELS.filter(m => m !== DEFAULT_ASSISTANT_MODEL)]
-    
-    for (const model of modelsToTry) {
-      try {
-        console.log(`[Anya] Attempting with model: ${model}`)
-        const response = await claude.messages.create({
-          model: model,
-          max_tokens: 1024,
-          temperature: 0.35,
-          system: systemPrompt,
-          messages: conversationMessages,
-        })
+    console.log('[Anya] Calling OpenAI API with model:', DEFAULT_ASSISTANT_MODEL)
+    const response = await openai.chat.completions.create({
+      model: DEFAULT_ASSISTANT_MODEL,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...conversationMessages
+      ],
+      temperature: 0.3,
+      max_tokens: 1000,
+    })
 
-        // #region agent log
-        fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:669',message:'AFTER Claude API call',data:{hasResponse:!!response,hasContent:!!response?.content,contentLength:response?.content?.length||0,firstTextExists:!!response?.content?.[0]?.text,model},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
-        // #endregion
-
-        const reply = response?.content?.[0]?.text?.trim()
-        if (reply) {
-          console.log(`[Anya] Claude API response received successfully with model: ${model}`)
-          // #region agent log
-          fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:671',message:'Claude API SUCCESS - returning reply',data:{replyLength:reply.length,model},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
-          // #endregion
-          return reply
-        }
-        console.warn(`[Anya] Claude API returned empty response with model: ${model}`)
-        lastError = new Error('Empty response from Claude API')
-        break // Don't try other models if we got a response but it was empty
-      } catch (modelError) {
-        console.warn(`[Anya] Model ${model} failed:`, modelError.message)
-        lastError = modelError
-        
-        // If it's not a model availability error, don't try other models
-        if (modelError.status !== 404 && !modelError.message?.toLowerCase().includes('model')) {
-          break
-        }
-        // Continue to next model
-      }
+    const reply = response.choices[0]?.message?.content?.trim()
+    if (reply) {
+      console.log('[Anya] OpenAI API response received successfully')
+      return reply
     }
-    
-    // If we get here, all models failed
-    const error = lastError || new Error('All models failed')
-    
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:674',message:'Claude API returned EMPTY response',data:{response},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
-    // #endregion
-    
-    throw error
   } catch (error) {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:675',message:'Claude API call FAILED',data:{errorType:error.constructor.name,errorMsg:error.message,errorStatus:error.status,model:DEFAULT_ASSISTANT_MODEL},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
-    // #endregion
-    console.error('[Anya] Claude API Error Details:')
-    console.error('  Error Type:', error.constructor.name)
-    console.error('  Error Message:', error.message)
-    console.error('  Error Status:', error.status)
-    console.error('  Model Used:', DEFAULT_ASSISTANT_MODEL)
-    
-    // Provide more specific error messages based on the error type
-    if (error.status === 401) {
-      return 'Authentication failed. The Anthropic API key may be invalid. Please check ANTHROPIC_API_KEY in Railway.'
-    } else if (error.status === 429) {
-      return 'Rate limit exceeded. Please wait a moment and try again.'
-    } else if (error.message?.toLowerCase().includes('model')) {
-      return `Model error: Unable to access Claude models. This may be a temporary issue. Please try again in a moment.`
-    } else if (error.message?.toLowerCase().includes('credit') || error.message?.toLowerCase().includes('balance')) {
-      return 'Your Anthropic account needs more credits. Please add credits at https://console.anthropic.com/settings/billing'
-    }
+    console.error('[Anya] OpenAI API Error:', error.message)
   }
 
-  return [
-    "I'm having trouble reaching the AI service right now.",
-    'We can still move forward manually—let me know the specific action you need help with (for example: find grants, track applications, organize documents), and I\'ll walk through the recommended steps.',
-  ].join(' ')
+  return "I'm having trouble reaching the AI service right now. Please try again in a moment."
 }
 
 export function listTools(user) {

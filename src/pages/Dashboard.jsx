@@ -212,13 +212,24 @@ export default function Dashboard() {
     [relevantExpenses],
   )
 
+  const { data: dashboardStats } = useQuery({
+    queryKey: ["dashboard-stats"],
+    queryFn: () => apiFetch('/api/stats/dashboard'),
+    enabled: Boolean(currentUser),
+    staleTime: 60_000,
+  })
+
   const totalFundsSecured = useMemo(
     () => {
+      // Use marketing stats for non-admin, real stats for admin
+      if (dashboardStats && !dashboardStats.isRealData) {
+        return dashboardStats.fundsSecured
+      }
       return relevantGrants
         .filter((g) => g.status === 'awarded' && g.amount)
         .reduce((sum, g) => sum + (Number(g.amount) || 0), 0)
     },
-    [relevantGrants],
+    [relevantGrants, dashboardStats],
   )
 
   const urgentDeadlines = useMemo(
@@ -242,12 +253,16 @@ export default function Dashboard() {
   )
 
   const displayOrganizationsCount = useMemo(() => {
+    // Use marketing stats for non-admin users
+    if (currentUser?.role !== "admin" && dashboardStats && !dashboardStats.isRealData) {
+      return dashboardStats.organizations
+    }
     if (currentUser?.role === "admin") {
       return profiles.length || organizations.length
     }
     // For non-admin users, show their organization count (1 if they belong to one)
     return profileOrganizationId ? 1 : 0
-  }, [currentUser?.role, profiles.length, organizations.length, profileOrganizationId])
+  }, [currentUser?.role, profiles.length, organizations.length, profileOrganizationId, dashboardStats])
 
   const stats = useMemo(
     () => [

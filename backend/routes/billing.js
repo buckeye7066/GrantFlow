@@ -265,7 +265,7 @@ router.put('/accounts/:profileId', requireAdmin, (req, res) => {
       metadata = accountRow.metadata ? JSON.parse(accountRow.metadata) : null,
     } = req.body ?? {}
 
-    const allowedDiscounts = new Set(['none', 'student', 'minister'])
+    const allowedDiscounts = new Set(['none', 'student', 'minister', 'hardship', 'custom'])
     if (!allowedDiscounts.has(discount_type ?? 'none')) {
       return res.status(400).json({ error: 'Invalid discount_type' })
     }

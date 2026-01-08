@@ -1313,6 +1313,271 @@ router.post('/bulk-populate', async (req, res) => {
   }
 })
 
+// Crawl all counties for local funding sources (background job)
+router.post('/crawl-all-counties', async (req, res) => {
+  const auth = req.user ?? { role: 'guest' }
+  const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
+  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  
+  if (auth.role !== 'admin' && bulkKey !== expectedKey) {
+    return res.status(403).json({ error: 'Admin access or valid bulk key required' })
+  }
+  
+  try {
+    console.log('[crawl-all-counties] Starting county-level funding crawl...')
+    
+    const { crawlAllCounties } = await import('../services/countyFundingCrawler.js')
+    const result = await crawlAllCounties(req.db)
+    
+    const totalCount = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get().count
+    
+    res.json({
+      success: true,
+      message: `Crawled ${result.counties} counties across ${result.states} states`,
+      states_processed: result.states,
+      counties_processed: result.counties,
+      opportunities_per_county: 5,
+      inserted: result.inserted,
+      updated: result.updated,
+      errors: result.errors,
+      total_opportunities: totalCount,
+      note: 'Each county now has United Way, Food Bank, Housing Authority, Community Action, and Salvation Army entries'
+    })
+  } catch (error) {
+    console.error('[crawl-all-counties] Error:', error)
+    res.status(500).json(formatError(error))
+  }
+})
+
+// Crawl counties for a specific state
+router.post('/crawl-state-counties/:state', async (req, res) => {
+  const auth = req.user ?? { role: 'guest' }
+  const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
+  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  
+  if (auth.role !== 'admin' && bulkKey !== expectedKey) {
+    return res.status(403).json({ error: 'Admin access or valid bulk key required' })
+  }
+  
+  const state = req.params.state?.toUpperCase()
+  if (!state || state.length !== 2) {
+    return res.status(400).json({ error: 'Valid 2-letter state code required' })
+  }
+  
+  try {
+    const { crawlStateCounties } = await import('../services/countyFundingCrawler.js')
+    const result = await crawlStateCounties(req.db, state)
+    
+    res.json({
+      success: true,
+      state,
+      counties_processed: result.counties,
+      inserted: result.inserted,
+      updated: result.updated,
+      errors: result.errors
+    })
+  } catch (error) {
+    console.error(`[crawl-state-counties] Error for ${state}:`, error)
+    res.status(500).json(formatError(error))
+  }
+})
+
+// Get county crawler status
+router.get('/county-status', async (req, res) => {
+  try {
+    const { getCrawlerStatus } = await import('../services/countyFundingCrawler.js')
+    const status = getCrawlerStatus(req.db)
+    
+    const totalOpps = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get().count
+    
+    res.json({
+      ...status,
+      total_all_opportunities: totalOpps
+    })
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+// Seed local assistance networks (food banks, community agencies, etc.)
+router.post('/seed-local-networks', async (req, res) => {
+  const auth = req.user ?? { role: 'guest' }
+  const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
+  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  
+  if (auth.role !== 'admin' && bulkKey !== expectedKey) {
+    return res.status(403).json({ error: 'Admin access or valid bulk key required' })
+  }
+  
+  try {
+    const fs = await import('fs')
+    const path = await import('path')
+    const { fileURLToPath } = await import('url')
+    
+    const __filename = fileURLToPath(import.meta.url)
+    const __dirname = path.dirname(__filename)
+    const dataPath = path.join(__dirname, '..', 'data', 'local_assistance_networks.json')
+    
+    const data = JSON.parse(fs.readFileSync(dataPath, 'utf-8'))
+    
+    let inserted = 0, updated = 0, errors = 0
+    
+    for (const net of data.networks) {
+      try {
+        const existing = req.db.prepare('SELECT id FROM funding_opportunities WHERE id = ?').get(net.id)
+        const categoriesJson = JSON.stringify(net.categories || [])
+        const keywordsJson = JSON.stringify([...net.categories, 'local', 'assistance', 'community'].filter(Boolean))
+        
+        if (existing) {
+          req.db.prepare(`
+            UPDATE funding_opportunities SET
+              title = ?, sponsor = ?, description = ?, application_url = ?, source_url = ?,
+              is_national = ?, state = ?, categories = ?, keywords = ?,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).run(net.title, net.sponsor, net.description, net.url, net.url, net.is_national ? 1 : 0, net.state || 'nationwide', categoriesJson, keywordsJson, net.id)
+          updated++
+        } else {
+          req.db.prepare(`
+            INSERT INTO funding_opportunities (
+              id, title, sponsor, source, source_id, source_url, description,
+              application_url, is_national, state, categories, keywords,
+              opportunity_type, is_active, created_at, updated_at
+            ) VALUES (?, ?, ?, 'verified_real', ?, ?, ?, ?, ?, ?, ?, ?, 'program', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          `).run(net.id, net.title, net.sponsor, net.id, net.url, net.description, net.url, net.is_national ? 1 : 0, net.state || 'nationwide', categoriesJson, keywordsJson)
+          inserted++
+        }
+      } catch (e) {
+        console.error(`[seed-local-networks] Error for ${net.id}:`, e.message)
+        errors++
+      }
+    }
+    
+    const totalCount = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get().count
+    
+    res.json({
+      success: true,
+      message: `Seeded local networks: ${inserted} new, ${updated} updated`,
+      inserted,
+      updated,
+      errors,
+      total_opportunities: totalCount
+    })
+  } catch (error) {
+    console.error('[seed-local-networks] Error:', error)
+    res.status(500).json(formatError(error))
+  }
+})
+
+// Seed state assistance programs (211, SNAP, etc.)
+router.post('/seed-state-assistance', async (req, res) => {
+  const auth = req.user ?? { role: 'guest' }
+  const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
+  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  
+  if (auth.role !== 'admin' && bulkKey !== expectedKey) {
+    return res.status(403).json({ error: 'Admin access or valid bulk key required' })
+  }
+  
+  try {
+    console.log('[seed-state-assistance] Loading state assistance programs...')
+    
+    const fs = await import('fs')
+    const path = await import('path')
+    const { fileURLToPath } = await import('url')
+    
+    const __filename = fileURLToPath(import.meta.url)
+    const __dirname = path.dirname(__filename)
+    const dataPath = path.join(__dirname, '..', 'data', 'state_assistance_programs.json')
+    
+    const data = JSON.parse(fs.readFileSync(dataPath, 'utf-8'))
+    
+    let inserted = 0, updated = 0, errors = 0
+    
+    for (const prog of data.programs) {
+      try {
+        const existing = req.db.prepare('SELECT id FROM funding_opportunities WHERE id = ?').get(prog.id)
+        
+        const isNational = prog.state === 'nationwide' ? 1 : 0
+        const categoriesJson = JSON.stringify(prog.categories || [])
+        const keywordsJson = JSON.stringify([prog.state?.toLowerCase(), '211', 'local', 'assistance'].filter(Boolean))
+        
+        if (existing) {
+          req.db.prepare(`
+            UPDATE funding_opportunities SET
+              title = ?, sponsor = ?, description = ?, application_url = ?, source_url = ?,
+              is_national = ?, state = ?, categories = ?, keywords = ?,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).run(prog.title, prog.sponsor, prog.description, prog.url, prog.url, isNational, prog.state, categoriesJson, keywordsJson, prog.id)
+          updated++
+        } else {
+          req.db.prepare(`
+            INSERT INTO funding_opportunities (
+              id, title, sponsor, source, source_id, source_url, description,
+              application_url, is_national, state, categories, keywords,
+              opportunity_type, is_active, created_at, updated_at
+            ) VALUES (?, ?, ?, 'verified_real', ?, ?, ?, ?, ?, ?, ?, ?, 'program', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          `).run(prog.id, prog.title, prog.sponsor, prog.id, prog.url, prog.description, prog.url, isNational, prog.state, categoriesJson, keywordsJson)
+          inserted++
+        }
+      } catch (e) {
+        console.error(`[seed-state-assistance] Error for ${prog.id}:`, e.message)
+        errors++
+      }
+    }
+    
+    const totalCount = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get().count
+    
+    res.json({
+      success: true,
+      message: `Seeded state assistance programs: ${inserted} new, ${updated} updated`,
+      inserted,
+      updated,
+      errors,
+      total_opportunities: totalCount
+    })
+  } catch (error) {
+    console.error('[seed-state-assistance] Error:', error)
+    res.status(500).json(formatError(error))
+  }
+})
+
+// Crawl Grants.gov for REAL federal funding opportunities
+router.post('/crawl-grants-gov', async (req, res) => {
+  const auth = req.user ?? { role: 'guest' }
+  const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
+  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  
+  if (auth.role !== 'admin' && bulkKey !== expectedKey) {
+    return res.status(403).json({ error: 'Admin access or valid bulk key required' })
+  }
+  
+  try {
+    console.log('[crawl-grants-gov] Starting Grants.gov crawl...')
+    
+    const { crawlGrantsGov } = await import('../services/grantsDotGovCrawler.js')
+    
+    const maxPages = req.body?.max_pages || 5
+    const result = await crawlGrantsGov(req.db, { maxPages, rowsPerPage: 100 })
+    
+    const totalCount = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get().count
+    
+    res.json({
+      success: true,
+      message: `Crawled Grants.gov: ${result.inserted} new, ${result.updated} updated`,
+      inserted: result.inserted,
+      updated: result.updated,
+      errors: result.errors,
+      total_opportunities: totalCount,
+      note: 'All opportunities are REAL federal grants from Grants.gov'
+    })
+  } catch (error) {
+    console.error('[crawl-grants-gov] Error:', error)
+    res.status(500).json(formatError(error))
+  }
+})
+
 // Remove all loans and matching-fund opportunities from the database
 router.post('/remove-loans', async (req, res) => {
   const auth = req.user ?? { role: 'guest' }

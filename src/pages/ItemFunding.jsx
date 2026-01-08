@@ -28,6 +28,7 @@ import { Progress } from "@/components/ui/progress"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useToast } from "@/components/ui/use-toast"
 import { listOpportunities, listOpportunityStates } from "@/api/opportunities"
+import ProfileSelect from "@/components/shared/ProfileSelect"
 
 const NOT_AVAILABLE = 'N/A'
 import { listProfiles, getProfile } from "@/api/profiles"
@@ -504,22 +505,12 @@ export default function ItemFunding() {
 
               <div className="space-y-2">
                 <Label className="text-xs uppercase tracking-wide text-slate-500">Profile</Label>
-                <Select
+                <ProfileSelect
                   value={filters.profileId}
                   onValueChange={(value) => setFilters((prev) => ({ ...prev, profileId: value }))}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select profile" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All profiles</SelectItem>
-                    {profilesQuery.data?.map((profile) => (
-                      <SelectItem key={profile.id} value={profile.id}>
-                        {profile.display_name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  showAllOption={true}
+                  placeholder="Select profile"
+                />
                 {filters.profileId && filters.profileId !== "all" && selectedProfileQuery.isLoading ? (
                   <p className="text-[11px] text-slate-400">Loading profile signals…</p>
                 ) : null}

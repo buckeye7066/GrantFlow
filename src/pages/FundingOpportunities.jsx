@@ -204,8 +204,15 @@ function scoreOpportunity(opportunity, profileDetail) {
     score += 5
     reasons.push("Rolling deadline – flexible submission window")
   } else if (opportunity.deadline) {
-    const timeToDeadline = formatDistanceToNowStrict(new Date(opportunity.deadline), { addSuffix: true })
-    reasons.push(`Deadline ${timeToDeadline}`)
+    try {
+      const deadlineDate = new Date(opportunity.deadline)
+      if (!isNaN(deadlineDate.getTime())) {
+        const timeToDeadline = formatDistanceToNowStrict(deadlineDate, { addSuffix: true })
+        reasons.push(`Deadline ${timeToDeadline}`)
+      }
+    } catch {
+      // Invalid date, skip deadline display
+    }
   }
 
   return {
@@ -628,7 +635,7 @@ export default function FundingOpportunities() {
   const ITEMS_PER_PAGE = 50
 
   const opportunitiesQuery = useQuery({
-    queryKey: ["opportunities", filters],
+    queryKey: ["opportunities", filters, currentPage],
     queryFn: () =>
       listOpportunities({
         search: filters.search || undefined,
@@ -636,7 +643,8 @@ export default function FundingOpportunities() {
         source: filters.source !== "all" ? filters.source : undefined,
         is_national: filters.nationalOnly ? "true" : undefined,
         compliance: filters.compliance,
-        limit: 100000, // Fetch ALL opportunities - no artificial limit
+        limit: ITEMS_PER_PAGE,
+        offset: (currentPage - 1) * ITEMS_PER_PAGE,
       }),
   })
   
@@ -767,13 +775,9 @@ export default function FundingOpportunities() {
     })
   }, [organizedOpportunities, filters.profileId, selectedProfile])
 
-  // Pagination calculations
-  const totalPages = Math.ceil(opportunitiesWithMatch.length / ITEMS_PER_PAGE)
-  const paginatedOpportunities = useMemo(() => {
-    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE
-    const endIndex = startIndex + ITEMS_PER_PAGE
-    return opportunitiesWithMatch.slice(startIndex, endIndex)
-  }, [opportunitiesWithMatch, currentPage])
+  // Pagination calculations (Server-side)
+  const totalPages = Math.ceil(totalResults / ITEMS_PER_PAGE)
+  const paginatedOpportunities = opportunitiesWithMatch // Already limited by server query
 
   const handleAddToPipeline = async (opportunity) => {
     if (!selectedProfile || !filters.profileId || filters.profileId === "all") {
@@ -1242,7 +1246,7 @@ export default function FundingOpportunities() {
               </Button>
               
               <span className="text-sm text-slate-500 ml-4">
-                Page {currentPage} of {totalPages} ({opportunitiesWithMatch.length.toLocaleString()} total)
+                Page {currentPage} of {totalPages} ({totalResults.toLocaleString()} total)
               </span>
             </div>
           )}

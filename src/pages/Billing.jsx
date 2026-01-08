@@ -31,6 +31,197 @@ function formatCurrencyFromCents(cents) {
   }).format(cents / 100)
 }
 
+function generateInvoiceHTML(invoiceData) {
+  const {
+    invoiceNumber,
+    invoiceDate,
+    profileName,
+    profileType,
+    tierName,
+    monthly,
+    hourly,
+    discountType,
+    discountPercent,
+    discountAmount,
+    isProBono,
+    proBonoReason,
+    totalDue,
+  } = invoiceData
+
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>Invoice ${invoiceNumber}</title>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            color: #333;
+          }
+          .header {
+            text-align: center;
+            margin-bottom: 40px;
+            border-bottom: 3px solid #2563eb;
+            padding-bottom: 20px;
+          }
+          .header h1 {
+            color: #2563eb;
+            margin: 0;
+            font-size: 32px;
+          }
+          .invoice-info {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 30px;
+          }
+          .invoice-info div {
+            flex: 1;
+          }
+          .section {
+            margin-bottom: 20px;
+          }
+          .section-title {
+            font-weight: bold;
+            color: #2563eb;
+            margin-bottom: 5px;
+            font-size: 14px;
+            text-transform: uppercase;
+          }
+          .section-value {
+            font-size: 16px;
+            margin-bottom: 10px;
+          }
+          .details-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 30px;
+          }
+          .details-table th,
+          .details-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e5e7eb;
+          }
+          .details-table th {
+            background-color: #f3f4f6;
+            font-weight: bold;
+            color: #1f2937;
+          }
+          .total-row {
+            font-weight: bold;
+            font-size: 18px;
+            background-color: #f9fafb;
+          }
+          .pro-bono-badge {
+            display: inline-block;
+            background-color: #7c3aed;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+          }
+          .footer {
+            margin-top: 50px;
+            padding-top: 20px;
+            border-top: 1px solid #e5e7eb;
+            text-align: center;
+            color: #6b7280;
+            font-size: 14px;
+          }
+          @media print {
+            body {
+              margin: 0;
+            }
+            .no-print {
+              display: none;
+            }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h1>GrantFlow Invoice</h1>
+        </div>
+        
+        <div class="invoice-info">
+          <div>
+            <div class="section-title">Invoice Number</div>
+            <div class="section-value">${invoiceNumber}</div>
+            <div class="section-title">Invoice Date</div>
+            <div class="section-value">${invoiceDate}</div>
+          </div>
+          <div>
+            <div class="section-title">Client</div>
+            <div class="section-value">${profileName}</div>
+            <div class="section-title">Profile Type</div>
+            <div class="section-value">${profileType}</div>
+          </div>
+        </div>
+
+        <table class="details-table">
+          <thead>
+            <tr>
+              <th>Description</th>
+              <th>Details</th>
+              <th style="text-align: right;">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Billing Tier</strong></td>
+              <td>${tierName}</td>
+              <td style="text-align: right;">${formatCurrencyFromCents(monthly)}</td>
+            </tr>
+            <tr>
+              <td><strong>Hourly Rate</strong></td>
+              <td>Standard hourly rate for services</td>
+              <td style="text-align: right;">${formatCurrencyFromCents(hourly)}</td>
+            </tr>
+            ${discountType !== 'none' ? `
+            <tr>
+              <td><strong>Discount Applied</strong></td>
+              <td>${discountType.charAt(0).toUpperCase() + discountType.slice(1)} (${discountPercent}%)</td>
+              <td style="text-align: right;">-${formatCurrencyFromCents(discountAmount)}</td>
+            </tr>
+            ` : ''}
+            ${isProBono ? `
+            <tr>
+              <td colspan="3">
+                <span class="pro-bono-badge">PRO BONO SERVICE</span>
+                ${proBonoReason ? `<div style="margin-top: 8px; color: #6b7280;">${proBonoReason}</div>` : ''}
+              </td>
+            </tr>
+            ` : ''}
+            <tr class="total-row">
+              <td colspan="2"><strong>Total Amount Due</strong></td>
+              <td style="text-align: right;"><strong>${formatCurrencyFromCents(totalDue)}</strong></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="footer">
+          <p><strong>GrantFlow</strong> - Professional Grant Writing Services</p>
+          <p>Ethical billing practices - No percentage-of-award fees</p>
+          <button class="no-print" onclick="window.print()" style="
+            margin-top: 20px;
+            padding: 10px 20px;
+            background-color: #2563eb;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+          ">Print Invoice</button>
+        </div>
+      </body>
+    </html>
+  `
+}
+
 function BillingAccountCard({ account, tiers, onSave, saving }) {
   const [form, setForm] = useState({
     tier_id: account.tier_id,
@@ -39,6 +230,53 @@ function BillingAccountCard({ account, tiers, onSave, saving }) {
     is_pro_bono: account.is_pro_bono ?? false,
     pro_bono_reason: account.pro_bono_reason ?? "",
   })
+
+  const handleGenerateInvoice = () => {
+    const tier = tiers.find((t) => t.id === form.tier_id)
+    const monthly = account.custom_monthly_cents ?? tier?.base_monthly_cents ?? 0
+    const hourly = account.custom_hourly_cents ?? tier?.hourly_rate_cents ?? 0
+    
+    // Generate a more robust invoice number with timestamp and cryptographically secure random component
+    const timestamp = Date.now()
+    const randomBytes = new Uint8Array(4)
+    crypto.getRandomValues(randomBytes)
+    const randomPart = Array.from(randomBytes, byte => byte.toString(16).padStart(2, '0')).join('').toUpperCase()
+    const invoiceNumber = `INV-${timestamp}-${randomPart}`
+    
+    const invoiceDate = new Date().toLocaleDateString('en-US', { 
+      year: 'numeric', 
+      month: 'long', 
+      day: 'numeric' 
+    })
+
+    // Calculate discount amount with null-safety for both monthly and discount_percent
+    const discountAmount = (monthly && form.discount_percent) ? (monthly * (form.discount_percent / 100)) : 0
+    const totalDue = form.is_pro_bono ? 0 : (monthly - discountAmount)
+
+    const invoiceHTML = generateInvoiceHTML({
+      invoiceNumber,
+      invoiceDate,
+      profileName: account.profile_name,
+      profileType: account.profile_type?.replace(/_/g, ' ') || 'N/A',
+      tierName: tier?.name ?? 'Not assigned',
+      monthly,
+      hourly,
+      discountType: form.discount_type,
+      discountPercent: form.discount_percent,
+      discountAmount,
+      isProBono: form.is_pro_bono,
+      proBonoReason: form.pro_bono_reason,
+      totalDue,
+    })
+
+    const invoiceWindow = window.open('', '_blank', 'noopener,noreferrer')
+    if (invoiceWindow) {
+      invoiceWindow.document.write(invoiceHTML)
+      invoiceWindow.document.close()
+    } else {
+      alert('Please allow pop-ups to generate the invoice')
+    }
+  }
 
   useEffect(() => {
     setForm({
@@ -170,6 +408,14 @@ function BillingAccountCard({ account, tiers, onSave, saving }) {
         </div>
 
         <div className="flex justify-end gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            onClick={handleGenerateInvoice}
+          >
+            Generate Invoice
+          </Button>
           <Button
             variant="outline"
             size="sm"

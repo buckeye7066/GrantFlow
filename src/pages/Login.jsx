@@ -1,9 +1,10 @@
 import { useEffect, useMemo } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate, Link } from 'react-router-dom'
 import AuthShell from '@/components/auth/AuthShell'
 import AuthMethodTabs from '@/components/auth/AuthMethodTabs'
 import AuthErrorBoundary from '@/components/auth/AuthErrorBoundary'
 import { useAuthStore } from '@/stores/authStore'
+import { ArrowRight } from 'lucide-react'
 
 const AUTH_TABS = new Set(['email'])
 
@@ -59,6 +60,15 @@ export default function Login() {
       >
         <AuthMethodExpiryNotice />
         <AuthMethodTabs onComplete={handleComplete} />
+        <div className="mt-6 pt-6 border-t border-slate-200 text-center">
+          <Link
+            to="/ServiceApplication"
+            className="inline-flex items-center gap-2 text-sm font-medium text-blue-600 hover:text-blue-700 hover:underline"
+          >
+            New user? Apply for grant writing services
+            <ArrowRight className="h-4 w-4" />
+          </Link>
+        </div>
       </AuthShell>
     </AuthErrorBoundary>
   )

@@ -39,10 +39,25 @@ export async function runStartupOperations(db) {
     console.log('[Anya Startup] Phase 2: Skipping crawler job queuing (triggered on-demand instead)')
     report.crawler_jobs_queued = 0
 
-    // Phase 3: Skip nationwide crawler on startup (too resource intensive)
-    // The nationwide crawler can be triggered manually via API when needed
-    // Individual profile crawlers are queued above and will run in background
-    console.log('[Anya Startup] Phase 3: Skipping nationwide crawler (run manually via /api/crawlers if needed)')
+    // Phase 3: Queue county-level funding crawler to run in background
+    // This populates local funding sources for each county
+    console.log('[Anya Startup] Phase 3: Scheduling county funding crawler (background)...')
+    try {
+      // Run county crawler after a 30 second delay to not block startup
+      setTimeout(async () => {
+        try {
+          console.log('[Anya Background] Starting county funding crawler...')
+          const { crawlAllCounties } = await import('./countyFundingCrawler.js')
+          const result = await crawlAllCounties(db)
+          console.log(`[Anya Background] County crawler complete: ${result.inserted} new opportunities across ${result.counties} counties`)
+        } catch (crawlErr) {
+          console.error('[Anya Background] County crawler error:', crawlErr.message)
+        }
+      }, 30000) // 30 second delay
+      report.county_crawler_scheduled = true
+    } catch (scheduleErr) {
+      report.errors.push({ phase: 'county_scheduler', error: scheduleErr.message })
+    }
     report.nationwide_opportunities = 0
 
     // Phase 4: Sync profile opportunities to global
