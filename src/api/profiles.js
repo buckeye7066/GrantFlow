@@ -55,3 +55,11 @@ export async function requestProfileSectionAI(profileId, sectionKey) {
     method: 'POST',
   })
 }
+
+export async function requestProfileFieldAI(context) {
+  const { profileId, sectionKey, fieldName } = context
+  return apiFetch(`/api/profiles/${profileId}/fields/ai`, {
+    method: 'POST',
+    body: JSON.stringify(context),
+  })
+}

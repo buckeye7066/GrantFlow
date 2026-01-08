@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Test Reattach API</title>
+  <style>
+    body { font-family: monospace; padding: 20px; }
+    button { padding: 10px 20px; font-size: 16px; margin: 10px 0; }
+    pre { background: #f5f5f5; padding: 10px; border-radius: 5px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Reattach Users API Test</h1>
+  <button onclick="runReattach()">Run Reattach Users</button>
+  <button onclick="verifyResults()">Verify Results</button>
+  <pre id="output">Click a button to start...</pre>
+  
+  <script>
+    async function runReattach() {
+      const output = document.getElementById('output');
+      output.textContent = 'Calling API endpoint...\n\n';
+      
+      try {
+        const response = await fetch('/grantflow/api/admin/reattach-users', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          credentials: 'include'
+        });
+        
+        const data = await response.json();
+        output.textContent = `Status: ${response.status} ${response.statusText}\n\n`;
+        output.textContent += 'Response:\n' + JSON.stringify(data, null, 2);
+      } catch (error) {
+        output.textContent = 'Error: ' + error.message + '\n' + error.stack;
+      }
+    }
+    
+    async function verifyResults() {
+      const output = document.getElementById('output');
+      output.textContent = 'Fetching profiles to verify...\n\n';
+      
+      try {
+        const response = await fetch('/grantflow/api/profiles', {
+          credentials: 'include'
+        });
+        
+        const data = await response.json();
+        output.textContent = `Found ${data.length || 0} profiles:\n\n`;
+        
+        if (data.profiles) {
+          data.profiles.forEach(p => {
+            output.textContent += `${p.display_name}: ${p.user_id ? 'LINKED' : 'NOT LINKED'}\n`;
+          });
+        } else if (Array.isArray(data)) {
+          data.forEach(p => {
+            output.textContent += `${p.display_name}: ${p.user_id ? 'LINKED' : 'NOT LINKED'}\n`;
+          });
+        } else {
+          output.textContent += JSON.stringify(data, null, 2);
+        }
+      } catch (error) {
+        output.textContent = 'Error: ' + error.message;
+      }
+    }
+  </script>
+</body>
+</html>

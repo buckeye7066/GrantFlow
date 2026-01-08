@@ -8,12 +8,23 @@ const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent'])
 let cachedClaudeClient = null
 
 function getClaudeClient() {
+  // #region agent log
+  fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:10',message:'getClaudeClient ENTRY',data:{hasCachedClient:!!cachedClaudeClient,envKeys:Object.keys(process.env).filter(k=>k.includes('ANTHROPIC')||k.includes('OPENAI')||k.includes('API'))},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,B,E'})}).catch(()=>{});
+  // #endregion
+  
   if (cachedClaudeClient) return cachedClaudeClient
   
   const apiKey = process.env.ANTHROPIC_API_KEY
   console.log('[Anya] Checking Anthropic API key:', apiKey ? `Found (${apiKey.substring(0, 10)}...)` : 'Missing')
   
+  // #region agent log
+  fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:13',message:'API key check',data:{hasKey:!!apiKey,keyPrefix:apiKey?apiKey.substring(0,10):'N/A',keyStartsWith:apiKey?apiKey.startsWith('sk-ant-'):false},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,E'})}).catch(()=>{});
+  // #endregion
+  
   if (!apiKey) {
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:16',message:'API key MISSING - throwing error',data:{code:'MISSING_API_KEY'},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,E'})}).catch(()=>{});
+    // #endregion
     const error = new Error(
       'Anthropic API key is not configured. Please set ANTHROPIC_API_KEY environment variable. ' +
       'Get your API key from https://console.anthropic.com/'
@@ -23,14 +34,23 @@ function getClaudeClient() {
   }
   
   if (!apiKey.startsWith('sk-ant-')) {
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:25',message:'API key format WARNING',data:{keyPrefix:apiKey.substring(0,10)},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     console.warn('[Anya] Warning: API key does not start with "sk-ant-". It may be invalid.')
   }
   
   try {
     cachedClaudeClient = new Anthropic({ apiKey })
     console.log('[Anya] Anthropic client initialized successfully')
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:30',message:'Anthropic client initialized SUCCESS',data:{clientCreated:!!cachedClaudeClient},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
     return cachedClaudeClient
   } catch (error) {
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:34',message:'Anthropic client init FAILED',data:{errorType:error.constructor.name,errorMsg:error.message},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
     console.error('[Anya] Failed to initialize Anthropic client:', error.message)
     throw error
   }
@@ -557,6 +577,10 @@ export function updateTask(
 }
 
 export async function generateAssistantResponse(db, user, sessionId, { content }) {
+  // #region agent log
+  fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:559',message:'generateAssistantResponse ENTRY',data:{hasContent:!!content,contentLength:content?.length||0,sessionId,userId:user?.userId,userRole:user?.role},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'D'})}).catch(()=>{});
+  // #endregion
+  
   const trimmed = (content ?? '').trim()
   if (!trimmed) {
     return "I'm here and ready to help—just let me know what you'd like to work on."
@@ -564,8 +588,17 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
 
   let claude = null
   try {
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:565',message:'BEFORE getClaudeClient call',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
     claude = getClaudeClient()
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:567',message:'AFTER getClaudeClient call SUCCESS',data:{hasClient:!!claude},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
   } catch (error) {
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:568',message:'getClaudeClient FAILED - returning fallback',data:{errorType:error.constructor.name,errorMsg:error.message,errorCode:error.code},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,B,E'})}).catch(()=>{});
+    // #endregion
     console.warn('[anya] Claude client unavailable; providing guided assistance instead:', error.message)
     
     // Provide helpful responses without AI
@@ -658,6 +691,10 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     console.log('[Anya] Calling Claude API with model:', DEFAULT_ASSISTANT_MODEL)
     console.log('[Anya] Message count:', conversationMessages.length)
     
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:661',message:'BEFORE Claude API call',data:{model:DEFAULT_ASSISTANT_MODEL,messageCount:conversationMessages.length,hasClaudeClient:!!claude},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
+    
     const response = await claude.messages.create({
       model: DEFAULT_ASSISTANT_MODEL,
       max_tokens: 1024,
@@ -666,13 +703,26 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
       messages: conversationMessages,
     })
 
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:669',message:'AFTER Claude API call',data:{hasResponse:!!response,hasContent:!!response?.content,contentLength:response?.content?.length||0,firstTextExists:!!response?.content?.[0]?.text},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
+
     const reply = response?.content?.[0]?.text?.trim()
     if (reply) {
       console.log('[Anya] Claude API response received successfully')
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:671',message:'Claude API SUCCESS - returning reply',data:{replyLength:reply.length},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
       return reply
     }
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:674',message:'Claude API returned EMPTY response',data:{response},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
     console.warn('[Anya] Claude API returned empty response')
   } catch (error) {
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:675',message:'Claude API call FAILED',data:{errorType:error.constructor.name,errorMsg:error.message,errorStatus:error.status,model:DEFAULT_ASSISTANT_MODEL},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
     console.error('[Anya] Claude API Error Details:')
     console.error('  Error Type:', error.constructor.name)
     console.error('  Error Message:', error.message)

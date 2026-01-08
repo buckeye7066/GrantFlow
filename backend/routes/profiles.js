@@ -653,6 +653,71 @@ router.post('/:id/sections/:sectionKey/ai', async (req, res) => {
   }
 })
 
+// Generate AI suggestion for individual profile field
+router.post('/:id/fields/ai', async (req, res) => {
+  const { id } = req.params
+  const { fieldName, fieldLabel, currentValue, fieldDescription, sectionKey, profileData } = req.body
+  const auth = req.user ?? { role: 'guest' }
+
+  if (auth.role !== 'admin' && auth.profileId !== id) {
+    return res.status(403).json({ error: 'Not authorized to access this profile' })
+  }
+
+  try {
+    // Get profile for context
+    const profile = req.db.prepare(`
+      SELECT display_name, primary_type, organization_id 
+      FROM profiles WHERE id = ?
+    `).get(id)
+    
+    if (!profile) {
+      return res.status(404).json({ error: 'Profile not found' })
+    }
+
+    // Create focused prompt for the specific field
+    const prompt = `You are assisting with filling out a grant application field.
+
+Field Name: ${fieldLabel}
+${fieldDescription ? `Field Description: ${fieldDescription}` : ''}
+Current Value: ${currentValue || '(empty)'}
+Section: ${sectionKey || 'general'}
+
+Profile Information:
+- Name: ${profile.display_name}
+- Type: ${profile.primary_type}
+${profileData ? `- Context: ${JSON.stringify(profileData, null, 2).substring(0, 500)}` : ''}
+
+Please provide appropriate content for the "${fieldLabel}" field.
+Requirements:
+- Be specific and professional
+- Use language suitable for grant applications
+- For text fields: Provide 2-3 clear, concise sentences
+- For numbers: Provide only the numeric value
+- For descriptions: Be detailed but concise
+
+Return ONLY the field value content, no JSON wrapper or explanations.`
+
+    const openai = getOpenAI()
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.3,
+      max_tokens: 400,
+    })
+
+    const suggestion = extractCompletionText(completion).trim()
+    
+    res.json({
+      field: fieldName,
+      suggestion,
+      usage: completion.usage ?? null,
+    })
+  } catch (error) {
+    console.error('Field AI suggestion error:', error)
+    res.status(500).json({ error: error.message || 'Failed to generate AI suggestion for field' })
+  }
+})
+
 // Send application email (for draft applications or completed profiles)
 router.post('/send-application-email', async (req, res) => {
   try {

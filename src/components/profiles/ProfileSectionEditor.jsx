@@ -16,8 +16,10 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Info } from "lucide-react"
+import { Info, Sparkles, Loader2 } from "lucide-react"
 import { Switch } from "@/components/ui/switch"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import ProfileFieldWithAI from "@/components/profiles/ProfileFieldWithAI"
 
 const basicInfoSchema = z.object({
   full_name: z.string().min(1, "Name is required"),
@@ -543,6 +545,7 @@ export default function ProfileSectionEditor({
   open,
   sectionKey,
   initialData,
+  profileId,
   onClose,
   onSave,
   isSaving,
@@ -661,20 +664,21 @@ export default function ProfileSectionEditor({
                 )
               }
 
-              const FieldComponent = field.component ?? Input
+              // Use ProfileFieldWithAI for text fields to provide individual AI assistance
               return (
-                <div className="space-y-2" key={field.name}>
-                  <Label htmlFor={field.name}>{field.label}</Label>
-                  <FieldComponent
-                    id={field.name}
-                    {...field.props}
+                <div key={field.name}>
+                  <ProfileFieldWithAI
+                    field={field}
+                    value={form.watch(field.name)}
+                    onChange={(newValue) => form.setValue(field.name, newValue)}
+                    disabled={isSaving || aiStatus === 'loading'}
+                    profileId={profileId}
+                    sectionKey={sectionKey}
+                    formContext={form.getValues()}
                     {...form.register(field.name)}
                   />
-                  {field.description && (
-                    <p className="text-xs text-slate-500">{field.description}</p>
-                  )}
                   {form.formState.errors?.[field.name] && (
-                    <p className="text-xs text-red-600">
+                    <p className="text-xs text-red-600 mt-1">
                       {form.formState.errors[field.name]?.message}
                     </p>
                   )}

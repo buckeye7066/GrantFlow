@@ -490,6 +490,7 @@ export default function ProfileDetail() {
         open={Boolean(editingSection)}
         sectionKey={editingSection?.key}
         initialData={editingSection?.data ?? {}}
+        profileId={profileId}
         onClose={handleCloseEditor}
         onSave={handleSaveSection}
         isSaving={Boolean(savingSectionKey)}
