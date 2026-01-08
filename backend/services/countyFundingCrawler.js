@@ -82,7 +82,9 @@ const ORG_PATTERNS = {
 /**
  * US Counties with their states - loaded from data file or built dynamically
  */
+// Cache for counties - reset on server restart
 let COUNTIES_BY_STATE = null;
+const CRAWLER_VERSION = '2.0'; // Bump to force reload
 
 async function loadCounties() {
   if (COUNTIES_BY_STATE) return COUNTIES_BY_STATE;
