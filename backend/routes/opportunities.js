@@ -143,8 +143,9 @@ function applyComplianceFilters(compliance, conditions, params) {
   if (normalized === 'grant_only') {
     conditions.push('(opportunity_type IS NULL OR LOWER(opportunity_type) NOT IN (?, ?, ?))');
     params.push(...LOAN_TYPES);
-    conditions.push('COALESCE(requires_match, 0) = 0');
-    conditions.push('COALESCE(match_percentage, 0) = 0');
+    // Be generous: NULL or 0 means it doesn't require a match
+    conditions.push('(requires_match IS NULL OR requires_match = 0)');
+    conditions.push('(match_percentage IS NULL OR match_percentage = 0)');
   }
   return normalized;
 }
