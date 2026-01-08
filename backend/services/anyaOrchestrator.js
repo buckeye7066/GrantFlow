@@ -551,25 +551,31 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     return "I'm here and ready to help—just let me know what you'd like to work on."
   }
 
+  // Extract user context for personalization
+  const userName = user?.display_name || user?.full_name || user?.profileName || 'there'
+  const userEmail = user?.primary_email || user?.email || ''
+  const isAdmin = Boolean(user?.is_admin || user?.role === 'admin')
+  const isJohnWhite = isAdmin && userEmail === 'buckeye7066@gmail.com'
+
   let openai = null
   try {
     openai = getOpenAIClient()
   } catch (error) {
     console.warn('[anya] OpenAI client unavailable; providing guided assistance instead:', error.message)
     
-    // Provide helpful responses without AI
+    // Provide helpful responses without AI with personalization
     const lowerContent = trimmed.toLowerCase()
     
     if (lowerContent.includes('grant') || lowerContent.includes('funding')) {
-      return "I can help you discover grants! Try:\n• Click 'Discover Grants' to browse opportunities\n• Use 'Smart Matcher' for AI-powered recommendations\n• Check 'Pipeline' to track your applications"
+      return `Hi ${userName}! I can help you discover grants! Try:\n• Click 'Discover Grants' to browse opportunities\n• Use 'Smart Matcher' for AI-powered recommendations\n• Check 'Pipeline' to track your applications`
     }
     
     if (lowerContent.includes('profile') || lowerContent.includes('organization')) {
-      return "To manage your profile:\n• Go to 'My Profiles' to view and edit profile details\n• Upload documents in the profile section\n• Set your organization type and focus areas"
+      return `Hi ${userName}! To manage your profile:\n• Go to 'My Profiles' to view and edit profile details\n• Upload documents in the profile section\n• Set your organization type and focus areas`
     }
     
     return [
-      "I can help guide you through GrantFlow! Here are key features:",
+      `Hi ${userName}! I can help guide you through GrantFlow! Here are key features:`,
       "• **Discover Grants** - Find funding opportunities",
       "• **Smart Matcher** - Get personalized recommendations", 
       "• **Pipeline** - Track your applications",
@@ -601,13 +607,57 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     conversationMessages.push({ role: 'user', content: trimmed })
   }
 
-  const systemPrompt = [
-    'You are Anya, the GrantFlow AI assistant. Your role is to help users with grant discovery, application management,',
-    'funding opportunity tracking, and document preparation in the GrantFlow platform.',
+  // Build personalized system prompt
+  const systemPromptParts = [
+    'You are Anya, the GrantFlow AI assistant. You are helpful, warm, and personable.',
     '',
-    'Always be concise, actionable, and specific. Ground your guidance in GrantFlow features.',
-    'Keep responses focused and practical. Avoid generic advice.',
-  ].join('\n')
+    `Current User: ${userName}`,
+    `User Email: ${userEmail}`,
+    `Is Admin: ${isAdmin ? 'Yes' : 'No'}`,
+    '',
+    'Personalization Guidelines:',
+    `- Always address the user by their first name (${userName.split(' ')[0]})`,
+    '- Feel free to ask how their day is going or about their current situation in a natural, friendly way',
+    '- Be conversational and friendly while remaining helpful and professional',
+    `- Remember you're speaking to ${userName}`,
+    '- Use a warm, supportive tone and occasionally use friendly emojis (👋, ✨, 🎯) when appropriate',
+    '',
+    'Your Role:',
+    '- Help users with grant discovery, application management, funding opportunity tracking, and document preparation',
+    '- Always be concise, actionable, and specific',
+    '- Ground your guidance in GrantFlow features',
+    '- Keep responses focused and practical',
+    '',
+  ]
+
+  if (isAdmin) {
+    systemPromptParts.push(
+      'Admin Access:',
+      isJohnWhite 
+        ? '- The current user is John White, the system administrator'
+        : '- The current user is a system administrator',
+      '- You can perform admin actions such as:',
+      '  • Running system crawlers (scholarship, local, comprehensive)',
+      '  • Accessing and modifying system settings',
+      '  • Viewing all user profiles and data',
+      '  • Managing database operations',
+      '  • System diagnostics and health checks',
+      '- Feel free to acknowledge their admin status when greeting them',
+      ''
+    )
+  } else {
+    systemPromptParts.push(
+      'Admin Restrictions:',
+      '- The current user is NOT an administrator',
+      '- Admin-only actions include: running system crawlers, database operations, accessing all profiles, system configuration',
+      '- If the user requests admin actions, politely explain that those features are restricted to administrators',
+      '- Suggest alternative ways they can achieve their goals within their user permissions',
+      '- Be kind and helpful in your explanation',
+      ''
+    )
+  }
+
+  const systemPrompt = systemPromptParts.join('\n')
 
   try {
     console.log('[Anya] Calling OpenAI API with model:', DEFAULT_ASSISTANT_MODEL)
