@@ -721,11 +721,12 @@ router.patch('/:id/link-user', async (req, res) => {
     let userId = null
     
     if (email) {
+      // Normalize email to lowercase for consistent storage
       const normalizedEmail = email.trim().toLowerCase()
       
       // Check if user already exists with this email
       const existingUser = req.db
-        .prepare('SELECT id FROM users WHERE primary_email = ? COLLATE NOCASE')
+        .prepare('SELECT id FROM users WHERE LOWER(primary_email) = LOWER(?)')
         .get(normalizedEmail)
       
       if (existingUser) {
@@ -738,9 +739,14 @@ router.patch('/:id/link-user', async (req, res) => {
           VALUES (?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         `)
         const result = insertUser.run(normalizedEmail)
+        // SQLite's lastInsertRowid gives us the rowid, so we query by rowid to get the actual id
         userId = req.db
           .prepare('SELECT id FROM users WHERE rowid = ?')
           .get(result.lastInsertRowid)?.id
+        
+        if (!userId) {
+          throw new Error('Failed to create user record')
+        }
       }
       
       // Check if this user is already linked to another profile

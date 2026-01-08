@@ -70,13 +70,8 @@ export default function ProfileUserLinker() {
   })
 
   // Get current linked email from user_id
-  const getCurrentLinkedEmail = () => {
-    if (!selectedProfile?.user_id) return null
-    
-    // Try to find the user email from the profile data
-    // The backend should return the user email in the profile response
-    return null // We'll need to enhance the backend to return this
-  }
+  // Note: Backend needs to be enhanced to return user email in profile response
+  // For now, we just check if there's a user_id linked
 
   const handleSubmit = (e) => {
     e.preventDefault()
