@@ -16,11 +16,13 @@ export default function SmartMatcher() {
   const [searchQuery, setSearchQuery] = useState("")
   const [minScore, setMinScore] = useState(50)
 
-  const { data: opportunities = [] } = useQuery({
+  const { data: opportunitiesResponse } = useQuery({
     queryKey: ['opportunities'],
     queryFn: () => apiFetch('/api/opportunities'),
     staleTime: 60_000,
   })
+
+  const opportunities = opportunitiesResponse?.data ?? []
 
   const { data: profile } = useQuery({
     queryKey: ['profile-detail', selectedProfileId],
