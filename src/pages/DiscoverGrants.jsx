@@ -13,6 +13,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import ProfileSelect from '@/components/shared/ProfileSelect';
 import { 
   runComprehensiveMatch, 
   runECFServiceSearch, 
