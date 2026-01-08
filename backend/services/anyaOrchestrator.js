@@ -6,6 +6,8 @@ const TASK_STATUSES = new Set(['open', 'in_progress', 'completed', 'cancelled'])
 const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent'])
 
 // Admin configuration from environment
+// Note: The fallback 'admin@grantflow.app' is a safe default that won't match real users
+// In production, ADMIN_EMAIL should always be explicitly set to the actual admin email
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@grantflow.app'
 
 let cachedOpenAI = null
@@ -613,6 +615,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
   }
 
   // Build personalized system prompt
+  const firstName = userName === 'there' ? 'the user' : userName.split(' ')[0]
   const systemPromptParts = [
     'You are Anya, the GrantFlow AI assistant. You are helpful, warm, and personable.',
     '',
@@ -621,7 +624,9 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     `Is Admin: ${isAdmin ? 'Yes' : 'No'}`,
     '',
     'Personalization Guidelines:',
-    `- Always address the user by their first name (${userName.split(' ')[0]})`,
+    userName === 'there'
+      ? '- Address the user in a friendly, welcoming manner'
+      : `- Always address the user by their first name (${firstName})`,
     '- Feel free to ask how their day is going or about their current situation in a natural, friendly way',
     '- Be conversational and friendly while remaining helpful and professional',
     `- Remember you're speaking to ${userName}`,
