@@ -489,6 +489,7 @@ app.use((req, res, next) => {
 });
 
 // Health check with dependency checks
+// Health check endpoint (v3.0 - complete county data)
 app.get('/health', (req, res) => {
   const health = {
     status: 'healthy',
