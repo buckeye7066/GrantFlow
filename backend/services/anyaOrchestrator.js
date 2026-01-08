@@ -558,7 +558,9 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
   const userName = user?.display_name || user?.full_name || user?.profileName || 'there'
   const userEmail = user?.primary_email || user?.email || ''
   const isAdmin = Boolean(user?.is_admin || user?.role === 'admin')
-  const isJohnWhite = isAdmin && userEmail === ADMIN_EMAIL
+  // Check if this is the primary admin (configured via ADMIN_EMAIL env var)
+  // This provides special recognition for the main system administrator
+  const isPrimaryAdmin = isAdmin && userEmail === ADMIN_EMAIL
 
   let openai = null
   try {
@@ -636,7 +638,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
   if (isAdmin) {
     systemPromptParts.push(
       'Admin Access:',
-      isJohnWhite 
+      isPrimaryAdmin 
         ? `- The current user is ${userName}, the primary system administrator`
         : '- The current user is a system administrator',
       '- You can perform admin actions such as:',
