@@ -139,12 +139,26 @@ function calculateOpportunityMatch(opp, signals, profileState) {
  * Run comprehensive search using real funding opportunities
  * Matches opportunities to profile based on signals
  */
-export async function runComprehensiveCrawler(db, profileContext = {}, options = {}) {
-  const { 
-    matchThreshold = 70,
-    maxResults = 50,
-    saveToDatabase = true 
-  } = options
+export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {}, options = {}) {
+  // Support both dispatcher context object and direct (db, profileContext, options) calls
+  let db, profileContext, matchThreshold, maxResults, saveToDatabase
+  
+  if (contextOrDb && typeof contextOrDb === 'object' && contextOrDb.db) {
+    // Called from dispatcher with context object
+    db = contextOrDb.db
+    profileContext = contextOrDb.profileContext || {}
+    const params = contextOrDb.job?.parameters || {}
+    matchThreshold = params.match_threshold || 70
+    maxResults = params.max_results || 50
+    saveToDatabase = params.save_to_database !== false
+  } else {
+    // Called directly with (db, profileContext, options)
+    db = contextOrDb
+    profileContext = profileContextArg
+    matchThreshold = options.matchThreshold || 70
+    maxResults = options.maxResults || 50
+    saveToDatabase = options.saveToDatabase !== false
+  }
   
   console.log('[comprehensiveCrawler] Starting with real opportunities...')
   
