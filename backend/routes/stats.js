@@ -19,9 +19,23 @@ const MARKETING_STATS = {
 router.get('/dashboard', (req, res) => {
   try {
     const auth = req.user ?? { role: 'guest' }
-    const isAdmin = auth.role === 'admin' || auth.is_admin === true
+    const isAdmin =
+      auth.role === 'admin' ||
+      auth.is_admin === true ||
+      (Array.isArray(auth.roles) && auth.roles.includes('admin'))
 
     if (isAdmin) {
+      if (!req.db) {
+        return res.status(500).json({
+          error: 'Database not available',
+          organizations: 0,
+          fundsSecured: 0,
+          activeProfiles: 0,
+          opportunitiesFound: 0,
+          isRealData: true,
+        })
+      }
+
       // Return real database stats for admin
       const profilesCount = req.db
         .prepare('SELECT COUNT(*) as count FROM profiles')
@@ -36,7 +50,7 @@ router.get('/dashboard', (req, res) => {
         .get()
       
       const opportunitiesCount = req.db
-        .prepare('SELECT COUNT(*) as count FROM opportunities')
+        .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1")
         .get()
       
       const awardedGrants = req.db

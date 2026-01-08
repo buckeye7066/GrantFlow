@@ -318,6 +318,23 @@ export const useAuthStore = create((set, get) => ({
   },
 
   startEmailSignIn: async (email) => {
+    // If a previous session exists (often stale after deploy), clear it before starting a new login
+    try {
+      base44.clearToken()
+      clearRefreshTimer()
+      clearAccessExpiry()
+      set({
+        accessToken: null,
+        refreshToken: null,
+        isAuthenticated: false,
+        sessionExpired: false,
+        sessionMessage: null,
+        error: null,
+      })
+    } catch {
+      // ignore
+    }
+
     return startEmailSignIn(email)
   },
 
@@ -346,6 +363,23 @@ export const useAuthStore = create((set, get) => ({
   },
 
   startPhoneSignIn: async (phone) => {
+    // Same as email: clear stale session before starting new login
+    try {
+      base44.clearToken()
+      clearRefreshTimer()
+      clearAccessExpiry()
+      set({
+        accessToken: null,
+        refreshToken: null,
+        isAuthenticated: false,
+        sessionExpired: false,
+        sessionMessage: null,
+        error: null,
+      })
+    } catch {
+      // ignore
+    }
+
     return startPhoneSignIn(phone)
   },
 

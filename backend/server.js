@@ -682,37 +682,6 @@ app.use('/api/preferences', preferencesRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api', discoveryRouter); // Discovery endpoints (comprehensiveMatch, searchOpportunities, etc.)
 
-// Stats endpoint for dashboard (handles both /api/stats and /api/stats/dashboard)
-app.get('/api/stats/dashboard', (req, res, next) => {
-  // Redirect to the main stats endpoint
-  req.url = '/api/stats';
-  next();
-});
-
-app.get('/api/stats', (req, res) => {
-  try {
-    const orgCount = db.prepare('SELECT COUNT(*) as count FROM organizations').get();
-    const grantCount = db.prepare('SELECT COUNT(*) as count FROM grants WHERE status IN (?, ?, ?, ?)').get('interested', 'drafting', 'submitted', 'awarded');
-    const totalExpenses = db.prepare('SELECT COALESCE(SUM(amount), 0) as total FROM expenses').get();
-    const upcomingDeadlines = db.prepare(`
-      SELECT COUNT(*) as count FROM grants 
-      WHERE deadline IS NOT NULL 
-      AND deadline >= date('now') 
-      AND deadline <= date('now', '+14 days')
-      AND status IN ('discovered', 'interested', 'drafting')
-    `).get();
-    
-    res.json({
-      organizations: orgCount.count,
-      activeGrants: grantCount.count,
-      totalExpenses: totalExpenses.total,
-      upcomingDeadlines: upcomingDeadlines.count
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // Pipeline stats
 app.get('/api/pipeline/stats', (req, res) => {
   try {
