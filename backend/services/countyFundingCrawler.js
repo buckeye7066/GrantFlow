@@ -89,12 +89,24 @@ async function loadCounties() {
   
   const countiesPath = path.join(__dirname, '..', 'data', 'us_counties.json');
   
-  if (fs.existsSync(countiesPath)) {
-    COUNTIES_BY_STATE = JSON.parse(fs.readFileSync(countiesPath, 'utf-8'));
-  } else {
-    // Generate basic county list - this would ideally come from census data
+  console.log(`[CountyCrawler] Loading counties from: ${countiesPath}`);
+  
+  try {
+    if (fs.existsSync(countiesPath)) {
+      const fileContent = fs.readFileSync(countiesPath, 'utf-8');
+      console.log(`[CountyCrawler] File size: ${fileContent.length} bytes`);
+      COUNTIES_BY_STATE = JSON.parse(fileContent);
+      console.log(`[CountyCrawler] Loaded ${Object.keys(COUNTIES_BY_STATE).length} states`);
+    } else {
+      console.log('[CountyCrawler] File not found, generating basic list...');
+      // Generate basic county list - this would ideally come from census data
+      COUNTIES_BY_STATE = generateBasicCountyList();
+      fs.writeFileSync(countiesPath, JSON.stringify(COUNTIES_BY_STATE, null, 2));
+    }
+  } catch (err) {
+    console.error('[CountyCrawler] Error loading counties:', err.message);
+    // Fallback to generated list
     COUNTIES_BY_STATE = generateBasicCountyList();
-    fs.writeFileSync(countiesPath, JSON.stringify(COUNTIES_BY_STATE, null, 2));
   }
   
   return COUNTIES_BY_STATE;
@@ -219,6 +231,7 @@ function upsertOpportunity(db, opp) {
       return { inserted: true };
     }
   } catch (error) {
+    console.error(`[CountyCrawler] DB error for ${opp.id}: ${error.message}`);
     return { error: error.message };
   }
 }
