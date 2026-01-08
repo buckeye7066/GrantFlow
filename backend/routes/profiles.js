@@ -733,7 +733,7 @@ Return ONLY the field value content, no JSON wrapper or explanations.`
     res.json({
       field: fieldName,
       suggestion,
-      usage: completion.usage ?? null,
+      usage: null // No usage data for mock responses
     })
   } catch (error) {
     console.error('Field AI suggestion error:', error)

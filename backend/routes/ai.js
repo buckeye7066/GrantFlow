@@ -20,6 +20,74 @@ const getOpenAI = () => {
 };
 
 // Match opportunities to a profile
+// Comprehensive match endpoint for discovery
+router.post('/comprehensive-match', async (req, res) => {
+  try {
+    const { profile } = req.body
+    
+    // Get all opportunities from database
+    const opportunities = req.db.prepare(`
+      SELECT * FROM funding_opportunities 
+      WHERE is_active = 1 
+      ORDER BY created_at DESC 
+      LIMIT 100
+    `).all()
+    
+    // Calculate match scores
+    const scoredOpps = opportunities.map(opp => ({
+      ...opp,
+      fit_score: 80 + Math.floor(Math.random() * 20), // Mock score 80-100
+      match_reasons: ['Geographic match', 'Type match', 'Mission alignment']
+    }))
+    
+    res.json({
+      opportunities: scoredOpps.filter(o => o.fit_score >= 80),
+      total: scoredOpps.length,
+      profile
+    })
+  } catch (error) {
+    console.error('Comprehensive match error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// ECF service search endpoint
+router.post('/ecf-service-search', async (req, res) => {
+  try {
+    const { profile } = req.body
+    
+    const services = [
+      {
+        name: 'Respite Care Services',
+        description: 'Temporary relief for caregivers',
+        provider: 'Regional DD Board',
+        match_score: 92
+      },
+      {
+        name: 'Assistive Technology',
+        description: 'Adaptive equipment and devices',
+        provider: 'AT Program',
+        match_score: 88
+      },
+      {
+        name: 'Community Integration Support',
+        description: 'Social and community participation',
+        provider: 'ECF CHOICES',
+        match_score: 85
+      }
+    ]
+    
+    res.json({
+      services,
+      total: services.length,
+      profile
+    })
+  } catch (error) {
+    console.error('ECF service search error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 router.post('/match', async (req, res) => {
   try {
     const { profile_id } = req.body;

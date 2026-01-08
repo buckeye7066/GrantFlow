@@ -484,6 +484,26 @@ export function buildProfileSignals({ profile, sections }) {
   }
 }
 
+export function calculateMatchScore(profile, opportunity) {
+  // Simple match scoring algorithm
+  let score = 50 // Base score
+  
+  // Geographic match
+  if (opportunity.state === profile.state || opportunity.is_national) {
+    score += 20
+  }
+  
+  // Type match
+  if (opportunity.eligibility_criteria?.includes(profile.primary_type)) {
+    score += 15
+  }
+  
+  // Random variation for testing
+  score += Math.floor(Math.random() * 15)
+  
+  return Math.min(100, score)
+}
+
 export function summarizeProfileSignals(signals) {
   const parts = []
   if (signals.demographics?.size) {
