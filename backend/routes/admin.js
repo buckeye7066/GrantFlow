@@ -7,6 +7,9 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import pdfParse from 'pdf-parse';
 import OpenAI from 'openai';
+import { seedRealOpportunities } from '../utils/seedRealOpportunities.js';
+import { ensureDesignatedProfiles } from '../utils/ensureDesignatedProfiles.js';
+import { buildProfileSignals, calculateMatchScore } from '../services/profileHelpers.js';
 
 const router = express.Router();
 
@@ -373,6 +376,151 @@ router.post('/reattach-users', (req, res) => {
   } catch (error) {
     console.error('[admin] Reattach users error:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/admin/db-stats - Database statistics
+router.get('/db-stats', (req, res) => {
+  try {
+    const stats = {
+      profiles: req.db.prepare('SELECT COUNT(*) as count FROM profiles').get()?.count || 0,
+      profile_sections: req.db.prepare('SELECT COUNT(*) as count FROM profile_sections').get()?.count || 0,
+      funding_opportunities: req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get()?.count || 0,
+      grants: req.db.prepare('SELECT COUNT(*) as count FROM grants').get()?.count || 0,
+      organizations: req.db.prepare('SELECT COUNT(*) as count FROM organizations').get()?.count || 0,
+    };
+
+    const sampleOpps = req.db.prepare(`
+      SELECT title, keywords, categories 
+      FROM funding_opportunities 
+      WHERE is_active = 1 
+      LIMIT 5
+    `).all();
+
+    res.json({ success: true, stats, sample_opportunities: sampleOpps });
+  } catch (error) {
+    console.error('[admin/db-stats] Error:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to get database stats' });
+  }
+});
+
+// POST /api/admin/seed-opportunities - Seed real funding opportunities
+router.post('/seed-opportunities', async (req, res) => {
+  try {
+    const { totalLoaded } = seedRealOpportunities(req.db);
+    const totalInDb = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get()?.count || 0;
+    res.json({ success: true, message: `Seeded ${totalLoaded} opportunities`, total_in_database: totalInDb, loaded_from_files: totalLoaded });
+  } catch (error) {
+    console.error('[admin/seed-opportunities] Error:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to seed opportunities' });
+  }
+});
+
+// POST /api/admin/sync-profiles - Sync designated profiles
+router.post('/sync-profiles', async (req, res) => {
+  try {
+    ensureDesignatedProfiles(req.db);
+    const profilesCount = req.db.prepare('SELECT COUNT(*) as count FROM profiles').get()?.count || 0;
+    const sectionsCount = req.db.prepare('SELECT COUNT(*) as count FROM profile_sections').get()?.count || 0;
+    res.json({ success: true, message: 'Profiles synchronized', profiles: profilesCount, total_sections: sectionsCount });
+  } catch (error) {
+    console.error('[admin/sync-profiles] Error:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to sync profiles' });
+  }
+});
+
+// POST /api/admin/seed-profile-grants - Seed grants for profiles
+router.post('/seed-profile-grants', async (req, res) => {
+  try {
+    const { excludeProfiles = [] } = req.body || {};
+    const profiles = req.db.prepare('SELECT * FROM profiles WHERE status = ?').all('active');
+    const opportunities = req.db.prepare(`
+      SELECT * FROM funding_opportunities 
+      WHERE is_active = 1 
+      AND (requires_match = 0 OR requires_match IS NULL)
+      LIMIT 500
+    `).all();
+
+    let totalGrantsAdded = 0;
+    const results = [];
+
+    for (const profile of profiles) {
+      const displayName = (profile.display_name || '').toLowerCase();
+      if (excludeProfiles.some(excluded => displayName.includes(excluded.toLowerCase()))) {
+        results.push({ profile: profile.display_name, status: 'skipped', opportunities_found: 0, grants_added: 0 });
+        continue;
+      }
+
+      const sections = {};
+      const sectionRows = req.db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profile.id);
+      sectionRows.forEach(row => {
+        try { sections[row.section_key] = JSON.parse(row.data || '{}'); } catch (e) { sections[row.section_key] = {}; }
+      });
+
+      const profileContext = { profile: profile, sections: sections };
+      const profileSignals = buildProfileSignals(profileContext);
+
+      const scored = opportunities.map(opp => {
+        const { score, matchedFields } = calculateMatchScore(profileSignals, opp);
+        return { opp, score, matchedFields };
+      });
+
+      const topMatches = scored.filter(s => s.score >= 45).sort((a, b) => b.score - a.score).slice(0, 50);
+
+      let orgId = profile.organization_id;
+      if (!orgId) {
+        orgId = crypto.randomUUID();
+        req.db.prepare(`INSERT INTO organizations (id, name, applicant_type, created_at, updated_at) VALUES (?, ?, 'individual_need', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).run(orgId, profile.display_name || 'My Organization');
+        req.db.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile.id);
+      }
+
+      let added = 0;
+      for (const { opp, score, matchedFields } of topMatches) {
+        const existing = req.db.prepare('SELECT id FROM grants WHERE organization_id = ? AND (funding_opportunity_id = ? OR title = ?)').get(orgId, opp.id, opp.title);
+        if (!existing) {
+          try {
+            req.db.prepare(`
+              INSERT INTO grants (id, organization_id, funding_opportunity_id, title, funder, deadline, status, match_score, match_reasons, application_url, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            `).run(crypto.randomUUID(), orgId, opp.id, opp.title, opp.sponsor, opp.deadline, score, JSON.stringify((matchedFields || []).slice(0, 10)), opp.application_url);
+            added++;
+          } catch (e) { /* ignore duplicates */ }
+        }
+      }
+      results.push({ profile: profile.display_name, status: 'seeded', opportunities_found: topMatches.length, grants_added: added });
+      totalGrantsAdded += added;
+    }
+    res.json({ success: true, message: 'Profile seeding complete', results, total_grants_added: totalGrantsAdded });
+  } catch (error) {
+    console.error('[admin/seed-profile-grants] Error:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to seed profile grants' });
+  }
+});
+
+// POST /api/admin/link-admin-to-organizations - Link admin to all organizations
+router.post('/link-admin-to-organizations', async (req, res) => {
+  try {
+    const adminUser = req.db.prepare('SELECT id FROM users WHERE is_admin = 1 LIMIT 1').get();
+    if (!adminUser) {
+      return res.status(404).json({ success: false, error: 'Admin user not found' });
+    }
+
+    const organizations = req.db.prepare('SELECT id FROM organizations').all();
+    let linkedCount = 0;
+
+    for (const org of organizations) {
+      try {
+        const existingLink = req.db.prepare('SELECT 1 FROM user_organizations WHERE user_id = ? AND organization_id = ?').get(adminUser.id, org.id);
+        if (!existingLink) {
+          req.db.prepare('INSERT INTO user_organizations (user_id, organization_id) VALUES (?, ?)').run(adminUser.id, org.id);
+          linkedCount++;
+        }
+      } catch (e) { /* ignore */ }
+    }
+    res.json({ success: true, message: `Admin user linked to ${linkedCount} organizations.` });
+  } catch (error) {
+    console.error('[admin/link-admin-to-organizations] Error:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to link admin to organizations' });
   }
 });
 
