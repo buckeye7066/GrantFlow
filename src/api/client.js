@@ -90,8 +90,10 @@ class APIClient {
       this.clearToken();
       if (this.onAuthFailure) {
         this.onAuthFailure('Your session expired. Sign in again to continue.');
+      } else {
+        // Redirect to login if no handler
+        this.auth.redirectToLogin();
       }
-      // Don't redirect automatically - let the app handle it
       throw this.createAuthError('Authentication required');
     }
     
@@ -148,7 +150,7 @@ class APIClient {
         
         return data;
       } catch (error) {
-        // Refresh failed - clear everything and notify once
+        // Refresh failed - clear everything and redirect to login
         console.error('[APIClient] Token refresh failed:', error.message);
         this.clearToken();
         
@@ -159,6 +161,7 @@ class APIClient {
         if (this.onAuthFailure) {
           this.onAuthFailure('Your session expired. Sign in again to continue.');
         } else {
+          // Redirect to login as fallback
           this.auth.redirectToLogin();
         }
         throw authError;

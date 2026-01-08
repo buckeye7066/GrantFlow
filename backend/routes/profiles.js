@@ -690,4 +690,91 @@ router.post('/send-application-email', async (req, res) => {
   }
 })
 
+// Link a user email to a profile (Admin only)
+router.patch('/:id/link-user', async (req, res) => {
+  const { id } = req.params
+  const { email } = req.body
+  const auth = req.user ?? { role: 'guest' }
+
+  // Only admins can link users to profiles
+  if (auth.role !== 'admin') {
+    return res.status(403).json({ error: 'Only administrators can link users to profiles' })
+  }
+
+  // Validate profile exists
+  const profile = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!profile) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  // Validate email format if provided (allow null/empty to unlink)
+  if (email) {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ error: 'Invalid email format' })
+    }
+  }
+
+  try {
+    // If email is provided, find or create the user and link them
+    // If email is null/empty, unlink the user
+    let userId = null
+    
+    if (email) {
+      const normalizedEmail = email.trim().toLowerCase()
+      
+      // Check if user already exists with this email
+      const existingUser = req.db
+        .prepare('SELECT id FROM users WHERE primary_email = ? COLLATE NOCASE')
+        .get(normalizedEmail)
+      
+      if (existingUser) {
+        userId = existingUser.id
+      } else {
+        // Create a placeholder user record for this email
+        // They'll get proper user data when they sign up/login
+        const insertUser = req.db.prepare(`
+          INSERT INTO users (primary_email, created_at, updated_at)
+          VALUES (?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `)
+        const result = insertUser.run(normalizedEmail)
+        userId = req.db
+          .prepare('SELECT id FROM users WHERE rowid = ?')
+          .get(result.lastInsertRowid)?.id
+      }
+      
+      // Check if this user is already linked to another profile
+      const existingLink = req.db
+        .prepare('SELECT id FROM profiles WHERE user_id = ? AND id != ?')
+        .get(userId, id)
+      
+      if (existingLink) {
+        return res.status(400).json({ 
+          error: 'User already linked to another profile',
+          message: `Email ${email} is already linked to profile ${existingLink.id}. Unlink it first or use a different email.`
+        })
+      }
+    }
+
+    // Update the profile's user_id
+    req.db
+      .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(userId, id)
+
+    // Fetch and return the updated profile
+    const updated = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+    
+    res.json({
+      success: true,
+      profile: mapProfile(updated),
+      message: email 
+        ? `Profile linked to ${email}` 
+        : 'Profile user link removed'
+    })
+  } catch (error) {
+    console.error('Error linking user to profile:', error)
+    res.status(500).json(formatError(error))
+  }
+})
+
 export default router

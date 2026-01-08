@@ -23,6 +23,7 @@ import { Loader2, User, AlertCircle, Upload, X } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { apiFetch } from '@/api/client'
 import { useToast } from '@/components/ui/use-toast'
+import { useAuthStore } from '@/stores/authStore'
 
 const PROFILE_TYPES = [
   { value: 'individual', label: 'Individual' },
@@ -38,6 +39,7 @@ const PROFILE_TYPES = [
 ]
 
 export default function ProfileCreationWizard({ open, onComplete, onSkip }) {
+  const user = useAuthStore((state) => state.user)
   const [formData, setFormData] = useState({
     display_name: '',
     primary_type: '',
@@ -47,6 +49,11 @@ export default function ProfileCreationWizard({ open, onComplete, onSkip }) {
   const [error, setError] = useState(null)
   const queryClient = useQueryClient()
   const { toast } = useToast()
+
+  // Admin users should never see this wizard
+  if (user?.is_admin) {
+    return null
+  }
 
   const createProfileMutation = useMutation({
     mutationFn: async ({ profileData, avatarFile }) => {

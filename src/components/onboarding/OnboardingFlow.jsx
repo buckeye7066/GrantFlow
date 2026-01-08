@@ -34,6 +34,7 @@ export default function OnboardingFlow() {
   const [showProfileWizard, setShowProfileWizard] = useState(false)
 
   useEffect(() => {
+    // Admin users should never see onboarding
     if (user?.is_admin) {
       return
     }

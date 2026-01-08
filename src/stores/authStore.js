@@ -178,7 +178,9 @@ export const useAuthStore = create((set, get) => ({
       const profiles = Array.isArray(payload.profiles) ? payload.profiles : []
       const activeProfileId =
         payload.active_profile_id ?? profiles[0]?.id ?? null
-      const needsProfileCreation = profiles.length === 0 && !get().hasSeenOnboarding
+      // Admin users (is_admin flag) should never need profile creation
+      const isAdmin = payload.user?.is_admin === true
+      const needsProfileCreation = !isAdmin && profiles.length === 0 && !get().hasSeenOnboarding
       set({
         user: payload.user,
         profiles,
@@ -189,6 +191,7 @@ export const useAuthStore = create((set, get) => ({
         sessionMessage: null,
         preferredAuthMethod: get().preferredAuthMethod,
         needsProfileCreation,
+        hasSeenOnboarding: isAdmin ? true : get().hasSeenOnboarding, // Skip onboarding for admins
       })
       return
     }
@@ -227,8 +230,10 @@ export const useAuthStore = create((set, get) => ({
         id: payload.profile_id ?? 'user',
         display_name: payload.full_name ?? 'GrantFlow User',
         is_admin: false,
+        primary_email: payload.email ?? null,
       }
       const profiles = payload.profiles ?? []
+      // Regular users need profile creation only if they have no profiles and haven't seen onboarding
       const needsProfileCreation = profiles.length === 0 && !get().hasSeenOnboarding
       set({
         user,
