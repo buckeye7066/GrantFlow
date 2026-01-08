@@ -557,19 +557,33 @@ export function updateTask(
 }
 
 export async function generateAssistantResponse(db, user, sessionId, { content }) {
+  console.log('[Anya] === generateAssistantResponse called ===')
+  console.log('[Anya] Session ID:', sessionId)
+  console.log('[Anya] User:', user?.userId || 'unknown')
+  console.log('[Anya] Message length:', content?.length || 0)
+  
   const trimmed = (content ?? '').trim()
   if (!trimmed) {
+    console.log('[Anya] Empty message received, returning default response')
     return "I'm here and ready to help—just let me know what you'd like to work on."
   }
 
+  console.log('[Anya] User message:', trimmed.substring(0, 100) + (trimmed.length > 100 ? '...' : ''))
+
+  // Try to get Claude client
   let claude = null
   try {
+    console.log('[Anya] Attempting to initialize Claude client...')
     claude = getClaudeClient()
+    console.log('[Anya] ✓ Claude client initialized successfully')
   } catch (error) {
-    console.warn('[anya] Claude client unavailable; providing guided assistance instead:', error.message)
+    console.error('[Anya] ✗ Claude client initialization failed:', error.message)
+    console.error('[Anya] Error code:', error.code)
     
     // Provide helpful responses without AI
     const lowerContent = trimmed.toLowerCase()
+    
+    console.log('[Anya] Falling back to rule-based responses')
     
     // Common queries and helpful responses
     if (lowerContent.includes('grant') || lowerContent.includes('funding')) {
@@ -601,17 +615,19 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     ].join('\n')
   }
 
-  let historyMessages = null
+  // Load conversation history
+  let historyMessages = []
   try {
-    // Ensure the caller has access and load recent history for context.
+    console.log('[Anya] Loading session history...')
     getSession(db, user, sessionId)
     historyMessages = getMessages(db, user, sessionId, { limit: 20, direction: 'asc' })
+    console.log('[Anya] ✓ Loaded', historyMessages.length, 'historical messages')
   } catch (historyError) {
-    console.warn('[anya] Unable to load session history; continuing with minimal context:', historyError)
+    console.warn('[Anya] ✗ Unable to load session history:', historyError.message)
     historyMessages = []
   }
 
-  // Build message history for Claude (excluding system message from messages array)
+  // Build message history for Claude
   let conversationMessages = historyMessages
     .filter((msg) => typeof msg?.content === 'string' && msg.content.trim().length > 0)
     .map((msg) => ({
@@ -619,18 +635,23 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
       content: msg.content,
     }))
 
+  console.log('[Anya] Conversation has', conversationMessages.length, 'messages before adding current')
+
   // CRITICAL: Ensure the current user message is included
-  // This fixes the bug where the message might not be in history yet
   const hasCurrentMessage = conversationMessages.some(
     (msg) => msg.role === 'user' && msg.content === trimmed
   )
   if (!hasCurrentMessage) {
     conversationMessages.push({ role: 'user', content: trimmed })
+    console.log('[Anya] Added current message to conversation')
+  } else {
+    console.log('[Anya] Current message already in history')
   }
 
   // Claude requires at least one message
   if (conversationMessages.length === 0) {
     conversationMessages = [{ role: 'user', content: trimmed }]
+    console.log('[Anya] Starting new conversation with first message')
   }
 
   // Claude system prompt
@@ -655,9 +676,13 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
   ].join('\n')
 
   try {
-    console.log('[Anya] Calling Claude API with model:', DEFAULT_ASSISTANT_MODEL)
-    console.log('[Anya] Message count:', conversationMessages.length)
+    console.log('[Anya] === Calling Claude API ===')
+    console.log('[Anya] Model:', DEFAULT_ASSISTANT_MODEL)
+    console.log('[Anya] Messages to send:', conversationMessages.length)
+    console.log('[Anya] API Key present:', !!process.env.ANTHROPIC_API_KEY)
+    console.log('[Anya] API Key prefix:', process.env.ANTHROPIC_API_KEY ? process.env.ANTHROPIC_API_KEY.substring(0, 15) + '...' : 'MISSING')
     
+    const startTime = Date.now()
     const response = await claude.messages.create({
       model: DEFAULT_ASSISTANT_MODEL,
       max_tokens: 1024,
@@ -665,30 +690,54 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
       system: systemPrompt,
       messages: conversationMessages,
     })
+    const duration = Date.now() - startTime
+    
+    console.log('[Anya] ✓ Claude API call completed in', duration, 'ms')
+    console.log('[Anya] Response ID:', response?.id)
+    console.log('[Anya] Response model:', response?.model)
+    console.log('[Anya] Stop reason:', response?.stop_reason)
 
     const reply = response?.content?.[0]?.text?.trim()
     if (reply) {
-      console.log('[Anya] Claude API response received successfully')
+      console.log('[Anya] ✓ Response text length:', reply.length)
+      console.log('[Anya] Response preview:', reply.substring(0, 100) + (reply.length > 100 ? '...' : ''))
       return reply
     }
-    console.warn('[Anya] Claude API returned empty response')
+    
+    console.error('[Anya] ✗ Claude API returned empty response')
+    console.error('[Anya] Full response object:', JSON.stringify(response, null, 2))
   } catch (error) {
-    console.error('[Anya] Claude API Error Details:')
-    console.error('  Error Type:', error.constructor.name)
-    console.error('  Error Message:', error.message)
-    console.error('  Error Status:', error.status)
-    console.error('  Model Used:', DEFAULT_ASSISTANT_MODEL)
+    console.error('[Anya] === Claude API Error ===')
+    console.error('[Anya] Error Type:', error.constructor.name)
+    console.error('[Anya] Error Message:', error.message)
+    console.error('[Anya] Error Status:', error.status)
+    console.error('[Anya] Error Code:', error.code)
+    console.error('[Anya] Model Used:', DEFAULT_ASSISTANT_MODEL)
+    
+    if (error.stack) {
+      console.error('[Anya] Stack trace:', error.stack)
+    }
     
     // Provide more specific error messages based on the error type
     if (error.status === 401) {
+      console.error('[Anya] Authentication error - check API key')
       return 'Authentication failed. The Anthropic API key may be invalid. Please check ANTHROPIC_API_KEY in Railway.'
     } else if (error.status === 429) {
+      console.error('[Anya] Rate limit exceeded')
       return 'Rate limit exceeded. Please wait a moment and try again.'
+    } else if (error.status === 400) {
+      console.error('[Anya] Bad request - possibly invalid model or parameters')
+      return `Request error: ${error.message}. Please contact support if this persists.`
     } else if (error.message?.includes('model')) {
+      console.error('[Anya] Model error - check model name')
       return `Model error: The model "${DEFAULT_ASSISTANT_MODEL}" may not be available. Please check the model name.`
     }
+    
+    // Generic error with details
+    return `I encountered an error while processing your message: ${error.message}. Please try again or contact support if this persists.`
   }
 
+  console.error('[Anya] Reached end of function without returning - this should not happen')
   return [
     "I'm having trouble reaching the AI service right now.",
     'We can still move forward manually—let me know the specific action you need help with (for example: find grants, track applications, organize documents), and I\'ll walk through the recommended steps.',
