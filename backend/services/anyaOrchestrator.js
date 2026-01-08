@@ -5,6 +5,9 @@ import { listToolMetadata, invokeTool as invokeRegisteredTool } from './anyaTool
 const TASK_STATUSES = new Set(['open', 'in_progress', 'completed', 'cancelled'])
 const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent'])
 
+// Admin configuration from environment
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@grantflow.app'
+
 let cachedOpenAI = null
 
 function getOpenAIClient() {
@@ -555,7 +558,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
   const userName = user?.display_name || user?.full_name || user?.profileName || 'there'
   const userEmail = user?.primary_email || user?.email || ''
   const isAdmin = Boolean(user?.is_admin || user?.role === 'admin')
-  const isJohnWhite = isAdmin && userEmail === 'buckeye7066@gmail.com'
+  const isJohnWhite = isAdmin && userEmail === ADMIN_EMAIL
 
   let openai = null
   try {
@@ -634,7 +637,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     systemPromptParts.push(
       'Admin Access:',
       isJohnWhite 
-        ? '- The current user is John White, the system administrator'
+        ? `- The current user is ${userName}, the primary system administrator`
         : '- The current user is a system administrator',
       '- You can perform admin actions such as:',
       '  • Running system crawlers (scholarship, local, comprehensive)',
