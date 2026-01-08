@@ -27,6 +27,7 @@ import preferencesRouter from './routes/preferences.js';
 import adminRouter from './routes/admin.js';
 import discoveryRouter from './routes/discovery.js';
 import serviceApplicationRouter from './routes/serviceApplication.js';
+import statsRouter from './routes/stats.js';
 import jwt from 'jsonwebtoken';
 import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
@@ -664,6 +665,7 @@ app.get('/api/auth/me', authMeLimiter, (req, res) => {
 app.use('/api/auth', authRouter);
 app.use('/api/service-application', serviceApplicationRouter);
 app.use('/api/billing', billingRouter);
+app.use('/api/stats', statsRouter);
 app.use('/api/organizations', organizationsRouter);
 app.use('/api/grants', grantsRouter);
 app.use('/api/opportunities', opportunitiesRouter);
