@@ -1,43 +1,32 @@
 import { randomUUID } from 'crypto'
-import Anthropic from '@anthropic-ai/sdk'
+import OpenAI from 'openai'
 import { listToolMetadata, invokeTool as invokeRegisteredTool } from './anyaToolRegistry.js'
 
 const TASK_STATUSES = new Set(['open', 'in_progress', 'completed', 'cancelled'])
 const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent'])
 
-let cachedClaudeClient = null
+let cachedOpenAI = null
 
-function getClaudeClient() {
-  if (cachedClaudeClient) return cachedClaudeClient
+function getOpenAIClient() {
+  if (cachedOpenAI) return cachedOpenAI
   
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  console.log('[Anya] Checking Anthropic API key:', apiKey ? `Found (${apiKey.substring(0, 10)}...)` : 'Missing')
-  
+  const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) {
-    const error = new Error(
-      'Anthropic API key is not configured. Please set ANTHROPIC_API_KEY environment variable. ' +
-      'Get your API key from https://console.anthropic.com/'
-    )
+    const error = new Error('OPENAI_API_KEY environment variable is not set')
     error.code = 'MISSING_API_KEY'
     throw error
   }
   
-  if (!apiKey.startsWith('sk-ant-')) {
-    console.warn('[Anya] Warning: API key does not start with "sk-ant-". It may be invalid.')
-  }
-  
   try {
-    cachedClaudeClient = new Anthropic({ apiKey })
-    console.log('[Anya] Anthropic client initialized successfully')
-    return cachedClaudeClient
+    cachedOpenAI = new OpenAI({ apiKey })
+    return cachedOpenAI
   } catch (error) {
-    console.error('[Anya] Failed to initialize Anthropic client:', error.message)
+    console.error('[Anya] Failed to initialize OpenAI client:', error.message)
     throw error
   }
 }
 
-const DEFAULT_ASSISTANT_MODEL =
-  process.env.ANYA_CLAUDE_MODEL || process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20241022'
+const DEFAULT_ASSISTANT_MODEL = process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini'
 
 function coerceProfileId(requestedProfileId) {
   if (!requestedProfileId) return null
@@ -562,42 +551,30 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     return "I'm here and ready to help—just let me know what you'd like to work on."
   }
 
-  let claude = null
+  let openai = null
   try {
-    claude = getClaudeClient()
+    openai = getOpenAIClient()
   } catch (error) {
-    console.warn('[anya] Claude client unavailable; providing guided assistance instead:', error.message)
+    console.warn('[anya] OpenAI client unavailable; providing guided assistance instead:', error.message)
     
     // Provide helpful responses without AI
     const lowerContent = trimmed.toLowerCase()
     
-    // Common queries and helpful responses
     if (lowerContent.includes('grant') || lowerContent.includes('funding')) {
-      return "I can help you discover grants! Try:\n• Click 'Discover Grants' to browse opportunities\n• Use 'Smart Matcher' for AI-powered recommendations\n• Check 'Pipeline' to track your applications\n\nNote: Full AI assistance requires ANTHROPIC_API_KEY configuration."
+      return "I can help you discover grants! Try:\n• Click 'Discover Grants' to browse opportunities\n• Use 'Smart Matcher' for AI-powered recommendations\n• Check 'Pipeline' to track your applications"
     }
     
     if (lowerContent.includes('profile') || lowerContent.includes('organization')) {
-      return "To manage your profile:\n• Go to 'My Profiles' to view and edit profile details\n• Upload documents in the profile section\n• Set your organization type and focus areas\n\nNote: Full AI assistance requires ANTHROPIC_API_KEY configuration."
+      return "To manage your profile:\n• Go to 'My Profiles' to view and edit profile details\n• Upload documents in the profile section\n• Set your organization type and focus areas"
     }
     
-    if (lowerContent.includes('crawler') || lowerContent.includes('search')) {
-      return "For grant discovery:\n• Use 'Discover Grants' to search opportunities\n• Filter by state, amount, or deadline\n• Save promising grants to your pipeline\n\nNote: Full AI assistance requires ANTHROPIC_API_KEY configuration."
-    }
-    
-    if (lowerContent.includes('help') || lowerContent.includes('how')) {
-      return "Here's what you can do in GrantFlow:\n• **Discover Grants** - Browse and search funding opportunities\n• **My Profiles** - Manage organization details\n• **Pipeline** - Track application progress\n• **Smart Matcher** - Get AI-powered recommendations\n• **Documents** - Upload and manage files\n\nNote: Full AI assistance requires ANTHROPIC_API_KEY configuration."
-    }
-    
-    // Default response with helpful navigation
     return [
       "I can help guide you through GrantFlow! Here are key features:",
       "• **Discover Grants** - Find funding opportunities",
       "• **Smart Matcher** - Get personalized recommendations", 
       "• **Pipeline** - Track your applications",
       "",
-      "What would you like to work on?",
-      "",
-      "Note: For full AI assistance, an admin needs to configure ANTHROPIC_API_KEY."
+      "What would you like to work on?"
     ].join('\n')
   }
 
@@ -611,88 +588,50 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     historyMessages = []
   }
 
-  // Build message history for Claude (excluding system message from messages array)
-  let conversationMessages = historyMessages
+  // Build message history for OpenAI
+  const conversationMessages = historyMessages
     .filter((msg) => typeof msg?.content === 'string' && msg.content.trim().length > 0)
     .map((msg) => ({
       role: msg.role === 'assistant' ? 'assistant' : 'user',
       content: msg.content,
     }))
 
-  // CRITICAL: Ensure the current user message is included
-  // This fixes the bug where the message might not be in history yet
-  const hasCurrentMessage = conversationMessages.some(
-    (msg) => msg.role === 'user' && msg.content === trimmed
-  )
-  if (!hasCurrentMessage) {
+  // Ensure current message is included
+  if (!conversationMessages.some(msg => msg.role === 'user' && msg.content === trimmed)) {
     conversationMessages.push({ role: 'user', content: trimmed })
   }
 
-  // Claude requires at least one message
-  if (conversationMessages.length === 0) {
-    conversationMessages = [{ role: 'user', content: trimmed }]
-  }
-
-  // Claude system prompt
   const systemPrompt = [
     'You are Anya, the GrantFlow AI assistant. Your role is to help users with grant discovery, application management,',
     'funding opportunity tracking, and document preparation in the GrantFlow platform.',
     '',
-    'Key capabilities you should highlight:',
-    '- Discovering and tracking grant opportunities',
-    '- Managing grant applications and deadlines',
-    '- Organizing documents and requirements',
-    '- Setting up milestones and tracking progress',
-    '- Providing guidance on grant writing and compliance',
-    '',
-    'Always be concise, actionable, and specific. When users ask for help:',
-    '1. Understand their current situation or goal',
-    '2. Provide clear, step-by-step guidance grounded in GrantFlow features',
-    '3. If you need more information, ask specific questions',
-    '4. If something requires human review or admin access, explain what they need to do',
-    '',
-    'Keep responses focused and practical. Avoid generic advice—tie your suggestions to GrantFlow workflows whenever possible.',
+    'Always be concise, actionable, and specific. Ground your guidance in GrantFlow features.',
+    'Keep responses focused and practical. Avoid generic advice.',
   ].join('\n')
 
   try {
-    console.log('[Anya] Calling Claude API with model:', DEFAULT_ASSISTANT_MODEL)
-    console.log('[Anya] Message count:', conversationMessages.length)
+    console.log('[Anya] Calling OpenAI API with model:', DEFAULT_ASSISTANT_MODEL)
     
-    const response = await claude.messages.create({
+    const response = await openai.chat.completions.create({
       model: DEFAULT_ASSISTANT_MODEL,
-      max_tokens: 1024,
-      temperature: 0.35,
-      system: systemPrompt,
-      messages: conversationMessages,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...conversationMessages
+      ],
+      temperature: 0.3,
+      max_tokens: 1000,
     })
 
-    const reply = response?.content?.[0]?.text?.trim()
+    const reply = response.choices[0]?.message?.content?.trim()
     if (reply) {
-      console.log('[Anya] Claude API response received successfully')
+      console.log('[Anya] OpenAI API response received successfully')
       return reply
     }
-    console.warn('[Anya] Claude API returned empty response')
   } catch (error) {
-    console.error('[Anya] Claude API Error Details:')
-    console.error('  Error Type:', error.constructor.name)
-    console.error('  Error Message:', error.message)
-    console.error('  Error Status:', error.status)
-    console.error('  Model Used:', DEFAULT_ASSISTANT_MODEL)
-    
-    // Provide more specific error messages based on the error type
-    if (error.status === 401) {
-      return 'Authentication failed. The Anthropic API key may be invalid. Please check ANTHROPIC_API_KEY in Railway.'
-    } else if (error.status === 429) {
-      return 'Rate limit exceeded. Please wait a moment and try again.'
-    } else if (error.message?.includes('model')) {
-      return `Model error: The model "${DEFAULT_ASSISTANT_MODEL}" may not be available. Please check the model name.`
-    }
+    console.error('[Anya] OpenAI API Error:', error.message)
   }
 
-  return [
-    "I'm having trouble reaching the AI service right now.",
-    'We can still move forward manually—let me know the specific action you need help with (for example: find grants, track applications, organize documents), and I\'ll walk through the recommended steps.',
-  ].join(' ')
+  return "I'm having trouble reaching the AI service right now. Please try again in a moment."
 }
 
 export function listTools(user) {
