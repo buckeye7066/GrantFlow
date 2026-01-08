@@ -682,7 +682,13 @@ app.use('/api/preferences', preferencesRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api', discoveryRouter); // Discovery endpoints (comprehensiveMatch, searchOpportunities, etc.)
 
-// Stats endpoint for dashboard
+// Stats endpoint for dashboard (handles both /api/stats and /api/stats/dashboard)
+app.get('/api/stats/dashboard', (req, res, next) => {
+  // Redirect to the main stats endpoint
+  req.url = '/api/stats';
+  next();
+});
+
 app.get('/api/stats', (req, res) => {
   try {
     const orgCount = db.prepare('SELECT COUNT(*) as count FROM organizations').get();

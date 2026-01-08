@@ -204,8 +204,15 @@ function scoreOpportunity(opportunity, profileDetail) {
     score += 5
     reasons.push("Rolling deadline – flexible submission window")
   } else if (opportunity.deadline) {
-    const timeToDeadline = formatDistanceToNowStrict(new Date(opportunity.deadline), { addSuffix: true })
-    reasons.push(`Deadline ${timeToDeadline}`)
+    try {
+      const deadlineDate = new Date(opportunity.deadline)
+      if (!isNaN(deadlineDate.getTime())) {
+        const timeToDeadline = formatDistanceToNowStrict(deadlineDate, { addSuffix: true })
+        reasons.push(`Deadline ${timeToDeadline}`)
+      }
+    } catch {
+      // Invalid date, skip deadline display
+    }
   }
 
   return {
