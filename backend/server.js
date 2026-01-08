@@ -419,10 +419,25 @@ app.use((req, res, next) => {
 
 app.use((req, res, next) => {
   const authHeader = req.headers.authorization || '';
+  const xAdminToken = req.headers['x-admin-token'];
+  const xAnyaToken = req.headers['x-anya-token'];
   let user = { role: 'guest', profileId: null };
   let handled = false;
 
-  if (authHeader.startsWith('Bearer ')) {
+  // 1. Check X-Admin-Token
+  if (!handled && xAdminToken && ADMIN_TOKEN && xAdminToken === ADMIN_TOKEN) {
+    user = { role: 'admin', is_admin: true, full_name: ADMIN_NAME, email: ADMIN_EMAIL };
+    handled = true;
+  }
+
+  // 2. Check X-Anya-Token (autonomous bot)
+  if (!handled && xAnyaToken && process.env.ANYA_API_KEY && xAnyaToken === process.env.ANYA_API_KEY) {
+    user = { role: 'admin', is_admin: true, full_name: 'Anya Assistant', email: 'anya@grantflow.app' };
+    handled = true;
+  }
+
+  // 3. Check Authorization Bearer token
+  if (!handled && authHeader.startsWith('Bearer ')) {
     const token = authHeader.slice(7).trim();
     if (token) {
       try {
@@ -445,7 +460,7 @@ app.use((req, res, next) => {
           ) {
             user = {
               role: sessionRow.is_admin ? 'admin' : 'user',
-              is_admin: Boolean(sessionRow.is_admin), // Add is_admin flag for consistency
+              is_admin: Boolean(sessionRow.is_admin),
               userId: sessionRow.user_id,
               profileId: payload.profile_id ?? sessionRow.profile_id ?? null,
               sessionId: sessionRow.id,
