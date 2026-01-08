@@ -240,7 +240,7 @@ function BillingAccountCard({ account, tiers, onSave, saving }) {
     const timestamp = Date.now()
     const randomBytes = new Uint8Array(4)
     crypto.getRandomValues(randomBytes)
-    const randomPart = Array.from(randomBytes, byte => byte.toString(36)).join('').toUpperCase().substring(0, 6)
+    const randomPart = Array.from(randomBytes, byte => byte.toString(16).padStart(2, '0')).join('').toUpperCase()
     const invoiceNumber = `INV-${timestamp}-${randomPart}`
     
     const invoiceDate = new Date().toLocaleDateString('en-US', { 
@@ -249,8 +249,8 @@ function BillingAccountCard({ account, tiers, onSave, saving }) {
       day: 'numeric' 
     })
 
-    // Calculate discount amount with null-safety
-    const discountAmount = monthly ? (monthly * (form.discount_percent / 100)) : 0
+    // Calculate discount amount with null-safety for both monthly and discount_percent
+    const discountAmount = (monthly && form.discount_percent) ? (monthly * (form.discount_percent / 100)) : 0
     const totalDue = form.is_pro_bono ? 0 : (monthly - discountAmount)
 
     const invoiceHTML = generateInvoiceHTML({
@@ -269,7 +269,7 @@ function BillingAccountCard({ account, tiers, onSave, saving }) {
       totalDue,
     })
 
-    const invoiceWindow = window.open('', '_blank', 'noopener=yes,noreferrer=yes')
+    const invoiceWindow = window.open('', '_blank', 'noopener,noreferrer')
     if (invoiceWindow) {
       invoiceWindow.document.write(invoiceHTML)
       invoiceWindow.document.close()
