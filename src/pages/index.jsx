@@ -85,6 +85,7 @@ import Admin from "./Admin";
 
 import Login from "./Login";
 import AuthCallback from "./AuthCallback";
+import ServiceApplication from "./ServiceApplication";
 
 import { Route, Routes, useLocation, Navigate } from 'react-router-dom';
 import { useAuthStore } from "@/stores/authStore";
@@ -343,6 +344,7 @@ export default function Pages() {
     return (
         <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/ServiceApplication" element={<ServiceApplication />} />
             <Route path="/auth/callback" element={<AuthCallback />} />
             <Route path="/*" element={<LayoutRoutes />} />
         </Routes>

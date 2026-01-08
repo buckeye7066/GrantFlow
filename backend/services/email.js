@@ -112,6 +112,156 @@ export async function sendVerificationEmail(email, code) {
 }
 
 /**
+ * Send a service application submission email
+ * @param {string} toEmail - Recipient email address
+ * @param {Object} applicationData - Service application data to format and send
+ * @returns {Promise<boolean>} True if email was sent successfully
+ * @throws {Error} If email service is not configured or sending fails
+ */
+export async function sendServiceApplicationEmail(toEmail, applicationData) {
+  if (!toEmail || typeof toEmail !== 'string') {
+    throw new Error('Invalid email address')
+  }
+  
+  if (!applicationData || typeof applicationData !== 'object') {
+    throw new Error('Invalid application data')
+  }
+  
+  const client = await getResendClient()
+  
+  if (!client) {
+    const errorMsg = 'Email service not configured. RESEND_API_KEY is missing from environment variables.'
+    console.error('[email]', errorMsg, 'Would send service application to:', toEmail)
+    throw new Error(errorMsg)
+  }
+
+  try {
+    // Format service application data as HTML
+    const htmlContent = formatServiceApplicationAsHTML(applicationData)
+    
+    await client.emails.send({
+      from: FROM_EMAIL,
+      to: toEmail,
+      subject: `New Service Application - ${applicationData.fullName}`,
+      html: htmlContent,
+    })
+    console.info('[email] Service application email sent successfully to', toEmail)
+    return true
+  } catch (error) {
+    console.error('[email] Failed to send service application:', error?.message || error)
+    throw new Error(`Failed to send service application email: ${error?.message || 'Unknown error'}`)
+  }
+}
+
+function formatServiceApplicationAsHTML(data) {
+  const categoryLabels = {
+    individual: 'Individual',
+    small: 'Small Organization',
+    midSize: 'Mid-Size Organization',
+    large: 'Large Organization',
+  }
+
+  const sections = []
+  
+  // Client Information
+  sections.push(`
+    <h2 style="color: #2563eb; border-bottom: 2px solid #2563eb; padding-bottom: 8px; margin-top: 0;">Client Information</h2>
+    <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+      <tr><td style="padding: 8px; font-weight: bold; width: 200px;">Full Name:</td><td style="padding: 8px;">${data.fullName}</td></tr>
+      <tr><td style="padding: 8px; font-weight: bold;">Email:</td><td style="padding: 8px;">${data.email}</td></tr>
+      <tr><td style="padding: 8px; font-weight: bold;">Phone:</td><td style="padding: 8px;">${data.phone || 'Not provided'}</td></tr>
+      <tr><td style="padding: 8px; font-weight: bold;">Organization:</td><td style="padding: 8px;">${data.organization || 'Not provided'}</td></tr>
+      <tr><td style="padding: 8px; font-weight: bold;">Title/Position:</td><td style="padding: 8px;">${data.title || 'Not provided'}</td></tr>
+    </table>
+  `)
+
+  // Client Category
+  sections.push(`
+    <h2 style="color: #2563eb; border-bottom: 2px solid #2563eb; padding-bottom: 8px;">Client Category</h2>
+    <p style="font-size: 16px; margin: 10px 0 20px 0;"><strong>${categoryLabels[data.clientCategory] || data.clientCategory}</strong></p>
+  `)
+
+  // Selected Services
+  if (data.selectedServices && data.selectedServices.length > 0) {
+    const servicesHtml = data.selectedServices
+      .map(service => `<li style="margin: 8px 0; font-size: 15px;">${service}</li>`)
+      .join('')
+    
+    sections.push(`
+      <h2 style="color: #2563eb; border-bottom: 2px solid #2563eb; padding-bottom: 8px;">Selected Services</h2>
+      <ul style="margin: 10px 0 20px 0; padding-left: 20px;">
+        ${servicesHtml}
+      </ul>
+    `)
+  }
+
+  // Total Cost
+  sections.push(`
+    <h2 style="color: #2563eb; border-bottom: 2px solid #2563eb; padding-bottom: 8px;">Estimated Total Cost</h2>
+    <p style="font-size: 24px; font-weight: bold; color: #2563eb; margin: 10px 0 20px 0;">
+      $${typeof data.totalCost === 'number' ? data.totalCost.toFixed(2) : '0.00'}
+    </p>
+  `)
+
+  // Submission timestamp
+  const submittedDate = data.submittedAt ? new Date(data.submittedAt).toLocaleString('en-US', {
+    dateStyle: 'full',
+    timeStyle: 'long',
+  }) : 'N/A'
+
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <style>
+        body { 
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; 
+          line-height: 1.6; 
+          color: #333; 
+          max-width: 800px; 
+          margin: 0 auto; 
+          padding: 20px;
+          background-color: #f8fafc;
+        }
+        .container {
+          background-color: white;
+          padding: 30px;
+          border-radius: 8px;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h1 style="color: #1e40af; border-bottom: 3px solid #2563eb; padding-bottom: 10px; margin-top: 0;">
+          New Service Application
+        </h1>
+        <p style="color: #666; margin-bottom: 30px; font-size: 14px;">
+          Submitted on ${submittedDate}
+        </p>
+        ${sections.join('\n')}
+        <hr style="margin: 30px 0; border: none; border-top: 1px solid #e2e8f0;">
+        <div style="background-color: #f1f5f9; padding: 15px; border-radius: 6px; margin-top: 20px;">
+          <p style="color: #475569; font-size: 13px; margin: 0;">
+            <strong>Payment Terms:</strong><br>
+            • 40% due at project kickoff<br>
+            • 40% due at complete draft delivery<br>
+            • 20% due at submission and handoff package delivery<br>
+            • Net 15 days from invoice date
+          </p>
+        </div>
+        <p style="color: #666; font-size: 12px; text-align: center; margin-top: 30px;">
+          This application was submitted through GrantFlow Service Application Portal<br>
+          Dr. John White, PhD, MBA | Grant Writing Consultant<br>
+          Cell: 423.504.7778 | Fax: 423.414.5290
+        </p>
+      </div>
+    </body>
+    </html>
+  `
+}
+
+/**
  * Send an application submission email
  * @param {string} toEmail - Recipient email address
  * @param {Object} applicationData - Application data to format and send
