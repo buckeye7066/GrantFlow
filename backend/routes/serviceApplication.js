@@ -34,7 +34,6 @@ router.post('/', async (req, res) => {
       }
 
       // Send email notification to admin
-      const recipientEmail = recipient || SERVICE_APPLICATION_EMAIL
       const emailContent = {
         type: 'contact_admin',
         name,
@@ -44,7 +43,8 @@ router.post('/', async (req, res) => {
         submittedAt: new Date().toISOString(),
       }
 
-      await sendServiceApplicationEmail(recipientEmail, emailContent)
+      // Always send to admin email (determined server-side, not from client)
+      await sendServiceApplicationEmail(SERVICE_APPLICATION_EMAIL, emailContent)
 
       return res.json({
         success: true,

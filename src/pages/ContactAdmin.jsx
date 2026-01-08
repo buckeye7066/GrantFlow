@@ -33,7 +33,7 @@ export default function ContactAdmin() {
     setIsSubmitting(true)
 
     try {
-      // Send email via backend
+      // Send email via backend - recipient is determined server-side
       const response = await fetch('/api/service-application', {
         method: 'POST',
         headers: {
@@ -42,7 +42,6 @@ export default function ContactAdmin() {
         body: JSON.stringify({
           ...formData,
           type: 'contact_admin',
-          recipient: ADMIN_EMAIL,
         }),
       })
 

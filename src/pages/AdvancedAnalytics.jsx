@@ -36,8 +36,17 @@ export default function AdvancedAnalytics() {
     const avgDays = awardedWithDates.length > 0
       ? Math.round(
           awardedWithDates.reduce((sum, g) => {
-            const days = differenceInDays(new Date(g.awarded_date), new Date(g.submitted_date))
-            return sum + days
+            try {
+              const submittedDate = new Date(g.submitted_date)
+              const awardedDate = new Date(g.awarded_date)
+              if (isNaN(submittedDate.getTime()) || isNaN(awardedDate.getTime())) {
+                return sum
+              }
+              const days = differenceInDays(awardedDate, submittedDate)
+              return sum + (days >= 0 ? days : 0)
+            } catch {
+              return sum
+            }
           }, 0) / awardedWithDates.length
         )
       : 0
