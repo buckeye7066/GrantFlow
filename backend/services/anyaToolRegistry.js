@@ -911,7 +911,7 @@ registerTool({
     const { db } = context
     
     // Default to all crawler types if not specified
-    const types = crawlerTypes || ['local', 'scholarship', 'comprehensive', 'profile_enrichment']
+    const types = crawlerTypes || ['local', 'scholarship', 'comprehensive', 'national', 'profile_enrichment']
     
     const jobIds = []
     for (const crawlerType of types) {
@@ -961,7 +961,7 @@ registerTool({
       profileId: { type: 'string', description: 'Profile ID to schedule crawlers for' },
       crawlerType: {
         type: 'string',
-        enum: ['local', 'scholarship', 'comprehensive', 'item_search', 'profile_enrichment', 'avatar_lookup'],
+        enum: ['local', 'scholarship', 'comprehensive', 'national', 'item_search', 'profile_enrichment', 'avatar_lookup'],
         description: 'Type of crawler to schedule'
       },
       schedule: { type: 'string', description: 'Cron expression (e.g., "0 9 * * 1" for every Monday at 9am)' },
@@ -1171,7 +1171,7 @@ registerTool({
           type: 'string',
           enum: ['local', 'scholarship', 'comprehensive', 'profile_enrichment', 'avatar_lookup', 'item_search']
         },
-        description: 'Types of crawlers to run (default: [local, scholarship, comprehensive, profile_enrichment])'
+        description: 'Types of crawlers to run (default: [local, scholarship, comprehensive, national, profile_enrichment])'
       },
       maxRetries: { type: 'integer', description: 'Maximum retries for failed jobs (default: 3)', minimum: 0, maximum: 10 },
       waitForCompletion: { type: 'boolean', description: 'Wait for jobs to complete (default: false)' },

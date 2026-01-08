@@ -20,6 +20,7 @@ const HANDLERS = {
   local: processLocalCrawlerJob,
   scholarship: processScholarshipCrawlerJob,
   comprehensive: processComprehensiveCrawlerJob,
+  national: processComprehensiveCrawlerJob,
   item_search: processItemCrawlerJob,
   document_ingest: processDocumentIngestionJob,
   pipeline_automation: processPipelineAutomationJob,

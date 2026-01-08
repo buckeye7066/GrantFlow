@@ -63,6 +63,7 @@ export const CRAWLER_JOB_TYPES = [
   'local',
   'scholarship',
   'comprehensive',
+  'national',
   'item_search',
   'avatar_lookup',
   'document_ingest',

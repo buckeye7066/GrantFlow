@@ -41,7 +41,7 @@ async function auditLog(entry) {
 export async function runAutonomousCrawlers(options, context) {
   const {
     profileIds = null,
-    crawlerTypes = ['local', 'scholarship', 'comprehensive', 'profile_enrichment'],
+    crawlerTypes = ['local', 'scholarship', 'comprehensive', 'national', 'profile_enrichment'],
     maxRetries = 3,
     waitForCompletion = false,
     timeoutMinutes = 30,
