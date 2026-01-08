@@ -44,15 +44,20 @@ function BillingAccountCard({ account, tiers, onSave, saving }) {
     const tier = tiers.find((t) => t.id === form.tier_id)
     const monthly = account.custom_monthly_cents ?? tier?.base_monthly_cents ?? 0
     const hourly = account.custom_hourly_cents ?? tier?.hourly_rate_cents ?? 0
-    const invoiceNumber = `INV-${Date.now()}`
+    
+    // Generate a more robust invoice number with timestamp and random component
+    const timestamp = Date.now()
+    const randomPart = Math.random().toString(36).substring(2, 8).toUpperCase()
+    const invoiceNumber = `INV-${timestamp}-${randomPart}`
+    
     const invoiceDate = new Date().toLocaleDateString('en-US', { 
       year: 'numeric', 
       month: 'long', 
       day: 'numeric' 
     })
 
-    // Calculate discount amount
-    const discountAmount = (monthly * (form.discount_percent / 100))
+    // Calculate discount amount with null-safety
+    const discountAmount = monthly ? (monthly * (form.discount_percent / 100)) : 0
     const totalDue = form.is_pro_bono ? 0 : (monthly - discountAmount)
 
     const invoiceHTML = `
@@ -228,7 +233,7 @@ function BillingAccountCard({ account, tiers, onSave, saving }) {
       </html>
     `
 
-    const invoiceWindow = window.open('', '_blank')
+    const invoiceWindow = window.open('', '_blank', 'noopener,noreferrer')
     if (invoiceWindow) {
       invoiceWindow.document.write(invoiceHTML)
       invoiceWindow.document.close()
