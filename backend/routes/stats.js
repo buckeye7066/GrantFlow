@@ -19,7 +19,7 @@ const MARKETING_STATS = {
 router.get('/dashboard', (req, res) => {
   try {
     const auth = req.user ?? { role: 'guest' }
-    const isAdmin = auth.role === 'admin'
+    const isAdmin = auth.role === 'admin' || auth.is_admin === true
 
     if (isAdmin) {
       // Return real database stats for admin

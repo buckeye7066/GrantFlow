@@ -45,6 +45,11 @@ export default function ProfileSelect({
     staleTime: 60_000, // 1 minute
   })
 
+  // Filter profiles based on user role - memoized for performance
+  const availableProfiles = React.useMemo(() => {
+    return isAdmin ? profiles : profiles.filter(p => p.user_id === user?.id)
+  }, [isAdmin, profiles, user?.id])
+
   if (isLoading) {
     return (
       <Select disabled>
@@ -54,9 +59,6 @@ export default function ProfileSelect({
       </Select>
     )
   }
-
-  // Filter profiles based on user role
-  const availableProfiles = isAdmin ? profiles : profiles.filter(p => p.user_id === user?.id)
 
   if (availableProfiles.length === 0) {
     return (
