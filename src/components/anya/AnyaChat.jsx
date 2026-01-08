@@ -662,7 +662,13 @@ export default function AnyaChat({ profileId }) {
         )}
       </ScrollArea>
 
-      <div className="border-t border-slate-200 bg-slate-50/80 px-4 py-3">
+      <form
+        className="border-t border-slate-200 bg-slate-50/80 px-4 py-3"
+        onSubmit={(event) => {
+          event.preventDefault()
+          handleSend()
+        }}
+      >
         <Textarea
           value={input}
           onChange={(event) => setInput(event.target.value)}
@@ -682,6 +688,7 @@ export default function AnyaChat({ profileId }) {
             Anya keeps all actions scoped to this profile.
           </span>
           <Button
+            type="submit"
             onClick={handleSend}
             disabled={isDisabled || isSending || !input.trim()}
             size="sm"
@@ -691,7 +698,7 @@ export default function AnyaChat({ profileId }) {
             Send
           </Button>
         </div>
-      </div>
+      </form>
 
       <Dialog
         open={isCodeSearchOpen}
