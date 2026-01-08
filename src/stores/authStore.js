@@ -174,13 +174,40 @@ export const useAuthStore = create((set, get) => ({
       return
     }
 
+    // Handle standard auth response with user object
     if (payload.user) {
+      const user = payload.user
       const profiles = Array.isArray(payload.profiles) ? payload.profiles : []
       const activeProfileId =
         payload.active_profile_id ?? profiles[0]?.id ?? null
+      
+      // Check if this is an admin user
+      if (user.is_admin) {
+        set({
+          user,
+          profiles,
+          activeProfileId,
+          isAuthenticated: true,
+          error: null,
+          sessionExpired: false,
+          sessionMessage: null,
+          preferredAuthMethod: get().preferredAuthMethod,
+          needsProfileCreation: false, // Admins don't need profiles
+          hasSeenOnboarding: true, // Skip onboarding for admins
+        })
+        
+        // Trigger crawler jobs asynchronously (fire-and-forget)
+        triggerAdminCrawlers().catch(err => {
+          console.warn('Failed to trigger admin crawlers:', err)
+        })
+        
+        return
+      }
+      
+      // Regular user
       const needsProfileCreation = profiles.length === 0 && !get().hasSeenOnboarding
       set({
-        user: payload.user,
+        user,
         profiles,
         activeProfileId,
         isAuthenticated: true,
@@ -193,6 +220,7 @@ export const useAuthStore = create((set, get) => ({
       return
     }
 
+    // Legacy: Handle old-style payload with role field (for backwards compatibility)
     if (payload.role === 'admin') {
       const user = {
         id: 'admin',
@@ -214,7 +242,6 @@ export const useAuthStore = create((set, get) => ({
       })
       
       // Trigger crawler jobs asynchronously (fire-and-forget)
-      // Run immediately in next tick to avoid blocking state update
       triggerAdminCrawlers().catch(err => {
         console.warn('Failed to trigger admin crawlers:', err)
       })
