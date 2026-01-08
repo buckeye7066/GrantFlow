@@ -95,6 +95,16 @@ class APIClient {
       throw this.createAuthError('Authentication required');
     }
     
+    // If the original request was to /refresh, don't try again - just fail
+    if (originalRequest?.url?.includes('/auth/refresh')) {
+      console.warn('[APIClient] Refresh endpoint failed, clearing auth state');
+      this.clearToken();
+      if (this.onAuthFailure) {
+        this.onAuthFailure('Your session is no longer valid. Please sign in again.');
+      }
+      throw this.createAuthError('Session expired');
+    }
+    
     // Single-flight refresh: if a refresh is already in progress, await it
     if (this.refreshPromise) {
       console.log('[APIClient] Refresh already in progress, waiting...');
