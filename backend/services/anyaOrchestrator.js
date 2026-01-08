@@ -11,7 +11,7 @@ function getClaudeClient() {
   if (cachedClaudeClient) return cachedClaudeClient
   
   const apiKey = process.env.ANTHROPIC_API_KEY
-  console.log('[Anya] Checking Anthropic API key:', apiKey ? `Found (${apiKey.substring(0, 10)}...)` : 'Missing')
+  console.log('[Anya] Checking Anthropic API key:', apiKey ? `Found (${apiKey.substring(0, 8)}...)` : 'Missing')
   
   if (!apiKey) {
     const error = new Error(
@@ -680,7 +680,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     console.log('[Anya] Model:', DEFAULT_ASSISTANT_MODEL)
     console.log('[Anya] Messages to send:', conversationMessages.length)
     console.log('[Anya] API Key present:', !!process.env.ANTHROPIC_API_KEY)
-    console.log('[Anya] API Key prefix:', process.env.ANTHROPIC_API_KEY ? process.env.ANTHROPIC_API_KEY.substring(0, 15) + '...' : 'MISSING')
+    console.log('[Anya] API Key prefix:', process.env.ANTHROPIC_API_KEY ? process.env.ANTHROPIC_API_KEY.substring(0, 8) + '...' : 'MISSING')
     
     const startTime = Date.now()
     const response = await claude.messages.create({
@@ -705,7 +705,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     }
     
     console.error('[Anya] ✗ Claude API returned empty response')
-    console.error('[Anya] Full response object:', JSON.stringify(response, null, 2))
+    console.error('[Anya] Response structure - ID:', response?.id, 'Model:', response?.model, 'Content length:', response?.content?.length)
   } catch (error) {
     console.error('[Anya] === Claude API Error ===')
     console.error('[Anya] Error Type:', error.constructor.name)
@@ -737,7 +737,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     return `I encountered an error while processing your message: ${error.message}. Please try again or contact support if this persists.`
   }
 
-  console.error('[Anya] Reached end of function without returning - this should not happen')
+  // This should not be reached, but return a fallback message just in case
   return [
     "I'm having trouble reaching the AI service right now.",
     'We can still move forward manually—let me know the specific action you need help with (for example: find grants, track applications, organize documents), and I\'ll walk through the recommended steps.',

@@ -113,7 +113,7 @@ Look for timing information:
 
 ✅ Environment variables set:
 - `ANTHROPIC_API_KEY` - Your Anthropic API key
-- `ANYA_CLAUDE_MODEL` (optional) - Defaults to `claude-3-5-sonnet-20241022`
+- `ANYA_CLAUDE_MODEL` or `CLAUDE_MODEL` (optional) - Defaults to `claude-3-5-sonnet-20241022`
 
 ✅ Anthropic account:
 - API key is valid

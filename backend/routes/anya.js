@@ -42,6 +42,9 @@ function handleError(res, error) {
   return res.status(status).json({ error: error.message || 'Unexpected error' })
 }
 
+// Test model - use cheapest/fastest for connection testing
+const TEST_MODEL = 'claude-3-haiku-20240307';
+
 // Public test endpoint - no auth required
 router.get('/test', async (_req, res) => {
   console.log('[Anya Test] === Test endpoint called ===')
@@ -54,7 +57,7 @@ router.get('/test', async (_req, res) => {
   try {
     const apiKey = process.env.ANTHROPIC_API_KEY
     console.log('[Anya Test] API key present:', !!apiKey)
-    console.log('[Anya Test] API key prefix:', apiKey ? apiKey.substring(0, 15) + '...' : 'MISSING')
+    console.log('[Anya Test] API key prefix:', apiKey ? apiKey.substring(0, 8) + '...' : 'MISSING')
     
     if (!apiKey) {
       anthropicStatus = 'missing_key'
@@ -73,7 +76,7 @@ router.get('/test', async (_req, res) => {
       console.log('[Anya Test] Making test API call...')
       const startTime = Date.now()
       const testResponse = await client.messages.create({
-        model: 'claude-3-haiku-20240307', // Use cheapest model for testing
+        model: TEST_MODEL,
         max_tokens: 10,
         messages: [{ role: 'user', content: 'Say "ok"' }],
       })
@@ -83,7 +86,7 @@ router.get('/test', async (_req, res) => {
       if (testResponse?.content?.[0]?.text) {
         anthropicStatus = 'connected'
         modelInfo = {
-          model: 'claude-3-haiku-20240307',
+          model: TEST_MODEL,
           test_response: testResponse.content[0].text,
           response_time_ms: duration,
         }
@@ -118,7 +121,7 @@ router.get('/test', async (_req, res) => {
       status: anthropicStatus,
       api_key_configured: !!process.env.ANTHROPIC_API_KEY,
       api_key_prefix: process.env.ANTHROPIC_API_KEY ? 
-        process.env.ANTHROPIC_API_KEY.substring(0, 15) + '...' : null,
+        process.env.ANTHROPIC_API_KEY.substring(0, 8) + '...' : null,
       error: anthropicError,
       model: modelInfo,
     },
@@ -150,7 +153,7 @@ router.get('/status', adminAuth, async (_req, res) => {
       
       // Make a minimal test request
       const testResponse = await client.messages.create({
-        model: 'claude-3-haiku-20240307', // Use cheapest model for testing
+        model: TEST_MODEL,
         max_tokens: 10,
         messages: [{ role: 'user', content: 'Say "ok"' }],
       })
@@ -158,7 +161,7 @@ router.get('/status', adminAuth, async (_req, res) => {
       if (testResponse?.content?.[0]?.text) {
         anthropicStatus = 'connected'
         modelInfo = {
-          model: 'claude-3-haiku-20240307',
+          model: TEST_MODEL,
           test_response: testResponse.content[0].text,
         }
       } else {
@@ -184,7 +187,7 @@ router.get('/status', adminAuth, async (_req, res) => {
       status: anthropicStatus,
       api_key_configured: !!process.env.ANTHROPIC_API_KEY,
       api_key_prefix: process.env.ANTHROPIC_API_KEY ? 
-        process.env.ANTHROPIC_API_KEY.substring(0, 10) + '...' : null,
+        process.env.ANTHROPIC_API_KEY.substring(0, 8) + '...' : null,
       error: anthropicError,
       model: modelInfo,
     },
