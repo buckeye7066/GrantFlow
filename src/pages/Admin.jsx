@@ -2,6 +2,7 @@ import React from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Shield } from 'lucide-react';
 import AdminDocumentUpload from '@/components/admin/AdminDocumentUpload';
+import ProfileUserLinker from '@/components/admin/ProfileUserLinker';
 import { useAuthStore } from '@/stores/authStore';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { AlertCircle } from 'lucide-react';
@@ -41,10 +42,15 @@ export default function Admin() {
         <Tabs defaultValue="upload" className="w-full">
           <TabsList>
             <TabsTrigger value="upload">Upload Profile Document</TabsTrigger>
+            <TabsTrigger value="link-users">Link Users to Profiles</TabsTrigger>
           </TabsList>
           
           <TabsContent value="upload" className="mt-6">
             <AdminDocumentUpload />
+          </TabsContent>
+          
+          <TabsContent value="link-users" className="mt-6">
+            <ProfileUserLinker />
           </TabsContent>
         </Tabs>
       </div>
