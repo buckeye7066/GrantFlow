@@ -8,6 +8,7 @@ import fs from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { upsertFundingOpportunity } from './opportunityInserter.js'
+import { saveToProfilePipeline } from './opportunityMatcher.js'
 import {
   buildProfileSignals,
   summarizeProfileSignals,
@@ -160,6 +161,9 @@ export function processLocalCrawlerJob({ db, job, dataDir, profileContext }) {
   
   // Insert into database
   let insertedCount = 0
+  let savedToPipeline = 0
+  const profileId = profileContext?.profile?.id
+  
   for (const opp of topOpps) {
     try {
       const result = upsertFundingOpportunity(db, {
@@ -184,15 +188,27 @@ export function processLocalCrawlerJob({ db, job, dataDir, profileContext }) {
       if (result.inserted) {
         insertedCount++
       }
+      
+      // Save to profile pipeline if match >= 80%
+      if (profileId && opp.match_score >= 80) {
+        const oppWithId = { ...opp, id: result.id }
+        const pipelineResult = saveToProfilePipeline(db, oppWithId, profileId, profileContext, opp.match_score)
+        if (pipelineResult.saved) {
+          savedToPipeline++
+        }
+      }
     } catch (err) {
       console.error(`[localCrawler] Error inserting ${opp.title}:`, err.message)
     }
   }
   
+  console.log(`[localCrawler] Saved ${savedToPipeline} opportunities to profile pipeline (≥80% match)`)
+  
   return {
     evaluated: allOpps.length,
     inserted: insertedCount,
     matched: topOpps.length,
+    savedToPipeline,
     opportunityLogs: topOpps.map(o => ({
       title: o.title,
       sponsor: o.sponsor,

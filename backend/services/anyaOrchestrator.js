@@ -57,7 +57,14 @@ function getClaudeClient() {
 }
 
 const DEFAULT_ASSISTANT_MODEL =
-  process.env.ANYA_CLAUDE_MODEL || process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20241022'
+  process.env.ANYA_CLAUDE_MODEL || process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20240620'
+
+// Fallback models in order of preference
+const FALLBACK_MODELS = [
+  'claude-3-5-sonnet-20240620',
+  'claude-3-sonnet-20240229',
+  'claude-3-haiku-20240307',
+]
 
 function coerceProfileId(requestedProfileId) {
   if (!requestedProfileId) return null
@@ -695,30 +702,58 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:661',message:'BEFORE Claude API call',data:{model:DEFAULT_ASSISTANT_MODEL,messageCount:conversationMessages.length,hasClaudeClient:!!claude},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
     // #endregion
     
-    const response = await claude.messages.create({
-      model: DEFAULT_ASSISTANT_MODEL,
-      max_tokens: 1024,
-      temperature: 0.35,
-      system: systemPrompt,
-      messages: conversationMessages,
-    })
+    let lastError = null
+    let modelToTry = DEFAULT_ASSISTANT_MODEL
+    
+    // Try the default model first, then fallbacks
+    const modelsToTry = [DEFAULT_ASSISTANT_MODEL, ...FALLBACK_MODELS.filter(m => m !== DEFAULT_ASSISTANT_MODEL)]
+    
+    for (const model of modelsToTry) {
+      try {
+        console.log(`[Anya] Attempting with model: ${model}`)
+        const response = await claude.messages.create({
+          model: model,
+          max_tokens: 1024,
+          temperature: 0.35,
+          system: systemPrompt,
+          messages: conversationMessages,
+        })
 
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:669',message:'AFTER Claude API call',data:{hasResponse:!!response,hasContent:!!response?.content,contentLength:response?.content?.length||0,firstTextExists:!!response?.content?.[0]?.text},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
-    // #endregion
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:669',message:'AFTER Claude API call',data:{hasResponse:!!response,hasContent:!!response?.content,contentLength:response?.content?.length||0,firstTextExists:!!response?.content?.[0]?.text,model},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+        // #endregion
 
-    const reply = response?.content?.[0]?.text?.trim()
-    if (reply) {
-      console.log('[Anya] Claude API response received successfully')
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:671',message:'Claude API SUCCESS - returning reply',data:{replyLength:reply.length},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
-      // #endregion
-      return reply
+        const reply = response?.content?.[0]?.text?.trim()
+        if (reply) {
+          console.log(`[Anya] Claude API response received successfully with model: ${model}`)
+          // #region agent log
+          fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:671',message:'Claude API SUCCESS - returning reply',data:{replyLength:reply.length,model},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+          // #endregion
+          return reply
+        }
+        console.warn(`[Anya] Claude API returned empty response with model: ${model}`)
+        lastError = new Error('Empty response from Claude API')
+        break // Don't try other models if we got a response but it was empty
+      } catch (modelError) {
+        console.warn(`[Anya] Model ${model} failed:`, modelError.message)
+        lastError = modelError
+        
+        // If it's not a model availability error, don't try other models
+        if (modelError.status !== 404 && !modelError.message?.toLowerCase().includes('model')) {
+          break
+        }
+        // Continue to next model
+      }
     }
+    
+    // If we get here, all models failed
+    const error = lastError || new Error('All models failed')
+    
     // #region agent log
     fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:674',message:'Claude API returned EMPTY response',data:{response},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
     // #endregion
-    console.warn('[Anya] Claude API returned empty response')
+    
+    throw error
   } catch (error) {
     // #region agent log
     fetch('http://127.0.0.1:7244/ingest/d8208840-ed01-4dc6-b653-2a2151ebe533',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'anyaOrchestrator.js:675',message:'Claude API call FAILED',data:{errorType:error.constructor.name,errorMsg:error.message,errorStatus:error.status,model:DEFAULT_ASSISTANT_MODEL},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
@@ -734,8 +769,10 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
       return 'Authentication failed. The Anthropic API key may be invalid. Please check ANTHROPIC_API_KEY in Railway.'
     } else if (error.status === 429) {
       return 'Rate limit exceeded. Please wait a moment and try again.'
-    } else if (error.message?.includes('model')) {
-      return `Model error: The model "${DEFAULT_ASSISTANT_MODEL}" may not be available. Please check the model name.`
+    } else if (error.message?.toLowerCase().includes('model')) {
+      return `Model error: Unable to access Claude models. This may be a temporary issue. Please try again in a moment.`
+    } else if (error.message?.toLowerCase().includes('credit') || error.message?.toLowerCase().includes('balance')) {
+      return 'Your Anthropic account needs more credits. Please add credits at https://console.anthropic.com/settings/billing'
     }
   }
 

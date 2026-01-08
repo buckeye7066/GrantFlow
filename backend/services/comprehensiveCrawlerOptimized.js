@@ -257,13 +257,28 @@ export async function runComprehensiveCrawler(db, profileContext = {}, options =
   if (profileId) {
     for (const opp of topOpps.filter(o => o.match_score >= 80)) {
       try {
-        await saveToProfilePipeline(db, profileId, opp, opp.match_score, opp.match_reasons)
-        savedToProfile++
+        // Find the inserted opportunity ID
+        const insertedOpp = db.prepare(`
+          SELECT id FROM funding_opportunities 
+          WHERE source = 'verified_real' AND source_id = ?
+          LIMIT 1
+        `).get(opp.id || opp.source_id)
+        
+        if (insertedOpp) {
+          const oppWithId = { ...opp, id: insertedOpp.id }
+          const result = await saveToProfilePipeline(db, oppWithId, profileId, profileContext, opp.match_score)
+          if (result.saved) {
+            savedToProfile++
+          }
+        }
       } catch (err) {
         // Ignore duplicates
+        console.warn(`[comprehensiveCrawler] Could not save to pipeline: ${err.message}`)
       }
     }
   }
+  
+  console.log(`[comprehensiveCrawler] Saved ${savedToProfile} opportunities to profile pipeline (≥80% match)`)
   
   return {
     success: true,

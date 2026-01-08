@@ -1,0 +1,71 @@
+{
+  "timestamp": "2026-01-08T05:30:48.204Z",
+  "summary": {
+    "total_tests": 25,
+    "passed": 16,
+    "failed": 9,
+    "success_rate": "64.0%"
+  },
+  "details": {
+    "passed": [
+      "Authentication",
+      "Health Check",
+      "Get Current User",
+      "List Profiles",
+      "List Opportunities",
+      "List Crawler Jobs",
+      "List Grants",
+      "Anya Tools",
+      "List Organizations",
+      "Create Profile",
+      "Read Profile",
+      "Update Profile",
+      "Delete Profile",
+      "Anya Status",
+      "Anya Tools",
+      "Anya Session"
+    ],
+    "failed": [
+      {
+        "test": "AI Field Assistance",
+        "error": "Request failed with status code 500"
+      },
+      {
+        "test": "local crawler",
+        "error": "Request failed with status code 500"
+      },
+      {
+        "test": "government crawler",
+        "error": "Request failed with status code 500"
+      },
+      {
+        "test": "student crawler",
+        "error": "Request failed with status code 500"
+      },
+      {
+        "test": "ecf crawler",
+        "error": "Request failed with status code 500"
+      },
+      {
+        "test": "item crawler",
+        "error": "Request failed with status code 500"
+      },
+      {
+        "test": "specialNeeds crawler",
+        "error": "Request failed with status code 500"
+      },
+      {
+        "test": "Discovery",
+        "error": "Request failed with status code 404"
+      },
+      {
+        "test": "Anya",
+        "error": "Request failed with status code 404"
+      }
+    ],
+    "fixed": [
+      "Set default for RESEND_API_KEY",
+      "Set default for FROM_EMAIL"
+    ]
+  }
+}

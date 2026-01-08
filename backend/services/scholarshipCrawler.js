@@ -1,6 +1,7 @@
 import fs from 'fs'
 import { join } from 'path'
 import { upsertFundingOpportunity } from './opportunityInserter.js'
+import { saveToProfilePipeline } from './opportunityMatcher.js'
 import {
   extractStateFromContext,
   extractStudentCampusZip,
@@ -273,6 +274,8 @@ export function processScholarshipCrawlerJob({
   }
 
   let inserted = 0
+  let savedToPipeline = 0
+  const profileId = profileContext?.profile?.id
   const opportunityLogs = []
   scored.forEach(({ opportunity, score, reasons }) => {
     const matchSummary =
@@ -295,6 +298,15 @@ export function processScholarshipCrawlerJob({
       inserted += 1
     }
 
+    // Save to profile pipeline if match >= 80%
+    if (profileId && score >= 80) {
+      const oppWithId = { ...opportunity, id: result.id }
+      const pipelineResult = saveToProfilePipeline(db, oppWithId, profileId, profileContext, score)
+      if (pipelineResult.saved) {
+        savedToPipeline++
+      }
+    }
+
     opportunityLogs.push({
       title: opportunity.title,
       sponsor: opportunity.sponsor,
@@ -304,14 +316,18 @@ export function processScholarshipCrawlerJob({
       inserted: !!result.inserted,
     })
   })
+  
+  console.log(`[scholarshipCrawler] Saved ${savedToPipeline} scholarships to profile pipeline (≥80% match)`)
 
   return {
     inserted,
     evaluated: scored.length,
+    savedToPipeline,
     result_count: inserted,
     result_meta: {
       evaluated: scored.length,
       inserted,
+      savedToPipeline,
       duration_seconds: Math.max(0, Math.round((Date.now() - startTime) / 1000)),
       opportunities: opportunityLogs,
     },
