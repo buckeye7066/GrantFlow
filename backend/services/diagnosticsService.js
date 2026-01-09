@@ -107,10 +107,22 @@ function getDatabaseDiagnostics(db) {
  */
 function getTableCount(db, tableName) {
   try {
-    // Validate table name to prevent SQL injection
-    if (!/^[a-zA-Z0-9_]+$/.test(tableName)) {
+    // Whitelist of allowed table names for additional security
+    const allowedTables = [
+      'funding_opportunities',
+      'crawl_logs',
+      'grants',
+      'profiles',
+      'users',
+      'organizations',
+      'crawler_jobs',
+    ];
+    
+    // Validate table name is in whitelist
+    if (!allowedTables.includes(tableName)) {
       return 0;
     }
+    
     const result = db.prepare(`SELECT COUNT(*) as count FROM ${tableName}`).get();
     return result?.count || 0;
   } catch (error) {

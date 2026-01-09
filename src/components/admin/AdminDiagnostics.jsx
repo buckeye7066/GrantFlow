@@ -182,7 +182,7 @@ export default function AdminDiagnostics() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
             <div>
               <p className="text-sm text-slate-600">Environment</p>
               <p className="font-medium">{diagnostics.app.env}</p>
@@ -222,7 +222,7 @@ export default function AdminDiagnostics() {
               
               <div>
                 <p className="text-sm text-slate-600 mb-2">Table Counts</p>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                   {Object.entries(diagnostics.db.tables).map(([table, count]) => (
                     <div key={table} className="bg-slate-50 p-3 rounded">
                       <p className="text-xs text-slate-600">{table}</p>
