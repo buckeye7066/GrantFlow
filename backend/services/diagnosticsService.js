@@ -1,4 +1,4 @@
-import { promises as fs } from 'fs';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -18,7 +18,7 @@ export function getSystemDiagnostics(db) {
   let version = 'unknown';
   try {
     const packageJsonPath = path.resolve(__dirname, '../../package.json');
-    const packageJson = JSON.parse(require('fs').readFileSync(packageJsonPath, 'utf8'));
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
     version = packageJson.version || 'unknown';
   } catch (error) {
     // Ignore if we can't read package.json
