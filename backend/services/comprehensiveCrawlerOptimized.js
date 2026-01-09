@@ -5,6 +5,7 @@ import { upsertFundingOpportunity } from './opportunityInserter.js'
 import {
   buildProfileSignals,
   summarizeProfileSignals,
+  safeParseArrayField,
 } from './profileHelpers.js'
 import { saveToProfilePipeline } from './opportunityMatcher.js'
 
@@ -201,9 +202,9 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
       seenTitles.add(opp.title)
       allOpps.push({
         ...opp,
-        keywords: JSON.parse(opp.keywords || '[]'),
-        categories: JSON.parse(opp.categories || '[]'),
-        eligibility_bullets: JSON.parse(opp.eligibility_bullets || '[]')
+        keywords: safeParseArrayField(opp.keywords, []),
+        categories: safeParseArrayField(opp.categories, []),
+        eligibility_bullets: safeParseArrayField(opp.eligibility_bullets, [])
       })
     }
   }
