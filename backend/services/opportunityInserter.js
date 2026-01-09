@@ -19,15 +19,20 @@ export function upsertFundingOpportunity(db, opportunity) {
     )
     .get(source, sourceId)
 
-  // Skip only if incoming is baseline (null last_verified_at) trying to overwrite verified record
-  const incomingIsBaseline = !opportunity.last_verified_at
-  const existingIsVerified = existing?.last_verified_at !== null
-  
-  if (existing?.id && incomingIsBaseline && existingIsVerified) {
-    return { id: existing.id, inserted: false, skipped: true, reason: 'baseline data cannot overwrite verified record' }
+  const incomingIsBaseline = opportunity.last_verified_at == null
+  const existingIsVerified = existing?.last_verified_at != null
+
+  // Only block baseline/unverified incoming data from downgrading verified existing records
+  if (existing?.id && existingIsVerified && incomingIsBaseline) {
+    return {
+      id: existing.id,
+      inserted: false,
+      skipped: true,
+      reason: 'baseline cannot downgrade verified record'
+    }
   }
 
-  // If record exists, update it (verified records can update verified records)
+  // Otherwise allow updates (including verified→verified ingestion refresh)
   if (existing?.id) {
     return { id: existing.id, inserted: false }
   }
