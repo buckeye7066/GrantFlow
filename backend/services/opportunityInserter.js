@@ -19,12 +19,15 @@ export function upsertFundingOpportunity(db, opportunity) {
     )
     .get(source, sourceId)
 
-  // If record exists and is verified (has last_verified_at), don't overwrite
-  if (existing?.id && existing.last_verified_at !== null) {
-    return { id: existing.id, inserted: false, skipped: true, reason: 'verified record' }
+  // Skip only if incoming is baseline (null last_verified_at) trying to overwrite verified record
+  const incomingIsBaseline = !opportunity.last_verified_at
+  const existingIsVerified = existing?.last_verified_at !== null
+  
+  if (existing?.id && incomingIsBaseline && existingIsVerified) {
+    return { id: existing.id, inserted: false, skipped: true, reason: 'baseline data cannot overwrite verified record' }
   }
 
-  // If record exists but is not verified (baseline), update it
+  // If record exists, update it (verified records can update verified records)
   if (existing?.id) {
     return { id: existing.id, inserted: false }
   }
