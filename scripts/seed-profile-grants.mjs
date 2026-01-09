@@ -23,6 +23,28 @@ console.log('Database:', DB_PATH);
 // Connect to database
 const db = new Database(DB_PATH);
 
+/**
+ * Safely parse array fields that may be JSON arrays or comma-separated strings
+ */
+function safeParseArrayField(value, fallback = []) {
+  if (!value) return fallback;
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        return Array.isArray(parsed) ? parsed : fallback;
+      } catch {
+        // Fall through to comma-split
+      }
+    }
+    // Handle comma-separated strings
+    return trimmed.split(',').map(s => s.trim()).filter(Boolean);
+  }
+  return fallback;
+}
+
 // Load real opportunities from all data files
 function loadAllRealOpportunities() {
   const opportunities = [];
@@ -90,16 +112,12 @@ function buildProfileSignals(profile, sections) {
     }
   }
   
-  // Parse JSON fields
-  try {
-    const tags = JSON.parse(profile.tags || '[]');
-    tags.forEach(t => signals.keywords.add(t.toLowerCase()));
-  } catch (e) {}
+  // Parse JSON fields using safeParseArrayField
+  const tags = safeParseArrayField(profile.tags, []);
+  tags.forEach(t => signals.keywords.add(t.toLowerCase()));
   
-  try {
-    const interests = JSON.parse(profile.interests || '[]');
-    interests.forEach(i => signals.keywords.add(i.toLowerCase()));
-  } catch (e) {}
+  const interests = safeParseArrayField(profile.interests, []);
+  interests.forEach(i => signals.keywords.add(i.toLowerCase()));
   
   // Process sections
   for (const section of sections) {
