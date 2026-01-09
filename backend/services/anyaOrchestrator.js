@@ -564,6 +564,59 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
   // This provides special recognition for the main system administrator
   const isPrimaryAdmin = isAdmin && userEmail === ADMIN_EMAIL
 
+  // Check for health-related queries and respond with system diagnostics
+  const lowerContent = trimmed.toLowerCase()
+  const healthKeywords = ['working', 'health', 'status', 'system', 'crawler', 'error', 'broken', 'fine', 'ok', 'running']
+  const isHealthQuery = healthKeywords.some(keyword => lowerContent.includes(keyword))
+  
+  if (isHealthQuery && isAdmin) {
+    try {
+      // Call system.health tool to get actual system status
+      const { invokeTool: invokeRegisteredTool } = await import('./anyaToolRegistry.js')
+      const healthResult = await invokeRegisteredTool('system.health', {}, { db, user })
+      const health = healthResult?.output || {}
+      
+      // Build response based on actual system state
+      const statusEmoji = {
+        'healthy': '✅',
+        'warning': '⚠️',
+        'degraded': '🔴',
+        'error': '❌'
+      }[health.status] || '❓'
+      
+      let response = `Hi ${userName}! ${statusEmoji} System Status: **${health.status?.toUpperCase()}**\n\n`
+      
+      if (health.issues && health.issues.length > 0) {
+        response += '**Issues Detected:**\n'
+        health.issues.forEach(issue => {
+          response += `• ${issue}\n`
+        })
+        response += '\n'
+      } else {
+        response += '✓ All systems operational!\n\n'
+      }
+      
+      response += '**Quick Stats:**\n'
+      response += `• ${health.counts?.opportunities || 0} funding opportunities\n`
+      response += `• ${health.counts?.activeProfiles || 0} active profiles\n`
+      response += `• ${health.crawlers?.totalRuns || 0} total crawler runs\n`
+      
+      if (health.crawlers?.recentFailures > 0) {
+        response += `\n⚠️ ${health.crawlers.recentFailures} crawler failures in the last 24 hours\n`
+      }
+      
+      if (health.lastError) {
+        response += `\n**Last Error:**\n`
+        response += `• ${health.lastError.crawler}: ${health.lastError.message}\n`
+      }
+      
+      return response
+    } catch (error) {
+      console.error('[anya] Failed to get system health:', error)
+      // Fall through to normal AI response
+    }
+  }
+
   let openai = null
   try {
     openai = getOpenAIClient()
@@ -656,6 +709,13 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
       '  • Viewing all user profiles and data',
       '  • Managing database operations',
       '  • System diagnostics and health checks',
+      '',
+      'CRITICAL - System Health Reporting:',
+      '- NEVER claim "everything is fine" or "all systems working" without checking system.health tool first',
+      '- When asked about system status, crawlers, or errors, ALWAYS use the system.health tool',
+      '- Report actual issues found in system.health output - do not sugarcoat problems',
+      '- If system.health shows failures, missing API keys, or zero opportunities, report them clearly',
+      '- Base all health-related responses on actual data from system.health, not assumptions',
       '- Feel free to acknowledge their admin status when greeting them',
       ''
     )
