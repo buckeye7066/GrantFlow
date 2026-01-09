@@ -804,9 +804,13 @@ router.get('/national-crawl/status', async (req, res) => {
  */
 router.get('/diagnostics', (req, res) => {
   try {
-    // Check admin access
+    // Check admin access - use consistent admin enforcement (is_admin flag or email-based)
     const user = req.user;
-    if (!user || !user.is_admin) {
+    const userEmail = user?.primary_email || user?.email || '';
+    const isAdmin = user?.is_admin === true || user?.role === 'admin' || 
+                    (userEmail && userEmail.toLowerCase().includes('buckeye7066'));
+    
+    if (!isAdmin) {
       return res.status(403).json({ 
         error: 'Access denied',
         message: 'This endpoint is restricted to administrators only' 

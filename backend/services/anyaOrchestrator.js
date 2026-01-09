@@ -566,7 +566,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
 
   // Check for health-related queries and respond with system diagnostics
   const lowerContent = trimmed.toLowerCase()
-  const healthKeywords = ['working', 'health', 'status', 'system', 'crawler', 'error', 'broken', 'fine', 'ok', 'running']
+  const healthKeywords = ['working', 'health', 'status', 'crawler', 'error', 'broken', 'fine', 'running']
   const isHealthQuery = healthKeywords.some(keyword => lowerContent.includes(keyword))
   
   if (isHealthQuery && isAdmin) {
