@@ -535,8 +535,8 @@ export function calculateMatchScore(profile, opportunity) {
     score += 15
   }
   
-  // Random variation for testing
-  score += Math.floor(Math.random() * 15)
+  // REMOVED: Random variation for testing - use deterministic scoring only
+  // Use matchingEngine.js for production scoring
   
   return Math.min(100, score)
 }

@@ -62,18 +62,9 @@ export function calculateMatchScore(opportunity, profile) {
   return Math.min(100, score)
 }
 
-/**
- * DEPRECATED: Mock opportunities removed from production paths
- * All crawlers must return real data from legitimate sources or throw errors
- * @throws {Error} Always throws error - should not be used in production
- */
-export function getMockOpportunities(crawlerType, profile) {
-  throw new Error(
-    `getMockOpportunities() is deprecated and disabled in production. ` +
-    `Crawler type '${crawlerType}' must use real data sources. ` +
-    `Profile: ${profile?.id || 'unknown'}`
-  )
-}
+// REMOVED: getMockOpportunities() function
+// All crawlers must use real data connectors, not mock data
+// See backend/services/connectors/ for real API integrations
 
 export function formatOpportunity(opp, profile) {
   return {
@@ -95,6 +86,5 @@ export function formatOpportunity(opp, profile) {
 export default {
   getProfileWithLocation,
   calculateMatchScore,
-  getMockOpportunities,
   formatOpportunity
 }

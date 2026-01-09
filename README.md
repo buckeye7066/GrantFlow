@@ -819,6 +819,227 @@ This project is licensed under the MIT License.
 - Clear node_modules and reinstall: `rm -rf node_modules && npm install`
 - Check for TypeScript errors: `npm run type-check` (if configured)
 
+---
+
+## 📊 Data Sources & Legality
+
+GrantFlow uses **only** legitimate, publicly accessible data sources with proper attribution and rate limiting:
+
+### Federal Sources
+
+| Source | Type | API | Rate Limit | TOS |
+|--------|------|-----|------------|-----|
+| **Grants.gov** | OPPORTUNITY | [REST API](https://www.grants.gov/web/grants/xml-web-services.html) | ~1 req/sec (conservative) | [Terms](https://www.grants.gov/web/grants/support/terms-of-use.html) |
+| **SAM.gov** | PROGRAM | [Federal Assistance API](https://open.gsa.gov/api/fh-public-api/) | ~2 req/sec | [Terms](https://www.sam.gov/SAM/pages/public/termsOfUse.jsf) |
+| **NIH RePORTER** | OPPORTUNITY | [REST API](https://api.reporter.nih.gov/) | 100 req/min | Public domain |
+| **NSF Awards** | OPPORTUNITY | [Awards API](https://www.research.gov/common/webapi/awardapisearch-v1.htm) | Conservative use | Public domain |
+| **USAspending.gov** | DIRECTORY | [API v2](https://api.usaspending.gov/) | 500 req/hour | Public domain |
+
+**API Keys Required:**
+- `SAM_GOV_API_KEY` - Register at https://open.gsa.gov/api/fh-public-api/
+
+### State/Local Sources
+
+| Source | Type | Notes |
+|--------|------|-------|
+| **Benefits.gov** | PROGRAM | No official API - use state-specific databases instead |
+| **State Open Data** | DIRECTORY | Socrata-based portals (varies by state) |
+| **State Agencies** | VARIES | Direct partnerships recommended |
+
+### Source Type Classification
+
+- **OPPORTUNITY**: Open/forecasted solicitation with deadline and direct application URL
+  - Example: Active Grants.gov FOA, NIH R01 with deadline
+- **PROGRAM**: Standing assistance program with rolling enrollment
+  - Example: Medicaid, SNAP, LIHEAP, SAM.gov assistance listings
+- **DIRECTORY**: Funding source locator, no claim of "open grant"
+  - Example: Community foundation listings, agency directories, historical awards
+
+### Compliance Notes
+
+1. **Rate Limiting**: All connectors implement conservative rate limiting to respect server resources
+2. **Attribution**: Evidence URLs stored with each opportunity for audit trail
+3. **TOS Compliance**: Review each source's terms of service before high-volume use
+4. **No Scraping**: Never screen-scrape Benefits.gov or state sites without permission
+5. **API Registration**: Register for required API keys and monitor usage limits
+
+---
+
+## 🗺️ National ZIP Crawler Design
+
+The National ZIP Crawler processes all ~43,859 US ZIP codes to ensure comprehensive coverage:
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│ National ZIP Crawler                                 │
+│                                                      │
+│  1. Load all US ZIP codes                           │
+│  2. Process in batches (100 per batch)              │
+│  3. For each ZIP, find ≥3 funding sources           │
+│  4. Classify: OPPORTUNITY → PROGRAM → DIRECTORY     │
+│  5. Store evidence URL + verification timestamp     │
+│  6. Checkpoint every 500 ZIPs (resumable)           │
+└─────────────────────────────────────────────────────┘
+```
+
+### Fallback Logic
+
+For each ZIP code, attempt to find sources in this priority order:
+
+1. **OPPORTUNITY** (best): Active federal/state grants with deadlines
+2. **PROGRAM** (good): Standing programs like Medicaid, SNAP
+3. **DIRECTORY** (fallback): State portals, agency listings
+
+If fewer than 3 sources found, record reason in logs.
+
+### Database Schema
+
+```sql
+CREATE TABLE zip_funding_sources (
+  id TEXT PRIMARY KEY,
+  created_at DATETIME,
+  zip_code TEXT NOT NULL,
+  source_name TEXT NOT NULL,
+  source_type TEXT CHECK(source_type IN ('OPPORTUNITY', 'PROGRAM', 'DIRECTORY')),
+  evidence_url TEXT,
+  evidence_title TEXT,
+  last_verified_at DATETIME,
+  number_of_opportunities_found INTEGER,
+  metadata TEXT -- JSON: sponsor, deadline, etc.
+);
+```
+
+### Usage
+
+```javascript
+import { startNationalCrawl, resumeCrawl, getCrawlStatus } from './backend/services/nationalZipCrawler.js'
+
+// Start new crawl
+await startNationalCrawl(db)
+
+// Resume from checkpoint
+await resumeCrawl(db)
+
+// Check status
+const status = getCrawlStatus()
+console.log(`Progress: ${status.progress}`)
+```
+
+### Performance
+
+- **Estimated Time**: ~48-72 hours for full crawl (with rate limiting)
+- **Resumability**: Checkpoints every 500 ZIPs
+- **Rate Limiting**: 2 seconds between batches, 100ms between ZIPs
+- **Concurrency**: Processes batches sequentially to avoid overwhelming APIs
+
+---
+
+## ✅ How to Verify Data Authenticity
+
+Every funding opportunity in GrantFlow must include verification metadata:
+
+### Required Fields
+
+- `type`: OPPORTUNITY, PROGRAM, or DIRECTORY
+- `evidence_url`: API endpoint or page used to verify
+- `last_verified_at`: Timestamp of last verification
+- `source`: Original data source (e.g., "grants.gov")
+
+### Verification Process
+
+1. **Check Type**: Ensure opportunity has correct type classification
+2. **Follow Evidence URL**: Click through to verify opportunity is real
+3. **Verify Deadline**: For OPPORTUNITY type, confirm deadline is accurate
+4. **Check Source**: Validate source field matches evidence URL domain
+
+### Example Verification
+
+```javascript
+// Good: Real opportunity with evidence
+{
+  title: "NIH R01 Research Project Grant",
+  type: "OPPORTUNITY",
+  source: "grants.gov",
+  evidence_url: "https://grants.nih.gov/grants/guide/pa-files/PA-20-265.html",
+  last_verified_at: "2026-01-09T10:00:00Z",
+  deadline: "2026-04-05",
+  application_url: "https://www.grants.gov/web/grants/view-opportunity.html?oppId=123456"
+}
+
+// Bad: Mock data (rejected)
+{
+  title: "Example City Grant",
+  type: null,
+  source: "mock",
+  evidence_url: "https://example.com/grants",
+  last_verified_at: null
+}
+```
+
+### Audit Tools
+
+Run the crawler matrix test to validate all data:
+
+```bash
+node backend/tests/crawlerMatrixTest.js
+```
+
+This generates an audit file: `backend/data/audit/crawler_matrix_YYYYMMDD.json`
+
+The audit checks:
+- ✅ No mock data (no example.com, placeholder, etc.)
+- ✅ All URLs are valid (not placeholder domains)
+- ✅ Match scoring is deterministic (same input = same output)
+- ✅ Types are correct (OPPORTUNITY/PROGRAM/DIRECTORY)
+
+---
+
+## 🔍 How to Run Audits
+
+### Pre-Deployment Audit
+
+Before deploying to production, run comprehensive audits:
+
+```bash
+# 1. Lint all code
+npm run lint
+
+# 2. Build to catch TypeScript errors
+npm run build
+
+# 3. Run crawler matrix test
+node backend/tests/crawlerMatrixTest.js
+
+# 4. Check for mock data
+grep -r "example\.com" backend/services/crawlers/ && echo "❌ Mock data found!" || echo "✅ No mock data"
+grep -r "Math\.random" backend/ && echo "❌ Random scoring found!" || echo "✅ Deterministic scoring"
+
+# 5. Verify database schema
+sqlite3 backend/data/grantflow.db "SELECT COUNT(*) FROM funding_opportunities WHERE type IS NULL" # Should be 0
+```
+
+### Production Monitoring
+
+Monitor data quality in production:
+
+1. **Evidence URL Health**: Check that evidence URLs are still accessible
+2. **Type Distribution**: Track OPPORTUNITY vs PROGRAM vs DIRECTORY ratios
+3. **Verification Age**: Alert on opportunities not verified in 90+ days
+4. **Match Score Distribution**: Ensure scores are well-distributed (not all high/low)
+
+### Monthly Audit Checklist
+
+- [ ] Run crawler matrix test
+- [ ] Review audit file for validation issues
+- [ ] Update stale evidence URLs (90+ days old)
+- [ ] Verify API keys are still valid
+- [ ] Check rate limit compliance
+- [ ] Review user feedback on opportunity accuracy
+
+---
+
 ## 🔗 Resources
 
 - [Vite Documentation](https://vitejs.dev/)
