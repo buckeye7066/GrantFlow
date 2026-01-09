@@ -2,19 +2,11 @@
  * Local Funding Crawler
  * Searches for funding opportunities within 50 mile radius of profile location
  * Excludes loans and matching funds
+ * Production version - no mock fallbacks
  */
 
-// Dependencies are required - no fallback to mock data
-let axios, cheerio
-try {
-  const axiosModule = await import('axios')
-  axios = axiosModule.default
-  cheerio = await import('cheerio')
-} catch (error) {
-  console.error('[LocalFundingCrawler] CRITICAL: axios/cheerio not installed')
-  console.error('[LocalFundingCrawler] This crawler requires real dependencies to function')
-  throw new Error('LocalFundingCrawler dependencies missing: axios and/or cheerio')
-}
+import axios from 'axios'
+import * as cheerio from 'cheerio'
 
 // Mock calculateDistance if geoUtils doesn't exist
 const calculateDistance = (lat1, lng1, lat2, lng2) => {
@@ -113,8 +105,13 @@ export async function crawlLocalFunding(profile, options = {}) {
 async function searchLocalSource(source, coords, profile) {
   const opportunities = []
   
-  // Note: This crawler is legacy and searches specific websites
-  // For real data, use the new ingestion system (npm run ingest)
+  // Production: No mock fallbacks - must have real axios/cheerio
+  if (!axios || !cheerio) {
+    throw new Error(
+      `axios and cheerio are required dependencies for ${source.name} crawler. ` +
+      `Mock fallbacks are disabled in production.`
+    )
+  }
   
   if (source.type === 'community_foundation') {
     // Search community foundations near coordinates
@@ -209,9 +206,17 @@ function matchesEligibility(opportunity, profile) {
 }
 
 async function getZipCoordinates(zip) {
-  // Use a geocoding service or database
+  // Production: No mock fallbacks - must have real axios
+  if (!axios) {
+    throw new Error(
+      'axios is required for ZIP code geocoding. ' +
+      'Mock fallbacks are disabled in production.'
+    )
+  }
+  
   try {
-    const response = await axios.get(`https://api.zippopotam.us/us/${zip}`)
+    // Use a geocoding service or database
+    const response = await axios.get(`https://api.zippopotam.us/us/${zip}`, { timeout: 5000 })
     if (response.data && response.data.places && response.data.places[0]) {
       return {
         lat: parseFloat(response.data.places[0].latitude),
@@ -222,14 +227,7 @@ async function getZipCoordinates(zip) {
     }
   } catch (error) {
     console.error('[LocalFundingCrawler] Geocoding error:', error.message)
-    // Fallback to mock coordinates for Ohio ZIP codes
-    const ohioZipCoords = {
-      '43215': { lat: 39.9612, lng: -82.9988, city: 'Columbus', state: 'OH' },
-      '43201': { lat: 40.0150, lng: -83.0130, city: 'Columbus', state: 'OH' },
-      '45202': { lat: 39.1031, lng: -84.5120, city: 'Cincinnati', state: 'OH' },
-      '44114': { lat: 41.4993, lng: -81.6944, city: 'Cleveland', state: 'OH' }
-    }
-    return ohioZipCoords[zip] || ohioZipCoords['43215']
+    throw new Error(`Failed to geocode ZIP ${zip}: ${error.message}`)
   }
   return null
 }

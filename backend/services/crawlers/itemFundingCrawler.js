@@ -223,48 +223,16 @@ async function searchItemSource(source, itemInfo, profile) {
 async function searchGeneralItemGrants(itemInfo, profile) {
   const grants = []
   
-  // General equipment grants
-  grants.push({
-    title: 'Equipment and Capital Improvement Grant',
-    sponsor: 'Community Foundation',
-    description: 'Grants for equipment and capital improvements for nonprofits',
-    url: 'https://www.communityfoundation.org/equipment-grants',
-    amount_min: 5000,
-    amount_max: 50000,
-    deadline: 'Annual',
-    eligibility: 'Nonprofit organizations with equipment needs',
-    item_categories: ['equipment', 'capital']
-  })
+  // Production: Must use real general equipment grant sources
+  // No mock/placeholder foundation URLs allowed
   
-  // Mission-specific grants
-  if (profile.mission || profile.focus_areas?.includes('mission')) {
-    grants.push({
-      title: 'Mission Support Equipment Grant',
-      sponsor: 'Faith-Based Foundation',
-      description: 'Equipment grants for mission-minded organizations',
-      url: 'https://www.faithfoundation.org/equipment',
-      amount_min: 10000,
-      amount_max: 75000,
-      deadline: 'Bi-annual',
-      eligibility: 'Mission-focused nonprofit organizations',
-      item_categories: ['equipment', 'vehicle', 'supplies']
-    })
-  }
-  
-  // Transportation-specific
-  if (itemInfo.type === 'vehicle' || itemInfo.purpose === 'transportation') {
-    grants.push({
-      title: 'Community Transportation Grant',
-      sponsor: 'Transportation Authority',
-      description: 'Funding for vehicles serving community transportation needs',
-      url: 'https://www.transportation.gov/grants',
-      amount_min: 15000,
-      amount_max: 100000,
-      deadline: 'Quarterly',
-      eligibility: 'Organizations providing community transportation',
-      item_categories: ['vehicle', 'transportation']
-    })
-  }
+  // Note: These would need to be replaced with actual community foundation search
+  // or aggregator APIs in production. Throwing error to prevent use of placeholder data.
+  throw new Error(
+    'searchGeneralItemGrants requires real community foundation API integration. ' +
+    'Placeholder URLs (communityfoundation.org, faithfoundation.org, etc.) are not allowed in production. ' +
+    `Item type: ${itemInfo.type}, Profile: ${profile?.id || 'unknown'}`
+  )
   
   return grants
 }

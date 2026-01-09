@@ -211,13 +211,164 @@ See `package.json` for the full script catalogue.
 
 ---
 
+## National Crawl
+
+The National ZIP Crawl feature enables comprehensive funding source discovery across all ~43,859 US ZIP codes.
+
+### How to Run
+
+**Start a national crawl (Admin only):**
+
+```bash
+POST /api/admin/national-crawl/start
+{
+  "batch_size": 50,
+  "min_sources_per_zip": 3
+}
+```
+
+**Monitor progress:**
+
+```bash
+GET /api/admin/national-crawl/status
+```
+
+**Stop a running crawl:**
+
+```bash
+POST /api/admin/national-crawl/stop
+```
+
+### Features
+
+- **Batch Processing:** Processes ZIPs in configurable batches (default: 50)
+- **Checkpointing:** Saves progress after every batch to `national_zip_progress` table
+- **Resumable:** If interrupted, automatically resumes from last checkpoint
+- **Rate Limited:** Respects upstream API limits (configurable delay between requests)
+- **Memory Safe:** Processes in batches to avoid memory accumulation
+- **Real Data Only:** Uses Grants.gov API, state portals, and foundation locators
+
+### Data Sources
+
+The national crawl integrates with multiple real data sources:
+- **Grants.gov API** - Federal grant opportunities
+- **State Grant Portals** - State-specific funding (OH, CA, TX, NY, FL configured)
+- **Foundation Locator** - Community foundation grants
+
+See [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md) for complete source documentation.
+
+### Monitoring
+
+Track crawl progress in the database:
+
+```sql
+SELECT 
+  COUNT(*) as total_zips,
+  SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+  SUM(sources_found) as total_sources,
+  AVG(sources_found) as avg_per_zip
+FROM national_zip_progress;
+```
+
+---
+
+## Crawler Matrix Test
+
+The Crawler Test Harness validates all 6 crawlers against all profiles in the database.
+
+### How to Run
+
+```bash
+node scripts/test-all-crawlers-all-profiles.mjs [--db-path PATH]
+```
+
+### What It Tests
+
+For each profile, runs all 6 crawlers:
+1. `localFundingCrawler` - Local funding within 50 miles
+2. `governmentFundingCrawler` - Federal/state/local government grants
+3. `studentGrantsCrawler` - Student grants and scholarships
+4. `ecfBenefitsCrawler` - ECF CHOICES and disability benefits
+5. `itemFundingCrawler` - Item-specific funding (vehicles, equipment)
+6. `specialNeedsCrawler` - Special needs populations
+
+### Validation Checks
+
+Each result is validated for:
+- ✅ No loans (checks for keywords: loan, repay, interest, apr)
+- ✅ No matching-fund requirements
+- ✅ Required fields present (title, sponsor, description, URL, match_score)
+- ✅ No placeholder URLs (example.com, example.org, example.gov)
+- ✅ Match score within valid range (0-100)
+
+### Output
+
+- **Audit Report:** `backend/data/audit/crawler-matrix-YYYYMMDD.json`
+- **Database Log:** Results logged to `crawl_logs` table
+- **Console Output:** Real-time progress and summary statistics
+
+### Exit Codes
+
+- `0` - All tests passed
+- `1` - Some tests failed or produced invalid results
+
+---
+
+## Admin Profile Access
+
+GrantFlow enforces role-based access control for profile management.
+
+### Admin User
+
+**Identification:**
+- Email: `buckeye7066@gmail.com`
+- OR `users.is_admin = true` flag in database
+
+**Permissions:**
+- ✅ View ALL profiles in the system
+- ✅ Create profiles for any user
+- ✅ Access any profile details
+- ✅ Run national crawls
+- ✅ Access admin endpoints
+
+### Enduser
+
+**Permissions:**
+- ✅ View only their own profiles (`profiles.user_id = user.id`)
+- ✅ Create profiles for themselves only
+- ✅ Access only their own profile details
+- ❌ Cannot see other users' profiles
+- ❌ Cannot run national crawls
+- ❌ Cannot access admin endpoints
+
+### API Endpoints
+
+**GET /api/profiles**
+- Admin: Returns all profiles
+- Enduser: Returns only profiles where `user_id` matches
+
+**POST /api/profiles**
+- Admin: Can create for anyone (specify `user_id` in body)
+- Enduser: Can only create for themselves
+
+**GET /api/profiles/:id**
+- Admin: Can access any profile
+- Enduser: Can only access if `user_id` matches
+
+### Server-Side Enforcement
+
+All access control is enforced server-side. UI hints are NOT sufficient - the backend validates permissions on every request.
+
+---
+
 ## Documentation & References
 
+- [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md) — Complete documentation of all real data sources, APIs, rate limits, and best practices.
 - [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) — Production checklist, env vars, seeding, QA, monitoring.
 - [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — Vercel + Railway deployment guide.
 - [`docs/VERCEL_RAILWAY_DEPLOYMENT.md`](docs/VERCEL_RAILWAY_DEPLOYMENT.md) — Detailed deployment instructions.
 - [`docs/AUTH_FRONTEND_PLAN.md`](docs/AUTH_FRONTEND_PLAN.md) — Historical context for the authentication UX overhaul.
-- `scripts/` — Smoke tests (`smoke-login.mjs`, `smoke-auth-callback.mjs`) and database auditing (`check-profiles.mjs`).
+- `scripts/` — Smoke tests (`smoke-login.mjs`, `smoke-auth-callback.mjs`), database auditing (`check-profiles.mjs`), and crawler testing (`test-all-crawlers-all-profiles.mjs`).
 
 ---
 
@@ -226,6 +377,8 @@ See `package.json` for the full script catalogue.
 - Monitor OpenAI and Twilio usage; set billing caps and alerts.
 - Schedule backups of `grantflow.db` and `/uploads` from the Railway volume.
 - Keep OAuth redirect URIs in each provider dashboard synchronized with production (`https://app.axiombiolabs.org/grantflow/api/auth/<provider>/callback`).
+- Review crawler logs regularly to ensure data sources remain operational.
+- Update data source configurations if APIs change (see `docs/DATA_SOURCES.md`).
 
 Questions or deployment assistance? Open an issue or contact the GrantFlow engineering team at Axiom BioLabs. Happy shipping! 🎉
 # GrantFlow

@@ -1,15 +1,18 @@
 /**
  * Real Web Crawler API Routes
  * Handles execution of specialized funding crawlers
+ * Production version - uses only real data sources
  */
 
 import express from 'express'
 import { ensureAuth } from '../middleware/auth.js'
-import { 
-  getProfileWithLocation, 
-  getMockOpportunities, 
-  formatOpportunity 
-} from '../services/crawlers/crawlerHelpers.js'
+import { getProfileWithLocation, formatOpportunity } from '../services/crawlers/crawlerHelpers.js'
+import { crawlLocalFunding } from '../services/crawlers/localFundingCrawler.js'
+import { crawlGovernmentFunding } from '../services/crawlers/governmentFundingCrawler.js'
+import { crawlStudentGrants } from '../services/crawlers/studentGrantsCrawler.js'
+import { crawlECFBenefits } from '../services/crawlers/ecfBenefitsCrawler.js'
+import { crawlItemFunding } from '../services/crawlers/itemFundingCrawler.js'
+import { crawlSpecialNeeds } from '../services/crawlers/specialNeedsCrawler.js'
 
 const router = express.Router()
 
@@ -56,12 +59,42 @@ router.post('/run', ensureAuth, async (req, res) => {
     
     console.log(`[RealCrawlers] Running ${crawler_type} for profile ${profile_id || 'custom'}`)
     
-    // Get mock opportunities for the crawler type
+    // Execute the appropriate real crawler
     const startTime = Date.now()
-    const mockOpportunities = getMockOpportunities(crawler_type, profile)
+    let opportunities = []
     
-    // Format opportunities with proper structure
-    const opportunities = mockOpportunities.map(opp => formatOpportunity(opp, profile))
+    try {
+      switch (crawler_type) {
+        case 'local_funding':
+          opportunities = await crawlLocalFunding(profile, { min_match_score })
+          break
+        case 'government_funding':
+          opportunities = await crawlGovernmentFunding(profile, { min_match_score })
+          break
+        case 'student_grants':
+          opportunities = await crawlStudentGrants(profile, { min_match_score })
+          break
+        case 'ecf_benefits':
+          opportunities = await crawlECFBenefits(profile, { min_match_score })
+          break
+        case 'item_matching':
+          opportunities = await crawlItemFunding(profile, { item_request, min_match_score })
+          break
+        case 'special_needs':
+          opportunities = await crawlSpecialNeeds(profile, { min_match_score })
+          break
+        default:
+          throw new Error(`Crawler implementation not found for type: ${crawler_type}`)
+      }
+    } catch (crawlerError) {
+      console.error(`[RealCrawlers] Crawler ${crawler_type} failed:`, crawlerError)
+      return res.status(500).json({
+        error: 'Crawler execution failed',
+        message: crawlerError.message,
+        crawler_type,
+        note: 'This is a real crawler error - mock fallbacks are disabled in production'
+      })
+    }
     
     const duration = Date.now() - startTime
     
@@ -151,18 +184,43 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
     }
     
     try {
-      const opportunities = getMockOpportunities(crawlerType, profile)
-        .map(opp => formatOpportunity(opp, profile))
-        .filter(opp => opp.match_score >= min_match_score)
+      let opportunities = []
       
-      await saveOpportunitiesToDB(db, opportunities, profile_id, crawlerType)
+      // Execute real crawlers
+      switch (crawlerType) {
+        case 'local_funding':
+          opportunities = await crawlLocalFunding(profile, { min_match_score })
+          break
+        case 'government_funding':
+          opportunities = await crawlGovernmentFunding(profile, { min_match_score })
+          break
+        case 'student_grants':
+          opportunities = await crawlStudentGrants(profile, { min_match_score })
+          break
+        case 'ecf_benefits':
+          opportunities = await crawlECFBenefits(profile, { min_match_score })
+          break
+        case 'item_matching':
+          opportunities = await crawlItemFunding(profile, { min_match_score })
+          break
+        case 'special_needs':
+          opportunities = await crawlSpecialNeeds(profile, { min_match_score })
+          break
+        default:
+          throw new Error(`Crawler not implemented: ${crawlerType}`)
+      }
+      
+      const filteredOpportunities = opportunities.filter(opp => opp.match_score >= min_match_score)
+      
+      await saveOpportunitiesToDB(db, filteredOpportunities, profile_id, crawlerType)
       
       results.push({
         crawler_type: crawlerType,
         success: true,
-        count: opportunities.length
+        count: filteredOpportunities.length
       })
     } catch (error) {
+      console.error(`[RealCrawlers] Error in ${crawlerType}:`, error)
       results.push({
         crawler_type: crawlerType,
         success: false,

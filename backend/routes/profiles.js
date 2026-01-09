@@ -15,6 +15,20 @@ import { formatError } from '../middleware/errorHandler.js'
 
 const router = express.Router()
 
+// Admin configuration
+const ADMIN_EMAIL = 'buckeye7066@gmail.com'
+
+/**
+ * Check if user is admin
+ * Checks both is_admin flag and primary_email match
+ */
+function isAdmin(user) {
+  return Boolean(user?.is_admin) || 
+         user?.primary_email === ADMIN_EMAIL || 
+         user?.email === ADMIN_EMAIL || 
+         user?.role === 'admin'
+}
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const uploadDir = join(__dirname, '..', 'uploads')
@@ -131,27 +145,24 @@ function getOpenAI() {
 }
 
 router.get('/', (req, res) => {
-  const auth = req.user ?? { role: 'guest' }
+  const user = req.user
   const includeSummary = req.query.summary === 'true'
   
   // Validate pagination parameters
   const { limit, offset } = validatePagination(req.query);
 
-  if (auth.role !== 'admin') {
-    // Non-admin users should see all profiles they have access to via user_id
-    if (!auth.userId) {
-      return res.json([])
+  // Check if user is admin
+  if (!isAdmin(user)) {
+    // Enduser: return only profiles where profiles.user_id = user.id
+    if (!user || !user.id) {
+      return res.status(401).json({ error: 'Authentication required' })
     }
 
     // Get all profiles linked to this user (with pagination)
     const rows = req.db.prepare(
       `${profileSelect} WHERE p.user_id = ? ORDER BY p.created_at ASC LIMIT ? OFFSET ?`
-    ).all(auth.userId, limit, offset)
+    ).all(user.id, limit, offset)
     
-    if (rows.length === 0) {
-      return res.json([])
-    }
-
     const profiles = rows.map(mapProfile)
     if (includeSummary) {
       profiles.forEach(profile => enrichProfileWithSummary(req.db, profile))
@@ -159,7 +170,7 @@ router.get('/', (req, res) => {
     return res.json(profiles)
   }
 
-  // Admin user - return all profiles with pagination
+  // Admin: return ALL profiles with pagination
   const stmt = req.db.prepare(`${profileSelect} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`)
   const profiles = stmt.all(limit, offset).map(mapProfile)
   
@@ -171,14 +182,30 @@ router.get('/', (req, res) => {
 })
 
 router.post('/', (req, res) => {
-  const auth = req.user ?? { role: 'guest' }
-  if (auth.role !== 'admin') {
-    return res.status(403).json({ error: 'Only admin can create profiles' })
-  }
-  const { display_name, primary_type, organization_id, created_by, status = 'active', tags = [] } = req.body ?? {}
+  const user = req.user
+  const { display_name, primary_type, organization_id, user_id, created_by, status = 'active', tags = [] } = req.body ?? {}
 
   if (!display_name || typeof display_name !== 'string') {
     return res.status(400).json({ error: 'display_name is required' })
+  }
+
+  // Check permissions
+  if (!isAdmin(user)) {
+    // Enduser can only create profiles for themselves
+    if (!user || !user.id) {
+      return res.status(401).json({ error: 'Authentication required' })
+    }
+    
+    if (user_id && user_id !== user.id) {
+      return res.status(403).json({ 
+        error: 'Endusers can only create profiles for themselves' 
+      })
+    }
+  } else {
+    // Admin can create for anyone
+    if (user_id && !req.db.prepare('SELECT id FROM users WHERE id = ?').get(user_id)) {
+      return res.status(400).json({ error: 'Invalid user_id: user does not exist' })
+    }
   }
 
   // Validate organization_id if provided
@@ -189,18 +216,22 @@ router.post('/', (req, res) => {
     }
   }
 
+  // Determine user_id for the new profile
+  const profileUserId = isAdmin(user) ? (user_id || user?.id) : user.id
+
   const insert = req.db.prepare(`
-    INSERT INTO profiles (display_name, primary_type, organization_id, created_by, status, tags)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO profiles (display_name, primary_type, organization_id, user_id, created_by, status, tags)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `)
 
   const info = insert.run(
     display_name,
     primary_type ?? null,
     organization_id ?? null,
-    created_by ?? null,
-    status ?? 'active',
-    JSON.stringify(tags ?? []),
+    profileUserId ?? null,
+    created_by ?? user?.id ?? null,
+    status,
+    JSON.stringify(tags)
   )
 
   const row = req.db.prepare(`${profileSelect} WHERE p.rowid = ?`).get(info.lastInsertRowid)
@@ -213,20 +244,21 @@ router.post('/', (req, res) => {
 
 router.get('/:id', (req, res) => {
   const { id } = req.params
-  const auth = req.user ?? { role: 'guest' }
+  const user = req.user
   const row = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!row) {
     return res.status(404).json({ error: 'Profile not found' })
   }
 
-  if (auth.role !== 'admin') {
-    const matchesProfileId = auth.profileId === id
-    const matchesUserId = auth.userId && row.user_id && auth.userId === row.user_id
-    if (!matchesProfileId && !matchesUserId) {
-      return res.status(403).json({ error: 'Not authorized to access this profile' })
+  // Check access permissions
+  if (!isAdmin(user)) {
+    // Enduser: can only access profiles where user_id matches
+    if (!user || !user.id || row.user_id !== user.id) {
+      return res.status(403).json({ error: 'Access denied' })
     }
   }
 
+  // Return profile with sections
   const sections = req.db
     .prepare(
       `
