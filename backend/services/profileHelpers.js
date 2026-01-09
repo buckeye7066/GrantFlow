@@ -8,6 +8,33 @@ function safeParseJSON(value, fallback) {
   }
 }
 
+/**
+ * Safely parse array fields that may be JSON arrays or comma-separated strings
+ * Handles:
+ * - JSON arrays: ["item1", "item2"]
+ * - Comma-separated strings: "item1,item2,item3"
+ * - Already parsed arrays: ["item1", "item2"]
+ * - null/undefined/empty values
+ */
+export function safeParseArrayField(value, fallback = []) {
+  if (!value) return fallback
+  if (Array.isArray(value)) return value
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        return Array.isArray(parsed) ? parsed : fallback
+      } catch {
+        // Fall through to comma-split
+      }
+    }
+    // Handle comma-separated strings
+    return trimmed.split(',').map(s => s.trim()).filter(Boolean)
+  }
+  return fallback
+}
+
 export function loadProfileContext(db, profileId) {
   const profile = db
     .prepare('SELECT * FROM profiles WHERE id = ? LIMIT 1')
@@ -30,10 +57,20 @@ export function loadProfileContext(db, profileId) {
       return acc
     }, {})
 
-  const tags = safeParseJSON(profile.tags, [])
-  const signals = buildProfileSignals({ profile: { ...profile, tags }, sections })
+  // Use safeParseArrayField for array fields
+  const tags = safeParseArrayField(profile.tags, [])
+  const interests = safeParseArrayField(profile.interests, [])
+  
+  const signals = buildProfileSignals({ 
+    profile: { ...profile, tags, interests }, 
+    sections 
+  })
 
-  return { profile: { ...profile, tags }, sections, signals }
+  return { 
+    profile: { ...profile, tags, interests }, 
+    sections, 
+    signals 
+  }
 }
 
 export function extractZipFromContext({ profile, sections, jobParameters = {} }) {

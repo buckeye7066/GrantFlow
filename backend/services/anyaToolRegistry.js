@@ -565,7 +565,6 @@ export async function invokeTool(name, params, context) {
 
     // Log admin tool invocation for audit
     // TODO: Remove debug log
-    // // TODO: Remove debug log - console.log('[anyaToolRegistry] Admin tool invoked:', {
     //   tool: name,
     //   user: user.userId ?? user.id ?? 'unknown',
     //   timestamp: new Date().toISOString(),
@@ -1076,7 +1075,7 @@ registerTool({
 
 registerTool({
   name: 'admin.code.scan',
-  description: 'Scan codebase for issues like TODOs, // TODO: Remove debug log - console.logs, or potential bugs. Admin only.',
+  description: 'Scan codebase for issues like TODOs, console.logs, or potential bugs. Admin only.',
   requiresAdmin: true,
   schema: {
     type: 'object',
@@ -1093,8 +1092,6 @@ registerTool({
   handler: async (params, context) => {
     const { directory = '.', filePattern = '**/*.{js,jsx,ts,tsx}', issueTypes = ['todo', 'console', 'debugger', 'fixme', 'hack'] } = params
     
-    // This is a simplified implementation
-    // In production, you'd use a proper code scanner
     const issues = {
       todos: [],
       consoles: [],
@@ -1111,6 +1108,103 @@ registerTool({
       hack: /\/\/\s*HACK:?\s*(.+)/gi,
     }
     
+    // Scan files
+    const scanDir = path.resolve(REPO_ROOT, directory)
+    const extensions = ['.js', '.jsx', '.ts', '.tsx']
+    
+    async function scanFile(filePath) {
+      try {
+        const content = await fs.readFile(filePath, 'utf-8')
+        const lines = content.split('\n')
+        const relativePath = path.relative(REPO_ROOT, filePath)
+        
+        lines.forEach((line, index) => {
+          if (issueTypes.includes('todo')) {
+            const todoMatches = [...line.matchAll(patterns.todo)]
+            todoMatches.forEach(match => {
+              issues.todos.push({
+                file: relativePath,
+                line: index + 1,
+                content: match[1]?.trim() || 'No description',
+                code: line.trim()
+              })
+            })
+          }
+          
+          if (issueTypes.includes('console')) {
+            if (patterns.console.test(line)) {
+              issues.consoles.push({
+                file: relativePath,
+                line: index + 1,
+                code: line.trim()
+              })
+            }
+          }
+          
+          if (issueTypes.includes('debugger')) {
+            if (patterns.debugger.test(line)) {
+              issues.debuggers.push({
+                file: relativePath,
+                line: index + 1,
+                code: line.trim()
+              })
+            }
+          }
+          
+          if (issueTypes.includes('fixme')) {
+            const fixmeMatches = [...line.matchAll(patterns.fixme)]
+            fixmeMatches.forEach(match => {
+              issues.fixmes.push({
+                file: relativePath,
+                line: index + 1,
+                content: match[1]?.trim() || 'No description',
+                code: line.trim()
+              })
+            })
+          }
+          
+          if (issueTypes.includes('hack')) {
+            const hackMatches = [...line.matchAll(patterns.hack)]
+            hackMatches.forEach(match => {
+              issues.hacks.push({
+                file: relativePath,
+                line: index + 1,
+                content: match[1]?.trim() || 'No description',
+                code: line.trim()
+              })
+            })
+          }
+        })
+      } catch (error) {
+        // Skip files that can't be read
+      }
+    }
+    
+    async function scanDirectory(dir) {
+      try {
+        const entries = await fs.readdir(dir, { withFileTypes: true })
+        
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name)
+          
+          if (entry.isDirectory()) {
+            if (!IGNORED_DIRS.has(entry.name)) {
+              await scanDirectory(fullPath)
+            }
+          } else if (entry.isFile()) {
+            const ext = path.extname(entry.name)
+            if (extensions.includes(ext)) {
+              await scanFile(fullPath)
+            }
+          }
+        }
+      } catch (error) {
+        // Skip directories that can't be read
+      }
+    }
+    
+    await scanDirectory(scanDir)
+    
     return {
       success: true,
       directory,
@@ -1122,9 +1216,16 @@ registerTool({
         debuggers: issues.debuggers.length,
         fixmes: issues.fixmes.length,
         hacks: issues.hacks.length,
+        total: issues.todos.length + issues.consoles.length + issues.debuggers.length + issues.fixmes.length + issues.hacks.length
       },
-      message: 'Code scan completed. Use a file system tool to perform detailed scanning.',
-      note: 'This is a placeholder. Full code scanning requires file system access which is handled by existing code crawl tools.',
+      issues: {
+        todos: issues.todos.slice(0, 50), // Limit results
+        consoles: issues.consoles.slice(0, 50),
+        debuggers: issues.debuggers.slice(0, 50),
+        fixmes: issues.fixmes.slice(0, 50),
+        hacks: issues.hacks.slice(0, 50),
+      },
+      message: `Code scan completed. Found ${issues.todos.length + issues.consoles.length + issues.debuggers.length + issues.fixmes.length + issues.hacks.length} total issues.`
     }
   },
 })
