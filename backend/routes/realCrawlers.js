@@ -6,7 +6,7 @@
 
 import express from 'express'
 import { ensureAuth } from '../middleware/auth.js'
-import { getProfileWithLocation, formatOpportunity } from '../services/crawlerHelpers.js'
+import { getProfileWithLocation, formatOpportunity } from '../services/crawlers/crawlerHelpers.js'
 import { crawlLocalFunding } from '../services/crawlers/localFundingCrawler.js'
 import { crawlGovernmentFunding } from '../services/crawlers/governmentFundingCrawler.js'
 import { crawlStudentGrants } from '../services/crawlers/studentGrantsCrawler.js'

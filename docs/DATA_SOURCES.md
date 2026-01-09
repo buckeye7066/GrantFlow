@@ -459,10 +459,10 @@ When available from sources, collect:
 {
   "contact_info": {
     "name": "Contact person name",
-    "email": "contact@example.org",
+    "email": "contact@organization.com",
     "phone": "555-123-4567",
     "address": "123 Main St, City, ST 12345",
-    "website": "https://example.org"
+    "website": "https://organization.com"
   }
 }
 ```
