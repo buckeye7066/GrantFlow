@@ -140,6 +140,15 @@ function checkFundingOpportunitiesSchema(db) {
     const tableInfo = db.prepare('PRAGMA table_info(funding_opportunities)').all();
     const columnNames = tableInfo.map(col => col.name);
     
+    // Also check if crawl_logs table exists
+    let crawlLogsExists = false;
+    try {
+      db.prepare('SELECT 1 FROM crawl_logs LIMIT 1').get();
+      crawlLogsExists = true;
+    } catch (e) {
+      crawlLogsExists = false;
+    }
+    
     return {
       funding_opportunities_has_type: columnNames.includes('type'),
       funding_opportunities_has_evidence_url: columnNames.includes('evidence_url'),
@@ -147,6 +156,7 @@ function checkFundingOpportunitiesSchema(db) {
       funding_opportunities_has_title: columnNames.includes('title'),
       funding_opportunities_has_sponsor: columnNames.includes('sponsor'),
       funding_opportunities_has_deadline: columnNames.includes('deadline'),
+      crawl_logs_exists: crawlLogsExists,
     };
   } catch (error) {
     return {
@@ -351,4 +361,73 @@ export function analyzeSystemHealth(diagnostics) {
     issues,
     warnings,
   };
+}
+
+/**
+ * Get non-admin safe health summary (no sensitive details)
+ * @param {Object} db - Database connection
+ * @returns {Object} Safe health summary
+ */
+export function getSafeHealthSummary(db) {
+  const timestamp = new Date().toISOString();
+  
+  if (!db) {
+    return {
+      timestamp,
+      status: 'error',
+      counts: { opportunities: 0, recentFailures: 0 },
+      summary: 'Database connection unavailable'
+    };
+  }
+  
+  try {
+    // Get basic counts
+    const opportunitiesCount = getTableCount(db, 'funding_opportunities');
+    
+    // Get recent failures count (last 24 hours)
+    let recentFailures = 0;
+    try {
+      const failures = db.prepare(`
+        SELECT COUNT(*) as count
+        FROM crawler_jobs
+        WHERE status = 'failed'
+          AND created_at >= datetime('now', '-24 hours')
+      `).get();
+      recentFailures = failures?.count || 0;
+    } catch (e) {
+      // Ignore if crawler_jobs doesn't exist
+    }
+    
+    // Determine status
+    let status = 'healthy';
+    let summary = 'System is operating normally';
+    
+    if (opportunitiesCount === 0 && recentFailures > 0) {
+      status = 'degraded';
+      summary = `${recentFailures} crawler failure(s) in last 24h; no opportunities ingested`;
+    } else if (opportunitiesCount === 0) {
+      status = 'warning';
+      summary = 'No funding opportunities in database yet';
+    } else if (recentFailures > 0) {
+      status = 'warning';
+      summary = `${recentFailures} crawler failure(s) in last 24h`;
+    }
+    
+    return {
+      timestamp,
+      status,
+      counts: {
+        opportunities: opportunitiesCount,
+        recentFailures,
+      },
+      summary,
+    };
+  } catch (error) {
+    return {
+      timestamp,
+      status: 'error',
+      counts: { opportunities: 0, recentFailures: 0 },
+      summary: 'Failed to retrieve health information'
+    };
+  }
 }

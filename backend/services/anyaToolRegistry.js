@@ -928,6 +928,29 @@ registerTool({
       }
     }
 
+    // For non-admin users, return safe summary only
+    const isAdmin = user?.is_admin || user?.role === 'admin'
+    
+    if (!isAdmin) {
+      try {
+        const { getSafeHealthSummary } = await import('./diagnosticsService.js')
+        const safeSummary = getSafeHealthSummary(db)
+        return {
+          status: safeSummary.status.toUpperCase(),
+          counts: safeSummary.counts,
+          summary: safeSummary.summary,
+          is_admin: false,
+        }
+      } catch (error) {
+        return {
+          status: 'ERROR',
+          error: error.message,
+          issues: ['Failed to retrieve health information'],
+        }
+      }
+    }
+
+    // For admin users, return detailed diagnostics
     try {
       const diagnostics = getSystemDiagnostics(db)
       const health = analyzeSystemHealth(diagnostics)
@@ -990,6 +1013,7 @@ registerTool({
         last_error: lastError,
         issues: health.issues,
         warnings: health.warnings,
+        is_admin: true,
       }
     } catch (error) {
       return {

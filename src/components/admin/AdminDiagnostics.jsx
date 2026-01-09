@@ -25,6 +25,7 @@ export default function AdminDiagnostics() {
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [jsonCopied, setJsonCopied] = useState(false);
 
   const loadDiagnostics = async () => {
     try {
@@ -72,6 +73,15 @@ export default function AdminDiagnostics() {
       navigator.clipboard.writeText(errorText);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const handleCopyDiagnostics = () => {
+    if (diagnostics) {
+      const jsonText = JSON.stringify(diagnostics, null, 2);
+      navigator.clipboard.writeText(jsonText);
+      setJsonCopied(true);
+      setTimeout(() => setJsonCopied(false), 2000);
     }
   };
 
@@ -209,15 +219,35 @@ export default function AdminDiagnostics() {
             Last updated: {new Date(diagnostics.timestamp).toLocaleString()}
           </p>
         </div>
-        <Button
-          onClick={handleRefresh}
-          disabled={refreshing}
-          variant="outline"
-          size="sm"
-        >
-          <RefreshCw className={`w-4 h-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
-          Refresh
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            onClick={handleCopyDiagnostics}
+            disabled={jsonCopied}
+            variant="outline"
+            size="sm"
+          >
+            {jsonCopied ? (
+              <>
+                <Check className="w-4 h-4 mr-2" />
+                Copied!
+              </>
+            ) : (
+              <>
+                <Copy className="w-4 h-4 mr-2" />
+                Copy Diagnostics JSON
+              </>
+            )}
+          </Button>
+          <Button
+            onClick={handleRefresh}
+            disabled={refreshing}
+            variant="outline"
+            size="sm"
+          >
+            <RefreshCw className={`w-4 h-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* System Status - Truth-based */}

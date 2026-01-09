@@ -635,6 +635,25 @@ app.use('/api/reminders', remindersRouter);
 app.use('/api/crawlers', crawlersRouter);
 app.use('/api/real-crawlers', realCrawlersRouter);
 app.use('/api/preferences', preferencesRouter);
+
+// Public health endpoint - safe for non-admin users
+import { getSafeHealthSummary } from './services/diagnosticsService.js';
+app.get('/api/health', (req, res) => {
+  try {
+    const healthSummary = getSafeHealthSummary(db);
+    const statusCode = healthSummary.status === 'healthy' ? 200 : 503;
+    res.status(statusCode).json(healthSummary);
+  } catch (error) {
+    console.error('[/api/health] Error:', error);
+    res.status(500).json({
+      timestamp: new Date().toISOString(),
+      status: 'error',
+      counts: { opportunities: 0, recentFailures: 0 },
+      summary: 'Failed to retrieve health information'
+    });
+  }
+});
+
 app.use('/api/admin', adminRouter);
 app.use('/api', discoveryRouter); // Discovery endpoints (comprehensiveMatch, searchOpportunities, etc.)
 
