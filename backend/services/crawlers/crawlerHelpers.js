@@ -62,10 +62,6 @@ export function calculateMatchScore(opportunity, profile) {
   return Math.min(100, score)
 }
 
-// REMOVED: getMockOpportunities() function
-// All crawlers must use real data connectors, not mock data
-// See backend/services/connectors/ for real API integrations
-
 export function formatOpportunity(opp, profile) {
   return {
     title: opp.title,

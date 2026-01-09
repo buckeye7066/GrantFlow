@@ -49,46 +49,42 @@ async function rateLimitedFetch(url, options = {}) {
 }
 
 /**
- * Search NIH active funding opportunities
+ * Search NIH funding mechanisms (BASELINE/UNVERIFIED)
  * @param {Object} params - Search parameters
- * @returns {Promise<Array>} Array of NIH opportunities (OPPORTUNITY type)
+ * @returns {Promise<Array>} Array of NIH program baseline entries (PROGRAM type)
+ * 
+ * NOTE: These are funding mechanism templates, NOT verified open opportunities.
+ * Real FOA ingestion requires parsing NIH Guide RSS feeds.
  */
 export async function searchNIHOpportunities(params = {}) {
-  // NIH RePORTER shows active projects, but for OPPORTUNITIES we want
-  // to look at NIH Guide (open solicitations)
-  // This is a simplified implementation
+  console.log('[NIH] Fetching baseline funding mechanisms');
   
-  console.log('[NIH] Searching active funding opportunities');
-  
-  // In production, you would:
+  // In production, real FOA ingestion would:
   // 1. Parse NIH Guide RSS feeds: https://grants.nih.gov/funding/searchguide/index.html
-  // 2. Use NIH RePORTER to identify active programs
-  // 3. Cross-reference with open FOAs
+  // 2. Use NIH RePORTER API to identify active programs
+  // 3. Cross-reference with specific open FOAs with real deadlines
   
   const opportunities = [];
   
-  // Common NIH funding mechanisms
+  // Common NIH funding mechanisms (baseline templates, not verified opportunities)
   const nihMechanisms = [
     {
-      title: 'NIH R01 Research Project Grant',
+      title: 'NIH R01 Research Project Grant (Mechanism)',
       description: 'Support for health-related research and development based on mission of NIH',
       activity_code: 'R01',
-      url: 'https://grants.nih.gov/grants/funding/r01.htm',
-      type: 'OPPORTUNITY' // Open solicitations with deadlines
+      url: 'https://grants.nih.gov/grants/funding/r01.htm'
     },
     {
-      title: 'NIH R21 Exploratory/Developmental Research Grant',
+      title: 'NIH R21 Exploratory/Developmental Research Grant (Mechanism)',
       description: 'Support for novel scientific ideas or new model systems, tools, or technologies',
       activity_code: 'R21',
-      url: 'https://grants.nih.gov/grants/funding/r21.htm',
-      type: 'OPPORTUNITY'
+      url: 'https://grants.nih.gov/grants/funding/r21.htm'
     },
     {
-      title: 'NIH R43/R44 SBIR (Small Business Innovation Research)',
+      title: 'NIH R43/R44 SBIR (Small Business Innovation Research) (Mechanism)',
       description: 'Support for domestic small businesses to engage in research/R&D',
       activity_code: 'R43',
-      url: 'https://grants.nih.gov/grants/funding/sbir.htm',
-      type: 'OPPORTUNITY'
+      url: 'https://grants.nih.gov/grants/funding/sbir.htm'
     }
   ];
   
@@ -106,15 +102,14 @@ export async function searchNIHOpportunities(params = {}) {
         'Nonprofit organizations',
         'U.S. entities'
       ],
-      deadline_type: 'rolling', // Most NIH grants have multiple deadlines per year
       application_url: mech.url,
       is_national: true,
       categories: ['Health', 'Research', 'Biomedical'],
       keywords: ['NIH', 'research', mech.activity_code],
       opportunity_type: 'grant',
-      type: 'OPPORTUNITY', // These are open solicitations
+      type: 'PROGRAM', // Baseline mechanism, not verified open opportunity
       evidence_url: 'https://grants.nih.gov/funding/searchguide/index.html',
-      last_verified_at: new Date().toISOString(),
+      last_verified_at: null, // Not verified - baseline only
       is_active: true,
       last_crawled: new Date().toISOString(),
       amount_min: 100000,
@@ -126,21 +121,24 @@ export async function searchNIHOpportunities(params = {}) {
 }
 
 /**
- * Search NSF active funding opportunities
+ * Search NSF funding mechanisms (BASELINE/UNVERIFIED)
  * @param {Object} params - Search parameters
- * @returns {Promise<Array>} Array of NSF opportunities (OPPORTUNITY type)
+ * @returns {Promise<Array>} Array of NSF program baseline entries (PROGRAM type)
+ * 
+ * NOTE: These are funding mechanism templates, NOT verified open opportunities.
+ * Real FOA ingestion requires parsing NSF funding announcements.
  */
 export async function searchNSFOpportunities(params = {}) {
-  console.log('[NSF] Searching active funding opportunities');
+  console.log('[NSF] Fetching baseline funding mechanisms');
   
-  // In production:
+  // In production, real FOA ingestion would:
   // 1. Parse NSF funding opportunities: https://www.nsf.gov/funding/
   // 2. Use NSF Awards API to identify active programs
-  // 3. Track deadlines from program announcements
+  // 3. Track specific deadlines from program announcements
   
   const opportunities = [
     {
-      title: 'NSF CAREER Award',
+      title: 'NSF CAREER Award (Mechanism)',
       description: 'Faculty Early Career Development Program',
       sponsor: 'National Science Foundation',
       source: 'nsf.gov',
@@ -152,16 +150,14 @@ export async function searchNSFOpportunities(params = {}) {
         'Within 7 years of PhD',
         'U.S. institutions'
       ],
-      deadline_type: 'fixed',
-      deadline: '2025-07-31', // Example deadline
       application_url: 'https://www.nsf.gov/funding/pgm_summ.jsp?pims_id=503214',
       is_national: true,
       categories: ['Research', 'Education', 'STEM'],
       keywords: ['NSF', 'CAREER', 'research', 'faculty'],
       opportunity_type: 'grant',
-      type: 'OPPORTUNITY',
+      type: 'PROGRAM', // Baseline mechanism, not verified open opportunity
       evidence_url: 'https://www.nsf.gov/funding/',
-      last_verified_at: new Date().toISOString(),
+      last_verified_at: null, // Not verified - baseline only
       is_active: true,
       last_crawled: new Date().toISOString(),
       amount_min: 400000,
@@ -173,24 +169,24 @@ export async function searchNSFOpportunities(params = {}) {
 }
 
 /**
- * Get detailed information about an NIH or NSF opportunity
+ * Get detailed information about an NIH or NSF funding mechanism (baseline)
  */
 export async function getResearchOpportunityDetails(opportunityId, agency = 'NIH') {
   if (agency === 'NIH') {
     return {
-      title: `NIH ${opportunityId}`,
+      title: `NIH ${opportunityId} (Mechanism)`,
       sponsor: 'National Institutes of Health',
-      type: 'OPPORTUNITY',
+      type: 'PROGRAM', // Baseline mechanism
       evidence_url: `https://grants.nih.gov/grants/guide/${opportunityId}`,
-      last_verified_at: new Date().toISOString()
+      last_verified_at: null // Not verified - baseline only
     };
   } else if (agency === 'NSF') {
     return {
-      title: `NSF ${opportunityId}`,
+      title: `NSF ${opportunityId} (Mechanism)`,
       sponsor: 'National Science Foundation',
-      type: 'OPPORTUNITY',
+      type: 'PROGRAM', // Baseline mechanism
       evidence_url: `https://www.nsf.gov/funding/pgm_summ.jsp?pims_id=${opportunityId}`,
-      last_verified_at: new Date().toISOString()
+      last_verified_at: null // Not verified - baseline only
     };
   }
   

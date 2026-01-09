@@ -831,9 +831,11 @@ GrantFlow uses **only** legitimate, publicly accessible data sources with proper
 |--------|------|-----|------------|-----|
 | **Grants.gov** | OPPORTUNITY | [REST API](https://www.grants.gov/web/grants/xml-web-services.html) | ~1 req/sec (conservative) | [Terms](https://www.grants.gov/web/grants/support/terms-of-use.html) |
 | **SAM.gov** | PROGRAM | [Federal Assistance API](https://open.gsa.gov/api/fh-public-api/) | ~2 req/sec | [Terms](https://www.sam.gov/SAM/pages/public/termsOfUse.jsf) |
-| **NIH RePORTER** | OPPORTUNITY | [REST API](https://api.reporter.nih.gov/) | 100 req/min | Public domain |
-| **NSF Awards** | OPPORTUNITY | [Awards API](https://www.research.gov/common/webapi/awardapisearch-v1.htm) | Conservative use | Public domain |
+| **NIH RePORTER** | PROGRAM (baseline) | [REST API](https://api.reporter.nih.gov/) | 100 req/min | Public domain |
+| **NSF Awards** | PROGRAM (baseline) | [Awards API](https://www.research.gov/common/webapi/awardapisearch-v1.htm) | Conservative use | Public domain |
 | **USAspending.gov** | DIRECTORY | [API v2](https://api.usaspending.gov/) | 500 req/hour | Public domain |
+
+**Note on NIH/NSF:** Currently returns baseline funding mechanism templates (type: PROGRAM, last_verified_at: null). Real FOA ingestion with verified deadlines requires parsing NIH Guide RSS feeds and NSF funding announcements.
 
 **API Keys Required:**
 - `SAM_GOV_API_KEY` - Register at https://open.gsa.gov/api/fh-public-api/
@@ -849,9 +851,9 @@ GrantFlow uses **only** legitimate, publicly accessible data sources with proper
 ### Source Type Classification
 
 - **OPPORTUNITY**: Open/forecasted solicitation with deadline and direct application URL
-  - Example: Active Grants.gov FOA, NIH R01 with deadline
-- **PROGRAM**: Standing assistance program with rolling enrollment
-  - Example: Medicaid, SNAP, LIHEAP, SAM.gov assistance listings
+  - Example: Active Grants.gov FOA with verified deadline
+- **PROGRAM**: Standing assistance program with rolling enrollment or baseline funding mechanism
+  - Example: Medicaid, SNAP, LIHEAP, SAM.gov assistance listings, NIH/NSF mechanisms (baseline/unverified)
 - **DIRECTORY**: Funding source locator, no claim of "open grant"
   - Example: Community foundation listings, agency directories, historical awards
 
@@ -959,13 +961,22 @@ Every funding opportunity in GrantFlow must include verification metadata:
 ```javascript
 // Good: Real opportunity with evidence
 {
-  title: "NIH R01 Research Project Grant",
+  title: "Active Grants.gov FOA",
   type: "OPPORTUNITY",
   source: "grants.gov",
-  evidence_url: "https://grants.nih.gov/grants/guide/pa-files/PA-20-265.html",
+  evidence_url: "https://www.grants.gov/web/grants/view-opportunity.html?oppId=123456",
   last_verified_at: "2026-01-09T10:00:00Z",
   deadline: "2026-04-05",
   application_url: "https://www.grants.gov/web/grants/view-opportunity.html?oppId=123456"
+}
+
+// Acceptable: Baseline mechanism (unverified)
+{
+  title: "NIH R01 Research Project Grant (Mechanism)",
+  type: "PROGRAM",
+  source: "nih.gov",
+  evidence_url: "https://grants.nih.gov/grants/funding/r01.htm",
+  last_verified_at: null // Baseline only, not verified
 }
 
 // Bad: Mock data (rejected)
