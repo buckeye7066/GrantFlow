@@ -798,4 +798,156 @@ router.get('/national-crawl/status', async (req, res) => {
   }
 })
 
+/**
+ * GET /api/admin/diagnostics - System diagnostics and health check
+ * Returns comprehensive system health information for debugging
+ */
+router.get('/diagnostics', (req, res) => {
+  try {
+    // Check admin access
+    const user = req.user;
+    if (!user || !user.is_admin) {
+      return res.status(403).json({ 
+        error: 'Access denied',
+        message: 'This endpoint is restricted to administrators only' 
+      });
+    }
+
+    const db = req.db;
+    const diagnostics = {
+      timestamp: new Date().toISOString(),
+      server: {
+        uptime: process.uptime(),
+        nodeVersion: process.version,
+        platform: process.platform,
+        memory: {
+          used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+          total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
+          unit: 'MB'
+        }
+      },
+      database: {
+        path: process.env.DB_PATH || 'default',
+        writable: true, // We can write since we're querying
+        tables: {}
+      },
+      counts: {},
+      environment: {
+        hasOpenAIKey: !!process.env.OPENAI_API_KEY,
+        hasAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
+        hasSamGovKey: !!process.env.SAM_GOV_API_KEY,
+        nodeEnv: process.env.NODE_ENV || 'development'
+      },
+      crawlers: {
+        lastRuns: [],
+        recentErrors: []
+      }
+    };
+
+    // Get table counts
+    try {
+      diagnostics.counts.funding_opportunities = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get()?.count || 0;
+      diagnostics.counts.active_opportunities = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get()?.count || 0;
+      diagnostics.counts.crawl_logs = db.prepare('SELECT COUNT(*) as count FROM crawl_logs').get()?.count || 0;
+      diagnostics.counts.profiles = db.prepare('SELECT COUNT(*) as count FROM profiles').get()?.count || 0;
+      diagnostics.counts.active_profiles = db.prepare('SELECT COUNT(*) as count FROM profiles WHERE status = ?').get('active')?.count || 0;
+      diagnostics.counts.users = db.prepare('SELECT COUNT(*) as count FROM users').get()?.count || 0;
+      diagnostics.counts.grants = db.prepare('SELECT COUNT(*) as count FROM grants').get()?.count || 0;
+    } catch (countError) {
+      diagnostics.counts.error = 'Failed to retrieve counts: ' + countError.message;
+    }
+
+    // Get last 10 crawl logs
+    try {
+      diagnostics.crawlers.lastRuns = db.prepare(`
+        SELECT 
+          id, 
+          crawler_type, 
+          status, 
+          records_found, 
+          records_saved, 
+          error_message,
+          started_at, 
+          completed_at,
+          duration_ms
+        FROM crawl_logs 
+        ORDER BY started_at DESC 
+        LIMIT 10
+      `).all();
+    } catch (logError) {
+      diagnostics.crawlers.lastRuns = [];
+      diagnostics.crawlers.error = 'Failed to retrieve crawl logs: ' + logError.message;
+    }
+
+    // Get recent errors from crawl logs
+    try {
+      diagnostics.crawlers.recentErrors = db.prepare(`
+        SELECT 
+          crawler_type, 
+          error_message, 
+          started_at
+        FROM crawl_logs 
+        WHERE status = 'failed' AND error_message IS NOT NULL
+        ORDER BY started_at DESC 
+        LIMIT 5
+      `).all();
+    } catch (errorLogError) {
+      diagnostics.crawlers.recentErrors = [];
+    }
+
+    // Get last error from any source if available
+    try {
+      const lastError = db.prepare(`
+        SELECT error_message, started_at, crawler_type
+        FROM crawl_logs 
+        WHERE error_message IS NOT NULL 
+        ORDER BY started_at DESC 
+        LIMIT 1
+      `).get();
+      
+      if (lastError) {
+        diagnostics.lastError = {
+          message: lastError.error_message,
+          source: lastError.crawler_type,
+          timestamp: lastError.started_at
+        };
+      }
+    } catch (e) {
+      // No last error or error retrieving it
+    }
+
+    // System health assessment
+    const hasData = diagnostics.counts.funding_opportunities > 0;
+    const hasRecentErrors = diagnostics.crawlers.recentErrors.length > 0;
+    const hasApiKeys = diagnostics.environment.hasOpenAIKey;
+
+    diagnostics.health = {
+      status: hasRecentErrors ? 'degraded' : (hasData && hasApiKeys ? 'healthy' : 'warning'),
+      issues: []
+    };
+
+    if (!hasData) {
+      diagnostics.health.issues.push('No funding opportunities in database - crawlers may not have run successfully');
+    }
+    if (!hasApiKeys) {
+      diagnostics.health.issues.push('OPENAI_API_KEY not configured - AI features will not work');
+    }
+    if (!diagnostics.environment.hasSamGovKey) {
+      diagnostics.health.issues.push('SAM_GOV_API_KEY not configured - government funding crawler will fail');
+    }
+    if (hasRecentErrors) {
+      diagnostics.health.issues.push(`${diagnostics.crawlers.recentErrors.length} recent crawler failures detected`);
+    }
+
+    res.json(diagnostics);
+  } catch (error) {
+    console.error('[admin/diagnostics] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to retrieve diagnostics',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 export default router;
