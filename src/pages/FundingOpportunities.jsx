@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import {
+  AlertTriangle,
   Building,
   CalendarDays,
   CheckCircle2,
@@ -320,6 +321,13 @@ function OpportunityCard({ opportunity, onSelect, match, onAddToPipeline, isAddi
         <h3 className="text-lg font-semibold text-slate-900 line-clamp-2 group-hover:text-blue-700 transition-colors">
           {opportunity.title}
         </h3>
+        {/* Baseline / Not verified badge */}
+        {!opportunity.last_verified_at && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
+            <AlertTriangle className="w-3 h-3" />
+            Baseline / Not verified
+          </span>
+        )}
         {/* Funding Source / Sponsor */}
         <div className="flex items-center gap-2 text-sm text-slate-700 font-medium">
           <Building className="w-4 h-4 text-blue-500" />
@@ -493,6 +501,13 @@ function OpportunityDetail({
       <DialogContent className="max-w-3xl">
         <DialogHeader className="space-y-2">
           <DialogTitle className="text-2xl font-semibold text-slate-900">{opportunity.title}</DialogTitle>
+          {/* Baseline / Not verified badge in detail view */}
+          {!opportunity.last_verified_at && (
+            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200 w-fit">
+              <AlertTriangle className="w-3 h-3" />
+              Baseline / Not verified
+            </div>
+          )}
           <div className="flex items-center gap-2 text-sm text-slate-500">
             <Layers className="w-4 h-4" />
             <span>{opportunity.source || "Crawler"}</span>
