@@ -636,6 +636,143 @@ registerTool({
   },
 })
 
+registerTool({
+  name: 'system.health',
+  description: 'Get system health summary including crawler status, database counts, and recent errors. Use this before reporting system status.',
+  schema: {
+    type: 'object',
+    properties: {},
+  },
+  handler: async (params, context) => {
+    const { db } = context;
+    if (!db) {
+      throw new Error('Database connection unavailable');
+    }
+
+    try {
+      // Get crawler statistics
+      const crawlerStats = {
+        lastRuns: [],
+        recentFailures: 0,
+        totalRuns: 0
+      };
+
+      try {
+        crawlerStats.lastRuns = db.prepare(`
+          SELECT 
+            crawler_type, 
+            status, 
+            records_found, 
+            records_saved,
+            started_at,
+            error_message
+          FROM crawl_logs 
+          ORDER BY started_at DESC 
+          LIMIT 5
+        `).all();
+
+        crawlerStats.totalRuns = db.prepare('SELECT COUNT(*) as count FROM crawl_logs').get()?.count || 0;
+        crawlerStats.recentFailures = db.prepare(`
+          SELECT COUNT(*) as count FROM crawl_logs 
+          WHERE status = 'failed' 
+          AND started_at >= datetime('now', '-24 hours')
+        `).get()?.count || 0;
+      } catch (e) {
+        console.warn('[system.health] Failed to get crawler stats:', e.message);
+      }
+
+      // Get database counts
+      const counts = {
+        opportunities: 0,
+        activeOpportunities: 0,
+        profiles: 0,
+        activeProfiles: 0
+      };
+
+      try {
+        counts.opportunities = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get()?.count || 0;
+        counts.activeOpportunities = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get()?.count || 0;
+        counts.profiles = db.prepare('SELECT COUNT(*) as count FROM profiles').get()?.count || 0;
+        counts.activeProfiles = db.prepare('SELECT COUNT(*) as count FROM profiles WHERE status = ?').get('active')?.count || 0;
+      } catch (e) {
+        console.warn('[system.health] Failed to get counts:', e.message);
+      }
+
+      // Get last error
+      let lastError = null;
+      try {
+        const errorRow = db.prepare(`
+          SELECT error_message, started_at, crawler_type
+          FROM crawl_logs 
+          WHERE error_message IS NOT NULL 
+          ORDER BY started_at DESC 
+          LIMIT 1
+        `).get();
+
+        if (errorRow) {
+          lastError = {
+            message: errorRow.error_message,
+            crawler: errorRow.crawler_type,
+            timestamp: errorRow.started_at
+          };
+        }
+      } catch (e) {
+        console.warn('[system.health] Failed to get last error:', e.message);
+      }
+
+      // Environment checks
+      const environment = {
+        hasOpenAIKey: !!process.env.OPENAI_API_KEY,
+        hasSamGovKey: !!process.env.SAM_GOV_API_KEY
+      };
+
+      // Determine overall health status
+      let status = 'healthy';
+      const issues = [];
+
+      if (counts.opportunities === 0) {
+        status = 'warning';
+        issues.push('No funding opportunities in database - crawlers may not have run successfully');
+      }
+
+      if (crawlerStats.recentFailures > 0) {
+        status = 'degraded';
+        issues.push(`${crawlerStats.recentFailures} crawler failures in the last 24 hours`);
+      }
+
+      if (!environment.hasOpenAIKey) {
+        status = 'warning';
+        issues.push('OPENAI_API_KEY not configured');
+      }
+
+      if (!environment.hasSamGovKey) {
+        if (status === 'healthy') status = 'warning';
+        issues.push('SAM_GOV_API_KEY not configured - government funding crawler will fail');
+      }
+
+      return {
+        status,
+        timestamp: new Date().toISOString(),
+        counts,
+        crawlers: crawlerStats,
+        lastError,
+        environment,
+        issues,
+        summary: issues.length === 0 
+          ? 'All systems operational' 
+          : `${issues.length} issue(s) detected`
+      };
+    } catch (error) {
+      console.error('[system.health] Error:', error);
+      return {
+        status: 'error',
+        error: error.message,
+        timestamp: new Date().toISOString()
+      };
+    }
+  },
+})
+
 // ============================================================================
 // Admin-only tools
 // ============================================================================

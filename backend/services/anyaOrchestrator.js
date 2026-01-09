@@ -588,10 +588,11 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
 
   const isHealthQuery = isAdmin && healthKeywords.some(keyword => lowerContent.includes(keyword))
 
-  if (isHealthQuery) {
-    try {
-      console.log('[Anya] Health query detected, invoking system.health tool')
-      const healthData = await invokeRegisteredTool('system.health', {}, { db, user })
+ if (isHealthQuery) {
+  try {
+    const { invokeTool: invokeRegisteredTool } = await import('./anyaToolRegistry.js')
+    console.log('[Anya] Health query detected, invoking system.health tool')
+    const healthData = await invokeRegisteredTool('system.health', {}, { db, user })
 
       // Format the health data into a human-readable response
       const lines = []
@@ -758,6 +759,13 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
       '  • Viewing all user profiles and data',
       '  • Managing database operations',
       '  • System diagnostics and health checks',
+      '',
+      'CRITICAL - System Health Reporting:',
+      '- NEVER claim "everything is fine" or "all systems working" without checking system.health tool first',
+      '- When asked about system status, crawlers, or errors, ALWAYS use the system.health tool',
+      '- Report actual issues found in system.health output - do not sugarcoat problems',
+      '- If system.health shows failures, missing API keys, or zero opportunities, report them clearly',
+      '- Base all health-related responses on actual data from system.health, not assumptions',
       '- Feel free to acknowledge their admin status when greeting them',
       '',
       '**CRITICAL TRUTH GATE RULE FOR SYSTEM HEALTH QUERIES:**',
