@@ -43,8 +43,21 @@ export function calculateMatchScore(opportunity, profile) {
     score += 15
   }
   
-  // Random variation for testing
-  score += Math.floor(Math.random() * 35)
+  // Deterministic scoring based on opportunity and profile characteristics
+  // Category/keyword alignment (0-15 points)
+  const oppText = `${opportunity.title} ${opportunity.description}`.toLowerCase()
+  const profileKeywords = profile.keywords || profile.focus_areas || []
+  const matchedKeywords = profileKeywords.filter(keyword => 
+    oppText.includes(keyword.toLowerCase())
+  )
+  score += Math.min(15, matchedKeywords.length * 3)
+  
+  // Eligibility alignment (0-10 points)
+  const eligText = (opportunity.eligibility_criteria || opportunity.eligibility || '').toLowerCase()
+  const profileType = (profile.organization_type || profile.primary_type || '').toLowerCase()
+  if (eligText.includes(profileType)) {
+    score += 10
+  }
   
   return Math.min(100, score)
 }

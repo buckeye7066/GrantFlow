@@ -1341,13 +1341,19 @@ export default function FundingOpportunities() {
           <CardContent className="p-12 text-center space-y-4">
             <Layers className="w-12 h-12 mx-auto text-slate-300" />
             <h3 className="text-xl font-semibold text-slate-900">No opportunities found</h3>
-            <p className="text-sm text-slate-600">
-              Adjust your filters or ensure the crawlers have ingested the latest sources. A minimum of three opportunities per
-              ZIP will appear once the comprehensive crawler finishes its sweep.
+            <p className="text-sm text-slate-600 max-w-md mx-auto">
+              {opportunitiesData?.opportunities?.length === 0 && opportunitiesData?.total === 0 ? (
+                <>
+                  No funding opportunities have been ingested yet. To populate with real data from live sources, run:
+                  <code className="block mt-2 p-2 bg-slate-100 rounded text-left">npm run ingest</code>
+                  Or use the Admin panel to trigger ingestion via API.
+                </>
+              ) : (
+                <>
+                  Adjust your filters or ensure the ingestion has completed. Once ingestion runs, opportunities from Grants.gov and USASpending.gov will appear here.
+                </>
+              )}
             </p>
-            <Button variant="outline" onClick={handleRequestComprehensiveSweep}>
-              Trigger crawler sweep
-            </Button>
           </CardContent>
         </Card>
       )}
