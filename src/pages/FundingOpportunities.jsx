@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query"
 import {
   Building,
   CalendarDays,
+  CheckCircle2,
   DollarSign,
   ExternalLink,
   FileText,
@@ -30,6 +31,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Progress } from "@/components/ui/progress"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useToast } from "@/components/ui/use-toast"
 import { listOpportunities, listOpportunitySources, listOpportunityStates } from "@/api/opportunities"
 import { listProfiles, getProfile } from "@/api/profiles"
@@ -244,6 +246,34 @@ function OpportunityCard({ opportunity, onSelect, match, onAddToPipeline, isAddi
     ? "Review terms"
     : "Funding review"
   const opportunityTypeLabel = opportunity.opportunity_type || "Funding Opportunity"
+  
+  // Get type badge styling and label
+  const getTypeBadge = (type) => {
+    switch(type) {
+      case 'OPPORTUNITY':
+        return { 
+          label: 'Open Grant', 
+          className: 'bg-green-100 text-green-700 border-green-300' 
+        }
+      case 'PROGRAM':
+        return { 
+          label: 'Standing Program', 
+          className: 'bg-blue-100 text-blue-700 border-blue-300' 
+        }
+      case 'DIRECTORY':
+        return { 
+          label: 'Resource Directory', 
+          className: 'bg-gray-100 text-gray-700 border-gray-300' 
+        }
+      default:
+        return { 
+          label: 'Unverified', 
+          className: 'bg-amber-100 text-amber-700 border-amber-300' 
+        }
+    }
+  }
+  
+  const typeBadge = getTypeBadge(opportunity.type)
 
   // Get match color based on score
   const getMatchColor = (score) => {
@@ -267,9 +297,17 @@ function OpportunityCard({ opportunity, onSelect, match, onAddToPipeline, isAddi
     >
       <CardHeader className="pb-3 space-y-2">
         <div className="flex items-center justify-between gap-3">
-          <Badge variant="outline" className="uppercase text-[11px] tracking-wide text-slate-500">
-            {opportunity.source || "Uncategorized"}
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Badge variant="outline" className="uppercase text-[11px] tracking-wide text-slate-500">
+              {opportunity.source || "Uncategorized"}
+            </Badge>
+            {/* Type Badge (OPPORTUNITY/PROGRAM/DIRECTORY) */}
+            {opportunity.type && (
+              <Badge className={cn("text-xs border font-semibold uppercase tracking-wider", typeBadge.className)}>
+                {typeBadge.label}
+              </Badge>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             {opportunity.opportunity_type ? (
               <Badge variant="outline" className="text-xs uppercase tracking-wide text-slate-500">
@@ -324,21 +362,40 @@ function OpportunityCard({ opportunity, onSelect, match, onAddToPipeline, isAddi
           </div>
         )}
 
-        {/* Match Score - Prominently displayed */}
+        {/* Match Score - Prominently displayed with tooltip for reasons */}
         {match ? (
-          <div className={cn("rounded-lg border p-3 space-y-2", getMatchColor(matchScore))}>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Target className="w-4 h-4" />
-                <span className="text-sm font-semibold uppercase tracking-wide">Match Score</span>
-              </div>
-              <span className="text-2xl font-bold">{matchScore}%</span>
-            </div>
-            <Progress value={matchScore} className="h-2" />
-            {match.reasons && match.reasons.length > 0 && (
-              <p className="text-xs opacity-80 line-clamp-1">{match.reasons[0]}</p>
-            )}
-          </div>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className={cn("rounded-lg border p-3 space-y-2 cursor-help", getMatchColor(matchScore))}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Target className="w-4 h-4" />
+                      <span className="text-sm font-semibold uppercase tracking-wide">Match Score</span>
+                    </div>
+                    <span className="text-2xl font-bold">{matchScore}%</span>
+                  </div>
+                  <Progress value={matchScore} className="h-2" />
+                  {match.reasons && match.reasons.length > 0 && (
+                    <p className="text-xs opacity-80 line-clamp-1">{match.reasons[0]} {match.reasons.length > 1 && `+${match.reasons.length - 1} more`}</p>
+                  )}
+                </div>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-sm p-3">
+                <div className="space-y-2">
+                  <p className="font-semibold text-sm">Match Reasons:</p>
+                  <ul className="text-xs space-y-1">
+                    {match.reasons && match.reasons.map((reason, idx) => (
+                      <li key={idx} className="flex items-start gap-2">
+                        <CheckCircle2 className="w-3 h-3 mt-0.5 flex-shrink-0 text-green-600" />
+                        <span>{reason}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         ) : (
           <div className="rounded-lg border border-dashed border-slate-200 p-3 text-xs text-slate-500 text-center">
             <Target className="w-4 h-4 mx-auto mb-1 opacity-50" />
@@ -511,6 +568,34 @@ function OpportunityDetail({
                   </>
                 )}
               </div>
+              
+              {/* Evidence URL and Verification */}
+              {(opportunity.evidence_url || opportunity.last_verified_at) && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-2 col-span-1 sm:col-span-2">
+                  <p className="font-semibold text-slate-800 flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-green-600" />
+                    Verification
+                  </p>
+                  {opportunity.evidence_url && (
+                    <div className="flex items-center gap-2 text-xs text-blue-600">
+                      <ExternalLink className="w-3 h-3" />
+                      <a 
+                        href={opportunity.evidence_url} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="hover:underline truncate"
+                      >
+                        Evidence URL: {new URL(opportunity.evidence_url).hostname}
+                      </a>
+                    </div>
+                  )}
+                  {opportunity.last_verified_at && (
+                    <p className="text-xs text-slate-600">
+                      Verified on {format(new Date(opportunity.last_verified_at), "PPP")}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
             {showMatchInsights ? (
               <div className="rounded-xl border border-blue-200 bg-blue-50/70 p-4 space-y-2">
