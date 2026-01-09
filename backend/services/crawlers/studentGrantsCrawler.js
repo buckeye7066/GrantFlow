@@ -146,16 +146,15 @@ async function searchStudentSource(source, studentInfo, profile) {
       interests: studentInfo.interests
     }
     
-    // Simulate API call (would need real API access)
-    try {
-      // This would be a real API call or web scraping
-      const mockScholarships = generateScholarshipOpportunities(searchCriteria, studentInfo)
-      opportunities.push(...mockScholarships)
-    } catch (error) {
-      console.error(`[StudentGrantsCrawler] Error with ${source.name}:`, error.message)
-    }
+    // Production: Must use real scholarship database APIs
+    // No mock data generation in production
+    throw new Error(
+      `Real ${source.name} API integration required. ` +
+      `Mock scholarship generation is disabled in production. ` +
+      `Please implement actual API calls to ${source.baseUrl}`
+    )
   } else if (source.name === 'FAFSA') {
-    // FAFSA specific opportunities
+    // FAFSA specific opportunities - these are real federal programs
     opportunities.push({
       title: 'Federal Pell Grant',
       sponsor: 'U.S. Department of Education',
@@ -197,90 +196,19 @@ async function searchSchoolFinancialAid(schoolName, studentInfo, profile) {
   
   const url = schoolFinAidUrls[schoolName]
   if (url) {
-    try {
-      // This would scrape the school's financial aid page
-      opportunities.push({
-        title: `${schoolName} Merit Scholarship`,
-        sponsor: schoolName,
-        description: `Merit-based scholarship for incoming students at ${schoolName}`,
-        url: url,
-        amount_min: 5000,
-        amount_max: 25000,
-        deadline: 'February 1, 2025',
-        eligibility: `Based on academic achievement, GPA ${studentInfo.gpa >= 3.5 ? 'meets' : 'below'} requirement`,
-        school_specific: true
-      })
-      
-      if (studentInfo.financial_need) {
-        opportunities.push({
-          title: `${schoolName} Need-Based Grant`,
-          sponsor: schoolName,
-          description: `Need-based financial aid grant for ${schoolName} students`,
-          url: url,
-          amount_min: 1000,
-          amount_max: 15000,
-          deadline: 'March 1, 2025',
-          eligibility: 'Based on demonstrated financial need via FAFSA',
-          school_specific: true
-        })
-      }
-    } catch (error) {
-      console.error(`[StudentGrantsCrawler] Error crawling ${schoolName}:`, error.message)
-    }
+    // Production: Must implement real scraping or API calls to school financial aid pages
+    throw new Error(
+      `Real school financial aid scraper required for ${schoolName}. ` +
+      `Mock school scholarship generation is disabled in production. ` +
+      `Please implement actual scraping/API calls to ${url}`
+    )
   }
   
   return opportunities
 }
 
-function generateScholarshipOpportunities(criteria, studentInfo) {
-  const opportunities = []
-  
-  // Merit-based scholarships
-  if (studentInfo.gpa >= 3.5) {
-    opportunities.push({
-      title: 'Academic Excellence Scholarship',
-      sponsor: 'National Merit Foundation',
-      description: 'Scholarship for students with outstanding academic achievement',
-      amount_min: 2500,
-      amount_max: 10000,
-      deadline: 'March 15, 2025',
-      eligibility: 'Minimum 3.5 GPA required',
-      match_criteria: ['gpa']
-    })
-  }
-  
-  // Test score based
-  if (studentInfo.sat >= 1400 || studentInfo.act >= 32) {
-    opportunities.push({
-      title: 'High Achiever Scholarship',
-      sponsor: 'College Board',
-      description: 'For students with exceptional standardized test scores',
-      amount_min: 5000,
-      amount_max: 20000,
-      deadline: 'April 1, 2025',
-      eligibility: 'SAT 1400+ or ACT 32+',
-      match_criteria: ['test_scores']
-    })
-  }
-  
-  // Interest-based
-  studentInfo.interests?.forEach(interest => {
-    if (interest.toLowerCase().includes('stem')) {
-      opportunities.push({
-        title: 'STEM Excellence Award',
-        sponsor: 'National Science Foundation',
-        description: 'Supporting students pursuing STEM fields',
-        amount_min: 5000,
-        amount_max: 15000,
-        deadline: 'February 28, 2025',
-        eligibility: 'Must be pursuing STEM major',
-        match_criteria: ['interests', 'major']
-      })
-    }
-  })
-  
-  return opportunities
-}
+// Remove mock scholarship generation function - not allowed in production
+// function generateScholarshipOpportunities() removed
 
 function calculateStudentMatchScore(opportunity, studentInfo, profile) {
   let score = 60 // Base score
