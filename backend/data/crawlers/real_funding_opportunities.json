@@ -10,8 +10,17 @@
       "amount_description": "Varies by state allocation",
       "deadline": "Rolling",
       "application_url": "https://www.fns.usda.gov/snap/et",
-      "categories": ["employment", "training", "food_security"],
-      "keywords": ["SNAP", "employment", "job training", "workforce"],
+      "categories": [
+        "employment",
+        "training",
+        "food_security"
+      ],
+      "keywords": [
+        "SNAP",
+        "employment",
+        "job training",
+        "workforce"
+      ],
       "eligibility_bullets": [
         "Must be a SNAP recipient",
         "Age 16-59 unless exempt",
@@ -19,7 +28,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "fed-liheap",
@@ -30,8 +42,18 @@
       "amount_max": 2000,
       "deadline": "Varies by state",
       "application_url": "https://www.acf.hhs.gov/ocs/programs/liheap",
-      "categories": ["utilities", "basic_needs", "housing"],
-      "keywords": ["energy", "utilities", "heating", "cooling", "low income"],
+      "categories": [
+        "utilities",
+        "basic_needs",
+        "housing"
+      ],
+      "keywords": [
+        "energy",
+        "utilities",
+        "heating",
+        "cooling",
+        "low income"
+      ],
       "eligibility_bullets": [
         "Household income at or below 150% of federal poverty level",
         "Must be responsible for home energy costs",
@@ -39,7 +61,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "fed-pell-grant",
@@ -50,8 +75,17 @@
       "amount_max": 7395,
       "deadline": "June 30 annually",
       "application_url": "https://studentaid.gov/understand-aid/types/grants/pell",
-      "categories": ["education", "scholarship"],
-      "keywords": ["college", "university", "undergraduate", "financial aid", "education"],
+      "categories": [
+        "education",
+        "scholarship"
+      ],
+      "keywords": [
+        "college",
+        "university",
+        "undergraduate",
+        "financial aid",
+        "education"
+      ],
       "eligibility_bullets": [
         "Must demonstrate financial need via FAFSA",
         "Must be enrolled in eligible degree program",
@@ -59,7 +93,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "fed-teach-grant",
@@ -70,8 +107,16 @@
       "amount_max": 4000,
       "deadline": "Rolling with academic year",
       "application_url": "https://studentaid.gov/understand-aid/types/grants/teach",
-      "categories": ["education", "teaching"],
-      "keywords": ["teacher", "education", "teaching", "high-need"],
+      "categories": [
+        "education",
+        "teaching"
+      ],
+      "keywords": [
+        "teacher",
+        "education",
+        "teaching",
+        "high-need"
+      ],
       "eligibility_bullets": [
         "Must agree to teach 4 years in high-need field",
         "Must complete FAFSA",
@@ -79,7 +124,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "fed-fseog",
@@ -90,8 +138,15 @@
       "amount_max": 4000,
       "deadline": "Varies by school",
       "application_url": "https://studentaid.gov/understand-aid/types/grants/fseog",
-      "categories": ["education", "scholarship"],
-      "keywords": ["college", "financial aid", "undergraduate"],
+      "categories": [
+        "education",
+        "scholarship"
+      ],
+      "keywords": [
+        "college",
+        "financial aid",
+        "undergraduate"
+      ],
       "eligibility_bullets": [
         "Must demonstrate exceptional financial need",
         "Must complete FAFSA",
@@ -99,7 +154,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     }
   ],
   "foundation_grants": [
@@ -112,8 +170,17 @@
       "amount_max": 500000,
       "deadline": "Rolling",
       "application_url": "https://kresge.org/our-work/arts-culture/",
-      "categories": ["arts", "culture", "community"],
-      "keywords": ["arts", "culture", "community development", "nonprofit"],
+      "categories": [
+        "arts",
+        "culture",
+        "community"
+      ],
+      "keywords": [
+        "arts",
+        "culture",
+        "community development",
+        "nonprofit"
+      ],
       "eligibility_bullets": [
         "501(c)(3) nonprofit organization",
         "Demonstrated track record in arts programming",
@@ -121,7 +188,10 @@
       ],
       "requires_match": false,
       "requires_501c3": true,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "found-gates-scholarship",
@@ -132,8 +202,16 @@
       "amount_max": 75000,
       "deadline": "September 15 annually",
       "application_url": "https://www.thegatesscholarship.org/",
-      "categories": ["scholarship", "education"],
-      "keywords": ["scholarship", "college", "minority", "low income"],
+      "categories": [
+        "scholarship",
+        "education"
+      ],
+      "keywords": [
+        "scholarship",
+        "college",
+        "minority",
+        "low income"
+      ],
       "eligibility_bullets": [
         "High school senior from low-income household",
         "Pell Grant eligible",
@@ -142,7 +220,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "found-walmart",
@@ -153,8 +234,17 @@
       "amount_max": 5000,
       "deadline": "Rolling - apply through local store",
       "application_url": "https://walmart.org/how-we-give/local-community-grants",
-      "categories": ["community", "hunger", "workforce"],
-      "keywords": ["community", "hunger relief", "workforce", "disaster"],
+      "categories": [
+        "community",
+        "hunger",
+        "workforce"
+      ],
+      "keywords": [
+        "community",
+        "hunger relief",
+        "workforce",
+        "disaster"
+      ],
       "eligibility_bullets": [
         "501(c)(3) tax-exempt organization",
         "Organization must operate in a Walmart service area",
@@ -162,7 +252,10 @@
       ],
       "requires_match": false,
       "requires_501c3": true,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "found-target",
@@ -173,8 +266,16 @@
       "amount_max": 10000,
       "deadline": "Quarterly voting periods",
       "application_url": "https://corporate.target.com/sustainability-governance/grants",
-      "categories": ["community", "education", "basic_needs"],
-      "keywords": ["community", "education", "local"],
+      "categories": [
+        "community",
+        "education",
+        "basic_needs"
+      ],
+      "keywords": [
+        "community",
+        "education",
+        "local"
+      ],
       "eligibility_bullets": [
         "501(c)(3) nonprofit organization",
         "Serve communities near Target stores",
@@ -182,7 +283,10 @@
       ],
       "requires_match": false,
       "requires_501c3": true,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     }
   ],
   "state_programs": [
@@ -195,8 +299,17 @@
       "amount_max": 100000,
       "deadline": "Varies by funding cycle",
       "application_url": "https://jfs.ohio.gov/ofc/",
-      "categories": ["family", "children", "social_services"],
-      "keywords": ["family", "children", "Ohio", "social services"],
+      "categories": [
+        "family",
+        "children",
+        "social_services"
+      ],
+      "keywords": [
+        "family",
+        "children",
+        "Ohio",
+        "social services"
+      ],
       "eligibility_bullets": [
         "Ohio-based nonprofit or government entity",
         "Serves families with children",
@@ -204,7 +317,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "OH"
+      "state": "OH",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "state-oh-osfa",
@@ -215,8 +331,16 @@
       "amount_max": 7500,
       "deadline": "October 1 annually",
       "application_url": "https://highered.ohio.gov/students/pay-for-college/ohio-college-opportunity-grant",
-      "categories": ["education", "scholarship"],
-      "keywords": ["college", "Ohio", "financial aid", "undergraduate"],
+      "categories": [
+        "education",
+        "scholarship"
+      ],
+      "keywords": [
+        "college",
+        "Ohio",
+        "financial aid",
+        "undergraduate"
+      ],
       "eligibility_bullets": [
         "Ohio resident for 12+ months",
         "Expected Family Contribution of $2,190 or less",
@@ -225,7 +349,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "OH"
+      "state": "OH",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "state-ca-calgrant",
@@ -236,8 +363,15 @@
       "amount_max": 14296,
       "deadline": "March 2 annually",
       "application_url": "https://www.csac.ca.gov/cal-grants",
-      "categories": ["education", "scholarship"],
-      "keywords": ["California", "college", "financial aid"],
+      "categories": [
+        "education",
+        "scholarship"
+      ],
+      "keywords": [
+        "California",
+        "college",
+        "financial aid"
+      ],
       "eligibility_bullets": [
         "California resident",
         "Meet income and asset ceilings",
@@ -246,7 +380,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "CA"
+      "state": "CA",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "state-ny-tap",
@@ -257,8 +394,16 @@
       "amount_max": 5665,
       "deadline": "Rolling with academic year",
       "application_url": "https://www.hesc.ny.gov/pay-for-college/financial-aid/types-of-financial-aid/grants/tap-tuition-assistance-program.html",
-      "categories": ["education", "scholarship"],
-      "keywords": ["New York", "college", "tuition", "financial aid"],
+      "categories": [
+        "education",
+        "scholarship"
+      ],
+      "keywords": [
+        "New York",
+        "college",
+        "tuition",
+        "financial aid"
+      ],
       "eligibility_bullets": [
         "New York State resident",
         "Meet income eligibility requirements",
@@ -267,7 +412,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "NY"
+      "state": "NY",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "state-tx-tpeg",
@@ -278,8 +426,15 @@
       "amount_max": 5000,
       "deadline": "Varies by institution",
       "application_url": "https://www.highered.texas.gov/institutional-resources-programs/student-financial-aid-programs/",
-      "categories": ["education", "scholarship"],
-      "keywords": ["Texas", "college", "financial aid"],
+      "categories": [
+        "education",
+        "scholarship"
+      ],
+      "keywords": [
+        "Texas",
+        "college",
+        "financial aid"
+      ],
       "eligibility_bullets": [
         "Texas resident",
         "Demonstrate financial need",
@@ -288,7 +443,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "TX"
+      "state": "TX",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     }
   ],
   "disability_assistance": [
@@ -302,8 +460,16 @@
       "amount_description": "Up to $943/month for individuals in 2024",
       "deadline": "Rolling - apply anytime",
       "application_url": "https://www.ssa.gov/ssi/",
-      "categories": ["disability", "income_support"],
-      "keywords": ["disability", "SSI", "income", "monthly benefit"],
+      "categories": [
+        "disability",
+        "income_support"
+      ],
+      "keywords": [
+        "disability",
+        "SSI",
+        "income",
+        "monthly benefit"
+      ],
       "eligibility_bullets": [
         "Disabled, blind, or age 65+",
         "Limited income and resources",
@@ -312,7 +478,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "dis-able-account",
@@ -323,8 +492,16 @@
       "amount_max": 18000,
       "deadline": "Rolling",
       "application_url": "https://www.ablenrc.org/",
-      "categories": ["disability", "savings"],
-      "keywords": ["disability", "ABLE", "savings", "tax-advantaged"],
+      "categories": [
+        "disability",
+        "savings"
+      ],
+      "keywords": [
+        "disability",
+        "ABLE",
+        "savings",
+        "tax-advantaged"
+      ],
       "eligibility_bullets": [
         "Disability onset before age 26",
         "Eligible for SSI/SSDI or meet disability criteria",
@@ -332,7 +509,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "dis-vocational-rehab",
@@ -344,8 +524,17 @@
       "amount_description": "Services provided at no cost",
       "deadline": "Rolling",
       "application_url": "https://rsa.ed.gov/about/programs/vocational-rehabilitation-state-grants",
-      "categories": ["disability", "employment", "training"],
-      "keywords": ["disability", "vocational rehabilitation", "employment", "job training"],
+      "categories": [
+        "disability",
+        "employment",
+        "training"
+      ],
+      "keywords": [
+        "disability",
+        "vocational rehabilitation",
+        "employment",
+        "job training"
+      ],
       "eligibility_bullets": [
         "Have a physical or mental disability",
         "Disability creates barrier to employment",
@@ -354,7 +543,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     }
   ],
   "veteran_assistance": [
@@ -368,8 +560,16 @@
       "amount_description": "Up to full tuition + monthly housing allowance",
       "deadline": "Rolling",
       "application_url": "https://www.va.gov/education/about-gi-bill-benefits/post-9-11/",
-      "categories": ["education", "veteran"],
-      "keywords": ["veteran", "GI Bill", "education", "military"],
+      "categories": [
+        "education",
+        "veteran"
+      ],
+      "keywords": [
+        "veteran",
+        "GI Bill",
+        "education",
+        "military"
+      ],
       "eligibility_bullets": [
         "Served at least 90 days after September 10, 2001",
         "Honorable discharge",
@@ -377,7 +577,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "vet-voc-rehab",
@@ -389,8 +592,17 @@
       "amount_description": "Full program costs covered",
       "deadline": "Rolling",
       "application_url": "https://www.va.gov/careers-employment/vocational-rehabilitation/",
-      "categories": ["veteran", "disability", "employment"],
-      "keywords": ["veteran", "disability", "employment", "training"],
+      "categories": [
+        "veteran",
+        "disability",
+        "employment"
+      ],
+      "keywords": [
+        "veteran",
+        "disability",
+        "employment",
+        "training"
+      ],
       "eligibility_bullets": [
         "Service-connected disability rating",
         "Employment handicap determination",
@@ -398,7 +610,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "vet-aid-attendance",
@@ -409,8 +624,17 @@
       "amount_max": 2431,
       "deadline": "Rolling",
       "application_url": "https://www.va.gov/pension/aid-attendance-housebound/",
-      "categories": ["veteran", "health", "senior"],
-      "keywords": ["veteran", "pension", "aid and attendance", "elder care"],
+      "categories": [
+        "veteran",
+        "health",
+        "senior"
+      ],
+      "keywords": [
+        "veteran",
+        "pension",
+        "aid and attendance",
+        "elder care"
+      ],
       "eligibility_bullets": [
         "Wartime veteran or surviving spouse",
         "Meet income and net worth limits",
@@ -419,7 +643,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     }
   ],
   "nonprofit_grants": [
@@ -432,8 +659,17 @@
       "amount_max": 1000000,
       "deadline": "Varies by program",
       "application_url": "https://americorps.gov/funding-opportunity/fy-2024-americorps-state-national",
-      "categories": ["nonprofit", "service", "community"],
-      "keywords": ["AmeriCorps", "service", "volunteer", "nonprofit"],
+      "categories": [
+        "nonprofit",
+        "service",
+        "community"
+      ],
+      "keywords": [
+        "AmeriCorps",
+        "service",
+        "volunteer",
+        "nonprofit"
+      ],
       "eligibility_bullets": [
         "501(c)(3) or government entity",
         "Capacity to manage federal grant",
@@ -441,7 +677,10 @@
       ],
       "requires_match": false,
       "requires_501c3": true,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "np-united-way",
@@ -452,8 +691,18 @@
       "amount_max": 100000,
       "deadline": "Varies by local United Way",
       "application_url": "https://www.unitedway.org/get-involved/give/apply-for-a-grant",
-      "categories": ["community", "education", "health"],
-      "keywords": ["United Way", "community", "education", "health", "income"],
+      "categories": [
+        "community",
+        "education",
+        "health"
+      ],
+      "keywords": [
+        "United Way",
+        "community",
+        "education",
+        "health",
+        "income"
+      ],
       "eligibility_bullets": [
         "501(c)(3) nonprofit organization",
         "Align with local United Way priorities",
@@ -461,7 +710,10 @@
       ],
       "requires_match": false,
       "requires_501c3": true,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     }
   ],
   "individual_assistance": [
@@ -475,8 +727,18 @@
       "amount_description": "Monthly benefit varies by state and family size",
       "deadline": "Rolling",
       "application_url": "https://www.acf.hhs.gov/ofa/programs/tanf",
-      "categories": ["family", "income_support", "children"],
-      "keywords": ["family", "children", "low income", "cash assistance", "welfare"],
+      "categories": [
+        "family",
+        "income_support",
+        "children"
+      ],
+      "keywords": [
+        "family",
+        "children",
+        "low income",
+        "cash assistance",
+        "welfare"
+      ],
       "eligibility_bullets": [
         "Family with dependent children",
         "Meet income requirements",
@@ -485,7 +747,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "ind-wic",
@@ -497,8 +762,20 @@
       "amount_description": "Monthly food benefit varies",
       "deadline": "Rolling",
       "application_url": "https://www.fns.usda.gov/wic",
-      "categories": ["nutrition", "health", "children", "women"],
-      "keywords": ["nutrition", "pregnant", "infant", "children", "food", "women"],
+      "categories": [
+        "nutrition",
+        "health",
+        "children",
+        "women"
+      ],
+      "keywords": [
+        "nutrition",
+        "pregnant",
+        "infant",
+        "children",
+        "food",
+        "women"
+      ],
       "eligibility_bullets": [
         "Pregnant, postpartum, or breastfeeding women",
         "Infants and children under 5",
@@ -507,7 +784,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "ind-head-start",
@@ -519,8 +799,18 @@
       "amount_description": "Free program services",
       "deadline": "Rolling enrollment",
       "application_url": "https://www.acf.hhs.gov/ohs",
-      "categories": ["education", "children", "family"],
-      "keywords": ["children", "preschool", "early childhood", "education", "family"],
+      "categories": [
+        "education",
+        "children",
+        "family"
+      ],
+      "keywords": [
+        "children",
+        "preschool",
+        "early childhood",
+        "education",
+        "family"
+      ],
       "eligibility_bullets": [
         "Children from birth to age 5",
         "Family income below poverty line",
@@ -529,7 +819,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "ind-medicaid",
@@ -541,8 +834,19 @@
       "amount_description": "Health coverage - not cash benefit",
       "deadline": "Rolling",
       "application_url": "https://www.medicaid.gov/",
-      "categories": ["health", "insurance", "disability"],
-      "keywords": ["health", "insurance", "medical", "low income", "disability", "children"],
+      "categories": [
+        "health",
+        "insurance",
+        "disability"
+      ],
+      "keywords": [
+        "health",
+        "insurance",
+        "medical",
+        "low income",
+        "disability",
+        "children"
+      ],
       "eligibility_bullets": [
         "Meet income requirements (varies by state)",
         "Certain categories: children, pregnant, elderly, disabled",
@@ -551,7 +855,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "ind-chip",
@@ -563,8 +870,18 @@
       "amount_description": "Health coverage - not cash benefit",
       "deadline": "Rolling",
       "application_url": "https://www.healthcare.gov/medicaid-chip/childrens-health-insurance-program/",
-      "categories": ["health", "children", "insurance"],
-      "keywords": ["children", "health", "insurance", "medical", "family"],
+      "categories": [
+        "health",
+        "children",
+        "insurance"
+      ],
+      "keywords": [
+        "children",
+        "health",
+        "insurance",
+        "medical",
+        "family"
+      ],
       "eligibility_bullets": [
         "Children under 19",
         "Family income too high for Medicaid",
@@ -573,7 +890,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "ind-section8",
@@ -585,8 +905,18 @@
       "amount_description": "Covers portion of rent based on income",
       "deadline": "Waitlist - varies by location",
       "application_url": "https://www.hud.gov/topics/housing_choice_voucher_program_section_8",
-      "categories": ["housing", "rental_assistance"],
-      "keywords": ["housing", "rent", "voucher", "low income", "elderly", "disability"],
+      "categories": [
+        "housing",
+        "rental_assistance"
+      ],
+      "keywords": [
+        "housing",
+        "rent",
+        "voucher",
+        "low income",
+        "elderly",
+        "disability"
+      ],
       "eligibility_bullets": [
         "Income below 50% of area median",
         "Priority for very low-income",
@@ -595,7 +925,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "ind-weatherization",
@@ -606,8 +939,18 @@
       "amount_max": 8000,
       "deadline": "Rolling",
       "application_url": "https://www.energy.gov/eere/wap/weatherization-assistance-program",
-      "categories": ["housing", "energy", "utilities"],
-      "keywords": ["energy", "home improvement", "utilities", "low income", "weatherization"],
+      "categories": [
+        "housing",
+        "energy",
+        "utilities"
+      ],
+      "keywords": [
+        "energy",
+        "home improvement",
+        "utilities",
+        "low income",
+        "weatherization"
+      ],
       "eligibility_bullets": [
         "Household income at or below 200% poverty level",
         "Priority for elderly, disabled, families with children",
@@ -616,7 +959,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "ind-lifeline",
@@ -628,8 +974,18 @@
       "amount_description": "$9.25/month discount, up to $34.25 on Tribal lands",
       "deadline": "Rolling",
       "application_url": "https://www.lifelinesupport.org/",
-      "categories": ["utilities", "technology", "communication"],
-      "keywords": ["phone", "internet", "discount", "low income", "communication"],
+      "categories": [
+        "utilities",
+        "technology",
+        "communication"
+      ],
+      "keywords": [
+        "phone",
+        "internet",
+        "discount",
+        "low income",
+        "communication"
+      ],
       "eligibility_bullets": [
         "Participate in federal assistance program OR",
         "Income at or below 135% poverty guideline",
@@ -638,7 +994,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "ind-acp-internet",
@@ -650,8 +1009,19 @@
       "amount_description": "$30/month internet + $100 device discount",
       "deadline": "While funding lasts",
       "application_url": "https://www.fcc.gov/acp",
-      "categories": ["technology", "internet", "education"],
-      "keywords": ["internet", "computer", "laptop", "tablet", "low income", "broadband"],
+      "categories": [
+        "technology",
+        "internet",
+        "education"
+      ],
+      "keywords": [
+        "internet",
+        "computer",
+        "laptop",
+        "tablet",
+        "low income",
+        "broadband"
+      ],
       "eligibility_bullets": [
         "Income at or below 200% poverty guideline",
         "Participate in assistance programs (SNAP, Medicaid, etc.)",
@@ -660,7 +1030,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "ind-free-school-meals",
@@ -672,8 +1045,19 @@
       "amount_description": "Free meals - annual value ~$2,000",
       "deadline": "Apply through school",
       "application_url": "https://www.fns.usda.gov/nslp",
-      "categories": ["nutrition", "children", "education"],
-      "keywords": ["children", "school", "meals", "food", "low income", "nutrition"],
+      "categories": [
+        "nutrition",
+        "children",
+        "education"
+      ],
+      "keywords": [
+        "children",
+        "school",
+        "meals",
+        "food",
+        "low income",
+        "nutrition"
+      ],
       "eligibility_bullets": [
         "Family income at or below 185% poverty for reduced price",
         "At or below 130% poverty for free meals",
@@ -682,7 +1066,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     }
   ],
   "healthcare_assistance": [
@@ -696,8 +1083,18 @@
       "amount_description": "Services provided at no cost based on need",
       "deadline": "Rolling",
       "application_url": "https://ryanwhite.hrsa.gov/",
-      "categories": ["health", "hiv", "medical"],
-      "keywords": ["HIV", "AIDS", "healthcare", "medication", "medical"],
+      "categories": [
+        "health",
+        "hiv",
+        "medical"
+      ],
+      "keywords": [
+        "HIV",
+        "AIDS",
+        "healthcare",
+        "medication",
+        "medical"
+      ],
       "eligibility_bullets": [
         "Living with HIV",
         "Low-income and underinsured",
@@ -706,7 +1103,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "health-fqhc",
@@ -718,8 +1118,19 @@
       "amount_description": "Sliding scale fees based on income",
       "deadline": "Rolling",
       "application_url": "https://findahealthcenter.hrsa.gov/",
-      "categories": ["health", "medical", "primary_care"],
-      "keywords": ["health", "medical", "doctor", "clinic", "low income", "uninsured"],
+      "categories": [
+        "health",
+        "medical",
+        "primary_care"
+      ],
+      "keywords": [
+        "health",
+        "medical",
+        "doctor",
+        "clinic",
+        "low income",
+        "uninsured"
+      ],
       "eligibility_bullets": [
         "Open to everyone regardless of insurance",
         "Sliding fee scale based on income",
@@ -728,7 +1139,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "health-hill-burton",
@@ -740,8 +1154,18 @@
       "amount_description": "Free or reduced cost medical care",
       "deadline": "Rolling",
       "application_url": "https://www.hrsa.gov/get-health-care/affordable/hill-burton",
-      "categories": ["health", "hospital", "medical"],
-      "keywords": ["hospital", "medical", "healthcare", "free care", "low income"],
+      "categories": [
+        "health",
+        "hospital",
+        "medical"
+      ],
+      "keywords": [
+        "hospital",
+        "medical",
+        "healthcare",
+        "free care",
+        "low income"
+      ],
       "eligibility_bullets": [
         "Income at or below poverty guidelines",
         "Apply at participating facility",
@@ -750,7 +1174,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "health-maternal-child",
@@ -762,8 +1189,21 @@
       "amount_description": "Services provided based on need",
       "deadline": "Rolling",
       "application_url": "https://mchb.hrsa.gov/programs-impact/title-v-maternal-child-health-mch-block-grant",
-      "categories": ["health", "children", "women", "prenatal"],
-      "keywords": ["maternal", "child", "health", "prenatal", "infant", "women", "children"],
+      "categories": [
+        "health",
+        "children",
+        "women",
+        "prenatal"
+      ],
+      "keywords": [
+        "maternal",
+        "child",
+        "health",
+        "prenatal",
+        "infant",
+        "women",
+        "children"
+      ],
       "eligibility_bullets": [
         "Pregnant women and mothers",
         "Infants and children",
@@ -772,7 +1212,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     }
   ],
   "senior_assistance": [
@@ -786,8 +1229,19 @@
       "amount_description": "Free or low-cost meals",
       "deadline": "Rolling",
       "application_url": "https://www.mealsonwheelsamerica.org/",
-      "categories": ["senior", "nutrition", "health"],
-      "keywords": ["senior", "elderly", "meals", "food", "nutrition", "homebound"],
+      "categories": [
+        "senior",
+        "nutrition",
+        "health"
+      ],
+      "keywords": [
+        "senior",
+        "elderly",
+        "meals",
+        "food",
+        "nutrition",
+        "homebound"
+      ],
       "eligibility_bullets": [
         "Age 60 or older",
         "Homebound or difficulty preparing meals",
@@ -796,7 +1250,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "senior-lis",
@@ -808,8 +1265,19 @@
       "amount_description": "Annual savings on prescription drugs",
       "deadline": "Rolling",
       "application_url": "https://www.ssa.gov/medicare/part-d-extra-help",
-      "categories": ["senior", "health", "medication"],
-      "keywords": ["senior", "medicare", "prescription", "medication", "drugs", "elderly"],
+      "categories": [
+        "senior",
+        "health",
+        "medication"
+      ],
+      "keywords": [
+        "senior",
+        "medicare",
+        "prescription",
+        "medication",
+        "drugs",
+        "elderly"
+      ],
       "eligibility_bullets": [
         "Medicare beneficiary",
         "Income below 150% poverty level",
@@ -818,7 +1286,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "senior-commodity",
@@ -830,8 +1301,18 @@
       "amount_description": "Monthly food package value",
       "deadline": "Rolling",
       "application_url": "https://www.fns.usda.gov/csfp/commodity-supplemental-food-program",
-      "categories": ["senior", "nutrition", "food"],
-      "keywords": ["senior", "elderly", "food", "nutrition", "commodities"],
+      "categories": [
+        "senior",
+        "nutrition",
+        "food"
+      ],
+      "keywords": [
+        "senior",
+        "elderly",
+        "food",
+        "nutrition",
+        "commodities"
+      ],
       "eligibility_bullets": [
         "Age 60 or older",
         "Income at or below 130% poverty guideline",
@@ -840,7 +1321,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     }
   ],
   "emergency_assistance": [
@@ -854,8 +1338,18 @@
       "amount_description": "Up to 18 months of rent/utilities",
       "deadline": "While funds available",
       "application_url": "https://home.treasury.gov/policy-issues/coronavirus/assistance-for-state-local-and-tribal-governments/emergency-rental-assistance-program",
-      "categories": ["housing", "utilities", "emergency"],
-      "keywords": ["rent", "emergency", "eviction", "utilities", "housing"],
+      "categories": [
+        "housing",
+        "utilities",
+        "emergency"
+      ],
+      "keywords": [
+        "rent",
+        "emergency",
+        "eviction",
+        "utilities",
+        "housing"
+      ],
       "eligibility_bullets": [
         "Risk of homelessness or housing instability",
         "Income below 80% area median",
@@ -864,7 +1358,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "emerg-fema-individual",
@@ -875,8 +1372,18 @@
       "amount_max": 41000,
       "deadline": "60 days after disaster declaration",
       "application_url": "https://www.fema.gov/assistance/individual",
-      "categories": ["emergency", "disaster", "housing"],
-      "keywords": ["disaster", "emergency", "FEMA", "housing", "recovery"],
+      "categories": [
+        "emergency",
+        "disaster",
+        "housing"
+      ],
+      "keywords": [
+        "disaster",
+        "emergency",
+        "FEMA",
+        "housing",
+        "recovery"
+      ],
       "eligibility_bullets": [
         "Affected by presidentially declared disaster",
         "U.S. citizen or qualified alien",
@@ -885,7 +1392,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "emerg-salvation-army",
@@ -896,8 +1406,17 @@
       "amount_max": 1500,
       "deadline": "Rolling",
       "application_url": "https://www.salvationarmyusa.org/usn/provide-shelter/",
-      "categories": ["emergency", "basic_needs"],
-      "keywords": ["emergency", "rent", "utilities", "food", "crisis"],
+      "categories": [
+        "emergency",
+        "basic_needs"
+      ],
+      "keywords": [
+        "emergency",
+        "rent",
+        "utilities",
+        "food",
+        "crisis"
+      ],
       "eligibility_bullets": [
         "Experiencing financial crisis",
         "Contact local Salvation Army",
@@ -906,7 +1425,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     },
     {
       "id": "emerg-catholic-charities",
@@ -917,8 +1439,19 @@
       "amount_max": 2000,
       "deadline": "Rolling",
       "application_url": "https://www.catholiccharitiesusa.org/find-help/",
-      "categories": ["emergency", "basic_needs", "faith"],
-      "keywords": ["emergency", "rent", "utilities", "food", "crisis", "faith"],
+      "categories": [
+        "emergency",
+        "basic_needs",
+        "faith"
+      ],
+      "keywords": [
+        "emergency",
+        "rent",
+        "utilities",
+        "food",
+        "crisis",
+        "faith"
+      ],
       "eligibility_bullets": [
         "Experiencing financial hardship",
         "Open to all regardless of faith",
@@ -927,7 +1460,10 @@
       ],
       "requires_match": false,
       "requires_501c3": false,
-      "state": "nationwide"
+      "state": "nationwide",
+      "type": "OPPORTUNITY",
+      "is_verified": false,
+      "last_verified_at": null
     }
   ]
 }
