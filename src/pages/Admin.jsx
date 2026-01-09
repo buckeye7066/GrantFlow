@@ -65,12 +65,11 @@ export default function Admin() {
 
         <Tabs defaultValue="diagnostics" className="w-full">
           <TabsList>
-            <TabsTrigger value="diagnostics">Diagnostics</TabsTrigger>
-            <TabsTrigger value="upload">Upload Profile Document</TabsTrigger>
             <TabsTrigger value="diagnostics">
               <Activity className="w-4 h-4 mr-2" />
               Diagnostics
             </TabsTrigger>
+            <TabsTrigger value="upload">Upload Profile Document</TabsTrigger>
           </TabsList>
           
           <TabsContent value="diagnostics" className="mt-6">
