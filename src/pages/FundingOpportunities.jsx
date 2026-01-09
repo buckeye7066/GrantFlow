@@ -1357,7 +1357,7 @@ export default function FundingOpportunities() {
             <Layers className="w-12 h-12 mx-auto text-slate-300" />
             <h3 className="text-xl font-semibold text-slate-900">No opportunities found</h3>
             <p className="text-sm text-slate-600 max-w-md mx-auto">
-              {opportunitiesData?.opportunities?.length === 0 && opportunitiesData?.total === 0 ? (
+              {opportunitiesQuery.data?.opportunities?.length === 0 && opportunitiesQuery.data?.total === 0 ? (
                 <>
                   No funding opportunities have been ingested yet. To populate with real data from live sources, run:
                   <code className="block mt-2 p-2 bg-slate-100 rounded text-left">npm run ingest</code>
