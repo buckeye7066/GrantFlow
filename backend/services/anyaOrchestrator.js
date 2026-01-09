@@ -564,6 +564,108 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
   // This provides special recognition for the main system administrator
   const isPrimaryAdmin = isAdmin && userEmail === ADMIN_EMAIL
 
+  // TRUTH GATE: Detect system health queries and handle them directly
+  // Only for admin users to prevent false positives in normal conversation
+  const lowerContent = trimmed.toLowerCase()
+  const healthKeywords = [
+    'are crawlers working',
+    'crawler status',
+    'system status',
+    'health check',
+    'diagnostics',
+    'admin panel',
+    'why is it broken',
+    'why did it fail',
+    '0 succeeded',
+    'failed',
+    'no opportunities',
+    'is everything ok',
+    'is everything working',
+    'is it working',
+    'system health',
+    '/health',
+  ]
+
+  const isHealthQuery = isAdmin && healthKeywords.some(keyword => lowerContent.includes(keyword))
+
+  if (isHealthQuery) {
+    try {
+      console.log('[Anya] Health query detected, invoking system.health tool')
+      const healthData = await invokeRegisteredTool('system.health', {}, { db, user })
+
+      // Format the health data into a human-readable response
+      const lines = []
+      lines.push(`**System Status: ${healthData.status}**\n`)
+
+      if (healthData.issues && healthData.issues.length > 0) {
+        lines.push('**Issues:**')
+        healthData.issues.forEach(issue => lines.push(`• ${issue}`))
+        lines.push('')
+      }
+
+      if (healthData.warnings && healthData.warnings.length > 0) {
+        lines.push('**Warnings:**')
+        healthData.warnings.forEach(warning => lines.push(`• ${warning}`))
+        lines.push('')
+      }
+
+      lines.push('**Quick Stats:**')
+      lines.push(`• ${healthData.counts.opportunities} funding opportunities`)
+      lines.push(`• ${healthData.counts.profiles} active profiles`)
+      lines.push(`• ${healthData.counts.crawl_logs} crawl logs`)
+      lines.push('')
+
+      if (healthData.crawler_stats) {
+        lines.push(`• Crawler runs (24h): ${healthData.crawler_stats.totalRuns}`)
+        lines.push(`• Recent failures: ${healthData.crawler_stats.recentFailures}`)
+        lines.push('')
+      }
+
+      lines.push('**Environment:**')
+      lines.push(`• OPENAI_API_KEY: ${healthData.env_flags.OPENAI_API_KEY_present ? '✓ Present' : '✗ Not set'}`)
+      lines.push(`• ANTHROPIC_API_KEY: ${healthData.env_flags.ANTHROPIC_API_KEY_present ? '✓ Present' : '✗ Not set'}`)
+      lines.push(`• SAM_GOV_API_KEY: ${healthData.env_flags.SAM_GOV_API_KEY_present ? '✓ Present' : '✗ Not set'}`)
+      lines.push('')
+
+      if (healthData.last_error) {
+        lines.push('**Last Error:**')
+        lines.push(`• ${healthData.last_error.crawler}: ${healthData.last_error.message}`)
+        lines.push(`• Time: ${new Date(healthData.last_error.time).toLocaleString()}`)
+        lines.push('')
+      }
+
+      // Provide actionable next steps based on status
+      if (healthData.status === 'ERROR') {
+        lines.push('**Next Action:**')
+        if (!healthData.env_flags.SAM_GOV_API_KEY_present) {
+          lines.push('• Configure SAM_GOV_API_KEY environment variable')
+        }
+        if (healthData.issues.includes('Database connection failed')) {
+          lines.push('• Check database connection and restart the server')
+        }
+        lines.push('• Review error logs for detailed information')
+      } else if (healthData.status === 'WARNING' || healthData.status === 'DEGRADED') {
+        lines.push('**Next Action:**')
+        if (healthData.counts.opportunities === 0) {
+          lines.push('• Run crawlers to populate funding opportunities')
+        }
+        if (healthData.crawler_stats.recentFailures > 0) {
+          lines.push('• Review and retry failed crawler jobs')
+        }
+        if (!healthData.env_flags.OPENAI_API_KEY_present && !healthData.env_flags.ANTHROPIC_API_KEY_present) {
+          lines.push('• Configure AI API keys for full functionality')
+        }
+      } else {
+        lines.push('**Status:** System is operating normally ✓')
+      }
+
+      return lines.join('\n')
+    } catch (error) {
+      console.error('[Anya] Failed to retrieve system health:', error)
+      return `I could not retrieve diagnostics; the system may be degraded.\n\nError: ${error.message}\n\nPlease check the logs or contact support.`
+    }
+  }
+
   let openai = null
   try {
     openai = getOpenAIClient()

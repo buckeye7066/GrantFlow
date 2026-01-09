@@ -909,6 +909,98 @@ registerTool({
   },
 })
 
+// System Health Tool - Compact version for Anya truth gate
+registerTool({
+  name: 'system.health',
+  description: 'Get compact system health status with crawler stats, DB counts, and recent errors. Use this when user asks about system status, crawler health, or "is everything working". Returns truth-based status assessment.',
+  requiresAdmin: false, // Available to all users but provides limited info for non-admins
+  schema: {
+    type: 'object',
+    properties: {},
+  },
+  handler: async (_params, context) => {
+    const { db, user } = context
+    if (!db) {
+      return {
+        status: 'ERROR',
+        error: 'Database connection unavailable',
+        issues: ['Database connection failed'],
+      }
+    }
+
+    try {
+      const diagnostics = getSystemDiagnostics(db)
+      const health = analyzeSystemHealth(diagnostics)
+
+      // Get crawler stats from last 24 hours
+      let crawlerStats = { totalRuns: 0, recentFailures: 0, lastRuns: [] }
+      try {
+        const last24h = db.prepare(`
+          SELECT type, status, created_at, error
+          FROM crawler_jobs
+          WHERE created_at >= datetime('now', '-24 hours')
+          ORDER BY created_at DESC
+          LIMIT 20
+        `).all()
+
+        crawlerStats.totalRuns = last24h.length
+        crawlerStats.recentFailures = last24h.filter(j => j.status === 'failed').length
+        crawlerStats.lastRuns = last24h.slice(0, 5).map(j => ({
+          type: j.type,
+          status: j.status,
+          time: j.created_at,
+          error: j.error || null
+        }))
+      } catch (err) {
+        // Ignore crawler stats errors
+      }
+
+      // Get last error
+      let lastError = null
+      if (diagnostics.errors && diagnostics.errors.length > 0) {
+        const err = diagnostics.errors[0]
+        lastError = {
+          crawler: err.crawler_type || err.source || 'unknown',
+          message: err.message,
+          time: err.time
+        }
+      }
+
+      // Determine status
+      let status = 'HEALTHY'
+      if (health.status === 'unhealthy' || !diagnostics.db.ok) {
+        status = 'ERROR'
+      } else if (health.status === 'degraded' || diagnostics.db.tables.funding_opportunities === 0 || crawlerStats.recentFailures > 0) {
+        status = health.warnings.length > 0 ? 'WARNING' : 'DEGRADED'
+      }
+
+      return {
+        status,
+        counts: {
+          opportunities: diagnostics.db.tables?.funding_opportunities || 0,
+          profiles: diagnostics.db.tables?.profiles || 0,
+          crawl_logs: diagnostics.db.tables?.crawl_logs || 0,
+        },
+        crawler_stats: crawlerStats,
+        env_flags: {
+          OPENAI_API_KEY_present: diagnostics.env_flags?.OPENAI_API_KEY_present || false,
+          ANTHROPIC_API_KEY_present: diagnostics.env_flags?.ANTHROPIC_API_KEY_present || false,
+          SAM_GOV_API_KEY_present: diagnostics.env_flags?.SAM_GOV_API_KEY_present || false,
+        },
+        last_error: lastError,
+        issues: health.issues,
+        warnings: health.warnings,
+      }
+    } catch (error) {
+      return {
+        status: 'ERROR',
+        error: error.message,
+        issues: ['Failed to retrieve system health'],
+      }
+    }
+  },
+})
+
 // Enhanced Admin Crawler Tools
 registerTool({
   name: 'admin.crawler.triggerAll',
