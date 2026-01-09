@@ -415,6 +415,18 @@ router.delete('/:id', (req, res) => {
   }
 });
 
+// Get ingestion status
+router.get('/meta/ingestion', async (req, res) => {
+  try {
+    const { getIngestionStatus } = await import('../services/sources/ingestionService.js');
+    const status = getIngestionStatus(req.db);
+    res.json(status);
+  } catch (error) {
+    console.error('Error getting ingestion status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get distinct sources for filtering
 router.get('/meta/sources', (req, res) => {
   try {

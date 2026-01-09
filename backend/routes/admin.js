@@ -497,6 +497,67 @@ router.post('/seed-profile-grants', async (req, res) => {
   }
 });
 
+// POST /api/admin/ingest - Trigger ingestion from all sources
+router.post('/ingest', async (req, res) => {
+  try {
+    console.log('[admin/ingest] Starting manual ingestion...');
+    
+    // Import connectors dynamically
+    const { fetchGrantsGov } = await import('../services/sources/grantsGov.js');
+    const { fetchUSASpending } = await import('../services/sources/usaSpending.js');
+    const { ingestOpportunities } = await import('../services/sources/ingestionService.js');
+    
+    const results = [];
+    
+    // Ingest from Grants.gov
+    try {
+      console.log('[admin/ingest] Fetching from Grants.gov...');
+      const { opportunities: grantsGovOpps } = await fetchGrantsGov({ limit: 100, offset: 0 });
+      const grantsGovResult = ingestOpportunities(req.db, grantsGovOpps, 'grants.gov');
+      results.push({ source: 'grants.gov', ...grantsGovResult });
+    } catch (error) {
+      console.error('[admin/ingest] Grants.gov error:', error.message);
+      results.push({ source: 'grants.gov', success: false, error: error.message });
+    }
+    
+    // Ingest from USASpending.gov
+    try {
+      console.log('[admin/ingest] Fetching from USASpending.gov...');
+      const { opportunities: usaSpendingOpps } = await fetchUSASpending({ limit: 100, page: 1 });
+      const usaSpendingResult = ingestOpportunities(req.db, usaSpendingOpps, 'usaspending.gov');
+      results.push({ source: 'usaspending.gov', ...usaSpendingResult });
+    } catch (error) {
+      console.error('[admin/ingest] USASpending.gov error:', error.message);
+      results.push({ source: 'usaspending.gov', success: false, error: error.message });
+    }
+    
+    // Calculate totals
+    const summary = {
+      sources_processed: results.length,
+      successes: results.filter(r => r.success).length,
+      failures: results.filter(r => !r.success).length,
+      total_inserted: results.reduce((sum, r) => sum + (r.records_inserted || 0), 0),
+      total_updated: results.reduce((sum, r) => sum + (r.records_updated || 0), 0),
+      total_errors: results.reduce((sum, r) => sum + (r.errors || 0), 0),
+    };
+    
+    console.log('[admin/ingest] Ingestion completed:', summary);
+    
+    res.json({
+      success: summary.failures === 0,
+      message: `Ingestion completed: ${summary.total_inserted} inserted, ${summary.total_updated} updated`,
+      summary,
+      results,
+    });
+  } catch (error) {
+    console.error('[admin/ingest] Error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message || 'Failed to run ingestion',
+    });
+  }
+});
+
 // POST /api/admin/link-admin-to-organizations - Link admin to all organizations
 router.post('/link-admin-to-organizations', async (req, res) => {
   try {

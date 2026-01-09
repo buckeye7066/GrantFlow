@@ -95,6 +95,77 @@ New team members land faster when they watch the GrantFlow walkthrough. Drop the
 
 ---
 
+## Real Data Ingestion
+
+GrantFlow fetches **live funding opportunities** from official government APIs. No mock or placeholder data is used in production.
+
+### Running Ingestion Locally
+
+```bash
+# Ingest from all sources (Grants.gov + USASpending.gov)
+npm run ingest
+
+# Ingest from specific sources
+npm run ingest:grantsgov      # Grants.gov only
+npm run ingest:usaspending    # USASpending.gov only
+
+# Run database migrations (if needed)
+npm run migrate
+```
+
+### Verify Results
+
+```bash
+# Check total opportunities ingested
+curl http://localhost:8080/api/opportunities | jq '.total'
+
+# Check opportunities by source
+curl 'http://localhost:8080/api/opportunities?source=grants.gov' | jq '.total'
+
+# Get ingestion status
+curl http://localhost:8080/api/opportunities/meta/ingestion | jq
+```
+
+### Admin API Ingestion
+
+Trigger ingestion via API (requires admin auth):
+
+```bash
+POST /api/admin/ingest
+```
+
+Returns ingestion status, record counts, and any errors.
+
+### Environment Variables
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `DATABASE_PATH` | No | Path to SQLite database (default: `backend/data/grantflow.db`) |
+| `GRANTS_GOV_API_KEY` | No | Optional API key for Grants.gov (works without) |
+| `OPENAI_API_KEY` | Yes | Required for AI features |
+| `TWILIO_*` | Yes | Required for SMS auth |
+
+### Data Sources
+
+1. **Grants.gov** (`grants.gov` source)
+   - Official federal grant opportunities API
+   - No API key required for public data
+   - Endpoint: `https://www.grants.gov/grantsws/rest/opportunities/search`
+
+2. **USASpending.gov** (`usaspending.gov` source)
+   - Federal spending and awards data
+   - No API key required
+   - Endpoint: `https://api.usaspending.gov/api/v2/search/spending_by_award/`
+
+### Scheduling (Production)
+
+On Railway, schedule ingestion to run daily using:
+
+1. **Railway Cron**: Schedule `npm run ingest` as a cron job
+2. **Internal scheduler**: Set `INGESTION_INTERVAL_HOURS` env var (future feature)
+
+---
+
 ## QA & Smoke Tests
 
 | Command | Purpose |
@@ -125,10 +196,15 @@ Refer to the QA checklist in [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_RE
 | --- | --- |
 | `npm run dev:full` | Run backend and frontend simultaneously |
 | `npm run backend` | Start the Express API |
+| `npm run ingest` | Run full ingestion from all sources (Grants.gov + USASpending.gov) |
+| `npm run ingest:grantsgov` | Ingest from Grants.gov only |
+| `npm run ingest:usaspending` | Ingest from USASpending.gov only |
+| `npm run migrate` | Run database migrations |
 | `npm run smoke:callback` | Validate auth callback error surfaces |
 | `npm run check:profiles` | Audit SQLite seeds (11 profiles + sections) |
 | `npm run seed:db` | Build `backend/data/grantflow.db` from curated baseline profiles |
 | `npm run seed:profiles` | Rehydrate the 11 curated profiles/sections into an existing DB (`--force` to reset) |
+| `npm run seed:demo` | Seed demo data (development only, uses bundled JSON files) |
 | `npm run build` / `npm run preview` | Build and preview the production frontend |
 
 See `package.json` for the full script catalogue.
