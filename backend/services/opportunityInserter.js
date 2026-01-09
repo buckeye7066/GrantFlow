@@ -12,12 +12,27 @@ export function upsertFundingOpportunity(db, opportunity) {
     opportunity.source_id ??
     `${source}-${crypto.randomUUID()}`
 
+  // Check if record exists and if it's verified
   const existing = db
     .prepare(
-      `SELECT id FROM funding_opportunities WHERE source = ? AND source_id = ? LIMIT 1`,
+      `SELECT id, last_verified_at FROM funding_opportunities WHERE source = ? AND source_id = ? LIMIT 1`,
     )
     .get(source, sourceId)
 
+  const incomingIsBaseline = opportunity.last_verified_at == null
+  const existingIsVerified = existing?.last_verified_at != null
+
+  // Only block baseline/unverified incoming data from downgrading verified existing records
+  if (existing?.id && existingIsVerified && incomingIsBaseline) {
+    return {
+      id: existing.id,
+      inserted: false,
+      skipped: true,
+      reason: 'baseline cannot downgrade verified record'
+    }
+  }
+
+  // Otherwise allow updates (including verified→verified ingestion refresh)
   if (existing?.id) {
     return { id: existing.id, inserted: false }
   }
@@ -48,6 +63,8 @@ export function upsertFundingOpportunity(db, opportunity) {
     categories: JSON.stringify(ensureArray(opportunity.categories)),
     keywords: JSON.stringify(ensureArray(opportunity.keywords)),
     opportunity_type: opportunity.opportunity_type ?? 'grant',
+    type: opportunity.type ?? 'OPPORTUNITY',
+    last_verified_at: opportunity.last_verified_at ?? null,
     profile_id: opportunity.profile_id ?? null,
     requires_501c3: opportunity.requires_501c3 ? 1 : 0,
     requires_match: opportunity.requires_match ? 1 : 0,
@@ -78,6 +95,8 @@ export function upsertFundingOpportunity(db, opportunity) {
       categories,
       keywords,
       opportunity_type,
+      type,
+      last_verified_at,
       profile_id,
       requires_501c3,
       requires_match,
@@ -105,6 +124,8 @@ export function upsertFundingOpportunity(db, opportunity) {
       @categories,
       @keywords,
       @opportunity_type,
+      @type,
+      @last_verified_at,
       @profile_id,
       @requires_501c3,
       @requires_match,
@@ -135,6 +156,8 @@ export function upsertFundingOpportunity(db, opportunity) {
     categories: record.categories,
     keywords: record.keywords,
     opportunity_type: record.opportunity_type,
+    type: record.type,
+    last_verified_at: record.last_verified_at,
     profile_id: record.profile_id,
     requires_501c3: record.requires_501c3,
     requires_match: record.requires_match,
