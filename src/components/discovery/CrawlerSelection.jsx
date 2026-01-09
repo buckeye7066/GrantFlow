@@ -5,9 +5,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { 
   MapPin, Building2, GraduationCap, Heart, 
-  Package, Users, Loader2, CheckCircle, Info
+  Package, Users, Loader2, CheckCircle, Info, AlertTriangle
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
+import { apiFetch } from '@/api/client';
 
 const CRAWLER_CONFIGS = [
   {
@@ -70,6 +71,7 @@ export default function CrawlerSelection({
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState({});
   const [results, setResults] = useState({});
+  const [errors, setErrors] = useState({});
   const { toast } = useToast();
 
   const handleToggleCrawler = (crawlerId) => {
@@ -105,6 +107,7 @@ export default function CrawlerSelection({
     setIsRunning(true);
     setProgress({});
     setResults({});
+    setErrors({});
 
     const crawlersToRun = Array.from(selectedCrawlers);
     console.log(`[CrawlerSelection] Running ${crawlersToRun.length} crawlers for profile ${profileId}`);
@@ -117,10 +120,9 @@ export default function CrawlerSelection({
     // Run crawlers in parallel
     const crawlerPromises = crawlersToRun.map(async (crawlerId) => {
       try {
-        // Call the crawler API
-        const response = await fetch('/api/real-crawlers/run', {
+        // Call the crawler API with authenticated request
+        const data = await apiFetch('/api/real-crawlers/run', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             crawler_type: crawlerId,
             profile_id: profileId,
@@ -129,12 +131,6 @@ export default function CrawlerSelection({
             min_match_score: 80
           })
         });
-
-        if (!response.ok) {
-          throw new Error(`Crawler ${crawlerId} failed`);
-        }
-
-        const data = await response.json();
         
         setProgress(prev => ({ ...prev, [crawlerId]: 'completed' }));
         setResults(prev => ({ ...prev, [crawlerId]: data }));
@@ -143,7 +139,19 @@ export default function CrawlerSelection({
       } catch (error) {
         console.error(`[CrawlerSelection] Error running ${crawlerId}:`, error);
         setProgress(prev => ({ ...prev, [crawlerId]: 'error' }));
-        return { crawlerId, success: false, error: error.message };
+        
+        // Extract meaningful error message
+        let errorMessage = error.message || 'Unknown error';
+        
+        // Try to get more specific error from the response
+        if (error.response && typeof error.response === 'object') {
+          errorMessage = error.response.error || error.response.message || errorMessage;
+        }
+        
+        // Store the error message for display
+        setErrors(prev => ({ ...prev, [crawlerId]: errorMessage }));
+        
+        return { crawlerId, success: false, error: errorMessage };
       }
     });
 
@@ -154,6 +162,8 @@ export default function CrawlerSelection({
       .filter(r => r.success)
       .flatMap(r => r.data.opportunities || []);
 
+    const failedResults = allResults.filter(r => !r.success);
+
     console.log(`[CrawlerSelection] Found ${successfulResults.length} total opportunities`);
 
     // Add to pipeline if callback provided
@@ -163,14 +173,28 @@ export default function CrawlerSelection({
 
     setIsRunning(false);
 
-    // Show completion toast
+    // Show completion toast with detailed error info
     const successCount = allResults.filter(r => r.success).length;
     const errorCount = allResults.filter(r => !r.success).length;
 
+    let toastDescription = `${successCount} succeeded, ${errorCount} failed. Found ${successfulResults.length} opportunities.`;
+    
+    // Add error details if any failed
+    if (failedResults.length > 0) {
+      const errorDetails = failedResults
+        .map(r => {
+          const crawlerName = CRAWLER_CONFIGS.find(c => c.id === r.crawlerId)?.name || r.crawlerId;
+          return `${crawlerName}: ${r.error}`;
+        })
+        .join('\n');
+      
+      toastDescription += `\n\nErrors:\n${errorDetails}`;
+    }
+
     toast({
       title: 'Crawler run complete',
-      description: `${successCount} succeeded, ${errorCount} failed. Found ${successfulResults.length} opportunities.`,
-      variant: errorCount > 0 ? 'warning' : 'success'
+      description: toastDescription,
+      variant: errorCount > 0 ? 'destructive' : 'default'
     });
   };
 
@@ -219,6 +243,7 @@ export default function CrawlerSelection({
               const isSelected = selectedCrawlers.has(crawler.id);
               const status = progress[crawler.id];
               const result = results[crawler.id];
+              const error = errors[crawler.id];
 
               return (
                 <div
@@ -250,6 +275,9 @@ export default function CrawlerSelection({
                         {status === 'completed' && (
                           <CheckCircle className="w-4 h-4 text-green-600" />
                         )}
+                        {status === 'error' && (
+                          <AlertTriangle className="w-4 h-4 text-red-600" />
+                        )}
                       </div>
                       <p className="text-sm text-slate-700">{crawler.description}</p>
                       <p className="text-xs text-slate-500">{crawler.details}</p>
@@ -257,6 +285,12 @@ export default function CrawlerSelection({
                       {result && (
                         <div className="mt-2 text-xs text-green-700 font-medium">
                           Found {result.count || 0} opportunities
+                        </div>
+                      )}
+                      
+                      {error && (
+                        <div className="mt-2 p-2 bg-red-100 border border-red-300 rounded text-xs text-red-800">
+                          <strong>Error:</strong> {error}
                         </div>
                       )}
                     </div>
