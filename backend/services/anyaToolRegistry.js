@@ -1132,7 +1132,9 @@ registerTool({
           }
           
           if (issueTypes.includes('console')) {
-            if (patterns.console.test(line)) {
+            // Create a new regex for each test to avoid global state issues
+            const consoleRegex = /console\.(log|warn|error|debug|info)\(/
+            if (consoleRegex.test(line)) {
               issues.consoles.push({
                 file: relativePath,
                 line: index + 1,
@@ -1142,7 +1144,9 @@ registerTool({
           }
           
           if (issueTypes.includes('debugger')) {
-            if (patterns.debugger.test(line)) {
+            // Create a new regex for each test
+            const debuggerRegex = /debugger;?/
+            if (debuggerRegex.test(line)) {
               issues.debuggers.push({
                 file: relativePath,
                 line: index + 1,
