@@ -33,6 +33,7 @@ import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
 import { runStartupOperations } from './services/anyaStartupOperations.js';
+import { getSafeHealthSummary } from './services/diagnosticsService.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { MAX_JSON_BODY_SIZE } from './config/constants.js';
 
@@ -637,7 +638,6 @@ app.use('/api/real-crawlers', realCrawlersRouter);
 app.use('/api/preferences', preferencesRouter);
 
 // Public health endpoint - safe for non-admin users
-import { getSafeHealthSummary } from './services/diagnosticsService.js';
 app.get('/api/health', (req, res) => {
   try {
     const healthSummary = getSafeHealthSummary(db);
