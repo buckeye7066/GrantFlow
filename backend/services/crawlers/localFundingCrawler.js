@@ -4,17 +4,17 @@
  * Excludes loans and matching funds
  */
 
-// Use mock data if external dependencies aren't available
+// Dependencies are required - no fallback to mock data
 let axios, cheerio
 try {
   const axiosModule = await import('axios')
   axios = axiosModule.default
   cheerio = await import('cheerio')
 } catch (error) {
-  console.log('[LocalFundingCrawler] Using mock data (axios/cheerio not installed)')
+  console.error('[LocalFundingCrawler] CRITICAL: axios/cheerio not installed')
+  console.error('[LocalFundingCrawler] This crawler requires real dependencies to function')
+  throw new Error('LocalFundingCrawler dependencies missing: axios and/or cheerio')
 }
-
-import { mockLocalFunding } from './mockCrawlerData.js'
 
 // Mock calculateDistance if geoUtils doesn't exist
 const calculateDistance = (lat1, lng1, lat2, lng2) => {
@@ -113,14 +113,8 @@ export async function crawlLocalFunding(profile, options = {}) {
 async function searchLocalSource(source, coords, profile) {
   const opportunities = []
   
-  // Use mock data if axios/cheerio not available
-  if (!axios || !cheerio) {
-    return mockLocalFunding.map(opp => ({
-      ...opp,
-      latitude: opp.latitude || coords.lat,
-      longitude: opp.longitude || coords.lng
-    }))
-  }
+  // Note: This crawler is legacy and searches specific websites
+  // For real data, use the new ingestion system (npm run ingest)
   
   if (source.type === 'community_foundation') {
     // Search community foundations near coordinates
@@ -215,21 +209,8 @@ function matchesEligibility(opportunity, profile) {
 }
 
 async function getZipCoordinates(zip) {
-  // Mock coordinates for Ohio ZIP codes when axios not available
-  const ohioZipCoords = {
-    '43215': { lat: 39.9612, lng: -82.9988, city: 'Columbus', state: 'OH' },
-    '43201': { lat: 40.0150, lng: -83.0130, city: 'Columbus', state: 'OH' },
-    '45202': { lat: 39.1031, lng: -84.5120, city: 'Cincinnati', state: 'OH' },
-    '44114': { lat: 41.4993, lng: -81.6944, city: 'Cleveland', state: 'OH' }
-  }
-  
-  if (!axios) {
-    // Return mock coordinates for known ZIPs or default Columbus coords
-    return ohioZipCoords[zip] || ohioZipCoords['43215']
-  }
-  
+  // Use a geocoding service or database
   try {
-    // Use a geocoding service or database
     const response = await axios.get(`https://api.zippopotam.us/us/${zip}`)
     if (response.data && response.data.places && response.data.places[0]) {
       return {
@@ -241,7 +222,13 @@ async function getZipCoordinates(zip) {
     }
   } catch (error) {
     console.error('[LocalFundingCrawler] Geocoding error:', error.message)
-    // Return default coordinates
+    // Fallback to mock coordinates for Ohio ZIP codes
+    const ohioZipCoords = {
+      '43215': { lat: 39.9612, lng: -82.9988, city: 'Columbus', state: 'OH' },
+      '43201': { lat: 40.0150, lng: -83.0130, city: 'Columbus', state: 'OH' },
+      '45202': { lat: 39.1031, lng: -84.5120, city: 'Cincinnati', state: 'OH' },
+      '44114': { lat: 41.4993, lng: -81.6944, city: 'Cleveland', state: 'OH' }
+    }
     return ohioZipCoords[zip] || ohioZipCoords['43215']
   }
   return null
