@@ -657,6 +657,19 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
       '  • Managing database operations',
       '  • System diagnostics and health checks',
       '- Feel free to acknowledge their admin status when greeting them',
+      '',
+      '**CRITICAL TRUTH GATE RULE FOR SYSTEM HEALTH QUERIES:**',
+      '- When asked about system health, crawler status, or if "everything is working"',
+      '- You MUST call the admin.diagnostics tool FIRST before answering',
+      '- DO NOT claim "everything looks fine" or "all systems operational" without diagnostics proof',
+      '- Base your response ONLY on actual diagnostics data:',
+      '  • If DB has 0 opportunities -> say so explicitly',
+      '  • If crawlers failed -> explain what failed and why',
+      '  • If schema checks fail -> report the specific failures',
+      '  • If env vars missing -> specify which ones are missing',
+      '  • If recent errors exist -> summarize them',
+      '- Provide actionable next steps based on the actual state',
+      '- Be honest and factual - never provide false reassurance',
       ''
     )
   } else {

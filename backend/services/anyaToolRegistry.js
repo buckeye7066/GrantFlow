@@ -18,6 +18,7 @@ import {
   adminHealthCheck,
   adminHealthLogs,
 } from './anyaAdminTools.js'
+import { getSystemDiagnostics, analyzeSystemHealth } from './diagnosticsService.js'
 import {
   runAutonomousCodeCrawl,
   getAutonomousStatus,
@@ -883,6 +884,29 @@ registerTool({
     },
   },
   handler: adminHealthLogs,
+})
+
+// System Diagnostics Tool
+registerTool({
+  name: 'admin.diagnostics',
+  description: 'Get comprehensive system diagnostics including database status, environment configuration, last activity, and recent errors. Use this to check system health before claiming everything is working. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {},
+  },
+  handler: async (_params, context) => {
+    const { db } = context
+    if (!db) {
+      throw new Error('Database connection unavailable')
+    }
+    const diagnostics = getSystemDiagnostics(db)
+    const health = analyzeSystemHealth(diagnostics)
+    return {
+      ...diagnostics,
+      health_analysis: health,
+    }
+  },
 })
 
 // Enhanced Admin Crawler Tools

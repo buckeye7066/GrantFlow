@@ -2,6 +2,7 @@ import React from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Shield } from 'lucide-react';
 import AdminDocumentUpload from '@/components/admin/AdminDocumentUpload';
+import AdminDiagnostics from '@/components/admin/AdminDiagnostics';
 import { useAuthStore } from '@/stores/authStore';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { AlertCircle } from 'lucide-react';
@@ -38,10 +39,15 @@ export default function Admin() {
           </p>
         </div>
 
-        <Tabs defaultValue="upload" className="w-full">
+        <Tabs defaultValue="diagnostics" className="w-full">
           <TabsList>
+            <TabsTrigger value="diagnostics">Diagnostics</TabsTrigger>
             <TabsTrigger value="upload">Upload Profile Document</TabsTrigger>
           </TabsList>
+          
+          <TabsContent value="diagnostics" className="mt-6">
+            <AdminDiagnostics />
+          </TabsContent>
           
           <TabsContent value="upload" className="mt-6">
             <AdminDocumentUpload />

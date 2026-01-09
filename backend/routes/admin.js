@@ -10,6 +10,7 @@ import OpenAI from 'openai';
 import { seedRealOpportunities } from '../utils/seedRealOpportunities.js';
 import { ensureDesignatedProfiles } from '../utils/ensureDesignatedProfiles.js';
 import { buildProfileSignals, calculateMatchScore } from '../services/profileHelpers.js';
+import { getSystemDiagnostics } from '../services/diagnosticsService.js';
 
 const router = express.Router();
 
@@ -376,6 +377,29 @@ router.post('/reattach-users', (req, res) => {
   } catch (error) {
     console.error('[admin] Reattach users error:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/admin/diagnostics - System diagnostics (admin only)
+router.get('/diagnostics', (req, res) => {
+  try {
+    // Check admin access - must match frontend's user.is_admin check
+    const user = req.user;
+    if (!user || !user.is_admin) {
+      return res.status(403).json({ 
+        error: 'Access denied',
+        message: 'This endpoint is restricted to administrators only' 
+      });
+    }
+
+    const diagnostics = getSystemDiagnostics(req.db);
+    res.json(diagnostics);
+  } catch (error) {
+    console.error('[admin/diagnostics] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to get diagnostics',
+      message: error.message || 'An unexpected error occurred'
+    });
   }
 });
 
