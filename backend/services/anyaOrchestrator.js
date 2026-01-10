@@ -5,6 +5,11 @@ import { listToolMetadata, invokeTool as invokeRegisteredTool } from './anyaTool
 const TASK_STATUSES = new Set(['open', 'in_progress', 'completed', 'cancelled'])
 const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent'])
 
+// Admin configuration from environment
+// Note: The fallback 'admin@grantflow.app' is a safe default that won't match real users
+// In production, ADMIN_EMAIL should always be explicitly set to the actual admin email
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@grantflow.app'
+
 let cachedOpenAI = null
 
 function getOpenAIClient() {
@@ -551,25 +556,136 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     return "I'm here and ready to help—just let me know what you'd like to work on."
   }
 
+  // Extract user context for personalization
+  const userName = user?.display_name || user?.full_name || user?.profileName || 'there'
+  const userEmail = user?.primary_email || user?.email || ''
+  const isAdmin = Boolean(user?.is_admin || user?.role === 'admin')
+  // Check if this is the primary admin (configured via ADMIN_EMAIL env var)
+  // This provides special recognition for the main system administrator
+  const isPrimaryAdmin = isAdmin && userEmail === ADMIN_EMAIL
+
+  // TRUTH GATE: Detect system health queries and handle them directly
+  // Only for admin users to prevent false positives in normal conversation
+  const lowerContent = trimmed.toLowerCase()
+  const healthKeywords = [
+    'are crawlers working',
+    'crawler status',
+    'system status',
+    'health check',
+    'diagnostics',
+    'admin panel',
+    'why is it broken',
+    'why did it fail',
+    '0 succeeded',
+    'failed',
+    'no opportunities',
+    'is everything ok',
+    'is everything working',
+    'is it working',
+    'system health',
+    '/health',
+  ]
+
+  const isHealthQuery = isAdmin && healthKeywords.some(keyword => lowerContent.includes(keyword))
+
+ if (isHealthQuery) {
+  try {
+    const { invokeTool: invokeRegisteredTool } = await import('./anyaToolRegistry.js')
+    console.log('[Anya] Health query detected, invoking system.health tool')
+    const healthData = await invokeRegisteredTool('system.health', {}, { db, user })
+
+      // Format the health data into a human-readable response
+      const lines = []
+      lines.push(`**System Status: ${healthData.status}**\n`)
+
+      if (healthData.issues && healthData.issues.length > 0) {
+        lines.push('**Issues:**')
+        healthData.issues.forEach(issue => lines.push(`• ${issue}`))
+        lines.push('')
+      }
+
+      if (healthData.warnings && healthData.warnings.length > 0) {
+        lines.push('**Warnings:**')
+        healthData.warnings.forEach(warning => lines.push(`• ${warning}`))
+        lines.push('')
+      }
+
+      lines.push('**Quick Stats:**')
+      lines.push(`• ${healthData.counts.opportunities} funding opportunities`)
+      lines.push(`• ${healthData.counts.profiles} active profiles`)
+      lines.push(`• ${healthData.counts.crawl_logs} crawl logs`)
+      lines.push('')
+
+      if (healthData.crawler_stats) {
+        lines.push(`• Crawler runs (24h): ${healthData.crawler_stats.totalRuns}`)
+        lines.push(`• Recent failures: ${healthData.crawler_stats.recentFailures}`)
+        lines.push('')
+      }
+
+      lines.push('**Environment:**')
+      lines.push(`• OPENAI_API_KEY: ${healthData.env_flags.OPENAI_API_KEY_present ? '✓ Present' : '✗ Not set'}`)
+      lines.push(`• ANTHROPIC_API_KEY: ${healthData.env_flags.ANTHROPIC_API_KEY_present ? '✓ Present' : '✗ Not set'}`)
+      lines.push(`• SAM_GOV_API_KEY: ${healthData.env_flags.SAM_GOV_API_KEY_present ? '✓ Present' : '✗ Not set'}`)
+      lines.push('')
+
+      if (healthData.last_error) {
+        lines.push('**Last Error:**')
+        lines.push(`• ${healthData.last_error.crawler}: ${healthData.last_error.message}`)
+        lines.push(`• Time: ${new Date(healthData.last_error.time).toLocaleString()}`)
+        lines.push('')
+      }
+
+      // Provide actionable next steps based on status
+      if (healthData.status === 'ERROR') {
+        lines.push('**Next Action:**')
+        if (!healthData.env_flags.SAM_GOV_API_KEY_present) {
+          lines.push('• Configure SAM_GOV_API_KEY environment variable')
+        }
+        if (healthData.issues.includes('Database connection failed')) {
+          lines.push('• Check database connection and restart the server')
+        }
+        lines.push('• Review error logs for detailed information')
+      } else if (healthData.status === 'WARNING' || healthData.status === 'DEGRADED') {
+        lines.push('**Next Action:**')
+        if (healthData.counts.opportunities === 0) {
+          lines.push('• Run crawlers to populate funding opportunities')
+        }
+        if (healthData.crawler_stats.recentFailures > 0) {
+          lines.push('• Review and retry failed crawler jobs')
+        }
+        if (!healthData.env_flags.OPENAI_API_KEY_present && !healthData.env_flags.ANTHROPIC_API_KEY_present) {
+          lines.push('• Configure AI API keys for full functionality')
+        }
+      } else {
+        lines.push('**Status:** System is operating normally ✓')
+      }
+
+      return lines.join('\n')
+    } catch (error) {
+      console.error('[Anya] Failed to retrieve system health:', error)
+      return `I could not retrieve diagnostics; the system may be degraded.\n\nError: ${error.message}\n\nPlease check the logs or contact support.`
+    }
+  }
+
   let openai = null
   try {
     openai = getOpenAIClient()
   } catch (error) {
     console.warn('[anya] OpenAI client unavailable; providing guided assistance instead:', error.message)
     
-    // Provide helpful responses without AI
+    // Provide helpful responses without AI with personalization
     const lowerContent = trimmed.toLowerCase()
     
     if (lowerContent.includes('grant') || lowerContent.includes('funding')) {
-      return "I can help you discover grants! Try:\n• Click 'Discover Grants' to browse opportunities\n• Use 'Smart Matcher' for AI-powered recommendations\n• Check 'Pipeline' to track your applications"
+      return `Hi ${userName}! I can help you discover grants! Try:\n• Click 'Discover Grants' to browse opportunities\n• Use 'Smart Matcher' for AI-powered recommendations\n• Check 'Pipeline' to track your applications`
     }
     
     if (lowerContent.includes('profile') || lowerContent.includes('organization')) {
-      return "To manage your profile:\n• Go to 'My Profiles' to view and edit profile details\n• Upload documents in the profile section\n• Set your organization type and focus areas"
+      return `Hi ${userName}! To manage your profile:\n• Go to 'My Profiles' to view and edit profile details\n• Upload documents in the profile section\n• Set your organization type and focus areas`
     }
     
     return [
-      "I can help guide you through GrantFlow! Here are key features:",
+      `Hi ${userName}! I can help guide you through GrantFlow! Here are key features:`,
       "• **Discover Grants** - Find funding opportunities",
       "• **Smart Matcher** - Get personalized recommendations", 
       "• **Pipeline** - Track your applications",
@@ -601,13 +717,84 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     conversationMessages.push({ role: 'user', content: trimmed })
   }
 
-  const systemPrompt = [
-    'You are Anya, the GrantFlow AI assistant. Your role is to help users with grant discovery, application management,',
-    'funding opportunity tracking, and document preparation in the GrantFlow platform.',
+  // Build personalized system prompt
+  // Extract first name safely, handling edge cases
+  const firstName = (!userName || userName === 'there') 
+    ? 'the user' 
+    : (typeof userName === 'string' ? userName.split(' ')[0] : userName)
+  
+  const systemPromptParts = [
+    'You are Anya, the GrantFlow AI assistant. You are helpful, warm, and personable.',
     '',
-    'Always be concise, actionable, and specific. Ground your guidance in GrantFlow features.',
-    'Keep responses focused and practical. Avoid generic advice.',
-  ].join('\n')
+    `Current User: ${userName}`,
+    `User Email: ${userEmail}`,
+    `Is Admin: ${isAdmin ? 'Yes' : 'No'}`,
+    '',
+    'Personalization Guidelines:',
+    (!userName || userName === 'there')
+      ? '- Address the user in a friendly, welcoming manner'
+      : `- Always address the user by their first name (${firstName})`,
+    '- Feel free to ask how their day is going or about their current situation in a natural, friendly way',
+    '- Be conversational and friendly while remaining helpful and professional',
+    `- Remember you're speaking to ${userName}`,
+    '- Use a warm, supportive tone and occasionally use friendly emojis (👋, ✨, 🎯) when appropriate',
+    '',
+    'Your Role:',
+    '- Help users with grant discovery, application management, funding opportunity tracking, and document preparation',
+    '- Always be concise, actionable, and specific',
+    '- Ground your guidance in GrantFlow features',
+    '- Keep responses focused and practical',
+    '',
+  ]
+
+  if (isAdmin) {
+    systemPromptParts.push(
+      'Admin Access:',
+      isPrimaryAdmin 
+        ? `- The current user is ${userName}, the primary system administrator`
+        : '- The current user is a system administrator',
+      '- You can perform admin actions such as:',
+      '  • Running system crawlers (scholarship, local, comprehensive)',
+      '  • Accessing and modifying system settings',
+      '  • Viewing all user profiles and data',
+      '  • Managing database operations',
+      '  • System diagnostics and health checks',
+      '',
+      'CRITICAL - System Health Reporting:',
+      '- NEVER claim "everything is fine" or "all systems working" without checking system.health tool first',
+      '- When asked about system status, crawlers, or errors, ALWAYS use the system.health tool',
+      '- Report actual issues found in system.health output - do not sugarcoat problems',
+      '- If system.health shows failures, missing API keys, or zero opportunities, report them clearly',
+      '- Base all health-related responses on actual data from system.health, not assumptions',
+      '- Feel free to acknowledge their admin status when greeting them',
+      '',
+      '**CRITICAL TRUTH GATE RULE FOR SYSTEM HEALTH QUERIES:**',
+      '- When asked about system health, crawler status, or if "everything is working"',
+      '- You MUST call the admin.diagnostics tool FIRST before answering',
+      '- DO NOT claim "everything looks fine" or "all systems operational" without diagnostics proof',
+      '- Base your response ONLY on actual diagnostics data:',
+      '  • If DB has 0 opportunities -> say so explicitly',
+      '  • If crawlers failed -> explain what failed and why',
+      '  • If schema checks fail -> report the specific failures',
+      '  • If env vars missing -> specify which ones are missing',
+      '  • If recent errors exist -> summarize them',
+      '- Provide actionable next steps based on the actual state',
+      '- Be honest and factual - never provide false reassurance',
+      ''
+    )
+  } else {
+    systemPromptParts.push(
+      'Admin Restrictions:',
+      '- The current user is NOT an administrator',
+      '- Admin-only actions include: running system crawlers, database operations, accessing all profiles, system configuration',
+      '- If the user requests admin actions, politely explain that those features are restricted to administrators',
+      '- Suggest alternative ways they can achieve their goals within their user permissions',
+      '- Be kind and helpful in your explanation',
+      ''
+    )
+  }
+
+  const systemPrompt = systemPromptParts.join('\n')
 
   try {
     console.log('[Anya] Calling OpenAI API with model:', DEFAULT_ASSISTANT_MODEL)

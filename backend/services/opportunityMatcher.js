@@ -4,7 +4,7 @@
  * ENHANCED: Uses ALL profile data points for comprehensive matching
  */
 
-import { buildProfileSignals } from './profileHelpers.js'
+import { buildProfileSignals, safeParseArrayField } from './profileHelpers.js'
 
 /**
  * Calculate match percentage between opportunity and profile
@@ -32,28 +32,10 @@ function calculateMatchPercentage(opportunity, profileContext) {
   let matchStrength = 0 // Track category matches
   const matchedFields = []
   
-  // Parse opportunity data
-  let oppKeywords = []
-  let oppCategories = []
-  let eligibility = []
-  
-  try { 
-    oppKeywords = Array.isArray(opportunity.keywords) 
-      ? opportunity.keywords 
-      : JSON.parse(opportunity.keywords || '[]')
-  } catch (e) { /* ignore */ }
-  
-  try { 
-    oppCategories = Array.isArray(opportunity.categories) 
-      ? opportunity.categories 
-      : JSON.parse(opportunity.categories || '[]')
-  } catch (e) { /* ignore */ }
-  
-  try { 
-    eligibility = Array.isArray(opportunity.eligibility_bullets) 
-      ? opportunity.eligibility_bullets 
-      : JSON.parse(opportunity.eligibility_bullets || '[]')
-  } catch (e) { /* ignore */ }
+  // Parse opportunity data using safeParseArrayField
+  const oppKeywords = safeParseArrayField(opportunity.keywords, [])
+  const oppCategories = safeParseArrayField(opportunity.categories, [])
+  const eligibility = safeParseArrayField(opportunity.eligibility_bullets, [])
   
   const oppTerms = new Set([
     ...oppKeywords.map(k => String(k).toLowerCase()),

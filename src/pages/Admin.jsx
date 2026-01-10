@@ -1,10 +1,10 @@
 import React from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Shield } from 'lucide-react';
+import { Shield, Activity, AlertCircle } from 'lucide-react';
 import AdminDocumentUpload from '@/components/admin/AdminDocumentUpload';
+import AdminDiagnostics from '@/components/admin/AdminDiagnostics';
 import { useAuthStore } from '@/stores/authStore';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { AlertCircle } from 'lucide-react';
 
 export default function Admin() {
   const user = useAuthStore((state) => state.user);
@@ -38,10 +38,18 @@ export default function Admin() {
           </p>
         </div>
 
-        <Tabs defaultValue="upload" className="w-full">
+        <Tabs defaultValue="diagnostics" className="w-full">
           <TabsList>
+            <TabsTrigger value="diagnostics">
+              <Activity className="w-4 h-4 mr-2" />
+              Diagnostics
+            </TabsTrigger>
             <TabsTrigger value="upload">Upload Profile Document</TabsTrigger>
           </TabsList>
+          
+          <TabsContent value="diagnostics" className="mt-6">
+            <AdminDiagnostics />
+          </TabsContent>
           
           <TabsContent value="upload" className="mt-6">
             <AdminDocumentUpload />

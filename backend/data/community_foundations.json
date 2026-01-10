@@ -3,264 +3,1991 @@
   "source": "Council on Foundations, Foundation Directory",
   "foundations": {
     "AL": [
-      {"name": "Community Foundation of Greater Birmingham", "url": "https://cfbham.org/", "counties": ["Jefferson", "Shelby", "Blount", "St. Clair", "Walker"]},
-      {"name": "Community Foundation of South Alabama", "url": "https://communityendowment.com/", "counties": ["Mobile", "Baldwin"]},
-      {"name": "Community Foundation of Huntsville/Madison County", "url": "https://communityfoundationhsv.org/", "counties": ["Madison", "Limestone", "Morgan"]},
-      {"name": "Community Foundation of Northeast Alabama", "url": "https://cfnea.org/", "counties": ["Calhoun", "Etowah", "Cherokee", "Cleburne"]},
-      {"name": "Central Alabama Community Foundation", "url": "https://cacfinfo.org/", "counties": ["Montgomery", "Autauga", "Elmore", "Lowndes"]}
+      {
+        "name": "Community Foundation of Greater Birmingham",
+        "url": "https://cfbham.org/",
+        "counties": [
+          "Jefferson",
+          "Shelby",
+          "Blount",
+          "St. Clair",
+          "Walker"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of South Alabama",
+        "url": "https://communityendowment.com/",
+        "counties": [
+          "Mobile",
+          "Baldwin"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of Huntsville/Madison County",
+        "url": "https://communityfoundationhsv.org/",
+        "counties": [
+          "Madison",
+          "Limestone",
+          "Morgan"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of Northeast Alabama",
+        "url": "https://cfnea.org/",
+        "counties": [
+          "Calhoun",
+          "Etowah",
+          "Cherokee",
+          "Cleburne"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Central Alabama Community Foundation",
+        "url": "https://cacfinfo.org/",
+        "counties": [
+          "Montgomery",
+          "Autauga",
+          "Elmore",
+          "Lowndes"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "AK": [
-      {"name": "Alaska Community Foundation", "url": "https://alaskacf.org/", "counties": ["statewide"]}
+      {
+        "name": "Alaska Community Foundation",
+        "url": "https://alaskacf.org/",
+        "counties": [
+          "statewide"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "AZ": [
-      {"name": "Arizona Community Foundation", "url": "https://azfoundation.org/", "counties": ["Maricopa", "Pima", "Pinal"]},
-      {"name": "Community Foundation for Southern Arizona", "url": "https://cfsaz.org/", "counties": ["Pima", "Cochise", "Santa Cruz"]},
-      {"name": "Arizona Community Foundation of Flagstaff", "url": "https://azfoundation.org/flagstaff/", "counties": ["Coconino", "Navajo", "Apache"]}
+      {
+        "name": "Arizona Community Foundation",
+        "url": "https://azfoundation.org/",
+        "counties": [
+          "Maricopa",
+          "Pima",
+          "Pinal"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation for Southern Arizona",
+        "url": "https://cfsaz.org/",
+        "counties": [
+          "Pima",
+          "Cochise",
+          "Santa Cruz"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Arizona Community Foundation of Flagstaff",
+        "url": "https://azfoundation.org/flagstaff/",
+        "counties": [
+          "Coconino",
+          "Navajo",
+          "Apache"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "AR": [
-      {"name": "Arkansas Community Foundation", "url": "https://arcf.org/", "counties": ["statewide"]},
-      {"name": "Community Foundation of North Central Arkansas", "url": "https://cfnca.org/", "counties": ["Baxter", "Marion", "Fulton", "Izard"]}
+      {
+        "name": "Arkansas Community Foundation",
+        "url": "https://arcf.org/",
+        "counties": [
+          "statewide"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of North Central Arkansas",
+        "url": "https://cfnca.org/",
+        "counties": [
+          "Baxter",
+          "Marion",
+          "Fulton",
+          "Izard"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "CA": [
-      {"name": "California Community Foundation", "url": "https://calfund.org/", "counties": ["Los Angeles"]},
-      {"name": "Silicon Valley Community Foundation", "url": "https://siliconvalleycf.org/", "counties": ["San Mateo", "Santa Clara"]},
-      {"name": "San Diego Foundation", "url": "https://sdfoundation.org/", "counties": ["San Diego"]},
-      {"name": "Orange County Community Foundation", "url": "https://oc-cf.org/", "counties": ["Orange"]},
-      {"name": "San Francisco Foundation", "url": "https://sff.org/", "counties": ["San Francisco", "Alameda", "Contra Costa", "Marin", "San Mateo"]},
-      {"name": "Sacramento Region Community Foundation", "url": "https://sacregcf.org/", "counties": ["Sacramento", "Placer", "El Dorado", "Yolo"]},
-      {"name": "Community Foundation of the North State", "url": "https://cfnorthstate.org/", "counties": ["Shasta", "Tehama", "Siskiyou"]},
-      {"name": "Fresno Regional Foundation", "url": "https://fresnoregfoundation.org/", "counties": ["Fresno", "Madera", "Kings"]},
-      {"name": "Ventura County Community Foundation", "url": "https://vccf.org/", "counties": ["Ventura"]},
-      {"name": "Humboldt Area Foundation", "url": "https://hafoundation.org/", "counties": ["Humboldt", "Del Norte", "Trinity"]}
+      {
+        "name": "California Community Foundation",
+        "url": "https://calfund.org/",
+        "counties": [
+          "Los Angeles"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Silicon Valley Community Foundation",
+        "url": "https://siliconvalleycf.org/",
+        "counties": [
+          "San Mateo",
+          "Santa Clara"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "San Diego Foundation",
+        "url": "https://sdfoundation.org/",
+        "counties": [
+          "San Diego"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Orange County Community Foundation",
+        "url": "https://oc-cf.org/",
+        "counties": [
+          "Orange"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "San Francisco Foundation",
+        "url": "https://sff.org/",
+        "counties": [
+          "San Francisco",
+          "Alameda",
+          "Contra Costa",
+          "Marin",
+          "San Mateo"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Sacramento Region Community Foundation",
+        "url": "https://sacregcf.org/",
+        "counties": [
+          "Sacramento",
+          "Placer",
+          "El Dorado",
+          "Yolo"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of the North State",
+        "url": "https://cfnorthstate.org/",
+        "counties": [
+          "Shasta",
+          "Tehama",
+          "Siskiyou"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Fresno Regional Foundation",
+        "url": "https://fresnoregfoundation.org/",
+        "counties": [
+          "Fresno",
+          "Madera",
+          "Kings"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Ventura County Community Foundation",
+        "url": "https://vccf.org/",
+        "counties": [
+          "Ventura"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Humboldt Area Foundation",
+        "url": "https://hafoundation.org/",
+        "counties": [
+          "Humboldt",
+          "Del Norte",
+          "Trinity"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "CO": [
-      {"name": "The Denver Foundation", "url": "https://denverfoundation.org/", "counties": ["Denver", "Adams", "Arapahoe", "Douglas", "Jefferson"]},
-      {"name": "Community Foundation Boulder County", "url": "https://commfound.org/", "counties": ["Boulder"]},
-      {"name": "Pikes Peak Community Foundation", "url": "https://ppcf.org/", "counties": ["El Paso", "Teller"]},
-      {"name": "Community Foundation of Northern Colorado", "url": "https://nocofoundation.org/", "counties": ["Larimer", "Weld"]}
+      {
+        "name": "The Denver Foundation",
+        "url": "https://denverfoundation.org/",
+        "counties": [
+          "Denver",
+          "Adams",
+          "Arapahoe",
+          "Douglas",
+          "Jefferson"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation Boulder County",
+        "url": "https://commfound.org/",
+        "counties": [
+          "Boulder"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Pikes Peak Community Foundation",
+        "url": "https://ppcf.org/",
+        "counties": [
+          "El Paso",
+          "Teller"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of Northern Colorado",
+        "url": "https://nocofoundation.org/",
+        "counties": [
+          "Larimer",
+          "Weld"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "CT": [
-      {"name": "Hartford Foundation for Public Giving", "url": "https://hfpg.org/", "counties": ["Hartford"]},
-      {"name": "Community Foundation for Greater New Haven", "url": "https://cfgnh.org/", "counties": ["New Haven"]},
-      {"name": "Fairfield County's Community Foundation", "url": "https://fccfoundation.org/", "counties": ["Fairfield"]}
+      {
+        "name": "Hartford Foundation for Public Giving",
+        "url": "https://hfpg.org/",
+        "counties": [
+          "Hartford"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation for Greater New Haven",
+        "url": "https://cfgnh.org/",
+        "counties": [
+          "New Haven"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Fairfield County's Community Foundation",
+        "url": "https://fccfoundation.org/",
+        "counties": [
+          "Fairfield"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "DE": [
-      {"name": "Delaware Community Foundation", "url": "https://delcf.org/", "counties": ["New Castle", "Kent", "Sussex"]}
+      {
+        "name": "Delaware Community Foundation",
+        "url": "https://delcf.org/",
+        "counties": [
+          "New Castle",
+          "Kent",
+          "Sussex"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "FL": [
-      {"name": "Community Foundation of Tampa Bay", "url": "https://cftampabay.org/", "counties": ["Hillsborough", "Pinellas", "Pasco", "Hernando", "Citrus"]},
-      {"name": "Miami Foundation", "url": "https://miamifoundation.org/", "counties": ["Miami-Dade"]},
-      {"name": "Community Foundation for Palm Beach and Martin Counties", "url": "https://yourcommunityfoundation.org/", "counties": ["Palm Beach", "Martin"]},
-      {"name": "Community Foundation of Central Florida", "url": "https://cffound.org/", "counties": ["Orange", "Osceola", "Seminole", "Lake", "Volusia"]},
-      {"name": "Community Foundation of North Florida", "url": "https://cfnf.org/", "counties": ["Duval", "Clay", "Nassau", "St. Johns", "Baker"]},
-      {"name": "Gulf Coast Community Foundation", "url": "https://gulfcoastcf.org/", "counties": ["Sarasota", "Manatee", "Charlotte", "DeSoto"]},
-      {"name": "Community Foundation of Broward", "url": "https://cfbroward.org/", "counties": ["Broward"]}
+      {
+        "name": "Community Foundation of Tampa Bay",
+        "url": "https://cftampabay.org/",
+        "counties": [
+          "Hillsborough",
+          "Pinellas",
+          "Pasco",
+          "Hernando",
+          "Citrus"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Miami Foundation",
+        "url": "https://miamifoundation.org/",
+        "counties": [
+          "Miami-Dade"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation for Palm Beach and Martin Counties",
+        "url": "https://yourcommunityfoundation.org/",
+        "counties": [
+          "Palm Beach",
+          "Martin"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of Central Florida",
+        "url": "https://cffound.org/",
+        "counties": [
+          "Orange",
+          "Osceola",
+          "Seminole",
+          "Lake",
+          "Volusia"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of North Florida",
+        "url": "https://cfnf.org/",
+        "counties": [
+          "Duval",
+          "Clay",
+          "Nassau",
+          "St. Johns",
+          "Baker"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Gulf Coast Community Foundation",
+        "url": "https://gulfcoastcf.org/",
+        "counties": [
+          "Sarasota",
+          "Manatee",
+          "Charlotte",
+          "DeSoto"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of Broward",
+        "url": "https://cfbroward.org/",
+        "counties": [
+          "Broward"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "GA": [
-      {"name": "Community Foundation for Greater Atlanta", "url": "https://cfgreateratlanta.org/", "counties": ["Fulton", "DeKalb", "Cobb", "Gwinnett", "Clayton", "Cherokee", "Forsyth"]},
-      {"name": "Community Foundation of Central Georgia", "url": "https://cfcga.org/", "counties": ["Bibb", "Houston", "Peach", "Monroe"]},
-      {"name": "Savannah Community Foundation", "url": "https://savannahcf.org/", "counties": ["Chatham", "Effingham", "Bryan"]}
+      {
+        "name": "Community Foundation for Greater Atlanta",
+        "url": "https://cfgreateratlanta.org/",
+        "counties": [
+          "Fulton",
+          "DeKalb",
+          "Cobb",
+          "Gwinnett",
+          "Clayton",
+          "Cherokee",
+          "Forsyth"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of Central Georgia",
+        "url": "https://cfcga.org/",
+        "counties": [
+          "Bibb",
+          "Houston",
+          "Peach",
+          "Monroe"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Savannah Community Foundation",
+        "url": "https://savannahcf.org/",
+        "counties": [
+          "Chatham",
+          "Effingham",
+          "Bryan"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "HI": [
-      {"name": "Hawaii Community Foundation", "url": "https://hawaiicommunityfoundation.org/", "counties": ["Honolulu", "Hawaii", "Maui", "Kauai"]}
+      {
+        "name": "Hawaii Community Foundation",
+        "url": "https://hawaiicommunityfoundation.org/",
+        "counties": [
+          "Honolulu",
+          "Hawaii",
+          "Maui",
+          "Kauai"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "ID": [
-      {"name": "Idaho Community Foundation", "url": "https://idahocf.org/", "counties": ["statewide"]}
+      {
+        "name": "Idaho Community Foundation",
+        "url": "https://idahocf.org/",
+        "counties": [
+          "statewide"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "IL": [
-      {"name": "Chicago Community Trust", "url": "https://cct.org/", "counties": ["Cook"]},
-      {"name": "Community Foundation of the Fox River Valley", "url": "https://communityfoundationfrv.org/", "counties": ["Kane", "Kendall"]},
-      {"name": "DuPage Foundation", "url": "https://dupagefoundation.org/", "counties": ["DuPage"]},
-      {"name": "Community Foundation of Central Illinois", "url": "https://communityfoundationci.org/", "counties": ["Peoria", "Tazewell", "Woodford"]},
-      {"name": "Quad Cities Community Foundation", "url": "https://qccommunityfoundation.org/", "counties": ["Rock Island", "Henry"]}
+      {
+        "name": "Chicago Community Trust",
+        "url": "https://cct.org/",
+        "counties": [
+          "Cook"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of the Fox River Valley",
+        "url": "https://communityfoundationfrv.org/",
+        "counties": [
+          "Kane",
+          "Kendall"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "DuPage Foundation",
+        "url": "https://dupagefoundation.org/",
+        "counties": [
+          "DuPage"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of Central Illinois",
+        "url": "https://communityfoundationci.org/",
+        "counties": [
+          "Peoria",
+          "Tazewell",
+          "Woodford"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Quad Cities Community Foundation",
+        "url": "https://qccommunityfoundation.org/",
+        "counties": [
+          "Rock Island",
+          "Henry"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "IN": [
-      {"name": "Central Indiana Community Foundation", "url": "https://cicf.org/", "counties": ["Marion", "Hamilton", "Boone", "Hendricks", "Johnson", "Morgan", "Hancock"]},
-      {"name": "Community Foundation of St. Joseph County", "url": "https://cfsjc.org/", "counties": ["St. Joseph", "Elkhart"]},
-      {"name": "Community Foundation of Greater Fort Wayne", "url": "https://cfgfw.org/", "counties": ["Allen", "DeKalb", "Noble", "Whitley"]},
-      {"name": "Legacy Foundation of Lake County", "url": "https://legacyfdn.org/", "counties": ["Lake", "Porter"]}
+      {
+        "name": "Central Indiana Community Foundation",
+        "url": "https://cicf.org/",
+        "counties": [
+          "Marion",
+          "Hamilton",
+          "Boone",
+          "Hendricks",
+          "Johnson",
+          "Morgan",
+          "Hancock"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of St. Joseph County",
+        "url": "https://cfsjc.org/",
+        "counties": [
+          "St. Joseph",
+          "Elkhart"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of Greater Fort Wayne",
+        "url": "https://cfgfw.org/",
+        "counties": [
+          "Allen",
+          "DeKalb",
+          "Noble",
+          "Whitley"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Legacy Foundation of Lake County",
+        "url": "https://legacyfdn.org/",
+        "counties": [
+          "Lake",
+          "Porter"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "IA": [
-      {"name": "Community Foundation of Greater Des Moines", "url": "https://desmoinesfoundation.org/", "counties": ["Polk", "Dallas", "Warren"]},
-      {"name": "Greater Cedar Rapids Community Foundation", "url": "https://gcrcf.org/", "counties": ["Linn", "Jones", "Benton"]},
-      {"name": "Quad Cities Community Foundation", "url": "https://qccommunityfoundation.org/", "counties": ["Scott"]}
+      {
+        "name": "Community Foundation of Greater Des Moines",
+        "url": "https://desmoinesfoundation.org/",
+        "counties": [
+          "Polk",
+          "Dallas",
+          "Warren"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Greater Cedar Rapids Community Foundation",
+        "url": "https://gcrcf.org/",
+        "counties": [
+          "Linn",
+          "Jones",
+          "Benton"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Quad Cities Community Foundation",
+        "url": "https://qccommunityfoundation.org/",
+        "counties": [
+          "Scott"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "KS": [
-      {"name": "Greater Kansas City Community Foundation", "url": "https://growyourgiving.org/", "counties": ["Johnson", "Wyandotte"]},
-      {"name": "Wichita Community Foundation", "url": "https://wichitacf.org/", "counties": ["Sedgwick", "Butler", "Harvey"]},
-      {"name": "Topeka Community Foundation", "url": "https://topekacommunityfoundation.org/", "counties": ["Shawnee", "Douglas"]}
+      {
+        "name": "Greater Kansas City Community Foundation",
+        "url": "https://growyourgiving.org/",
+        "counties": [
+          "Johnson",
+          "Wyandotte"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Wichita Community Foundation",
+        "url": "https://wichitacf.org/",
+        "counties": [
+          "Sedgwick",
+          "Butler",
+          "Harvey"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Topeka Community Foundation",
+        "url": "https://topekacommunityfoundation.org/",
+        "counties": [
+          "Shawnee",
+          "Douglas"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "KY": [
-      {"name": "Community Foundation of Louisville", "url": "https://cflouisville.org/", "counties": ["Jefferson", "Oldham", "Bullitt", "Spencer"]},
-      {"name": "Blue Grass Community Foundation", "url": "https://bgcf.org/", "counties": ["Fayette", "Scott", "Woodford", "Bourbon", "Clark"]},
-      {"name": "Community Foundation of West Kentucky", "url": "https://cfwestky.org/", "counties": ["McCracken", "Marshall", "Graves", "Calloway"]}
+      {
+        "name": "Community Foundation of Louisville",
+        "url": "https://cflouisville.org/",
+        "counties": [
+          "Jefferson",
+          "Oldham",
+          "Bullitt",
+          "Spencer"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Blue Grass Community Foundation",
+        "url": "https://bgcf.org/",
+        "counties": [
+          "Fayette",
+          "Scott",
+          "Woodford",
+          "Bourbon",
+          "Clark"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of West Kentucky",
+        "url": "https://cfwestky.org/",
+        "counties": [
+          "McCracken",
+          "Marshall",
+          "Graves",
+          "Calloway"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "LA": [
-      {"name": "Greater New Orleans Foundation", "url": "https://gnof.org/", "counties": ["Orleans", "Jefferson", "St. Tammany", "St. Bernard"]},
-      {"name": "Baton Rouge Area Foundation", "url": "https://bfrg.org/", "counties": ["East Baton Rouge", "West Baton Rouge", "Ascension", "Livingston"]},
-      {"name": "Community Foundation of North Louisiana", "url": "https://cfnla.org/", "counties": ["Caddo", "Bossier", "Webster"]}
+      {
+        "name": "Greater New Orleans Foundation",
+        "url": "https://gnof.org/",
+        "counties": [
+          "Orleans",
+          "Jefferson",
+          "St. Tammany",
+          "St. Bernard"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Baton Rouge Area Foundation",
+        "url": "https://bfrg.org/",
+        "counties": [
+          "East Baton Rouge",
+          "West Baton Rouge",
+          "Ascension",
+          "Livingston"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of North Louisiana",
+        "url": "https://cfnla.org/",
+        "counties": [
+          "Caddo",
+          "Bossier",
+          "Webster"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "ME": [
-      {"name": "Maine Community Foundation", "url": "https://mainecf.org/", "counties": ["statewide"]}
+      {
+        "name": "Maine Community Foundation",
+        "url": "https://mainecf.org/",
+        "counties": [
+          "statewide"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "MD": [
-      {"name": "Baltimore Community Foundation", "url": "https://bcf.org/", "counties": ["Baltimore City", "Baltimore County"]},
-      {"name": "Community Foundation of Frederick County", "url": "https://cffredco.org/", "counties": ["Frederick"]},
-      {"name": "Community Foundation of the Eastern Shore", "url": "https://cfes.org/", "counties": ["Wicomico", "Worcester", "Somerset", "Dorchester"]}
+      {
+        "name": "Baltimore Community Foundation",
+        "url": "https://bcf.org/",
+        "counties": [
+          "Baltimore City",
+          "Baltimore County"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of Frederick County",
+        "url": "https://cffredco.org/",
+        "counties": [
+          "Frederick"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of the Eastern Shore",
+        "url": "https://cfes.org/",
+        "counties": [
+          "Wicomico",
+          "Worcester",
+          "Somerset",
+          "Dorchester"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "MA": [
-      {"name": "Boston Foundation", "url": "https://tbf.org/", "counties": ["Suffolk", "Middlesex", "Norfolk"]},
-      {"name": "Community Foundation of Western Massachusetts", "url": "https://communityfoundation.org/", "counties": ["Hampden", "Hampshire", "Franklin"]},
-      {"name": "Cape Cod Foundation", "url": "https://capecodfoundation.org/", "counties": ["Barnstable"]}
+      {
+        "name": "Boston Foundation",
+        "url": "https://tbf.org/",
+        "counties": [
+          "Suffolk",
+          "Middlesex",
+          "Norfolk"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of Western Massachusetts",
+        "url": "https://communityfoundation.org/",
+        "counties": [
+          "Hampden",
+          "Hampshire",
+          "Franklin"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Cape Cod Foundation",
+        "url": "https://capecodfoundation.org/",
+        "counties": [
+          "Barnstable"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "MI": [
-      {"name": "Community Foundation for Southeast Michigan", "url": "https://cfsem.org/", "counties": ["Wayne", "Oakland", "Macomb", "Washtenaw", "Monroe", "Livingston", "St. Clair"]},
-      {"name": "Grand Rapids Community Foundation", "url": "https://grfoundation.org/", "counties": ["Kent", "Ottawa", "Allegan"]},
-      {"name": "Community Foundation for Muskegon County", "url": "https://cffmc.org/", "counties": ["Muskegon"]},
-      {"name": "Kalamazoo Community Foundation", "url": "https://kalfound.org/", "counties": ["Kalamazoo", "Van Buren"]}
+      {
+        "name": "Community Foundation for Southeast Michigan",
+        "url": "https://cfsem.org/",
+        "counties": [
+          "Wayne",
+          "Oakland",
+          "Macomb",
+          "Washtenaw",
+          "Monroe",
+          "Livingston",
+          "St. Clair"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Grand Rapids Community Foundation",
+        "url": "https://grfoundation.org/",
+        "counties": [
+          "Kent",
+          "Ottawa",
+          "Allegan"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation for Muskegon County",
+        "url": "https://cffmc.org/",
+        "counties": [
+          "Muskegon"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Kalamazoo Community Foundation",
+        "url": "https://kalfound.org/",
+        "counties": [
+          "Kalamazoo",
+          "Van Buren"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "MN": [
-      {"name": "Minneapolis Foundation", "url": "https://minneapolisfoundation.org/", "counties": ["Hennepin"]},
-      {"name": "Saint Paul & Minnesota Foundation", "url": "https://spmcf.org/", "counties": ["Ramsey", "Dakota", "Washington", "Anoka", "Scott", "Carver"]},
-      {"name": "Rochester Area Foundation", "url": "https://rochesterarea.org/", "counties": ["Olmsted", "Dodge", "Fillmore", "Mower"]},
-      {"name": "Duluth Superior Area Community Foundation", "url": "https://dsacommunityfoundation.org/", "counties": ["St. Louis", "Carlton", "Lake"]}
+      {
+        "name": "Minneapolis Foundation",
+        "url": "https://minneapolisfoundation.org/",
+        "counties": [
+          "Hennepin"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Saint Paul & Minnesota Foundation",
+        "url": "https://spmcf.org/",
+        "counties": [
+          "Ramsey",
+          "Dakota",
+          "Washington",
+          "Anoka",
+          "Scott",
+          "Carver"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Rochester Area Foundation",
+        "url": "https://rochesterarea.org/",
+        "counties": [
+          "Olmsted",
+          "Dodge",
+          "Fillmore",
+          "Mower"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Duluth Superior Area Community Foundation",
+        "url": "https://dsacommunityfoundation.org/",
+        "counties": [
+          "St. Louis",
+          "Carlton",
+          "Lake"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "MS": [
-      {"name": "Community Foundation for Mississippi", "url": "https://cfms.org/", "counties": ["statewide"]},
-      {"name": "Community Foundation of Greater Jackson", "url": "https://cfgreaterjackson.org/", "counties": ["Hinds", "Madison", "Rankin"]}
+      {
+        "name": "Community Foundation for Mississippi",
+        "url": "https://cfms.org/",
+        "counties": [
+          "statewide"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of Greater Jackson",
+        "url": "https://cfgreaterjackson.org/",
+        "counties": [
+          "Hinds",
+          "Madison",
+          "Rankin"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "MO": [
-      {"name": "Greater Kansas City Community Foundation", "url": "https://growyourgiving.org/", "counties": ["Jackson", "Clay", "Platte", "Cass"]},
-      {"name": "St. Louis Community Foundation", "url": "https://stlgives.org/", "counties": ["St. Louis City", "St. Louis County"]},
-      {"name": "Community Foundation of the Ozarks", "url": "https://cfozarks.org/", "counties": ["Greene", "Christian", "Webster", "Stone", "Taney"]}
+      {
+        "name": "Greater Kansas City Community Foundation",
+        "url": "https://growyourgiving.org/",
+        "counties": [
+          "Jackson",
+          "Clay",
+          "Platte",
+          "Cass"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "St. Louis Community Foundation",
+        "url": "https://stlgives.org/",
+        "counties": [
+          "St. Louis City",
+          "St. Louis County"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of the Ozarks",
+        "url": "https://cfozarks.org/",
+        "counties": [
+          "Greene",
+          "Christian",
+          "Webster",
+          "Stone",
+          "Taney"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "MT": [
-      {"name": "Montana Community Foundation", "url": "https://mtcf.org/", "counties": ["statewide"]}
+      {
+        "name": "Montana Community Foundation",
+        "url": "https://mtcf.org/",
+        "counties": [
+          "statewide"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "NE": [
-      {"name": "Nebraska Community Foundation", "url": "https://nebcommfound.org/", "counties": ["statewide"]},
-      {"name": "Omaha Community Foundation", "url": "https://omahafoundation.org/", "counties": ["Douglas", "Sarpy"]},
-      {"name": "Lincoln Community Foundation", "url": "https://lcf.org/", "counties": ["Lancaster"]}
+      {
+        "name": "Nebraska Community Foundation",
+        "url": "https://nebcommfound.org/",
+        "counties": [
+          "statewide"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Omaha Community Foundation",
+        "url": "https://omahafoundation.org/",
+        "counties": [
+          "Douglas",
+          "Sarpy"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Lincoln Community Foundation",
+        "url": "https://lcf.org/",
+        "counties": [
+          "Lancaster"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "NV": [
-      {"name": "Nevada Community Foundation", "url": "https://nevadacf.org/", "counties": ["Clark", "Washoe"]}
+      {
+        "name": "Nevada Community Foundation",
+        "url": "https://nevadacf.org/",
+        "counties": [
+          "Clark",
+          "Washoe"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "NH": [
-      {"name": "New Hampshire Charitable Foundation", "url": "https://nhcf.org/", "counties": ["statewide"]}
+      {
+        "name": "New Hampshire Charitable Foundation",
+        "url": "https://nhcf.org/",
+        "counties": [
+          "statewide"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "NJ": [
-      {"name": "Community Foundation of New Jersey", "url": "https://cfnj.org/", "counties": ["statewide"]},
-      {"name": "Princeton Area Community Foundation", "url": "https://pacf.org/", "counties": ["Mercer"]},
-      {"name": "Fund for New Jersey", "url": "https://fundfornj.org/", "counties": ["statewide"]}
+      {
+        "name": "Community Foundation of New Jersey",
+        "url": "https://cfnj.org/",
+        "counties": [
+          "statewide"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Princeton Area Community Foundation",
+        "url": "https://pacf.org/",
+        "counties": [
+          "Mercer"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Fund for New Jersey",
+        "url": "https://fundfornj.org/",
+        "counties": [
+          "statewide"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "NM": [
-      {"name": "Albuquerque Community Foundation", "url": "https://abqcf.org/", "counties": ["Bernalillo", "Sandoval", "Valencia"]},
-      {"name": "Santa Fe Community Foundation", "url": "https://santafecf.org/", "counties": ["Santa Fe", "Los Alamos", "Rio Arriba"]}
+      {
+        "name": "Albuquerque Community Foundation",
+        "url": "https://abqcf.org/",
+        "counties": [
+          "Bernalillo",
+          "Sandoval",
+          "Valencia"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Santa Fe Community Foundation",
+        "url": "https://santafecf.org/",
+        "counties": [
+          "Santa Fe",
+          "Los Alamos",
+          "Rio Arriba"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "NY": [
-      {"name": "New York Community Trust", "url": "https://nycommunitytrust.org/", "counties": ["New York", "Bronx", "Kings", "Queens", "Richmond", "Westchester"]},
-      {"name": "Community Foundation for Greater Buffalo", "url": "https://cfgb.org/", "counties": ["Erie", "Niagara"]},
-      {"name": "Rochester Area Community Foundation", "url": "https://racf.org/", "counties": ["Monroe", "Genesee", "Livingston", "Ontario", "Orleans", "Wayne"]},
-      {"name": "Community Foundation of Herkimer and Oneida Counties", "url": "https://foundationhoc.org/", "counties": ["Herkimer", "Oneida"]},
-      {"name": "Central New York Community Foundation", "url": "https://cnycf.org/", "counties": ["Onondaga", "Madison", "Oswego"]}
+      {
+        "name": "New York Community Trust",
+        "url": "https://nycommunitytrust.org/",
+        "counties": [
+          "New York",
+          "Bronx",
+          "Kings",
+          "Queens",
+          "Richmond",
+          "Westchester"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation for Greater Buffalo",
+        "url": "https://cfgb.org/",
+        "counties": [
+          "Erie",
+          "Niagara"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Rochester Area Community Foundation",
+        "url": "https://racf.org/",
+        "counties": [
+          "Monroe",
+          "Genesee",
+          "Livingston",
+          "Ontario",
+          "Orleans",
+          "Wayne"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of Herkimer and Oneida Counties",
+        "url": "https://foundationhoc.org/",
+        "counties": [
+          "Herkimer",
+          "Oneida"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Central New York Community Foundation",
+        "url": "https://cnycf.org/",
+        "counties": [
+          "Onondaga",
+          "Madison",
+          "Oswego"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "NC": [
-      {"name": "Foundation For The Carolinas", "url": "https://fftc.org/", "counties": ["Mecklenburg", "Cabarrus", "Union", "Gaston", "Iredell"]},
-      {"name": "Triangle Community Foundation", "url": "https://trianglecf.org/", "counties": ["Durham", "Wake", "Orange", "Chatham"]},
-      {"name": "Community Foundation of Greater Greensboro", "url": "https://cfgg.org/", "counties": ["Guilford", "Randolph", "Rockingham"]},
-      {"name": "Winston-Salem Foundation", "url": "https://wsfoundation.org/", "counties": ["Forsyth", "Stokes", "Davie"]},
-      {"name": "Community Foundation of Western North Carolina", "url": "https://cfwnc.org/", "counties": ["Buncombe", "Henderson", "Haywood", "Madison", "Transylvania"]}
+      {
+        "name": "Foundation For The Carolinas",
+        "url": "https://fftc.org/",
+        "counties": [
+          "Mecklenburg",
+          "Cabarrus",
+          "Union",
+          "Gaston",
+          "Iredell"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Triangle Community Foundation",
+        "url": "https://trianglecf.org/",
+        "counties": [
+          "Durham",
+          "Wake",
+          "Orange",
+          "Chatham"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of Greater Greensboro",
+        "url": "https://cfgg.org/",
+        "counties": [
+          "Guilford",
+          "Randolph",
+          "Rockingham"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Winston-Salem Foundation",
+        "url": "https://wsfoundation.org/",
+        "counties": [
+          "Forsyth",
+          "Stokes",
+          "Davie"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of Western North Carolina",
+        "url": "https://cfwnc.org/",
+        "counties": [
+          "Buncombe",
+          "Henderson",
+          "Haywood",
+          "Madison",
+          "Transylvania"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "ND": [
-      {"name": "North Dakota Community Foundation", "url": "https://ndcf.net/", "counties": ["statewide"]}
+      {
+        "name": "North Dakota Community Foundation",
+        "url": "https://ndcf.net/",
+        "counties": [
+          "statewide"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "OH": [
-      {"name": "Cleveland Foundation", "url": "https://clevelandfoundation.org/", "counties": ["Cuyahoga", "Lake", "Geauga"]},
-      {"name": "Columbus Foundation", "url": "https://columbusfoundation.org/", "counties": ["Franklin", "Delaware", "Fairfield", "Licking", "Union"]},
-      {"name": "Greater Cincinnati Foundation", "url": "https://gcfdn.org/", "counties": ["Hamilton", "Butler", "Warren", "Clermont"]},
-      {"name": "Akron Community Foundation", "url": "https://akroncf.org/", "counties": ["Summit", "Portage", "Medina"]},
-      {"name": "Toledo Community Foundation", "url": "https://toledocf.org/", "counties": ["Lucas", "Wood", "Ottawa"]},
-      {"name": "Dayton Foundation", "url": "https://daytonfoundation.org/", "counties": ["Montgomery", "Greene", "Miami", "Clark"]}
+      {
+        "name": "Cleveland Foundation",
+        "url": "https://clevelandfoundation.org/",
+        "counties": [
+          "Cuyahoga",
+          "Lake",
+          "Geauga"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Columbus Foundation",
+        "url": "https://columbusfoundation.org/",
+        "counties": [
+          "Franklin",
+          "Delaware",
+          "Fairfield",
+          "Licking",
+          "Union"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Greater Cincinnati Foundation",
+        "url": "https://gcfdn.org/",
+        "counties": [
+          "Hamilton",
+          "Butler",
+          "Warren",
+          "Clermont"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Akron Community Foundation",
+        "url": "https://akroncf.org/",
+        "counties": [
+          "Summit",
+          "Portage",
+          "Medina"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Toledo Community Foundation",
+        "url": "https://toledocf.org/",
+        "counties": [
+          "Lucas",
+          "Wood",
+          "Ottawa"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Dayton Foundation",
+        "url": "https://daytonfoundation.org/",
+        "counties": [
+          "Montgomery",
+          "Greene",
+          "Miami",
+          "Clark"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "OK": [
-      {"name": "Oklahoma City Community Foundation", "url": "https://occf.org/", "counties": ["Oklahoma", "Canadian", "Cleveland", "Logan"]},
-      {"name": "Tulsa Community Foundation", "url": "https://tulsacf.org/", "counties": ["Tulsa", "Wagoner", "Creek", "Rogers", "Osage"]}
+      {
+        "name": "Oklahoma City Community Foundation",
+        "url": "https://occf.org/",
+        "counties": [
+          "Oklahoma",
+          "Canadian",
+          "Cleveland",
+          "Logan"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Tulsa Community Foundation",
+        "url": "https://tulsacf.org/",
+        "counties": [
+          "Tulsa",
+          "Wagoner",
+          "Creek",
+          "Rogers",
+          "Osage"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "OR": [
-      {"name": "Oregon Community Foundation", "url": "https://oregoncf.org/", "counties": ["statewide"]},
-      {"name": "Meyer Memorial Trust", "url": "https://mmt.org/", "counties": ["statewide"]}
+      {
+        "name": "Oregon Community Foundation",
+        "url": "https://oregoncf.org/",
+        "counties": [
+          "statewide"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Meyer Memorial Trust",
+        "url": "https://mmt.org/",
+        "counties": [
+          "statewide"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "PA": [
-      {"name": "Philadelphia Foundation", "url": "https://philafound.org/", "counties": ["Philadelphia", "Bucks", "Chester", "Delaware", "Montgomery"]},
-      {"name": "Pittsburgh Foundation", "url": "https://pittsburghfoundation.org/", "counties": ["Allegheny", "Westmoreland", "Washington", "Butler", "Beaver"]},
-      {"name": "Community Foundation for the Alleghenies", "url": "https://cfalleghenies.org/", "counties": ["Cambria", "Somerset", "Bedford", "Blair"]},
-      {"name": "Central Pennsylvania Community Foundation", "url": "https://cpcommunityfoundation.org/", "counties": ["Dauphin", "Cumberland", "Perry", "Lebanon"]},
-      {"name": "Erie Community Foundation", "url": "https://eriecf.org/", "counties": ["Erie"]}
+      {
+        "name": "Philadelphia Foundation",
+        "url": "https://philafound.org/",
+        "counties": [
+          "Philadelphia",
+          "Bucks",
+          "Chester",
+          "Delaware",
+          "Montgomery"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Pittsburgh Foundation",
+        "url": "https://pittsburghfoundation.org/",
+        "counties": [
+          "Allegheny",
+          "Westmoreland",
+          "Washington",
+          "Butler",
+          "Beaver"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation for the Alleghenies",
+        "url": "https://cfalleghenies.org/",
+        "counties": [
+          "Cambria",
+          "Somerset",
+          "Bedford",
+          "Blair"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Central Pennsylvania Community Foundation",
+        "url": "https://cpcommunityfoundation.org/",
+        "counties": [
+          "Dauphin",
+          "Cumberland",
+          "Perry",
+          "Lebanon"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Erie Community Foundation",
+        "url": "https://eriecf.org/",
+        "counties": [
+          "Erie"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "RI": [
-      {"name": "Rhode Island Foundation", "url": "https://rifoundation.org/", "counties": ["statewide"]}
+      {
+        "name": "Rhode Island Foundation",
+        "url": "https://rifoundation.org/",
+        "counties": [
+          "statewide"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "SC": [
-      {"name": "Central Carolina Community Foundation", "url": "https://yourfoundation.org/", "counties": ["Richland", "Lexington", "Newberry", "Fairfield"]},
-      {"name": "Coastal Community Foundation", "url": "https://coastalcommunityfoundation.org/", "counties": ["Charleston", "Berkeley", "Dorchester"]},
-      {"name": "Community Foundation of Greenville", "url": "https://cfgreenville.org/", "counties": ["Greenville", "Pickens", "Anderson", "Laurens"]}
+      {
+        "name": "Central Carolina Community Foundation",
+        "url": "https://yourfoundation.org/",
+        "counties": [
+          "Richland",
+          "Lexington",
+          "Newberry",
+          "Fairfield"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Coastal Community Foundation",
+        "url": "https://coastalcommunityfoundation.org/",
+        "counties": [
+          "Charleston",
+          "Berkeley",
+          "Dorchester"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of Greenville",
+        "url": "https://cfgreenville.org/",
+        "counties": [
+          "Greenville",
+          "Pickens",
+          "Anderson",
+          "Laurens"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "SD": [
-      {"name": "South Dakota Community Foundation", "url": "https://sdcommunityfoundation.org/", "counties": ["statewide"]},
-      {"name": "Sioux Falls Area Community Foundation", "url": "https://sfacf.org/", "counties": ["Minnehaha", "Lincoln", "McCook"]}
+      {
+        "name": "South Dakota Community Foundation",
+        "url": "https://sdcommunityfoundation.org/",
+        "counties": [
+          "statewide"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Sioux Falls Area Community Foundation",
+        "url": "https://sfacf.org/",
+        "counties": [
+          "Minnehaha",
+          "Lincoln",
+          "McCook"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "TN": [
-      {"name": "Community Foundation of Greater Memphis", "url": "https://cfgm.org/", "counties": ["Shelby", "Fayette", "Tipton"]},
-      {"name": "Community Foundation of Middle Tennessee", "url": "https://cfmt.org/", "counties": ["Davidson", "Williamson", "Rutherford", "Wilson", "Sumner", "Robertson"]},
-      {"name": "East Tennessee Foundation", "url": "https://easttennesseefoundation.org/", "counties": ["Knox", "Blount", "Anderson", "Sevier", "Loudon"]},
-      {"name": "Community Foundation of Greater Chattanooga", "url": "https://cfgc.org/", "counties": ["Hamilton", "Bradley", "Marion", "Sequatchie"]}
+      {
+        "name": "Community Foundation of Greater Memphis",
+        "url": "https://cfgm.org/",
+        "counties": [
+          "Shelby",
+          "Fayette",
+          "Tipton"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of Middle Tennessee",
+        "url": "https://cfmt.org/",
+        "counties": [
+          "Davidson",
+          "Williamson",
+          "Rutherford",
+          "Wilson",
+          "Sumner",
+          "Robertson"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "East Tennessee Foundation",
+        "url": "https://easttennesseefoundation.org/",
+        "counties": [
+          "Knox",
+          "Blount",
+          "Anderson",
+          "Sevier",
+          "Loudon"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of Greater Chattanooga",
+        "url": "https://cfgc.org/",
+        "counties": [
+          "Hamilton",
+          "Bradley",
+          "Marion",
+          "Sequatchie"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "TX": [
-      {"name": "Texas Community Foundation", "url": "https://txcf.org/", "counties": ["statewide"]},
-      {"name": "Communities Foundation of Texas", "url": "https://cftexas.org/", "counties": ["Dallas", "Collin", "Denton", "Rockwall", "Kaufman", "Ellis"]},
-      {"name": "Houston Endowment", "url": "https://houstonendowment.org/", "counties": ["Harris", "Fort Bend", "Montgomery", "Brazoria", "Galveston"]},
-      {"name": "San Antonio Area Foundation", "url": "https://saafdn.org/", "counties": ["Bexar", "Comal", "Guadalupe", "Kendall"]},
-      {"name": "Austin Community Foundation", "url": "https://austincf.org/", "counties": ["Travis", "Williamson", "Hays", "Bastrop"]},
-      {"name": "Community Foundation of North Texas", "url": "https://cfntx.org/", "counties": ["Tarrant", "Parker", "Hood", "Johnson"]},
-      {"name": "Permian Basin Area Foundation", "url": "https://pbfoundation.org/", "counties": ["Midland", "Ector", "Andrews", "Martin"]},
-      {"name": "Amarillo Area Foundation", "url": "https://amarilloareafoundation.org/", "counties": ["Potter", "Randall", "Carson"]},
-      {"name": "Lubbock Area Foundation", "url": "https://lubbockareafoundation.org/", "counties": ["Lubbock", "Hockley", "Crosby"]},
-      {"name": "Coastal Bend Community Foundation", "url": "https://cbcfoundation.org/", "counties": ["Nueces", "San Patricio", "Kleberg"]}
+      {
+        "name": "Texas Community Foundation",
+        "url": "https://txcf.org/",
+        "counties": [
+          "statewide"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Communities Foundation of Texas",
+        "url": "https://cftexas.org/",
+        "counties": [
+          "Dallas",
+          "Collin",
+          "Denton",
+          "Rockwall",
+          "Kaufman",
+          "Ellis"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Houston Endowment",
+        "url": "https://houstonendowment.org/",
+        "counties": [
+          "Harris",
+          "Fort Bend",
+          "Montgomery",
+          "Brazoria",
+          "Galveston"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "San Antonio Area Foundation",
+        "url": "https://saafdn.org/",
+        "counties": [
+          "Bexar",
+          "Comal",
+          "Guadalupe",
+          "Kendall"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Austin Community Foundation",
+        "url": "https://austincf.org/",
+        "counties": [
+          "Travis",
+          "Williamson",
+          "Hays",
+          "Bastrop"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of North Texas",
+        "url": "https://cfntx.org/",
+        "counties": [
+          "Tarrant",
+          "Parker",
+          "Hood",
+          "Johnson"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Permian Basin Area Foundation",
+        "url": "https://pbfoundation.org/",
+        "counties": [
+          "Midland",
+          "Ector",
+          "Andrews",
+          "Martin"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Amarillo Area Foundation",
+        "url": "https://amarilloareafoundation.org/",
+        "counties": [
+          "Potter",
+          "Randall",
+          "Carson"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Lubbock Area Foundation",
+        "url": "https://lubbockareafoundation.org/",
+        "counties": [
+          "Lubbock",
+          "Hockley",
+          "Crosby"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Coastal Bend Community Foundation",
+        "url": "https://cbcfoundation.org/",
+        "counties": [
+          "Nueces",
+          "San Patricio",
+          "Kleberg"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "UT": [
-      {"name": "Utah Community Foundation", "url": "https://utahcf.org/", "counties": ["statewide"]}
+      {
+        "name": "Utah Community Foundation",
+        "url": "https://utahcf.org/",
+        "counties": [
+          "statewide"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "VT": [
-      {"name": "Vermont Community Foundation", "url": "https://vermontcf.org/", "counties": ["statewide"]}
+      {
+        "name": "Vermont Community Foundation",
+        "url": "https://vermontcf.org/",
+        "counties": [
+          "statewide"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "VA": [
-      {"name": "Community Foundation for Northern Virginia", "url": "https://cfnova.org/", "counties": ["Fairfax", "Arlington", "Loudoun", "Prince William", "Alexandria"]},
-      {"name": "Community Foundation for a greater Richmond", "url": "https://cfrichmond.org/", "counties": ["Richmond City", "Henrico", "Chesterfield", "Hanover"]},
-      {"name": "Hampton Roads Community Foundation", "url": "https://hamptonroadscf.org/", "counties": ["Norfolk", "Virginia Beach", "Newport News", "Hampton", "Chesapeake"]},
-      {"name": "Charlottesville Area Community Foundation", "url": "https://cacfonline.org/", "counties": ["Charlottesville", "Albemarle", "Greene", "Fluvanna", "Louisa", "Nelson"]}
+      {
+        "name": "Community Foundation for Northern Virginia",
+        "url": "https://cfnova.org/",
+        "counties": [
+          "Fairfax",
+          "Arlington",
+          "Loudoun",
+          "Prince William",
+          "Alexandria"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation for a greater Richmond",
+        "url": "https://cfrichmond.org/",
+        "counties": [
+          "Richmond City",
+          "Henrico",
+          "Chesterfield",
+          "Hanover"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Hampton Roads Community Foundation",
+        "url": "https://hamptonroadscf.org/",
+        "counties": [
+          "Norfolk",
+          "Virginia Beach",
+          "Newport News",
+          "Hampton",
+          "Chesapeake"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Charlottesville Area Community Foundation",
+        "url": "https://cacfonline.org/",
+        "counties": [
+          "Charlottesville",
+          "Albemarle",
+          "Greene",
+          "Fluvanna",
+          "Louisa",
+          "Nelson"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "WA": [
-      {"name": "Seattle Foundation", "url": "https://seattlefoundation.org/", "counties": ["King"]},
-      {"name": "Community Foundation of North Central Washington", "url": "https://cfncw.org/", "counties": ["Chelan", "Douglas", "Okanogan"]},
-      {"name": "Spokane Community Foundation", "url": "https://spokanecf.org/", "counties": ["Spokane"]},
-      {"name": "Greater Tacoma Community Foundation", "url": "https://gtcf.org/", "counties": ["Pierce"]}
+      {
+        "name": "Seattle Foundation",
+        "url": "https://seattlefoundation.org/",
+        "counties": [
+          "King"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation of North Central Washington",
+        "url": "https://cfncw.org/",
+        "counties": [
+          "Chelan",
+          "Douglas",
+          "Okanogan"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Spokane Community Foundation",
+        "url": "https://spokanecf.org/",
+        "counties": [
+          "Spokane"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Greater Tacoma Community Foundation",
+        "url": "https://gtcf.org/",
+        "counties": [
+          "Pierce"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "WV": [
-      {"name": "Community Foundation for the Ohio Valley", "url": "https://cfov.org/", "counties": ["Ohio", "Marshall", "Brooke"]},
-      {"name": "Greater Kanawha Valley Foundation", "url": "https://tgkvf.org/", "counties": ["Kanawha", "Putnam", "Boone", "Clay"]},
-      {"name": "Parkersburg Area Community Foundation", "url": "https://pacfwv.org/", "counties": ["Wood", "Wirt", "Pleasants"]}
+      {
+        "name": "Community Foundation for the Ohio Valley",
+        "url": "https://cfov.org/",
+        "counties": [
+          "Ohio",
+          "Marshall",
+          "Brooke"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Greater Kanawha Valley Foundation",
+        "url": "https://tgkvf.org/",
+        "counties": [
+          "Kanawha",
+          "Putnam",
+          "Boone",
+          "Clay"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Parkersburg Area Community Foundation",
+        "url": "https://pacfwv.org/",
+        "counties": [
+          "Wood",
+          "Wirt",
+          "Pleasants"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "WI": [
-      {"name": "Greater Milwaukee Foundation", "url": "https://greatermilwaukeefoundation.org/", "counties": ["Milwaukee", "Waukesha", "Ozaukee", "Washington"]},
-      {"name": "Madison Community Foundation", "url": "https://madisongives.org/", "counties": ["Dane"]},
-      {"name": "Community Foundation for the Fox Valley Region", "url": "https://cffoxvalley.org/", "counties": ["Outagamie", "Calumet", "Winnebago"]},
-      {"name": "Green Bay Packers Foundation", "url": "https://packers.com/community/community-foundation", "counties": ["Brown"]}
+      {
+        "name": "Greater Milwaukee Foundation",
+        "url": "https://greatermilwaukeefoundation.org/",
+        "counties": [
+          "Milwaukee",
+          "Waukesha",
+          "Ozaukee",
+          "Washington"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Madison Community Foundation",
+        "url": "https://madisongives.org/",
+        "counties": [
+          "Dane"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Community Foundation for the Fox Valley Region",
+        "url": "https://cffoxvalley.org/",
+        "counties": [
+          "Outagamie",
+          "Calumet",
+          "Winnebago"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      },
+      {
+        "name": "Green Bay Packers Foundation",
+        "url": "https://packers.com/community/community-foundation",
+        "counties": [
+          "Brown"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "WY": [
-      {"name": "Wyoming Community Foundation", "url": "https://wycf.org/", "counties": ["statewide"]}
+      {
+        "name": "Wyoming Community Foundation",
+        "url": "https://wycf.org/",
+        "counties": [
+          "statewide"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ],
     "DC": [
-      {"name": "Greater Washington Community Foundation", "url": "https://thecommunityfoundation.org/", "counties": ["District of Columbia"]}
+      {
+        "name": "Greater Washington Community Foundation",
+        "url": "https://thecommunityfoundation.org/",
+        "counties": [
+          "District of Columbia"
+        ],
+        "type": "DIRECTORY",
+        "is_verified": false,
+        "last_verified_at": null
+      }
     ]
   }
 }

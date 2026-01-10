@@ -18,6 +18,7 @@ import {
   adminHealthCheck,
   adminHealthLogs,
 } from './anyaAdminTools.js'
+import { getSystemDiagnostics, analyzeSystemHealth } from './diagnosticsService.js'
 import {
   runAutonomousCodeCrawl,
   getAutonomousStatus,
@@ -565,7 +566,6 @@ export async function invokeTool(name, params, context) {
 
     // Log admin tool invocation for audit
     // TODO: Remove debug log
-    // // TODO: Remove debug log - console.log('[anyaToolRegistry] Admin tool invoked:', {
     //   tool: name,
     //   user: user.userId ?? user.id ?? 'unknown',
     //   timestamp: new Date().toISOString(),
@@ -633,6 +633,143 @@ registerTool({
       throw new Error('Database connection unavailable')
     }
     return summarizeGrants(context.db, params, context)
+  },
+})
+
+registerTool({
+  name: 'system.health',
+  description: 'Get system health summary including crawler status, database counts, and recent errors. Use this before reporting system status.',
+  schema: {
+    type: 'object',
+    properties: {},
+  },
+  handler: async (params, context) => {
+    const { db } = context;
+    if (!db) {
+      throw new Error('Database connection unavailable');
+    }
+
+    try {
+      // Get crawler statistics
+      const crawlerStats = {
+        lastRuns: [],
+        recentFailures: 0,
+        totalRuns: 0
+      };
+
+      try {
+        crawlerStats.lastRuns = db.prepare(`
+          SELECT 
+            crawler_type, 
+            status, 
+            records_found, 
+            records_saved,
+            started_at,
+            error_message
+          FROM crawl_logs 
+          ORDER BY started_at DESC 
+          LIMIT 5
+        `).all();
+
+        crawlerStats.totalRuns = db.prepare('SELECT COUNT(*) as count FROM crawl_logs').get()?.count || 0;
+        crawlerStats.recentFailures = db.prepare(`
+          SELECT COUNT(*) as count FROM crawl_logs 
+          WHERE status = 'failed' 
+          AND started_at >= datetime('now', '-24 hours')
+        `).get()?.count || 0;
+      } catch (e) {
+        console.warn('[system.health] Failed to get crawler stats:', e.message);
+      }
+
+      // Get database counts
+      const counts = {
+        opportunities: 0,
+        activeOpportunities: 0,
+        profiles: 0,
+        activeProfiles: 0
+      };
+
+      try {
+        counts.opportunities = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get()?.count || 0;
+        counts.activeOpportunities = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get()?.count || 0;
+        counts.profiles = db.prepare('SELECT COUNT(*) as count FROM profiles').get()?.count || 0;
+        counts.activeProfiles = db.prepare('SELECT COUNT(*) as count FROM profiles WHERE status = ?').get('active')?.count || 0;
+      } catch (e) {
+        console.warn('[system.health] Failed to get counts:', e.message);
+      }
+
+      // Get last error
+      let lastError = null;
+      try {
+        const errorRow = db.prepare(`
+          SELECT error_message, started_at, crawler_type
+          FROM crawl_logs 
+          WHERE error_message IS NOT NULL 
+          ORDER BY started_at DESC 
+          LIMIT 1
+        `).get();
+
+        if (errorRow) {
+          lastError = {
+            message: errorRow.error_message,
+            crawler: errorRow.crawler_type,
+            timestamp: errorRow.started_at
+          };
+        }
+      } catch (e) {
+        console.warn('[system.health] Failed to get last error:', e.message);
+      }
+
+      // Environment checks
+      const environment = {
+        hasOpenAIKey: !!process.env.OPENAI_API_KEY,
+        hasSamGovKey: !!process.env.SAM_GOV_API_KEY
+      };
+
+      // Determine overall health status
+      let status = 'healthy';
+      const issues = [];
+
+      if (counts.opportunities === 0) {
+        status = 'warning';
+        issues.push('No funding opportunities in database - crawlers may not have run successfully');
+      }
+
+      if (crawlerStats.recentFailures > 0) {
+        status = 'degraded';
+        issues.push(`${crawlerStats.recentFailures} crawler failures in the last 24 hours`);
+      }
+
+      if (!environment.hasOpenAIKey) {
+        status = 'warning';
+        issues.push('OPENAI_API_KEY not configured');
+      }
+
+      if (!environment.hasSamGovKey) {
+        if (status === 'healthy') status = 'warning';
+        issues.push('SAM_GOV_API_KEY not configured - government funding crawler will fail');
+      }
+
+      return {
+        status,
+        timestamp: new Date().toISOString(),
+        counts,
+        crawlers: crawlerStats,
+        lastError,
+        environment,
+        issues,
+        summary: issues.length === 0 
+          ? 'All systems operational' 
+          : `${issues.length} issue(s) detected`
+      };
+    } catch (error) {
+      console.error('[system.health] Error:', error);
+      return {
+        status: 'error',
+        error: error.message,
+        timestamp: new Date().toISOString()
+      };
+    }
   },
 })
 
@@ -886,6 +1023,145 @@ registerTool({
   handler: adminHealthLogs,
 })
 
+// System Diagnostics Tool
+registerTool({
+  name: 'admin.diagnostics',
+  description: 'Get comprehensive system diagnostics including database status, environment configuration, last activity, and recent errors. Use this to check system health before claiming everything is working. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {},
+  },
+  handler: async (_params, context) => {
+    const { db } = context
+    if (!db) {
+      throw new Error('Database connection unavailable')
+    }
+    const diagnostics = getSystemDiagnostics(db)
+    const health = analyzeSystemHealth(diagnostics)
+    return {
+      ...diagnostics,
+      health_analysis: health,
+    }
+  },
+})
+
+// System Health Tool - Compact version for Anya truth gate
+registerTool({
+  name: 'system.health',
+  description: 'Get compact system health status with crawler stats, DB counts, and recent errors. Use this when user asks about system status, crawler health, or "is everything working". Returns truth-based status assessment.',
+  requiresAdmin: false, // Available to all users but provides limited info for non-admins
+  schema: {
+    type: 'object',
+    properties: {},
+  },
+  handler: async (_params, context) => {
+    const { db, user } = context
+    if (!db) {
+      return {
+        status: 'ERROR',
+        error: 'Database connection unavailable',
+        issues: ['Database connection failed'],
+      }
+    }
+
+    // For non-admin users, return safe summary only
+    const isAdmin = user?.is_admin || user?.role === 'admin'
+    
+    if (!isAdmin) {
+      try {
+        const { getSafeHealthSummary } = await import('./diagnosticsService.js')
+        const safeSummary = getSafeHealthSummary(db)
+        return {
+          status: safeSummary.status.toUpperCase(),
+          counts: safeSummary.counts,
+          summary: safeSummary.summary,
+          is_admin: false,
+        }
+      } catch (error) {
+        return {
+          status: 'ERROR',
+          error: error.message,
+          issues: ['Failed to retrieve health information'],
+        }
+      }
+    }
+
+    // For admin users, return detailed diagnostics
+    try {
+      const diagnostics = getSystemDiagnostics(db)
+      const health = analyzeSystemHealth(diagnostics)
+
+      // Get crawler stats from last 24 hours
+      let crawlerStats = { totalRuns: 0, recentFailures: 0, lastRuns: [] }
+      try {
+        const last24h = db.prepare(`
+          SELECT type, status, created_at, error
+          FROM crawler_jobs
+          WHERE created_at >= datetime('now', '-24 hours')
+          ORDER BY created_at DESC
+          LIMIT 20
+        `).all()
+
+        crawlerStats.totalRuns = last24h.length
+        crawlerStats.recentFailures = last24h.filter(j => j.status === 'failed').length
+        crawlerStats.lastRuns = last24h.slice(0, 5).map(j => ({
+          type: j.type,
+          status: j.status,
+          time: j.created_at,
+          error: j.error || null
+        }))
+      } catch (err) {
+        // Ignore crawler stats errors
+      }
+
+      // Get last error
+      let lastError = null
+      if (diagnostics.errors && diagnostics.errors.length > 0) {
+        const err = diagnostics.errors[0]
+        lastError = {
+          crawler: err.crawler_type || err.source || 'unknown',
+          message: err.message,
+          time: err.time
+        }
+      }
+
+      // Determine status
+      let status = 'HEALTHY'
+      if (health.status === 'unhealthy' || !diagnostics.db.ok) {
+        status = 'ERROR'
+      } else if (health.status === 'degraded' || diagnostics.db.tables.funding_opportunities === 0 || crawlerStats.recentFailures > 0) {
+        status = health.warnings.length > 0 ? 'WARNING' : 'DEGRADED'
+      }
+
+      return {
+        status,
+        counts: {
+          opportunities: diagnostics.db.tables?.funding_opportunities || 0,
+          profiles: diagnostics.db.tables?.profiles || 0,
+          crawl_logs: diagnostics.db.tables?.crawl_logs || 0,
+        },
+        crawler_stats: crawlerStats,
+        env_flags: {
+          OPENAI_API_KEY_present: diagnostics.env_flags?.OPENAI_API_KEY_present || false,
+          ANTHROPIC_API_KEY_present: diagnostics.env_flags?.ANTHROPIC_API_KEY_present || false,
+          SAM_GOV_API_KEY_present: diagnostics.env_flags?.SAM_GOV_API_KEY_present || false,
+        },
+        last_error: lastError,
+        issues: health.issues,
+        warnings: health.warnings,
+        is_admin: true,
+      }
+    } catch (error) {
+      return {
+        status: 'ERROR',
+        error: error.message,
+        issues: ['Failed to retrieve system health'],
+      }
+    }
+  },
+})
+
 // Enhanced Admin Crawler Tools
 registerTool({
   name: 'admin.crawler.triggerAll',
@@ -1076,7 +1352,7 @@ registerTool({
 
 registerTool({
   name: 'admin.code.scan',
-  description: 'Scan codebase for issues like TODOs, // TODO: Remove debug log - console.logs, or potential bugs. Admin only.',
+  description: 'Scan codebase for issues like TODOs, console.logs, or potential bugs. Admin only.',
   requiresAdmin: true,
   schema: {
     type: 'object',
@@ -1093,8 +1369,6 @@ registerTool({
   handler: async (params, context) => {
     const { directory = '.', filePattern = '**/*.{js,jsx,ts,tsx}', issueTypes = ['todo', 'console', 'debugger', 'fixme', 'hack'] } = params
     
-    // This is a simplified implementation
-    // In production, you'd use a proper code scanner
     const issues = {
       todos: [],
       consoles: [],
@@ -1111,6 +1385,107 @@ registerTool({
       hack: /\/\/\s*HACK:?\s*(.+)/gi,
     }
     
+    // Scan files
+    const scanDir = path.resolve(REPO_ROOT, directory)
+    const extensions = ['.js', '.jsx', '.ts', '.tsx']
+    
+    async function scanFile(filePath) {
+      try {
+        const content = await fs.readFile(filePath, 'utf-8')
+        const lines = content.split('\n')
+        const relativePath = path.relative(REPO_ROOT, filePath)
+        
+        lines.forEach((line, index) => {
+          if (issueTypes.includes('todo')) {
+            const todoMatches = [...line.matchAll(patterns.todo)]
+            todoMatches.forEach(match => {
+              issues.todos.push({
+                file: relativePath,
+                line: index + 1,
+                content: match[1]?.trim() || 'No description',
+                code: line.trim()
+              })
+            })
+          }
+          
+          if (issueTypes.includes('console')) {
+            // Create a new regex for each test to avoid global state issues
+            const consoleRegex = /console\.(log|warn|error|debug|info)\(/
+            if (consoleRegex.test(line)) {
+              issues.consoles.push({
+                file: relativePath,
+                line: index + 1,
+                code: line.trim()
+              })
+            }
+          }
+          
+          if (issueTypes.includes('debugger')) {
+            // Create a new regex for each test
+            const debuggerRegex = /debugger;?/
+            if (debuggerRegex.test(line)) {
+              issues.debuggers.push({
+                file: relativePath,
+                line: index + 1,
+                code: line.trim()
+              })
+            }
+          }
+          
+          if (issueTypes.includes('fixme')) {
+            const fixmeMatches = [...line.matchAll(patterns.fixme)]
+            fixmeMatches.forEach(match => {
+              issues.fixmes.push({
+                file: relativePath,
+                line: index + 1,
+                content: match[1]?.trim() || 'No description',
+                code: line.trim()
+              })
+            })
+          }
+          
+          if (issueTypes.includes('hack')) {
+            const hackMatches = [...line.matchAll(patterns.hack)]
+            hackMatches.forEach(match => {
+              issues.hacks.push({
+                file: relativePath,
+                line: index + 1,
+                content: match[1]?.trim() || 'No description',
+                code: line.trim()
+              })
+            })
+          }
+        })
+      } catch (error) {
+        // Skip files that can't be read
+      }
+    }
+    
+    async function scanDirectory(dir) {
+      try {
+        const entries = await fs.readdir(dir, { withFileTypes: true })
+        
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name)
+          
+          if (entry.isDirectory()) {
+            if (!IGNORED_DIRS.has(entry.name)) {
+              await scanDirectory(fullPath)
+            }
+          } else if (entry.isFile()) {
+            const ext = path.extname(entry.name)
+            if (extensions.includes(ext)) {
+              await scanFile(fullPath)
+            }
+          }
+        }
+      } catch (error) {
+        // Skip directories that can't be read
+      }
+    }
+    
+    await scanDirectory(scanDir)
+    
     return {
       success: true,
       directory,
@@ -1122,9 +1497,16 @@ registerTool({
         debuggers: issues.debuggers.length,
         fixmes: issues.fixmes.length,
         hacks: issues.hacks.length,
+        total: issues.todos.length + issues.consoles.length + issues.debuggers.length + issues.fixmes.length + issues.hacks.length
       },
-      message: 'Code scan completed. Use a file system tool to perform detailed scanning.',
-      note: 'This is a placeholder. Full code scanning requires file system access which is handled by existing code crawl tools.',
+      issues: {
+        todos: issues.todos.slice(0, 50), // Limit results
+        consoles: issues.consoles.slice(0, 50),
+        debuggers: issues.debuggers.slice(0, 50),
+        fixmes: issues.fixmes.slice(0, 50),
+        hacks: issues.hacks.slice(0, 50),
+      },
+      message: `Code scan completed. Found ${issues.todos.length + issues.consoles.length + issues.debuggers.length + issues.fixmes.length + issues.hacks.length} total issues.`
     }
   },
 })

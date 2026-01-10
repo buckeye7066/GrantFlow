@@ -1,15 +1,18 @@
 /**
  * Real Web Crawler API Routes
  * Handles execution of specialized funding crawlers
+ * Production version - uses only real data sources
  */
 
 import express from 'express'
 import { ensureAuth } from '../middleware/auth.js'
-import { 
-  getProfileWithLocation, 
-  getMockOpportunities, 
-  formatOpportunity 
-} from '../services/crawlers/crawlerHelpers.js'
+import { getProfileWithLocation, formatOpportunity } from '../services/crawlers/crawlerHelpers.js'
+import { crawlLocalFunding } from '../services/crawlers/localFundingCrawler.js'
+import { crawlGovernmentFunding } from '../services/crawlers/governmentFundingCrawler.js'
+import { crawlStudentGrants } from '../services/crawlers/studentGrantsCrawler.js'
+import { crawlECFBenefits } from '../services/crawlers/ecfBenefitsCrawler.js'
+import { crawlItemFunding } from '../services/crawlers/itemFundingCrawler.js'
+import { crawlSpecialNeeds } from '../services/crawlers/specialNeedsCrawler.js'
 
 const router = express.Router()
 
@@ -33,12 +36,16 @@ router.post('/run', ensureAuth, async (req, res) => {
   if (!crawler_type || !CRAWLER_TYPES.includes(crawler_type)) {
     return res.status(400).json({ 
       error: 'Invalid crawler type',
+      message: `Invalid crawler type: ${crawler_type}`,
       available_crawlers: CRAWLER_TYPES
     })
   }
   
   if (!profile_id && !profile_data) {
-    return res.status(400).json({ error: 'Profile ID or data required' })
+    return res.status(400).json({ 
+      error: 'Profile ID or data required',
+      message: 'Either profile_id or profile_data must be provided'
+    })
   }
   
   try {
@@ -50,18 +57,66 @@ router.post('/run', ensureAuth, async (req, res) => {
       profile = getProfileWithLocation(db, profile_id)
       
       if (!profile) {
-        return res.status(404).json({ error: 'Profile not found' })
+        return res.status(404).json({ 
+          error: 'Profile not found',
+          message: `Profile with ID ${profile_id} does not exist`
+        })
       }
     }
     
     console.log(`[RealCrawlers] Running ${crawler_type} for profile ${profile_id || 'custom'}`)
     
-    // Get mock opportunities for the crawler type
+    // Execute the appropriate real crawler
     const startTime = Date.now()
-    const mockOpportunities = getMockOpportunities(crawler_type, profile)
+    let opportunities = []
     
-    // Format opportunities with proper structure
-    const opportunities = mockOpportunities.map(opp => formatOpportunity(opp, profile))
+    try {
+      switch (crawler_type) {
+        case 'local_funding':
+          opportunities = await crawlLocalFunding(profile, { min_match_score })
+          break
+        case 'government_funding':
+          opportunities = await crawlGovernmentFunding(profile, { min_match_score })
+          break
+        case 'student_grants':
+          opportunities = await crawlStudentGrants(profile, { min_match_score })
+          break
+        case 'ecf_benefits':
+          opportunities = await crawlECFBenefits(profile, { min_match_score })
+          break
+        case 'item_matching':
+          opportunities = await crawlItemFunding(profile, { item_request, min_match_score })
+          break
+        case 'special_needs':
+          opportunities = await crawlSpecialNeeds(profile, { min_match_score })
+          break
+        default:
+          throw new Error(`Crawler implementation not found for type: ${crawler_type}`)
+      }
+    } catch (crawlerError) {
+      console.error(`[RealCrawlers] Crawler ${crawler_type} failed:`, crawlerError)
+      
+      // Return detailed error information
+      let errorMessage = crawlerError.message || 'Unknown crawler error'
+      let errorDetails = null
+      
+      // Check for common error patterns and provide helpful messages
+      if (errorMessage.includes('SAM_GOV_API_KEY') || errorMessage.includes('API key')) {
+        errorMessage = 'SAM_GOV_API_KEY missing - government funding crawler requires API configuration'
+      } else if (errorMessage.includes('ENOTFOUND') || errorMessage.includes('network')) {
+        errorMessage = 'Network error - unable to reach external funding sources'
+      } else if (errorMessage.includes('timeout')) {
+        errorMessage = 'Request timeout - external service is not responding'
+      }
+      
+      return res.status(500).json({
+        error: 'Crawler execution failed',
+        message: errorMessage,
+        crawler: crawler_type,
+        status: 500,
+        timestamp: new Date().toISOString()
+      })
+    }
     
     const duration = Date.now() - startTime
     
@@ -124,59 +179,108 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
   const { profile_id, crawler_types, min_match_score = 80 } = req.body
   
   if (!profile_id) {
-    return res.status(400).json({ error: 'Profile ID required' })
+    return res.status(400).json({ 
+      error: 'Profile ID required',
+      message: 'profile_id is required for running multiple crawlers'
+    })
   }
   
   if (!crawler_types || !Array.isArray(crawler_types)) {
-    return res.status(400).json({ error: 'Crawler types array required' })
+    return res.status(400).json({ 
+      error: 'Crawler types array required',
+      message: 'crawler_types must be an array of crawler type strings'
+    })
   }
   
   const db = req.db
   const profile = getProfileWithLocation(db, profile_id)
   
   if (!profile) {
-    return res.status(404).json({ error: 'Profile not found' })
+    return res.status(404).json({ 
+      error: 'Profile not found',
+      message: `Profile with ID ${profile_id} does not exist`
+    })
   }
   
-  const results = []
+  const succeeded = []
+  const failed = []
+  let totalFound = 0
+  let totalInserted = 0
   
   for (const crawlerType of crawler_types) {
     if (!CRAWLER_TYPES.includes(crawlerType)) {
-      results.push({
-        crawler_type: crawlerType,
-        success: false,
-        error: 'Invalid crawler type'
+      failed.push({
+        crawler: crawlerType,
+        error: 'Invalid crawler type',
+        status: 400
       })
       continue
     }
     
     try {
-      const opportunities = getMockOpportunities(crawlerType, profile)
-        .map(opp => formatOpportunity(opp, profile))
-        .filter(opp => opp.match_score >= min_match_score)
+      let opportunities = []
       
-      await saveOpportunitiesToDB(db, opportunities, profile_id, crawlerType)
+      // Execute real crawlers
+      switch (crawlerType) {
+        case 'local_funding':
+          opportunities = await crawlLocalFunding(profile, { min_match_score })
+          break
+        case 'government_funding':
+          opportunities = await crawlGovernmentFunding(profile, { min_match_score })
+          break
+        case 'student_grants':
+          opportunities = await crawlStudentGrants(profile, { min_match_score })
+          break
+        case 'ecf_benefits':
+          opportunities = await crawlECFBenefits(profile, { min_match_score })
+          break
+        case 'item_matching':
+          opportunities = await crawlItemFunding(profile, { min_match_score })
+          break
+        case 'special_needs':
+          opportunities = await crawlSpecialNeeds(profile, { min_match_score })
+          break
+        default:
+          throw new Error(`Crawler not implemented: ${crawlerType}`)
+      }
       
-      results.push({
-        crawler_type: crawlerType,
-        success: true,
-        count: opportunities.length
+      const filteredOpportunities = opportunities.filter(opp => opp.match_score >= min_match_score)
+      
+      await saveOpportunitiesToDB(db, filteredOpportunities, profile_id, crawlerType)
+      
+      totalFound += opportunities.length
+      totalInserted += filteredOpportunities.length
+      
+      succeeded.push({
+        crawler: crawlerType,
+        found: opportunities.length,
+        inserted: filteredOpportunities.length
       })
     } catch (error) {
-      results.push({
-        crawler_type: crawlerType,
-        success: false,
-        error: error.message
+      console.error(`[RealCrawlers] Error in ${crawlerType}:`, error)
+      
+      // Provide helpful error messages
+      let errorMessage = error.message || 'Unknown error'
+      if (errorMessage.includes('SAM_GOV_API_KEY')) {
+        errorMessage = 'SAM_GOV_API_KEY missing'
+      } else if (errorMessage.includes('network') || errorMessage.includes('ENOTFOUND')) {
+        errorMessage = 'Network error - unable to reach external sources'
+      }
+      
+      failed.push({
+        crawler: crawlerType,
+        error: errorMessage,
+        status: 500
       })
     }
   }
   
   res.json({
-    profile_id,
-    results,
-    total_crawlers: crawler_types.length,
-    successful: results.filter(r => r.success).length,
-    failed: results.filter(r => !r.success).length
+    totalSelected: crawler_types.length,
+    succeeded,
+    failed,
+    totalFound,
+    totalInserted
   })
 })
 

@@ -8,13 +8,91 @@ const __dirname = dirname(__filename)
 const REPO_ROOT = path.resolve(process.cwd())
 
 // ============================================================================
+// Admin Role Enforcement
+// ============================================================================
+
+const ADMIN_EMAIL = 'buckeye7066@gmail.com';
+
+/**
+ * Check if user is admin
+ * @param {Object} user - User object with email
+ * @returns {boolean} True if user is admin
+ */
+export function isAdmin(user) {
+  if (!user || !user.primary_email) {
+    return false;
+  }
+  return user.primary_email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+}
+
+/**
+ * Require admin access - throws if user is not admin
+ * @param {Object} user - User object to check
+ * @throws {Error} If user is not admin
+ */
+export function requireAdmin(user) {
+  if (!isAdmin(user)) {
+    throw new Error('Admin access required. Contact buckeye7066@gmail.com for assistance.');
+  }
+}
+
+/**
+ * Check if user can access a profile
+ * - Admin can access all profiles
+ * - Regular users can only access their own profiles
+ * @param {Object} user - User object
+ * @param {string} profileId - Profile ID to access
+ * @param {Object} db - Database connection
+ * @returns {boolean} True if user can access profile
+ */
+export function canAccessProfile(user, profileId, db) {
+  // Admin can access all profiles
+  if (isAdmin(user)) {
+    return true;
+  }
+  
+  // Check if profile belongs to user
+  const profile = db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId);
+  
+  if (!profile) {
+    return false;
+  }
+  
+  return profile.user_id === user.id;
+}
+
+/**
+ * Get accessible profiles for user
+ * - Admin gets all profiles
+ * - Regular users get only their own profiles
+ * @param {Object} user - User object
+ * @param {Object} db - Database connection
+ * @returns {Array} Array of accessible profile IDs
+ */
+export function getAccessibleProfiles(user, db) {
+  if (isAdmin(user)) {
+    // Admin gets all profiles
+    return db.prepare('SELECT id FROM profiles WHERE status = ?').all('active').map(p => p.id);
+  }
+  
+  // Regular users get only their own profiles
+  return db.prepare('SELECT id FROM profiles WHERE user_id = ? AND status = ?')
+    .all(user.id, 'active')
+    .map(p => p.id);
+}
+
+// ============================================================================
 // Code Analysis & Auto-Fix Tools
 // ============================================================================
 
 /**
  * Deep scan the codebase for patterns, potential errors, and anti-patterns
+ * ADMIN ONLY
  */
 export async function adminCodeCrawl({ pattern, directory, includeTests = false }, context) {
+  // Require admin access
+  requireAdmin(context.user);
+  
   const searchRoot = directory
     ? path.resolve(REPO_ROOT, directory)
     : REPO_ROOT

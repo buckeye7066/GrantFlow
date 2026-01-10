@@ -95,6 +95,77 @@ New team members land faster when they watch the GrantFlow walkthrough. Drop the
 
 ---
 
+## Real Data Ingestion
+
+GrantFlow fetches **live funding opportunities** from official government APIs. No mock or placeholder data is used in production.
+
+### Running Ingestion Locally
+
+```bash
+# Ingest from all sources (Grants.gov + USASpending.gov)
+npm run ingest
+
+# Ingest from specific sources
+npm run ingest:grantsgov      # Grants.gov only
+npm run ingest:usaspending    # USASpending.gov only
+
+# Run database migrations (if needed)
+npm run migrate
+```
+
+### Verify Results
+
+```bash
+# Check total opportunities ingested
+curl http://localhost:8080/api/opportunities | jq '.total'
+
+# Check opportunities by source
+curl 'http://localhost:8080/api/opportunities?source=grants.gov' | jq '.total'
+
+# Get ingestion status
+curl http://localhost:8080/api/opportunities/meta/ingestion | jq
+```
+
+### Admin API Ingestion
+
+Trigger ingestion via API (requires admin auth):
+
+```bash
+POST /api/admin/ingest
+```
+
+Returns ingestion status, record counts, and any errors.
+
+### Environment Variables
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `DATABASE_PATH` | No | Path to SQLite database (default: `backend/data/grantflow.db`) |
+| `GRANTS_GOV_API_KEY` | No | Optional API key for Grants.gov (works without) |
+| `OPENAI_API_KEY` | Yes | Required for AI features |
+| `TWILIO_*` | Yes | Required for SMS auth |
+
+### Data Sources
+
+1. **Grants.gov** (`grants.gov` source)
+   - Official federal grant opportunities API
+   - No API key required for public data
+   - Endpoint: `https://www.grants.gov/grantsws/rest/opportunities/search`
+
+2. **USASpending.gov** (`usaspending.gov` source)
+   - Federal spending and awards data
+   - No API key required
+   - Endpoint: `https://api.usaspending.gov/api/v2/search/spending_by_award/`
+
+### Scheduling (Production)
+
+On Railway, schedule ingestion to run daily using:
+
+1. **Railway Cron**: Schedule `npm run ingest` as a cron job
+2. **Internal scheduler**: Set `INGESTION_INTERVAL_HOURS` env var (future feature)
+
+---
+
 ## QA & Smoke Tests
 
 | Command | Purpose |
@@ -125,23 +196,179 @@ Refer to the QA checklist in [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_RE
 | --- | --- |
 | `npm run dev:full` | Run backend and frontend simultaneously |
 | `npm run backend` | Start the Express API |
+| `npm run ingest` | Run full ingestion from all sources (Grants.gov + USASpending.gov) |
+| `npm run ingest:grantsgov` | Ingest from Grants.gov only |
+| `npm run ingest:usaspending` | Ingest from USASpending.gov only |
+| `npm run migrate` | Run database migrations |
 | `npm run smoke:callback` | Validate auth callback error surfaces |
 | `npm run check:profiles` | Audit SQLite seeds (11 profiles + sections) |
 | `npm run seed:db` | Build `backend/data/grantflow.db` from curated baseline profiles |
 | `npm run seed:profiles` | Rehydrate the 11 curated profiles/sections into an existing DB (`--force` to reset) |
+| `npm run seed:demo` | Seed demo data (development only, uses bundled JSON files) |
 | `npm run build` / `npm run preview` | Build and preview the production frontend |
 
 See `package.json` for the full script catalogue.
 
 ---
 
+## National Crawl
+
+The National ZIP Crawl feature enables comprehensive funding source discovery across all ~43,859 US ZIP codes.
+
+### How to Run
+
+**Start a national crawl (Admin only):**
+
+```bash
+POST /api/admin/national-crawl/start
+{
+  "batch_size": 50,
+  "min_sources_per_zip": 3
+}
+```
+
+**Monitor progress:**
+
+```bash
+GET /api/admin/national-crawl/status
+```
+
+**Stop a running crawl:**
+
+```bash
+POST /api/admin/national-crawl/stop
+```
+
+### Features
+
+- **Batch Processing:** Processes ZIPs in configurable batches (default: 50)
+- **Checkpointing:** Saves progress after every batch to `national_zip_progress` table
+- **Resumable:** If interrupted, automatically resumes from last checkpoint
+- **Rate Limited:** Respects upstream API limits (configurable delay between requests)
+- **Memory Safe:** Processes in batches to avoid memory accumulation
+- **Real Data Only:** Uses Grants.gov API, state portals, and foundation locators
+
+### Data Sources
+
+The national crawl integrates with multiple real data sources:
+- **Grants.gov API** - Federal grant opportunities
+- **State Grant Portals** - State-specific funding (OH, CA, TX, NY, FL configured)
+- **Foundation Locator** - Community foundation grants
+
+See [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md) for complete source documentation.
+
+### Monitoring
+
+Track crawl progress in the database:
+
+```sql
+SELECT 
+  COUNT(*) as total_zips,
+  SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+  SUM(sources_found) as total_sources,
+  AVG(sources_found) as avg_per_zip
+FROM national_zip_progress;
+```
+
+---
+
+## Crawler Matrix Test
+
+The Crawler Test Harness validates all 6 crawlers against all profiles in the database.
+
+### How to Run
+
+```bash
+node scripts/test-all-crawlers-all-profiles.mjs [--db-path PATH]
+```
+
+### What It Tests
+
+For each profile, runs all 6 crawlers:
+1. `localFundingCrawler` - Local funding within 50 miles
+2. `governmentFundingCrawler` - Federal/state/local government grants
+3. `studentGrantsCrawler` - Student grants and scholarships
+4. `ecfBenefitsCrawler` - ECF CHOICES and disability benefits
+5. `itemFundingCrawler` - Item-specific funding (vehicles, equipment)
+6. `specialNeedsCrawler` - Special needs populations
+
+### Validation Checks
+
+Each result is validated for:
+- ✅ No loans (checks for keywords: loan, repay, interest, apr)
+- ✅ No matching-fund requirements
+- ✅ Required fields present (title, sponsor, description, URL, match_score)
+- ✅ No placeholder URLs (example.com, example.org, example.gov)
+- ✅ Match score within valid range (0-100)
+
+### Output
+
+- **Audit Report:** `backend/data/audit/crawler-matrix-YYYYMMDD.json`
+- **Database Log:** Results logged to `crawl_logs` table
+- **Console Output:** Real-time progress and summary statistics
+
+### Exit Codes
+
+- `0` - All tests passed
+- `1` - Some tests failed or produced invalid results
+
+---
+
+## Admin Profile Access
+
+GrantFlow enforces role-based access control for profile management.
+
+### Admin User
+
+**Identification:**
+- Email: `buckeye7066@gmail.com`
+- OR `users.is_admin = true` flag in database
+
+**Permissions:**
+- ✅ View ALL profiles in the system
+- ✅ Create profiles for any user
+- ✅ Access any profile details
+- ✅ Run national crawls
+- ✅ Access admin endpoints
+
+### Enduser
+
+**Permissions:**
+- ✅ View only their own profiles (`profiles.user_id = user.id`)
+- ✅ Create profiles for themselves only
+- ✅ Access only their own profile details
+- ❌ Cannot see other users' profiles
+- ❌ Cannot run national crawls
+- ❌ Cannot access admin endpoints
+
+### API Endpoints
+
+**GET /api/profiles**
+- Admin: Returns all profiles
+- Enduser: Returns only profiles where `user_id` matches
+
+**POST /api/profiles**
+- Admin: Can create for anyone (specify `user_id` in body)
+- Enduser: Can only create for themselves
+
+**GET /api/profiles/:id**
+- Admin: Can access any profile
+- Enduser: Can only access if `user_id` matches
+
+### Server-Side Enforcement
+
+All access control is enforced server-side. UI hints are NOT sufficient - the backend validates permissions on every request.
+
+---
+
 ## Documentation & References
 
+- [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md) — Complete documentation of all real data sources, APIs, rate limits, and best practices.
 - [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) — Production checklist, env vars, seeding, QA, monitoring.
 - [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — Vercel + Railway deployment guide.
 - [`docs/VERCEL_RAILWAY_DEPLOYMENT.md`](docs/VERCEL_RAILWAY_DEPLOYMENT.md) — Detailed deployment instructions.
 - [`docs/AUTH_FRONTEND_PLAN.md`](docs/AUTH_FRONTEND_PLAN.md) — Historical context for the authentication UX overhaul.
-- `scripts/` — Smoke tests (`smoke-login.mjs`, `smoke-auth-callback.mjs`) and database auditing (`check-profiles.mjs`).
+- `scripts/` — Smoke tests (`smoke-login.mjs`, `smoke-auth-callback.mjs`), database auditing (`check-profiles.mjs`), and crawler testing (`test-all-crawlers-all-profiles.mjs`).
 
 ---
 
@@ -150,6 +377,8 @@ See `package.json` for the full script catalogue.
 - Monitor OpenAI and Twilio usage; set billing caps and alerts.
 - Schedule backups of `grantflow.db` and `/uploads` from the Railway volume.
 - Keep OAuth redirect URIs in each provider dashboard synchronized with production (`https://app.axiombiolabs.org/grantflow/api/auth/<provider>/callback`).
+- Review crawler logs regularly to ensure data sources remain operational.
+- Update data source configurations if APIs change (see `docs/DATA_SOURCES.md`).
 
 Questions or deployment assistance? Open an issue or contact the GrantFlow engineering team at Axiom BioLabs. Happy shipping! 🎉
 # GrantFlow
@@ -589,6 +818,238 @@ This project is licensed under the MIT License.
 **Build failures:**
 - Clear node_modules and reinstall: `rm -rf node_modules && npm install`
 - Check for TypeScript errors: `npm run type-check` (if configured)
+
+---
+
+## 📊 Data Sources & Legality
+
+GrantFlow uses **only** legitimate, publicly accessible data sources with proper attribution and rate limiting:
+
+### Federal Sources
+
+| Source | Type | API | Rate Limit | TOS |
+|--------|------|-----|------------|-----|
+| **Grants.gov** | OPPORTUNITY | [REST API](https://www.grants.gov/web/grants/xml-web-services.html) | ~1 req/sec (conservative) | [Terms](https://www.grants.gov/web/grants/support/terms-of-use.html) |
+| **SAM.gov** | PROGRAM | [Federal Assistance API](https://open.gsa.gov/api/fh-public-api/) | ~2 req/sec | [Terms](https://www.sam.gov/SAM/pages/public/termsOfUse.jsf) |
+| **NIH RePORTER** | PROGRAM (baseline) | [REST API](https://api.reporter.nih.gov/) | 100 req/min | Public domain |
+| **NSF Awards** | PROGRAM (baseline) | [Awards API](https://www.research.gov/common/webapi/awardapisearch-v1.htm) | Conservative use | Public domain |
+| **USAspending.gov** | DIRECTORY | [API v2](https://api.usaspending.gov/) | 500 req/hour | Public domain |
+
+**Note on NIH/NSF:** Currently returns baseline funding mechanism templates (type: PROGRAM, last_verified_at: null). Real FOA ingestion with verified deadlines requires parsing NIH Guide RSS feeds and NSF funding announcements.
+
+**API Keys Required:**
+- `SAM_GOV_API_KEY` - Register at https://open.gsa.gov/api/fh-public-api/
+
+### State/Local Sources
+
+| Source | Type | Notes |
+|--------|------|-------|
+| **Benefits.gov** | PROGRAM | No official API - use state-specific databases instead |
+| **State Open Data** | DIRECTORY | Socrata-based portals (varies by state) |
+| **State Agencies** | VARIES | Direct partnerships recommended |
+
+### Source Type Classification
+
+- **OPPORTUNITY**: Open/forecasted solicitation with deadline and direct application URL
+  - Example: Active Grants.gov FOA with verified deadline
+- **PROGRAM**: Standing assistance program with rolling enrollment or baseline funding mechanism
+  - Example: Medicaid, SNAP, LIHEAP, SAM.gov assistance listings, NIH/NSF mechanisms (baseline/unverified)
+- **DIRECTORY**: Funding source locator, no claim of "open grant"
+  - Example: Community foundation listings, agency directories, historical awards
+
+### Compliance Notes
+
+1. **Rate Limiting**: All connectors implement conservative rate limiting to respect server resources
+2. **Attribution**: Evidence URLs stored with each opportunity for audit trail
+3. **TOS Compliance**: Review each source's terms of service before high-volume use
+4. **No Scraping**: Never screen-scrape Benefits.gov or state sites without permission
+5. **API Registration**: Register for required API keys and monitor usage limits
+
+---
+
+## 🗺️ National ZIP Crawler Design
+
+The National ZIP Crawler processes all ~43,859 US ZIP codes to ensure comprehensive coverage:
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│ National ZIP Crawler                                 │
+│                                                      │
+│  1. Load all US ZIP codes                           │
+│  2. Process in batches (100 per batch)              │
+│  3. For each ZIP, find ≥3 funding sources           │
+│  4. Classify: OPPORTUNITY → PROGRAM → DIRECTORY     │
+│  5. Store evidence URL + verification timestamp     │
+│  6. Checkpoint every 500 ZIPs (resumable)           │
+└─────────────────────────────────────────────────────┘
+```
+
+### Fallback Logic
+
+For each ZIP code, attempt to find sources in this priority order:
+
+1. **OPPORTUNITY** (best): Active federal/state grants with deadlines
+2. **PROGRAM** (good): Standing programs like Medicaid, SNAP
+3. **DIRECTORY** (fallback): State portals, agency listings
+
+If fewer than 3 sources found, record reason in logs.
+
+### Database Schema
+
+```sql
+CREATE TABLE zip_funding_sources (
+  id TEXT PRIMARY KEY,
+  created_at DATETIME,
+  zip_code TEXT NOT NULL,
+  source_name TEXT NOT NULL,
+  source_type TEXT CHECK(source_type IN ('OPPORTUNITY', 'PROGRAM', 'DIRECTORY')),
+  evidence_url TEXT,
+  evidence_title TEXT,
+  last_verified_at DATETIME,
+  number_of_opportunities_found INTEGER,
+  metadata TEXT -- JSON: sponsor, deadline, etc.
+);
+```
+
+### Usage
+
+```javascript
+import { startNationalCrawl, resumeCrawl, getCrawlStatus } from './backend/services/nationalZipCrawler.js'
+
+// Start new crawl
+await startNationalCrawl(db)
+
+// Resume from checkpoint
+await resumeCrawl(db)
+
+// Check status
+const status = getCrawlStatus()
+console.log(`Progress: ${status.progress}`)
+```
+
+### Performance
+
+- **Estimated Time**: ~48-72 hours for full crawl (with rate limiting)
+- **Resumability**: Checkpoints every 500 ZIPs
+- **Rate Limiting**: 2 seconds between batches, 100ms between ZIPs
+- **Concurrency**: Processes batches sequentially to avoid overwhelming APIs
+
+---
+
+## ✅ How to Verify Data Authenticity
+
+Every funding opportunity in GrantFlow must include verification metadata:
+
+### Required Fields
+
+- `type`: OPPORTUNITY, PROGRAM, or DIRECTORY
+- `evidence_url`: API endpoint or page used to verify
+- `last_verified_at`: Timestamp of last verification
+- `source`: Original data source (e.g., "grants.gov")
+
+### Verification Process
+
+1. **Check Type**: Ensure opportunity has correct type classification
+2. **Follow Evidence URL**: Click through to verify opportunity is real
+3. **Verify Deadline**: For OPPORTUNITY type, confirm deadline is accurate
+4. **Check Source**: Validate source field matches evidence URL domain
+
+### Example Verification
+
+```javascript
+// Good: Real opportunity with evidence
+{
+  title: "Active Grants.gov FOA",
+  type: "OPPORTUNITY",
+  source: "grants.gov",
+  evidence_url: "https://www.grants.gov/web/grants/view-opportunity.html?oppId=123456",
+  last_verified_at: "2026-01-09T10:00:00Z",
+  deadline: "2026-04-05",
+  application_url: "https://www.grants.gov/web/grants/view-opportunity.html?oppId=123456"
+}
+
+// Acceptable: Baseline mechanism (unverified)
+{
+  title: "NIH R01 Research Project Grant (Mechanism)",
+  type: "PROGRAM",
+  source: "nih.gov",
+  evidence_url: "https://grants.nih.gov/grants/funding/r01.htm",
+  last_verified_at: null // Baseline only, not verified
+}
+
+// Bad: Mock data (rejected)
+{
+  title: "Example City Grant",
+  type: null,
+  source: "mock",
+  evidence_url: "https://example.com/grants",
+  last_verified_at: null
+}
+```
+
+### Audit Tools
+
+Run the crawler matrix test to validate all data:
+
+```bash
+node backend/tests/crawlerMatrixTest.js
+```
+
+This generates an audit file: `backend/data/audit/crawler_matrix_YYYYMMDD.json`
+
+The audit checks:
+- ✅ No mock data (no example.com, placeholder, etc.)
+- ✅ All URLs are valid (not placeholder domains)
+- ✅ Match scoring is deterministic (same input = same output)
+- ✅ Types are correct (OPPORTUNITY/PROGRAM/DIRECTORY)
+
+---
+
+## 🔍 How to Run Audits
+
+### Pre-Deployment Audit
+
+Before deploying to production, run comprehensive audits:
+
+```bash
+# 1. Lint all code
+npm run lint
+
+# 2. Build to catch TypeScript errors
+npm run build
+
+# 3. Run crawler matrix test
+node backend/tests/crawlerMatrixTest.js
+
+# 4. Check for mock data
+grep -r "example\.com" backend/services/crawlers/ && echo "❌ Mock data found!" || echo "✅ No mock data"
+grep -r "Math\.random" backend/ && echo "❌ Random scoring found!" || echo "✅ Deterministic scoring"
+
+# 5. Verify database schema
+sqlite3 backend/data/grantflow.db "SELECT COUNT(*) FROM funding_opportunities WHERE type IS NULL" # Should be 0
+```
+
+### Production Monitoring
+
+Monitor data quality in production:
+
+1. **Evidence URL Health**: Check that evidence URLs are still accessible
+2. **Type Distribution**: Track OPPORTUNITY vs PROGRAM vs DIRECTORY ratios
+3. **Verification Age**: Alert on opportunities not verified in 90+ days
+4. **Match Score Distribution**: Ensure scores are well-distributed (not all high/low)
+
+### Monthly Audit Checklist
+
+- [ ] Run crawler matrix test
+- [ ] Review audit file for validation issues
+- [ ] Update stale evidence URLs (90+ days old)
+- [ ] Verify API keys are still valid
+- [ ] Check rate limit compliance
+- [ ] Review user feedback on opportunity accuracy
+
+---
 
 ## 🔗 Resources
 

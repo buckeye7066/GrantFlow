@@ -166,19 +166,9 @@ try {
   console.error('[database] CRITICAL: Failed to initialize database:', dbError);
   console.error('[database] Database path:', dbPath);
   
-  if (process.env.NODE_ENV === 'production') {
-    console.error('[database] Cannot start server without database connection');
-    process.exit(1);
-  } else {
-    console.warn('[database] WARNING: Running in development mode with database errors');
-    // Create a minimal mock db for development
-    db = {
-      prepare: () => ({ get: () => null, all: () => [], run: () => ({ changes: 0 }) }),
-      pragma: () => {},
-      exec: () => {},
-      transaction: (fn) => fn
-    };
-  }
+  // Always exit on database errors - don't mask with mock DB
+  console.error('[database] Cannot start server without database connection');
+  process.exit(1);
 }
 
 export { db };
@@ -352,7 +342,7 @@ ensureDesignatedProfiles(db)
 linkAllProfilesToAdmin(db)
 ensureUserPreferencesTable(db)
 
-// Auto-seed funding opportunities if database is empty
+// Check funding opportunities count and provide guidance
 try {
   const oppCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get();
   if (oppCount && oppCount.count === 0) {
@@ -426,8 +416,8 @@ try {
   } else {
     console.info(`[startup] Found ${oppCount.count} existing funding opportunities`);
   }
-} catch (seedError) {
-  console.warn('[startup] Error during auto-seed:', seedError.message);
+} catch (error) {
+  console.warn('[startup] Error checking opportunities count:', error.message);
 }
 
 function parseBoolEnv(value) {
@@ -792,6 +782,24 @@ app.use('/api/reminders', remindersRouter);
 app.use('/api/crawlers', crawlersRouter);
 app.use('/api/real-crawlers', realCrawlersRouter);
 app.use('/api/preferences', preferencesRouter);
+
+// Public health endpoint - safe for non-admin users
+app.get('/api/health', (req, res) => {
+  try {
+    const healthSummary = getSafeHealthSummary(db);
+    const statusCode = healthSummary.status === 'healthy' ? 200 : 503;
+    res.status(statusCode).json(healthSummary);
+  } catch (error) {
+    console.error('[/api/health] Error:', error);
+    res.status(500).json({
+      timestamp: new Date().toISOString(),
+      status: 'error',
+      counts: { opportunities: 0, recentFailures: 0 },
+      summary: 'Failed to retrieve health information'
+    });
+  }
+});
+
 app.use('/api/admin', adminRouter);
 app.use('/api', discoveryRouter); // Discovery endpoints (comprehensiveMatch, searchOpportunities, etc.)
 app.use('/api/crawler-v2', crawlerV2Router);

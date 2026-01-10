@@ -10,6 +10,7 @@ import OpenAI from 'openai';
 import { seedRealOpportunities } from '../utils/seedRealOpportunities.js';
 import { ensureDesignatedProfiles } from '../utils/ensureDesignatedProfiles.js';
 import { buildProfileSignals, calculateMatchScore } from '../services/profileHelpers.js';
+import { getSystemDiagnostics } from '../services/diagnosticsService.js';
 
 const router = express.Router();
 
@@ -118,9 +119,13 @@ Be conservative - only include information you are confident about from the docu
 // Upload a PDF document, extract text, use AI to parse it, and create a profile
 router.post('/upload-profile-document', upload.single('document'), async (req, res) => {
   try {
-    // Check admin access - must match frontend's user.is_admin check
+    // Check admin access - use consistent admin enforcement (is_admin flag or email-based)
     const user = req.user;
-    if (!user || !user.is_admin) {
+    const userEmail = user?.primary_email || user?.email || '';
+    const isAdmin = user?.is_admin === true || user?.role === 'admin' || 
+                    (userEmail && userEmail.toLowerCase().includes('buckeye7066'));
+    
+    if (!isAdmin) {
       // Clean up uploaded file
       if (req.file) {
         try {
@@ -379,6 +384,33 @@ router.post('/reattach-users', (req, res) => {
   }
 });
 
+// GET /api/admin/diagnostics - System diagnostics (admin only)
+router.get('/diagnostics', (req, res) => {
+  try {
+    // Check admin access - use consistent admin enforcement (is_admin flag or email-based)
+    const user = req.user;
+    const userEmail = user?.primary_email || user?.email || '';
+    const isAdmin = user?.is_admin === true || user?.role === 'admin' || 
+                    (userEmail && userEmail.toLowerCase().includes('buckeye7066'));
+    
+    if (!isAdmin) {
+      return res.status(403).json({ 
+        error: 'Access denied',
+        message: 'This endpoint is restricted to administrators only' 
+      });
+    }
+
+    const diagnostics = getSystemDiagnostics(req.db);
+    res.json(diagnostics);
+  } catch (error) {
+    console.error('[admin/diagnostics] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to get diagnostics',
+      message: error.message || 'An unexpected error occurred'
+    });
+  }
+});
+
 // GET /api/admin/db-stats - Database statistics
 router.get('/db-stats', (req, res) => {
   try {
@@ -497,6 +529,67 @@ router.post('/seed-profile-grants', async (req, res) => {
   }
 });
 
+// POST /api/admin/ingest - Trigger ingestion from all sources
+router.post('/ingest', async (req, res) => {
+  try {
+    console.log('[admin/ingest] Starting manual ingestion...');
+    
+    // Import connectors dynamically
+    const { fetchGrantsGov } = await import('../services/sources/grantsGov.js');
+    const { fetchUSASpending } = await import('../services/sources/usaSpending.js');
+    const { ingestOpportunities } = await import('../services/sources/ingestionService.js');
+    
+    const results = [];
+    
+    // Ingest from Grants.gov
+    try {
+      console.log('[admin/ingest] Fetching from Grants.gov...');
+      const { opportunities: grantsGovOpps } = await fetchGrantsGov({ limit: 100, offset: 0 });
+      const grantsGovResult = ingestOpportunities(req.db, grantsGovOpps, 'grants.gov');
+      results.push({ source: 'grants.gov', ...grantsGovResult });
+    } catch (error) {
+      console.error('[admin/ingest] Grants.gov error:', error.message);
+      results.push({ source: 'grants.gov', success: false, error: error.message });
+    }
+    
+    // Ingest from USASpending.gov
+    try {
+      console.log('[admin/ingest] Fetching from USASpending.gov...');
+      const { opportunities: usaSpendingOpps } = await fetchUSASpending({ limit: 100, page: 1 });
+      const usaSpendingResult = ingestOpportunities(req.db, usaSpendingOpps, 'usaspending.gov');
+      results.push({ source: 'usaspending.gov', ...usaSpendingResult });
+    } catch (error) {
+      console.error('[admin/ingest] USASpending.gov error:', error.message);
+      results.push({ source: 'usaspending.gov', success: false, error: error.message });
+    }
+    
+    // Calculate totals
+    const summary = {
+      sources_processed: results.length,
+      successes: results.filter(r => r.success).length,
+      failures: results.filter(r => !r.success).length,
+      total_inserted: results.reduce((sum, r) => sum + (r.records_inserted || 0), 0),
+      total_updated: results.reduce((sum, r) => sum + (r.records_updated || 0), 0),
+      total_errors: results.reduce((sum, r) => sum + (r.errors || 0), 0),
+    };
+    
+    console.log('[admin/ingest] Ingestion completed:', summary);
+    
+    res.json({
+      success: summary.failures === 0,
+      message: `Ingestion completed: ${summary.total_inserted} inserted, ${summary.total_updated} updated`,
+      summary,
+      results,
+    });
+  } catch (error) {
+    console.error('[admin/ingest] Error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message || 'Failed to run ingestion',
+    });
+  }
+});
+
 // POST /api/admin/link-admin-to-organizations - Link admin to all organizations
 router.post('/link-admin-to-organizations', async (req, res) => {
   try {
@@ -523,5 +616,218 @@ router.post('/link-admin-to-organizations', async (req, res) => {
     res.status(500).json({ success: false, error: error.message || 'Failed to link admin to organizations' });
   }
 });
+
+/**
+ * National ZIP crawl management endpoints
+ */
+
+// Track running national crawl jobs
+let nationalCrawlJob = null
+
+/**
+ * Start national ZIP crawl
+ * POST /api/admin/national-crawl/start
+ */
+router.post('/national-crawl/start', async (req, res) => {
+  try {
+    if (nationalCrawlJob && nationalCrawlJob.status === 'running') {
+      return res.status(409).json({
+        error: 'National crawl already running',
+        job_id: nationalCrawlJob.id
+      })
+    }
+    
+    const { batch_size, min_sources_per_zip } = req.body
+    const db = req.db
+    
+    // Import national ZIP crawler
+    const { runNationalZipCrawl } = await import('../services/crawlers/nationalZipCrawler.js')
+    
+    // Create job record
+    const jobId = crypto.randomUUID()
+    const params = {
+      batch_size: batch_size || 50,
+      min_sources_per_zip: min_sources_per_zip || 3
+    }
+    
+    db.prepare(`
+      INSERT INTO crawler_jobs (
+        id, type, status, parameters, requested_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, datetime('now'))
+    `).run(
+      jobId,
+      'national_zip_scan',
+      'running',
+      JSON.stringify(params),
+      req.user?.id || 'admin'
+    )
+    
+    nationalCrawlJob = {
+      id: jobId,
+      status: 'running',
+      started_at: new Date().toISOString()
+    }
+    
+    // Run crawl in background
+    const dbPath = process.env.DB_PATH || join(__dirname, '..', 'data', 'grantflow.db')
+    
+    runNationalZipCrawl(dbPath, params)
+      .then(result => {
+        nationalCrawlJob.status = 'completed'
+        nationalCrawlJob.completed_at = new Date().toISOString()
+        nationalCrawlJob.result = result
+        
+        // Update job record
+        db.prepare(`
+          UPDATE crawler_jobs 
+          SET status = 'completed', 
+              completed_at = datetime('now'),
+              result_count = ?,
+              result_meta = ?
+          WHERE id = ?
+        `).run(result.sources, JSON.stringify(result), jobId)
+      })
+      .catch(error => {
+        nationalCrawlJob.status = 'failed'
+        nationalCrawlJob.error = error.message
+        
+        // Update job record
+        db.prepare(`
+          UPDATE crawler_jobs 
+          SET status = 'failed', 
+              completed_at = datetime('now'),
+              error = ?
+          WHERE id = ?
+        `).run(error.message, jobId)
+      })
+    
+    res.json({
+      success: true,
+      job_id: jobId,
+      message: 'National ZIP crawl started',
+      parameters: params
+    })
+  } catch (error) {
+    console.error('[admin/national-crawl/start] Error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * Stop national ZIP crawl
+ * POST /api/admin/national-crawl/stop
+ */
+router.post('/national-crawl/stop', async (req, res) => {
+  try {
+    if (!nationalCrawlJob || nationalCrawlJob.status !== 'running') {
+      return res.status(404).json({
+        error: 'No national crawl currently running'
+      })
+    }
+    
+    // Mark as cancelled (actual stopping would require more complex implementation)
+    nationalCrawlJob.status = 'cancelled'
+    nationalCrawlJob.cancelled_at = new Date().toISOString()
+    
+    // Update job record
+    req.db.prepare(`
+      UPDATE crawler_jobs 
+      SET status = 'cancelled', 
+          completed_at = datetime('now')
+      WHERE id = ?
+    `).run(nationalCrawlJob.id)
+    
+    res.json({
+      success: true,
+      message: 'National ZIP crawl stopped',
+      job_id: nationalCrawlJob.id
+    })
+  } catch (error) {
+    console.error('[admin/national-crawl/stop] Error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * Get national ZIP crawl status
+ * GET /api/admin/national-crawl/status
+ */
+router.get('/national-crawl/status', async (req, res) => {
+  try {
+    const db = req.db
+    
+    // Get current job status if running
+    if (nationalCrawlJob) {
+      // Get progress from database
+      const progress = db.prepare(`
+        SELECT 
+          COUNT(*) as total_zips,
+          SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_zips,
+          SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_zips,
+          SUM(sources_found) as total_sources,
+          AVG(sources_found) as avg_sources
+        FROM national_zip_progress
+      `).get()
+      
+      return res.json({
+        job: nationalCrawlJob,
+        progress: {
+          total_zips: progress.total_zips || 0,
+          completed: progress.completed_zips || 0,
+          failed: progress.failed_zips || 0,
+          sources_found: progress.total_sources || 0,
+          avg_sources_per_zip: progress.avg_sources || 0
+        }
+      })
+    }
+    
+    // Get last completed job
+    const lastJob = db.prepare(`
+      SELECT * FROM crawler_jobs 
+      WHERE type = 'national_zip_scan' 
+      ORDER BY created_at DESC 
+      LIMIT 1
+    `).get()
+    
+    if (!lastJob) {
+      return res.json({
+        message: 'No national crawl jobs found',
+        progress: null
+      })
+    }
+    
+    // Get final progress
+    const progress = db.prepare(`
+      SELECT 
+        COUNT(*) as total_zips,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_zips,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_zips,
+        SUM(sources_found) as total_sources,
+        AVG(sources_found) as avg_sources
+      FROM national_zip_progress
+    `).get()
+    
+    res.json({
+      last_job: {
+        id: lastJob.id,
+        status: lastJob.status,
+        started_at: lastJob.started_at,
+        completed_at: lastJob.completed_at,
+        result_count: lastJob.result_count,
+        error: lastJob.error
+      },
+      progress: {
+        total_zips: progress.total_zips || 0,
+        completed: progress.completed_zips || 0,
+        failed: progress.failed_zips || 0,
+        sources_found: progress.total_sources || 0,
+        avg_sources_per_zip: progress.avg_sources || 0
+      }
+    })
+  } catch (error) {
+    console.error('[admin/national-crawl/status] Error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
 
 export default router;

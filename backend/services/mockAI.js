@@ -1,9 +1,20 @@
 /**
  * Mock AI Service
- * Provides mock responses when OpenAI is not available
+ * DEPRECATED: Only for development/testing when OpenAI is not available
+ * Production code should NEVER use these mock responses
+ * 
+ * @deprecated Use real AI service instead
  */
 
+const isDevelopment = process.env.NODE_ENV === 'development' || process.env.ALLOW_MOCK_AI === 'true';
+
 export function getMockFieldSuggestion(fieldName, fieldLabel) {
+  if (!isDevelopment) {
+    throw new Error('Mock AI is disabled in production. Configure OPENAI_API_KEY.');
+  }
+  
+  console.warn('[MOCK AI] Using mock suggestion for:', fieldName);
+  
   const mockSuggestions = {
     mission: 'To empower underserved communities through comprehensive support services, educational programs, and sustainable resource development.',
     primary_goal: 'Increase access to essential services and opportunities for low-income families, with a focus on education, healthcare, and economic mobility.',
@@ -22,6 +33,12 @@ export function getMockFieldSuggestion(fieldName, fieldLabel) {
 }
 
 export function getMockSectionSuggestion(sectionKey) {
+  if (!isDevelopment) {
+    throw new Error('Mock AI is disabled in production. Configure OPENAI_API_KEY.');
+  }
+  
+  console.warn('[MOCK AI] Using mock section suggestion for:', sectionKey);
+  
   const suggestions = {
     basic_information: {
       full_name: 'Community Support Organization',

@@ -7,6 +7,7 @@ import { safeParseJSON } from '../utils/safeJson.js';
 import { formatError } from '../middleware/errorHandler.js';
 import { validatePagination } from '../utils/validation.js';
 import { DEFAULT_OPENAI_MODEL, OPENAI_TIMEOUT_MS, MAX_PROMPT_LENGTH } from '../config/constants.js';
+import { calculateMatchScore } from '../services/matchingEngine.js';
 
 const router = express.Router();
 
@@ -33,15 +34,18 @@ router.post('/comprehensive-match', async (req, res) => {
       LIMIT 100
     `).all()
     
-    // Calculate match scores
-    const scoredOpps = opportunities.map(opp => ({
-      ...opp,
-      fit_score: 80 + Math.floor(Math.random() * 20), // Mock score 80-100
-      match_reasons: ['Geographic match', 'Type match', 'Mission alignment']
-    }))
+    // Calculate match scores using deterministic algorithm
+    const scoredOpps = opportunities.map(opp => {
+      const matchResult = calculateMatchScore(profile, opp);
+      return {
+        ...opp,
+        fit_score: matchResult.score,
+        match_reasons: matchResult.reasons
+      };
+    });
     
     res.json({
-      opportunities: scoredOpps.filter(o => o.fit_score >= 80),
+      opportunities: scoredOpps.filter(o => o.fit_score >= 50), // Minimum threshold
       total: scoredOpps.length,
       profile
     })
