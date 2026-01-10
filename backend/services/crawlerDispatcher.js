@@ -117,10 +117,10 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
           WHERE id = ?
         `).run(result.avatarUrl, profileContext.profile.id)
 
-        if (previous?.avatar_url && previous.avatar_url.startsWith('/uploads/')) {
+        if (previous?.avatar_url && previous.avatar_url.startsWith('/uploads/avatars/')) {
           // best-effort cleanup
           try {
-            const absolutePath = join(uploadDir, previous.avatar_url.replace('/uploads/', ''))
+            const absolutePath = join(uploadDir, previous.avatar_url.replace('/uploads/avatars/', ''))
             await fs.promises.unlink(absolutePath)
           } catch (error) {
             console.warn('[crawlerDispatcher] Failed to remove previous avatar', error)

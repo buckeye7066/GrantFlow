@@ -461,8 +461,18 @@ router.get('/:id/file', (req, res) => {
       .trim();
 
     res.setHeader('Content-Type', doc.mime_type || 'application/octet-stream');
-    // Use attachment to avoid embedding sensitive docs inline by default.
-    res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+
+    const disposition = String(req.query?.disposition || '').toLowerCase();
+    const download =
+      req.query?.download === 'true' || req.query?.download === '1' || req.query?.download === true;
+
+    // Default: attachment (safer). Allow inline explicitly for printing/preview.
+    const contentDisposition =
+      disposition === 'inline' && !download
+        ? `inline; filename="${safeName}"`
+        : `attachment; filename="${safeName}"`;
+
+    res.setHeader('Content-Disposition', contentDisposition);
     return fs.createReadStream(filePath).pipe(res);
   } catch (error) {
     return res.status(500).json({ error: error.message });
