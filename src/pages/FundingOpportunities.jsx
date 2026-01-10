@@ -43,6 +43,73 @@ import { cn } from "@/lib/utils"
 
 const NOT_AVAILABLE = 'N/A'
 
+const STATE_CODES = new Set([
+  "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD",
+  "MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC",
+  "SD","TN","TX","UT","VT","VA","WA","WV","WI","WY","DC",
+])
+
+const STATE_NAME_TO_CODE = new Map([
+  ["alabama","AL"],["alaska","AK"],["arizona","AZ"],["arkansas","AR"],["california","CA"],
+  ["colorado","CO"],["connecticut","CT"],["delaware","DE"],["florida","FL"],["georgia","GA"],
+  ["hawaii","HI"],["idaho","ID"],["illinois","IL"],["indiana","IN"],["iowa","IA"],
+  ["kansas","KS"],["kentucky","KY"],["louisiana","LA"],["maine","ME"],["maryland","MD"],
+  ["massachusetts","MA"],["michigan","MI"],["minnesota","MN"],["mississippi","MS"],["missouri","MO"],
+  ["montana","MT"],["nebraska","NE"],["nevada","NV"],["new hampshire","NH"],["new jersey","NJ"],
+  ["new mexico","NM"],["new york","NY"],["north carolina","NC"],["north dakota","ND"],["ohio","OH"],
+  ["oklahoma","OK"],["oregon","OR"],["pennsylvania","PA"],["rhode island","RI"],["south carolina","SC"],
+  ["south dakota","SD"],["tennessee","TN"],["texas","TX"],["utah","UT"],["vermont","VT"],
+  ["virginia","VA"],["washington","WA"],["west virginia","WV"],["wisconsin","WI"],["wyoming","WY"],
+  ["district of columbia","DC"],
+])
+
+function deriveStateFromText(text) {
+  if (!text || typeof text !== "string") return null
+  const trimmed = text.trim()
+  if (!trimmed) return null
+
+  const zipStateMatch = trimmed.match(/\b([A-Za-z]{2})\s+\d{5}\b/)
+  if (zipStateMatch) {
+    const code = zipStateMatch[1].toUpperCase()
+    if (STATE_CODES.has(code)) return code
+  }
+
+  const codeMatches = trimmed.toUpperCase().match(/\b([A-Z]{2})\b/g) ?? []
+  for (const candidate of codeMatches) {
+    if (STATE_CODES.has(candidate)) return candidate
+  }
+
+  const lower = trimmed.toLowerCase()
+  for (const [name, code] of STATE_NAME_TO_CODE.entries()) {
+    if (lower.includes(name)) return code
+  }
+
+  return null
+}
+
+function deriveStateFromProfile(profileDetail) {
+  if (!profileDetail) return null
+  const sections = Array.isArray(profileDetail.sections) ? profileDetail.sections : []
+  const basic = sections.find((s) => s?.section_key === "basic_information")?.data ?? null
+  const location = sections.find((s) => s?.section_key === "location_focus")?.data ?? null
+
+  const candidates = [
+    basic?.state,
+    basic?.address_state,
+    basic?.address,
+    location?.state,
+    location?.primary_state,
+    location?.geographic_focus,
+  ]
+
+  for (const entry of candidates) {
+    const state = deriveStateFromText(entry)
+    if (state) return state
+  }
+
+  return null
+}
+
 function formatDeadline(deadline, deadlineType) {
   if (!deadline) {
     return deadlineType === "rolling" ? "Rolling deadline" : "Deadline TBD"
@@ -247,6 +314,9 @@ function OpportunityCard({ opportunity, onSelect, match, onAddToPipeline, isAddi
     ? "Review terms"
     : "Funding review"
   const opportunityTypeLabel = opportunity.opportunity_type || "Funding Opportunity"
+  const hasUrl = Boolean(opportunity.source_url || opportunity.application_url)
+  const recordOrigin = opportunity.record_origin || "live_crawl"
+  const isSynthetic = recordOrigin === "synthetic"
   
   // Get type badge styling and label
   const getTypeBadge = (type) => {
@@ -321,11 +391,21 @@ function OpportunityCard({ opportunity, onSelect, match, onAddToPipeline, isAddi
         <h3 className="text-lg font-semibold text-slate-900 line-clamp-2 group-hover:text-blue-700 transition-colors">
           {opportunity.title}
         </h3>
-        {/* Baseline / Not verified badge */}
-        {!opportunity.last_verified_at && (
+        {/* Trust indicator */}
+        {opportunity.last_verified_at ? (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-800 border border-emerald-200">
+            <CheckCircle2 className="w-3 h-3" />
+            Verified
+          </span>
+        ) : isSynthetic || !hasUrl ? (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
             <AlertTriangle className="w-3 h-3" />
-            Baseline / Not verified
+            Review source
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200">
+            <Layers className="w-3 h-3" />
+            Live source
           </span>
         )}
         {/* Funding Source / Sponsor */}
@@ -496,16 +576,39 @@ function OpportunityDetail({
     }
   }
 
+  const hasUrl = Boolean(opportunity.source_url || opportunity.application_url)
+  const recordOrigin = opportunity.record_origin || "live_crawl"
+  const isSynthetic = recordOrigin === "synthetic"
+  let contactInfo = null
+  if (opportunity.contact_info) {
+    try {
+      contactInfo =
+        typeof opportunity.contact_info === "string" ? JSON.parse(opportunity.contact_info) : opportunity.contact_info
+    } catch {
+      contactInfo = null
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent className="max-w-3xl">
         <DialogHeader className="space-y-2">
           <DialogTitle className="text-2xl font-semibold text-slate-900">{opportunity.title}</DialogTitle>
-          {/* Baseline / Not verified badge in detail view */}
-          {!opportunity.last_verified_at && (
+          {/* Trust indicator in detail view */}
+          {opportunity.last_verified_at ? (
+            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-800 border border-emerald-200 w-fit">
+              <CheckCircle2 className="w-3 h-3" />
+              Verified
+            </div>
+          ) : isSynthetic || !hasUrl ? (
             <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200 w-fit">
               <AlertTriangle className="w-3 h-3" />
-              Baseline / Not verified
+              Review source
+            </div>
+          ) : (
+            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200 w-fit">
+              <Layers className="w-3 h-3" />
+              Live source
             </div>
           )}
           <div className="flex items-center gap-2 text-sm text-slate-500">
@@ -609,6 +712,62 @@ function OpportunityDetail({
                       Verified on {format(new Date(opportunity.last_verified_at), "PPP")}
                     </p>
                   )}
+                </div>
+              )}
+
+              {/* Contact info */}
+              {(contactInfo || opportunity.application_url || opportunity.source_url) && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-2 col-span-1 sm:col-span-2">
+                  <p className="font-semibold text-slate-800 flex items-center gap-2">
+                    <ExternalLink className="w-4 h-4 text-blue-600" />
+                    Contact & links
+                  </p>
+                  {contactInfo?.name ? <p className="text-sm text-slate-700">{contactInfo.name}</p> : null}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                    {contactInfo?.email ? (
+                      <a className="text-blue-600 hover:underline truncate" href={`mailto:${contactInfo.email}`}>
+                        Email: {contactInfo.email}
+                      </a>
+                    ) : null}
+                    {contactInfo?.phone ? (
+                      <a className="text-blue-600 hover:underline truncate" href={`tel:${contactInfo.phone}`}>
+                        Phone: {contactInfo.phone}
+                      </a>
+                    ) : null}
+                    {contactInfo?.website ? (
+                      <a
+                        className="text-blue-600 hover:underline truncate"
+                        href={contactInfo.website}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Website: {contactInfo.website}
+                      </a>
+                    ) : null}
+                    {opportunity.application_url ? (
+                      <a
+                        className="text-blue-600 hover:underline truncate"
+                        href={opportunity.application_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Application: {new URL(opportunity.application_url).hostname}
+                      </a>
+                    ) : null}
+                    {!opportunity.application_url && opportunity.source_url ? (
+                      <a
+                        className="text-blue-600 hover:underline truncate"
+                        href={opportunity.source_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Source: {new URL(opportunity.source_url).hostname}
+                      </a>
+                    ) : null}
+                  </div>
+                  {contactInfo?.address ? (
+                    <p className="text-xs text-slate-600 whitespace-pre-line">{contactInfo.address}</p>
+                  ) : null}
                 </div>
               )}
             </div>
@@ -796,6 +955,16 @@ export default function FundingOpportunities() {
     filters.compliance === "grant_only"
       ? "Grant funds only — excluding loans and match requirements."
       : "Including opportunities that may require matching funds or repayment."
+
+  // When a profile is selected, default the state filter based on their address/geographic focus.
+  React.useEffect(() => {
+    if (!selectedProfile) return
+    if (filters.profileId === "all") return
+    if (filters.state !== "all") return
+    const derived = deriveStateFromProfile(selectedProfile)
+    if (!derived) return
+    setFilters((prev) => ({ ...prev, state: derived }))
+  }, [selectedProfile, filters.profileId, filters.state])
 
   const organizedOpportunities = useMemo(() => {
     if (!opportunities.length) {
