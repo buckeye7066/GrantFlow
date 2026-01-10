@@ -205,10 +205,12 @@ const allowedMigrations = [
   { table: 'profiles', column: 'user_id', type: 'TEXT REFERENCES users(id) ON DELETE SET NULL' },
   { table: 'crawler_jobs', column: 'result_meta', type: 'TEXT' },
   { table: 'crawler_jobs', column: 'retry_count', type: 'INTEGER DEFAULT 0' },
-  { table: 'crawler_jobs', column: 'last_retry_at', type: 'DATETIME' }
+  { table: 'crawler_jobs', column: 'last_retry_at', type: 'DATETIME' },
+  // Positive classification for "REAL" opportunity invariants
+  { table: 'funding_opportunities', column: 'record_origin', type: "TEXT DEFAULT 'live_crawl'" }
 ];
 
-const validTables = new Set(['profiles', 'crawler_jobs', 'users', 'organizations', 'grants']);
+const validTables = new Set(['profiles', 'crawler_jobs', 'users', 'organizations', 'grants', 'funding_opportunities']);
 const validColumnPattern = /^[a-z_]+$/;
 
 allowedMigrations.forEach(({ table, column, type }) => {
@@ -390,9 +392,9 @@ try {
           id, source, source_id, title, sponsor, description,
           application_url, source_url, deadline, amount_min, amount_max,
           categories, keywords, eligibility_bullets, match_reasons,
-          state, requires_match, requires_501c3, is_active, is_national,
+          state, requires_match, requires_501c3, is_active, is_national, record_origin,
           opportunity_type, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         ON CONFLICT(id) DO NOTHING
       `);
       
@@ -400,6 +402,7 @@ try {
         for (const opp of allOpportunities) {
           try {
             const id = opp.id || crypto.randomUUID();
+            const isNational = opp.is_national === true || opp.is_national === 1 || opp.state === 'nationwide';
             upsert.run(
               id, opp.source || 'seeded_real', opp.source_id || id,
               opp.title || opp.program_name, opp.sponsor || opp.funder, opp.description || opp.summary,
@@ -407,8 +410,9 @@ try {
               opp.amount_min || opp.award_floor, opp.amount_max || opp.award_ceiling,
               JSON.stringify(opp.categories || []), JSON.stringify(opp.keywords || []),
               JSON.stringify(opp.eligibility_bullets || []), JSON.stringify(opp.match_reasons || []),
-              opp.state || (opp.is_national ? 'nationwide' : null),
-              opp.requires_match ? 1 : 0, opp.requires_501c3 ? 1 : 0, opp.is_national ? 1 : 0,
+              opp.state || (isNational ? 'nationwide' : null),
+              opp.requires_match ? 1 : 0, opp.requires_501c3 ? 1 : 0, isNational ? 1 : 0,
+              'curated_verified',
               opp.opportunity_type || 'grant'
             );
           } catch (e) { /* ignore individual errors */ }
@@ -426,18 +430,68 @@ try {
   console.warn('[startup] Error during auto-seed:', seedError.message);
 }
 
-// Ensure at least 3 REAL national opportunities are always available (visible from any ZIP).
+function parseBoolEnv(value) {
+  if (value == null) return null
+  const v = String(value).trim().toLowerCase()
+  if (['1', 'true', 'yes', 'y', 'on'].includes(v)) return true
+  if (['0', 'false', 'no', 'n', 'off'].includes(v)) return false
+  return null
+}
+
+// Ensure at least N REAL national opportunities are available (visible from any ZIP).
+// - Non-prod: default ON (local reliability).
+// - Prod: default OFF unless first-boot (no opportunities at all) or explicitly enabled.
 try {
   const minimum = Number.parseInt(process.env.MIN_NATIONAL_OPPORTUNITIES || '3', 10)
-  const ensured = ensureMinimumNationalOpportunities(db, Number.isFinite(minimum) ? minimum : 3)
-  if (!ensured.ok) {
-    console.warn(
-      `[startup] National minimum not met: have ${ensured.total}, need ${ensured.minimum}`,
-    )
+  const min = Number.isFinite(minimum) ? minimum : 3
+
+  const isProd = process.env.NODE_ENV === 'production'
+  const flag = parseBoolEnv(process.env.ENABLE_MIN_NATIONAL_ENSURE)
+  const activeTotalRow = db
+    .prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1')
+    .get()
+  const activeTotal = Number(activeTotalRow?.count ?? 0)
+
+  let shouldEnsure = false
+  let enabledBy = 'disabled'
+
+  if (flag === true) {
+    shouldEnsure = true
+    enabledBy = 'flag'
+  } else if (flag === false) {
+    shouldEnsure = false
+    enabledBy = 'flag_off'
+  } else if (!isProd) {
+    shouldEnsure = true
+    enabledBy = 'default_nonprod'
+  } else if (activeTotal === 0) {
+    shouldEnsure = true
+    enabledBy = 'first_boot'
+  }
+
+  if (shouldEnsure) {
+    const ensured = ensureMinimumNationalOpportunities(db, min)
+    const backfilled = (ensured.events || []).some((e) => e.type === 'backfill' || e.type === 'schema_backfill')
+
+    const evt = {
+      event: 'min_national_ensure',
+      enabled_by: enabledBy,
+      minimum: ensured.minimum,
+      ok: ensured.ok,
+      total: ensured.total,
+      ensured: ensured.ensured,
+      backfilled,
+      sources: (ensured.events || []).filter((e) => e.type === 'backfill').map((e) => e.source),
+    }
+
+    // Structured log for observability (backfill is acceptable but must be visible)
+    console.info('[startup]', JSON.stringify(evt))
+
+    if (!ensured.ok) {
+      console.warn(`[startup] National minimum not met: have ${ensured.total}, need ${ensured.minimum}`)
+    }
   } else {
-    console.info(
-      `[startup] National minimum ensured: have ${ensured.total} (min ${ensured.minimum})`,
-    )
+    console.info('[startup]', JSON.stringify({ event: 'min_national_ensure', enabled_by: enabledBy, minimum: min, skipped: true }))
   }
 } catch (error) {
   console.warn('[startup] Failed to ensure national minimum opportunities:', error?.message || error)

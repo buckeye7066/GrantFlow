@@ -169,39 +169,45 @@ router.get('/', (req, res) => {
     const parsedLimit = Number.parseInt(limit, 10) || 10000;
     const parsedOffset = Math.max(Number.parseInt(offset, 10) || 0, 0);
 
-    const conditions = ['is_active = 1'];
-    const filterParams = [];
+    const baseConditions = ['is_active = 1'];
+    const baseParams = [];
 
-    applyComplianceFilters(compliance, conditions, filterParams);
+    applyComplianceFilters(compliance, baseConditions, baseParams);
 
     if (search) {
       const searchTerm = `%${search}%`;
-      conditions.push('(title LIKE ? OR sponsor LIKE ? OR description LIKE ?)');
-      filterParams.push(searchTerm, searchTerm, searchTerm);
+      baseConditions.push('(title LIKE ? OR sponsor LIKE ? OR description LIKE ?)');
+      baseParams.push(searchTerm, searchTerm, searchTerm);
     }
 
-    if (state) {
-      conditions.push('(state = ? OR is_national = 1)');
-      filterParams.push(state);
-    }
+    const normalizedState = state ? String(state).toUpperCase() : null;
 
     if (isNational === 'true') {
-      conditions.push('is_national = 1');
+      baseConditions.push('is_national = 1');
     }
 
     if (source) {
-      conditions.push('source = ?');
-      filterParams.push(source);
+      baseConditions.push('source = ?');
+      baseParams.push(source);
     }
 
     if (deadlineAfter) {
-      conditions.push('(deadline_type = "rolling" OR (deadline IS NOT NULL AND deadline >= ?))');
-      filterParams.push(deadlineAfter);
+      baseConditions.push('(deadline_type = "rolling" OR (deadline IS NOT NULL AND deadline >= ?))');
+      baseParams.push(deadlineAfter);
     }
 
     if (deadlineBefore) {
-      conditions.push('(deadline IS NOT NULL AND deadline <= ?)');
-      filterParams.push(deadlineBefore);
+      baseConditions.push('(deadline IS NOT NULL AND deadline <= ?)');
+      baseParams.push(deadlineBefore);
+    }
+
+    const conditions = [...baseConditions];
+    const filterParams = [...baseParams];
+
+    if (normalizedState) {
+      // Default behavior includes both state + national.
+      conditions.push('(state = ? OR is_national = 1)');
+      filterParams.push(normalizedState);
     }
 
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -212,18 +218,63 @@ router.get('/', (req, res) => {
         created_at DESC
     `;
 
-    const opportunities = req.db
-      .prepare(
-        `
-          SELECT *
-          FROM funding_opportunities
-          ${whereClause}
-          ${orderClause}
-          LIMIT ?
-          OFFSET ?
-        `,
-      )
-      .all(...filterParams, parsedLimit, parsedOffset);
+    // If state-scoped and first page, guarantee >=3 national opportunities are included
+    // (without changing total counts or hiding crawler failures).
+    const minNationalVisible = Math.max(
+      Number.parseInt(process.env.MIN_NATIONAL_VISIBLE || '3', 10) || 3,
+      0,
+    );
+
+    let opportunities;
+    if (normalizedState && parsedOffset === 0 && isNational !== 'true' && parsedLimit > 0 && minNationalVisible > 0) {
+      const commonWhere = baseConditions.length ? `WHERE ${baseConditions.join(' AND ')}` : 'WHERE 1=1';
+
+      const nationals = req.db
+        .prepare(
+          `
+            SELECT *
+            FROM funding_opportunities
+            ${commonWhere}
+              AND is_national = 1
+            ${orderClause}
+            LIMIT ?
+          `,
+        )
+        .all(...baseParams, minNationalVisible);
+
+      const remaining = Math.max(parsedLimit - nationals.length, 0);
+      const locals = remaining > 0
+        ? req.db
+            .prepare(
+              `
+                SELECT *
+                FROM funding_opportunities
+                ${commonWhere}
+                  AND state = ?
+                  AND (is_national IS NULL OR is_national = 0)
+                ${orderClause}
+                LIMIT ?
+              `,
+            )
+            .all(...baseParams, normalizedState, remaining)
+        : [];
+
+      // Return locals first, then nationals to guarantee visibility in the response.
+      opportunities = [...locals, ...nationals];
+    } else {
+      opportunities = req.db
+        .prepare(
+          `
+            SELECT *
+            FROM funding_opportunities
+            ${whereClause}
+            ${orderClause}
+            LIMIT ?
+            OFFSET ?
+          `,
+        )
+        .all(...filterParams, parsedLimit, parsedOffset);
+    }
 
     const parsed = opportunities.map((opp) => decorateOpportunity(opp));
 

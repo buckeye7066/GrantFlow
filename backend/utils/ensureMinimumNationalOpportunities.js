@@ -20,21 +20,50 @@ function stableIdFromUrl(url) {
   return crypto.createHash('sha256').update(String(url)).digest('hex')
 }
 
+function hasColumn(db, tableName, columnName) {
+  try {
+    const cols = db.prepare(`PRAGMA table_info(${tableName})`).all()
+    return cols.some((c) => String(c.name).toLowerCase() === String(columnName).toLowerCase())
+  } catch {
+    return false
+  }
+}
+
+function ensureRecordOriginColumn(db) {
+  if (hasColumn(db, 'funding_opportunities', 'record_origin')) return { ok: true, added: false }
+  try {
+    db.prepare(
+      `ALTER TABLE funding_opportunities ADD COLUMN record_origin TEXT DEFAULT 'live_crawl'`,
+    ).run()
+    return { ok: true, added: true }
+  } catch {
+    return { ok: false, added: false }
+  }
+}
+
 function countRealNational(db) {
-  // REAL definition: active, national, has a URL, and not from known synthetic/template sources
-  const row = db
-    .prepare(
-      `
+  // REAL definition: active + national + has URL + positive classification
+  // Back-compat: if record_origin column doesn't exist yet, treat unknowns as live_crawl for counting.
+  const hasOrigin = hasColumn(db, 'funding_opportunities', 'record_origin')
+  const sql = hasOrigin
+    ? `
         SELECT COUNT(*) AS count
         FROM funding_opportunities
         WHERE is_active = 1
           AND is_national = 1
           AND source_url IS NOT NULL
           AND source_url != ''
-          AND (source IS NULL OR LOWER(source) NOT IN ('synthetic', 'template', 'comprehensive_crawler'))
-      `,
-    )
-    .get()
+          AND record_origin IN ('live_crawl','curated_verified')
+      `
+    : `
+        SELECT COUNT(*) AS count
+        FROM funding_opportunities
+        WHERE is_active = 1
+          AND is_national = 1
+          AND source_url IS NOT NULL
+          AND source_url != ''
+      `
+  const row = db.prepare(sql).get()
   return Number(row?.count ?? 0)
 }
 
@@ -42,6 +71,13 @@ export function ensureMinimumNationalOpportunities(db, minimum = 3) {
   if (!db) throw new Error('db required')
   const min = Number.isFinite(minimum) ? minimum : 3
   if (min <= 0) return { ok: true, minimum: min, ensured: 0, total: countRealNational(db) }
+
+  const events = []
+
+  const originColumn = ensureRecordOriginColumn(db)
+  if (originColumn.added) {
+    events.push({ type: 'schema_backfill', detail: 'added_record_origin_column' })
+  }
 
   // Backfill missing source_url from application_url for older inserted rows.
   try {
@@ -58,21 +94,45 @@ export function ensureMinimumNationalOpportunities(db, minimum = 3) {
     // best-effort
   }
 
+  // Backfill record_origin for older rows (positive classification)
+  try {
+    // Prefer curated_verified for known curated sources
+    db.prepare(
+      `
+        UPDATE funding_opportunities
+        SET record_origin = 'curated_verified'
+        WHERE (record_origin IS NULL OR record_origin = '')
+          AND LOWER(COALESCE(source, '')) IN ('seeded_real_grant','seeded_real','verified_real')
+      `,
+    ).run()
+    // Default everything else to live_crawl unless explicitly set
+    db.prepare(
+      `
+        UPDATE funding_opportunities
+        SET record_origin = 'live_crawl'
+        WHERE (record_origin IS NULL OR record_origin = '')
+      `,
+    ).run()
+  } catch {
+    // best-effort
+  }
+
   const before = countRealNational(db)
   if (before >= min) {
-    return { ok: true, minimum: min, ensured: 0, total: before }
+    return { ok: true, minimum: min, ensured: 0, total: before, events }
   }
 
   // 1) Seed from curated real files (broad but safe; uses upsert)
   try {
     seedRealOpportunities(db)
+    events.push({ type: 'backfill', source: 'seedRealOpportunities' })
   } catch {
     // best-effort
   }
 
   let current = countRealNational(db)
   if (current >= min) {
-    return { ok: true, minimum: min, ensured: current - before, total: current }
+    return { ok: true, minimum: min, ensured: current - before, total: current, events }
   }
 
   // 2) Minimal fallback: insert a few known nationwide assistance entries from existing JSON files
@@ -115,6 +175,7 @@ export function ensureMinimumNationalOpportunities(db, minimum = 3) {
       opportunity_type: item.opportunity_type || 'program',
       requires_match: 0,
       requires_501c3: 0,
+      record_origin: 'curated_verified',
     }
 
     try {
@@ -129,7 +190,11 @@ export function ensureMinimumNationalOpportunities(db, minimum = 3) {
   }
 
   const after = countRealNational(db)
-  return { ok: after >= min, minimum: min, ensured, total: after }
+  if (ensured > 0) {
+    events.push({ type: 'backfill', source: 'fallback_json', inserted: ensured })
+  }
+
+  return { ok: after >= min, minimum: min, ensured, total: after, events }
 }
 
 export default ensureMinimumNationalOpportunities

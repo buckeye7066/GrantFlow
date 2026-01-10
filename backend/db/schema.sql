@@ -117,6 +117,7 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   source TEXT, -- 'grants.gov', 'foundation', 'state', 'federal', etc.
   source_id TEXT, -- external ID from source
   source_url TEXT,
+  record_origin TEXT DEFAULT 'live_crawl' CHECK(record_origin IN ('live_crawl','curated_verified','manual','synthetic')),
   
   description TEXT,
   eligibility_bullets TEXT DEFAULT '[]', -- JSON array

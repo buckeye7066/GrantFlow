@@ -62,3 +62,11 @@ backend/anya/audit/**/*.log
 test-*.js
 test-*.mjs
 seed/grantflow.db
+
+# Local-only scratch docs / tooling (do not leave in limbo)
+docs/DEFECT_LEDGER.md
+docs/ENV_VARS.md
+docs/REPRO_MATRIX.md
+scripts/_doctor/
+tests/smoke/
+tests/unit/
