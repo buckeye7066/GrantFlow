@@ -12,6 +12,7 @@ import crypto from 'crypto';
 import organizationsRouter from './routes/organizations.js';
 import grantsRouter from './routes/grants.js';
 import opportunitiesRouter from './routes/opportunities.js';
+import programsRouter from './routes/programs.js';
 import milestonesRouter from './routes/milestones.js';
 import documentsRouter from './routes/documents.js';
 import expensesRouter from './routes/expenses.js';
@@ -29,11 +30,13 @@ import discoveryRouter from './routes/discovery.js';
 import serviceApplicationRouter from './routes/serviceApplication.js';
 import statsRouter from './routes/stats.js';
 import jwt from 'jsonwebtoken';
+import crawlerV2Router from './routes/crawlerV2.js';
+import nfProgramsRouter from './routes/nfPrograms.js';
 import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
 import { runStartupOperations } from './services/anyaStartupOperations.js';
-import { getSafeHealthSummary } from './services/diagnosticsService.js';
+import ensureMinimumNationalOpportunities from './utils/ensureMinimumNationalOpportunities.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { MAX_JSON_BODY_SIZE } from './config/constants.js';
 
@@ -130,6 +133,11 @@ app.use('/uploads', express.static(uploadsDir));
 
 // Serve static files from Vite build
 app.use(express.static(distPath));
+// Serve the SPA under the configured base path so production builds (base=/grantflow) work locally.
+const APP_BASE_PATH = process.env.AUTH_FRONTEND_APP_BASE || process.env.VITE_APP_BASE || '/grantflow';
+if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
+  app.use(APP_BASE_PATH, express.static(distPath));
+}
 
 // Initialize database
 const dataDir = join(__dirname, 'data');
@@ -187,10 +195,12 @@ const allowedMigrations = [
   { table: 'profiles', column: 'user_id', type: 'TEXT REFERENCES users(id) ON DELETE SET NULL' },
   { table: 'crawler_jobs', column: 'result_meta', type: 'TEXT' },
   { table: 'crawler_jobs', column: 'retry_count', type: 'INTEGER DEFAULT 0' },
-  { table: 'crawler_jobs', column: 'last_retry_at', type: 'DATETIME' }
+  { table: 'crawler_jobs', column: 'last_retry_at', type: 'DATETIME' },
+  // Positive classification for "REAL" opportunity invariants
+  { table: 'funding_opportunities', column: 'record_origin', type: "TEXT DEFAULT 'live_crawl'" }
 ];
 
-const validTables = new Set(['profiles', 'crawler_jobs', 'users', 'organizations', 'grants']);
+const validTables = new Set(['profiles', 'crawler_jobs', 'users', 'organizations', 'grants', 'funding_opportunities']);
 const validColumnPattern = /^[a-z_]+$/;
 
 allowedMigrations.forEach(({ table, column, type }) => {
@@ -210,112 +220,124 @@ allowedMigrations.forEach(({ table, column, type }) => {
   }
 });
 
-function ensureCrawlerJobsSupportsProfileEnrichment() {
-  try {
-    db.prepare(
-      `
-        INSERT INTO crawler_jobs (id, type, status)
-        VALUES ('__schema_test__', 'profile_enrichment', 'queued')
-      `,
-    ).run()
-    db.prepare(
-      `
-        DELETE FROM crawler_jobs
-        WHERE id = '__schema_test__'
-      `,
-    ).run()
-  } catch (error) {
-    if (error?.message && error.message.includes('CHECK constraint failed')) {
-      const rebuild = db.transaction(() => {
-        db.prepare(
-          `
-            CREATE TABLE crawler_jobs_new (
-              id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
-              created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-              started_at DATETIME,
-              completed_at DATETIME,
-              type TEXT NOT NULL CHECK(type IN (
-                'local',
-                'scholarship',
-                'comprehensive',
-                'item_search',
-                'avatar_lookup',
-                'document_ingest',
-                'pipeline_automation',
-                'profile_enrichment'
-              )),
-              status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
-                'queued',
-                'running',
-                'completed',
-                'failed',
-                'cancelled'
-              )),
-              profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
-              organization_id TEXT REFERENCES organizations(id) ON DELETE SET NULL,
-              parameters TEXT DEFAULT '{}',
-              result_count INTEGER DEFAULT 0,
-              result_meta TEXT,
-              error TEXT,
-              requested_by TEXT,
-              retry_count INTEGER DEFAULT 0,
-              last_retry_at DATETIME
-            )
-          `,
-        ).run()
+function ensureCrawlerJobsSupportsAllTypes() {
+  const testTypes = ['profile_enrichment', 'national']
+  let needsRebuild = false
 
-        db.prepare(
-          `
-            INSERT INTO crawler_jobs_new (
-              id,
-              created_at,
-              started_at,
-              completed_at,
-              type,
-              status,
-              profile_id,
-              organization_id,
-              parameters,
-              result_count,
-              result_meta,
-              error,
-              requested_by,
-              retry_count,
-              last_retry_at
-            )
-            SELECT
-              id,
-              created_at,
-              started_at,
-              completed_at,
-              type,
-              status,
-              profile_id,
-              organization_id,
-              parameters,
-              result_count,
-              NULL,
-              error,
-              requested_by,
-              COALESCE(retry_count, 0),
-              last_retry_at
-            FROM crawler_jobs
-          `,
-        ).run()
-
-        db.prepare('DROP TABLE crawler_jobs').run()
-        db.prepare('ALTER TABLE crawler_jobs_new RENAME TO crawler_jobs').run()
-        db.prepare('CREATE INDEX IF NOT EXISTS idx_crawler_jobs_status ON crawler_jobs(status)').run()
-        db.prepare('CREATE INDEX IF NOT EXISTS idx_crawler_jobs_profile ON crawler_jobs(profile_id)').run()
-        db.prepare('CREATE INDEX IF NOT EXISTS idx_crawler_jobs_type ON crawler_jobs(type)').run()
-      })
-
-      rebuild()
+  for (const type of testTypes) {
+    try {
+      const testId = `__schema_test_${type}__`
+      db.prepare(
+        `
+          INSERT INTO crawler_jobs (id, type, status)
+          VALUES (?, ?, 'queued')
+        `,
+      ).run(testId, type)
+      db.prepare(
+        `
+          DELETE FROM crawler_jobs
+          WHERE id = ?
+        `,
+      ).run(testId)
+    } catch (error) {
+      if (error?.message && error.message.includes('CHECK constraint failed')) {
+        needsRebuild = true
+        break
+      }
     }
   }
+
+  if (!needsRebuild) return
+
+  const rebuild = db.transaction(() => {
+    db.prepare(
+      `
+        CREATE TABLE crawler_jobs_new (
+          id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          started_at DATETIME,
+          completed_at DATETIME,
+          type TEXT NOT NULL CHECK(type IN (
+            'local',
+            'scholarship',
+            'comprehensive',
+            'national',
+            'item_search',
+            'avatar_lookup',
+            'document_ingest',
+            'pipeline_automation',
+            'profile_enrichment'
+          )),
+          status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
+            'queued',
+            'running',
+            'completed',
+            'failed',
+            'cancelled'
+          )),
+          profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+          organization_id TEXT REFERENCES organizations(id) ON DELETE SET NULL,
+          parameters TEXT DEFAULT '{}',
+          result_count INTEGER DEFAULT 0,
+          result_meta TEXT,
+          error TEXT,
+          requested_by TEXT,
+          retry_count INTEGER DEFAULT 0,
+          last_retry_at DATETIME
+        )
+      `,
+    ).run()
+
+    db.prepare(
+      `
+        INSERT INTO crawler_jobs_new (
+          id,
+          created_at,
+          started_at,
+          completed_at,
+          type,
+          status,
+          profile_id,
+          organization_id,
+          parameters,
+          result_count,
+          result_meta,
+          error,
+          requested_by,
+          retry_count,
+          last_retry_at
+        )
+        SELECT
+          id,
+          created_at,
+          started_at,
+          completed_at,
+          type,
+          status,
+          profile_id,
+          organization_id,
+          parameters,
+          result_count,
+          result_meta,
+          error,
+          requested_by,
+          COALESCE(retry_count, 0),
+          last_retry_at
+        FROM crawler_jobs
+      `,
+    ).run()
+
+    db.prepare('DROP TABLE crawler_jobs').run()
+    db.prepare('ALTER TABLE crawler_jobs_new RENAME TO crawler_jobs').run()
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_crawler_jobs_status ON crawler_jobs(status)').run()
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_crawler_jobs_profile ON crawler_jobs(profile_id)').run()
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_crawler_jobs_type ON crawler_jobs(type)').run()
+  })
+
+  rebuild()
 }
 
-ensureCrawlerJobsSupportsProfileEnrichment()
+ensureCrawlerJobsSupportsAllTypes()
 ensureDesignatedProfiles(db)
 linkAllProfilesToAdmin(db)
 ensureUserPreferencesTable(db)
@@ -324,22 +346,145 @@ ensureUserPreferencesTable(db)
 try {
   const oppCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get();
   if (oppCount && oppCount.count === 0) {
-    console.info('[startup] ═══════════════════════════════════════════════════════════');
-    console.info('[startup] No funding opportunities found in database');
-    console.info('[startup] ');
-    console.info('[startup] To populate with REAL data from live sources, run:');
-    console.info('[startup]   npm run ingest');
-    console.info('[startup] ');
-    console.info('[startup] To populate with demo data (development only), run:');
-    console.info('[startup]   npm run seed:demo');
-    console.info('[startup] ');
-    console.info('[startup] The app will show an empty state until you run ingestion.');
-    console.info('[startup] ═══════════════════════════════════════════════════════════');
+    console.info('[startup] No funding opportunities found, auto-seeding...');
+    
+    // Load opportunity files
+    const crawlersDir = join(__dirname, 'data', 'crawlers');
+    const files = [
+      { path: join(crawlersDir, 'real_funding_opportunities.json'), type: 'structured' },
+      { path: join(crawlersDir, 'scholarship_opportunities.json'), type: 'array' },
+      { path: join(crawlersDir, 'local_opportunities.json'), type: 'array' },
+      { path: join(crawlersDir, 'item_funding_sources.json'), type: 'array' },
+    ];
+    
+    const allOpportunities = [];
+    for (const file of files) {
+      try {
+        if (fs.existsSync(file.path)) {
+          const content = fs.readFileSync(file.path, 'utf8');
+          const data = JSON.parse(content);
+          if (file.type === 'structured') {
+            Object.values(data).forEach(category => {
+              if (Array.isArray(category)) allOpportunities.push(...category);
+            });
+          } else if (Array.isArray(data)) {
+            allOpportunities.push(...data);
+          }
+        }
+      } catch (e) {
+        console.warn(`[startup] Failed to load ${file.path}:`, e.message);
+      }
+    }
+    
+    if (allOpportunities.length > 0) {
+      const upsert = db.prepare(`
+        INSERT INTO funding_opportunities (
+          id, source, source_id, title, sponsor, description,
+          application_url, source_url, deadline, amount_min, amount_max,
+          categories, keywords, eligibility_bullets, match_reasons,
+          state, requires_match, requires_501c3, is_active, is_national, record_origin,
+          opportunity_type, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO NOTHING
+      `);
+      
+      const transaction = db.transaction(() => {
+        for (const opp of allOpportunities) {
+          try {
+            const id = opp.id || crypto.randomUUID();
+            const isNational = opp.is_national === true || opp.is_national === 1 || opp.state === 'nationwide';
+            upsert.run(
+              id, opp.source || 'seeded_real', opp.source_id || id,
+              opp.title || opp.program_name, opp.sponsor || opp.funder, opp.description || opp.summary,
+              opp.application_url || opp.url, opp.url || opp.source_url || opp.application_url, opp.deadline,
+              opp.amount_min || opp.award_floor, opp.amount_max || opp.award_ceiling,
+              JSON.stringify(opp.categories || []), JSON.stringify(opp.keywords || []),
+              JSON.stringify(opp.eligibility_bullets || []), JSON.stringify(opp.match_reasons || []),
+              opp.state || (isNational ? 'nationwide' : null),
+              opp.requires_match ? 1 : 0, opp.requires_501c3 ? 1 : 0, isNational ? 1 : 0,
+              'curated_verified',
+              opp.opportunity_type || 'grant'
+            );
+          } catch (e) { /* ignore individual errors */ }
+        }
+      });
+      
+      transaction();
+      const newCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get();
+      console.info(`[startup] Seeded ${newCount.count} funding opportunities`);
+    }
   } else {
     console.info(`[startup] Found ${oppCount.count} existing funding opportunities`);
   }
 } catch (error) {
   console.warn('[startup] Error checking opportunities count:', error.message);
+}
+
+function parseBoolEnv(value) {
+  if (value == null) return null
+  const v = String(value).trim().toLowerCase()
+  if (['1', 'true', 'yes', 'y', 'on'].includes(v)) return true
+  if (['0', 'false', 'no', 'n', 'off'].includes(v)) return false
+  return null
+}
+
+// Ensure at least N REAL national opportunities are available (visible from any ZIP).
+// - Non-prod: default ON (local reliability).
+// - Prod: default OFF unless first-boot (no opportunities at all) or explicitly enabled.
+try {
+  const minimum = Number.parseInt(process.env.MIN_NATIONAL_OPPORTUNITIES || '3', 10)
+  const min = Number.isFinite(minimum) ? minimum : 3
+
+  const isProd = process.env.NODE_ENV === 'production'
+  const flag = parseBoolEnv(process.env.ENABLE_MIN_NATIONAL_ENSURE)
+  const activeTotalRow = db
+    .prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1')
+    .get()
+  const activeTotal = Number(activeTotalRow?.count ?? 0)
+
+  let shouldEnsure = false
+  let enabledBy = 'disabled'
+
+  if (flag === true) {
+    shouldEnsure = true
+    enabledBy = 'flag'
+  } else if (flag === false) {
+    shouldEnsure = false
+    enabledBy = 'flag_off'
+  } else if (!isProd) {
+    shouldEnsure = true
+    enabledBy = 'default_nonprod'
+  } else if (activeTotal === 0) {
+    shouldEnsure = true
+    enabledBy = 'first_boot'
+  }
+
+  if (shouldEnsure) {
+    const ensured = ensureMinimumNationalOpportunities(db, min)
+    const backfilled = (ensured.events || []).some((e) => e.type === 'backfill' || e.type === 'schema_backfill')
+
+    const evt = {
+      event: 'min_national_ensure',
+      enabled_by: enabledBy,
+      minimum: ensured.minimum,
+      ok: ensured.ok,
+      total: ensured.total,
+      ensured: ensured.ensured,
+      backfilled,
+      sources: (ensured.events || []).filter((e) => e.type === 'backfill').map((e) => e.source),
+    }
+
+    // Structured log for observability (backfill is acceptable but must be visible)
+    console.info('[startup]', JSON.stringify(evt))
+
+    if (!ensured.ok) {
+      console.warn(`[startup] National minimum not met: have ${ensured.total}, need ${ensured.minimum}`)
+    }
+  } else {
+    console.info('[startup]', JSON.stringify({ event: 'min_national_ensure', enabled_by: enabledBy, minimum: min, skipped: true }))
+  }
+} catch (error) {
+  console.warn('[startup] Failed to ensure national minimum opportunities:', error?.message || error)
 }
 
 // Auto-seed grants disabled temporarily to debug server crash
@@ -626,6 +771,7 @@ app.use('/api/stats', statsRouter);
 app.use('/api/organizations', organizationsRouter);
 app.use('/api/grants', grantsRouter);
 app.use('/api/opportunities', opportunitiesRouter);
+app.use('/api/programs', programsRouter);
 app.use('/api/milestones', milestonesRouter);
 app.use('/api/documents', documentsRouter);
 app.use('/api/expenses', expensesRouter);
@@ -656,6 +802,8 @@ app.get('/api/health', (req, res) => {
 
 app.use('/api/admin', adminRouter);
 app.use('/api', discoveryRouter); // Discovery endpoints (comprehensiveMatch, searchOpportunities, etc.)
+app.use('/api/crawler-v2', crawlerV2Router);
+app.use('/api/nf-programs', nfProgramsRouter);
 
 // Pipeline stats
 app.get('/api/pipeline/stats', (req, res) => {
@@ -786,7 +934,8 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 const server = app.listen(PORT, '0.0.0.0', () => {
   const loggedCorsOrigins = Array.isArray(corsOptions.origin) ? corsOptions.origin : [corsOptions.origin];
   console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
-  console.log('[Server] Ready on port', PORT);
+  const actualPort = server.address()?.port ?? PORT;
+  console.log('[Server] Ready on port', actualPort);
   
   // Start Anya autonomous operations 5 seconds after server is ready
   if (process.env.ANYA_AUTONOMOUS_ENABLED === 'true') {
@@ -808,6 +957,39 @@ const server = app.listen(PORT, '0.0.0.0', () => {
     }, 5000);
   } else {
     console.log('[Anya] Autonomous operations disabled (set ANYA_AUTONOMOUS_ENABLED=true to enable)');
+  }
+
+  // Optional: continuous national programs crawler (Track A/B programs)
+  if (process.env.NATIONAL_PROGRAMS_CRAWLER_ENABLED === 'true') {
+    const intervalMinutes = Number.parseInt(
+      process.env.NATIONAL_PROGRAMS_CRAWLER_INTERVAL_MINUTES || '360',
+      10,
+    )
+    const maxUrls = Number.parseInt(process.env.NATIONAL_PROGRAMS_MAX_URLS || '200', 10)
+    const maxDepth = Number.parseInt(process.env.NATIONAL_PROGRAMS_MAX_DEPTH || '2', 10)
+
+    setTimeout(() => {
+      import('./services/nationalPrograms/continuousRunner.js')
+        .then(({ startNationalProgramsCrawler }) => {
+          console.log(
+            `[NationalPrograms] Continuous crawler enabled (every ${intervalMinutes} minutes, maxUrls=${maxUrls}, maxDepth=${maxDepth})`,
+          )
+          startNationalProgramsCrawler({
+            db,
+            uploadDir: uploadsDir,
+            intervalMinutes,
+            maxUrls,
+            maxDepth,
+          })
+        })
+        .catch((err) => {
+          console.error('[NationalPrograms] Failed to start continuous crawler:', err?.message || err)
+        })
+    }, 8000)
+  } else {
+    console.log(
+      '[NationalPrograms] Continuous crawler disabled (set NATIONAL_PROGRAMS_CRAWLER_ENABLED=true to enable)',
+    )
   }
 });
 

@@ -6,6 +6,20 @@ function ensureArray(value) {
   return [value]
 }
 
+function deriveIsNational(opportunity) {
+  return (
+    opportunity?.is_national === true ||
+    opportunity?.is_national === 1 ||
+    opportunity?.state === 'nationwide'
+  )
+}
+
+function deriveRecordOrigin(opportunity) {
+  const origin = opportunity?.record_origin
+  if (typeof origin === 'string' && origin.length > 0) return origin
+  return 'live_crawl'
+}
+
 export function upsertFundingOpportunity(db, opportunity) {
   const source = opportunity.source ?? 'crawler'
   const sourceId =
@@ -38,10 +52,12 @@ export function upsertFundingOpportunity(db, opportunity) {
   }
 
   const id = opportunity.id ?? crypto.randomUUID()
+  const isNational = deriveIsNational(opportunity)
   const record = {
     title: opportunity.title?.trim(),
     sponsor: opportunity.sponsor?.trim() ?? null,
     description: opportunity.description ?? null,
+    source_url: opportunity.source_url ?? opportunity.url ?? opportunity.application_url ?? null,
     eligibility_bullets: JSON.stringify(
       ensureArray(opportunity.eligibility_bullets),
     ),
@@ -58,8 +74,8 @@ export function upsertFundingOpportunity(db, opportunity) {
     deadline: opportunity.deadline ?? null,
     deadline_type: opportunity.deadline_type ?? null,
     application_url: opportunity.application_url ?? null,
-    is_national: opportunity.is_national ? 1 : 0,
-    state: opportunity.state ?? null,
+    is_national: isNational ? 1 : 0,
+    state: opportunity.state ?? (isNational ? 'nationwide' : null),
     categories: JSON.stringify(ensureArray(opportunity.categories)),
     keywords: JSON.stringify(ensureArray(opportunity.keywords)),
     opportunity_type: opportunity.opportunity_type ?? 'grant',
@@ -73,6 +89,7 @@ export function upsertFundingOpportunity(db, opportunity) {
         ? opportunity.match_percentage
         : null,
     notes: opportunity.notes ?? null,
+    record_origin: deriveRecordOrigin(opportunity),
   }
 
   const insert = db.prepare(`
@@ -82,6 +99,8 @@ export function upsertFundingOpportunity(db, opportunity) {
       sponsor,
       source,
       source_id,
+      source_url,
+      record_origin,
       description,
       eligibility_bullets,
       amount_min,
@@ -111,6 +130,8 @@ export function upsertFundingOpportunity(db, opportunity) {
       @sponsor,
       @source,
       @source_id,
+      @source_url,
+      @record_origin,
       @description,
       @eligibility_bullets,
       @amount_min,
@@ -143,6 +164,8 @@ export function upsertFundingOpportunity(db, opportunity) {
     sponsor: record.sponsor,
     source,
     source_id: sourceId,
+    source_url: record.source_url,
+    record_origin: record.record_origin,
     description: record.description,
     eligibility_bullets: record.eligibility_bullets,
     amount_min: record.amount_min,
