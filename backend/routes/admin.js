@@ -11,6 +11,10 @@ import { seedRealOpportunities } from '../utils/seedRealOpportunities.js';
 import { ensureDesignatedProfiles } from '../utils/ensureDesignatedProfiles.js';
 import { buildProfileSignals, calculateMatchScore } from '../services/profileHelpers.js';
 import { getSystemDiagnostics } from '../services/diagnosticsService.js';
+import { listStatesWithCounts, listZipsForState, getZipEntry } from '../services/geo/zipReference.js';
+import { ensureZipGeoCache, ensureOpportunityGeoCoverage } from '../services/geo/geoSchema.js';
+import { resolveZipCounty } from '../services/geo/zipCountyResolver.js';
+import { runGeoZipCrawl } from '../services/geo/geoZipOpportunityCrawler.js';
 
 const router = express.Router();
 
@@ -640,6 +644,28 @@ router.post('/link-admin-to-organizations', async (req, res) => {
 // Track running national crawl jobs
 let nationalCrawlJob = null
 
+// Track running geo crawl/index jobs (state/county/zip scoped)
+let geoCrawlJob = null
+let geoIndexJob = null
+
+function ensureAdminOnly(req, res) {
+  const user = req.user
+  const userEmail = user?.primary_email || user?.email || ''
+  const isAdmin =
+    user?.is_admin === true ||
+    user?.role === 'admin' ||
+    (userEmail && userEmail.toLowerCase().includes('buckeye7066'))
+
+  if (!isAdmin) {
+    res.status(403).json({
+      error: 'Access denied',
+      message: 'This endpoint is restricted to administrators only',
+    })
+    return null
+  }
+  return user
+}
+
 /**
  * Start national ZIP crawl
  * POST /api/admin/national-crawl/start
@@ -666,9 +692,11 @@ router.post('/national-crawl/start', async (req, res) => {
         )
         .run(
           jobId,
-          'national_zip_scan',
+          // Use an existing allowed type in older DBs to avoid CHECK constraint failures.
+          // The actual crawl is handled by the national zip crawler, not the dispatcher.
+          'national',
           'completed',
-          JSON.stringify({ smoke: true }),
+          JSON.stringify({ smoke: true, subtype: 'national_zip_scan' }),
           req.user?.id || 'admin',
           JSON.stringify({ skipped: true, reason: 'SMOKE_MODE prevents nationwide crawl' }),
         )
@@ -698,9 +726,11 @@ router.post('/national-crawl/start', async (req, res) => {
       ) VALUES (?, ?, ?, ?, ?, datetime('now'))
     `).run(
       jobId,
-      'national_zip_scan',
+      // Use an existing allowed type in older DBs to avoid CHECK constraint failures.
+      // The actual crawl is handled by the national zip crawler, not the dispatcher.
+      'national',
       'running',
-      JSON.stringify(params),
+      JSON.stringify({ ...params, subtype: 'national_zip_scan' }),
       req.user?.id || 'admin'
     )
     
@@ -870,6 +900,309 @@ router.get('/national-crawl/status', async (req, res) => {
     console.error('[admin/national-crawl/status] Error:', error)
     res.status(500).json({ error: error.message })
   }
+})
+
+/**
+ * ============================================================
+ * GEO CRAWL (Admin-only): state → county → ZIP scoped crawling
+ * ============================================================
+ */
+
+// GET /api/admin/geo/states
+router.get('/geo/states', async (req, res) => {
+  const admin = ensureAdminOnly(req, res)
+  if (!admin) return
+  try {
+    return res.json({ states: listStatesWithCounts() })
+  } catch (error) {
+    console.error('[admin/geo/states] Error:', error)
+    return res.status(500).json({ error: error.message })
+  }
+})
+
+// GET /api/admin/geo/state/:state/zips
+router.get('/geo/state/:state/zips', async (req, res) => {
+  const admin = ensureAdminOnly(req, res)
+  if (!admin) return
+  try {
+    const state = String(req.params.state || '').trim().toUpperCase()
+    if (!state || state.length !== 2) {
+      return res.status(400).json({ error: 'Valid 2-letter state code required' })
+    }
+    const zips = listZipsForState(state)
+    return res.json({ state, total: zips.length, zips })
+  } catch (error) {
+    console.error('[admin/geo/state/zips] Error:', error)
+    return res.status(500).json({ error: error.message })
+  }
+})
+
+// POST /api/admin/geo/state/:state/index-counties
+router.post('/geo/state/:state/index-counties', async (req, res) => {
+  const admin = ensureAdminOnly(req, res)
+  if (!admin) return
+
+  try {
+    const state = String(req.params.state || '').trim().toUpperCase()
+    if (!state || state.length !== 2) {
+      return res.status(400).json({ error: 'Valid 2-letter state code required' })
+    }
+
+    if (geoIndexJob && geoIndexJob.status === 'running') {
+      return res.status(409).json({ error: 'Geo county index already running', job: geoIndexJob })
+    }
+
+    ensureZipGeoCache(req.db)
+    const zips = listZipsForState(state)
+
+    geoIndexJob = {
+      id: crypto.randomUUID(),
+      status: 'running',
+      state,
+      total: zips.length,
+      processed: 0,
+      started_at: new Date().toISOString(),
+    }
+
+    setImmediate(async () => {
+      for (const zipEntry of zips) {
+        if (!geoIndexJob || geoIndexJob.status !== 'running') break
+        try {
+          await resolveZipCounty(req.db, zipEntry)
+        } catch {
+          // best-effort
+        }
+        geoIndexJob.processed += 1
+      }
+      if (geoIndexJob && geoIndexJob.status === 'running') {
+        geoIndexJob.status = 'completed'
+        geoIndexJob.completed_at = new Date().toISOString()
+      }
+    })
+
+    return res.status(202).json({ success: true, job: geoIndexJob })
+  } catch (error) {
+    console.error('[admin/geo/index-counties] Error:', error)
+    return res.status(500).json({ error: error.message })
+  }
+})
+
+// GET /api/admin/geo/state/:state/counties
+router.get('/geo/state/:state/counties', async (req, res) => {
+  const admin = ensureAdminOnly(req, res)
+  if (!admin) return
+  try {
+    const state = String(req.params.state || '').trim().toUpperCase()
+    if (!state || state.length !== 2) {
+      return res.status(400).json({ error: 'Valid 2-letter state code required' })
+    }
+
+    ensureZipGeoCache(req.db)
+    const counties = req.db
+      .prepare(
+        `
+          SELECT county, COUNT(*) AS zip_count
+          FROM zip_geo_cache
+          WHERE state = ?
+            AND county IS NOT NULL
+            AND county != ''
+          GROUP BY county
+          ORDER BY county ASC
+        `,
+      )
+      .all(state)
+
+    return res.json({ state, counties })
+  } catch (error) {
+    console.error('[admin/geo/state/counties] Error:', error)
+    return res.status(500).json({ error: error.message })
+  }
+})
+
+// GET /api/admin/geo/state/:state/county/:county/zips
+router.get('/geo/state/:state/county/:county/zips', async (req, res) => {
+  const admin = ensureAdminOnly(req, res)
+  if (!admin) return
+  try {
+    const state = String(req.params.state || '').trim().toUpperCase()
+    const county = String(req.params.county || '').trim()
+    if (!state || state.length !== 2) {
+      return res.status(400).json({ error: 'Valid 2-letter state code required' })
+    }
+    if (!county) {
+      return res.status(400).json({ error: 'county is required' })
+    }
+
+    ensureZipGeoCache(req.db)
+    const zips = req.db
+      .prepare(
+        `
+          SELECT zip_code, city, state, county, lat, lng
+          FROM zip_geo_cache
+          WHERE state = ? AND county = ?
+          ORDER BY zip_code ASC
+        `,
+      )
+      .all(state, county)
+
+    return res.json({ state, county, total: zips.length, zips })
+  } catch (error) {
+    console.error('[admin/geo/state/county/zips] Error:', error)
+    return res.status(500).json({ error: error.message })
+  }
+})
+
+// POST /api/admin/geo/crawl/start
+router.post('/geo/crawl/start', async (req, res) => {
+  const admin = ensureAdminOnly(req, res)
+  if (!admin) return
+
+  try {
+    if (geoCrawlJob && geoCrawlJob.status === 'running') {
+      return res.status(409).json({ error: 'Geo crawl already running', job: geoCrawlJob })
+    }
+
+    const { state, counties, zips, min_sources_per_zip = 3 } = req.body || {}
+    const normalizedState = String(state || '').trim().toUpperCase()
+    if (!normalizedState || normalizedState.length !== 2) {
+      return res.status(400).json({ error: 'state (2-letter code) is required' })
+    }
+
+    ensureZipGeoCache(req.db)
+    ensureOpportunityGeoCoverage(req.db)
+
+    let targetZips = []
+    if (Array.isArray(zips) && zips.length > 0) {
+      targetZips = zips
+        .map((z) => getZipEntry(z))
+        .filter((entry) => entry && entry.state === normalizedState)
+    } else if (Array.isArray(counties) && counties.length > 0) {
+      const placeholders = counties.map(() => '?').join(', ')
+      targetZips = req.db
+        .prepare(
+          `
+            SELECT zip_code, city, state, county, lat, lng
+            FROM zip_geo_cache
+            WHERE state = ?
+              AND county IN (${placeholders})
+            ORDER BY zip_code ASC
+          `,
+        )
+        .all(normalizedState, ...counties)
+    } else {
+      targetZips = listZipsForState(normalizedState)
+    }
+
+    const jobId = crypto.randomUUID()
+    geoCrawlJob = {
+      id: jobId,
+      status: 'running',
+      state: normalizedState,
+      total_zips: targetZips.length,
+      processed: 0,
+      inserted: 0,
+      linked: 0,
+      failed: 0,
+      min_sources_per_zip: Math.max(Number(min_sources_per_zip) || 3, 1),
+      started_at: new Date().toISOString(),
+    }
+
+    // Persist job record
+    try {
+      req.db
+        .prepare(
+          `
+            INSERT INTO crawler_jobs (id, type, status, parameters, requested_by, created_at, started_at)
+            VALUES (?, ?, 'running', ?, ?, datetime('now'), datetime('now'))
+          `,
+        )
+        .run(
+          jobId,
+          'national_zip_scan',
+          JSON.stringify({
+            mode: 'geo_zip_crawl',
+            state: normalizedState,
+            counties: Array.isArray(counties) ? counties : [],
+            zips: Array.isArray(zips) ? zips : [],
+            min_sources_per_zip: geoCrawlJob.min_sources_per_zip,
+          }),
+          req.user?.id || 'admin',
+        )
+    } catch (e) {
+      console.warn('[admin/geo/crawl/start] Failed to persist crawler_jobs record', e.message)
+    }
+
+    setImmediate(async () => {
+      try {
+        const result = await runGeoZipCrawl({
+          db: req.db,
+          zips: targetZips,
+          min_sources_per_zip: geoCrawlJob.min_sources_per_zip,
+          jobProgress: () => {
+            geoCrawlJob.processed += 1
+          },
+        })
+
+        geoCrawlJob.status = 'completed'
+        geoCrawlJob.completed_at = new Date().toISOString()
+        geoCrawlJob.inserted = result.inserted
+        geoCrawlJob.linked = result.linked
+        geoCrawlJob.failed = result.failed
+
+        try {
+          req.db
+            .prepare(
+              `
+                UPDATE crawler_jobs
+                SET status = 'completed',
+                    completed_at = datetime('now'),
+                    result_count = ?,
+                    result_meta = ?
+                WHERE id = ?
+              `,
+            )
+            .run(
+              result.linked ?? 0,
+              JSON.stringify({ ...result, state: normalizedState }),
+              jobId,
+            )
+        } catch (e) {
+          console.warn('[admin/geo/crawl/start] Failed to update crawler_jobs record', e.message)
+        }
+      } catch (error) {
+        geoCrawlJob.status = 'failed'
+        geoCrawlJob.error = error.message
+        geoCrawlJob.completed_at = new Date().toISOString()
+        try {
+          req.db
+            .prepare(
+              `
+                UPDATE crawler_jobs
+                SET status = 'failed',
+                    completed_at = datetime('now'),
+                    error = ?
+                WHERE id = ?
+              `,
+            )
+            .run(error.message, jobId)
+        } catch (e) {
+          console.warn('[admin/geo/crawl/start] Failed to update crawler_jobs failure', e.message)
+        }
+      }
+    })
+
+    return res.status(202).json({ success: true, job: geoCrawlJob })
+  } catch (error) {
+    console.error('[admin/geo/crawl/start] Error:', error)
+    return res.status(500).json({ error: error.message })
+  }
+})
+
+// GET /api/admin/geo/crawl/status
+router.get('/geo/crawl/status', async (req, res) => {
+  const admin = ensureAdminOnly(req, res)
+  if (!admin) return
+  return res.json({ geo_crawl: geoCrawlJob, geo_index: geoIndexJob })
 })
 
 export default router;
