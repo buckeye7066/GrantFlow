@@ -477,3 +477,21 @@
 [run=11216c84-cd16-4a12-a523-6223c8289ac1] fetch_success smoke-safe-county-nyc-rental-assistance status=200 ct=text/html;charset=UTF-8 url=https://www.nyc.gov/site/hra/help/rental-assistance.page
 [run=11216c84-cd16-4a12-a523-6223c8289ac1] source_success smoke-safe-county-nyc-rental-assistance
 [run=11216c84-cd16-4a12-a523-6223c8289ac1] complete ok sources_ok=4/4 programs_upserted=4
+[run=2171dfe8-8fe5-48ae-9ef7-8de5aa4120b0] start mode=SMOKE_MODE sources=4 live=true
+[run=2171dfe8-8fe5-48ae-9ef7-8de5aa4120b0] source_start smoke-safe-fed-cms-waivers HUD Rental Assistance (federal)
+[run=2171dfe8-8fe5-48ae-9ef7-8de5aa4120b0] fetch_start smoke-safe-fed-cms-waivers url=https://www.hud.gov/topics/rental_assistance
+[run=2171dfe8-8fe5-48ae-9ef7-8de5aa4120b0] fetch_success smoke-safe-fed-cms-waivers status=200 ct=text/html; charset=UTF-8 url=https://www.hud.gov/topics/rental_assistance
+[run=2171dfe8-8fe5-48ae-9ef7-8de5aa4120b0] source_success smoke-safe-fed-cms-waivers
+[run=2171dfe8-8fe5-48ae-9ef7-8de5aa4120b0] source_start smoke-safe-fed-cms-provider-enrollment CMS Provider Enrollment and Certification (federal provider support)
+[run=2171dfe8-8fe5-48ae-9ef7-8de5aa4120b0] fetch_start smoke-safe-fed-cms-provider-enrollment url=https://www.cms.gov/medicare/provider-enrollment-and-certification
+[run=2171dfe8-8fe5-48ae-9ef7-8de5aa4120b0] fetch_success smoke-safe-fed-cms-provider-enrollment status=200 ct=text/html; charset=UTF-8 url=https://www.cms.gov/medicare/provider-enrollment-and-certification
+[run=2171dfe8-8fe5-48ae-9ef7-8de5aa4120b0] source_success smoke-safe-fed-cms-provider-enrollment
+[run=2171dfe8-8fe5-48ae-9ef7-8de5aa4120b0] source_start smoke-safe-state-tn-tenncare TennCare (TN Medicaid overview)
+[run=2171dfe8-8fe5-48ae-9ef7-8de5aa4120b0] fetch_start smoke-safe-state-tn-tenncare url=https://www.tn.gov/tenncare.html
+[run=2171dfe8-8fe5-48ae-9ef7-8de5aa4120b0] fetch_success smoke-safe-state-tn-tenncare status=200 ct=text/html;charset=utf-8 url=https://www.tn.gov/tenncare.html
+[run=2171dfe8-8fe5-48ae-9ef7-8de5aa4120b0] source_success smoke-safe-state-tn-tenncare
+[run=2171dfe8-8fe5-48ae-9ef7-8de5aa4120b0] source_start smoke-safe-county-nyc-rental-assistance NYC Rental Assistance (municipal/county example)
+[run=2171dfe8-8fe5-48ae-9ef7-8de5aa4120b0] fetch_start smoke-safe-county-nyc-rental-assistance url=https://www.nyc.gov/site/hra/help/rental-assistance.page
+[run=2171dfe8-8fe5-48ae-9ef7-8de5aa4120b0] fetch_success smoke-safe-county-nyc-rental-assistance status=200 ct=text/html;charset=UTF-8 url=https://www.nyc.gov/site/hra/help/rental-assistance.page
+[run=2171dfe8-8fe5-48ae-9ef7-8de5aa4120b0] source_success smoke-safe-county-nyc-rental-assistance
+[run=2171dfe8-8fe5-48ae-9ef7-8de5aa4120b0] complete ok sources_ok=4/4 programs_upserted=4

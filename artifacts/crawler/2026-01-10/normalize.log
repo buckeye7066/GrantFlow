@@ -57,3 +57,7 @@
 [run=11216c84-cd16-4a12-a523-6223c8289ac1] normalize_success smoke-safe-fed-cms-provider-enrollment tracks=TRACK_B url=https://www.cms.gov/medicare/provider-enrollment-and-certification
 [run=11216c84-cd16-4a12-a523-6223c8289ac1] normalize_success smoke-safe-state-tn-tenncare tracks=TRACK_A url=https://www.tn.gov/tenncare.html
 [run=11216c84-cd16-4a12-a523-6223c8289ac1] normalize_success smoke-safe-county-nyc-rental-assistance tracks=TRACK_A url=https://www.nyc.gov/site/hra/help/rental-assistance.page
+[run=2171dfe8-8fe5-48ae-9ef7-8de5aa4120b0] normalize_success smoke-safe-fed-cms-waivers tracks=TRACK_A url=https://www.hud.gov/topics/rental_assistance
+[run=2171dfe8-8fe5-48ae-9ef7-8de5aa4120b0] normalize_success smoke-safe-fed-cms-provider-enrollment tracks=TRACK_B url=https://www.cms.gov/medicare/provider-enrollment-and-certification
+[run=2171dfe8-8fe5-48ae-9ef7-8de5aa4120b0] normalize_success smoke-safe-state-tn-tenncare tracks=TRACK_A url=https://www.tn.gov/tenncare.html
+[run=2171dfe8-8fe5-48ae-9ef7-8de5aa4120b0] normalize_success smoke-safe-county-nyc-rental-assistance tracks=TRACK_A url=https://www.nyc.gov/site/hra/help/rental-assistance.page
