@@ -16,7 +16,8 @@ const dbPath = process.env.DATABASE_URL || path.join(projectRoot, 'backend', 'da
 
 function main() {
   const mode = 'SMOKE_MODE'
-  const useLiveSources = process.env.CRAWLER_USE_LIVE_SOURCES === 'true'
+  // Smoke must be stable and use only known-200 public pages.
+  const useLiveSources = true
   const maxSources = Number.parseInt(process.env.CRAWLER_MAX_SOURCES || '10', 10)
   const maxUrlsPerSource = Number.parseInt(process.env.CRAWLER_MAX_URLS_PER_SOURCE || '6', 10)
   const timeoutSeconds = Number.parseInt(process.env.CRAWLER_TIMEOUT_SECONDS || '25', 10)
@@ -33,11 +34,25 @@ function main() {
     db,
     scopeMode: mode,
     useLiveSources,
+    sourceSet: 'SMOKE_SAFE_SOURCES',
     maxSources,
     maxUrlsPerSource,
     timeoutSeconds,
   })
     .then((result) => {
+      // Smoke must be 100% successful on SMOKE_SAFE_SOURCES.
+      if (
+        result?.counts?.sources_failed > 0 ||
+        (Array.isArray(result?.counts?.failures) && result.counts.failures.length > 0)
+      ) {
+        console.error('[crawler:smoke] FAILED (expected 100% success)', {
+          crawl_run_id: result.crawl_run_id,
+          counts: result.counts,
+          artifacts_dir: result.artifacts_dir,
+        })
+        db.close()
+        process.exit(1)
+      }
       console.log('[crawler:smoke] OK', {
         crawl_run_id: result.crawl_run_id,
         artifacts_dir: result.artifacts_dir,

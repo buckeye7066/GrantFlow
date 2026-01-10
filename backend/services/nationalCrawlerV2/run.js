@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import crypto from 'crypto'
 import { scrubPII } from '../../utils/piiScrubber.js'
-import { buildRegistry } from './registry.js'
+import { buildRegistry, getSmokeSafeSources } from './registry.js'
 import { RobotsCache } from './robots.js'
 import { createFetcher, fetchToBuffer, fetchFileUrl, fetchMockUrl } from './fetchers.js'
 import { parseContent } from './parsers.js'
@@ -91,6 +91,7 @@ export async function runNationalCrawlerV2({
   scopeMode = 'SMOKE_MODE',
   state = null,
   useLiveSources = false,
+  sourceSet = 'DEFAULT',
   maxSources = 10,
   maxUrlsPerSource = 8,
   timeoutSeconds = 25,
@@ -103,11 +104,15 @@ export async function runNationalCrawlerV2({
   const logs = await loggers(dir)
 
   const fixtureBaseUrl = fixturesBaseUrl()
-  const registry = buildRegistry({ useLive: useLiveSources, fixtureBaseUrl })
+  const registry =
+    sourceSet === 'SMOKE_SAFE_SOURCES'
+      ? getSmokeSafeSources()
+      : buildRegistry({ useLive: useLiveSources, fixtureBaseUrl })
 
   const selectedSources = registry
     .filter((s) => s.enabled)
     .filter((s) => {
+      if (sourceSet === 'SMOKE_SAFE_SOURCES') return true
       if (mode === 'SMOKE_MODE') return (s.tags || []).includes('smoke')
       if (mode === 'STATE_MODE') return s.jurisdiction === 'federal' || s.state === state
       return true
@@ -274,6 +279,14 @@ export async function runNationalCrawlerV2({
               contentType = net.contentType
               buffer = net.buffer
               contentHash = sha256(buffer.toString('utf8'))
+
+              // Dead-link / HTTP error detection (mandatory)
+              if (!net.ok || (typeof httpStatus === 'number' && httpStatus >= 400)) {
+                const statusLabel = typeof httpStatus === 'number' ? `HTTP ${httpStatus}` : 'HTTP error'
+                const err = new Error(statusLabel)
+                err.httpStatus = httpStatus
+                throw err
+              }
             }
 
             insertEvent.run(runId, source.source_id, url, 'fetch_success', 'Fetched', JSON.stringify({ httpStatus, contentType }))
@@ -331,14 +344,20 @@ export async function runNationalCrawlerV2({
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error)
             const stack = error instanceof Error ? error.stack : null
-            counts.failures.push({ url, failure_type: 'parse_error', message, stack, parser_name: null, retry_count: 0, source_id: source.source_id })
+            const failureType =
+              typeof error?.httpStatus === 'number' || (typeof httpStatus === 'number' && httpStatus >= 400)
+                ? 'http_error'
+                : url.startsWith('http')
+                ? 'fetch_error'
+                : 'parse_error'
+            counts.failures.push({ url, failure_type: failureType, message, stack, parser_name: null, retry_count: 0, source_id: source.source_id })
 
             insertEvent.run(runId, source.source_id, url, 'parse_failure', 'Failed', JSON.stringify({ message }))
             insertFailure.run(
               runId,
               source.source_id,
               url,
-              url.startsWith('http') ? 'fetch_error' : 'parse_error',
+              failureType,
               null,
               httpStatus,
               0,

@@ -131,7 +131,6 @@ async function main() {
   console.log('[crawler:doctor] Running crawler:smoke (offline by default)...')
   await runCmd('node', ['scripts/crawler-smoke.mjs'], {
     env: {
-      CRAWLER_USE_LIVE_SOURCES: process.env.CRAWLER_USE_LIVE_SOURCES || 'false',
       CRAWLER_MAX_SOURCES: process.env.CRAWLER_MAX_SOURCES || '10',
     },
   })

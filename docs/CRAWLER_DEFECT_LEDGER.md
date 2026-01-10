@@ -43,3 +43,13 @@ This ledger records defects encountered while implementing the crawler, and how 
   - `sample_output.<crawl_run_id>.json` and `failures.<crawl_run_id>.json` (preserved)
   - plus `sample_output.json` / `failures.json` as “latest”
 
+## 2026-01-10 — Live-run HTTP failures preserved (signals, not defects)
+
+Per review rules, third-party HTTP failures (403/404/429/5xx) are **not crawler defects** unless they cause instability.
+They are preserved as historical signals in run artifacts.
+
+- **Live run example**: `b75dc347-aff2-458c-8345-d3654941d106`
+  - `https://www.ssa.gov/benefits/` → HTTP 403 (recorded)
+  - `https://www.tn.gov/tenncare/long-term-services-supports/ecf-choices.html` → HTTP 404 (recorded)
+  - Evidence:
+    - `artifacts/crawler/2026-01-10/failures.b75dc347-aff2-458c-8345-d3654941d106.json`

@@ -57,6 +57,20 @@ These are intentionally stable to satisfy:
 - deterministic tests
 - no broad crawling during CI
 
+## Smoke-safe sources (SMOKE_SAFE_SOURCES)
+
+`crawler:smoke` uses a separate source set called **SMOKE_SAFE_SOURCES**, consisting solely of known-200 public pages.
+
+- Purpose:
+  - ensure `crawler:smoke` is always **100% success**
+  - avoid turning third-party 403/404/429/5xx into build failures
+
+- Defined in:
+  - `backend/services/nationalCrawlerV2/registry.js` (`SMOKE_SAFE_SOURCES`)
+
+- Note:
+  - `crawler:run` remains unchanged and continues to record real-world breakage in `parse_failures` and artifacts.
+
 ## Adding a new source
 
 1. Add a new registry entry in `backend/services/nationalCrawlerV2/registry.js`.
