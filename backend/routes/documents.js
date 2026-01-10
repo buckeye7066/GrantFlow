@@ -9,6 +9,8 @@ import pdfParse from 'pdf-parse';
 import mammoth from 'mammoth';
 import rateLimit from 'express-rate-limit';
 import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
+import OpenAI from 'openai';
+import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js';
 
 const router = express.Router();
 
@@ -62,6 +64,23 @@ const uploadLimiter = rateLimit({
   legacyHeaders: false,
   message: 'Too many file uploads from this IP, please try again later.',
 });
+
+function getOpenAI() {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey || apiKey === 'YOUR_OPENAI_API_KEY' || apiKey.includes('*')) {
+    console.log('[OpenAI] No valid API key - document ingestion jobs will fail gracefully');
+    return {
+      chat: {
+        completions: {
+          create: async () => {
+            throw new Error('OpenAI API key not configured');
+          },
+        },
+      },
+    };
+  }
+  return new OpenAI({ apiKey });
+}
 
 async function extractTextFromFile(filePath, mimeType) {
   if (!filePath || !mimeType) return null;
@@ -350,6 +369,19 @@ router.post('/ingest', uploadPrivate.single('document'), async (req, res) => {
         INSERT INTO crawler_jobs (type, status, profile_id, organization_id, parameters, requested_by)
         VALUES ('document_ingest', 'queued', ?, ?, ?, ?)
       `).run(profileId, resolvedOrganizationId, JSON.stringify({ document_id: docId, source }), requestedBy);
+
+      const job = req.db
+        .prepare('SELECT * FROM crawler_jobs WHERE rowid = last_insert_rowid()')
+        .get();
+
+      dispatchCrawlerJob({
+        db: req.db,
+        jobId: job.id,
+        uploadDir: publicUploadsDir,
+        getOpenAI,
+      }).catch((err) => {
+        console.error('[documents/ingest] Dispatch failed:', err);
+      });
     }
 
     res.status(202).json({
@@ -367,6 +399,41 @@ router.post('/ingest', uploadPrivate.single('document'), async (req, res) => {
         // Best-effort cleanup; ignore unlink errors.
       }
     }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/documents/:id/parse - queue document ingestion job (used by UI "Parse Document")
+router.post('/:id/parse', (req, res) => {
+  try {
+    const context = buildAccessContext(req);
+    if (!ensureAuthenticated(res, context)) return;
+
+    const doc = req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
+    if (!ensureDocumentAccess(res, context, doc)) return;
+
+    const requestedBy = context.user?.profileId ?? context.user?.userId ?? 'system';
+
+    req.db.prepare(`
+      INSERT INTO crawler_jobs (type, status, profile_id, organization_id, parameters, requested_by)
+      VALUES ('document_ingest', 'queued', ?, ?, ?, ?)
+    `).run(doc.profile_id ?? null, doc.organization_id ?? null, JSON.stringify({ document_id: doc.id, source: 'manual_parse' }), requestedBy);
+
+    const job = req.db
+      .prepare('SELECT * FROM crawler_jobs WHERE rowid = last_insert_rowid()')
+      .get();
+
+    dispatchCrawlerJob({
+      db: req.db,
+      jobId: job.id,
+      uploadDir: publicUploadsDir,
+      getOpenAI,
+    }).catch((err) => {
+      console.error('[documents/parse] Dispatch failed:', err);
+    });
+
+    res.status(202).json({ success: true, job_id: job.id });
+  } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });

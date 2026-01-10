@@ -22,6 +22,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx"
 import { useSettingsStore } from "@/stores/settingsStore"
+import ProfileFilesPanel from "@/components/profiles/ProfileFilesPanel.jsx"
 
 export default function ProfileDetail() {
   const [searchParams] = useSearchParams()
@@ -429,19 +430,21 @@ export default function ProfileDetail() {
           </TabsContent>
 
           <TabsContent value="proposals" className="mt-6">
-            <div className="rounded-lg border bg-white p-6">
-              <h3 className="text-lg font-semibold mb-4">Proposals & File Uploads</h3>
-              <p className="text-slate-600 mb-4">
-                Manage proposal documents and file uploads for this profile.
-              </p>
-              <div className="flex gap-3">
-                <Button onClick={() => navigate(createPageUrl("Proposals", { organization_id: profile.organization_id }))}>
-                  View Proposals
-                </Button>
-                <Button variant="outline" onClick={() => navigate(createPageUrl("Documents", { profile_id: profileId }))}>
-                  View Documents
-                </Button>
+            <div className="space-y-6">
+              <div className="rounded-lg border bg-white p-6">
+                <h3 className="text-lg font-semibold mb-2">Proposals</h3>
+                <p className="text-slate-600 mb-4">Manage grant proposals linked to this profile's organization.</p>
+                <div className="flex flex-wrap gap-3">
+                  <Button onClick={() => navigate(createPageUrl("Proposals", { organization_id: profile.organization_id }))}>
+                    View Proposals
+                  </Button>
+                  <Button variant="outline" onClick={() => navigate(createPageUrl("Documents", { profile_id: profileId }))}>
+                    View Document Library
+                  </Button>
+                </div>
               </div>
+
+              <ProfileFilesPanel profileId={profileId} profileName={profile.display_name} />
             </div>
           </TabsContent>
 
