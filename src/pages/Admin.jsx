@@ -3,6 +3,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Shield, Activity, AlertCircle } from 'lucide-react';
 import AdminDocumentUpload from '@/components/admin/AdminDocumentUpload';
 import AdminDiagnostics from '@/components/admin/AdminDiagnostics';
+import AdminGeoCrawl from '@/components/admin/AdminGeoCrawl';
 import { useAuthStore } from '@/stores/authStore';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
@@ -45,6 +46,7 @@ export default function Admin() {
               Diagnostics
             </TabsTrigger>
             <TabsTrigger value="upload">Upload Profile Document</TabsTrigger>
+            <TabsTrigger value="geo">Geo Crawl</TabsTrigger>
           </TabsList>
           
           <TabsContent value="diagnostics" className="mt-6">
@@ -53,6 +55,10 @@ export default function Admin() {
           
           <TabsContent value="upload" className="mt-6">
             <AdminDocumentUpload />
+          </TabsContent>
+
+          <TabsContent value="geo" className="mt-6">
+            <AdminGeoCrawl />
           </TabsContent>
         </Tabs>
       </div>

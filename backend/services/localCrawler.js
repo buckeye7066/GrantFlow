@@ -11,6 +11,7 @@ import { upsertFundingOpportunity } from './opportunityInserter.js'
 import { saveToProfilePipeline } from './opportunityMatcher.js'
 import {
   buildProfileSignals,
+  extractZipFromContext,
   extractStateFromContext,
   summarizeProfileSignals,
 } from './profileHelpers.js'
@@ -94,17 +95,20 @@ export function processLocalCrawlerJob({ db, job, dataDir, profileContext }) {
   
   // Build profile signals
   const signals = buildProfileSignals(profileContext)
+  const profileZip = extractZipFromContext({
+    profile: profileContext?.profile,
+    sections: profileContext?.sections,
+    jobParameters: parameters,
+  })
   const profileState = extractStateFromContext({
     profile: profileContext?.profile,
     sections: profileContext?.sections,
     jobParameters: parameters,
   })
   
-  if (!profileState) {
-    console.warn('[localCrawler] No state specified - will fall back to national opportunities only')
-  } else {
-    console.log('[localCrawler] Profile state:', profileState)
-  }
+  if (profileZip) console.log('[localCrawler] Profile ZIP:', profileZip)
+  if (!profileState) console.warn('[localCrawler] No state specified - will fall back to national opportunities only')
+  else console.log('[localCrawler] Profile state:', profileState)
   console.log('[localCrawler] Profile signals:', summarizeProfileSignals(signals))
   
   // Load local opportunities from data file
@@ -112,7 +116,22 @@ export function processLocalCrawlerJob({ db, job, dataDir, profileContext }) {
   console.log(`[localCrawler] Loaded ${localOpps.length} local opportunities`)
   
   // Also check database for local opportunities
-  const dbOpps = profileState
+  // Priority: ZIP-specific → state/national fallback.
+  const dbOpps = profileZip
+    ? db
+        .prepare(
+          `
+            SELECT *
+            FROM funding_opportunities
+            WHERE is_active = 1
+              AND zip_code = ?
+              AND (requires_match = 0 OR requires_match IS NULL)
+              AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
+            LIMIT 500
+          `,
+        )
+        .all(profileZip)
+    : profileState
     ? db
         .prepare(
           `
@@ -122,7 +141,7 @@ export function processLocalCrawlerJob({ db, job, dataDir, profileContext }) {
               AND (state = ? OR is_national = 1 OR LOWER(COALESCE(state, '')) = 'nationwide')
               AND (requires_match = 0 OR requires_match IS NULL)
               AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
-            LIMIT 250
+            LIMIT 500
           `,
         )
         .all(profileState)
@@ -135,7 +154,7 @@ export function processLocalCrawlerJob({ db, job, dataDir, profileContext }) {
               AND (is_national = 1 OR LOWER(COALESCE(state, '')) = 'nationwide')
               AND (requires_match = 0 OR requires_match IS NULL)
               AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
-            LIMIT 250
+            LIMIT 500
           `,
         )
         .all()

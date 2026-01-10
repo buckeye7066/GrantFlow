@@ -156,6 +156,8 @@ router.get('/', (req, res) => {
     const {
       search,
       state,
+      zip_code: zipCode,
+      county,
       source,
       deadline_after: deadlineAfter,
       deadline_before: deadlineBefore,
@@ -181,6 +183,8 @@ router.get('/', (req, res) => {
     }
 
     const normalizedState = state ? String(state).toUpperCase() : null;
+    const normalizedZip = zipCode ? String(zipCode).trim() : null;
+    const normalizedCounty = county ? String(county).trim() : null;
 
     if (isNational === 'true') {
       baseConditions.push('is_national = 1');
@@ -203,6 +207,16 @@ router.get('/', (req, res) => {
 
     const conditions = [...baseConditions];
     const filterParams = [...baseParams];
+
+    if (normalizedZip) {
+      conditions.push('(zip_code = ?)');
+      filterParams.push(normalizedZip);
+    }
+
+    if (normalizedCounty) {
+      conditions.push('(county = ?)');
+      filterParams.push(normalizedCounty);
+    }
 
     if (normalizedState) {
       // Default behavior includes both state + national.

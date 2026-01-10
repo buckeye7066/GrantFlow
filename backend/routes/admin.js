@@ -1107,7 +1107,7 @@ router.post('/geo/crawl/start', async (req, res) => {
       started_at: new Date().toISOString(),
     }
 
-    // Persist job record
+    // Persist job record (use existing allowed type for older DBs; encode subtype in parameters)
     try {
       req.db
         .prepare(
@@ -1118,8 +1118,9 @@ router.post('/geo/crawl/start', async (req, res) => {
         )
         .run(
           jobId,
-          'national_zip_scan',
+          'national',
           JSON.stringify({
+            subtype: 'geo_zip_local',
             mode: 'geo_zip_crawl',
             state: normalizedState,
             counties: Array.isArray(counties) ? counties : [],

@@ -70,8 +70,24 @@ function isPortAvailable(port, host = '127.0.0.1') {
   })
 }
 
+function parsePortListEnv(name) {
+  const raw = process.env[name]
+  if (!raw) return null
+  const ports = raw
+    .split(',')
+    .map((s) => Number.parseInt(String(s).trim(), 10))
+    .filter((n) => Number.isFinite(n) && n > 0 && n < 65536)
+  return ports.length > 0 ? ports : null
+}
+
+function portRange(start, count) {
+  const ports = []
+  for (let i = 0; i < count; i++) ports.push(start + i)
+  return ports
+}
+
 async function startFrontend(root, { outDir, logFile, basePath = '/grantflow', apiProxyTarget }) {
-  const candidatePorts = [5173, 5174, 5175]
+  const candidatePorts = parsePortListEnv('DOCTOR_FRONTEND_PORTS') || portRange(5173, 15) // 5173-5187
   for (const port of candidatePorts) {
     const available = await isPortAvailable(port)
     if (!available) continue
@@ -111,11 +127,11 @@ async function startFrontend(root, { outDir, logFile, basePath = '/grantflow', a
     try { proc.kill('SIGTERM') } catch {}
   }
 
-  throw new Error('Frontend did not become healthy on any candidate port (5173/5174/5175)')
+  throw new Error(`Frontend did not become healthy on any candidate port (${candidatePorts.join(',')})`)
 }
 
 async function startBackend(root, { outDir, logFile }) {
-  const candidatePorts = [8080, 8081, 8082]
+  const candidatePorts = parsePortListEnv('DOCTOR_BACKEND_PORTS') || portRange(8080, 15) // 8080-8094
   for (const port of candidatePorts) {
     // Express binds 0.0.0.0 by default; check port availability on all interfaces.
     const available = await isPortAvailable(port, '0.0.0.0')
@@ -158,7 +174,7 @@ async function startBackend(root, { outDir, logFile }) {
     try { proc.kill('SIGTERM') } catch {}
   }
 
-  throw new Error('Backend did not become healthy on any candidate port (8080/8081/8082)')
+  throw new Error(`Backend did not become healthy on any candidate port (${candidatePorts.join(',')})`)
 }
 
 async function main() {
@@ -255,65 +271,76 @@ async function main() {
   if (build.code !== 0) process.exit(build.code ?? 1)
 
   // Start backend first, then Vite dev server (for "dev servers" evidence), then run smoke.
-  const backend = await startBackend(root, { outDir, logFile: logs.backend })
-  const baseUrl = `http://127.0.0.1:${backend.port}`
-  const frontend = await startFrontend(root, {
-    outDir,
-    logFile: logs.frontend,
-    basePath: buildEnv.VITE_APP_BASE || '/grantflow',
-    apiProxyTarget: baseUrl,
-  })
-  const uiBaseUrl = `http://127.0.0.1:${frontend.port}`
+  let backend = null
+  let frontend = null
+  let exitCode = 0
 
-  const smokeEnv = mergedEnv({
-    // UI base (Vite dev) + API base (Express)
-    SMOKE_UI_BASE_URL: uiBaseUrl,
-    SMOKE_BASE_URL: uiBaseUrl,
-    SMOKE_BASE_PATH: process.env.SMOKE_BASE_PATH || process.env.VITE_APP_BASE || '/grantflow',
-    API_BASE_URL: baseUrl,
-    SMOKE_ADMIN_TOKEN: process.env.SMOKE_ADMIN_TOKEN || backend.env.ADMIN_TOKEN,
-    SMOKE_BULK_KEY: process.env.SMOKE_BULK_KEY || process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026',
-    ARTIFACTS_DIR: outDir,
-    // Keep smoke fast and deterministic by default.
-    SMOKE_MAX_ROUTES: process.env.SMOKE_MAX_ROUTES || '3',
-    SMOKE_MAX_CLICKS: process.env.SMOKE_MAX_CLICKS || '10',
-    SMOKE_MAX_PER_SELECTOR: process.env.SMOKE_MAX_PER_SELECTOR || '6',
-    SMOKE_ROUTE_CLICK_BUDGET_MS: process.env.SMOKE_ROUTE_CLICK_BUDGET_MS || '15000',
-  })
+  try {
+    backend = await startBackend(root, { outDir, logFile: logs.backend })
+    const baseUrl = `http://127.0.0.1:${backend.port}`
 
-  const smoke = await runCommand('npm', ['run', 'smoke'], {
-    cwd: root,
-    env: smokeEnv,
-    logFile: logs.smoke,
-    label: 'npm run smoke',
-    timeoutMs: 10 * 60_000,
-  })
+    frontend = await startFrontend(root, {
+      outDir,
+      logFile: logs.frontend,
+      basePath: buildEnv.VITE_APP_BASE || '/grantflow',
+      apiProxyTarget: baseUrl,
+    })
+    const uiBaseUrl = `http://127.0.0.1:${frontend.port}`
 
-  try { frontend.proc.kill('SIGTERM') } catch {}
-  try { backend.proc.kill('SIGTERM') } catch {}
+    const smokeEnv = mergedEnv({
+      // UI base (Vite dev) + API base (Express)
+      SMOKE_UI_BASE_URL: uiBaseUrl,
+      SMOKE_BASE_URL: uiBaseUrl,
+      SMOKE_BASE_PATH: process.env.SMOKE_BASE_PATH || process.env.VITE_APP_BASE || '/grantflow',
+      API_BASE_URL: baseUrl,
+      SMOKE_ADMIN_TOKEN: process.env.SMOKE_ADMIN_TOKEN || backend.env.ADMIN_TOKEN,
+      SMOKE_BULK_KEY: process.env.SMOKE_BULK_KEY || process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026',
+      ARTIFACTS_DIR: outDir,
+      // Keep smoke fast and deterministic by default.
+      SMOKE_MAX_ROUTES: process.env.SMOKE_MAX_ROUTES || '3',
+      SMOKE_MAX_CLICKS: process.env.SMOKE_MAX_CLICKS || '10',
+      SMOKE_MAX_PER_SELECTOR: process.env.SMOKE_MAX_PER_SELECTOR || '6',
+      SMOKE_ROUTE_CLICK_BUDGET_MS: process.env.SMOKE_ROUTE_CLICK_BUDGET_MS || '15000',
+    })
 
-  if (smoke.code !== 0) {
-    // Make it easy to find a trace quickly.
-    try {
-      const outputDir = path.join(outDir, 'playwright-output')
-      if (fs.existsSync(outputDir)) {
-        const zips = fs
-          .readdirSync(outputDir, { withFileTypes: true })
-          .filter((d) => d.isFile() && d.name.endsWith('.zip'))
-          .map((d) => d.name)
-        if (zips.length > 0) {
-          const newest = zips
-            .map((name) => ({ name, mtime: fs.statSync(path.join(outputDir, name)).mtimeMs }))
-            .sort((a, b) => b.mtime - a.mtime)[0]?.name
-          if (newest) {
-            fs.copyFileSync(path.join(outputDir, newest), path.join(outDir, 'trace.zip'))
+    const smoke = await runCommand('npm', ['run', 'smoke'], {
+      cwd: root,
+      env: smokeEnv,
+      logFile: logs.smoke,
+      label: 'npm run smoke',
+      timeoutMs: 10 * 60_000,
+    })
+
+    if (smoke.code !== 0) {
+      exitCode = smoke.code ?? 1
+      // Make it easy to find a trace quickly.
+      try {
+        const outputDir = path.join(outDir, 'playwright-output')
+        if (fs.existsSync(outputDir)) {
+          const zips = fs
+            .readdirSync(outputDir, { withFileTypes: true })
+            .filter((d) => d.isFile() && d.name.endsWith('.zip'))
+            .map((d) => d.name)
+          if (zips.length > 0) {
+            const newest = zips
+              .map((name) => ({ name, mtime: fs.statSync(path.join(outputDir, name)).mtimeMs }))
+              .sort((a, b) => b.mtime - a.mtime)[0]?.name
+            if (newest) {
+              fs.copyFileSync(path.join(outputDir, newest), path.join(outDir, 'trace.zip'))
+            }
           }
         }
-      }
-    } catch {}
-    process.exit(smoke.code ?? 1)
+      } catch {}
+    } else {
+      writeFile(path.join(outDir, 'doctor-success.txt'), 'doctor: OK\n')
+    }
+  } finally {
+    // Always clean up; otherwise a failed run can leave ports occupied and break the next run.
+    try { frontend?.proc?.kill('SIGTERM') } catch {}
+    try { backend?.proc?.kill('SIGTERM') } catch {}
   }
-  writeFile(path.join(outDir, 'doctor-success.txt'), 'doctor: OK\n')
+
+  if (exitCode !== 0) process.exit(exitCode)
 }
 
 main().catch((err) => {
