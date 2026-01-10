@@ -1,0 +1,479 @@
+[run=2e8519f5-1c9e-4041-93af-1cca668090ee] start mode=SMOKE_MODE sources=5 live=false
+[run=2e8519f5-1c9e-4041-93af-1cca668090ee] source_start fed-ssa-benefits SSA Benefits Overview
+[run=2e8519f5-1c9e-4041-93af-1cca668090ee] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=2e8519f5-1c9e-4041-93af-1cca668090ee] source_failure fed-ssa-benefits
+[run=2e8519f5-1c9e-4041-93af-1cca668090ee] source_start state-tn-ecf-choices TennCare ECF CHOICES
+[run=2e8519f5-1c9e-4041-93af-1cca668090ee] fetch_start state-tn-ecf-choices url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=2e8519f5-1c9e-4041-93af-1cca668090ee] source_failure state-tn-ecf-choices
+[run=2e8519f5-1c9e-4041-93af-1cca668090ee] source_start county-king-housing-assistance King County Housing Assistance (example municipal/county)
+[run=2e8519f5-1c9e-4041-93af-1cca668090ee] fetch_start county-king-housing-assistance url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=2e8519f5-1c9e-4041-93af-1cca668090ee] source_failure county-king-housing-assistance
+[run=2e8519f5-1c9e-4041-93af-1cca668090ee] source_start tribal-cherokee-health Cherokee Nation Health Services (example tribal)
+[run=2e8519f5-1c9e-4041-93af-1cca668090ee] fetch_start tribal-cherokee-health url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=2e8519f5-1c9e-4041-93af-1cca668090ee] source_failure tribal-cherokee-health
+[run=2e8519f5-1c9e-4041-93af-1cca668090ee] source_start mco-mock-portal MCO Contractor Portal (mock)
+[run=2e8519f5-1c9e-4041-93af-1cca668090ee] fetch_start mco-mock-portal url=mock://mco-portal-example
+[run=2e8519f5-1c9e-4041-93af-1cca668090ee] fetch_success mco-mock-portal status=200 ct=application/json url=mock://mco-portal-example
+[run=2e8519f5-1c9e-4041-93af-1cca668090ee] source_success mco-mock-portal
+[run=2e8519f5-1c9e-4041-93af-1cca668090ee] complete ok sources_ok=1/5 programs_upserted=2
+[run=17529091-62f8-41d1-bb6f-0b818daab79e] start mode=SMOKE_MODE sources=5 live=false
+[run=17529091-62f8-41d1-bb6f-0b818daab79e] source_start fed-ssa-benefits SSA Benefits Overview
+[run=17529091-62f8-41d1-bb6f-0b818daab79e] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=17529091-62f8-41d1-bb6f-0b818daab79e] source_failure fed-ssa-benefits
+[run=17529091-62f8-41d1-bb6f-0b818daab79e] source_start state-tn-ecf-choices TennCare ECF CHOICES
+[run=17529091-62f8-41d1-bb6f-0b818daab79e] fetch_start state-tn-ecf-choices url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=17529091-62f8-41d1-bb6f-0b818daab79e] source_failure state-tn-ecf-choices
+[run=17529091-62f8-41d1-bb6f-0b818daab79e] source_start county-king-housing-assistance King County Housing Assistance (example municipal/county)
+[run=17529091-62f8-41d1-bb6f-0b818daab79e] fetch_start county-king-housing-assistance url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=17529091-62f8-41d1-bb6f-0b818daab79e] source_failure county-king-housing-assistance
+[run=17529091-62f8-41d1-bb6f-0b818daab79e] source_start tribal-cherokee-health Cherokee Nation Health Services (example tribal)
+[run=17529091-62f8-41d1-bb6f-0b818daab79e] fetch_start tribal-cherokee-health url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=17529091-62f8-41d1-bb6f-0b818daab79e] source_failure tribal-cherokee-health
+[run=17529091-62f8-41d1-bb6f-0b818daab79e] source_start mco-mock-portal MCO Contractor Portal (mock)
+[run=17529091-62f8-41d1-bb6f-0b818daab79e] fetch_start mco-mock-portal url=mock://mco-portal-example
+[run=17529091-62f8-41d1-bb6f-0b818daab79e] fetch_success mco-mock-portal status=200 ct=application/json url=mock://mco-portal-example
+[run=17529091-62f8-41d1-bb6f-0b818daab79e] source_success mco-mock-portal
+[run=17529091-62f8-41d1-bb6f-0b818daab79e] complete ok sources_ok=1/5 programs_upserted=2
+[run=1b5b96a5-0eda-43c2-9a54-67a219e0d627] start mode=SMOKE_MODE sources=1 live=false
+[run=1b5b96a5-0eda-43c2-9a54-67a219e0d627] source_start fed-ssa-benefits SSA Benefits Overview
+[run=1b5b96a5-0eda-43c2-9a54-67a219e0d627] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=1b5b96a5-0eda-43c2-9a54-67a219e0d627] source_failure fed-ssa-benefits
+[run=1b5b96a5-0eda-43c2-9a54-67a219e0d627] complete ok sources_ok=0/1 programs_upserted=0
+[run=f90e770f-00cc-465c-bd97-e10751e92d8b] start mode=SMOKE_MODE sources=1 live=false
+[run=f90e770f-00cc-465c-bd97-e10751e92d8b] source_start fed-ssa-benefits SSA Benefits Overview
+[run=f90e770f-00cc-465c-bd97-e10751e92d8b] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=f90e770f-00cc-465c-bd97-e10751e92d8b] source_failure fed-ssa-benefits
+[run=f90e770f-00cc-465c-bd97-e10751e92d8b] complete ok sources_ok=0/1 programs_upserted=0
+[run=307a33e3-aa8d-4780-a855-ab947e449415] start mode=SMOKE_MODE sources=5 live=false
+[run=307a33e3-aa8d-4780-a855-ab947e449415] source_start fed-ssa-benefits SSA Benefits Overview
+[run=307a33e3-aa8d-4780-a855-ab947e449415] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=307a33e3-aa8d-4780-a855-ab947e449415] source_failure fed-ssa-benefits
+[run=307a33e3-aa8d-4780-a855-ab947e449415] source_start state-tn-ecf-choices TennCare ECF CHOICES
+[run=307a33e3-aa8d-4780-a855-ab947e449415] fetch_start state-tn-ecf-choices url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=307a33e3-aa8d-4780-a855-ab947e449415] source_failure state-tn-ecf-choices
+[run=307a33e3-aa8d-4780-a855-ab947e449415] source_start county-king-housing-assistance King County Housing Assistance (example municipal/county)
+[run=307a33e3-aa8d-4780-a855-ab947e449415] fetch_start county-king-housing-assistance url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=307a33e3-aa8d-4780-a855-ab947e449415] source_failure county-king-housing-assistance
+[run=307a33e3-aa8d-4780-a855-ab947e449415] source_start tribal-cherokee-health Cherokee Nation Health Services (example tribal)
+[run=307a33e3-aa8d-4780-a855-ab947e449415] fetch_start tribal-cherokee-health url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=307a33e3-aa8d-4780-a855-ab947e449415] source_failure tribal-cherokee-health
+[run=307a33e3-aa8d-4780-a855-ab947e449415] source_start mco-mock-portal MCO Contractor Portal (mock)
+[run=307a33e3-aa8d-4780-a855-ab947e449415] fetch_start mco-mock-portal url=mock://mco-portal-example
+[run=307a33e3-aa8d-4780-a855-ab947e449415] fetch_success mco-mock-portal status=200 ct=application/json url=mock://mco-portal-example
+[run=307a33e3-aa8d-4780-a855-ab947e449415] source_success mco-mock-portal
+[run=307a33e3-aa8d-4780-a855-ab947e449415] complete ok sources_ok=1/5 programs_upserted=2
+[run=4e1a8226-69a5-4269-a41f-2ca46e7a8918] start mode=SMOKE_MODE sources=5 live=false
+[run=4e1a8226-69a5-4269-a41f-2ca46e7a8918] source_start fed-ssa-benefits SSA Benefits Overview
+[run=4e1a8226-69a5-4269-a41f-2ca46e7a8918] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=4e1a8226-69a5-4269-a41f-2ca46e7a8918] source_failure fed-ssa-benefits
+[run=4e1a8226-69a5-4269-a41f-2ca46e7a8918] source_start state-tn-ecf-choices TennCare ECF CHOICES
+[run=4e1a8226-69a5-4269-a41f-2ca46e7a8918] fetch_start state-tn-ecf-choices url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=4e1a8226-69a5-4269-a41f-2ca46e7a8918] source_failure state-tn-ecf-choices
+[run=4e1a8226-69a5-4269-a41f-2ca46e7a8918] source_start county-king-housing-assistance King County Housing Assistance (example municipal/county)
+[run=4e1a8226-69a5-4269-a41f-2ca46e7a8918] fetch_start county-king-housing-assistance url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=4e1a8226-69a5-4269-a41f-2ca46e7a8918] source_failure county-king-housing-assistance
+[run=4e1a8226-69a5-4269-a41f-2ca46e7a8918] source_start tribal-cherokee-health Cherokee Nation Health Services (example tribal)
+[run=4e1a8226-69a5-4269-a41f-2ca46e7a8918] fetch_start tribal-cherokee-health url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=4e1a8226-69a5-4269-a41f-2ca46e7a8918] source_failure tribal-cherokee-health
+[run=4e1a8226-69a5-4269-a41f-2ca46e7a8918] source_start mco-mock-portal MCO Contractor Portal (mock)
+[run=4e1a8226-69a5-4269-a41f-2ca46e7a8918] fetch_start mco-mock-portal url=mock://mco-portal-example
+[run=4e1a8226-69a5-4269-a41f-2ca46e7a8918] fetch_success mco-mock-portal status=200 ct=application/json url=mock://mco-portal-example
+[run=4e1a8226-69a5-4269-a41f-2ca46e7a8918] source_success mco-mock-portal
+[run=4e1a8226-69a5-4269-a41f-2ca46e7a8918] complete ok sources_ok=1/5 programs_upserted=2
+[run=ca043b1e-28c6-49ea-8e1e-a4edf990716b] start mode=SMOKE_MODE sources=5 live=false
+[run=ca043b1e-28c6-49ea-8e1e-a4edf990716b] source_start fed-ssa-benefits SSA Benefits Overview
+[run=ca043b1e-28c6-49ea-8e1e-a4edf990716b] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=ca043b1e-28c6-49ea-8e1e-a4edf990716b] source_failure fed-ssa-benefits
+[run=ca043b1e-28c6-49ea-8e1e-a4edf990716b] source_start state-tn-ecf-choices TennCare ECF CHOICES
+[run=ca043b1e-28c6-49ea-8e1e-a4edf990716b] fetch_start state-tn-ecf-choices url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=ca043b1e-28c6-49ea-8e1e-a4edf990716b] source_failure state-tn-ecf-choices
+[run=ca043b1e-28c6-49ea-8e1e-a4edf990716b] source_start county-king-housing-assistance King County Housing Assistance (example municipal/county)
+[run=ca043b1e-28c6-49ea-8e1e-a4edf990716b] fetch_start county-king-housing-assistance url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=ca043b1e-28c6-49ea-8e1e-a4edf990716b] source_failure county-king-housing-assistance
+[run=ca043b1e-28c6-49ea-8e1e-a4edf990716b] source_start tribal-cherokee-health Cherokee Nation Health Services (example tribal)
+[run=ca043b1e-28c6-49ea-8e1e-a4edf990716b] fetch_start tribal-cherokee-health url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=ca043b1e-28c6-49ea-8e1e-a4edf990716b] source_failure tribal-cherokee-health
+[run=ca043b1e-28c6-49ea-8e1e-a4edf990716b] source_start mco-mock-portal MCO Contractor Portal (mock)
+[run=ca043b1e-28c6-49ea-8e1e-a4edf990716b] fetch_start mco-mock-portal url=mock://mco-portal-example
+[run=ca043b1e-28c6-49ea-8e1e-a4edf990716b] fetch_success mco-mock-portal status=200 ct=application/json url=mock://mco-portal-example
+[run=ca043b1e-28c6-49ea-8e1e-a4edf990716b] source_success mco-mock-portal
+[run=ca043b1e-28c6-49ea-8e1e-a4edf990716b] complete ok sources_ok=1/5 programs_upserted=2
+[run=1342d91a-b9fe-46a6-8f05-f6665b8effdd] start mode=SMOKE_MODE sources=1 live=false
+[run=1342d91a-b9fe-46a6-8f05-f6665b8effdd] source_start fed-ssa-benefits SSA Benefits Overview
+[run=1342d91a-b9fe-46a6-8f05-f6665b8effdd] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=1342d91a-b9fe-46a6-8f05-f6665b8effdd] source_failure fed-ssa-benefits
+[run=1342d91a-b9fe-46a6-8f05-f6665b8effdd] complete ok sources_ok=0/1 programs_upserted=0
+[run=c3afcd79-3875-48d3-98a7-956ef9a90db0] start mode=SMOKE_MODE sources=1 live=false
+[run=c3afcd79-3875-48d3-98a7-956ef9a90db0] source_start fed-ssa-benefits SSA Benefits Overview
+[run=c3afcd79-3875-48d3-98a7-956ef9a90db0] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=c3afcd79-3875-48d3-98a7-956ef9a90db0] source_failure fed-ssa-benefits
+[run=c3afcd79-3875-48d3-98a7-956ef9a90db0] complete ok sources_ok=0/1 programs_upserted=0
+[run=7ff4728e-3eba-4c32-a286-3b73e0778e35] start mode=SMOKE_MODE sources=5 live=false
+[run=7ff4728e-3eba-4c32-a286-3b73e0778e35] source_start fed-ssa-benefits SSA Benefits Overview
+[run=7ff4728e-3eba-4c32-a286-3b73e0778e35] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=7ff4728e-3eba-4c32-a286-3b73e0778e35] source_failure fed-ssa-benefits
+[run=7ff4728e-3eba-4c32-a286-3b73e0778e35] source_start state-tn-ecf-choices TennCare ECF CHOICES
+[run=7ff4728e-3eba-4c32-a286-3b73e0778e35] fetch_start state-tn-ecf-choices url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=7ff4728e-3eba-4c32-a286-3b73e0778e35] source_failure state-tn-ecf-choices
+[run=7ff4728e-3eba-4c32-a286-3b73e0778e35] source_start county-king-housing-assistance King County Housing Assistance (example municipal/county)
+[run=7ff4728e-3eba-4c32-a286-3b73e0778e35] fetch_start county-king-housing-assistance url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=7ff4728e-3eba-4c32-a286-3b73e0778e35] source_failure county-king-housing-assistance
+[run=7ff4728e-3eba-4c32-a286-3b73e0778e35] source_start tribal-cherokee-health Cherokee Nation Health Services (example tribal)
+[run=7ff4728e-3eba-4c32-a286-3b73e0778e35] fetch_start tribal-cherokee-health url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=7ff4728e-3eba-4c32-a286-3b73e0778e35] source_failure tribal-cherokee-health
+[run=7ff4728e-3eba-4c32-a286-3b73e0778e35] source_start mco-mock-portal MCO Contractor Portal (mock)
+[run=7ff4728e-3eba-4c32-a286-3b73e0778e35] fetch_start mco-mock-portal url=mock://mco-portal-example
+[run=7ff4728e-3eba-4c32-a286-3b73e0778e35] fetch_success mco-mock-portal status=200 ct=application/json url=mock://mco-portal-example
+[run=7ff4728e-3eba-4c32-a286-3b73e0778e35] source_success mco-mock-portal
+[run=7ff4728e-3eba-4c32-a286-3b73e0778e35] complete ok sources_ok=1/5 programs_upserted=2
+[run=3d046bc1-6874-40ab-b70a-1e1e04fd3c61] start mode=SMOKE_MODE sources=5 live=false
+[run=3d046bc1-6874-40ab-b70a-1e1e04fd3c61] source_start fed-ssa-benefits SSA Benefits Overview
+[run=3d046bc1-6874-40ab-b70a-1e1e04fd3c61] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=3d046bc1-6874-40ab-b70a-1e1e04fd3c61] source_failure fed-ssa-benefits
+[run=3d046bc1-6874-40ab-b70a-1e1e04fd3c61] source_start state-tn-ecf-choices TennCare ECF CHOICES
+[run=3d046bc1-6874-40ab-b70a-1e1e04fd3c61] fetch_start state-tn-ecf-choices url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=3d046bc1-6874-40ab-b70a-1e1e04fd3c61] source_failure state-tn-ecf-choices
+[run=3d046bc1-6874-40ab-b70a-1e1e04fd3c61] source_start county-king-housing-assistance King County Housing Assistance (example municipal/county)
+[run=3d046bc1-6874-40ab-b70a-1e1e04fd3c61] fetch_start county-king-housing-assistance url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=3d046bc1-6874-40ab-b70a-1e1e04fd3c61] source_failure county-king-housing-assistance
+[run=3d046bc1-6874-40ab-b70a-1e1e04fd3c61] source_start tribal-cherokee-health Cherokee Nation Health Services (example tribal)
+[run=3d046bc1-6874-40ab-b70a-1e1e04fd3c61] fetch_start tribal-cherokee-health url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=3d046bc1-6874-40ab-b70a-1e1e04fd3c61] source_failure tribal-cherokee-health
+[run=3d046bc1-6874-40ab-b70a-1e1e04fd3c61] source_start mco-mock-portal MCO Contractor Portal (mock)
+[run=3d046bc1-6874-40ab-b70a-1e1e04fd3c61] fetch_start mco-mock-portal url=mock://mco-portal-example
+[run=3d046bc1-6874-40ab-b70a-1e1e04fd3c61] fetch_success mco-mock-portal status=200 ct=application/json url=mock://mco-portal-example
+[run=3d046bc1-6874-40ab-b70a-1e1e04fd3c61] source_success mco-mock-portal
+[run=3d046bc1-6874-40ab-b70a-1e1e04fd3c61] complete ok sources_ok=1/5 programs_upserted=2
+[run=28a26e01-af79-4d43-9f3c-17530702455c] start mode=SMOKE_MODE sources=1 live=false
+[run=28a26e01-af79-4d43-9f3c-17530702455c] source_start fed-ssa-benefits SSA Benefits Overview
+[run=28a26e01-af79-4d43-9f3c-17530702455c] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=28a26e01-af79-4d43-9f3c-17530702455c] source_failure fed-ssa-benefits
+[run=28a26e01-af79-4d43-9f3c-17530702455c] complete ok sources_ok=0/1 programs_upserted=0
+[run=4f145615-fe92-42b3-97de-98fc9abb9901] start mode=SMOKE_MODE sources=1 live=false
+[run=4f145615-fe92-42b3-97de-98fc9abb9901] source_start fed-ssa-benefits SSA Benefits Overview
+[run=4f145615-fe92-42b3-97de-98fc9abb9901] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=4f145615-fe92-42b3-97de-98fc9abb9901] source_failure fed-ssa-benefits
+[run=4f145615-fe92-42b3-97de-98fc9abb9901] complete ok sources_ok=0/1 programs_upserted=0
+[run=f53c2ac7-66dc-4277-b786-f18e0bff8b7c] start mode=SMOKE_MODE sources=5 live=false
+[run=f53c2ac7-66dc-4277-b786-f18e0bff8b7c] source_start fed-ssa-benefits SSA Benefits Overview
+[run=f53c2ac7-66dc-4277-b786-f18e0bff8b7c] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=f53c2ac7-66dc-4277-b786-f18e0bff8b7c] source_failure fed-ssa-benefits
+[run=f53c2ac7-66dc-4277-b786-f18e0bff8b7c] source_start state-tn-ecf-choices TennCare ECF CHOICES
+[run=f53c2ac7-66dc-4277-b786-f18e0bff8b7c] fetch_start state-tn-ecf-choices url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=f53c2ac7-66dc-4277-b786-f18e0bff8b7c] source_failure state-tn-ecf-choices
+[run=f53c2ac7-66dc-4277-b786-f18e0bff8b7c] source_start county-king-housing-assistance King County Housing Assistance (example municipal/county)
+[run=f53c2ac7-66dc-4277-b786-f18e0bff8b7c] fetch_start county-king-housing-assistance url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=f53c2ac7-66dc-4277-b786-f18e0bff8b7c] source_failure county-king-housing-assistance
+[run=f53c2ac7-66dc-4277-b786-f18e0bff8b7c] source_start tribal-cherokee-health Cherokee Nation Health Services (example tribal)
+[run=f53c2ac7-66dc-4277-b786-f18e0bff8b7c] fetch_start tribal-cherokee-health url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=f53c2ac7-66dc-4277-b786-f18e0bff8b7c] source_failure tribal-cherokee-health
+[run=f53c2ac7-66dc-4277-b786-f18e0bff8b7c] source_start mco-mock-portal MCO Contractor Portal (mock)
+[run=f53c2ac7-66dc-4277-b786-f18e0bff8b7c] fetch_start mco-mock-portal url=mock://mco-portal-example
+[run=f53c2ac7-66dc-4277-b786-f18e0bff8b7c] fetch_success mco-mock-portal status=200 ct=application/json url=mock://mco-portal-example
+[run=f53c2ac7-66dc-4277-b786-f18e0bff8b7c] source_success mco-mock-portal
+[run=f53c2ac7-66dc-4277-b786-f18e0bff8b7c] complete ok sources_ok=1/5 programs_upserted=2
+[run=947efee0-4f57-47ef-9341-23a5a8278e58] start mode=SMOKE_MODE sources=5 live=false
+[run=947efee0-4f57-47ef-9341-23a5a8278e58] source_start fed-ssa-benefits SSA Benefits Overview
+[run=947efee0-4f57-47ef-9341-23a5a8278e58] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=947efee0-4f57-47ef-9341-23a5a8278e58] source_failure fed-ssa-benefits
+[run=947efee0-4f57-47ef-9341-23a5a8278e58] source_start state-tn-ecf-choices TennCare ECF CHOICES
+[run=947efee0-4f57-47ef-9341-23a5a8278e58] fetch_start state-tn-ecf-choices url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=947efee0-4f57-47ef-9341-23a5a8278e58] source_failure state-tn-ecf-choices
+[run=947efee0-4f57-47ef-9341-23a5a8278e58] source_start county-king-housing-assistance King County Housing Assistance (example municipal/county)
+[run=947efee0-4f57-47ef-9341-23a5a8278e58] fetch_start county-king-housing-assistance url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=947efee0-4f57-47ef-9341-23a5a8278e58] source_failure county-king-housing-assistance
+[run=947efee0-4f57-47ef-9341-23a5a8278e58] source_start tribal-cherokee-health Cherokee Nation Health Services (example tribal)
+[run=947efee0-4f57-47ef-9341-23a5a8278e58] fetch_start tribal-cherokee-health url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=947efee0-4f57-47ef-9341-23a5a8278e58] source_failure tribal-cherokee-health
+[run=947efee0-4f57-47ef-9341-23a5a8278e58] source_start mco-mock-portal MCO Contractor Portal (mock)
+[run=947efee0-4f57-47ef-9341-23a5a8278e58] fetch_start mco-mock-portal url=mock://mco-portal-example
+[run=947efee0-4f57-47ef-9341-23a5a8278e58] fetch_success mco-mock-portal status=200 ct=application/json url=mock://mco-portal-example
+[run=947efee0-4f57-47ef-9341-23a5a8278e58] source_success mco-mock-portal
+[run=947efee0-4f57-47ef-9341-23a5a8278e58] complete ok sources_ok=1/5 programs_upserted=2
+[run=f059106d-b60e-4faf-8dfb-c98761acd81e] start mode=SMOKE_MODE sources=1 live=false
+[run=f059106d-b60e-4faf-8dfb-c98761acd81e] source_start fed-ssa-benefits SSA Benefits Overview
+[run=f059106d-b60e-4faf-8dfb-c98761acd81e] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=f059106d-b60e-4faf-8dfb-c98761acd81e] source_failure fed-ssa-benefits
+[run=f059106d-b60e-4faf-8dfb-c98761acd81e] complete ok sources_ok=0/1 programs_upserted=0
+[run=a1ad5d8e-362f-4c1b-9def-eb9ad7200815] start mode=SMOKE_MODE sources=1 live=false
+[run=a1ad5d8e-362f-4c1b-9def-eb9ad7200815] source_start fed-ssa-benefits SSA Benefits Overview
+[run=a1ad5d8e-362f-4c1b-9def-eb9ad7200815] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=a1ad5d8e-362f-4c1b-9def-eb9ad7200815] source_failure fed-ssa-benefits
+[run=a1ad5d8e-362f-4c1b-9def-eb9ad7200815] complete ok sources_ok=0/1 programs_upserted=0
+[run=e0a40a56-ae1e-4c61-be44-7ec158533f71] start mode=SMOKE_MODE sources=5 live=false
+[run=e0a40a56-ae1e-4c61-be44-7ec158533f71] source_start fed-ssa-benefits SSA Benefits Overview
+[run=e0a40a56-ae1e-4c61-be44-7ec158533f71] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=e0a40a56-ae1e-4c61-be44-7ec158533f71] source_failure fed-ssa-benefits
+[run=e0a40a56-ae1e-4c61-be44-7ec158533f71] source_start state-tn-ecf-choices TennCare ECF CHOICES
+[run=e0a40a56-ae1e-4c61-be44-7ec158533f71] fetch_start state-tn-ecf-choices url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=e0a40a56-ae1e-4c61-be44-7ec158533f71] source_failure state-tn-ecf-choices
+[run=e0a40a56-ae1e-4c61-be44-7ec158533f71] source_start county-king-housing-assistance King County Housing Assistance (example municipal/county)
+[run=e0a40a56-ae1e-4c61-be44-7ec158533f71] fetch_start county-king-housing-assistance url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=e0a40a56-ae1e-4c61-be44-7ec158533f71] source_failure county-king-housing-assistance
+[run=e0a40a56-ae1e-4c61-be44-7ec158533f71] source_start tribal-cherokee-health Cherokee Nation Health Services (example tribal)
+[run=e0a40a56-ae1e-4c61-be44-7ec158533f71] fetch_start tribal-cherokee-health url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=e0a40a56-ae1e-4c61-be44-7ec158533f71] source_failure tribal-cherokee-health
+[run=e0a40a56-ae1e-4c61-be44-7ec158533f71] source_start mco-mock-portal MCO Contractor Portal (mock)
+[run=e0a40a56-ae1e-4c61-be44-7ec158533f71] fetch_start mco-mock-portal url=mock://mco-portal-example
+[run=e0a40a56-ae1e-4c61-be44-7ec158533f71] fetch_success mco-mock-portal status=200 ct=application/json url=mock://mco-portal-example
+[run=e0a40a56-ae1e-4c61-be44-7ec158533f71] source_success mco-mock-portal
+[run=e0a40a56-ae1e-4c61-be44-7ec158533f71] complete ok sources_ok=1/5 programs_upserted=2
+[run=c7aa14e9-271d-41cc-9f34-85b2450d7285] start mode=SMOKE_MODE sources=5 live=false
+[run=c7aa14e9-271d-41cc-9f34-85b2450d7285] source_start fed-ssa-benefits SSA Benefits Overview
+[run=c7aa14e9-271d-41cc-9f34-85b2450d7285] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=c7aa14e9-271d-41cc-9f34-85b2450d7285] source_failure fed-ssa-benefits
+[run=c7aa14e9-271d-41cc-9f34-85b2450d7285] source_start state-tn-ecf-choices TennCare ECF CHOICES
+[run=c7aa14e9-271d-41cc-9f34-85b2450d7285] fetch_start state-tn-ecf-choices url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=c7aa14e9-271d-41cc-9f34-85b2450d7285] source_failure state-tn-ecf-choices
+[run=c7aa14e9-271d-41cc-9f34-85b2450d7285] source_start county-king-housing-assistance King County Housing Assistance (example municipal/county)
+[run=c7aa14e9-271d-41cc-9f34-85b2450d7285] fetch_start county-king-housing-assistance url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=c7aa14e9-271d-41cc-9f34-85b2450d7285] source_failure county-king-housing-assistance
+[run=c7aa14e9-271d-41cc-9f34-85b2450d7285] source_start tribal-cherokee-health Cherokee Nation Health Services (example tribal)
+[run=c7aa14e9-271d-41cc-9f34-85b2450d7285] fetch_start tribal-cherokee-health url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=c7aa14e9-271d-41cc-9f34-85b2450d7285] source_failure tribal-cherokee-health
+[run=c7aa14e9-271d-41cc-9f34-85b2450d7285] source_start mco-mock-portal MCO Contractor Portal (mock)
+[run=c7aa14e9-271d-41cc-9f34-85b2450d7285] fetch_start mco-mock-portal url=mock://mco-portal-example
+[run=c7aa14e9-271d-41cc-9f34-85b2450d7285] fetch_success mco-mock-portal status=200 ct=application/json url=mock://mco-portal-example
+[run=c7aa14e9-271d-41cc-9f34-85b2450d7285] source_success mco-mock-portal
+[run=c7aa14e9-271d-41cc-9f34-85b2450d7285] complete ok sources_ok=1/5 programs_upserted=2
+[run=e4d8cdbf-395c-4d5e-813e-af2fcc20c754] start mode=SMOKE_MODE sources=1 live=false
+[run=e4d8cdbf-395c-4d5e-813e-af2fcc20c754] source_start fed-ssa-benefits SSA Benefits Overview
+[run=e4d8cdbf-395c-4d5e-813e-af2fcc20c754] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=e4d8cdbf-395c-4d5e-813e-af2fcc20c754] source_failure fed-ssa-benefits
+[run=e4d8cdbf-395c-4d5e-813e-af2fcc20c754] complete ok sources_ok=0/1 programs_upserted=0
+[run=3b3af99f-e954-48fd-ab57-0585e32bf716] start mode=SMOKE_MODE sources=5 live=false
+[run=3b3af99f-e954-48fd-ab57-0585e32bf716] source_start fed-ssa-benefits SSA Benefits Overview
+[run=3b3af99f-e954-48fd-ab57-0585e32bf716] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=3b3af99f-e954-48fd-ab57-0585e32bf716] fetch_success fed-ssa-benefits status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=3b3af99f-e954-48fd-ab57-0585e32bf716] source_success fed-ssa-benefits
+[run=3b3af99f-e954-48fd-ab57-0585e32bf716] source_start state-tn-ecf-choices TennCare ECF CHOICES
+[run=3b3af99f-e954-48fd-ab57-0585e32bf716] fetch_start state-tn-ecf-choices url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=3b3af99f-e954-48fd-ab57-0585e32bf716] fetch_success state-tn-ecf-choices status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=3b3af99f-e954-48fd-ab57-0585e32bf716] source_success state-tn-ecf-choices
+[run=3b3af99f-e954-48fd-ab57-0585e32bf716] source_start county-king-housing-assistance King County Housing Assistance (example municipal/county)
+[run=3b3af99f-e954-48fd-ab57-0585e32bf716] fetch_start county-king-housing-assistance url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=3b3af99f-e954-48fd-ab57-0585e32bf716] fetch_success county-king-housing-assistance status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=3b3af99f-e954-48fd-ab57-0585e32bf716] source_success county-king-housing-assistance
+[run=3b3af99f-e954-48fd-ab57-0585e32bf716] source_start tribal-cherokee-health Cherokee Nation Health Services (example tribal)
+[run=3b3af99f-e954-48fd-ab57-0585e32bf716] fetch_start tribal-cherokee-health url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=3b3af99f-e954-48fd-ab57-0585e32bf716] fetch_success tribal-cherokee-health status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=3b3af99f-e954-48fd-ab57-0585e32bf716] source_success tribal-cherokee-health
+[run=3b3af99f-e954-48fd-ab57-0585e32bf716] source_start mco-mock-portal MCO Contractor Portal (mock)
+[run=3b3af99f-e954-48fd-ab57-0585e32bf716] fetch_start mco-mock-portal url=mock://mco-portal-example
+[run=3b3af99f-e954-48fd-ab57-0585e32bf716] fetch_success mco-mock-portal status=200 ct=application/json url=mock://mco-portal-example
+[run=3b3af99f-e954-48fd-ab57-0585e32bf716] source_success mco-mock-portal
+[run=3b3af99f-e954-48fd-ab57-0585e32bf716] complete ok sources_ok=5/5 programs_upserted=6
+[run=eeac6131-7530-4692-b1d7-57f7a911e40f] start mode=SMOKE_MODE sources=5 live=false
+[run=eeac6131-7530-4692-b1d7-57f7a911e40f] source_start fed-ssa-benefits SSA Benefits Overview
+[run=eeac6131-7530-4692-b1d7-57f7a911e40f] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=eeac6131-7530-4692-b1d7-57f7a911e40f] fetch_success fed-ssa-benefits status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=eeac6131-7530-4692-b1d7-57f7a911e40f] source_success fed-ssa-benefits
+[run=eeac6131-7530-4692-b1d7-57f7a911e40f] source_start state-tn-ecf-choices TennCare ECF CHOICES
+[run=eeac6131-7530-4692-b1d7-57f7a911e40f] fetch_start state-tn-ecf-choices url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=eeac6131-7530-4692-b1d7-57f7a911e40f] fetch_success state-tn-ecf-choices status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=eeac6131-7530-4692-b1d7-57f7a911e40f] source_success state-tn-ecf-choices
+[run=eeac6131-7530-4692-b1d7-57f7a911e40f] source_start county-king-housing-assistance King County Housing Assistance (example municipal/county)
+[run=eeac6131-7530-4692-b1d7-57f7a911e40f] fetch_start county-king-housing-assistance url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=eeac6131-7530-4692-b1d7-57f7a911e40f] fetch_success county-king-housing-assistance status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=eeac6131-7530-4692-b1d7-57f7a911e40f] source_success county-king-housing-assistance
+[run=eeac6131-7530-4692-b1d7-57f7a911e40f] source_start tribal-cherokee-health Cherokee Nation Health Services (example tribal)
+[run=eeac6131-7530-4692-b1d7-57f7a911e40f] fetch_start tribal-cherokee-health url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=eeac6131-7530-4692-b1d7-57f7a911e40f] fetch_success tribal-cherokee-health status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=eeac6131-7530-4692-b1d7-57f7a911e40f] source_success tribal-cherokee-health
+[run=eeac6131-7530-4692-b1d7-57f7a911e40f] source_start mco-mock-portal MCO Contractor Portal (mock)
+[run=eeac6131-7530-4692-b1d7-57f7a911e40f] fetch_start mco-mock-portal url=mock://mco-portal-example
+[run=eeac6131-7530-4692-b1d7-57f7a911e40f] fetch_success mco-mock-portal status=200 ct=application/json url=mock://mco-portal-example
+[run=eeac6131-7530-4692-b1d7-57f7a911e40f] source_success mco-mock-portal
+[run=eeac6131-7530-4692-b1d7-57f7a911e40f] complete ok sources_ok=5/5 programs_upserted=6
+[run=16862dd6-ba6d-44ea-b287-2493adbc08b9] start mode=SMOKE_MODE sources=1 live=false
+[run=16862dd6-ba6d-44ea-b287-2493adbc08b9] source_start fed-ssa-benefits SSA Benefits Overview
+[run=16862dd6-ba6d-44ea-b287-2493adbc08b9] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=16862dd6-ba6d-44ea-b287-2493adbc08b9] fetch_success fed-ssa-benefits status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=16862dd6-ba6d-44ea-b287-2493adbc08b9] source_success fed-ssa-benefits
+[run=16862dd6-ba6d-44ea-b287-2493adbc08b9] complete ok sources_ok=1/1 programs_upserted=1
+[run=1e710580-4857-4c7d-9405-8a1c037830a5] start mode=SMOKE_MODE sources=1 live=false
+[run=1e710580-4857-4c7d-9405-8a1c037830a5] source_start fed-ssa-benefits SSA Benefits Overview
+[run=1e710580-4857-4c7d-9405-8a1c037830a5] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=1e710580-4857-4c7d-9405-8a1c037830a5] fetch_success fed-ssa-benefits status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=1e710580-4857-4c7d-9405-8a1c037830a5] source_success fed-ssa-benefits
+[run=1e710580-4857-4c7d-9405-8a1c037830a5] complete ok sources_ok=1/1 programs_upserted=1
+[run=ad726ed3-27ff-44ee-9cf9-9702f1c308be] start mode=SMOKE_MODE sources=5 live=false
+[run=ad726ed3-27ff-44ee-9cf9-9702f1c308be] source_start fed-ssa-benefits SSA Benefits Overview
+[run=ad726ed3-27ff-44ee-9cf9-9702f1c308be] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=ad726ed3-27ff-44ee-9cf9-9702f1c308be] fetch_success fed-ssa-benefits status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=ad726ed3-27ff-44ee-9cf9-9702f1c308be] source_success fed-ssa-benefits
+[run=ad726ed3-27ff-44ee-9cf9-9702f1c308be] source_start state-tn-ecf-choices TennCare ECF CHOICES
+[run=ad726ed3-27ff-44ee-9cf9-9702f1c308be] fetch_start state-tn-ecf-choices url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=ad726ed3-27ff-44ee-9cf9-9702f1c308be] fetch_success state-tn-ecf-choices status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=ad726ed3-27ff-44ee-9cf9-9702f1c308be] source_success state-tn-ecf-choices
+[run=ad726ed3-27ff-44ee-9cf9-9702f1c308be] source_start county-king-housing-assistance King County Housing Assistance (example municipal/county)
+[run=ad726ed3-27ff-44ee-9cf9-9702f1c308be] fetch_start county-king-housing-assistance url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=ad726ed3-27ff-44ee-9cf9-9702f1c308be] fetch_success county-king-housing-assistance status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=ad726ed3-27ff-44ee-9cf9-9702f1c308be] source_success county-king-housing-assistance
+[run=ad726ed3-27ff-44ee-9cf9-9702f1c308be] source_start tribal-cherokee-health Cherokee Nation Health Services (example tribal)
+[run=ad726ed3-27ff-44ee-9cf9-9702f1c308be] fetch_start tribal-cherokee-health url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=ad726ed3-27ff-44ee-9cf9-9702f1c308be] fetch_success tribal-cherokee-health status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=ad726ed3-27ff-44ee-9cf9-9702f1c308be] source_success tribal-cherokee-health
+[run=ad726ed3-27ff-44ee-9cf9-9702f1c308be] source_start mco-mock-portal MCO Contractor Portal (mock)
+[run=ad726ed3-27ff-44ee-9cf9-9702f1c308be] fetch_start mco-mock-portal url=mock://mco-portal-example
+[run=ad726ed3-27ff-44ee-9cf9-9702f1c308be] fetch_success mco-mock-portal status=200 ct=application/json url=mock://mco-portal-example
+[run=ad726ed3-27ff-44ee-9cf9-9702f1c308be] source_success mco-mock-portal
+[run=ad726ed3-27ff-44ee-9cf9-9702f1c308be] complete ok sources_ok=5/5 programs_upserted=6
+[run=00c97dbe-ff0f-4e9a-aeb9-35053dc03d1c] start mode=SMOKE_MODE sources=5 live=false
+[run=00c97dbe-ff0f-4e9a-aeb9-35053dc03d1c] source_start fed-ssa-benefits SSA Benefits Overview
+[run=00c97dbe-ff0f-4e9a-aeb9-35053dc03d1c] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=00c97dbe-ff0f-4e9a-aeb9-35053dc03d1c] fetch_success fed-ssa-benefits status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=00c97dbe-ff0f-4e9a-aeb9-35053dc03d1c] source_success fed-ssa-benefits
+[run=00c97dbe-ff0f-4e9a-aeb9-35053dc03d1c] source_start state-tn-ecf-choices TennCare ECF CHOICES
+[run=00c97dbe-ff0f-4e9a-aeb9-35053dc03d1c] fetch_start state-tn-ecf-choices url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=00c97dbe-ff0f-4e9a-aeb9-35053dc03d1c] fetch_success state-tn-ecf-choices status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=00c97dbe-ff0f-4e9a-aeb9-35053dc03d1c] source_success state-tn-ecf-choices
+[run=00c97dbe-ff0f-4e9a-aeb9-35053dc03d1c] source_start county-king-housing-assistance King County Housing Assistance (example municipal/county)
+[run=00c97dbe-ff0f-4e9a-aeb9-35053dc03d1c] fetch_start county-king-housing-assistance url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=00c97dbe-ff0f-4e9a-aeb9-35053dc03d1c] fetch_success county-king-housing-assistance status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=00c97dbe-ff0f-4e9a-aeb9-35053dc03d1c] source_success county-king-housing-assistance
+[run=00c97dbe-ff0f-4e9a-aeb9-35053dc03d1c] source_start tribal-cherokee-health Cherokee Nation Health Services (example tribal)
+[run=00c97dbe-ff0f-4e9a-aeb9-35053dc03d1c] fetch_start tribal-cherokee-health url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=00c97dbe-ff0f-4e9a-aeb9-35053dc03d1c] fetch_success tribal-cherokee-health status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=00c97dbe-ff0f-4e9a-aeb9-35053dc03d1c] source_success tribal-cherokee-health
+[run=00c97dbe-ff0f-4e9a-aeb9-35053dc03d1c] source_start mco-mock-portal MCO Contractor Portal (mock)
+[run=00c97dbe-ff0f-4e9a-aeb9-35053dc03d1c] fetch_start mco-mock-portal url=mock://mco-portal-example
+[run=00c97dbe-ff0f-4e9a-aeb9-35053dc03d1c] fetch_success mco-mock-portal status=200 ct=application/json url=mock://mco-portal-example
+[run=00c97dbe-ff0f-4e9a-aeb9-35053dc03d1c] source_success mco-mock-portal
+[run=00c97dbe-ff0f-4e9a-aeb9-35053dc03d1c] complete ok sources_ok=5/5 programs_upserted=6
+[run=f08c6270-a2ea-473c-b08e-4cb65335dd41] start mode=SMOKE_MODE sources=1 live=false
+[run=f08c6270-a2ea-473c-b08e-4cb65335dd41] source_start fed-ssa-benefits SSA Benefits Overview
+[run=f08c6270-a2ea-473c-b08e-4cb65335dd41] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=f08c6270-a2ea-473c-b08e-4cb65335dd41] fetch_success fed-ssa-benefits status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=f08c6270-a2ea-473c-b08e-4cb65335dd41] source_success fed-ssa-benefits
+[run=f08c6270-a2ea-473c-b08e-4cb65335dd41] complete ok sources_ok=1/1 programs_upserted=1
+[run=9d72eaa0-3f36-4e25-9faf-dbf6a8d4a88b] start mode=SMOKE_MODE sources=1 live=false
+[run=9d72eaa0-3f36-4e25-9faf-dbf6a8d4a88b] source_start fed-ssa-benefits SSA Benefits Overview
+[run=9d72eaa0-3f36-4e25-9faf-dbf6a8d4a88b] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=9d72eaa0-3f36-4e25-9faf-dbf6a8d4a88b] fetch_success fed-ssa-benefits status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=9d72eaa0-3f36-4e25-9faf-dbf6a8d4a88b] source_success fed-ssa-benefits
+[run=9d72eaa0-3f36-4e25-9faf-dbf6a8d4a88b] complete ok sources_ok=1/1 programs_upserted=1
+[run=6089c9d2-83ce-4690-b126-609d33eaf2a5] start mode=SMOKE_MODE sources=5 live=false
+[run=6089c9d2-83ce-4690-b126-609d33eaf2a5] source_start fed-ssa-benefits SSA Benefits Overview
+[run=6089c9d2-83ce-4690-b126-609d33eaf2a5] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=6089c9d2-83ce-4690-b126-609d33eaf2a5] fetch_success fed-ssa-benefits status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=6089c9d2-83ce-4690-b126-609d33eaf2a5] source_success fed-ssa-benefits
+[run=6089c9d2-83ce-4690-b126-609d33eaf2a5] source_start state-tn-ecf-choices TennCare ECF CHOICES
+[run=6089c9d2-83ce-4690-b126-609d33eaf2a5] fetch_start state-tn-ecf-choices url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=6089c9d2-83ce-4690-b126-609d33eaf2a5] fetch_success state-tn-ecf-choices status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=6089c9d2-83ce-4690-b126-609d33eaf2a5] source_success state-tn-ecf-choices
+[run=6089c9d2-83ce-4690-b126-609d33eaf2a5] source_start county-king-housing-assistance King County Housing Assistance (example municipal/county)
+[run=6089c9d2-83ce-4690-b126-609d33eaf2a5] fetch_start county-king-housing-assistance url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=6089c9d2-83ce-4690-b126-609d33eaf2a5] fetch_success county-king-housing-assistance status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=6089c9d2-83ce-4690-b126-609d33eaf2a5] source_success county-king-housing-assistance
+[run=6089c9d2-83ce-4690-b126-609d33eaf2a5] source_start tribal-cherokee-health Cherokee Nation Health Services (example tribal)
+[run=6089c9d2-83ce-4690-b126-609d33eaf2a5] fetch_start tribal-cherokee-health url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=6089c9d2-83ce-4690-b126-609d33eaf2a5] fetch_success tribal-cherokee-health status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=6089c9d2-83ce-4690-b126-609d33eaf2a5] source_success tribal-cherokee-health
+[run=6089c9d2-83ce-4690-b126-609d33eaf2a5] source_start mco-mock-portal MCO Contractor Portal (mock)
+[run=6089c9d2-83ce-4690-b126-609d33eaf2a5] fetch_start mco-mock-portal url=mock://mco-portal-example
+[run=6089c9d2-83ce-4690-b126-609d33eaf2a5] fetch_success mco-mock-portal status=200 ct=application/json url=mock://mco-portal-example
+[run=6089c9d2-83ce-4690-b126-609d33eaf2a5] source_success mco-mock-portal
+[run=6089c9d2-83ce-4690-b126-609d33eaf2a5] complete ok sources_ok=5/5 programs_upserted=6
+[run=632569b0-14d6-4f99-824c-a5f34ec3055e] start mode=SMOKE_MODE sources=5 live=false
+[run=632569b0-14d6-4f99-824c-a5f34ec3055e] source_start fed-ssa-benefits SSA Benefits Overview
+[run=632569b0-14d6-4f99-824c-a5f34ec3055e] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=632569b0-14d6-4f99-824c-a5f34ec3055e] fetch_success fed-ssa-benefits status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=632569b0-14d6-4f99-824c-a5f34ec3055e] source_success fed-ssa-benefits
+[run=632569b0-14d6-4f99-824c-a5f34ec3055e] source_start state-tn-ecf-choices TennCare ECF CHOICES
+[run=632569b0-14d6-4f99-824c-a5f34ec3055e] fetch_start state-tn-ecf-choices url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=632569b0-14d6-4f99-824c-a5f34ec3055e] fetch_success state-tn-ecf-choices status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/state-tn-ecf-choices.html
+[run=632569b0-14d6-4f99-824c-a5f34ec3055e] source_success state-tn-ecf-choices
+[run=632569b0-14d6-4f99-824c-a5f34ec3055e] source_start county-king-housing-assistance King County Housing Assistance (example municipal/county)
+[run=632569b0-14d6-4f99-824c-a5f34ec3055e] fetch_start county-king-housing-assistance url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=632569b0-14d6-4f99-824c-a5f34ec3055e] fetch_success county-king-housing-assistance status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/county-king-housing-assistance.html
+[run=632569b0-14d6-4f99-824c-a5f34ec3055e] source_success county-king-housing-assistance
+[run=632569b0-14d6-4f99-824c-a5f34ec3055e] source_start tribal-cherokee-health Cherokee Nation Health Services (example tribal)
+[run=632569b0-14d6-4f99-824c-a5f34ec3055e] fetch_start tribal-cherokee-health url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=632569b0-14d6-4f99-824c-a5f34ec3055e] fetch_success tribal-cherokee-health status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/tribal-cherokee-health.html
+[run=632569b0-14d6-4f99-824c-a5f34ec3055e] source_success tribal-cherokee-health
+[run=632569b0-14d6-4f99-824c-a5f34ec3055e] source_start mco-mock-portal MCO Contractor Portal (mock)
+[run=632569b0-14d6-4f99-824c-a5f34ec3055e] fetch_start mco-mock-portal url=mock://mco-portal-example
+[run=632569b0-14d6-4f99-824c-a5f34ec3055e] fetch_success mco-mock-portal status=200 ct=application/json url=mock://mco-portal-example
+[run=632569b0-14d6-4f99-824c-a5f34ec3055e] source_success mco-mock-portal
+[run=632569b0-14d6-4f99-824c-a5f34ec3055e] complete ok sources_ok=5/5 programs_upserted=6
+[run=dbf09900-c727-4efe-a7ba-8fcf097033ee] start mode=SMOKE_MODE sources=1 live=false
+[run=dbf09900-c727-4efe-a7ba-8fcf097033ee] source_start fed-ssa-benefits SSA Benefits Overview
+[run=dbf09900-c727-4efe-a7ba-8fcf097033ee] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=dbf09900-c727-4efe-a7ba-8fcf097033ee] fetch_success fed-ssa-benefits status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=dbf09900-c727-4efe-a7ba-8fcf097033ee] source_success fed-ssa-benefits
+[run=dbf09900-c727-4efe-a7ba-8fcf097033ee] complete ok sources_ok=1/1 programs_upserted=1
+[run=b3fd607c-53e5-4ea9-9052-53850d144354] start mode=SMOKE_MODE sources=1 live=false
+[run=b3fd607c-53e5-4ea9-9052-53850d144354] source_start fed-ssa-benefits SSA Benefits Overview
+[run=b3fd607c-53e5-4ea9-9052-53850d144354] fetch_start fed-ssa-benefits url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=b3fd607c-53e5-4ea9-9052-53850d144354] fetch_success fed-ssa-benefits status=200 ct=text/html url=file:///C:/Users/firer/GrantFlow/tests/crawler/fixtures/federal-ssa-benefits.html
+[run=b3fd607c-53e5-4ea9-9052-53850d144354] source_success fed-ssa-benefits
+[run=b3fd607c-53e5-4ea9-9052-53850d144354] complete ok sources_ok=1/1 programs_upserted=1
+[run=2adfc2b2-e5d4-46a2-a85d-222c01a4639a] start mode=SMOKE_MODE sources=4 live=true
+[run=2adfc2b2-e5d4-46a2-a85d-222c01a4639a] source_start fed-ssa-benefits SSA Benefits Overview
+[run=2adfc2b2-e5d4-46a2-a85d-222c01a4639a] fetch_start fed-ssa-benefits url=https://www.ssa.gov/benefits/
+[run=2adfc2b2-e5d4-46a2-a85d-222c01a4639a] fetch_success fed-ssa-benefits status=403 ct=text/html url=https://www.ssa.gov/benefits/
+[run=2adfc2b2-e5d4-46a2-a85d-222c01a4639a] source_success fed-ssa-benefits
+[run=2adfc2b2-e5d4-46a2-a85d-222c01a4639a] source_start state-tn-ecf-choices TennCare ECF CHOICES
+[run=2adfc2b2-e5d4-46a2-a85d-222c01a4639a] fetch_start state-tn-ecf-choices url=https://www.tn.gov/tenncare/long-term-services-supports/ecf-choices.html
+[run=2adfc2b2-e5d4-46a2-a85d-222c01a4639a] fetch_success state-tn-ecf-choices status=404 ct=text/html;charset=utf-8 url=https://www.tn.gov/tenncare/long-term-services-supports/ecf-choices.html
+[run=2adfc2b2-e5d4-46a2-a85d-222c01a4639a] source_success state-tn-ecf-choices
+[run=2adfc2b2-e5d4-46a2-a85d-222c01a4639a] source_start county-king-housing-assistance King County Housing Assistance (example municipal/county)
+[run=2adfc2b2-e5d4-46a2-a85d-222c01a4639a] fetch_start county-king-housing-assistance url=https://www.kingcounty.gov/en/dept/dchs/housing-services/housing-assistance
+[run=2adfc2b2-e5d4-46a2-a85d-222c01a4639a] fetch_success county-king-housing-assistance status=404 ct=text/html; charset=utf-8 url=https://www.kingcounty.gov/en/dept/dchs/housing-services/housing-assistance
+[run=2adfc2b2-e5d4-46a2-a85d-222c01a4639a] source_success county-king-housing-assistance
+[run=2adfc2b2-e5d4-46a2-a85d-222c01a4639a] source_start tribal-cherokee-health Cherokee Nation Health Services (example tribal)
+[run=2adfc2b2-e5d4-46a2-a85d-222c01a4639a] fetch_start tribal-cherokee-health url=https://www.cherokee.org/all-services/health/
+[run=2adfc2b2-e5d4-46a2-a85d-222c01a4639a] fetch_success tribal-cherokee-health status=404 ct=text/html; charset=utf-8 url=https://www.cherokee.org/all-services/health/
+[run=2adfc2b2-e5d4-46a2-a85d-222c01a4639a] source_success tribal-cherokee-health
+[run=2adfc2b2-e5d4-46a2-a85d-222c01a4639a] complete ok sources_ok=4/4 programs_upserted=5
+[run=b75dc347-aff2-458c-8345-d3654941d106] start mode=SMOKE_MODE sources=4 live=true
+[run=b75dc347-aff2-458c-8345-d3654941d106] source_start fed-ssa-benefits SSA Benefits Overview
+[run=b75dc347-aff2-458c-8345-d3654941d106] fetch_start fed-ssa-benefits url=https://www.ssa.gov/benefits/
+[run=b75dc347-aff2-458c-8345-d3654941d106] source_failure fed-ssa-benefits
+[run=b75dc347-aff2-458c-8345-d3654941d106] source_start state-tn-ecf-choices TennCare ECF CHOICES
+[run=b75dc347-aff2-458c-8345-d3654941d106] fetch_start state-tn-ecf-choices url=https://www.tn.gov/tenncare/long-term-services-supports/ecf-choices.html
+[run=b75dc347-aff2-458c-8345-d3654941d106] source_failure state-tn-ecf-choices
+[run=b75dc347-aff2-458c-8345-d3654941d106] source_start county-king-housing-assistance Municipal/County Housing Assistance (NYC HRA - example)
+[run=b75dc347-aff2-458c-8345-d3654941d106] fetch_start county-king-housing-assistance url=https://www.nyc.gov/site/hra/help/rental-assistance.page
+[run=b75dc347-aff2-458c-8345-d3654941d106] fetch_success county-king-housing-assistance status=200 ct=text/html;charset=UTF-8 url=https://www.nyc.gov/site/hra/help/rental-assistance.page
+[run=b75dc347-aff2-458c-8345-d3654941d106] source_success county-king-housing-assistance
+[run=b75dc347-aff2-458c-8345-d3654941d106] source_start tribal-cherokee-health Cherokee Nation Housing Authority (example tribal)
+[run=b75dc347-aff2-458c-8345-d3654941d106] fetch_start tribal-cherokee-health url=https://www.cherokee.org/all-services/housing-authority/
+[run=b75dc347-aff2-458c-8345-d3654941d106] fetch_success tribal-cherokee-health status=200 ct=text/html; charset=utf-8 url=https://www.cherokee.org/all-services/housing-authority/
+[run=b75dc347-aff2-458c-8345-d3654941d106] source_success tribal-cherokee-health
+[run=b75dc347-aff2-458c-8345-d3654941d106] complete ok sources_ok=2/4 programs_upserted=2
+[run=6a386c10-da2b-4d22-8f58-5b146481d437] start mode=SMOKE_MODE sources=4 live=true
+[run=6a386c10-da2b-4d22-8f58-5b146481d437] source_start smoke-safe-fed-cms-waivers CMS Medicaid Waivers (federal)
+[run=6a386c10-da2b-4d22-8f58-5b146481d437] fetch_start smoke-safe-fed-cms-waivers url=https://www.medicaid.gov/medicaid/waivers/index.html
+[run=6a386c10-da2b-4d22-8f58-5b146481d437] source_failure smoke-safe-fed-cms-waivers
+[run=6a386c10-da2b-4d22-8f58-5b146481d437] source_start smoke-safe-fed-cms-provider-enrollment CMS Provider Enrollment (federal provider support)
+[run=6a386c10-da2b-4d22-8f58-5b146481d437] fetch_start smoke-safe-fed-cms-provider-enrollment url=https://www.medicaid.gov/medicaid/provider-enrollment/index.html
+[run=6a386c10-da2b-4d22-8f58-5b146481d437] source_failure smoke-safe-fed-cms-provider-enrollment
+[run=6a386c10-da2b-4d22-8f58-5b146481d437] source_start smoke-safe-state-tn-tenncare TennCare (TN Medicaid overview)
+[run=6a386c10-da2b-4d22-8f58-5b146481d437] fetch_start smoke-safe-state-tn-tenncare url=https://www.tn.gov/tenncare.html
+[run=6a386c10-da2b-4d22-8f58-5b146481d437] fetch_success smoke-safe-state-tn-tenncare status=200 ct=text/html;charset=utf-8 url=https://www.tn.gov/tenncare.html
+[run=6a386c10-da2b-4d22-8f58-5b146481d437] source_success smoke-safe-state-tn-tenncare
+[run=6a386c10-da2b-4d22-8f58-5b146481d437] source_start smoke-safe-county-nyc-rental-assistance NYC Rental Assistance (municipal/county example)
+[run=6a386c10-da2b-4d22-8f58-5b146481d437] fetch_start smoke-safe-county-nyc-rental-assistance url=https://www.nyc.gov/site/hra/help/rental-assistance.page
+[run=6a386c10-da2b-4d22-8f58-5b146481d437] fetch_success smoke-safe-county-nyc-rental-assistance status=200 ct=text/html;charset=UTF-8 url=https://www.nyc.gov/site/hra/help/rental-assistance.page
+[run=6a386c10-da2b-4d22-8f58-5b146481d437] source_success smoke-safe-county-nyc-rental-assistance
+[run=6a386c10-da2b-4d22-8f58-5b146481d437] complete ok sources_ok=2/4 programs_upserted=2
+[run=11216c84-cd16-4a12-a523-6223c8289ac1] start mode=SMOKE_MODE sources=4 live=true
+[run=11216c84-cd16-4a12-a523-6223c8289ac1] source_start smoke-safe-fed-cms-waivers HUD Rental Assistance (federal)
+[run=11216c84-cd16-4a12-a523-6223c8289ac1] fetch_start smoke-safe-fed-cms-waivers url=https://www.hud.gov/topics/rental_assistance
+[run=11216c84-cd16-4a12-a523-6223c8289ac1] fetch_success smoke-safe-fed-cms-waivers status=200 ct=text/html; charset=UTF-8 url=https://www.hud.gov/topics/rental_assistance
+[run=11216c84-cd16-4a12-a523-6223c8289ac1] source_success smoke-safe-fed-cms-waivers
+[run=11216c84-cd16-4a12-a523-6223c8289ac1] source_start smoke-safe-fed-cms-provider-enrollment CMS Provider Enrollment and Certification (federal provider support)
+[run=11216c84-cd16-4a12-a523-6223c8289ac1] fetch_start smoke-safe-fed-cms-provider-enrollment url=https://www.cms.gov/medicare/provider-enrollment-and-certification
+[run=11216c84-cd16-4a12-a523-6223c8289ac1] fetch_success smoke-safe-fed-cms-provider-enrollment status=200 ct=text/html; charset=UTF-8 url=https://www.cms.gov/medicare/provider-enrollment-and-certification
+[run=11216c84-cd16-4a12-a523-6223c8289ac1] source_success smoke-safe-fed-cms-provider-enrollment
+[run=11216c84-cd16-4a12-a523-6223c8289ac1] source_start smoke-safe-state-tn-tenncare TennCare (TN Medicaid overview)
+[run=11216c84-cd16-4a12-a523-6223c8289ac1] fetch_start smoke-safe-state-tn-tenncare url=https://www.tn.gov/tenncare.html
+[run=11216c84-cd16-4a12-a523-6223c8289ac1] fetch_success smoke-safe-state-tn-tenncare status=200 ct=text/html;charset=utf-8 url=https://www.tn.gov/tenncare.html
+[run=11216c84-cd16-4a12-a523-6223c8289ac1] source_success smoke-safe-state-tn-tenncare
+[run=11216c84-cd16-4a12-a523-6223c8289ac1] source_start smoke-safe-county-nyc-rental-assistance NYC Rental Assistance (municipal/county example)
+[run=11216c84-cd16-4a12-a523-6223c8289ac1] fetch_start smoke-safe-county-nyc-rental-assistance url=https://www.nyc.gov/site/hra/help/rental-assistance.page
+[run=11216c84-cd16-4a12-a523-6223c8289ac1] fetch_success smoke-safe-county-nyc-rental-assistance status=200 ct=text/html;charset=UTF-8 url=https://www.nyc.gov/site/hra/help/rental-assistance.page
+[run=11216c84-cd16-4a12-a523-6223c8289ac1] source_success smoke-safe-county-nyc-rental-assistance
+[run=11216c84-cd16-4a12-a523-6223c8289ac1] complete ok sources_ok=4/4 programs_upserted=4

@@ -1,0 +1,12 @@
+[doctor] 2026-01-10T03:36:34.466Z API smoke OK
+[doctor] /health.status=healthy
+[doctor] /api/crawler-v2/health.status=ok
+[doctor] /api/nf-programs TRACK_A sample_count=4
+[doctor] 2026-01-10T03:38:16.521Z API smoke OK
+[doctor] /health.status=healthy
+[doctor] /api/crawler-v2/health.status=ok
+[doctor] /api/nf-programs TRACK_A sample_count=4
+[doctor] 2026-01-10T06:03:23.016Z API smoke OK
+[doctor] /health.status=healthy
+[doctor] /api/crawler-v2/health.status=ok
+[doctor] /api/nf-programs TRACK_A sample_count=4
