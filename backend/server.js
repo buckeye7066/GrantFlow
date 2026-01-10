@@ -132,12 +132,22 @@ try {
 }
 app.use('/uploads', express.static(uploadsDir));
 
-// Serve static files from Vite build
-app.use(express.static(distPath));
 // Serve the SPA under the configured base path so production builds (base=/grantflow) work locally.
+// IMPORTANT: Do NOT also serve the SPA at `/` when built with `base=/grantflow`, or assets will 404.
 const APP_BASE_PATH = process.env.AUTH_FRONTEND_APP_BASE || process.env.VITE_APP_BASE || '/grantflow';
-if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
-  app.use(APP_BASE_PATH, express.static(distPath));
+const NORMALIZED_APP_BASE_PATH =
+  APP_BASE_PATH === '/'
+    ? '/'
+    : `/${String(APP_BASE_PATH).replace(/^\/+/, '').replace(/\/+$/, '')}`;
+
+// Only mount the Vite build at the configured base path.
+app.use(NORMALIZED_APP_BASE_PATH, express.static(distPath));
+
+// Redirect `/` to the SPA base path when the app is configured under a subpath.
+if (NORMALIZED_APP_BASE_PATH !== '/') {
+  app.get('/', (req, res) => {
+    res.redirect(302, `${NORMALIZED_APP_BASE_PATH}/`);
+  });
 }
 
 // Initialize database
@@ -868,12 +878,17 @@ const spaFallbackLimiter = rateLimit({
   skip: (req) => req.path.startsWith('/api/'), // Skip API routes
 });
 
-// Serve React app for all non-API routes (SPA fallback)
-app.get('*', spaFallbackLimiter, (req, res, next) => {
+// Serve React app for SPA routes under the configured base path only.
+// This prevents a `/` vs `/grantflow` mismatch where `/` returns index.html that points at `/grantflow/assets/...`.
+const spaFallbackPath = NORMALIZED_APP_BASE_PATH === '/' ? '*' : `${NORMALIZED_APP_BASE_PATH}/*`;
+app.get(spaFallbackPath, spaFallbackLimiter, (req, res, next) => {
   // Skip API routes - let them fall through to 404 handler
-  if (req.path.startsWith('/api/')) {
-    return next();
-  }
+  if (req.path.startsWith('/api/')) return next();
+
+  // If the request is for a file (e.g. /grantflow/assets/foo.js), do not serve index.html.
+  // This avoids masking asset 404s as a 200 index.html response.
+  if (req.path.includes('.') || req.path.startsWith('/assets/')) return next();
+
   res.sendFile(join(distPath, 'index.html'));
 });
 
