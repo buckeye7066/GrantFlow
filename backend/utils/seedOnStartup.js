@@ -201,8 +201,8 @@ export function seedProfileGrants(db) {
       const matchedFields = [];
       
       let oppKeywords = [], oppCategories = [];
-      try { oppKeywords = JSON.parse(opp.keywords || '[]'); } catch (e) {}
-      try { oppCategories = JSON.parse(opp.categories || '[]'); } catch (e) {}
+      try { oppKeywords = JSON.parse(opp.keywords || '[]'); } catch (e) { /* ignore malformed JSON */ }
+      try { oppCategories = JSON.parse(opp.categories || '[]'); } catch (e) { /* ignore malformed JSON */ }
       
       const oppTerms = new Set([
         ...oppKeywords.map(k => k.toLowerCase()),

@@ -618,6 +618,7 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
     'local',
     'scholarship',
     'comprehensive',
+    'national',
     'item_search',
     'avatar_lookup',
     'document_ingest',
@@ -812,4 +813,408 @@ CREATE TRIGGER IF NOT EXISTS update_crawler_schedules_timestamp
 AFTER UPDATE ON crawler_schedules
 BEGIN
   UPDATE crawler_schedules SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+-- ============================================================
+-- National Funding & Benefits Programs (TRACKED DATASETS)
+-- IMPORTANT: Track A (CLIENT) and Track B (PROVIDER) are stored
+-- in separate tables and must not be merged.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS programs_client (
+  program_id TEXT PRIMARY KEY,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  -- Required fields (Track A)
+  program_name TEXT NOT NULL,
+  funding_track TEXT NOT NULL CHECK (funding_track IN ('CLIENT')),
+  jurisdiction TEXT NOT NULL CHECK (jurisdiction IN ('Federal', 'State', 'County', 'Tribal')),
+  state TEXT, -- 2-letter code, or NULL for federal-only, or 'DC'
+  county TEXT,
+  administering_agency TEXT,
+  program_type TEXT, -- Waiver, Grant, Reimbursement, Benefit, Subsidy
+  eligible_population TEXT,
+  covered_services TEXT,
+  income_limits TEXT,
+  diagnosis_requirements TEXT,
+  age_requirements TEXT,
+  funding_amounts TEXT DEFAULT '[]', -- JSON array/object
+  renewal_cycle TEXT,
+  application_method TEXT,
+  source_url TEXT NOT NULL,
+  last_verified DATETIME,
+  change_log TEXT DEFAULT '[]', -- JSON array of change summaries (lightweight)
+
+  -- Operational fields
+  is_active INTEGER DEFAULT 1,
+  confidence REAL DEFAULT 0.0,
+  canonical_key TEXT NOT NULL UNIQUE,
+  source_url_hash TEXT,
+  last_seen_at DATETIME,
+  last_fetch_status INTEGER,
+  last_content_hash TEXT
+);
+
+CREATE TABLE IF NOT EXISTS programs_provider (
+  program_id TEXT PRIMARY KEY,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  -- Required fields (Track B)
+  program_name TEXT NOT NULL,
+  funding_track TEXT NOT NULL CHECK (funding_track IN ('PROVIDER')),
+  jurisdiction TEXT NOT NULL CHECK (jurisdiction IN ('Federal', 'State', 'County', 'Tribal')),
+  state TEXT, -- 2-letter code, or NULL for federal-only, or 'DC'
+  county TEXT,
+  administering_agency TEXT,
+  program_type TEXT, -- Waiver, Grant, Reimbursement, Benefit, Subsidy
+  eligible_population TEXT,
+  covered_services TEXT,
+  income_limits TEXT,
+  diagnosis_requirements TEXT,
+  age_requirements TEXT,
+  provider_requirements TEXT, -- Track B only
+  funding_amounts TEXT DEFAULT '[]', -- JSON array/object
+  renewal_cycle TEXT,
+  application_method TEXT,
+  source_url TEXT NOT NULL,
+  last_verified DATETIME,
+  change_log TEXT DEFAULT '[]', -- JSON array of change summaries (lightweight)
+
+  -- Operational fields
+  is_active INTEGER DEFAULT 1,
+  confidence REAL DEFAULT 0.0,
+  canonical_key TEXT NOT NULL UNIQUE,
+  source_url_hash TEXT,
+  last_seen_at DATETIME,
+  last_fetch_status INTEGER,
+  last_content_hash TEXT
+);
+
+-- Versioned snapshots (content change detection)
+CREATE TABLE IF NOT EXISTS program_versions (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  funding_track TEXT NOT NULL CHECK (funding_track IN ('CLIENT', 'PROVIDER')),
+  program_id TEXT NOT NULL,
+
+  source_url TEXT NOT NULL,
+  fetched_at DATETIME,
+  http_status INTEGER,
+  content_type TEXT,
+  content_hash TEXT,
+  extracted_text TEXT, -- parsed plaintext (PHI-safe by design; do not store user data)
+  normalized_payload TEXT NOT NULL, -- JSON snapshot of normalized fields
+  change_type TEXT NOT NULL CHECK (change_type IN ('created', 'updated', 'unchanged', 'discontinued', 'reactivated', 'error')),
+  changed_fields TEXT DEFAULT '[]', -- JSON array of field names
+  change_summary TEXT, -- human-readable summary
+
+  UNIQUE(funding_track, program_id, content_hash)
+);
+
+-- Linkable (but separate) datasets: cross-track relationships
+CREATE TABLE IF NOT EXISTS program_crosslinks (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  client_program_id TEXT REFERENCES programs_client(program_id) ON DELETE CASCADE,
+  provider_program_id TEXT REFERENCES programs_provider(program_id) ON DELETE CASCADE,
+  relationship_type TEXT, -- e.g. 'administered_by_same_agency', 'shares_eligibility', 'serves_as_provider_for'
+  evidence_url TEXT,
+  notes TEXT
+);
+
+-- Crawl targets for modular jurisdiction agents
+CREATE TABLE IF NOT EXISTS program_crawl_targets (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  name TEXT NOT NULL,
+  jurisdiction TEXT NOT NULL CHECK (jurisdiction IN ('Federal', 'State', 'County', 'Tribal')),
+  state TEXT,
+  base_url TEXT NOT NULL,
+  seed_urls TEXT DEFAULT '[]', -- JSON array
+  agent_id TEXT NOT NULL,
+  enabled INTEGER DEFAULT 1,
+  parameters TEXT DEFAULT '{}'
+);
+
+-- Change event stream (notification-ready)
+CREATE TABLE IF NOT EXISTS program_change_events (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  funding_track TEXT NOT NULL CHECK (funding_track IN ('CLIENT', 'PROVIDER')),
+  program_id TEXT NOT NULL,
+  version_id TEXT REFERENCES program_versions(id) ON DELETE SET NULL,
+  event_type TEXT NOT NULL CHECK (event_type IN ('created', 'updated', 'discontinued', 'reactivated')),
+  changed_fields TEXT DEFAULT '[]',
+  summary TEXT,
+  confidence REAL DEFAULT 0.0
+);
+
+CREATE INDEX IF NOT EXISTS idx_programs_client_state ON programs_client(state);
+CREATE INDEX IF NOT EXISTS idx_programs_client_jurisdiction ON programs_client(jurisdiction);
+CREATE INDEX IF NOT EXISTS idx_programs_client_active ON programs_client(is_active);
+CREATE INDEX IF NOT EXISTS idx_programs_client_verified ON programs_client(last_verified);
+
+CREATE INDEX IF NOT EXISTS idx_programs_provider_state ON programs_provider(state);
+CREATE INDEX IF NOT EXISTS idx_programs_provider_jurisdiction ON programs_provider(jurisdiction);
+CREATE INDEX IF NOT EXISTS idx_programs_provider_active ON programs_provider(is_active);
+CREATE INDEX IF NOT EXISTS idx_programs_provider_verified ON programs_provider(last_verified);
+
+CREATE INDEX IF NOT EXISTS idx_program_versions_program ON program_versions(funding_track, program_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_program_versions_fetched ON program_versions(fetched_at);
+
+CREATE INDEX IF NOT EXISTS idx_program_change_events_created ON program_change_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_program_change_events_program ON program_change_events(funding_track, program_id);
+
+CREATE TRIGGER IF NOT EXISTS update_program_crawl_targets_timestamp
+AFTER UPDATE ON program_crawl_targets
+BEGIN
+  UPDATE program_crawl_targets SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS update_program_crosslinks_timestamp
+AFTER UPDATE ON program_crosslinks
+BEGIN
+  UPDATE program_crosslinks SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+-- ============================================================
+-- NATIONAL FUNDING & BENEFITS CRAWLER (V2) - STRICT SCHEMA
+-- TRACK_A and TRACK_B are separate tables and must never be merged.
+-- This is the schema used by crawler:smoke/crawler:doctor.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS crawler_sources (
+  source_id TEXT PRIMARY KEY,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  name TEXT NOT NULL,
+  jurisdiction TEXT NOT NULL CHECK (jurisdiction IN ('federal', 'state', 'county', 'tribal', 'mco', 'other')),
+  state TEXT, -- 2-letter code if applicable (or 'DC')
+  county TEXT,
+  source_family TEXT NOT NULL, -- e.g. 'agency_site', 'portal', 'pdf_index', 'mock'
+  base_url TEXT,
+  seed_urls TEXT NOT NULL DEFAULT '[]', -- JSON array
+  enabled INTEGER DEFAULT 1,
+  tags TEXT DEFAULT '[]', -- JSON array (smoke,state,national)
+  configuration TEXT DEFAULT '{}' -- JSON (parser hints, auth=none, etc.)
+);
+
+CREATE INDEX IF NOT EXISTS idx_crawler_sources_enabled ON crawler_sources(enabled);
+CREATE INDEX IF NOT EXISTS idx_crawler_sources_state ON crawler_sources(state);
+CREATE INDEX IF NOT EXISTS idx_crawler_sources_jurisdiction ON crawler_sources(jurisdiction);
+
+CREATE TABLE IF NOT EXISTS crawl_runs (
+  crawl_run_id TEXT PRIMARY KEY,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  started_at DATETIME,
+  completed_at DATETIME,
+  status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+  mode TEXT NOT NULL CHECK (mode IN ('SMOKE_MODE', 'STATE_MODE', 'NATIONAL_MODE')),
+  scope TEXT DEFAULT '{}', -- JSON (states, sources, limits)
+
+  sources_attempted INTEGER DEFAULT 0,
+  sources_succeeded INTEGER DEFAULT 0,
+  sources_failed INTEGER DEFAULT 0,
+
+  programs_extracted INTEGER DEFAULT 0,
+  programs_normalized INTEGER DEFAULT 0,
+  programs_upserted INTEGER DEFAULT 0,
+  versions_created INTEGER DEFAULT 0,
+
+  failures_count INTEGER DEFAULT 0,
+  notes TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_crawl_runs_created ON crawl_runs(created_at);
+CREATE INDEX IF NOT EXISTS idx_crawl_runs_status ON crawl_runs(status);
+CREATE INDEX IF NOT EXISTS idx_crawl_runs_mode ON crawl_runs(mode);
+
+CREATE TABLE IF NOT EXISTS crawl_events (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  crawl_run_id TEXT NOT NULL REFERENCES crawl_runs(crawl_run_id) ON DELETE CASCADE,
+  source_id TEXT REFERENCES crawler_sources(source_id) ON DELETE SET NULL,
+  url TEXT,
+  event_type TEXT NOT NULL CHECK (event_type IN (
+    'source_start',
+    'source_success',
+    'source_failure',
+    'fetch_start',
+    'fetch_success',
+    'fetch_failure',
+    'parse_success',
+    'parse_failure',
+    'normalize_success',
+    'normalize_failure',
+    'upsert_success',
+    'upsert_failure'
+  )),
+  message TEXT,
+  metadata TEXT DEFAULT '{}' -- JSON
+);
+
+CREATE INDEX IF NOT EXISTS idx_crawl_events_run ON crawl_events(crawl_run_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_crawl_events_source ON crawl_events(source_id, created_at);
+
+CREATE TABLE IF NOT EXISTS parse_failures (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  crawl_run_id TEXT NOT NULL REFERENCES crawl_runs(crawl_run_id) ON DELETE CASCADE,
+  source_id TEXT REFERENCES crawler_sources(source_id) ON DELETE SET NULL,
+  url TEXT NOT NULL,
+  failure_type TEXT NOT NULL, -- fetch_error | http_error | parse_error | normalize_error
+  parser_name TEXT,
+  http_status INTEGER,
+  retry_count INTEGER DEFAULT 0,
+  stack TEXT,
+  message TEXT,
+  metadata TEXT DEFAULT '{}' -- JSON
+);
+
+CREATE INDEX IF NOT EXISTS idx_parse_failures_run ON parse_failures(crawl_run_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_parse_failures_source ON parse_failures(source_id, created_at);
+
+CREATE TABLE IF NOT EXISTS nf_programs_a (
+  program_id TEXT PRIMARY KEY, -- deterministic stable id
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  program_name TEXT NOT NULL,
+  funding_track TEXT NOT NULL CHECK (funding_track IN ('TRACK_A')),
+  jurisdiction TEXT NOT NULL CHECK (jurisdiction IN ('federal', 'state', 'county', 'tribal', 'mco', 'other')),
+  state TEXT,
+  county TEXT,
+  administering_agency TEXT,
+  program_type TEXT NOT NULL CHECK (program_type IN ('waiver', 'grant', 'reimbursement', 'benefit', 'subsidy', 'other')),
+
+  eligible_population TEXT NOT NULL DEFAULT '[]', -- JSON array of strings
+  covered_services TEXT NOT NULL DEFAULT '[]', -- JSON array of strings
+  income_limits TEXT, -- JSON (nullable)
+  diagnosis_requirements TEXT, -- JSON (nullable)
+  age_requirements TEXT, -- JSON (nullable)
+  provider_requirements TEXT, -- must be NULL for Track A
+  funding_amounts TEXT, -- JSON (nullable)
+  renewal_cycle TEXT,
+  application_method TEXT,
+  application_url TEXT,
+  source_url TEXT NOT NULL,
+
+  source_last_crawled_at DATETIME,
+  last_verified DATETIME,
+  confidence_score REAL NOT NULL DEFAULT 0.0,
+
+  change_log TEXT NOT NULL DEFAULT '[]', -- JSON array (version pointers/diffs)
+  raw_source_refs TEXT NOT NULL DEFAULT '[]', -- JSON array ({url, hash})
+
+  is_active INTEGER DEFAULT 1,
+  last_fetch_status INTEGER,
+  last_content_hash TEXT
+);
+
+CREATE TABLE IF NOT EXISTS nf_programs_b (
+  program_id TEXT PRIMARY KEY, -- deterministic stable id
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  program_name TEXT NOT NULL,
+  funding_track TEXT NOT NULL CHECK (funding_track IN ('TRACK_B')),
+  jurisdiction TEXT NOT NULL CHECK (jurisdiction IN ('federal', 'state', 'county', 'tribal', 'mco', 'other')),
+  state TEXT,
+  county TEXT,
+  administering_agency TEXT,
+  program_type TEXT NOT NULL CHECK (program_type IN ('waiver', 'grant', 'reimbursement', 'benefit', 'subsidy', 'other')),
+
+  eligible_population TEXT NOT NULL DEFAULT '[]', -- JSON array of strings
+  covered_services TEXT NOT NULL DEFAULT '[]', -- JSON array of strings
+  income_limits TEXT, -- JSON (nullable)
+  diagnosis_requirements TEXT, -- JSON (nullable)
+  age_requirements TEXT, -- JSON (nullable)
+  provider_requirements TEXT, -- JSON (nullable) Track B only
+  funding_amounts TEXT, -- JSON (nullable)
+  renewal_cycle TEXT,
+  application_method TEXT,
+  application_url TEXT,
+  source_url TEXT NOT NULL,
+
+  source_last_crawled_at DATETIME,
+  last_verified DATETIME,
+  confidence_score REAL NOT NULL DEFAULT 0.0,
+
+  change_log TEXT NOT NULL DEFAULT '[]', -- JSON array (version pointers/diffs)
+  raw_source_refs TEXT NOT NULL DEFAULT '[]', -- JSON array ({url, hash})
+
+  is_active INTEGER DEFAULT 1,
+  last_fetch_status INTEGER,
+  last_content_hash TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_nf_a_state ON nf_programs_a(state);
+CREATE INDEX IF NOT EXISTS idx_nf_a_jurisdiction ON nf_programs_a(jurisdiction);
+CREATE INDEX IF NOT EXISTS idx_nf_a_track ON nf_programs_a(funding_track);
+CREATE INDEX IF NOT EXISTS idx_nf_a_program_type ON nf_programs_a(program_type);
+CREATE INDEX IF NOT EXISTS idx_nf_a_verified ON nf_programs_a(last_verified);
+
+CREATE INDEX IF NOT EXISTS idx_nf_b_state ON nf_programs_b(state);
+CREATE INDEX IF NOT EXISTS idx_nf_b_jurisdiction ON nf_programs_b(jurisdiction);
+CREATE INDEX IF NOT EXISTS idx_nf_b_track ON nf_programs_b(funding_track);
+CREATE INDEX IF NOT EXISTS idx_nf_b_program_type ON nf_programs_b(program_type);
+CREATE INDEX IF NOT EXISTS idx_nf_b_verified ON nf_programs_b(last_verified);
+
+CREATE TABLE IF NOT EXISTS nf_program_versions (
+  version_id TEXT PRIMARY KEY,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  crawl_run_id TEXT REFERENCES crawl_runs(crawl_run_id) ON DELETE SET NULL,
+  program_id TEXT NOT NULL,
+  funding_track TEXT NOT NULL CHECK (funding_track IN ('TRACK_A', 'TRACK_B')),
+  source_url TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  fetched_at DATETIME,
+  http_status INTEGER,
+  content_type TEXT,
+  parser_name TEXT,
+  normalized_payload TEXT NOT NULL, -- JSON snapshot
+  changed_fields TEXT NOT NULL DEFAULT '[]', -- JSON array
+  change_type TEXT NOT NULL CHECK (change_type IN ('created', 'updated', 'unchanged', 'discontinued', 'reactivated', 'error')),
+  diff_summary TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_nf_versions_program ON nf_program_versions(program_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_nf_versions_track ON nf_program_versions(funding_track, created_at);
+CREATE INDEX IF NOT EXISTS idx_nf_versions_hash ON nf_program_versions(content_hash);
+
+CREATE TABLE IF NOT EXISTS nf_crosslinks (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  program_id_a TEXT REFERENCES nf_programs_a(program_id) ON DELETE CASCADE,
+  program_id_b TEXT REFERENCES nf_programs_b(program_id) ON DELETE CASCADE,
+  relationship_type TEXT NOT NULL,
+  evidence_url TEXT,
+  notes TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_nf_crosslinks_a ON nf_crosslinks(program_id_a);
+CREATE INDEX IF NOT EXISTS idx_nf_crosslinks_b ON nf_crosslinks(program_id_b);
+
+CREATE TRIGGER IF NOT EXISTS update_crawler_sources_timestamp
+AFTER UPDATE ON crawler_sources
+BEGIN
+  UPDATE crawler_sources SET updated_at = CURRENT_TIMESTAMP WHERE source_id = NEW.source_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS update_nf_crosslinks_timestamp
+AFTER UPDATE ON nf_crosslinks
+BEGIN
+  UPDATE nf_crosslinks SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;

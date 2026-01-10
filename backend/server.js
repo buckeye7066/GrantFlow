@@ -12,6 +12,7 @@ import crypto from 'crypto';
 import organizationsRouter from './routes/organizations.js';
 import grantsRouter from './routes/grants.js';
 import opportunitiesRouter from './routes/opportunities.js';
+import programsRouter from './routes/programs.js';
 import milestonesRouter from './routes/milestones.js';
 import documentsRouter from './routes/documents.js';
 import expensesRouter from './routes/expenses.js';
@@ -29,6 +30,8 @@ import discoveryRouter from './routes/discovery.js';
 import serviceApplicationRouter from './routes/serviceApplication.js';
 import statsRouter from './routes/stats.js';
 import jwt from 'jsonwebtoken';
+import crawlerV2Router from './routes/crawlerV2.js';
+import nfProgramsRouter from './routes/nfPrograms.js';
 import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
@@ -219,112 +222,124 @@ allowedMigrations.forEach(({ table, column, type }) => {
   }
 });
 
-function ensureCrawlerJobsSupportsProfileEnrichment() {
-  try {
-    db.prepare(
-      `
-        INSERT INTO crawler_jobs (id, type, status)
-        VALUES ('__schema_test__', 'profile_enrichment', 'queued')
-      `,
-    ).run()
-    db.prepare(
-      `
-        DELETE FROM crawler_jobs
-        WHERE id = '__schema_test__'
-      `,
-    ).run()
-  } catch (error) {
-    if (error?.message && error.message.includes('CHECK constraint failed')) {
-      const rebuild = db.transaction(() => {
-        db.prepare(
-          `
-            CREATE TABLE crawler_jobs_new (
-              id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
-              created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-              started_at DATETIME,
-              completed_at DATETIME,
-              type TEXT NOT NULL CHECK(type IN (
-                'local',
-                'scholarship',
-                'comprehensive',
-                'item_search',
-                'avatar_lookup',
-                'document_ingest',
-                'pipeline_automation',
-                'profile_enrichment'
-              )),
-              status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
-                'queued',
-                'running',
-                'completed',
-                'failed',
-                'cancelled'
-              )),
-              profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
-              organization_id TEXT REFERENCES organizations(id) ON DELETE SET NULL,
-              parameters TEXT DEFAULT '{}',
-              result_count INTEGER DEFAULT 0,
-              result_meta TEXT,
-              error TEXT,
-              requested_by TEXT,
-              retry_count INTEGER DEFAULT 0,
-              last_retry_at DATETIME
-            )
-          `,
-        ).run()
+function ensureCrawlerJobsSupportsAllTypes() {
+  const testTypes = ['profile_enrichment', 'national']
+  let needsRebuild = false
 
-        db.prepare(
-          `
-            INSERT INTO crawler_jobs_new (
-              id,
-              created_at,
-              started_at,
-              completed_at,
-              type,
-              status,
-              profile_id,
-              organization_id,
-              parameters,
-              result_count,
-              result_meta,
-              error,
-              requested_by,
-              retry_count,
-              last_retry_at
-            )
-            SELECT
-              id,
-              created_at,
-              started_at,
-              completed_at,
-              type,
-              status,
-              profile_id,
-              organization_id,
-              parameters,
-              result_count,
-              NULL,
-              error,
-              requested_by,
-              COALESCE(retry_count, 0),
-              last_retry_at
-            FROM crawler_jobs
-          `,
-        ).run()
-
-        db.prepare('DROP TABLE crawler_jobs').run()
-        db.prepare('ALTER TABLE crawler_jobs_new RENAME TO crawler_jobs').run()
-        db.prepare('CREATE INDEX IF NOT EXISTS idx_crawler_jobs_status ON crawler_jobs(status)').run()
-        db.prepare('CREATE INDEX IF NOT EXISTS idx_crawler_jobs_profile ON crawler_jobs(profile_id)').run()
-        db.prepare('CREATE INDEX IF NOT EXISTS idx_crawler_jobs_type ON crawler_jobs(type)').run()
-      })
-
-      rebuild()
+  for (const type of testTypes) {
+    try {
+      const testId = `__schema_test_${type}__`
+      db.prepare(
+        `
+          INSERT INTO crawler_jobs (id, type, status)
+          VALUES (?, ?, 'queued')
+        `,
+      ).run(testId, type)
+      db.prepare(
+        `
+          DELETE FROM crawler_jobs
+          WHERE id = ?
+        `,
+      ).run(testId)
+    } catch (error) {
+      if (error?.message && error.message.includes('CHECK constraint failed')) {
+        needsRebuild = true
+        break
+      }
     }
   }
+
+  if (!needsRebuild) return
+
+  const rebuild = db.transaction(() => {
+    db.prepare(
+      `
+        CREATE TABLE crawler_jobs_new (
+          id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          started_at DATETIME,
+          completed_at DATETIME,
+          type TEXT NOT NULL CHECK(type IN (
+            'local',
+            'scholarship',
+            'comprehensive',
+            'national',
+            'item_search',
+            'avatar_lookup',
+            'document_ingest',
+            'pipeline_automation',
+            'profile_enrichment'
+          )),
+          status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
+            'queued',
+            'running',
+            'completed',
+            'failed',
+            'cancelled'
+          )),
+          profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+          organization_id TEXT REFERENCES organizations(id) ON DELETE SET NULL,
+          parameters TEXT DEFAULT '{}',
+          result_count INTEGER DEFAULT 0,
+          result_meta TEXT,
+          error TEXT,
+          requested_by TEXT,
+          retry_count INTEGER DEFAULT 0,
+          last_retry_at DATETIME
+        )
+      `,
+    ).run()
+
+    db.prepare(
+      `
+        INSERT INTO crawler_jobs_new (
+          id,
+          created_at,
+          started_at,
+          completed_at,
+          type,
+          status,
+          profile_id,
+          organization_id,
+          parameters,
+          result_count,
+          result_meta,
+          error,
+          requested_by,
+          retry_count,
+          last_retry_at
+        )
+        SELECT
+          id,
+          created_at,
+          started_at,
+          completed_at,
+          type,
+          status,
+          profile_id,
+          organization_id,
+          parameters,
+          result_count,
+          result_meta,
+          error,
+          requested_by,
+          COALESCE(retry_count, 0),
+          last_retry_at
+        FROM crawler_jobs
+      `,
+    ).run()
+
+    db.prepare('DROP TABLE crawler_jobs').run()
+    db.prepare('ALTER TABLE crawler_jobs_new RENAME TO crawler_jobs').run()
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_crawler_jobs_status ON crawler_jobs(status)').run()
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_crawler_jobs_profile ON crawler_jobs(profile_id)').run()
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_crawler_jobs_type ON crawler_jobs(type)').run()
+  })
+
+  rebuild()
 }
 
-ensureCrawlerJobsSupportsProfileEnrichment()
+ensureCrawlerJobsSupportsAllTypes()
 ensureDesignatedProfiles(db)
 linkAllProfilesToAdmin(db)
 ensureUserPreferencesTable(db)
@@ -689,6 +704,7 @@ app.use('/api/stats', statsRouter);
 app.use('/api/organizations', organizationsRouter);
 app.use('/api/grants', grantsRouter);
 app.use('/api/opportunities', opportunitiesRouter);
+app.use('/api/programs', programsRouter);
 app.use('/api/milestones', milestonesRouter);
 app.use('/api/documents', documentsRouter);
 app.use('/api/expenses', expensesRouter);
@@ -701,6 +717,8 @@ app.use('/api/real-crawlers', realCrawlersRouter);
 app.use('/api/preferences', preferencesRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api', discoveryRouter); // Discovery endpoints (comprehensiveMatch, searchOpportunities, etc.)
+app.use('/api/crawler-v2', crawlerV2Router);
+app.use('/api/nf-programs', nfProgramsRouter);
 
 // Pipeline stats
 app.get('/api/pipeline/stats', (req, res) => {
@@ -831,7 +849,8 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 const server = app.listen(PORT, '0.0.0.0', () => {
   const loggedCorsOrigins = Array.isArray(corsOptions.origin) ? corsOptions.origin : [corsOptions.origin];
   console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
-  console.log('[Server] Ready on port', PORT);
+  const actualPort = server.address()?.port ?? PORT;
+  console.log('[Server] Ready on port', actualPort);
   
   // Start Anya autonomous operations 5 seconds after server is ready
   if (process.env.ANYA_AUTONOMOUS_ENABLED === 'true') {
@@ -853,6 +872,39 @@ const server = app.listen(PORT, '0.0.0.0', () => {
     }, 5000);
   } else {
     console.log('[Anya] Autonomous operations disabled (set ANYA_AUTONOMOUS_ENABLED=true to enable)');
+  }
+
+  // Optional: continuous national programs crawler (Track A/B programs)
+  if (process.env.NATIONAL_PROGRAMS_CRAWLER_ENABLED === 'true') {
+    const intervalMinutes = Number.parseInt(
+      process.env.NATIONAL_PROGRAMS_CRAWLER_INTERVAL_MINUTES || '360',
+      10,
+    )
+    const maxUrls = Number.parseInt(process.env.NATIONAL_PROGRAMS_MAX_URLS || '200', 10)
+    const maxDepth = Number.parseInt(process.env.NATIONAL_PROGRAMS_MAX_DEPTH || '2', 10)
+
+    setTimeout(() => {
+      import('./services/nationalPrograms/continuousRunner.js')
+        .then(({ startNationalProgramsCrawler }) => {
+          console.log(
+            `[NationalPrograms] Continuous crawler enabled (every ${intervalMinutes} minutes, maxUrls=${maxUrls}, maxDepth=${maxDepth})`,
+          )
+          startNationalProgramsCrawler({
+            db,
+            uploadDir: uploadsDir,
+            intervalMinutes,
+            maxUrls,
+            maxDepth,
+          })
+        })
+        .catch((err) => {
+          console.error('[NationalPrograms] Failed to start continuous crawler:', err?.message || err)
+        })
+    }, 8000)
+  } else {
+    console.log(
+      '[NationalPrograms] Continuous crawler disabled (set NATIONAL_PROGRAMS_CRAWLER_ENABLED=true to enable)',
+    )
   }
 });
 

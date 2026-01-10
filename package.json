@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint \"src/**/*.{js,jsx}\" \"backend/**/*.js\"",
-    "test": "npm run lint && npm run build",
+    "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.app.json --noEmit",
+    "unit": "node --test \"tests/unit/**/*.test.mjs\"",
+    "smoke": "playwright test -c tests/smoke/playwright.config.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "test": "npm run lint && npm run typecheck && npm run unit && npm run build",
     "preview": "vite preview",
     "backend": "node backend/server.js",
     "dev:full": "concurrently \"npm run backend\" \"npm run dev\"",
@@ -23,11 +27,17 @@
     "crawl:targeted": "node ./scripts/extended-state-crawler.mjs",
     "prepopulate:grants": "node ./scripts/prepopulate-profile-grants.mjs",
     "setup:production": "bash ./scripts/setup-production-db.sh",
-    "start": "node backend/server.js"
+    "start": "node backend/server.js",
+
+    "crawler:smoke": "node ./scripts/crawler-smoke.mjs",
+    "crawler:run": "node ./scripts/crawler-run.mjs",
+    "crawler:doctor": "node ./scripts/crawler-doctor.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.30.1",
     "@base44/sdk": "^0.1.2",
+    "axios": "^1.6.0",
+    "cheerio": "^1.0.0-rc.12",
     "@hello-pangea/dnd": "^16.5.0",
     "@hookform/resolvers": "^4.1.2",
     "@radix-ui/react-accordion": "^1.2.3",
@@ -57,9 +67,7 @@
     "@radix-ui/react-toggle-group": "^1.1.2",
     "@radix-ui/react-tooltip": "^1.1.8",
     "@tanstack/react-query": "^5.62.7",
-    "axios": "1.13.2",
     "better-sqlite3": "^11.8.1",
-    "cheerio": "1.1.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.0.0",
@@ -73,13 +81,11 @@
     "firebase": "^11.1.0",
     "framer-motion": "^12.4.7",
     "input-otp": "^1.4.2",
-    "jsdom": "^24.0.0",
     "jsonwebtoken": "9.0.3",
     "lucide-react": "^0.475.0",
     "mammoth": "^1.8.0",
     "multer": "^2.0.2",
     "next-themes": "^0.4.4",
-    "node-fetch": "^3.3.2",
     "openai": "6.15.0",
     "pdf-parse": "^1.1.1",
     "react": "^18.2.0",
@@ -100,7 +106,9 @@
     "vaul": "^1.1.2",
     "zipcodes": "8.0.0",
     "zod": "^3.24.2",
-    "zustand": "4.5.7"
+    "zustand": "4.5.7",
+    "node-fetch": "^3.3.2",
+    "jsdom": "^24.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
@@ -115,6 +123,7 @@
     "playwright": "^1.49.1",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.3",
     "vite": "^7.2.4"
   }
 }

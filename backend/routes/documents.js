@@ -195,7 +195,13 @@ router.post('/upload', upload.single('file'), (req, res) => {
   try {
     const context = buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) {
-      if (req.file) try { fs.unlinkSync(req.file.path); } catch {}
+      if (req.file) {
+        try {
+          fs.unlinkSync(req.file.path);
+        } catch (error) {
+          // Best-effort cleanup; ignore unlink errors.
+        }
+      }
       return;
     }
 
@@ -213,7 +219,13 @@ router.post('/upload', upload.single('file'), (req, res) => {
       size: req.file.size,
     });
   } catch (error) {
-    if (req.file) try { fs.unlinkSync(req.file.path); } catch {}
+    if (req.file) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (unlinkError) {
+        // Best-effort cleanup; ignore unlink errors.
+      }
+    }
     res.status(500).json({ error: error.message || 'Upload failed' });
   }
 });
@@ -231,7 +243,13 @@ router.post('/ingest', upload.single('document'), async (req, res) => {
   try {
     const context = buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) {
-      if (req.file) try { fs.unlinkSync(req.file.path); } catch {}
+      if (req.file) {
+        try {
+          fs.unlinkSync(req.file.path);
+        } catch (unlinkError) {
+          // Best-effort cleanup; ignore unlink errors.
+        }
+      }
       return;
     }
 
@@ -320,7 +338,13 @@ router.post('/ingest', upload.single('document'), async (req, res) => {
     });
   } catch (error) {
     console.error('Ingest failed:', error);
-    if (req.file) try { fs.unlinkSync(req.file.path); } catch {}
+    if (req.file) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (unlinkError) {
+        // Best-effort cleanup; ignore unlink errors.
+      }
+    }
     res.status(500).json({ error: error.message });
   }
 });

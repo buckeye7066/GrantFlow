@@ -10,6 +10,7 @@ import { processDocumentIngestionJob } from './documentIngestion.js'
 import { processPipelineAutomationJob } from './pipelineAutomation.js'
 import { loadProfileContext } from './profileHelpers.js'
 import { processProfileEnrichmentJob } from './profileEnrichment.js'
+import { processNationalJob } from './nationalJobRouter.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -20,7 +21,7 @@ const HANDLERS = {
   local: processLocalCrawlerJob,
   scholarship: processScholarshipCrawlerJob,
   comprehensive: processComprehensiveCrawlerJob,
-  national: processComprehensiveCrawlerJob,
+  national: processNationalJob,
   item_search: processItemCrawlerJob,
   document_ingest: processDocumentIngestionJob,
   pipeline_automation: processPipelineAutomationJob,
