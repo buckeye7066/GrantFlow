@@ -75,7 +75,10 @@ const AUTH_METHODS = new Set(['email', 'phone', 'social'])
 // Crawler types to auto-trigger on admin login
 const ADMIN_CRAWLER_TYPES = ['local', 'scholarship', 'comprehensive']
 // Vite env values are typically strings, but be defensive (some tooling can coerce to boolean).
-const IS_SMOKE_UI = String(import.meta?.env?.VITE_SMOKE_MODE ?? '').toLowerCase() === 'true'
+const IS_SMOKE_UI =
+  String(import.meta?.env?.VITE_SMOKE_MODE ?? '').toLowerCase() === 'true' ||
+  // Playwright can inject a reliable marker before app code runs.
+  (typeof globalThis !== 'undefined' && globalThis.__GF_SMOKE__ === true)
 
 // Helper function to trigger crawler jobs for admin
 async function triggerAdminCrawlers() {

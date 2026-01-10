@@ -137,6 +137,11 @@ async function startBackend(root, { outDir, logFile }) {
     const available = await isPortAvailable(port, '0.0.0.0')
     if (!available) continue
 
+    const frontendPorts = parsePortListEnv('DOCTOR_FRONTEND_PORTS') || portRange(5173, 15) // 5173-5187
+    const corsOrigins = [
+      ...frontendPorts.flatMap((p) => [`http://localhost:${p}`, `http://127.0.0.1:${p}`]),
+    ]
+
     const backendEnv = mergedEnv({
       NODE_ENV: 'development',
       SMOKE_MODE: 'true',
@@ -144,15 +149,7 @@ async function startBackend(root, { outDir, logFile }) {
       ADMIN_TOKEN: process.env.ADMIN_TOKEN || 'dev-admin-token',
       // Include a few candidate dev ports so we can start Vite on any of them without restarting backend.
       CORS_ORIGIN:
-        process.env.CORS_ORIGIN ||
-        [
-          'http://localhost:5173',
-          'http://127.0.0.1:5173',
-          'http://localhost:5174',
-          'http://127.0.0.1:5174',
-          'http://localhost:5175',
-          'http://127.0.0.1:5175',
-        ].join(','),
+        process.env.CORS_ORIGIN || corsOrigins.join(','),
       AUTH_FRONTEND_APP_BASE: process.env.VITE_APP_BASE || '/grantflow',
       // Some routes gate production startup on OPENAI_API_KEY; keep dev runnable without real keys.
       OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',

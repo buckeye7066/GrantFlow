@@ -1,8 +1,20 @@
 import client, { apiFetch, getProfileSectionsClient } from './client'
 
 export async function listProfiles(params = {}) {
+  // React Query passes a "query function context" object into queryFn by default.
+  // If callers pass `listProfiles` directly as `queryFn`, we must ignore that context
+  // to avoid generating URLs like `?queryKey=[object Object]&signal=[object AbortSignal]`.
+  const looksLikeQueryContext =
+    params &&
+    typeof params === 'object' &&
+    (Object.prototype.hasOwnProperty.call(params, 'queryKey') ||
+      Object.prototype.hasOwnProperty.call(params, 'signal') ||
+      Object.prototype.hasOwnProperty.call(params, 'meta'))
+
+  const effectiveParams = looksLikeQueryContext ? {} : params
+
   const searchParams = new URLSearchParams()
-  Object.entries(params)
+  Object.entries(effectiveParams)
     .filter(([, value]) => value !== undefined && value !== null && value !== '')
     .forEach(([key, value]) => searchParams.set(key, String(value)))
 

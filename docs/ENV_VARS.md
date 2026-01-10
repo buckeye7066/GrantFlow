@@ -5,8 +5,8 @@ It enumerates environment variables referenced in code and/or present in example
 
 ## Summary
 
-- Total vars: **127**
-- Vars referenced in code: **118**
+- Total vars: **128**
+- Vars referenced in code: **119**
 - Vars present in env templates: **56**
 
 ## Inventory
@@ -120,6 +120,7 @@ It enumerates environment variables referenced in code and/or present in example
 | `SMOKE_BASE_URL` | Optional | (has code fallback) | Yes | No | Backend/Node |
 | `SMOKE_BULK_KEY` | Optional (feature-gated) | (has code fallback) | Yes | No | Backend/Node |
 | `SMOKE_DEBUG` | Optional |  | Yes | No | Backend/Node |
+| `SMOKE_INCLUDE_LOGIN` | Optional |  | Yes | No | Backend/Node |
 | `SMOKE_MAX_CLICKS` | Optional | (has code fallback) | Yes | No | Backend/Node |
 | `SMOKE_MAX_PER_SELECTOR` | Optional | (has code fallback) | Yes | No | Backend/Node |
 | `SMOKE_MAX_ROUTES` | Optional | (has code fallback) | Yes | No | Backend/Node |
@@ -180,7 +181,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/routes/anya.js:19-19` (process.env)
   - `backend/server.js:59-673` (process.env)
   - `scripts/diagnose-anya.mjs:20-20` (process.env)
-  - `scripts/doctor.mjs:144-144` (process.env)
+  - `scripts/doctor.mjs:149-149` (process.env)
 
 ### `ALLOW_MOCK_AI`
 
@@ -371,7 +372,7 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/routes/profiles.js:785-785` (process.env)
+  - `backend/routes/profiles.js:669-669` (process.env)
 
 ### `APP_BASE_PATH`
 
@@ -539,7 +540,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/routes/crawlerV2.js:9-9` (process.env)
   - `backend/routes/crawlers.js:1240-1801` (process.env)
   - `backend/server.js:554-674` (process.env)
-  - `scripts/doctor.mjs:297-297` (process.env)
+  - `scripts/doctor.mjs:294-294` (process.env)
   - `tests/smoke/smoke.spec.mjs:21-21` (process.env)
 
 ### `CORS_ORIGIN`
@@ -549,7 +550,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/env.example:12` = `http://localhost:5173,http://127.0.0.1:5173`
 - **Code references**:
   - `backend/server.js:82-83` (process.env)
-  - `scripts/doctor.mjs:147-147` (process.env)
+  - `scripts/doctor.mjs:152-152` (process.env)
 
 ### `CRAWLER_MAX_SOURCES`
 
@@ -808,12 +809,12 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/routes/auth.js:29-29` (process.env)
   - `backend/routes/crawlers.js:26-26` (process.env)
   - `backend/routes/documents.js:67-67` (process.env)
-  - `backend/routes/profiles.js:132-132` (process.env)
+  - `backend/routes/profiles.js:117-117` (process.env)
   - `backend/server.js:658-658` (process.env)
   - `backend/services/anyaOrchestrator.js:18-18` (process.env)
   - `backend/services/anyaToolRegistry.js:726-726` (process.env)
   - `backend/services/diagnosticsService.js:176-176` (process.env)
-  - `scripts/doctor.mjs:158-158` (process.env)
+  - `scripts/doctor.mjs:155-155` (process.env)
   - `scripts/fix-api-errors.mjs:25-27` (process.env)
   - `scripts/test-anya-ai.mjs:24-105` (process.env)
   - `scripts/test-anya-full.mjs:97-97` (process.env)
@@ -885,7 +886,7 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `scripts/doctor.mjs:296-296` (process.env)
+  - `scripts/doctor.mjs:293-293` (process.env)
   - `tests/smoke/smoke.spec.mjs:20-20` (process.env)
 
 ### `SMOKE_API_BASE_URL`
@@ -898,7 +899,7 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `tests/smoke/smoke.spec.mjs:312-312` (process.env)
+  - `tests/smoke/smoke.spec.mjs:316-316` (process.env)
 
 ### `SMOKE_API_PORT`
 
@@ -910,13 +911,13 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `tests/smoke/smoke.spec.mjs:268-268` (process.env)
+  - `tests/smoke/smoke.spec.mjs:272-272` (process.env)
 
 ### `SMOKE_BASE_PATH`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `scripts/doctor.mjs:294-294` (process.env)
+  - `scripts/doctor.mjs:291-291` (process.env)
   - `scripts/smoke-auth-callback.mjs:49-49` (process.env)
   - `scripts/smoke-auth-refresh.mjs:51-51` (process.env)
   - `scripts/smoke-login.mjs:29-29` (process.env)
@@ -939,7 +940,7 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `scripts/doctor.mjs:297-297` (process.env)
+  - `scripts/doctor.mjs:294-294` (process.env)
   - `tests/smoke/smoke.spec.mjs:21-21` (process.env)
 
 ### `SMOKE_DEBUG`
@@ -948,25 +949,31 @@ It enumerates environment variables referenced in code and/or present in example
 - **Code references**:
   - `scripts/smoke-login.mjs:58-72` (process.env)
 
+### `SMOKE_INCLUDE_LOGIN`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `tests/smoke/smoke.spec.mjs:65-65` (process.env)
+
 ### `SMOKE_MAX_CLICKS`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `scripts/doctor.mjs:301-301` (process.env)
-  - `tests/smoke/smoke.spec.mjs:99-99` (process.env)
+  - `scripts/doctor.mjs:298-298` (process.env)
+  - `tests/smoke/smoke.spec.mjs:100-100` (process.env)
 
 ### `SMOKE_MAX_PER_SELECTOR`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `scripts/doctor.mjs:302-302` (process.env)
-  - `tests/smoke/smoke.spec.mjs:100-100` (process.env)
+  - `scripts/doctor.mjs:299-299` (process.env)
+  - `tests/smoke/smoke.spec.mjs:101-101` (process.env)
 
 ### `SMOKE_MAX_ROUTES`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `scripts/doctor.mjs:300-300` (process.env)
+  - `scripts/doctor.mjs:297-297` (process.env)
   - `tests/smoke/smoke.spec.mjs:61-61` (process.env)
 
 ### `SMOKE_MODE`
@@ -981,8 +988,8 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `scripts/doctor.mjs:303-303` (process.env)
-  - `tests/smoke/smoke.spec.mjs:102-102` (process.env)
+  - `scripts/doctor.mjs:300-300` (process.env)
+  - `tests/smoke/smoke.spec.mjs:103-103` (process.env)
 
 ### `SMOKE_TARGET_PATH`
 
@@ -1084,7 +1091,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/routes/auth.js:125-125` (process.env)
   - `backend/server.js:141-141` (process.env)
   - `scripts/_doctor/http-proof.mjs:17-17` (process.env)
-  - `scripts/doctor.mjs:98-294` (process.env)
+  - `scripts/doctor.mjs:98-291` (process.env)
   - `src/App.jsx:54-54` (import.meta.env)
   - `src/api/client.js:9-9` (import.meta.env)
   - `src/components/auth/SessionExpiredDialog.jsx:10-10` (import.meta.env)
@@ -1095,4 +1102,4 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**:
   - `.env.example:53` = `/grantflow`
 - **Code references**:
-  - `scripts/doctor.mjs:99-266` (process.env)
+  - `scripts/doctor.mjs:99-263` (process.env)

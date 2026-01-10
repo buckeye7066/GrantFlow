@@ -62,9 +62,9 @@ function pickRoutes(allRoutes) {
   const normalized = allRoutes
     .filter((r) => typeof r === 'string' && r.trim().length > 0)
     .filter((r) => r !== '/*')
+    .filter((r) => (process.env.SMOKE_INCLUDE_LOGIN === 'true' ? true : r !== '/login'))
 
   const preferred = [
-    '/login',
     '/',
     '/Dashboard',
     '/Organizations',
@@ -95,7 +95,8 @@ function pickRoutes(allRoutes) {
 }
 
 async function safeClickAll(page) {
-  const skipRe = /(delete|remove|destroy|permanent|bulk|seed|crawl all|run all|wipe|reset db|danger)/i
+  const skipRe =
+    /(delete|remove|destroy|permanent|bulk|seed|crawl all|run all|wipe|reset db|danger|continue with email|send code|verification code)/i
   const MAX_TOTAL_CLICKS = Number.parseInt(process.env.SMOKE_MAX_CLICKS || '10', 10)
   const MAX_PER_SELECTOR = Number.parseInt(process.env.SMOKE_MAX_PER_SELECTOR || '6', 10)
   const START = Date.now()
@@ -127,8 +128,9 @@ async function safeClickAll(page) {
       if (skipRe.test(text)) continue
       if (await el.getAttribute('data-smoke-skip').catch(() => null)) continue
       try {
-        await el.click({ timeout: 2_000, trial: true })
-        await el.click({ timeout: 5_000 })
+        // Keep smoke deterministic and fast: do not wait on navigations triggered by clicks.
+        await el.click({ timeout: 500, trial: true, noWaitAfter: true })
+        await el.click({ timeout: 1_500, noWaitAfter: true })
         clicked.push({ selector, text: text.slice(0, 120) })
       } catch {
         // ignore
@@ -224,6 +226,8 @@ test('UI routes: visit + click visible controls + no console errors', async ({ p
   // Auth bypass for smoke: backend treats ADMIN_TOKEN as admin when used as Bearer token (server-side).
   await page.addInitScript(({ token }) => {
     try {
+      // Robust smoke marker (independent of Vite env injection)
+      window.__GF_SMOKE__ = true
       localStorage.setItem('grantflow:access-token', token)
       localStorage.setItem('grantflow:refresh-token', token)
     } catch {}

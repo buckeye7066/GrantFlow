@@ -51,7 +51,14 @@ function App() {
     )
   }
 
-  const basename = import.meta.env.VITE_APP_BASE ?? '/grantflow'
+  // Router basename must match the deployed base path. In dev we serve at `/`,
+  // while some production deployments live under a sub-path (e.g. `/grantflow`).
+  const normalizeBase = (base) => {
+    if (!base) return '/'
+    if (base === '/') return '/'
+    return base.endsWith('/') ? base.slice(0, -1) : base
+  }
+  const basename = normalizeBase(import.meta.env.VITE_APP_BASE ?? import.meta.env.BASE_URL)
 
   return (
     <Router basename={basename}>
