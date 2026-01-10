@@ -19,8 +19,35 @@ function isLikelyParseable(file) {
     "application/msword",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "text/plain",
+    "application/rtf",
+    "text/rtf",
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "image/bmp",
+    "image/tiff",
+    "image/heic",
+    "image/heif",
   ])
-  const parseableExt = new Set(["pdf", "doc", "docx", "txt"])
+  const parseableExt = new Set([
+    "pdf",
+    "doc",
+    "docx",
+    "txt",
+    "rtf",
+    "jpg",
+    "jpeg",
+    "png",
+    "webp",
+    "gif",
+    "bmp",
+    "tif",
+    "tiff",
+    "heic",
+    "heif",
+  ])
   return parseableMimes.has(file?.type) || parseableExt.has(extension)
 }
 
@@ -164,7 +191,7 @@ export default function ProfileFilesPanel({ profileId, profileName }) {
                   disabled={isUploading}
                 />
                 <Label htmlFor="parse-with-ai" className="text-sm font-medium">
-                  Try to parse with AI (PDF/DOC/DOCX/TXT only)
+                  Try to parse (PDF/DOC/DOCX/TXT/RTF + images/handwriting)
                 </Label>
               </div>
               <p className="text-xs text-slate-600">

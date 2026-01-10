@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import net from 'node:net'
 import { spawn } from 'node:child_process'
+import crypto from 'node:crypto'
 
 import { repoRoot, artifactsDir, todayStamp } from './_doctor/paths.mjs'
 import { ensureDir, runCommand, writeFile } from './_doctor/run.mjs'
@@ -24,6 +25,18 @@ async function waitForHttpOk(url, { timeoutMs = 60_000, intervalMs = 500 } = {})
 
 function mergedEnv(extra = {}) {
   return { ...process.env, ...extra }
+}
+
+function sha256(text) {
+  return crypto.createHash('sha256').update(text || '').digest('hex')
+}
+
+function computeInstallFingerprint(root) {
+  const lockPath = path.join(root, 'package-lock.json')
+  const pkgPath = path.join(root, 'package.json')
+  const lock = fs.existsSync(lockPath) ? fs.readFileSync(lockPath, 'utf8') : ''
+  const pkg = fs.existsSync(pkgPath) ? fs.readFileSync(pkgPath, 'utf8') : ''
+  return sha256(`${pkg}\n---\n${lock}`)
 }
 
 function startProcess(command, args, { cwd, env, logFile, label }) {
@@ -196,8 +209,14 @@ async function main() {
     smoke: path.join(outDir, 'smoke.log'),
   }
 
-  // Install check (non-destructive): if node_modules missing, do npm ci.
-  if (!fs.existsSync(path.join(root, 'node_modules'))) {
+  // Install check (non-destructive): if node_modules missing OR lock changed, do npm ci.
+  const nodeModulesDir = path.join(root, 'node_modules')
+  const fingerprintFile = path.join(nodeModulesDir, '.grantflow-doctor-install-fingerprint')
+  const expectedFingerprint = computeInstallFingerprint(root)
+  const currentFingerprint =
+    fs.existsSync(fingerprintFile) ? fs.readFileSync(fingerprintFile, 'utf8').trim() : null
+
+  if (!fs.existsSync(nodeModulesDir) || currentFingerprint !== expectedFingerprint) {
     const ci = await runCommand('npm', ['ci', '--no-audit', '--no-fund'], {
       cwd: root,
       env: process.env,
@@ -205,6 +224,10 @@ async function main() {
       label: 'npm ci',
     })
     if (ci.code !== 0) process.exit(ci.code ?? 1)
+    try {
+      ensureDir(nodeModulesDir)
+      writeFile(fingerprintFile, `${expectedFingerprint}\n`)
+    } catch {}
   }
 
   // Env inventory → docs/ENV_VARS.md

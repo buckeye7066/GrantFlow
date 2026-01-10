@@ -23,6 +23,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx"
 import { useSettingsStore } from "@/stores/settingsStore"
 import ProfileFilesPanel from "@/components/profiles/ProfileFilesPanel.jsx"
+import ProfileAppliedFundingPrint from "@/components/profiles/ProfileAppliedFundingPrint.jsx"
 
 export default function ProfileDetail() {
   const [searchParams] = useSearchParams()
@@ -353,13 +354,14 @@ export default function ProfileDetail() {
         </div>
 
         <Tabs defaultValue="profile" className="w-full">
-          <TabsList className="grid w-full grid-cols-7 lg:w-auto lg:inline-flex">
+          <TabsList className="grid w-full grid-cols-8 lg:w-auto lg:inline-flex">
             <TabsTrigger value="profile">Profile Information</TabsTrigger>
             <TabsTrigger value="pipeline">Pipeline</TabsTrigger>
             <TabsTrigger value="item-funding">Item Funding</TabsTrigger>
             <TabsTrigger value="deadlines">Grant Deadline</TabsTrigger>
             <TabsTrigger value="monitoring">Grant Monitoring</TabsTrigger>
             <TabsTrigger value="proposals">Proposals & Files</TabsTrigger>
+            <TabsTrigger value="documents">Documents</TabsTrigger>
             <TabsTrigger value="billing">Billing</TabsTrigger>
           </TabsList>
 
@@ -445,6 +447,13 @@ export default function ProfileDetail() {
               </div>
 
               <ProfileFilesPanel profileId={profileId} profileName={profile.display_name} />
+            </div>
+          </TabsContent>
+
+          <TabsContent value="documents" className="mt-6">
+            <div className="space-y-6">
+              <ProfileFilesPanel profileId={profileId} profileName={profile.display_name} />
+              <ProfileAppliedFundingPrint organizationId={profile.organization_id} profileName={profile.display_name} />
             </div>
           </TabsContent>
 

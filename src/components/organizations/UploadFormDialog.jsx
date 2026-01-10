@@ -119,7 +119,7 @@ export default function UploadFormDialog({ open, onOpenChange, onUpload }) {
                 ref={fileInputRef}
                 id="file"
                 type="file"
-                accept=".pdf,.docx,.doc,.jpg,.jpeg,.png"
+                accept=".pdf,.docx,.doc,.txt,.rtf,.jpg,.jpeg,.png,.heic,.heif,image/*,image/heic,image/heif,application/rtf,text/rtf"
                 onChange={handleFileChange}
                 disabled={isUploading}
               />

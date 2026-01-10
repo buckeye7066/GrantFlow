@@ -37,6 +37,7 @@ export default function DocumentItem({ document, onDelete }) {
     : 'Unknown date';
 
   const processingStatus = document.processing_status ?? 'pending';
+  const isProcessing = processingStatus === 'processing';
   const isUnparsed = processingStatus === 'pending' || processingStatus === 'failed';
   
   const parseMutation = useMutation({
@@ -67,12 +68,20 @@ export default function DocumentItem({ document, onDelete }) {
     }
   };
 
-  const resolveFileUrl = async () => {
+  const resolveFileUrl = async ({ purpose = 'download' } = {}) => {
     if (!fileUri) return null;
     if (fileUri.startsWith('http://') || fileUri.startsWith('https://')) {
       return fileUri;
     }
     if (fileUri.startsWith('/')) {
+      if (fileUri.startsWith('/api/documents/') && fileUri.includes('/file')) {
+        const separator = fileUri.includes('?') ? '&' : '?';
+        if (purpose === 'print') {
+          return `${fileUri}${separator}disposition=inline`;
+        }
+        // default to download
+        return `${fileUri}${separator}download=1`;
+      }
       return fileUri;
     }
     if (fileUri.startsWith('uploads/')) {
@@ -117,7 +126,7 @@ export default function DocumentItem({ document, onDelete }) {
   };
 
   const handleDownload = async () => {
-    const url = await resolveFileUrl();
+    const url = await resolveFileUrl({ purpose: 'download' });
     if (url) {
       window.open(url, '_blank', 'noopener,noreferrer');
       return;
@@ -139,7 +148,7 @@ export default function DocumentItem({ document, onDelete }) {
   };
 
   const handlePrint = async () => {
-    const url = await resolveFileUrl();
+    const url = await resolveFileUrl({ purpose: 'print' });
     if (url) {
       const printWindow = window.open(url, '_blank', 'noopener,noreferrer');
       if (printWindow) {
@@ -190,22 +199,24 @@ export default function DocumentItem({ document, onDelete }) {
         ) : null}
       </CardContent>
       <CardFooter className="flex gap-2">
-        {isUnparsed && (
-          <Button
-            variant="default"
-            size="sm"
-            className="flex-1"
-            onClick={handleParse}
-            disabled={isParsing || parseMutation.isPending}
-          >
-            <Wand2 className="w-3 h-3 mr-2" /> 
-            {isParsing || parseMutation.isPending ? 'Parsing...' : 'Parse Document'}
-          </Button>
-        )}
+        <Button
+          variant="default"
+          size="sm"
+          className="flex-1"
+          onClick={handleParse}
+          disabled={isProcessing || isParsing || parseMutation.isPending}
+        >
+          <Wand2 className="w-3 h-3 mr-2" />
+          {isProcessing || isParsing || parseMutation.isPending
+            ? 'Parsing...'
+            : isUnparsed
+            ? 'Parse Document'
+            : 'Re-parse'}
+        </Button>
         <Button
           variant="outline"
           size="sm"
-          className={isUnparsed ? "" : "flex-1"}
+          className=""
           onClick={handleDownload}
           disabled={!fileUri && !document.extracted_text}
         >

@@ -449,7 +449,7 @@ export default function ProfileOverview({
                 <input
                   ref={documentInputRef}
                   type="file"
-                  accept=".pdf,.doc,.docx,.txt,.rtf"
+                  accept=".pdf,.doc,.docx,.txt,.rtf,.jpg,.jpeg,.png,.heic,.heif,image/*"
                   className="hidden"
                   onChange={handleDocumentFileChange}
                 />

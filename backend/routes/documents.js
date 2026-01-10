@@ -2,15 +2,13 @@ import express from 'express';
 import crypto from 'crypto';
 import multer from 'multer';
 import fs from 'fs';
-import { promises as fsp } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import pdfParse from 'pdf-parse';
-import mammoth from 'mammoth';
 import rateLimit from 'express-rate-limit';
 import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
 import OpenAI from 'openai';
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js';
+import { extractTextFromFile as extractTextFromStoredFile } from '../services/documentTextExtractor.js';
 
 const router = express.Router();
 
@@ -82,35 +80,7 @@ function getOpenAI() {
   return new OpenAI({ apiKey });
 }
 
-async function extractTextFromFile(filePath, mimeType) {
-  if (!filePath || !mimeType) return null;
-
-  try {
-    if (mimeType === 'application/pdf') {
-      const buffer = await fsp.readFile(filePath);
-      const result = await pdfParse(buffer);
-      const text = result?.text?.trim();
-      return text && text.length > 0 ? text : null;
-    }
-
-    if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-      const buffer = await fsp.readFile(filePath);
-      const { value } = await mammoth.extractRawText({ buffer });
-      const text = value?.trim();
-      return text && text.length > 0 ? text : null;
-    }
-
-    if (mimeType === 'text/plain') {
-      const buffer = await fsp.readFile(filePath, 'utf8');
-      const text = buffer?.toString()?.trim();
-      return text && text.length > 0 ? text : null;
-    }
-  } catch (error) {
-    console.warn('Document text extraction failed', { filePath, mimeType, error });
-  }
-
-  return null;
-}
+// Text extraction is implemented in `backend/services/documentTextExtractor.js`
 
 function buildAccessContext(req) {
   const user = req.user ?? { role: 'guest' };
@@ -329,7 +299,13 @@ router.post('/ingest', uploadPrivate.single('document'), async (req, res) => {
     
     let extractedText = rawExtractedText || null;
     if (!extractedText && file) {
-      extractedText = await extractTextFromFile(file.path, file.mimetype);
+      const extraction = await extractTextFromStoredFile({
+        filePath: file.path,
+        mimeType: file.mimetype,
+        fileName: file.originalname,
+        ocr: true,
+      });
+      extractedText = extraction?.text ?? null;
     }
 
     const skipParsing = rawSkipParsing === 'true' || rawSkipParsing === true;
@@ -403,8 +379,9 @@ router.post('/ingest', uploadPrivate.single('document'), async (req, res) => {
   }
 });
 
-// POST /api/documents/:id/parse - queue document ingestion job (used by UI "Parse Document")
-router.post('/:id/parse', (req, res) => {
+// POST /api/documents/:id/parse
+// Re-run text extraction (incl OCR for images/handwriting) and queue AI enrichment.
+router.post('/:id/parse', async (req, res) => {
   try {
     const context = buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) return;
@@ -412,27 +389,113 @@ router.post('/:id/parse', (req, res) => {
     const doc = req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
     if (!ensureDocumentAccess(res, context, doc)) return;
 
+    if (!doc.profile_id) {
+      return res.status(400).json({ error: 'This document is not linked to a profile' });
+    }
+
+    const filePath = doc.file_path;
+    if (!filePath) {
+      return res.status(400).json({ error: 'This document has no stored file to parse' });
+    }
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'File not found on disk' });
+    }
+
+    const { handwriting = false, ocr_language = 'eng' } = req.body ?? {};
+
+    req.db
+      .prepare('UPDATE documents SET processing_status = ?, processing_error = NULL WHERE id = ?')
+      .run('processing', doc.id);
+
+    const extraction = await extractTextFromStoredFile({
+      filePath,
+      mimeType: doc.mime_type,
+      fileName: doc.name,
+      ocr: true,
+      handwriting: Boolean(handwriting),
+      ocrLanguage: typeof ocr_language === 'string' && ocr_language.trim() ? ocr_language.trim() : 'eng',
+    });
+
+    const extractedText = extraction?.text ?? null;
+    const warnings = Array.isArray(extraction?.warnings) ? extraction.warnings : [];
+    const extractionMethod = extraction?.method ?? null;
+
+    if (!extractedText) {
+      const message =
+        warnings.includes('pdf_text_empty_or_scanned')
+          ? 'Unable to extract text from this PDF. If it is scanned/handwritten, upload images (JPG/PNG/HEIC) instead.'
+          : 'Unable to extract text from this file type.';
+
+      req.db
+        .prepare(
+          `
+            UPDATE documents
+            SET processing_status = 'failed',
+                processing_error = ?,
+                extracted_text = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `,
+        )
+        .run(`${message}${extractionMethod ? ` (method=${extractionMethod})` : ''}`, doc.id);
+
+      return res.status(422).json({
+        success: false,
+        error: message,
+        document_id: doc.id,
+        extraction_method: extractionMethod,
+        warnings,
+      });
+    }
+
+    req.db
+      .prepare(
+        `
+          UPDATE documents
+          SET extracted_text = ?,
+              processing_status = 'completed',
+              processing_error = NULL,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `,
+      )
+      .run(extractedText, doc.id);
+
     const requestedBy = context.user?.profileId ?? context.user?.userId ?? 'system';
+    const jobId = crypto.randomUUID();
 
-    req.db.prepare(`
-      INSERT INTO crawler_jobs (type, status, profile_id, organization_id, parameters, requested_by)
-      VALUES ('document_ingest', 'queued', ?, ?, ?, ?)
-    `).run(doc.profile_id ?? null, doc.organization_id ?? null, JSON.stringify({ document_id: doc.id, source: 'manual_parse' }), requestedBy);
-
-    const job = req.db
-      .prepare('SELECT * FROM crawler_jobs WHERE rowid = last_insert_rowid()')
-      .get();
+    req.db
+      .prepare(
+        `
+          INSERT INTO crawler_jobs (id, type, status, profile_id, organization_id, parameters, requested_by)
+          VALUES (?, 'document_ingest', 'queued', ?, ?, ?, ?)
+        `,
+      )
+      .run(
+        jobId,
+        doc.profile_id ?? null,
+        doc.organization_id ?? null,
+        JSON.stringify({ document_id: doc.id, source: 'manual_parse' }),
+        requestedBy,
+      );
 
     dispatchCrawlerJob({
       db: req.db,
-      jobId: job.id,
+      jobId,
       uploadDir: publicUploadsDir,
       getOpenAI,
     }).catch((err) => {
       console.error('[documents/parse] Dispatch failed:', err);
     });
 
-    res.status(202).json({ success: true, job_id: job.id });
+    return res.status(202).json({
+      success: true,
+      document_id: doc.id,
+      profile_id: doc.profile_id,
+      job_id: jobId,
+      extraction_method: extractionMethod,
+      warnings,
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

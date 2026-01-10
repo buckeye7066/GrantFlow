@@ -215,13 +215,40 @@ const latestDuration = describeDuration(latestEnrichmentJob)
       'application/msword',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       'text/plain',
+      'application/rtf',
+      'text/rtf',
+      'image/jpeg',
+      'image/jpg',
+      'image/png',
+      'image/webp',
+      'image/gif',
+      'image/bmp',
+      'image/tiff',
+      'image/heic',
+      'image/heif',
     ];
-    const allowedExtensions = ['pdf', 'doc', 'docx', 'txt'];
+    const allowedExtensions = [
+      'pdf',
+      'doc',
+      'docx',
+      'txt',
+      'rtf',
+      'jpg',
+      'jpeg',
+      'png',
+      'webp',
+      'gif',
+      'bmp',
+      'tif',
+      'tiff',
+      'heic',
+      'heif',
+    ];
     const extension = file.name?.split('.').pop()?.toLowerCase() ?? '';
 
     if (!allowedTypes.includes(file.type) && !allowedExtensions.includes(extension)) {
       setUploadFile(null);
-      setUploadError('Supported formats: PDF, DOC, DOCX, or TXT.');
+      setUploadError('Supported formats: PDF, DOC, DOCX, TXT, RTF, and images (JPG/JPEG/PNG/HEIC).');
       return;
     }
 
@@ -446,14 +473,14 @@ const latestDuration = describeDuration(latestEnrichmentJob)
                 <h3 className="text-sm font-semibold text-slate-900">Upload and parse a document</h3>
                 <p className="text-sm text-slate-600">
                   Files stay scoped to {selectedProfile?.display_name ?? "the selected profile"}. Supported formats:
-                  PDF, DOC, DOCX, or TXT (50MB max).
+                  PDF, DOC, DOCX, TXT, RTF, or image scans (JPG/PNG/HEIC). Handwriting is supported best-effort via OCR (50MB max).
                 </p>
               </div>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".pdf,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
+                  accept=".pdf,.doc,.docx,.txt,.rtf,.jpg,.jpeg,.png,.heic,.heif,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,application/rtf,text/rtf,image/jpeg,image/png,image/heic,image/heif,image/*"
                   onChange={handleFileChange}
                   disabled={!selectedProfileId || isUploading}
                   className="w-full sm:w-72 text-sm"
