@@ -13,7 +13,45 @@ console.log('=== CRAWLER RESULTS CHECK ===\n')
 
 // Check opportunities
 const oppCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get()
+const activeCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get()
 console.log(`Total opportunities: ${oppCount.count}`)
+console.log(`Active opportunities: ${activeCount.count}`)
+
+// "Real" markers (best-effort; columns may not exist on older DBs)
+function hasColumn(table, column) {
+  try {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all()
+    return cols.some((c) => c.name === column)
+  } catch {
+    return false
+  }
+}
+
+if (hasColumn('funding_opportunities', 'record_origin')) {
+  const origins = db.prepare(`
+    SELECT record_origin, COUNT(*) as count
+    FROM funding_opportunities
+    WHERE is_active = 1
+    GROUP BY record_origin
+    ORDER BY count DESC
+  `).all()
+  console.log('\nActive opportunities by record_origin:')
+  origins.forEach((row) => console.log(`  ${row.record_origin || '(null)'}: ${row.count}`))
+}
+
+if (hasColumn('funding_opportunities', 'last_verified_at')) {
+  const verifiedCount = db
+    .prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1 AND last_verified_at IS NOT NULL')
+    .get()
+  console.log(`\nActive opportunities with last_verified_at set: ${verifiedCount.count}`)
+}
+
+if (hasColumn('funding_opportunities', 'evidence_url')) {
+  const evidenceCount = db
+    .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1 AND evidence_url IS NOT NULL AND evidence_url != ''")
+    .get()
+  console.log(`Active opportunities with evidence_url set: ${evidenceCount.count}`)
+}
 
 // Sample opportunities
 const sampleOpps = db.prepare('SELECT title, amount_min, amount_max, source FROM funding_opportunities LIMIT 5').all()
@@ -63,7 +101,7 @@ console.log(`Total grant items: ${pipelineCount.count}`)
 
 // Check grants by organization/profile
 const grantsByOrg = db.prepare(`
-  SELECT o.display_name, COUNT(g.id) as count
+  SELECT o.name, COUNT(g.id) as count
   FROM organizations o
   LEFT JOIN grants g ON o.id = g.organization_id
   GROUP BY o.id
@@ -74,13 +112,13 @@ const grantsByOrg = db.prepare(`
 if (grantsByOrg.length > 0) {
   console.log('\nOrganizations with grants:')
   grantsByOrg.forEach(org => {
-    console.log(`  - ${org.display_name}: ${org.count} grants`)
+    console.log(`  - ${org.name}: ${org.count} grants`)
   })
 }
 
 // Check recent grants added
 const recentGrants = db.prepare(`
-  SELECT g.title, g.status, g.notes, o.display_name
+  SELECT g.title, g.status, g.notes, o.name
   FROM grants g
   JOIN organizations o ON g.organization_id = o.id
   WHERE g.notes LIKE '%Auto-added%'
@@ -92,7 +130,7 @@ if (recentGrants.length > 0) {
   console.log('\nRecent auto-added grants:')
   recentGrants.forEach(g => {
     console.log(`  - ${g.title}`)
-    console.log(`    Org: ${g.display_name}`)
+    console.log(`    Org: ${g.name || g.display_name || '(unknown)'}`)
     console.log(`    Status: ${g.status}`)
   })
 }
