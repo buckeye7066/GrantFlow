@@ -63,6 +63,7 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@grantflow.app';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const uploadsDir = join(__dirname, '..', 'uploads');
+const privateUploadsDir = join(__dirname, '..', 'uploads_private');
 const distPath = join(__dirname, '..', 'dist');
 
 const app = express();
@@ -126,6 +127,9 @@ app.use(express.json({ limit: MAX_JSON_BODY_SIZE }));
 try {
   if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+  if (!fs.existsSync(privateUploadsDir)) {
+    fs.mkdirSync(privateUploadsDir, { recursive: true });
   }
 } catch (error) {
   console.warn('Failed to create uploads directory:', error);

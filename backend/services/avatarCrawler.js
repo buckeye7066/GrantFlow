@@ -28,7 +28,7 @@ export async function processAvatarLookupJob({ profileContext, uploadDir, getOpe
   return {
     inserted: 1,
     avatarFilename: filename,
-    avatarUrl: `/uploads/${filename}`,
+    avatarUrl: `/uploads/avatars/${filename}`,
   }
 }
 

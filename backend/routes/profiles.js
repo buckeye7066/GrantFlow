@@ -31,7 +31,9 @@ function isAdmin(user) {
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
-const uploadDir = join(__dirname, '..', 'uploads')
+// NOTE: `/uploads` is publicly served by `backend/server.js` from the repo-root `uploads/` directory.
+// Store profile avatars in a dedicated public subfolder under repo-root uploads.
+const uploadDir = join(__dirname, '..', '..', 'uploads', 'avatars')
 
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true })
@@ -369,8 +371,8 @@ router.delete('/:id', (req, res) => {
   stmt.run(id)
 
   // Clean up avatar file if it exists
-  if (existing.avatar_url && existing.avatar_url.startsWith('/uploads/')) {
-    const filename = existing.avatar_url.replace('/uploads/', '')
+  if (existing.avatar_url && existing.avatar_url.startsWith('/uploads/avatars/')) {
+    const filename = existing.avatar_url.replace('/uploads/avatars/', '')
     if (filename) {
       const avatarPath = join(uploadDir, filename)
       fs.unlink(avatarPath, (err) => {
@@ -386,11 +388,6 @@ router.post('/:id/avatar', upload.single('avatar'), (req, res, next) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
-    if (req.file) fs.unlink(join(uploadDir, req.file.filename), () => {})
-    return res.status(403).json({ error: 'Not authorized to update this profile' })
-  }
-
   if (!req.file) {
     return res.status(400).json({ error: 'Avatar file is required' })
   }
@@ -402,14 +399,22 @@ router.post('/:id/avatar', upload.single('avatar'), (req, res, next) => {
       return res.status(404).json({ error: 'Profile not found' })
     }
 
-    const publicPath = `/uploads/${req.file.filename}`
+    const ownsProfile =
+      Boolean(auth?.userId) && Boolean(profileRow.user_id) && auth.userId === profileRow.user_id
+
+    if (auth.role !== 'admin' && auth.profileId !== id && !ownsProfile) {
+      if (req.file) fs.unlink(join(uploadDir, req.file.filename), () => {})
+      return res.status(403).json({ error: 'Not authorized to update this profile' })
+    }
+
+    const publicPath = `/uploads/avatars/${req.file.filename}`
     req.db
       .prepare('UPDATE profiles SET avatar_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
       .run(publicPath, id)
 
     const previousAvatar = profileRow.avatar_url
-    if (previousAvatar && previousAvatar.startsWith('/uploads/')) {
-      const previousFilename = previousAvatar.replace('/uploads/', '')
+    if (previousAvatar && previousAvatar.startsWith('/uploads/avatars/')) {
+      const previousFilename = previousAvatar.replace('/uploads/avatars/', '')
       if (previousFilename && previousFilename !== req.file.filename) {
         const previousPath = join(uploadDir, previousFilename)
         fs.unlink(previousPath, () => {})

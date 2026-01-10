@@ -20,7 +20,8 @@ const AI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini'; // Configurable AI m
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const uploadDir = join(__dirname, '..', 'uploads');
+// Store admin-uploaded PDFs privately (NOT publicly served) since these may contain PII/PHI.
+const uploadDir = join(__dirname, '..', '..', 'uploads_private');
 
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
@@ -203,7 +204,7 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
 
       // Step 4: Store the document and link it to the profile
     const documentId = crypto.randomUUID();
-    const publicUrl = `/uploads/${file.filename}`;
+    const publicUrl = `/api/documents/${documentId}/file`;
     
     req.db.prepare(
       `INSERT INTO documents (

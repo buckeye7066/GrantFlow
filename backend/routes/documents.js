@@ -14,14 +14,20 @@ const router = express.Router();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const uploadDir = join(__dirname, '..', 'uploads');
+// NOTE: `/uploads` is publicly served by `backend/server.js` from the repo-root `uploads/` directory.
+// For sensitive (PHI/HIPAA) profile documents, store files in `uploads_private/` which is NOT publicly served.
+const publicUploadsDir = join(__dirname, '..', '..', 'uploads');
+const privateUploadsDir = join(__dirname, '..', '..', 'uploads_private');
 
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
+if (!fs.existsSync(publicUploadsDir)) {
+  fs.mkdirSync(publicUploadsDir, { recursive: true });
+}
+if (!fs.existsSync(privateUploadsDir)) {
+  fs.mkdirSync(privateUploadsDir, { recursive: true });
 }
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadDir),
+const publicStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, publicUploadsDir),
   filename: (_req, file, cb) => {
     const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
     const extension = file.originalname.includes('.') ? `.${file.originalname.split('.').pop()}` : '';
@@ -29,9 +35,23 @@ const storage = multer.diskStorage({
   },
 });
 
-const upload = multer({
-  storage,
+const privateStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, privateUploadsDir),
+  filename: (_req, file, cb) => {
+    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    const extension = file.originalname.includes('.') ? `.${file.originalname.split('.').pop()}` : '';
+    cb(null, `${unique}${extension}`);
+  },
+});
+
+const uploadPublic = multer({
+  storage: publicStorage,
   limits: { fileSize: 10 * 1024 * 1024 },
+});
+
+const uploadPrivate = multer({
+  storage: privateStorage,
+  limits: { fileSize: 50 * 1024 * 1024 },
 });
 
 // Rate limiter for file uploads to prevent abuse
@@ -191,7 +211,7 @@ router.get('/:id', (req, res) => {
 });
 
 // POST /api/documents/upload (Base44 Compatibility)
-router.post('/upload', upload.single('file'), (req, res) => {
+router.post('/upload', uploadPublic.single('file'), (req, res) => {
   try {
     const context = buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) {
@@ -239,7 +259,7 @@ router.post('/signed-url', (req, res) => {
 });
 
 // POST /api/documents/ingest (Universal Ingest)
-router.post('/ingest', upload.single('document'), async (req, res) => {
+router.post('/ingest', uploadPrivate.single('document'), async (req, res) => {
   try {
     const context = buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) {
@@ -283,7 +303,9 @@ router.post('/ingest', upload.single('document'), async (req, res) => {
     }
 
     const docId = crypto.randomUUID();
-    const publicUrl = file ? `/uploads/${file.filename}` : req.body?.file_url ?? null;
+    // Store the file privately and expose it via authenticated download endpoint.
+    // If a file_url is explicitly provided (remote), keep it.
+    const fileUrl = file ? `/api/documents/${docId}/file` : req.body?.file_url ?? null;
     const docName = (file?.originalname || rawName || 'Uploaded Document').trim();
     
     let extractedText = rawExtractedText || null;
@@ -308,7 +330,7 @@ router.post('/ingest', upload.single('document'), async (req, res) => {
       profileId,
       docName,
       rawType || null,
-      publicUrl,
+      fileUrl,
       file?.path || null,
       file?.size || null,
       file?.mimetype || null,
@@ -349,6 +371,37 @@ router.post('/ingest', upload.single('document'), async (req, res) => {
   }
 });
 
+// GET /api/documents/:id/file - authenticated file download/preview
+router.get('/:id/file', (req, res) => {
+  try {
+    const context = buildAccessContext(req);
+    if (!ensureAuthenticated(res, context)) return;
+
+    const doc = req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
+    if (!ensureDocumentAccess(res, context, doc)) return;
+
+    const filePath = doc.file_path;
+    if (!filePath) {
+      return res.status(404).json({ error: 'No file available for this document' });
+    }
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'File not found on disk' });
+    }
+
+    const safeName = String(doc.name || 'document')
+      .replace(/[\\\/]/g, '_')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    res.setHeader('Content-Type', doc.mime_type || 'application/octet-stream');
+    // Use attachment to avoid embedding sensitive docs inline by default.
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+    return fs.createReadStream(filePath).pipe(res);
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
 // PUT /api/documents/:id
 router.put('/:id', (req, res) => {
   try {
@@ -378,6 +431,16 @@ router.delete('/:id', (req, res) => {
 
     const existing = req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
     if (!ensureDocumentAccess(res, context, existing)) return;
+
+    if (existing?.file_path) {
+      try {
+        if (fs.existsSync(existing.file_path)) {
+          fs.unlinkSync(existing.file_path);
+        }
+      } catch (unlinkError) {
+        // Best-effort cleanup; ignore unlink errors.
+      }
+    }
 
     req.db.prepare('DELETE FROM profile_documents WHERE document_id = ?').run(req.params.id);
     req.db.prepare('DELETE FROM documents WHERE id = ?').run(req.params.id);
