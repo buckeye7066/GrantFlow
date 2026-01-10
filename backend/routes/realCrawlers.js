@@ -13,6 +13,7 @@ import { crawlStudentGrants } from '../services/crawlers/studentGrantsCrawler.js
 import { crawlECFBenefits } from '../services/crawlers/ecfBenefitsCrawler.js'
 import { crawlItemFunding } from '../services/crawlers/itemFundingCrawler.js'
 import { crawlSpecialNeeds } from '../services/crawlers/specialNeedsCrawler.js'
+import { runRealCrawlersAcrossProfiles } from '../services/realCrawlers/runMultipleService.js'
 
 const router = express.Router()
 
@@ -127,10 +128,8 @@ router.post('/run', ensureAuth, async (req, res) => {
       opp.match_score >= min_match_score
     )
     
-    // Save to database if profile_id provided
-    if (profile_id) {
-      await saveOpportunitiesToDB(db, filteredOpportunities, profile_id, crawler_type)
-    }
+    // NOTE: Persisting "real crawler" results is handled by the crawler jobs pipeline.
+    // This endpoint returns results for immediate UI consumption.
     
     res.json({
       success: true,
@@ -193,94 +192,47 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
   }
   
   const db = req.db
-  const profile = getProfileWithLocation(db, profile_id)
-  
-  if (!profile) {
-    return res.status(404).json({ 
-      error: 'Profile not found',
-      message: `Profile with ID ${profile_id} does not exist`
-    })
-  }
-  
+
+  // Use the shared service so persistence + "REAL" markers are consistent with Anya/admin tooling.
+  // For API callers, we only run for a single profile_id here.
+  const report = await runRealCrawlersAcrossProfiles(
+    {
+      profileIds: [profile_id],
+      crawlerTypes: crawler_types,
+      minMatchScore: min_match_score,
+      persistGlobal: true,
+      dryRun: false,
+      maxProfiles: 1,
+    },
+    { db, user: req.user },
+  )
+
+  // Shape the legacy response fields for backwards compatibility.
+  const profileReport = report.profiles?.[0] || null
   const succeeded = []
   const failed = []
-  let totalFound = 0
-  let totalInserted = 0
-  
-  for (const crawlerType of crawler_types) {
-    if (!CRAWLER_TYPES.includes(crawlerType)) {
-      failed.push({
-        crawler: crawlerType,
-        error: 'Invalid crawler type',
-        status: 400
-      })
-      continue
-    }
-    
-    try {
-      let opportunities = []
-      
-      // Execute real crawlers
-      switch (crawlerType) {
-        case 'local_funding':
-          opportunities = await crawlLocalFunding(profile, { min_match_score })
-          break
-        case 'government_funding':
-          opportunities = await crawlGovernmentFunding(profile, { min_match_score })
-          break
-        case 'student_grants':
-          opportunities = await crawlStudentGrants(profile, { min_match_score })
-          break
-        case 'ecf_benefits':
-          opportunities = await crawlECFBenefits(profile, { min_match_score })
-          break
-        case 'item_matching':
-          opportunities = await crawlItemFunding(profile, { min_match_score })
-          break
-        case 'special_needs':
-          opportunities = await crawlSpecialNeeds(profile, { min_match_score })
-          break
-        default:
-          throw new Error(`Crawler not implemented: ${crawlerType}`)
+  if (profileReport?.crawlers) {
+    profileReport.crawlers.forEach((c) => {
+      if (c.ok) {
+        succeeded.push({
+          crawler: c.crawler_type,
+          found: c.found,
+          inserted: c.saved_global,
+        })
+      } else {
+        failed.push({ crawler: c.crawler_type, error: c.error, status: 500 })
       }
-      
-      const filteredOpportunities = opportunities.filter(opp => opp.match_score >= min_match_score)
-      
-      await saveOpportunitiesToDB(db, filteredOpportunities, profile_id, crawlerType)
-      
-      totalFound += opportunities.length
-      totalInserted += filteredOpportunities.length
-      
-      succeeded.push({
-        crawler: crawlerType,
-        found: opportunities.length,
-        inserted: filteredOpportunities.length
-      })
-    } catch (error) {
-      console.error(`[RealCrawlers] Error in ${crawlerType}:`, error)
-      
-      // Provide helpful error messages
-      let errorMessage = error.message || 'Unknown error'
-      if (errorMessage.includes('SAM_GOV_API_KEY')) {
-        errorMessage = 'SAM_GOV_API_KEY missing'
-      } else if (errorMessage.includes('network') || errorMessage.includes('ENOTFOUND')) {
-        errorMessage = 'Network error - unable to reach external sources'
-      }
-      
-      failed.push({
-        crawler: crawlerType,
-        error: errorMessage,
-        status: 500
-      })
-    }
+    })
   }
-  
+
   res.json({
     totalSelected: crawler_types.length,
     succeeded,
     failed,
-    totalFound,
-    totalInserted
+    totalFound: report.totals.found,
+    totalInserted: report.totals.saved_global,
+    run_id: report.run_id,
+    artifact_path: report.artifact_path,
   })
 })
 
@@ -298,96 +250,6 @@ function getCrawlerDescription(type) {
   }
   
   return descriptions[type] || 'Specialized funding crawler'
-}
-
-/**
- * Save opportunities to database
- */
-async function saveOpportunitiesToDB(db, opportunities, profileId, crawlerType) {
-  const timestamp = new Date().toISOString()
-  
-  for (const opp of opportunities) {
-    try {
-      // Check if opportunity already exists
-      const existing = db.prepare(
-        'SELECT id FROM funding_opportunities WHERE title = ? AND sponsor = ?'
-      ).get(opp.title, opp.sponsor)
-      
-      let oppId
-      
-      if (existing) {
-        oppId = existing.id
-        // Update existing opportunity
-        db.prepare(`
-          UPDATE funding_opportunities 
-          SET 
-            description = ?,
-            amount = ?,
-            deadline = ?,
-            url = ?,
-            updated_at = ?
-          WHERE id = ?
-        `).run(
-          opp.description,
-          opp.amount,
-          opp.deadline,
-          opp.url,
-          timestamp,
-          oppId
-        )
-      } else {
-        // Insert new opportunity
-        const result = db.prepare(`
-          INSERT INTO funding_opportunities (
-            title, description, sponsor, amount, deadline,
-            url, eligibility_criteria, state, is_loan, requires_match,
-            created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-          opp.title,
-          opp.description,
-          opp.sponsor,
-          opp.amount,
-          opp.deadline,
-          opp.url,
-          JSON.stringify(opp.eligibility_criteria || []),
-          opp.state,
-          opp.is_loan || 0,
-          opp.requires_match || 0,
-          timestamp,
-          timestamp
-        )
-        
-        oppId = result.lastInsertRowid
-      }
-      
-      // Add to grants table if match score >= 80
-      if (opp.match_score >= 80) {
-        const existingGrant = db.prepare(
-          'SELECT id FROM grants WHERE profile_id = ? AND opportunity_id = ?'
-        ).get(profileId, oppId)
-        
-        if (!existingGrant) {
-          db.prepare(`
-            INSERT INTO grants (
-              profile_id, opportunity_id, status, match_score,
-              source, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-          `).run(
-            profileId,
-            oppId,
-            'potential',
-            opp.match_score,
-            crawlerType,
-            timestamp,
-            timestamp
-          )
-        }
-      }
-    } catch (error) {
-      console.error('[RealCrawlers] Error saving opportunity:', error)
-    }
-  }
 }
 
 export default router

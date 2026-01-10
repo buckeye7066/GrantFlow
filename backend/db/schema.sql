@@ -657,6 +657,52 @@ CREATE INDEX IF NOT EXISTS idx_crawler_jobs_status ON crawler_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_profile ON crawler_jobs(profile_id);
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_type ON crawler_jobs(type);
 
+-- ============================================================
+-- Real crawler run tracking (admin/Anya)
+-- Tracks /api/real-crawlers/run-multiple style executions with auditability.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS real_crawler_runs (
+  run_id TEXT PRIMARY KEY,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  started_at DATETIME,
+  completed_at DATETIME,
+  status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed')),
+
+  initiated_by TEXT, -- admin user email/id
+  profiles_targeted INTEGER DEFAULT 0,
+  crawler_types TEXT DEFAULT '[]', -- JSON array
+  min_match_score INTEGER DEFAULT 80,
+  persist_global INTEGER DEFAULT 1,
+  dry_run INTEGER DEFAULT 0,
+
+  total_found INTEGER DEFAULT 0,
+  total_saved_global INTEGER DEFAULT 0,
+  total_updated_global INTEGER DEFAULT 0,
+  total_skipped INTEGER DEFAULT 0,
+  total_errors INTEGER DEFAULT 0,
+
+  artifact_path TEXT,
+  summary TEXT,
+  metadata TEXT DEFAULT '{}' -- JSON
+);
+
+CREATE INDEX IF NOT EXISTS idx_real_crawler_runs_created ON real_crawler_runs(created_at);
+CREATE INDEX IF NOT EXISTS idx_real_crawler_runs_status ON real_crawler_runs(status);
+
+CREATE TABLE IF NOT EXISTS real_crawler_run_events (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  run_id TEXT NOT NULL REFERENCES real_crawler_runs(run_id) ON DELETE CASCADE,
+  profile_id TEXT,
+  crawler_type TEXT,
+  event_type TEXT NOT NULL, -- profile_start, crawler_start, crawler_success, crawler_failure, save_success, save_skipped, run_complete
+  message TEXT,
+  metadata TEXT DEFAULT '{}' -- JSON
+);
+
+CREATE INDEX IF NOT EXISTS idx_real_crawler_events_run ON real_crawler_run_events(run_id, created_at);
+
 -- National ZIP progress tracking for comprehensive national crawl
 CREATE TABLE IF NOT EXISTS national_zip_progress (
   zip TEXT PRIMARY KEY,

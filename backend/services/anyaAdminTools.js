@@ -2,6 +2,7 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { dirname } from 'path'
+import { runRealCrawlersAcrossProfiles } from './realCrawlers/runMultipleService.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -11,7 +12,11 @@ const REPO_ROOT = path.resolve(process.cwd())
 // Admin Role Enforcement
 // ============================================================================
 
-const ADMIN_EMAIL = 'buckeye7066@gmail.com';
+// Admin email should be configurable per environment.
+// Keep the historical default as a fallback for local dev.
+const ADMIN_EMAIL = String(
+  process.env.ADMIN_EMAIL || process.env.ANYA_ADMIN_EMAIL || 'buckeye7066@gmail.com',
+).trim();
 
 /**
  * Check if user is admin
@@ -637,6 +642,50 @@ export async function adminCrawlerRun({ type, profileId, parameters = {} }, cont
     },
     message: `Crawler job ${jobId} queued successfully`,
   }
+}
+
+/**
+ * Run the REAL crawler suite (the 6 crawlers behind /api/real-crawlers/run-multiple)
+ * across all (or specified) profiles, persist to GLOBAL opportunities as REAL, and write an auditable artifact.
+ *
+ * Admin only.
+ */
+export async function adminRealCrawlersRunMultiple(
+  {
+    profileIds = null,
+    crawlerTypes = [
+      'local_funding',
+      'government_funding',
+      'student_grants', // scholarships
+      'ecf_benefits',
+      'item_matching',
+      'special_needs',
+    ],
+    minMatchScore = 80,
+    persistGlobal = true,
+    dryRun = false,
+    maxProfiles = null,
+    timeoutMsPerCrawler = 25_000,
+    maxSavedPerCrawlerPerProfile = 50,
+    itemRequest = null,
+  },
+  context,
+) {
+  requireAdmin(context.user)
+  return await runRealCrawlersAcrossProfiles(
+    {
+      profileIds,
+      crawlerTypes,
+      minMatchScore,
+      persistGlobal,
+      dryRun,
+      maxProfiles,
+      timeoutMsPerCrawler,
+      maxSavedPerCrawlerPerProfile,
+      itemRequest,
+    },
+    context,
+  )
 }
 
 /**

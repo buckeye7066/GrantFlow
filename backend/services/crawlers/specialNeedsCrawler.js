@@ -6,6 +6,7 @@
 
 import axios from 'axios'
 import * as cheerio from 'cheerio'
+import { safeParseJSON } from '../../utils/safeJson.js'
 
 const SPECIAL_NEEDS_SOURCES = {
   cancer: [
@@ -127,12 +128,32 @@ export async function crawlSpecialNeeds(profile, options = {}) {
 
 function identifySpecialNeeds(profile) {
   const needs = []
+
+  const tags = (() => {
+    if (!profile?.tags) return []
+    if (Array.isArray(profile.tags)) return profile.tags
+    if (typeof profile.tags === 'string') {
+      const parsed = safeParseJSON(profile.tags, [])
+      return Array.isArray(parsed) ? parsed : []
+    }
+    return []
+  })()
+
+  const healthConditions = (() => {
+    if (!profile?.health_conditions) return []
+    if (Array.isArray(profile.health_conditions)) return profile.health_conditions
+    if (typeof profile.health_conditions === 'string') {
+      const parsed = safeParseJSON(profile.health_conditions, [])
+      return Array.isArray(parsed) ? parsed : []
+    }
+    return []
+  })()
   
   // Check for cancer history
   if (profile.cancer_survivor === true ||
       profile.medical_history?.includes('cancer') ||
-      profile.health_conditions?.some(c => c.toLowerCase().includes('cancer')) ||
-      profile.tags?.some(t => t.toLowerCase().includes('cancer'))) {
+      healthConditions.some(c => String(c).toLowerCase().includes('cancer')) ||
+      tags.some(t => String(t).toLowerCase().includes('cancer'))) {
     needs.push('cancer')
   }
   
@@ -140,7 +161,7 @@ function identifySpecialNeeds(profile) {
   if (profile.single_parent === true ||
       profile.family_status === 'single_parent' ||
       profile.household_type === 'single_parent' ||
-      profile.tags?.some(t => t.toLowerCase().includes('single parent'))) {
+      tags.some(t => String(t).toLowerCase().includes('single parent'))) {
     needs.push('single_parent')
   }
   
@@ -148,8 +169,8 @@ function identifySpecialNeeds(profile) {
   if (profile.disability_status === true ||
       profile.disabled === true ||
       profile.has_disability === true ||
-      profile.health_conditions?.length > 0 ||
-      profile.tags?.some(t => t.toLowerCase().includes('disability'))) {
+      healthConditions.length > 0 ||
+      tags.some(t => String(t).toLowerCase().includes('disability'))) {
     needs.push('disability')
   }
   
@@ -157,17 +178,17 @@ function identifySpecialNeeds(profile) {
   if (profile.veteran === true ||
       profile.military_service === true ||
       profile.veteran_status === true ||
-      profile.tags?.some(t => t.toLowerCase().includes('veteran'))) {
+      tags.some(t => String(t).toLowerCase().includes('veteran'))) {
     needs.push('veteran')
   }
   
   // Check for mental health needs
   if (profile.mental_health_needs === true ||
-      profile.health_conditions?.some(c => 
-        c.toLowerCase().includes('mental') || 
-        c.toLowerCase().includes('depression') ||
-        c.toLowerCase().includes('anxiety')) ||
-      profile.tags?.some(t => t.toLowerCase().includes('mental health'))) {
+      healthConditions.some(c => {
+        const s = String(c).toLowerCase()
+        return s.includes('mental') || s.includes('depression') || s.includes('anxiety')
+      }) ||
+      tags.some(t => String(t).toLowerCase().includes('mental health'))) {
     needs.push('mental_health')
   }
   

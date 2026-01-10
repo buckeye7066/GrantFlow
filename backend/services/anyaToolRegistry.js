@@ -11,6 +11,7 @@ import {
   adminCrawlerCheck,
   adminCrawlerRetry,
   adminCrawlerCancel,
+  adminRealCrawlersRunMultiple,
   adminFunctionsTest,
   adminFunctionsDiagnose,
   adminDbQuery,
@@ -891,6 +892,46 @@ registerTool({
     required: ['type'],
   },
   handler: adminCrawlerRun,
+})
+
+registerTool({
+  name: 'admin.realCrawlers.runMultiple',
+  description:
+    'Run the REAL crawler suite (the 6 crawlers behind /api/real-crawlers/run-multiple) across profiles, persist GLOBAL REAL opportunities (record_origin/evidence_url/last_verified_at), and write an auditable artifact. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      profileIds: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Specific profile IDs to run for (default: all active profiles)',
+      },
+      crawlerTypes: {
+        type: 'array',
+        items: {
+          type: 'string',
+          enum: [
+            'local_funding',
+            'government_funding',
+            'student_grants',
+            'ecf_benefits',
+            'item_matching',
+            'special_needs',
+          ],
+        },
+        description: 'Which REAL crawlers to run (default: all 6, incl. scholarships)',
+      },
+      minMatchScore: { type: 'integer', minimum: 0, maximum: 100, description: 'Minimum match_score (default 80)' },
+      persistGlobal: { type: 'boolean', description: 'Persist results to global opportunities (default true)' },
+      dryRun: { type: 'boolean', description: 'Do not write to DB; still produces report (default false)' },
+      maxProfiles: { type: 'integer', minimum: 1, maximum: 10000, description: 'Optional limit for safety' },
+      timeoutMsPerCrawler: { type: 'integer', minimum: 1000, maximum: 300000, description: 'Per crawler timeout in ms' },
+      maxSavedPerCrawlerPerProfile: { type: 'integer', minimum: 1, maximum: 5000, description: 'Cap saves per crawler per profile' },
+      itemRequest: { type: 'string', description: 'Optional item request for item_matching crawler' },
+    },
+  },
+  handler: adminRealCrawlersRunMultiple,
 })
 
 registerTool({

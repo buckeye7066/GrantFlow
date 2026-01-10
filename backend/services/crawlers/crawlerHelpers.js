@@ -12,7 +12,8 @@ export function getProfileWithLocation(db, profileId) {
       COALESCE(o.city, 'Columbus') as city,
       COALESCE(o.zip, '43215') as zip_code,
       o.name as organization_name,
-      o.type as organization_type
+      COALESCE(o.organization_type, o.applicant_type) as organization_type,
+      o.applicant_type as applicant_type
     FROM profiles p
     LEFT JOIN organizations o ON p.organization_id = o.id
     WHERE p.id = ?
@@ -25,6 +26,9 @@ export function getProfileWithLocation(db, profileId) {
     profile.state = profile.state || 'OH'
     profile.city = profile.city || 'Columbus'
     profile.zip_code = profile.zip_code || '43215'
+    // Normalize common ZIP fields used by crawlers
+    profile.zip = profile.zip || profile.zip_code
+    profile.postal_code = profile.postal_code || profile.zip_code
   }
   
   return profile
