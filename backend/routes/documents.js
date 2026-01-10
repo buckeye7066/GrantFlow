@@ -272,6 +272,9 @@ router.post('/ingest', uploadPrivate.single('document'), async (req, res) => {
       notes: rawNotes,
       source = null,
       skip_parsing: rawSkipParsing,
+      ocr: rawOcr,
+      handwriting: rawHandwriting,
+      ocr_language: rawOcrLanguage,
     } = req.body ?? {};
 
     const file = req.file;
@@ -299,11 +302,26 @@ router.post('/ingest', uploadPrivate.single('document'), async (req, res) => {
     
     let extractedText = rawExtractedText || null;
     if (!extractedText && file) {
+      const ocrEnabled =
+        rawOcr === undefined || rawOcr === null
+          ? true
+          : rawOcr === 'true' || rawOcr === '1' || rawOcr === true;
+
+      const handwriting =
+        rawHandwriting === 'true' || rawHandwriting === '1' || rawHandwriting === true;
+
+      const ocrLanguage =
+        typeof rawOcrLanguage === 'string' && rawOcrLanguage.trim()
+          ? rawOcrLanguage.trim()
+          : 'eng';
+
       const extraction = await extractTextFromStoredFile({
         filePath: file.path,
         mimeType: file.mimetype,
         fileName: file.originalname,
-        ocr: true,
+        ocr: ocrEnabled,
+        handwriting,
+        ocrLanguage,
       });
       extractedText = extraction?.text ?? null;
     }
@@ -519,7 +537,7 @@ router.get('/:id/file', (req, res) => {
     }
 
     const safeName = String(doc.name || 'document')
-      .replace(/[\\\/]/g, '_')
+      .replace(/[\\/]/g, '_')
       .replace(/\s+/g, ' ')
       .trim();
 
