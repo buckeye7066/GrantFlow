@@ -62,7 +62,7 @@ export function seedRealOpportunities(db) {
     match_reasons: ensureArray(opp.match_reasons),
     requires_match: opp.requires_match === true ? 1 : 0,
     requires_501c3: opp.requires_501c3 === true ? 1 : 0,
-    is_national: opp.state === 'nationwide' ? 1 : 0,
+    is_national: opp.is_national === true || opp.state === 'nationwide' ? 1 : 0,
     opportunity_type: opp.opportunity_type || (opp.categories?.includes('scholarship') ? 'scholarship' : 'grant'),
     application_url: opp.application_url || opp.url,
     source_url: opp.source_url || opp.url,

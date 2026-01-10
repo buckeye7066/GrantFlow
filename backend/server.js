@@ -36,6 +36,7 @@ import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
 import { runStartupOperations } from './services/anyaStartupOperations.js';
+import ensureMinimumNationalOpportunities from './utils/ensureMinimumNationalOpportunities.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { MAX_JSON_BODY_SIZE } from './config/constants.js';
 
@@ -132,6 +133,11 @@ app.use('/uploads', express.static(uploadsDir));
 
 // Serve static files from Vite build
 app.use(express.static(distPath));
+// Serve the SPA under the configured base path so production builds (base=/grantflow) work locally.
+const APP_BASE_PATH = process.env.AUTH_FRONTEND_APP_BASE || process.env.VITE_APP_BASE || '/grantflow';
+if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
+  app.use(APP_BASE_PATH, express.static(distPath));
+}
 
 // Initialize database
 const dataDir = join(__dirname, 'data');
@@ -418,6 +424,23 @@ try {
   }
 } catch (seedError) {
   console.warn('[startup] Error during auto-seed:', seedError.message);
+}
+
+// Ensure at least 3 REAL national opportunities are always available (visible from any ZIP).
+try {
+  const minimum = Number.parseInt(process.env.MIN_NATIONAL_OPPORTUNITIES || '3', 10)
+  const ensured = ensureMinimumNationalOpportunities(db, Number.isFinite(minimum) ? minimum : 3)
+  if (!ensured.ok) {
+    console.warn(
+      `[startup] National minimum not met: have ${ensured.total}, need ${ensured.minimum}`,
+    )
+  } else {
+    console.info(
+      `[startup] National minimum ensured: have ${ensured.total} (min ${ensured.minimum})`,
+    )
+  }
+} catch (error) {
+  console.warn('[startup] Failed to ensure national minimum opportunities:', error?.message || error)
 }
 
 // Auto-seed grants disabled temporarily to debug server crash
