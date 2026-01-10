@@ -300,6 +300,19 @@ router.get('/', (req, res) => {
   }
 });
 
+// Get ingestion status
+// NOTE: must be defined before `/:id` routes, otherwise it will be captured by the id param.
+router.get('/meta/ingestion', async (req, res) => {
+  try {
+    const { getIngestionStatus } = await import('../services/sources/ingestionService.js');
+    const status = getIngestionStatus(req.db);
+    res.json(status);
+  } catch (error) {
+    console.error('Error getting ingestion status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get single opportunity
 router.get('/:id', (req, res) => {
   try {
@@ -462,18 +475,6 @@ router.delete('/:id', (req, res) => {
     res.json({ success: true, message: 'Opportunity deactivated' });
   } catch (error) {
     console.error('Error deleting opportunity:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get ingestion status
-router.get('/meta/ingestion', async (req, res) => {
-  try {
-    const { getIngestionStatus } = await import('../services/sources/ingestionService.js');
-    const status = getIngestionStatus(req.db);
-    res.json(status);
-  } catch (error) {
-    console.error('Error getting ingestion status:', error);
     res.status(500).json({ error: error.message });
   }
 });
