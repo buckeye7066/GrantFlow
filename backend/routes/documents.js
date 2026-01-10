@@ -80,6 +80,120 @@ function getOpenAI() {
   return new OpenAI({ apiKey });
 }
 
+async function dispatchWithConcurrency(tasks, concurrency = 2) {
+  const results = []
+  let index = 0
+
+  const worker = async () => {
+    while (index < tasks.length) {
+      const current = index++
+      try {
+        results[current] = await tasks[current]()
+      } catch (error) {
+        results[current] = { error: error instanceof Error ? error.message : String(error) }
+      }
+    }
+  }
+
+  const workers = Array.from({ length: Math.max(1, Math.min(concurrency, tasks.length)) }, () => worker())
+  await Promise.all(workers)
+  return results
+}
+
+async function reextractAndQueueDocument({ db, doc, requestedBy, handwriting = false, ocrLanguage = 'eng' }) {
+  if (!doc?.id) throw new Error('Missing document')
+  if (!doc.profile_id) throw new Error('Document not linked to a profile')
+  if (!doc.file_path) throw new Error('Document has no stored file to parse')
+  if (!fs.existsSync(doc.file_path)) throw new Error('File not found on disk')
+
+  db.prepare('UPDATE documents SET processing_status = ?, processing_error = NULL WHERE id = ?').run(
+    'processing',
+    doc.id,
+  )
+
+  const extraction = await extractTextFromStoredFile({
+    filePath: doc.file_path,
+    mimeType: doc.mime_type,
+    fileName: doc.name,
+    ocr: true,
+    handwriting: Boolean(handwriting),
+    ocrLanguage: typeof ocrLanguage === 'string' && ocrLanguage.trim() ? ocrLanguage.trim() : 'eng',
+  })
+
+  const extractedText = extraction?.text ?? null
+  const warnings = Array.isArray(extraction?.warnings) ? extraction.warnings : []
+  const extractionMethod = extraction?.method ?? null
+
+  if (!extractedText) {
+    const message =
+      warnings.includes('pdf_text_empty_or_scanned')
+        ? 'Unable to extract text from this PDF. If it is scanned/handwritten, upload images (JPG/PNG/HEIC) instead.'
+        : 'Unable to extract text from this file type.'
+
+    db.prepare(
+      `
+        UPDATE documents
+        SET processing_status = 'failed',
+            processing_error = ?,
+            extracted_text = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `,
+    ).run(`${message}${extractionMethod ? ` (method=${extractionMethod})` : ''}`, doc.id)
+
+    return {
+      success: false,
+      document_id: doc.id,
+      error: message,
+      extraction_method: extractionMethod,
+      warnings,
+      job_id: null,
+    }
+  }
+
+  db.prepare(
+    `
+      UPDATE documents
+      SET extracted_text = ?,
+          processing_status = 'completed',
+          processing_error = NULL,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `,
+  ).run(extractedText, doc.id)
+
+  const jobId = crypto.randomUUID()
+  db.prepare(
+    `
+      INSERT INTO crawler_jobs (id, type, status, profile_id, organization_id, parameters, requested_by)
+      VALUES (?, 'document_ingest', 'queued', ?, ?, ?, ?)
+    `,
+  ).run(
+    jobId,
+    doc.profile_id ?? null,
+    doc.organization_id ?? null,
+    JSON.stringify({ document_id: doc.id, source: 'manual_parse_all' }),
+    requestedBy,
+  )
+
+  dispatchCrawlerJob({
+    db,
+    jobId,
+    uploadDir: publicUploadsDir,
+    getOpenAI,
+  }).catch((err) => {
+    console.error('[documents/parse-all] Dispatch failed:', err)
+  })
+
+  return {
+    success: true,
+    document_id: doc.id,
+    extraction_method: extractionMethod,
+    warnings,
+    job_id: jobId,
+  }
+}
+
 // Text extraction is implemented in `backend/services/documentTextExtractor.js`
 
 function buildAccessContext(req) {
@@ -407,117 +521,103 @@ router.post('/:id/parse', async (req, res) => {
     const doc = req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
     if (!ensureDocumentAccess(res, context, doc)) return;
 
-    if (!doc.profile_id) {
-      return res.status(400).json({ error: 'This document is not linked to a profile' });
-    }
-
-    const filePath = doc.file_path;
-    if (!filePath) {
-      return res.status(400).json({ error: 'This document has no stored file to parse' });
-    }
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'File not found on disk' });
-    }
-
     const { handwriting = false, ocr_language = 'eng' } = req.body ?? {};
+    const requestedBy = context.user?.profileId ?? context.user?.userId ?? 'system';
 
-    req.db
-      .prepare('UPDATE documents SET processing_status = ?, processing_error = NULL WHERE id = ?')
-      .run('processing', doc.id);
-
-    const extraction = await extractTextFromStoredFile({
-      filePath,
-      mimeType: doc.mime_type,
-      fileName: doc.name,
-      ocr: true,
-      handwriting: Boolean(handwriting),
-      ocrLanguage: typeof ocr_language === 'string' && ocr_language.trim() ? ocr_language.trim() : 'eng',
+    const result = await reextractAndQueueDocument({
+      db: req.db,
+      doc,
+      requestedBy,
+      handwriting,
+      ocrLanguage: ocr_language,
     });
 
-    const extractedText = extraction?.text ?? null;
-    const warnings = Array.isArray(extraction?.warnings) ? extraction.warnings : [];
-    const extractionMethod = extraction?.method ?? null;
-
-    if (!extractedText) {
-      const message =
-        warnings.includes('pdf_text_empty_or_scanned')
-          ? 'Unable to extract text from this PDF. If it is scanned/handwritten, upload images (JPG/PNG/HEIC) instead.'
-          : 'Unable to extract text from this file type.';
-
-      req.db
-        .prepare(
-          `
-            UPDATE documents
-            SET processing_status = 'failed',
-                processing_error = ?,
-                extracted_text = NULL,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-          `,
-        )
-        .run(`${message}${extractionMethod ? ` (method=${extractionMethod})` : ''}`, doc.id);
-
+    if (!result.success) {
       return res.status(422).json({
         success: false,
-        error: message,
-        document_id: doc.id,
-        extraction_method: extractionMethod,
-        warnings,
+        error: result.error,
+        document_id: result.document_id,
+        extraction_method: result.extraction_method,
+        warnings: result.warnings,
       });
     }
-
-    req.db
-      .prepare(
-        `
-          UPDATE documents
-          SET extracted_text = ?,
-              processing_status = 'completed',
-              processing_error = NULL,
-              updated_at = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `,
-      )
-      .run(extractedText, doc.id);
-
-    const requestedBy = context.user?.profileId ?? context.user?.userId ?? 'system';
-    const jobId = crypto.randomUUID();
-
-    req.db
-      .prepare(
-        `
-          INSERT INTO crawler_jobs (id, type, status, profile_id, organization_id, parameters, requested_by)
-          VALUES (?, 'document_ingest', 'queued', ?, ?, ?, ?)
-        `,
-      )
-      .run(
-        jobId,
-        doc.profile_id ?? null,
-        doc.organization_id ?? null,
-        JSON.stringify({ document_id: doc.id, source: 'manual_parse' }),
-        requestedBy,
-      );
-
-    dispatchCrawlerJob({
-      db: req.db,
-      jobId,
-      uploadDir: publicUploadsDir,
-      getOpenAI,
-    }).catch((err) => {
-      console.error('[documents/parse] Dispatch failed:', err);
-    });
 
     return res.status(202).json({
       success: true,
       document_id: doc.id,
       profile_id: doc.profile_id,
-      job_id: jobId,
-      extraction_method: extractionMethod,
-      warnings,
+      job_id: result.job_id,
+      extraction_method: result.extraction_method,
+      warnings: result.warnings,
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
+
+// POST /api/documents/parse-all
+// Parse all documents linked to a profile (admin + profile owner).
+router.post('/parse-all', async (req, res) => {
+  try {
+    const context = buildAccessContext(req)
+    if (!ensureAuthenticated(res, context)) return
+
+    const { profile_id, handwriting = false, ocr_language = 'eng', limit } = req.body ?? {}
+    const profileId = normalizeProfileId(profile_id)
+    if (!profileId) return res.status(400).json({ error: 'profile_id is required' })
+
+    const profile = req.db.prepare('SELECT id, organization_id FROM profiles WHERE id = ?').get(profileId)
+    if (!profile) return res.status(404).json({ error: 'Profile not found' })
+    if (!context.isAdmin && !context.accessibleProfiles.has(profile.id)) {
+      return res.status(403).json({ error: 'Not authorized for this profile' })
+    }
+
+    const maxDocs = 25
+    const requestedLimit = Number.isFinite(Number(limit)) ? Number(limit) : maxDocs
+    const finalLimit = Math.max(1, Math.min(maxDocs, requestedLimit))
+
+    const docs = req.db
+      .prepare(
+        `
+          SELECT d.*
+          FROM documents d
+          JOIN profile_documents pd ON pd.document_id = d.id
+          WHERE pd.profile_id = ?
+          ORDER BY d.created_at DESC
+          LIMIT ?
+        `,
+      )
+      .all(profileId, finalLimit)
+
+    const requestedBy = context.user?.profileId ?? context.user?.userId ?? 'system'
+
+    // Run asynchronously with a small concurrency cap so we don't block the server.
+    setImmediate(() => {
+      const tasks = docs.map((doc) => () =>
+        reextractAndQueueDocument({
+          db: req.db,
+          doc,
+          requestedBy,
+          handwriting,
+          ocrLanguage: ocr_language,
+        }),
+      )
+
+      dispatchWithConcurrency(tasks, 2).catch((err) => {
+        console.error('[documents/parse-all] Background parse-all failed', err)
+      })
+    })
+
+    return res.status(202).json({
+      success: true,
+      profile_id: profileId,
+      queued_count: docs.length,
+      note: docs.length === finalLimit ? `Queued up to ${finalLimit} most recent documents.` : null,
+    })
+  } catch (error) {
+    return res.status(500).json({ error: error.message })
+  }
+})
 
 // GET /api/documents/:id/file - authenticated file download/preview
 router.get('/:id/file', (req, res) => {

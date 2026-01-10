@@ -1,21 +1,28 @@
-import { buildProfileSectionPrompt } from '../prompts/profileSections.js'
+import { buildProfileSectionPrompt, supportedSectionKeys } from '../prompts/profileSections.js'
 import { extractCompletionText } from '../utils/openai.js'
+import { safeParseJSON } from '../utils/safeJson.js'
+import { extractDocumentFacts } from './documentFactsExtractor.js'
 
-const TARGET_SECTIONS = [
-  'basic_information',
-  'organization_details',
-  'financial_information',
-  'government_assistance',
-  'health_medical',
-  'demographics',
-  'family_life',
-  'military_service',
-  'occupation',
-  'location_focus',
-  'narrative',
-]
+function shouldIncludeUniversityApplications(profile, sections = {}) {
+  const type = String(profile?.primary_type ?? '').toLowerCase()
+  if (type.includes('student')) return true
 
-function truncateText(text, limit = 4000) {
+  const category = String(sections?.basic_information?.profile_category ?? '').toLowerCase()
+  if (category.includes('student')) return true
+
+  const orgType = String(sections?.organization_details?.organization_type ?? '').toLowerCase()
+  if (orgType.includes('student')) return true
+
+  return false
+}
+
+function getTargetSections(profile, sections = {}) {
+  const keys = Array.isArray(supportedSectionKeys) ? supportedSectionKeys.slice() : []
+  if (shouldIncludeUniversityApplications(profile, sections)) return keys
+  return keys.filter((key) => key !== 'university_applications')
+}
+
+function truncateText(text, limit = 16000) {
   if (!text) return ''
   if (text.length <= limit) return text
   return `${text.slice(0, limit)}…`
@@ -39,8 +46,25 @@ function mergeSectionData(existing = {}, incoming = {}) {
 
     if (typeof value === 'string') {
       if (!value) return
-      if (!existingValue || !normalizeValue(existingValue)) {
+      const existingNormalized = normalizeValue(existingValue)
+      if (!existingNormalized) {
         merged[key] = value
+        updatedFields.add(key)
+        return
+      }
+
+      // If existing is very short and incoming is meaningfully richer, prefer incoming.
+      if (typeof existingNormalized === 'string' && existingNormalized.length < 25 && value.length >= 50) {
+        merged[key] = value
+        updatedFields.add(key)
+        return
+      }
+
+      // If existing doesn't already contain incoming, append (keeps prior manual edits).
+      const existingLower = String(existingNormalized).toLowerCase()
+      const incomingLower = String(value).toLowerCase()
+      if (!existingLower.includes(incomingLower)) {
+        merged[key] = `${existingNormalized}\n${value}`.trim()
         updatedFields.add(key)
       }
       return
@@ -142,10 +166,11 @@ export async function processDocumentIngestionJob({
   const updates = []
   const profile = profileContext.profile
   const sections = profileContext.sections
+  const targetSections = getTargetSections(profile, sections)
 
   const docExcerpt = truncateText(
     document.extracted_text ?? document.notes ?? '',
-    5000,
+    16000,
   )
 
   const documentSummary = [
@@ -161,7 +186,102 @@ export async function processDocumentIngestionJob({
   const aiSectionsLog = {}
 
   try {
-    for (const sectionKey of TARGET_SECTIONS) {
+    // Pass 0 (deterministic facts): extract key identifiers and contact info with regexes.
+    try {
+      const facts = extractDocumentFacts(docExcerpt || '')
+      const factsTarget = [
+        { section_key: 'basic_information', data: facts.basic_information },
+        { section_key: 'organization_details', data: facts.organization_details },
+      ]
+
+      factsTarget.forEach((entry) => {
+        if (!entry.data || typeof entry.data !== 'object') return
+        const existing = sections[entry.section_key] ?? {}
+        const { data: merged, updatedFields } = mergeSectionData(existing, entry.data)
+        if (updatedFields.size > 0) {
+          upsertProfileSection(db, profile.id, entry.section_key, merged, document.id)
+          sections[entry.section_key] = merged
+          updates.push({
+            section_key: entry.section_key,
+            updated_fields: Array.from(updatedFields),
+          })
+        }
+        aiSectionsLog[`${entry.section_key}__facts`] = {
+          suggestion: entry.data,
+          updated: Array.from(updatedFields),
+        }
+      })
+    } catch (error) {
+      console.error('Deterministic document facts extraction failed', error)
+    }
+
+    // Pass 1 (high recall): extract a cross-section payload once, then merge into sections.
+    // This dramatically improves coverage versus 1-prompt-per-section, while still being conservative about fabrication.
+    try {
+      const extractionPayload = {
+        profile: {
+          id: profile.id,
+          display_name: profile.display_name,
+          primary_type: profile.primary_type,
+          tags: profile.tags,
+        },
+        existing_sections: sections,
+        document: {
+          id: document.id,
+          name: document.name,
+          type: document.type,
+          extracted_text: docExcerpt || '',
+        },
+        target_sections: targetSections,
+      }
+
+      const completion = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        temperature: 0.1,
+        response_format: { type: 'json_object' },
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are an expert information extraction assistant. Extract as much structured information as possible from the document text for the target sections. Do NOT fabricate. Use empty strings/null/false when unknown. Respond as JSON: { "sections": { [section_key]: { ...fields } } }.',
+          },
+          { role: 'user', content: JSON.stringify(extractionPayload, null, 2) },
+        ],
+      })
+
+      const raw = extractCompletionText(completion) || '{}'
+      const parsed = safeParseJSON(raw, {})
+      const extractedSections = parsed && typeof parsed === 'object' ? parsed.sections : null
+
+      if (extractedSections && typeof extractedSections === 'object') {
+        for (const sectionKey of targetSections) {
+          const suggestion = extractedSections[sectionKey]
+          if (!suggestion || typeof suggestion !== 'object') continue
+
+          const existing = sections[sectionKey] ?? {}
+          const { data: merged, updatedFields } = mergeSectionData(existing, suggestion)
+
+          if (updatedFields.size > 0) {
+            upsertProfileSection(db, profile.id, sectionKey, merged, document.id)
+            sections[sectionKey] = merged
+            updates.push({
+              section_key: sectionKey,
+              updated_fields: Array.from(updatedFields),
+            })
+          }
+
+          aiSectionsLog[`${sectionKey}__high_recall`] = {
+            suggestion,
+            updated: Array.from(updatedFields),
+          }
+        }
+      }
+    } catch (error) {
+      console.error('High-recall document extraction failed', error)
+    }
+
+    // Pass 2 (precision): per-section prompts to refine/confirm fields.
+    for (const sectionKey of targetSections) {
       const promptPayload = buildProfileSectionPrompt(sectionKey, {
         profile,
         sections,

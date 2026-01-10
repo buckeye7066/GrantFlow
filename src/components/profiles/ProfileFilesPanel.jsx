@@ -7,7 +7,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { Loader2, UploadCloud } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
-import { listDocuments, ingestDocument, deleteDocument } from "@/api/documents"
+import { listDocuments, ingestDocument, deleteDocument, parseAllProfileDocuments } from "@/api/documents"
 import DocumentItem from "@/components/documents/DocumentItem"
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50MB (backend enforced)
@@ -59,6 +59,7 @@ export default function ProfileFilesPanel({ profileId, profileName }) {
   const [uploadFile, setUploadFile] = useState(null)
   const [uploadError, setUploadError] = useState(null)
   const [parseWithAI, setParseWithAI] = useState(false)
+  const [handwritingOcr, setHandwritingOcr] = useState(true)
 
   const { data: documents = [], isLoading } = useQuery({
     queryKey: ["documents", profileId],
@@ -77,6 +78,11 @@ export default function ProfileFilesPanel({ profileId, profileName }) {
       const canParse = isLikelyParseable(file)
       const skipParsing = !parseWithAI || !canParse
       formData.append("skip_parsing", skipParsing ? "true" : "false")
+
+      // OCR options (server will only apply OCR to image-like files).
+      formData.append("ocr", "true")
+      formData.append("handwriting", handwritingOcr ? "true" : "false")
+      formData.append("ocr_language", "eng")
 
       return ingestDocument(formData)
     },
@@ -98,6 +104,28 @@ export default function ProfileFilesPanel({ profileId, profileName }) {
         variant: "destructive",
         title: "Upload failed",
         description: message,
+      })
+    },
+  })
+
+  const parseAllMutation = useMutation({
+    mutationFn: () =>
+      parseAllProfileDocuments(profileId, {
+        handwriting: Boolean(handwritingOcr),
+      }),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["documents", profileId] })
+      queryClient.invalidateQueries({ queryKey: ["profile", profileId] })
+      toast({
+        title: "Parsing queued",
+        description: `Queued ${result?.queued_count ?? "some"} document(s) for parsing.`,
+      })
+    },
+    onError: (error) => {
+      toast({
+        variant: "destructive",
+        title: "Parse-all failed",
+        description: error instanceof Error ? error.message : "Unable to queue parsing for these documents.",
       })
     },
   })
@@ -194,6 +222,17 @@ export default function ProfileFilesPanel({ profileId, profileName }) {
                   Try to parse (PDF/DOC/DOCX/TXT/RTF + images/handwriting)
                 </Label>
               </div>
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id={`handwriting-ocr-${profileId}`}
+                  checked={handwritingOcr}
+                  onCheckedChange={(checked) => setHandwritingOcr(Boolean(checked))}
+                  disabled={isUploading}
+                />
+                <Label htmlFor={`handwriting-ocr-${profileId}`} className="text-sm font-medium">
+                  Handwritten / scanned form (OCR)
+                </Label>
+              </div>
               <p className="text-xs text-slate-600">
                 For sensitive uploads (PHI/HIPAA/identifiers), you can leave parsing off and just store the file.
               </p>
@@ -218,6 +257,24 @@ export default function ProfileFilesPanel({ profileId, profileName }) {
                     Upload
                   </>
                 )}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  if (!profileId) return
+                  if (documents.length === 0) {
+                    toast({ title: "No documents", description: "Upload at least one document first." })
+                    return
+                  }
+                  const ok = window.confirm(
+                    `Queue parsing for up to 25 of the most recent documents for ${profileName ?? "this profile"}?`,
+                  )
+                  if (!ok) return
+                  parseAllMutation.mutate()
+                }}
+                disabled={!profileId || parseAllMutation.isPending}
+              >
+                {parseAllMutation.isPending ? "Queueing…" : "Parse all"}
               </Button>
             </div>
           </div>
