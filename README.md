@@ -102,15 +102,15 @@ GrantFlow fetches **live funding opportunities** from official government APIs. 
 ### Running Ingestion Locally
 
 ```bash
-# Ingest from all sources (Grants.gov + USASpending.gov)
+# Run database migrations FIRST (required: creates ingestion_runs table, etc.)
+npm run migrate
+
+# Then ingest from all sources (Grants.gov + USASpending.gov)
 npm run ingest
 
-# Ingest from specific sources
+# Or ingest from specific sources
 npm run ingest:grantsgov      # Grants.gov only
 npm run ingest:usaspending    # USASpending.gov only
-
-# Run database migrations (if needed)
-npm run migrate
 ```
 
 ### Verify Results
