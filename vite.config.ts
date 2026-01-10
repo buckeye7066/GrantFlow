@@ -9,7 +9,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const proxyTarget = env.VITE_API_PROXY_TARGET || 'http://localhost:8080'
-  const assetBase = env.VITE_ASSET_BASE || '/'
+  const rawBase = env.VITE_ASSET_BASE || env.VITE_APP_BASE || '/'
+  const assetBase =
+    rawBase === '/'
+      ? '/'
+      : `/${rawBase.replace(/^\/+/, '').replace(/\/+$/, '')}/`
 
   return {
     base: assetBase,
