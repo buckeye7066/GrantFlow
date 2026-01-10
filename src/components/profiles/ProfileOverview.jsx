@@ -25,9 +25,11 @@ import {
   Loader2,
   Upload,
   UploadCloud,
+  School,
 } from "lucide-react"
 import { SECTION_CONFIG } from "@/components/profiles/ProfileSectionEditor.jsx"
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx"
+import StudentSchoolsSection from "@/components/students/StudentSchoolsSection.jsx"
 
 const SECTION_ICONS = {
   basic_information: UserCircle,
@@ -41,6 +43,7 @@ const SECTION_ICONS = {
   occupation: Briefcase,
   location_focus: MapPin,
   narrative: FileText,
+  education: School,
 }
 
 function titleCase(value = "") {
@@ -282,7 +285,11 @@ export default function ProfileOverview({
   }
   const gridColumnsClass = columnMap[dashboardPrefs.layoutColumns] ?? "md:grid-cols-2"
   const gapClass = dashboardPrefs.layoutStyle === "compact" ? "gap-4" : "gap-6"
-  const totalSections = useMemo(() => Object.keys(SECTION_CONFIG).length, [])
+  const totalSections = useMemo(() => {
+    const configured = Object.keys(SECTION_CONFIG)
+    const stored = (profile.sections ?? []).map((s) => s.section_key).filter(Boolean)
+    return new Set([...configured, ...stored]).size
+  }, [profile.sections])
   const sectionsMap = useMemo(() => {
     const map = new Map()
     ;(profile.sections ?? []).forEach((section) => {
@@ -394,7 +401,12 @@ export default function ProfileOverview({
     })
   }
 
-  const orderedSectionKeys = Object.keys(SECTION_CONFIG)
+  const orderedSectionKeys = useMemo(() => {
+    const configured = Object.keys(SECTION_CONFIG)
+    const stored = (profile.sections ?? []).map((s) => s.section_key).filter(Boolean)
+    const extras = stored.filter((key) => !configured.includes(key)).sort((a, b) => a.localeCompare(b))
+    return configured.concat(extras)
+  }, [profile.sections])
 
   return (
     <div className="space-y-10">
@@ -550,6 +562,8 @@ export default function ProfileOverview({
           </div>
         </div>
       </section>
+
+      <StudentSchoolsSection profile={profile} />
 
       {billing ? (
         <section className="rounded-3xl border border-slate-200 bg-white/80 backdrop-blur-sm shadow-sm p-6 md:p-8 space-y-4">

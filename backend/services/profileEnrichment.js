@@ -24,7 +24,64 @@ function mergeValues(existingValue, incomingValue) {
   }
 
   if (Array.isArray(incomingValue)) {
-    const existing = Array.isArray(existingValue) ? existingValue.slice() : []
+    const existingArray = Array.isArray(existingValue) ? existingValue.slice() : []
+
+    // If this is an array of objects with stable identifiers (e.g. university applications),
+    // merge by name to avoid duplicates and allow enrichment updates to overwrite/extend.
+    const looksLikeNamedObjects =
+      incomingValue.some(
+        (entry) => entry && typeof entry === 'object' && !Array.isArray(entry) && typeof entry.name === 'string',
+      ) ||
+      existingArray.some(
+        (entry) => entry && typeof entry === 'object' && !Array.isArray(entry) && typeof entry.name === 'string',
+      )
+
+    if (looksLikeNamedObjects) {
+      const normalizeName = (value) =>
+        typeof value === 'string' ? value.trim().toLowerCase().replace(/\s+/g, ' ') : ''
+
+      const next = existingArray.slice()
+      const indexByName = new Map()
+
+      next.forEach((entry, index) => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return
+        const key = normalizeName(entry.name)
+        if (!key) return
+        if (!indexByName.has(key)) {
+          indexByName.set(key, index)
+        }
+      })
+
+      incomingValue.forEach((incomingEntry) => {
+        if (!incomingEntry || typeof incomingEntry !== 'object' || Array.isArray(incomingEntry)) {
+          // Primitive/array entries fall back to de-dupe by value.
+          const key = JSON.stringify(incomingEntry)
+          const set = new Set(next.map((entry) => JSON.stringify(entry)))
+          if (!set.has(key)) next.push(incomingEntry)
+          return
+        }
+
+        const incomingKey = normalizeName(incomingEntry.name)
+        if (!incomingKey) {
+          next.push(incomingEntry)
+          return
+        }
+
+        if (indexByName.has(incomingKey)) {
+          const idx = indexByName.get(incomingKey)
+          const existingObj = next[idx]
+          next[idx] = mergeSection(existingObj, incomingEntry)
+        } else {
+          indexByName.set(incomingKey, next.length)
+          next.push(incomingEntry)
+        }
+      })
+
+      return next
+    }
+
+    // Default: de-dupe by full JSON value.
+    const existing = existingArray.slice()
     const set = new Set(existing.map((entry) => JSON.stringify(entry)))
     incomingValue.forEach((entry) => {
       const key = JSON.stringify(entry)

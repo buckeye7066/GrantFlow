@@ -212,6 +212,15 @@ const narrativeSchema = z.object({
   special_circumstances: z.string().optional().or(z.literal("")),
 })
 
+const educationSchema = z.object({
+  current_school: z.string().optional().or(z.literal("")),
+  transcript_portal_url: z.string().url("Enter a valid URL").optional().or(z.literal("")),
+  test_scores_portal_url: z.string().url("Enter a valid URL").optional().or(z.literal("")),
+  commonapp_profile_url: z.string().url("Enter a valid URL").optional().or(z.literal("")),
+  fafsa_portal_url: z.string().url("Enter a valid URL").optional().or(z.literal("")),
+  notes: z.string().optional().or(z.literal("")),
+})
+
 export const SECTION_CONFIG = {
   basic_information: {
     title: "Basic Information",
@@ -539,6 +548,28 @@ export const SECTION_CONFIG = {
       { name: "special_circumstances", label: "Special circumstances", component: Textarea, props: { rows: 3 } },
     ],
   },
+  education: {
+    title: "Education (Student Records)",
+    description:
+      "Current/past school context and portals for transcripts, test scores, FAFSA, and CommonApp.",
+    schema: educationSchema,
+    defaults: {
+      current_school: "",
+      transcript_portal_url: "",
+      test_scores_portal_url: "",
+      commonapp_profile_url: "",
+      fafsa_portal_url: "https://studentaid.gov/h/apply-for-aid/fafsa",
+      notes: "",
+    },
+    fields: [
+      { name: "current_school", label: "Current school", component: Input },
+      { name: "transcript_portal_url", label: "Transcript sending portal URL", component: Input },
+      { name: "test_scores_portal_url", label: "Test scores sending portal URL", component: Input },
+      { name: "commonapp_profile_url", label: "Common App URL", component: Input },
+      { name: "fafsa_portal_url", label: "FAFSA URL", component: Input },
+      { name: "notes", label: "Notes", component: Textarea, props: { rows: 3 } },
+    ],
+  },
 }
 
 export default function ProfileSectionEditor({
@@ -556,6 +587,8 @@ export default function ProfileSectionEditor({
   const initialValues = config ? { ...defaults, ...(initialData ?? {}) } : {}
   const [aiStatus, setAiStatus] = useState('idle')
   const [aiError, setAiError] = useState(null)
+  const [rawJson, setRawJson] = useState(() => JSON.stringify(initialData ?? {}, null, 2))
+  const [rawJsonError, setRawJsonError] = useState(null)
 
   const form = useForm({
     resolver: config ? zodResolver(config.schema) : undefined,
@@ -567,12 +600,39 @@ export default function ProfileSectionEditor({
       form.reset({ ...defaults, ...(initialData ?? {}) })
       setAiStatus('idle')
       setAiError(null)
+      setRawJsonError(null)
+      setRawJson(JSON.stringify(initialData ?? {}, null, 2))
+      return
     }
+
+    // Unmapped sections still need a safe editor to guarantee comprehensive-form parity.
+    setAiStatus('idle')
+    setAiError(null)
+    setRawJsonError(null)
+    setRawJson(JSON.stringify(initialData ?? {}, null, 2))
   }, [config, defaults, initialData, form])
 
   const handleSubmit = form.handleSubmit((values) => {
     onSave(values)
   })
+
+  const handleRawSave = () => {
+    setRawJsonError(null)
+    let parsed
+    try {
+      parsed = JSON.parse(rawJson || '{}')
+    } catch (error) {
+      setRawJsonError('Invalid JSON. Please fix the syntax and try again.')
+      return
+    }
+
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      setRawJsonError('Section data must be a JSON object (e.g. { "key": "value" }).')
+      return
+    }
+
+    onSave(parsed)
+  }
 
   const handleAskAI = async () => {
     if (!config || !onAskAI) return
@@ -630,12 +690,27 @@ export default function ProfileSectionEditor({
         </DialogHeader>
 
         {!config ? (
-          <Alert variant="default">
-            <Info className="w-4 h-4" />
-            <AlertDescription className="text-sm text-slate-600">
-              This section isn’t wired to a form yet. Close this dialog and use the “Edit section” button to update the JSON directly.
-            </AlertDescription>
-          </Alert>
+          <div className="space-y-4">
+            <Alert variant="default">
+              <Info className="w-4 h-4" />
+              <AlertDescription className="text-sm text-slate-600">
+                This section doesn’t have a structured form yet. You can still edit the raw JSON below (this is how we preserve full parity
+                with the comprehensive application).
+              </AlertDescription>
+            </Alert>
+            <div className="space-y-2">
+              <Label htmlFor="raw-json">Section JSON</Label>
+              <Textarea
+                id="raw-json"
+                value={rawJson}
+                onChange={(e) => setRawJson(e.target.value)}
+                rows={14}
+                className="font-mono text-xs"
+                disabled={isSaving}
+              />
+              {rawJsonError ? <p className="text-xs text-red-600">{rawJsonError}</p> : null}
+            </div>
+          </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
             {config.fields.map((field) => {
@@ -708,11 +783,9 @@ export default function ProfileSectionEditor({
           <Button variant="ghost" onClick={onClose} disabled={isSaving}>
             Cancel
           </Button>
-          {config && (
-            <Button onClick={handleSubmit} disabled={isSaving}>
-              {isSaving ? "Saving..." : "Save changes"}
-            </Button>
-          )}
+          <Button onClick={config ? handleSubmit : handleRawSave} disabled={isSaving}>
+            {isSaving ? "Saving..." : "Save changes"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

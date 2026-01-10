@@ -12,28 +12,13 @@ import { linkProfileToAdmin } from '../utils/adminProfileLinks.js'
 import { safeParseJSON } from '../utils/safeJson.js'
 import { validatePagination } from '../utils/validation.js'
 import { formatError } from '../middleware/errorHandler.js'
+import { ensureProfileHasRequiredSections } from '../services/profileSectionDefaults.js'
 
 const router = express.Router()
 
-// Admin configuration
-const ADMIN_EMAIL = 'buckeye7066@gmail.com'
-
-/**
- * Check if user is admin
- * Checks both is_admin flag and primary_email match
- */
-function isAdmin(user) {
-  return Boolean(user?.is_admin) || 
-         user?.primary_email === ADMIN_EMAIL || 
-         user?.email === ADMIN_EMAIL || 
-         user?.role === 'admin'
-}
-
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
-// NOTE: `/uploads` is publicly served by `backend/server.js` from the repo-root `uploads/` directory.
-// Store profile avatars in a dedicated public subfolder under repo-root uploads.
-const uploadDir = join(__dirname, '..', '..', 'uploads', 'avatars')
+const uploadDir = join(__dirname, '..', 'uploads')
 
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true })
@@ -130,41 +115,34 @@ function enrichProfileWithSummary(db, profile) {
 
 function getOpenAI() {
   const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey || apiKey === 'YOUR_OPENAI_API_KEY' || apiKey.includes('*')) {
-    console.log('[OpenAI] No valid API key - will use fallback responses')
-    // Return a mock object that throws errors gracefully
-    return {
-      chat: {
-        completions: {
-          create: async () => {
-            throw new Error('OpenAI API key not configured')
-          }
-        }
-      }
-    }
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY environment variable is not set')
   }
   return new OpenAI({ apiKey })
 }
 
 router.get('/', (req, res) => {
-  const user = req.user
+  const auth = req.user ?? { role: 'guest' }
   const includeSummary = req.query.summary === 'true'
   
   // Validate pagination parameters
   const { limit, offset } = validatePagination(req.query);
 
-  // Check if user is admin
-  if (!isAdmin(user)) {
-    // Enduser: return only profiles where profiles.user_id = user.id
-    if (!user || !user.id) {
-      return res.status(401).json({ error: 'Authentication required' })
+  if (auth.role !== 'admin') {
+    // Non-admin users should see all profiles they have access to via user_id
+    if (!auth.userId) {
+      return res.json([])
     }
 
     // Get all profiles linked to this user (with pagination)
     const rows = req.db.prepare(
       `${profileSelect} WHERE p.user_id = ? ORDER BY p.created_at ASC LIMIT ? OFFSET ?`
-    ).all(user.id, limit, offset)
+    ).all(auth.userId, limit, offset)
     
+    if (rows.length === 0) {
+      return res.json([])
+    }
+
     const profiles = rows.map(mapProfile)
     if (includeSummary) {
       profiles.forEach(profile => enrichProfileWithSummary(req.db, profile))
@@ -172,7 +150,7 @@ router.get('/', (req, res) => {
     return res.json(profiles)
   }
 
-  // Admin: return ALL profiles with pagination
+  // Admin user - return all profiles with pagination
   const stmt = req.db.prepare(`${profileSelect} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`)
   const profiles = stmt.all(limit, offset).map(mapProfile)
   
@@ -184,30 +162,14 @@ router.get('/', (req, res) => {
 })
 
 router.post('/', (req, res) => {
-  const user = req.user
-  const { display_name, primary_type, organization_id, user_id, created_by, status = 'active', tags = [] } = req.body ?? {}
+  const auth = req.user ?? { role: 'guest' }
+  if (auth.role !== 'admin') {
+    return res.status(403).json({ error: 'Only admin can create profiles' })
+  }
+  const { display_name, primary_type, organization_id, created_by, status = 'active', tags = [] } = req.body ?? {}
 
   if (!display_name || typeof display_name !== 'string') {
     return res.status(400).json({ error: 'display_name is required' })
-  }
-
-  // Check permissions
-  if (!isAdmin(user)) {
-    // Enduser can only create profiles for themselves
-    if (!user || !user.id) {
-      return res.status(401).json({ error: 'Authentication required' })
-    }
-    
-    if (user_id && user_id !== user.id) {
-      return res.status(403).json({ 
-        error: 'Endusers can only create profiles for themselves' 
-      })
-    }
-  } else {
-    // Admin can create for anyone
-    if (user_id && !req.db.prepare('SELECT id FROM users WHERE id = ?').get(user_id)) {
-      return res.status(400).json({ error: 'Invalid user_id: user does not exist' })
-    }
   }
 
   // Validate organization_id if provided
@@ -218,22 +180,18 @@ router.post('/', (req, res) => {
     }
   }
 
-  // Determine user_id for the new profile
-  const profileUserId = isAdmin(user) ? (user_id || user?.id) : user.id
-
   const insert = req.db.prepare(`
-    INSERT INTO profiles (display_name, primary_type, organization_id, user_id, created_by, status, tags)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO profiles (display_name, primary_type, organization_id, created_by, status, tags)
+    VALUES (?, ?, ?, ?, ?, ?)
   `)
 
   const info = insert.run(
     display_name,
     primary_type ?? null,
     organization_id ?? null,
-    profileUserId ?? null,
-    created_by ?? user?.id ?? null,
-    status,
-    JSON.stringify(tags)
+    created_by ?? null,
+    status ?? 'active',
+    JSON.stringify(tags ?? []),
   )
 
   const row = req.db.prepare(`${profileSelect} WHERE p.rowid = ?`).get(info.lastInsertRowid)
@@ -246,21 +204,28 @@ router.post('/', (req, res) => {
 
 router.get('/:id', (req, res) => {
   const { id } = req.params
-  const user = req.user
+  const auth = req.user ?? { role: 'guest' }
   const row = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!row) {
     return res.status(404).json({ error: 'Profile not found' })
   }
 
-  // Check access permissions
-  if (!isAdmin(user)) {
-    // Enduser: can only access profiles where user_id matches
-    if (!user || !user.id || row.user_id !== user.id) {
-      return res.status(403).json({ error: 'Access denied' })
+  if (auth.role !== 'admin') {
+    const matchesProfileId = auth.profileId === id
+    const matchesUserId = auth.userId && row.user_id && auth.userId === row.user_id
+    if (!matchesProfileId && !matchesUserId) {
+      return res.status(403).json({ error: 'Not authorized to access this profile' })
     }
   }
 
-  // Return profile with sections
+  // Ensure every profile (existing + new) has the comprehensive application data points available.
+  // Non-destructive: only creates missing sections / fills missing default keys.
+  try {
+    ensureProfileHasRequiredSections(req.db, id)
+  } catch (error) {
+    console.warn('[profiles] Failed to ensure default sections', error)
+  }
+
   const sections = req.db
     .prepare(
       `
@@ -371,8 +336,8 @@ router.delete('/:id', (req, res) => {
   stmt.run(id)
 
   // Clean up avatar file if it exists
-  if (existing.avatar_url && existing.avatar_url.startsWith('/uploads/avatars/')) {
-    const filename = existing.avatar_url.replace('/uploads/avatars/', '')
+  if (existing.avatar_url && existing.avatar_url.startsWith('/uploads/')) {
+    const filename = existing.avatar_url.replace('/uploads/', '')
     if (filename) {
       const avatarPath = join(uploadDir, filename)
       fs.unlink(avatarPath, (err) => {
@@ -388,6 +353,11 @@ router.post('/:id/avatar', upload.single('avatar'), (req, res, next) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
+  if (auth.role !== 'admin' && auth.profileId !== id) {
+    if (req.file) fs.unlink(join(uploadDir, req.file.filename), () => {})
+    return res.status(403).json({ error: 'Not authorized to update this profile' })
+  }
+
   if (!req.file) {
     return res.status(400).json({ error: 'Avatar file is required' })
   }
@@ -399,22 +369,14 @@ router.post('/:id/avatar', upload.single('avatar'), (req, res, next) => {
       return res.status(404).json({ error: 'Profile not found' })
     }
 
-    const ownsProfile =
-      Boolean(auth?.userId) && Boolean(profileRow.user_id) && auth.userId === profileRow.user_id
-
-    if (auth.role !== 'admin' && auth.profileId !== id && !ownsProfile) {
-      if (req.file) fs.unlink(join(uploadDir, req.file.filename), () => {})
-      return res.status(403).json({ error: 'Not authorized to update this profile' })
-    }
-
-    const publicPath = `/uploads/avatars/${req.file.filename}`
+    const publicPath = `/uploads/${req.file.filename}`
     req.db
       .prepare('UPDATE profiles SET avatar_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
       .run(publicPath, id)
 
     const previousAvatar = profileRow.avatar_url
-    if (previousAvatar && previousAvatar.startsWith('/uploads/avatars/')) {
-      const previousFilename = previousAvatar.replace('/uploads/avatars/', '')
+    if (previousAvatar && previousAvatar.startsWith('/uploads/')) {
+      const previousFilename = previousAvatar.replace('/uploads/', '')
       if (previousFilename && previousFilename !== req.file.filename) {
         const previousPath = join(uploadDir, previousFilename)
         fs.unlink(previousPath, () => {})
@@ -697,84 +659,6 @@ router.post('/:id/sections/:sectionKey/ai', async (req, res) => {
   } catch (error) {
     console.error('Error generating profile section suggestion:', error)
     res.status(500).json(formatError(error))
-  }
-})
-
-// Generate AI suggestion for individual profile field
-router.post('/:id/fields/ai', async (req, res) => {
-  const { id } = req.params
-  const { fieldName, fieldLabel, currentValue, fieldDescription, sectionKey, profileData } = req.body
-  const auth = req.user ?? { role: 'guest' }
-
-  if (auth.role !== 'admin' && auth.profileId !== id) {
-    return res.status(403).json({ error: 'Not authorized to access this profile' })
-  }
-
-  try {
-    // Get profile for context
-    const profile = req.db.prepare(`
-      SELECT display_name, primary_type, organization_id 
-      FROM profiles WHERE id = ?
-    `).get(id)
-    
-    if (!profile) {
-      return res.status(404).json({ error: 'Profile not found' })
-    }
-
-    // Create focused prompt for the specific field
-    const prompt = `You are assisting with filling out a grant application field.
-
-Field Name: ${fieldLabel}
-${fieldDescription ? `Field Description: ${fieldDescription}` : ''}
-Current Value: ${currentValue || '(empty)'}
-Section: ${sectionKey || 'general'}
-
-Profile Information:
-- Name: ${profile.display_name}
-- Type: ${profile.primary_type}
-${profileData ? `- Context: ${JSON.stringify(profileData, null, 2).substring(0, 500)}` : ''}
-
-Please provide appropriate content for the "${fieldLabel}" field.
-Requirements:
-- Be specific and professional
-- Use language suitable for grant applications
-- For text fields: Provide 2-3 clear, concise sentences
-- For numbers: Provide only the numeric value
-- For descriptions: Be detailed but concise
-
-Return ONLY the field value content, no JSON wrapper or explanations.`
-
-    const openai = getOpenAI()
-    let suggestion
-    
-    try {
-      const completion = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-        max_tokens: 400,
-      })
-      suggestion = extractCompletionText(completion).trim()
-    } catch (error) {
-      // Use mock response if OpenAI fails
-      console.log('[Field AI] Using mock response due to:', error.message)
-      const mockResponses = {
-        mission: 'To empower underserved communities through comprehensive support services.',
-        funding_amount_needed: '$50,000 for program expansion and operational support',
-        timeline: '12-month implementation period with quarterly milestones',
-        default: `Sample content for ${fieldLabel}. This would be customized based on your profile.`
-      }
-      suggestion = mockResponses[fieldName] || mockResponses.default
-    }
-    
-    res.json({
-      field: fieldName,
-      suggestion,
-      usage: null // No usage data for mock responses
-    })
-  } catch (error) {
-    console.error('Field AI suggestion error:', error)
-    res.status(500).json({ error: error.message || 'Failed to generate AI suggestion for field' })
   }
 })
 
