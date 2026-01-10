@@ -33,6 +33,7 @@ import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
 import { runStartupOperations } from './services/anyaStartupOperations.js';
+import { getSafeHealthSummary } from './services/diagnosticsService.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { MAX_JSON_BODY_SIZE } from './config/constants.js';
 
@@ -635,6 +636,24 @@ app.use('/api/reminders', remindersRouter);
 app.use('/api/crawlers', crawlersRouter);
 app.use('/api/real-crawlers', realCrawlersRouter);
 app.use('/api/preferences', preferencesRouter);
+
+// Public health endpoint - safe for non-admin users
+app.get('/api/health', (req, res) => {
+  try {
+    const healthSummary = getSafeHealthSummary(db);
+    const statusCode = healthSummary.status === 'healthy' ? 200 : 503;
+    res.status(statusCode).json(healthSummary);
+  } catch (error) {
+    console.error('[/api/health] Error:', error);
+    res.status(500).json({
+      timestamp: new Date().toISOString(),
+      status: 'error',
+      counts: { opportunities: 0, recentFailures: 0 },
+      summary: 'Failed to retrieve health information'
+    });
+  }
+});
+
 app.use('/api/admin', adminRouter);
 app.use('/api', discoveryRouter); // Discovery endpoints (comprehensiveMatch, searchOpportunities, etc.)
 
