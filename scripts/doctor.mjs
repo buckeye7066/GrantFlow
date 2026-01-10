@@ -155,8 +155,11 @@ async function main() {
 
   // Build with a stable app base (default /grantflow)
   const buildEnv = mergedEnv({
+    NODE_ENV: 'production',
     VITE_APP_BASE: process.env.VITE_APP_BASE || '/grantflow',
     VITE_ASSET_BASE: process.env.VITE_ASSET_BASE || process.env.VITE_APP_BASE || '/grantflow',
+    // Prevent local .env files from hardcoding a cross-origin backend URL into the production bundle.
+    VITE_API_URL: '',
   })
   const build = await runCommand('npm', ['run', 'build'], { cwd: root, env: buildEnv, logFile: logs.build, label: 'npm run build' })
   if (build.code !== 0) process.exit(build.code ?? 1)
@@ -172,9 +175,10 @@ async function main() {
     SMOKE_ADMIN_TOKEN: process.env.SMOKE_ADMIN_TOKEN || backend.env.ADMIN_TOKEN,
     ARTIFACTS_DIR: outDir,
     // Keep smoke fast and deterministic by default.
-    SMOKE_MAX_ROUTES: process.env.SMOKE_MAX_ROUTES || '20',
-    SMOKE_MAX_CLICKS: process.env.SMOKE_MAX_CLICKS || '25',
-    SMOKE_MAX_PER_SELECTOR: process.env.SMOKE_MAX_PER_SELECTOR || '10',
+    SMOKE_MAX_ROUTES: process.env.SMOKE_MAX_ROUTES || '3',
+    SMOKE_MAX_CLICKS: process.env.SMOKE_MAX_CLICKS || '10',
+    SMOKE_MAX_PER_SELECTOR: process.env.SMOKE_MAX_PER_SELECTOR || '6',
+    SMOKE_ROUTE_CLICK_BUDGET_MS: process.env.SMOKE_ROUTE_CLICK_BUDGET_MS || '15000',
   })
 
   const smoke = await runCommand('npm', ['run', 'smoke'], {

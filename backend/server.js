@@ -39,6 +39,7 @@ import { runStartupOperations } from './services/anyaStartupOperations.js';
 import ensureMinimumNationalOpportunities from './utils/ensureMinimumNationalOpportunities.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { MAX_JSON_BODY_SIZE } from './config/constants.js';
+import { getSafeHealthSummary } from './services/healthSummary.js';
 
 // Validate required environment variables at startup
 const requiredEnvVars = ['OPENAI_API_KEY'];
@@ -197,7 +198,12 @@ const allowedMigrations = [
   { table: 'crawler_jobs', column: 'retry_count', type: 'INTEGER DEFAULT 0' },
   { table: 'crawler_jobs', column: 'last_retry_at', type: 'DATETIME' },
   // Positive classification for "REAL" opportunity invariants
-  { table: 'funding_opportunities', column: 'record_origin', type: "TEXT DEFAULT 'live_crawl'" }
+  { table: 'funding_opportunities', column: 'record_origin', type: "TEXT DEFAULT 'live_crawl'" },
+  // Funding opportunity metadata (needed for verified ingestion + invariants)
+  { table: 'funding_opportunities', column: 'contact_info', type: 'TEXT' },
+  { table: 'funding_opportunities', column: 'type', type: "TEXT DEFAULT 'OPPORTUNITY'" },
+  { table: 'funding_opportunities', column: 'evidence_url', type: 'TEXT' },
+  { table: 'funding_opportunities', column: 'last_verified_at', type: 'DATETIME' }
 ];
 
 const validTables = new Set(['profiles', 'crawler_jobs', 'users', 'organizations', 'grants', 'funding_opportunities']);

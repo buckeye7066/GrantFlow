@@ -35,6 +35,12 @@ function ensureRecordOriginColumn(db) {
   return { ok: true, added: true }
 }
 
+function ensureColumn(db, columnName, columnSql) {
+  if (hasColumn(db, 'funding_opportunities', columnName)) return { ok: true, added: false, column: columnName }
+  db.prepare(`ALTER TABLE funding_opportunities ADD COLUMN ${columnSql}`).run()
+  return { ok: true, added: true, column: columnName }
+}
+
 function backfillRecordOrigins(db) {
   // Positive classification: mark curated sources, default everything else to live_crawl.
   db.prepare(
@@ -142,6 +148,9 @@ function main() {
   // Ensure new column exists even on an already-created DB file.
   try {
     ensureRecordOriginColumn(db)
+    // Ensure columns used by the inserter/seed paths exist on older DBs.
+    ensureColumn(db, 'type', "type TEXT DEFAULT 'OPPORTUNITY'")
+    ensureColumn(db, 'last_verified_at', 'last_verified_at DATETIME')
     backfillRecordOrigins(db)
   } catch {
     // best-effort; checks will fail loudly if invariant is not enforceable
