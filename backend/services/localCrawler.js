@@ -11,6 +11,7 @@ import { upsertFundingOpportunity } from './opportunityInserter.js'
 import { saveToProfilePipeline } from './opportunityMatcher.js'
 import {
   buildProfileSignals,
+  extractStateFromContext,
   summarizeProfileSignals,
 } from './profileHelpers.js'
 
@@ -34,7 +35,15 @@ function calculateLocalMatch(opp, profileState, signals) {
   const matchReasons = []
   
   // State match is critical for local opportunities
-  if (opp.state === profileState) {
+  const oppIsNational =
+    opp?.is_national === 1 ||
+    opp?.is_national === true ||
+    (typeof opp?.state === 'string' && opp.state.toLowerCase() === 'nationwide')
+
+  if (oppIsNational) {
+    score += 20
+    matchReasons.push('National coverage')
+  } else if (opp.state === profileState) {
     score += 30
     matchReasons.push(`State match: ${profileState}`)
   } else if (opp.state && opp.state !== profileState) {
@@ -85,16 +94,17 @@ export function processLocalCrawlerJob({ db, job, dataDir, profileContext }) {
   
   // Build profile signals
   const signals = buildProfileSignals(profileContext)
-  const profileState = profileContext?.profile?.state || 
-                       profileContext?.sections?.location_focus?.state ||
-                       parameters.state
+  const profileState = extractStateFromContext({
+    profile: profileContext?.profile,
+    sections: profileContext?.sections,
+    jobParameters: parameters,
+  })
   
   if (!profileState) {
-    console.warn('[localCrawler] No state specified - cannot find local opportunities')
-    return { evaluated: 0, inserted: 0, opportunityLogs: [] }
+    console.warn('[localCrawler] No state specified - will fall back to national opportunities only')
+  } else {
+    console.log('[localCrawler] Profile state:', profileState)
   }
-  
-  console.log('[localCrawler] Profile state:', profileState)
   console.log('[localCrawler] Profile signals:', summarizeProfileSignals(signals))
   
   // Load local opportunities from data file
@@ -102,14 +112,33 @@ export function processLocalCrawlerJob({ db, job, dataDir, profileContext }) {
   console.log(`[localCrawler] Loaded ${localOpps.length} local opportunities`)
   
   // Also check database for local opportunities
-  const dbOpps = db.prepare(`
-    SELECT * FROM funding_opportunities 
-    WHERE is_active = 1 
-    AND state = ?
-    AND (requires_match = 0 OR requires_match IS NULL)
-    AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
-    LIMIT 100
-  `).all(profileState)
+  const dbOpps = profileState
+    ? db
+        .prepare(
+          `
+            SELECT *
+            FROM funding_opportunities
+            WHERE is_active = 1
+              AND (state = ? OR is_national = 1 OR LOWER(COALESCE(state, '')) = 'nationwide')
+              AND (requires_match = 0 OR requires_match IS NULL)
+              AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
+            LIMIT 250
+          `,
+        )
+        .all(profileState)
+    : db
+        .prepare(
+          `
+            SELECT *
+            FROM funding_opportunities
+            WHERE is_active = 1
+              AND (is_national = 1 OR LOWER(COALESCE(state, '')) = 'nationwide')
+              AND (requires_match = 0 OR requires_match IS NULL)
+              AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
+            LIMIT 250
+          `,
+        )
+        .all()
   
   console.log(`[localCrawler] Found ${dbOpps.length} local opportunities in database`)
   
@@ -131,7 +160,8 @@ export function processLocalCrawlerJob({ db, job, dataDir, profileContext }) {
         ...opp,
         keywords: JSON.parse(opp.keywords || '[]'),
         categories: JSON.parse(opp.categories || '[]'),
-        eligibility_bullets: JSON.parse(opp.eligibility_bullets || '[]')
+        eligibility_bullets: JSON.parse(opp.eligibility_bullets || '[]'),
+        _origin: 'db'
       })
     }
   }
@@ -166,6 +196,9 @@ export function processLocalCrawlerJob({ db, job, dataDir, profileContext }) {
   
   for (const opp of topOpps) {
     try {
+      const source = opp._origin === 'db' ? (opp.source ?? 'crawler') : 'local_foundation'
+      const sourceId = opp._origin === 'db' ? (opp.source_id ?? opp.id) : opp.id
+
       const result = upsertFundingOpportunity(db, {
         title: opp.title,
         sponsor: opp.sponsor,
@@ -180,8 +213,15 @@ export function processLocalCrawlerJob({ db, job, dataDir, profileContext }) {
         requires_match: false,
         requires_501c3: opp.requires_501c3,
         state: opp.state,
-        source: 'local_foundation',
-        source_id: opp.id,
+        source,
+        source_id: sourceId,
+        source_url: opp.source_url ?? opp.url ?? opp.application_url ?? null,
+        evidence_url: opp.evidence_url ?? null,
+        last_verified_at: opp.last_verified_at ?? null,
+        contact_info: opp.contact_info ?? null,
+        record_origin: opp.record_origin ?? null,
+        type: opp.type ?? null,
+        opportunity_type: opp.opportunity_type ?? null,
         match_reasons: opp.match_reasons
       })
       

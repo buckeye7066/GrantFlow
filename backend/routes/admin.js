@@ -665,7 +665,7 @@ router.post('/national-crawl/start', async (req, res) => {
         )
         .run(
           jobId,
-          'national',
+          'national_zip_scan',
           'completed',
           JSON.stringify({ smoke: true }),
           req.user?.id || 'admin',
@@ -697,7 +697,7 @@ router.post('/national-crawl/start', async (req, res) => {
       ) VALUES (?, ?, ?, ?, ?, datetime('now'))
     `).run(
       jobId,
-      'national',
+      'national_zip_scan',
       'running',
       JSON.stringify(params),
       req.user?.id || 'admin'

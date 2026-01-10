@@ -74,44 +74,110 @@ export function loadProfileContext(db, profileId) {
 }
 
 export function extractZipFromContext({ profile, sections, jobParameters = {} }) {
+  function extractZipFromText(text) {
+    if (typeof text !== 'string') return null
+    const match = text.match(/\b(\d{5})\b/)
+    return match?.[1] ?? null
+  }
+
   const candidates = [
     jobParameters.zip,
     jobParameters.primary_zip,
     sections?.basic_information?.zip,
     sections?.basic_information?.postal_code,
     sections?.basic_information?.address_zip,
+    sections?.basic_information?.address,
     sections?.location_focus?.primary_zip,
     sections?.location_focus?.service_zip,
     sections?.location_focus?.zip,
+    sections?.location_focus?.geographic_focus,
     sections?.organization_details?.zip,
     sections?.organization_details?.hq_zip,
     profile?.postal_code,
   ]
 
-  const zip = candidates.find(
-    (value) => typeof value === 'string' && /^\d{5}$/.test(value.trim()),
-  )
+  const zip = candidates
+    .map((value) => {
+      if (typeof value !== 'string') return null
+      const trimmed = value.trim()
+      if (/^\d{5}$/.test(trimmed)) return trimmed
+      return extractZipFromText(trimmed)
+    })
+    .find(Boolean)
 
   return zip?.trim() ?? null
 }
 
 export function extractStateFromContext({ profile, sections, jobParameters = {} }) {
+  const STATE_CODES = new Set([
+    'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD',
+    'MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC',
+    'SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC',
+  ])
+
+  const STATE_NAME_TO_CODE = new Map([
+    ['alabama','AL'],['alaska','AK'],['arizona','AZ'],['arkansas','AR'],['california','CA'],
+    ['colorado','CO'],['connecticut','CT'],['delaware','DE'],['florida','FL'],['georgia','GA'],
+    ['hawaii','HI'],['idaho','ID'],['illinois','IL'],['indiana','IN'],['iowa','IA'],
+    ['kansas','KS'],['kentucky','KY'],['louisiana','LA'],['maine','ME'],['maryland','MD'],
+    ['massachusetts','MA'],['michigan','MI'],['minnesota','MN'],['mississippi','MS'],['missouri','MO'],
+    ['montana','MT'],['nebraska','NE'],['nevada','NV'],['new hampshire','NH'],['new jersey','NJ'],
+    ['new mexico','NM'],['new york','NY'],['north carolina','NC'],['north dakota','ND'],['ohio','OH'],
+    ['oklahoma','OK'],['oregon','OR'],['pennsylvania','PA'],['rhode island','RI'],['south carolina','SC'],
+    ['south dakota','SD'],['tennessee','TN'],['texas','TX'],['utah','UT'],['vermont','VT'],
+    ['virginia','VA'],['washington','WA'],['west virginia','WV'],['wisconsin','WI'],['wyoming','WY'],
+    ['district of columbia','DC'],
+  ])
+
+  function extractStateFromText(text) {
+    if (typeof text !== 'string') return null
+    const trimmed = text.trim()
+    if (!trimmed) return null
+
+    // Prefer patterns like "City, ST 12345" or "ST 12345"
+    const zipStateMatch = trimmed.match(/\b([A-Za-z]{2})\s+\d{5}\b/)
+    if (zipStateMatch) {
+      const code = zipStateMatch[1].toUpperCase()
+      if (STATE_CODES.has(code)) return code
+    }
+
+    // Any standalone 2-letter code (guarded by allowlist)
+    const codeMatches = trimmed.toUpperCase().match(/\b([A-Z]{2})\b/g) ?? []
+    for (const candidate of codeMatches) {
+      if (STATE_CODES.has(candidate)) return candidate
+    }
+
+    // Full state name
+    const lower = trimmed.toLowerCase()
+    for (const [name, code] of STATE_NAME_TO_CODE.entries()) {
+      if (lower.includes(name)) return code
+    }
+
+    return null
+  }
+
   const candidates = [
     jobParameters.state,
     sections?.basic_information?.state,
     sections?.basic_information?.address_state,
+    sections?.basic_information?.address,
     sections?.location_focus?.state,
     sections?.location_focus?.primary_state,
+    sections?.location_focus?.geographic_focus,
     sections?.organization_details?.state,
     profile?.state,
   ]
 
   const state = candidates
-    .map((value) =>
-      typeof value === 'string' && value.trim().length === 2
-        ? value.trim().toUpperCase()
-        : null,
-    )
+    .map((value) => {
+      if (typeof value !== 'string') return null
+      const trimmed = value.trim()
+      if (trimmed.length === 2) {
+        const code = trimmed.toUpperCase()
+        return STATE_CODES.has(code) ? code : null
+      }
+      return extractStateFromText(trimmed)
+    })
     .find(Boolean)
 
   return state ?? null
