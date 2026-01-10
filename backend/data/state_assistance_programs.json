@@ -674,6 +674,91 @@
       "last_verified_at": null
     },
     {
+      "id": "chattanooga-gas-shield-of-warmth",
+      "state": "TN",
+      "title": "Chattanooga Gas Shield of Warmth Program",
+      "sponsor": "Chattanooga Gas / The Salvation Army of Chattanooga",
+      "url": "https://www.chattanoogagas.com/residential/billing-and-payment-options/bill-payment-assistance.html",
+      "categories": [
+        "utilities",
+        "energy",
+        "bill assistance",
+        "grant"
+      ],
+      "description": "Bill payment assistance grants and basic needs support for eligible Chattanooga Gas customers. Seniors 65+ and veterans may be eligible for additional grants. Contact: The Salvation Army of Chattanooga (423-305-6200).",
+      "type": "PROGRAM",
+      "is_verified": false,
+      "last_verified_at": null
+    },
+    {
+      "id": "chattanooga-gas-warm-neighbors",
+      "state": "TN",
+      "title": "Chattanooga Gas Warm Neighbors Program",
+      "sponsor": "Chattanooga Gas / United Way of Greater Chattanooga / The Caring Place",
+      "url": "https://www.chattanoogagas.com/residential/billing-and-payment-options/bill-payment-assistance.html",
+      "categories": [
+        "utilities",
+        "energy",
+        "bill assistance",
+        "emergency"
+      ],
+      "description": "Monetary relief for qualifying households' natural gas bills. Apply via United Way of Greater Chattanooga (Hamilton County) or The Caring Place (Bradley County).",
+      "type": "PROGRAM",
+      "is_verified": false,
+      "last_verified_at": null
+    },
+    {
+      "id": "chattanooga-gas-la-paz-bradley",
+      "state": "TN",
+      "title": "La Paz Chattanooga – Bradley County bill payment assistance (Chattanooga Gas customers)",
+      "sponsor": "La Paz Chattanooga",
+      "url": "https://www.chattanoogagas.com/residential/billing-and-payment-options/bill-payment-assistance.html",
+      "categories": [
+        "utilities",
+        "energy",
+        "bill assistance",
+        "community"
+      ],
+      "description": "Bill payment assistance grants for eligible Chattanooga Gas customers in Bradley County, serving the Hispanic-Latino community. Contact: 423-624-8414.",
+      "type": "PROGRAM",
+      "is_verified": false,
+      "last_verified_at": null
+    },
+    {
+      "id": "united-way-greater-chattanooga-211",
+      "state": "TN",
+      "title": "United Way 211 – Greater Chattanooga (Hamilton County)",
+      "sponsor": "United Way of Greater Chattanooga",
+      "url": "https://www.chattanoogagas.com/residential/billing-and-payment-options/bill-payment-assistance.html",
+      "categories": [
+        "referral",
+        "emergency",
+        "utilities",
+        "financial assistance"
+      ],
+      "description": "Resource and referral line for emergency shelter, food, clothing, and financial assistance (dial 2-1-1 or 423-265-8000; toll free 1-866-921-3035).",
+      "type": "PROGRAM",
+      "is_verified": false,
+      "last_verified_at": null
+    },
+    {
+      "id": "united-way-ocoee-region-211",
+      "state": "TN",
+      "title": "United Way 211 – Ocoee Region (Bradley County)",
+      "sponsor": "United Way of the Ocoee Region",
+      "url": "https://www.chattanoogagas.com/residential/billing-and-payment-options/bill-payment-assistance.html",
+      "categories": [
+        "referral",
+        "emergency",
+        "utilities",
+        "financial assistance"
+      ],
+      "description": "Resource and referral line for Bradley County (dial 2-1-1 or 423-800-8008; toll free 1-866-921-3035).",
+      "type": "PROGRAM",
+      "is_verified": false,
+      "last_verified_at": null
+    },
+    {
       "id": "211-tx",
       "state": "TX",
       "title": "Texas 211 - Find Help",
