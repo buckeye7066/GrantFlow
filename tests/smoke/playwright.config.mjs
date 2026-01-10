@@ -13,7 +13,12 @@ export default {
     ['html', { outputFolder: path.join(artifactsDir, 'playwright-report'), open: 'never' }],
   ],
   use: {
-    baseURL: process.env.SMOKE_BASE_URL || 'http://127.0.0.1:8080',
+    // Prefer doctor-provided SMOKE_BASE_URL; fall back to other common envs; finally PORT/8080.
+    baseURL:
+      process.env.SMOKE_BASE_URL ||
+      process.env.BASE_URL ||
+      process.env.API_BASE_URL ||
+      `http://127.0.0.1:${process.env.PORT || '8080'}`,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',

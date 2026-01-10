@@ -4,8 +4,11 @@ import { test, expect } from 'playwright/test'
 
 const ROOT = process.cwd()
 const ARTIFACTS_DIR = process.env.ARTIFACTS_DIR || path.join(ROOT, 'artifacts', 'local')
-const API_BASE_URL = process.env.API_BASE_URL || 'http://127.0.0.1:8080'
-const BASE_URL = process.env.SMOKE_BASE_URL || 'http://127.0.0.1:8080'
+const fallbackBase = `http://127.0.0.1:${process.env.PORT || '8080'}`
+// Doctor sets SMOKE_BASE_URL + API_BASE_URL when it dynamically selects 8080/8081/8082.
+// When running smoke standalone, allow BASE_URL/PORT overrides.
+const BASE_URL = process.env.SMOKE_BASE_URL || process.env.BASE_URL || process.env.API_BASE_URL || fallbackBase
+const API_BASE_URL = process.env.API_BASE_URL || process.env.SMOKE_BASE_URL || process.env.BASE_URL || fallbackBase
 const BASE_PATH = process.env.SMOKE_BASE_PATH || '/grantflow'
 const ADMIN_TOKEN = process.env.SMOKE_ADMIN_TOKEN || 'dev-admin-token'
 
