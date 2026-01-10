@@ -151,6 +151,8 @@ function main() {
     // Ensure columns used by the inserter/seed paths exist on older DBs.
     ensureColumn(db, 'type', "type TEXT DEFAULT 'OPPORTUNITY'")
     ensureColumn(db, 'last_verified_at', 'last_verified_at DATETIME')
+    ensureColumn(db, 'contact_info', 'contact_info TEXT')
+    ensureColumn(db, 'evidence_url', 'evidence_url TEXT')
     backfillRecordOrigins(db)
   } catch {
     // best-effort; checks will fail loudly if invariant is not enforceable

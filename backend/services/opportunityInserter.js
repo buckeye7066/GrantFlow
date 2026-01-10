@@ -15,8 +15,15 @@ function deriveIsNational(opportunity) {
 }
 
 function deriveRecordOrigin(opportunity) {
-  const origin = opportunity?.record_origin
-  if (typeof origin === 'string' && origin.length > 0) return origin
+  const origin = typeof opportunity?.record_origin === 'string'
+    ? opportunity.record_origin.trim()
+    : ''
+
+  // Clamp to allowed values (matches schema CHECK constraint).
+  if (origin === 'live_crawl') return 'live_crawl'
+  if (origin === 'curated_verified') return 'curated_verified'
+  if (origin === 'manual') return 'manual'
+  if (origin === 'synthetic') return 'synthetic'
   return 'live_crawl'
 }
 
