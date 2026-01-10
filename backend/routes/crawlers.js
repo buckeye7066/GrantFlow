@@ -1578,7 +1578,9 @@ router.post('/crawl-grants-gov', async (req, res) => {
   }
 })
 
-// Remove all loans and matching-fund opportunities from the database
+// Legacy endpoint: previously deleted "loan" and "requires_match" opportunities.
+// Policy: We keep all REAL opportunities in the database and use filters (compliance) to hide/show them in UI.
+// This endpoint is now non-destructive and returns counts for observability.
 router.post('/remove-loans', async (req, res) => {
   const auth = req.user ?? { role: 'guest' }
   const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
@@ -1589,31 +1591,36 @@ router.post('/remove-loans', async (req, res) => {
   }
   
   try {
-    console.log('[remove-loans] Removing loans and matching-fund opportunities...')
-    
-    // Delete loans
-    const loansDeleted = req.db.prepare(`
-      DELETE FROM funding_opportunities 
-      WHERE opportunity_type = 'loan' 
-         OR title LIKE '%Loan%' 
-         OR title LIKE '%loan%'
-         OR categories LIKE '%loan%'
-    `).run()
-    
-    // Delete matching-fund opportunities
-    const matchingDeleted = req.db.prepare(`
-      DELETE FROM funding_opportunities 
-      WHERE requires_match = 1
-    `).run()
-    
-    const totalRemaining = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get().count
+    console.log('[remove-loans] Non-destructive mode (counts only). Use compliance filters instead of deletion.')
+
+    const loansCount = req.db.prepare(`
+      SELECT COUNT(*) as count
+      FROM funding_opportunities
+      WHERE is_active = 1
+        AND (
+          opportunity_type = 'loan'
+          OR title LIKE '%Loan%'
+          OR title LIKE '%loan%'
+          OR categories LIKE '%loan%'
+        )
+    `).get().count
+
+    const matchingCount = req.db.prepare(`
+      SELECT COUNT(*) as count
+      FROM funding_opportunities
+      WHERE is_active = 1
+        AND requires_match = 1
+    `).get().count
+
+    const totalActive = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get().count
     
     res.json({
       success: true,
-      loans_removed: loansDeleted.changes,
-      matching_removed: matchingDeleted.changes,
-      total_remaining: totalRemaining,
-      message: 'All loans and matching-fund opportunities have been removed'
+      destructive: false,
+      loans_count: loansCount,
+      matching_count: matchingCount,
+      total_active: totalActive,
+      message: 'Non-destructive: opportunities retained. Use compliance filters (grant_only vs all) to hide/show loans or match-required programs.'
     })
   } catch (error) {
     console.error('[remove-loans] Error:', error)

@@ -29,6 +29,7 @@ function ensureArray(value) {
 
 export function seedRealOpportunities(db) {
   console.log('[seedRealOpportunities] Starting to seed real funding opportunities...');
+  const nowIso = new Date().toISOString()
 
   const realData = loadJSON(REAL_OPPS_PATH) || {};
   const realFederalGrants = realData.federal_grants || [];
@@ -57,6 +58,9 @@ export function seedRealOpportunities(db) {
     source: opp.source || 'seeded_real_grant',
     source_id: opp.source_id || opp.id,
     record_origin: 'curated_verified',
+    last_verified_at: opp.last_verified_at || nowIso,
+    evidence_url: opp.evidence_url || opp.source_url || opp.url || opp.application_url || null,
+    type: opp.type || ((opp.opportunity_type === 'benefit' || opp.opportunity_type === 'program') ? 'PROGRAM' : 'OPPORTUNITY'),
     eligibility_bullets: ensureArray(opp.eligibility_bullets),
     categories: ensureArray(opp.categories),
     keywords: ensureArray(opp.keywords),

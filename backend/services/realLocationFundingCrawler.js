@@ -1423,6 +1423,7 @@ function upsertOpportunity(db, opp, state = 'nationwide') {
     const categories = Array.isArray(opp.categories) ? JSON.stringify(opp.categories) : '[]';
     const keywords = Array.isArray(opp.keywords) ? JSON.stringify(opp.keywords) : '[]';
     const eligibility = Array.isArray(opp.eligibility) ? JSON.stringify(opp.eligibility) : '[]';
+    const recordType = opp.type || ((opp.opportunity_type === 'benefit' || opp.opportunity_type === 'program') ? 'PROGRAM' : 'OPPORTUNITY')
     
     if (existing) {
       db.prepare(`
@@ -1431,7 +1432,12 @@ function upsertOpportunity(db, opp, state = 'nationwide') {
           deadline = ?, deadline_type = ?, application_url = ?, source_url = ?,
           is_national = ?, state = ?, categories = ?, keywords = ?,
           eligibility_bullets = ?, opportunity_type = ?, requires_501c3 = ?,
-          requires_match = ?, updated_at = CURRENT_TIMESTAMP
+          requires_match = ?,
+          record_origin = 'curated_verified',
+          type = ?,
+          evidence_url = COALESCE(evidence_url, ?),
+          last_verified_at = CURRENT_TIMESTAMP,
+          updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `).run(
         opp.title, opp.sponsor, opp.description, opp.amount_min || null, opp.amount_max || null,
@@ -1439,6 +1445,8 @@ function upsertOpportunity(db, opp, state = 'nationwide') {
         opp.is_national !== false ? 1 : 0, state,
         categories, keywords, eligibility,
         opp.opportunity_type || 'grant', opp.requires_501c3 ? 1 : 0, opp.requires_match ? 1 : 0,
+        recordType,
+        opp.source_url,
         opp.id
       );
       return { updated: true };
@@ -1448,9 +1456,13 @@ function upsertOpportunity(db, opp, state = 'nationwide') {
           id, title, sponsor, source, source_id, source_url, description,
           amount_min, amount_max, deadline, deadline_type, application_url,
           is_national, state, categories, keywords, eligibility_bullets,
-          opportunity_type, requires_501c3, requires_match, is_active,
+          opportunity_type, requires_501c3, requires_match,
+          record_origin, type, evidence_url, last_verified_at,
+          is_active,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+          'curated_verified', ?, ?, CURRENT_TIMESTAMP,
+          1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       `).run(
         opp.id, opp.title, opp.sponsor, 'verified_real', opp.id,
         opp.source_url, opp.description,
@@ -1458,7 +1470,9 @@ function upsertOpportunity(db, opp, state = 'nationwide') {
         opp.deadline || null, opp.deadline_type || 'rolling', opp.application_url,
         opp.is_national !== false ? 1 : 0, state,
         categories, keywords, eligibility,
-        opp.opportunity_type || 'grant', opp.requires_501c3 ? 1 : 0, opp.requires_match ? 1 : 0
+        opp.opportunity_type || 'grant', opp.requires_501c3 ? 1 : 0, opp.requires_match ? 1 : 0,
+        recordType,
+        opp.source_url
       );
       return { inserted: true };
     }
