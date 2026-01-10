@@ -82,15 +82,75 @@ function mdEscape(s) {
 }
 
 function formatLineRange(lines) {
-  if (lines.length === 1) return `L${lines[0]}`
+  if (lines.length === 1) return `${lines[0]}-${lines[0]}`
   const sorted = [...lines].sort((a, b) => a - b)
-  return `L${sorted[0]}–L${sorted[sorted.length - 1]}`
+  return `${sorted[0]}-${sorted[sorted.length - 1]}`
+}
+
+function parseBackendRequiredEnvVars() {
+  try {
+    const serverPath = path.join(ROOT, 'backend', 'server.js')
+    const text = fs.readFileSync(serverPath, 'utf8')
+    const m = text.match(/const\s+requiredEnvVars\s*=\s*\[([^\]]*)\]/)
+    if (!m) return new Set()
+    const raw = m[1]
+    const vars = raw
+      .split(',')
+      .map((s) => s.trim())
+      .map((s) => s.replace(/^['"`]/, '').replace(/['"`]$/, ''))
+      .filter(Boolean)
+    return new Set(vars)
+  } catch {
+    return new Set()
+  }
+}
+
+function isProbablySecret(name) {
+  return /(_KEY|_SECRET|_TOKEN|_DSN|PASSWORD|TWILIO_AUTH_TOKEN)$/i.test(name)
+}
+
+function requiredness(name, backendRequiredSet) {
+  if (backendRequiredSet.has(name)) return 'Required (prod)'
+  // Build/runtime critical for local operation (even if defaults exist)
+  if (name === 'DATABASE_URL') return 'Required (local-run)'
+  if (name === 'AUTH_JWT_SECRET') return 'Required (prod)'
+  if (name === 'PORT') return 'Optional'
+  if (name.startsWith('VITE_')) return 'Optional'
+  return isProbablySecret(name) ? 'Optional (feature-gated)' : 'Optional'
+}
+
+function pickDevDefault(name, defs, codeRefs) {
+  // Prefer template value if present.
+  const template = defs?.[0]?.value
+  if (typeof template === 'string' && template.length > 0) return template
+
+  // Common safe dev defaults (never production defaults).
+  const safe = {
+    PORT: '8080',
+    NODE_ENV: 'development',
+    VITE_APP_BASE: '/grantflow',
+    VITE_ASSET_BASE: '/grantflow',
+    VITE_API_URL: 'http://localhost:8080',
+    VITE_API_PROXY_TARGET: 'http://localhost:8080',
+    ADMIN_TOKEN: 'dev-admin-token',
+    AUTH_JWT_SECRET: 'dev-secret-change-me',
+    BULK_POPULATE_KEY: 'grantflow-bulk-2026',
+  }
+  if (safe[name]) return safe[name]
+
+  // If referenced in code with obvious fallback literals, show "has code fallback".
+  if (Array.isArray(codeRefs) && codeRefs.some((c) => /process\.env\.[A-Z0-9_]+\s*\|\|/.test(c.excerpt))) {
+    return '(has code fallback)'
+  }
+
+  return ''
 }
 
 function main() {
   const files = walk(ROOT)
   const usage = files.flatMap(scanEnvUsages)
   const usageByVar = groupByVar(usage)
+  const backendRequired = parseBackendRequiredEnvVars()
 
   const envExampleFiles = [
     '.env.example',
@@ -128,14 +188,16 @@ function main() {
 
   lines.push('## Inventory')
   lines.push('')
-  lines.push('| Name | Referenced in code | Defined in templates | Notes |')
-  lines.push('| --- | --- | --- | --- |')
+  lines.push('| Name | Required? | Default / dev value | Referenced in code | Defined in templates | Notes |')
+  lines.push('| --- | --- | --- | --- | --- | --- |')
 
   for (const name of allVarNames) {
     const code = usageByVar.get(name) || []
     const defs = exampleByVar.get(name) || []
     const referenced = code.length ? 'Yes' : 'No'
     const defined = defs.length ? 'Yes' : 'No'
+    const req = requiredness(name, backendRequired)
+    const devDefault = mdEscape(pickDevDefault(name, defs, code))
     const notes = []
     if (code.some((u) => u.kind === 'process.env') && code.some((u) => u.kind === 'import.meta.env')) {
       notes.push('Used in both backend + frontend')
@@ -144,7 +206,7 @@ function main() {
     } else if (code.some((u) => u.kind === 'process.env')) {
       notes.push('Backend/Node')
     }
-    lines.push(`| \`${name}\` | ${referenced} | ${defined} | ${mdEscape(notes.join('; '))} |`)
+    lines.push(`| \`${name}\` | ${req} | ${devDefault} | ${referenced} | ${defined} | ${mdEscape(notes.join('; '))} |`)
   }
 
   lines.push('')

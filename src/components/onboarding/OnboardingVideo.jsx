@@ -13,7 +13,7 @@ import { Info, X, CheckCircle } from 'lucide-react'
 
 // Properly encode the video path to handle spaces and special characters in filename
 // The path parts are joined to ensure proper encoding while keeping forward slashes
-const VIDEO_PATH = '/' + encodeURIComponent('Grant Flow_ Get Started. mp4')
+const VIDEO_PATH = `${import.meta.env.BASE_URL}${encodeURIComponent('Grant Flow_ Get Started. mp4')}`
 
 export default function OnboardingVideo({ open, onComplete, onSkip }) {
   const [videoError, setVideoError] = useState(false)

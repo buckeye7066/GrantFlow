@@ -199,6 +199,29 @@ if (fs.existsSync(schemaPath)) {
   }
 }
 
+// Ensure a real admin user exists so token-based admin auth can access endpoints that require userId (e.g. /api/preferences).
+let adminUserId = null;
+try {
+  const existingAdmin = db
+    .prepare('SELECT id FROM users WHERE primary_email IS NOT NULL AND lower(primary_email) = lower(?) LIMIT 1')
+    .get(ADMIN_EMAIL);
+
+  if (existingAdmin?.id) {
+    adminUserId = existingAdmin.id;
+  } else {
+    adminUserId = crypto.randomUUID();
+    db.prepare(
+      `
+        INSERT INTO users (id, display_name, primary_email, is_admin, created_at, updated_at)
+        VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `,
+    ).run(adminUserId, ADMIN_NAME, ADMIN_EMAIL);
+    console.info('[startup] Created local admin user for token auth');
+  }
+} catch (error) {
+  console.warn('[startup] Failed to ensure admin user record:', error?.message || error);
+}
+
 // Schema migrations - Add columns if they don't exist
 // Table and column names are validated against a whitelist for security
 const allowedMigrations = [
@@ -527,7 +550,7 @@ app.use((req, res, next) => {
   const expectedBulkKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026';
   
   if (!handled && xAdminToken && ((expectedAdminToken && xAdminToken === expectedAdminToken) || xAdminToken === expectedBulkKey)) {
-    user = { role: 'admin', is_admin: true, full_name: ADMIN_NAME, email: ADMIN_EMAIL };
+    user = { role: 'admin', is_admin: true, userId: adminUserId, full_name: ADMIN_NAME, email: ADMIN_EMAIL };
     handled = true;
   }
 
@@ -577,7 +600,7 @@ app.use((req, res, next) => {
     }
 
     if (!handled && token && ADMIN_TOKEN && token === ADMIN_TOKEN) {
-      user = { role: 'admin', is_admin: true, full_name: ADMIN_NAME, email: ADMIN_EMAIL };
+      user = { role: 'admin', is_admin: true, userId: adminUserId, full_name: ADMIN_NAME, email: ADMIN_EMAIL };
       handled = true;
     }
 

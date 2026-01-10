@@ -37,7 +37,7 @@ export default function AnyaFloatingButton({ profileId, className }) {
           }
         >
           <img 
-            src="/images/anya-avatar.svg" 
+            src={`${import.meta.env.BASE_URL}images/anya-avatar.svg`} 
             alt="Anya AI Assistant" 
             className={cn(
               "h-full w-full object-cover transition-transform",
@@ -76,7 +76,7 @@ export default function AnyaFloatingButton({ profileId, className }) {
                     : "bg-gradient-to-br from-slate-400 to-slate-500"
                 )}>
                   <img 
-                    src="/images/anya-avatar.svg" 
+                    src={`${import.meta.env.BASE_URL}images/anya-avatar.svg`} 
                     alt="Anya" 
                     className="h-full w-full object-cover"
                   />

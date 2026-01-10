@@ -12,7 +12,11 @@ export function safeParseJSON(value, fallback = null) {
   try {
     return JSON.parse(value);
   } catch (error) {
-    console.warn('Failed to parse JSON:', error.message);
+    // Parsing failures are common when reading user/DB input; keep this utility quiet by default.
+    // Opt-in logging for debugging by setting SAFE_JSON_LOG=1.
+    if (process?.env?.SAFE_JSON_LOG === '1') {
+      console.warn('Failed to parse JSON:', error.message);
+    }
     return fallback;
   }
 }
@@ -31,7 +35,10 @@ export function safeStringifyJSON(value, fallback = '{}') {
   try {
     return JSON.stringify(value);
   } catch (error) {
-    console.warn('Failed to stringify JSON:', error.message);
+    // Opt-in logging for debugging by setting SAFE_JSON_LOG=1.
+    if (process?.env?.SAFE_JSON_LOG === '1') {
+      console.warn('Failed to stringify JSON:', error.message);
+    }
     return fallback;
   }
 }

@@ -449,7 +449,7 @@ export default function AnyaChat({ profileId }) {
               <div className="flex items-center gap-2">
                 <div className="flex h-8 w-8 items-center justify-center rounded-full overflow-hidden bg-gradient-to-br from-purple-600 to-blue-600">
                   <img 
-                    src="/images/anya-avatar.svg" 
+                    src={`${import.meta.env.BASE_URL}images/anya-avatar.svg`} 
                     alt="Anya" 
                     className="h-full w-full object-cover"
                   />

@@ -1,38 +1,31 @@
-## GrantFlow Production Merge – `resolve-merge-conflicts` → `main`
+## Make app runnable end-to-end + add doctor/smoke suite
 
 ### Overview
-- Integrates the production-ready GrantFlow workspace and backend bridge.
-- Keeps all `feat/production-readiness` snapshots while pulling in `main`’s security and infrastructure updates.
-- Verifies lint, build, and smoke coverage before promoting to production.
+This PR makes local/dev execution deterministic and adds a one-command **doctor** pipeline that:
+- runs install checks, lint, typecheck, unit tests, production build
+- starts backend + frontend dev servers
+- runs Playwright smoke that exercises UI routes and discovered backend endpoints
+- writes evidence logs/artifacts under `artifacts/YYYY-MM-DD/`
 
-### Branches
-- Source: `resolve-merge-conflicts`
-- Target: `main`
-- Merge base: `1f19d1f` (feat/production-readiness)
-- Merge commit on branch: `9f203d0`
-- Latest commit: `9467fe8`
+### How to run
 
-### Verification
-- `npm run lint` → **PASS** (0 errors, 6 known react-refresh warnings from shadcn/ui patterns)
-- `npm run build` → **PASS** (Vite build output in `dist/`)
-- `npm run preview -- --host 127.0.0.1 --port 4176 &`
-- `SMOKE_BASE_URL=http://127.0.0.1:4176 SMOKE_BASE_PATH=/grantflow SMOKE_TARGET_PATH= npm run smoke:login` → **PASS**
+- `npm run doctor`
+- Smoke only: `npm run smoke`
 
-### Deployment Notes
-- `vercel.json` already redirects `/` → `/grantflow` and rewrites `/grantflow/*` to the SPA.
-- Set `VITE_API_URL` in Vercel to your Railway backend (`https://grantflow-production.up.railway.app`).
-- Railway backend expects `DATABASE_URL=./data/grantflow.db` and a seeded `grantflow.db` (see `grantflow-migration.zip`).
-- Post-merge smoke test: `SMOKE_BASE_URL=https://<vercel-app>.vercel.app npm run smoke:login`.
+### Artifacts produced (per run)
+Written to: `artifacts/YYYY-MM-DD/` (e.g. `artifacts/2026-01-10/`)
+- `lint.log`, `typecheck.log`, `test.log`, `build.log`
+- `backend.log`, `frontend.log`, `smoke.log`
+- `playwright-report/` + `playwright-output/` (traces/screenshots/videos on failure)
+- `repro/` JSON: route list, UI clicks, console errors, api calls
+- `doctor-success.txt` (or `doctor-failure.txt`)
 
-### Checklist
-- [ ] Merge PR once lint, build, and smoke checks succeed in CI.
-- [ ] Promote the new Vercel deployment to production.
-- [ ] Confirm Railway backend is healthy (`/api/health`).
-- [ ] Navigate to `https://www.axiombiolabs.org/grantflow/login` and verify the dashboard renders.
-- [ ] Document any production anomalies in `docs/VERCEL_RAILWAY_DEPLOYMENT.md`.
+### Key changes
+- `scripts/doctor.mjs`: orchestrates the full pipeline and captures logs to artifacts
+- `tests/smoke/`: Playwright smoke enumerates routes from `src/pages/index.jsx`, clicks visible controls safely, captures console errors, discovers backend routes and calls them with safe payloads
+- `docs/ENV_VARS.md`: generated env inventory with required/optional + dev defaults + usage locations
+- `docs/REPRO_MATRIX.md`: repo discovery + what doctor/smoke covers
+- `docs/DEFECT_LEDGER.md`: evidence-based defects and fixes
+- `.env.example` + `.env.development.local`: safe dev templates
 
-### Appendix
-- Full cloud deployment playbook: `docs/VERCEL_RAILWAY_DEPLOYMENT.md`
-- Database import helper: `backend/import-data.js`
-- Smoke script: `scripts/smoke-login.mjs`
 

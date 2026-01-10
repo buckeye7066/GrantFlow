@@ -1247,65 +1247,101 @@ router.post('/bulk-populate', async (req, res) => {
   }
   
   try {
+    const { mode = 'seed_all_real' } = req.body || {}
+
+    // Primary behavior (default): seed the verified national + state real opportunity catalog.
+    // This is the supported path for "every ZIP has coverage" without generating ZIP-specific synthetic rows.
+    if (mode !== 'legacy_zip_batches') {
+      const { seedAllRealFunding, getOpportunityCountsByState } = await import(
+        '../services/realLocationFundingCrawler.js'
+      )
+
+      const result = await seedAllRealFunding(req.db)
+      const counts = getOpportunityCountsByState(req.db)
+
+      return res.json({
+        success: true,
+        mode: 'seed_all_real',
+        total_opportunities: result.total,
+        national_programs: (result.national?.inserted ?? 0) + (result.national?.updated ?? 0),
+        state_programs: (result.states?.inserted ?? 0) + (result.states?.updated ?? 0),
+        minimum_per_zip: counts.nationwide ?? result.national_count ?? null,
+        note:
+          'bulk-populate now seeds VERIFIED real national + state opportunities (non-synthetic). For observability/compatibility, use /seed-all-real directly.',
+      })
+    }
+
+    // Legacy behavior: iterate ZIPs and run the legacy comprehensive crawler in batches.
+    // Warning: This does NOT generate ZIP-specific templates; it is kept only for backward compatibility.
     const { limit_per_zip = 8, max_zips = 5000 } = req.body || {}
     const dataDir = join(__dirname, '..', 'data', 'crawlers')
     const zipFile = join(dataDir, 'zip_coordinates.json')
-    
+
     if (!fs.existsSync(zipFile)) {
       return res.status(500).json({ error: 'ZIP coordinates file not found' })
     }
-    
+
     const zipMap = JSON.parse(fs.readFileSync(zipFile, 'utf8'))
     const allZipCodes = Object.keys(zipMap).slice(0, max_zips)
-    
-    console.log(`[bulk-populate] Starting population of ${allZipCodes.length} ZIP codes with ${limit_per_zip} opportunities each`)
-    
-    // Import the crawler function
-    const { processComprehensiveCrawlerJob } = await import('../services/comprehensiveCrawlerOptimized.js')
-    
+
+    console.log(
+      `[bulk-populate] (legacy_zip_batches) Starting run across ${allZipCodes.length} ZIP codes (limit_per_zip=${limit_per_zip})`,
+    )
+
+    // NOTE: `comprehensiveCrawlerOptimized.js` exports `runComprehensiveCrawler`, not `processComprehensiveCrawlerJob`.
+    // This legacy path uses the job-shaped API from `comprehensiveCrawler.js`.
+    const { processComprehensiveCrawlerJob } = await import('../services/comprehensiveCrawler.js')
+
     const batchSize = 100
     let totalInserted = 0
     let totalEvaluated = 0
     const errors = []
-    
+
     for (let i = 0; i < allZipCodes.length; i += batchSize) {
       const batch = allZipCodes.slice(i, i + batchSize)
-      
+
       try {
         const job = {
           id: `bulk-populate-${i}-${Date.now()}`,
           type: 'comprehensive',
           parameters: {
             zip_list: batch,
-            limit_per_zip: limit_per_zip
-          }
+            limit_per_zip: limit_per_zip,
+          },
         }
-        
+
         const result = await processComprehensiveCrawlerJob({
           db: req.db,
           job,
           dataDir,
-          profileContext: null
+          profileContext: null,
         })
-        
+
         totalInserted += result.inserted || 0
         totalEvaluated += result.evaluated || 0
-        
-        console.log(`[bulk-populate] Batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(allZipCodes.length/batchSize)}: ${result.inserted} opportunities`)
+
+        console.log(
+          `[bulk-populate] (legacy_zip_batches) Batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(allZipCodes.length / batchSize)}: ${result.inserted} opportunities`,
+        )
       } catch (batchErr) {
         errors.push({ batch: i, error: batchErr.message })
-        console.error(`[bulk-populate] Batch ${i} error:`, batchErr.message)
+        console.error(`[bulk-populate] (legacy_zip_batches) Batch ${i} error:`, batchErr.message)
       }
     }
-    
-    console.log(`[bulk-populate] Complete: ${totalInserted} opportunities inserted from ${allZipCodes.length} ZIPs`)
-    
-    res.json({
+
+    console.log(
+      `[bulk-populate] (legacy_zip_batches) Complete: ${totalInserted} opportunities inserted from ${allZipCodes.length} ZIPs`,
+    )
+
+    return res.json({
       success: true,
+      mode: 'legacy_zip_batches',
       zip_codes_processed: allZipCodes.length,
       opportunities_inserted: totalInserted,
       opportunities_evaluated: totalEvaluated,
-      errors: errors.length > 0 ? errors : undefined
+      warning:
+        'Legacy mode retained for compatibility. It does not generate ZIP-specific opportunities; prefer mode=seed_all_real or /seed-all-real.',
+      errors: errors.length > 0 ? errors : undefined,
     })
   } catch (error) {
     console.error('Error in bulk populate:', error)

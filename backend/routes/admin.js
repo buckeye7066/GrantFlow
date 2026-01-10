@@ -119,6 +119,9 @@ Be conservative - only include information you are confident about from the docu
 // Upload a PDF document, extract text, use AI to parse it, and create a profile
 router.post('/upload-profile-document', upload.single('document'), async (req, res) => {
   try {
+    if (process.env.SMOKE_MODE === 'true') {
+      return res.status(202).json({ skipped: true, reason: 'SMOKE_MODE disables PDF ingestion' })
+    }
     // Check admin access - use consistent admin enforcement (is_admin flag or email-based)
     const user = req.user;
     const userEmail = user?.primary_email || user?.email || '';
@@ -439,6 +442,9 @@ router.get('/db-stats', (req, res) => {
 // POST /api/admin/seed-opportunities - Seed real funding opportunities
 router.post('/seed-opportunities', async (req, res) => {
   try {
+    if (process.env.SMOKE_MODE === 'true') {
+      return res.status(202).json({ skipped: true, reason: 'SMOKE_MODE disables seeding endpoints' })
+    }
     const { totalLoaded } = seedRealOpportunities(req.db);
     const totalInDb = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get()?.count || 0;
     res.json({ success: true, message: `Seeded ${totalLoaded} opportunities`, total_in_database: totalInDb, loaded_from_files: totalLoaded });
@@ -451,6 +457,9 @@ router.post('/seed-opportunities', async (req, res) => {
 // POST /api/admin/sync-profiles - Sync designated profiles
 router.post('/sync-profiles', async (req, res) => {
   try {
+    if (process.env.SMOKE_MODE === 'true') {
+      return res.status(202).json({ skipped: true, reason: 'SMOKE_MODE disables seeding endpoints' })
+    }
     ensureDesignatedProfiles(req.db);
     const profilesCount = req.db.prepare('SELECT COUNT(*) as count FROM profiles').get()?.count || 0;
     const sectionsCount = req.db.prepare('SELECT COUNT(*) as count FROM profile_sections').get()?.count || 0;
@@ -464,6 +473,9 @@ router.post('/sync-profiles', async (req, res) => {
 // POST /api/admin/seed-profile-grants - Seed grants for profiles
 router.post('/seed-profile-grants', async (req, res) => {
   try {
+    if (process.env.SMOKE_MODE === 'true') {
+      return res.status(202).json({ skipped: true, reason: 'SMOKE_MODE disables seeding endpoints' })
+    }
     const { excludeProfiles = [] } = req.body || {};
     const profiles = req.db.prepare('SELECT * FROM profiles WHERE status = ?').all('active');
     const opportunities = req.db.prepare(`
@@ -532,6 +544,9 @@ router.post('/seed-profile-grants', async (req, res) => {
 // POST /api/admin/ingest - Trigger ingestion from all sources
 router.post('/ingest', async (req, res) => {
   try {
+    if (process.env.SMOKE_MODE === 'true') {
+      return res.status(202).json({ skipped: true, reason: 'SMOKE_MODE disables live ingestion endpoints' })
+    }
     console.log('[admin/ingest] Starting manual ingestion...');
     
     // Import connectors dynamically
@@ -636,6 +651,32 @@ router.post('/national-crawl/start', async (req, res) => {
         job_id: nationalCrawlJob.id
       })
     }
+
+    // In SMOKE_MODE, never start a real nationwide crawl. Create a completed job and return immediately.
+    if (process.env.SMOKE_MODE === 'true') {
+      const jobId = crypto.randomUUID()
+      req.db
+        .prepare(
+          `
+            INSERT INTO crawler_jobs (
+              id, type, status, parameters, requested_by, created_at, completed_at, result_meta
+            ) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?)
+          `,
+        )
+        .run(
+          jobId,
+          'national',
+          'completed',
+          JSON.stringify({ smoke: true }),
+          req.user?.id || 'admin',
+          JSON.stringify({ skipped: true, reason: 'SMOKE_MODE prevents nationwide crawl' }),
+        )
+      return res.status(202).json({
+        success: true,
+        job_id: jobId,
+        message: 'National ZIP crawl skipped in SMOKE_MODE',
+      })
+    }
     
     const { batch_size, min_sources_per_zip } = req.body
     const db = req.db
@@ -656,7 +697,7 @@ router.post('/national-crawl/start', async (req, res) => {
       ) VALUES (?, ?, ?, ?, ?, datetime('now'))
     `).run(
       jobId,
-      'national_zip_scan',
+      'national',
       'running',
       JSON.stringify(params),
       req.user?.id || 'admin'

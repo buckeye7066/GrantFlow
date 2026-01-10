@@ -24,6 +24,10 @@ const ADMIN_EMAIL = String(
  * @returns {boolean} True if user is admin
  */
 export function isAdmin(user) {
+  // Allow explicit role-based admin (used by local admin token flow).
+  if (user?.role === 'admin') {
+    return true;
+  }
   if (!user || !user.primary_email) {
     return false;
   }
@@ -37,7 +41,9 @@ export function isAdmin(user) {
  */
 export function requireAdmin(user) {
   if (!isAdmin(user)) {
-    throw new Error('Admin access required. Contact buckeye7066@gmail.com for assistance.');
+    const err = new Error(`Admin access required. Contact ${ADMIN_EMAIL} for assistance.`);
+    err.status = 403;
+    throw err;
   }
 }
 

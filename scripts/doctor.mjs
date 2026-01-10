@@ -45,7 +45,7 @@ function startProcess(command, args, { cwd, env, logFile, label }) {
   return child
 }
 
-function isPortAvailable(port, host = '0.0.0.0') {
+function isPortAvailable(port, host = '127.0.0.1') {
   return new Promise((resolve) => {
     const server = net.createServer()
     server.once('error', (err) => {
@@ -57,10 +57,55 @@ function isPortAvailable(port, host = '0.0.0.0') {
   })
 }
 
+async function startFrontend(root, { outDir, logFile, basePath = '/grantflow', apiProxyTarget }) {
+  const candidatePorts = [5173, 5174, 5175]
+  for (const port of candidatePorts) {
+    const available = await isPortAvailable(port)
+    if (!available) continue
+
+    const frontendEnv = mergedEnv({
+      NODE_ENV: 'development',
+      VITE_SMOKE_MODE: 'true',
+      VITE_APP_BASE: process.env.VITE_APP_BASE || basePath,
+      VITE_ASSET_BASE: process.env.VITE_ASSET_BASE || process.env.VITE_APP_BASE || basePath,
+      // Proxy /api → backend. Doctor fills this once backend port is known.
+      VITE_API_PROXY_TARGET: apiProxyTarget || process.env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:8080',
+      // Some codepaths use VITE_API_URL directly (not the proxy).
+      VITE_API_URL: apiProxyTarget || process.env.VITE_API_URL || '',
+      // Keep frontend deterministic for smoke.
+      SMOKE_MODE: 'true',
+    })
+
+    const proc = startProcess('npm', ['run', 'dev', '--', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], {
+      cwd: root,
+      env: frontendEnv,
+      logFile,
+      label: `frontend:${port}`,
+    })
+
+    // If base is configured under a subpath, ensure that path is reachable.
+    const normalizedBase = (frontendEnv.VITE_APP_BASE || '/').replace(/\/$/, '')
+    const checkUrl =
+      normalizedBase && normalizedBase !== '/'
+        ? `http://127.0.0.1:${port}${normalizedBase}/`
+        : `http://127.0.0.1:${port}/`
+    const ok = await waitForHttpOk(checkUrl, { timeoutMs: 45_000 })
+    if (ok) {
+      writeFile(path.join(outDir, 'frontend-port.txt'), `${port}\n`)
+      return { proc, port, env: frontendEnv }
+    }
+
+    try { proc.kill('SIGTERM') } catch {}
+  }
+
+  throw new Error('Frontend did not become healthy on any candidate port (5173/5174/5175)')
+}
+
 async function startBackend(root, { outDir, logFile }) {
   const candidatePorts = [8080, 8081, 8082]
   for (const port of candidatePorts) {
-    const available = await isPortAvailable(port)
+    // Express binds 0.0.0.0 by default; check port availability on all interfaces.
+    const available = await isPortAvailable(port, '0.0.0.0')
     if (!available) continue
 
     const backendEnv = mergedEnv({
@@ -68,8 +113,20 @@ async function startBackend(root, { outDir, logFile }) {
       SMOKE_MODE: 'true',
       PORT: String(port),
       ADMIN_TOKEN: process.env.ADMIN_TOKEN || 'dev-admin-token',
-      CORS_ORIGIN: process.env.CORS_ORIGIN || 'http://localhost:5173,http://127.0.0.1:5173',
+      // Include a few candidate dev ports so we can start Vite on any of them without restarting backend.
+      CORS_ORIGIN:
+        process.env.CORS_ORIGIN ||
+        [
+          'http://localhost:5173',
+          'http://127.0.0.1:5173',
+          'http://localhost:5174',
+          'http://127.0.0.1:5174',
+          'http://localhost:5175',
+          'http://127.0.0.1:5175',
+        ].join(','),
       AUTH_FRONTEND_APP_BASE: process.env.VITE_APP_BASE || '/grantflow',
+      // Some routes gate production startup on OPENAI_API_KEY; keep dev runnable without real keys.
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
     })
 
     const proc = startProcess('node', ['backend/server.js'], {
@@ -99,17 +156,20 @@ async function main() {
 
   // Wipe prior artifacts for the day so reruns are easier to read.
   const wipeTargets = [
+    path.join(outDir, 'install.log'),
     path.join(outDir, 'lint.log'),
     path.join(outDir, 'typecheck.log'),
     path.join(outDir, 'test.log'),
     path.join(outDir, 'build.log'),
     path.join(outDir, 'backend.log'),
+    path.join(outDir, 'frontend.log'),
     path.join(outDir, 'smoke.log'),
     path.join(outDir, 'repro'),
     path.join(outDir, 'playwright-report'),
     path.join(outDir, 'playwright-output'),
     path.join(outDir, 'doctor-failure.txt'),
     path.join(outDir, 'doctor-success.txt'),
+    path.join(outDir, 'trace.zip'),
   ]
   wipeTargets.forEach((target) => {
     try { fs.rmSync(target, { recursive: true, force: true }) } catch {}
@@ -126,17 +186,24 @@ async function main() {
   )
 
   const logs = {
+    install: path.join(outDir, 'install.log'),
     lint: path.join(outDir, 'lint.log'),
     typecheck: path.join(outDir, 'typecheck.log'),
     test: path.join(outDir, 'test.log'),
     build: path.join(outDir, 'build.log'),
     backend: path.join(outDir, 'backend.log'),
+    frontend: path.join(outDir, 'frontend.log'),
     smoke: path.join(outDir, 'smoke.log'),
   }
 
   // Install check (non-destructive): if node_modules missing, do npm ci.
   if (!fs.existsSync(path.join(root, 'node_modules'))) {
-    const ci = await runCommand('npm', ['ci', '--no-audit', '--no-fund'], { cwd: root, env: process.env, logFile: logs.test, label: 'npm ci' })
+    const ci = await runCommand('npm', ['ci', '--no-audit', '--no-fund'], {
+      cwd: root,
+      env: process.env,
+      logFile: logs.install,
+      label: 'npm ci',
+    })
     if (ci.code !== 0) process.exit(ci.code ?? 1)
   }
 
@@ -164,15 +231,25 @@ async function main() {
   const build = await runCommand('npm', ['run', 'build'], { cwd: root, env: buildEnv, logFile: logs.build, label: 'npm run build' })
   if (build.code !== 0) process.exit(build.code ?? 1)
 
-  // Start backend (serves dist + /api) then run smoke against it.
+  // Start backend first, then Vite dev server (for "dev servers" evidence), then run smoke.
   const backend = await startBackend(root, { outDir, logFile: logs.backend })
   const baseUrl = `http://127.0.0.1:${backend.port}`
+  const frontend = await startFrontend(root, {
+    outDir,
+    logFile: logs.frontend,
+    basePath: buildEnv.VITE_APP_BASE || '/grantflow',
+    apiProxyTarget: baseUrl,
+  })
+  const uiBaseUrl = `http://127.0.0.1:${frontend.port}`
 
   const smokeEnv = mergedEnv({
-    SMOKE_BASE_URL: baseUrl,
+    // UI base (Vite dev) + API base (Express)
+    SMOKE_UI_BASE_URL: uiBaseUrl,
+    SMOKE_BASE_URL: uiBaseUrl,
     SMOKE_BASE_PATH: process.env.SMOKE_BASE_PATH || process.env.VITE_APP_BASE || '/grantflow',
     API_BASE_URL: baseUrl,
     SMOKE_ADMIN_TOKEN: process.env.SMOKE_ADMIN_TOKEN || backend.env.ADMIN_TOKEN,
+    SMOKE_BULK_KEY: process.env.SMOKE_BULK_KEY || process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026',
     ARTIFACTS_DIR: outDir,
     // Keep smoke fast and deterministic by default.
     SMOKE_MAX_ROUTES: process.env.SMOKE_MAX_ROUTES || '3',
@@ -189,9 +266,30 @@ async function main() {
     timeoutMs: 10 * 60_000,
   })
 
+  try { frontend.proc.kill('SIGTERM') } catch {}
   try { backend.proc.kill('SIGTERM') } catch {}
 
-  if (smoke.code !== 0) process.exit(smoke.code ?? 1)
+  if (smoke.code !== 0) {
+    // Make it easy to find a trace quickly.
+    try {
+      const outputDir = path.join(outDir, 'playwright-output')
+      if (fs.existsSync(outputDir)) {
+        const zips = fs
+          .readdirSync(outputDir, { withFileTypes: true })
+          .filter((d) => d.isFile() && d.name.endsWith('.zip'))
+          .map((d) => d.name)
+        if (zips.length > 0) {
+          const newest = zips
+            .map((name) => ({ name, mtime: fs.statSync(path.join(outputDir, name)).mtimeMs }))
+            .sort((a, b) => b.mtime - a.mtime)[0]?.name
+          if (newest) {
+            fs.copyFileSync(path.join(outputDir, newest), path.join(outDir, 'trace.zip'))
+          }
+        }
+      }
+    } catch {}
+    process.exit(smoke.code ?? 1)
+  }
   writeFile(path.join(outDir, 'doctor-success.txt'), 'doctor: OK\n')
 }
 

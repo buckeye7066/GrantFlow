@@ -458,6 +458,19 @@ CREATE TABLE IF NOT EXISTS crawl_logs (
   metadata TEXT -- JSON
 );
 
+-- Ingestion Runs (tracking grants.gov / usaspending.gov ingestion)
+CREATE TABLE IF NOT EXISTS ingestion_runs (
+  id TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  started_at DATETIME NOT NULL,
+  completed_at DATETIME,
+  status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed')),
+  records_fetched INTEGER DEFAULT 0,
+  records_inserted INTEGER DEFAULT 0,
+  records_updated INTEGER DEFAULT 0,
+  error_message TEXT
+);
+
 -- AI Artifacts (saved AI-generated content)
 CREATE TABLE IF NOT EXISTS ai_artifacts (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),

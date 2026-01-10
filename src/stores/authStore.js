@@ -74,10 +74,16 @@ const AUTH_METHODS = new Set(['email', 'phone', 'social'])
 
 // Crawler types to auto-trigger on admin login
 const ADMIN_CRAWLER_TYPES = ['local', 'scholarship', 'comprehensive']
+// Vite env values are typically strings, but be defensive (some tooling can coerce to boolean).
+const IS_SMOKE_UI = String(import.meta?.env?.VITE_SMOKE_MODE ?? '').toLowerCase() === 'true'
 
 // Helper function to trigger crawler jobs for admin
 async function triggerAdminCrawlers() {
   try {
+    if (IS_SMOKE_UI) {
+      // Smoke runs its own controlled crawler entrypoints; don't auto-trigger background crawlers.
+      return
+    }
     const promises = ADMIN_CRAWLER_TYPES.map((type) =>
       apiFetch('/api/crawlers/jobs', {
         method: 'POST',

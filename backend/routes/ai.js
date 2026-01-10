@@ -25,6 +25,10 @@ const getOpenAI = () => {
 router.post('/comprehensive-match', async (req, res) => {
   try {
     const { profile } = req.body
+
+    if (!profile || typeof profile !== 'object') {
+      return res.status(400).json({ error: 'profile is required' })
+    }
     
     // Get all opportunities from database
     const opportunities = req.db.prepare(`
@@ -439,6 +443,10 @@ Generate a well-structured, compelling ${section || 'narrative'} of about 300-50
 router.post('/analyze/eligibility', async (req, res) => {
   try {
     const { profile_id, opportunity_id } = req.body;
+
+    if (!profile_id || !opportunity_id) {
+      return res.status(400).json({ error: 'profile_id and opportunity_id are required' });
+    }
     
     const openai = getOpenAI();
     

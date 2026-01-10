@@ -322,6 +322,9 @@ router.post('/tools/:toolName/invoke', async (req, res) => {
 
 router.post('/autonomous/code', adminAuth, async (req, res) => {
   try {
+    if (process.env.SMOKE_MODE === 'true') {
+      return res.status(202).json({ skipped: true, reason: 'SMOKE_MODE disables autonomous code operations' })
+    }
     const result = await invokeTool(req.db, req.user, 'admin.anya.runAutonomous', req.body, {})
     res.status(201).json(result)
   } catch (error) {
@@ -331,6 +334,9 @@ router.post('/autonomous/code', adminAuth, async (req, res) => {
 
 router.post('/autonomous/crawlers', adminAuth, async (req, res) => {
   try {
+    if (process.env.SMOKE_MODE === 'true') {
+      return res.status(202).json({ skipped: true, reason: 'SMOKE_MODE disables autonomous crawler operations' })
+    }
     const result = await invokeTool(req.db, req.user, 'admin.anya.runCrawlers', req.body, {})
     res.status(201).json(result)
   } catch (error) {
@@ -340,6 +346,9 @@ router.post('/autonomous/crawlers', adminAuth, async (req, res) => {
 
 router.post('/autonomous/functions', adminAuth, async (req, res) => {
   try {
+    if (process.env.SMOKE_MODE === 'true') {
+      return res.status(202).json({ skipped: true, reason: 'SMOKE_MODE disables autonomous function tests' })
+    }
     const result = await invokeTool(req.db, req.user, 'admin.anya.testFunctions', req.body, {})
     res.status(201).json(result)
   } catch (error) {
@@ -349,6 +358,9 @@ router.post('/autonomous/functions', adminAuth, async (req, res) => {
 
 router.post('/autonomous/buttons', adminAuth, async (req, res) => {
   try {
+    if (process.env.SMOKE_MODE === 'true') {
+      return res.status(202).json({ skipped: true, reason: 'SMOKE_MODE disables autonomous button operations' })
+    }
     const result = await invokeTool(req.db, req.user, 'admin.anya.testButtons', req.body, {})
     res.status(201).json(result)
   } catch (error) {
