@@ -86,10 +86,15 @@ async function findSourcesForZip(zipInfo, db) {
       
       grantsGovResults.forEach(opp => {
         if (opp.type === 'OPPORTUNITY') {
+          const listing_type = 'OPPORTUNITY'
           sources.push({
             zip_code,
             source_name: opp.title,
-            source_type: 'OPPORTUNITY',
+            // NOTE: This is NOT an org classification. It's the listing/record type.
+            // Prefer `listing_type`. `source_type` is kept only as a deprecated alias
+            // for backward compatibility (do not add new usages).
+            listing_type,
+            source_type: listing_type,
             evidence_url: opp.evidence_url,
             evidence_title: opp.title,
             last_verified_at: new Date().toISOString(),
@@ -103,7 +108,7 @@ async function findSourcesForZip(zipInfo, db) {
     }
     
     // 2. If not enough OPPORTUNITIES, try SAM.gov PROGRAMS
-    if (sources.filter(s => s.source_type === 'OPPORTUNITY').length < MIN_SOURCES_PER_ZIP) {
+    if (sources.filter(s => s.listing_type === 'OPPORTUNITY').length < MIN_SOURCES_PER_ZIP) {
       try {
         const samGovResults = await searchAssistanceListings({
           keyword: state,
@@ -111,10 +116,12 @@ async function findSourcesForZip(zipInfo, db) {
         });
         
         samGovResults.forEach(program => {
+          const listing_type = 'PROGRAM'
           sources.push({
             zip_code,
             source_name: program.title,
-            source_type: 'PROGRAM',
+            listing_type,
+            source_type: listing_type, // deprecated alias
             evidence_url: program.evidence_url,
             evidence_title: program.title,
             last_verified_at: new Date().toISOString(),
@@ -133,10 +140,12 @@ async function findSourcesForZip(zipInfo, db) {
         const benefitsResults = await searchStateBenefits(state);
         
         benefitsResults.forEach(benefit => {
+          const listing_type = 'PROGRAM'
           sources.push({
             zip_code,
             source_name: benefit.title,
-            source_type: 'PROGRAM',
+            listing_type,
+            source_type: listing_type, // deprecated alias
             evidence_url: benefit.evidence_url,
             evidence_title: benefit.title,
             last_verified_at: new Date().toISOString(),
@@ -154,10 +163,12 @@ async function findSourcesForZip(zipInfo, db) {
         const stateDataResults = await searchStateData(state);
         
         stateDataResults.forEach(resource => {
+          const listing_type = 'DIRECTORY'
           sources.push({
             zip_code,
             source_name: resource.title,
-            source_type: 'DIRECTORY',
+            listing_type,
+            source_type: listing_type, // deprecated alias
             evidence_url: resource.evidence_url,
             evidence_title: resource.title,
             last_verified_at: new Date().toISOString(),
@@ -170,24 +181,41 @@ async function findSourcesForZip(zipInfo, db) {
     }
     
     // 5. Calculate statistics
-    const opportunityCount = sources.filter(s => s.source_type === 'OPPORTUNITY').length;
-    const programCount = sources.filter(s => s.source_type === 'PROGRAM').length;
-    const directoryCount = sources.filter(s => s.source_type === 'DIRECTORY').length;
+    const opportunityCount = sources.filter(s => s.listing_type === 'OPPORTUNITY').length;
+    const programCount = sources.filter(s => s.listing_type === 'PROGRAM').length;
+    const directoryCount = sources.filter(s => s.listing_type === 'DIRECTORY').length;
     
     // 6. Store results in database
+    const cols = getTableColumns(db, 'zip_funding_sources')
+    const hasListingType = cols.includes('listing_type')
+    const hasSourceType = cols.includes('source_type')
+
+    // Back-compat: insert whichever columns exist. If both exist, keep them identical.
+    const insertColumns = [
+      'zip_code',
+      'source_name',
+      ...(hasListingType ? ['listing_type'] : []),
+      ...(hasSourceType ? ['source_type'] : []),
+      'evidence_url',
+      'evidence_title',
+      'last_verified_at',
+      'number_of_opportunities_found',
+      'metadata',
+    ]
+
     const stmt = db.prepare(`
-      INSERT INTO zip_funding_sources 
-      (zip_code, source_name, source_type, evidence_url, evidence_title, 
-       last_verified_at, number_of_opportunities_found, metadata)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+      INSERT INTO zip_funding_sources
+      (${insertColumns.join(', ')})
+      VALUES (${insertColumns.map(() => '?').join(', ')})
+    `)
     
     sources.forEach(source => {
       try {
-        stmt.run(
+        const values = [
           source.zip_code,
           source.source_name,
-          source.source_type,
+          ...(hasListingType ? [source.listing_type] : []),
+          ...(hasSourceType ? [source.source_type] : []),
           source.evidence_url,
           source.evidence_title,
           source.last_verified_at,
@@ -196,8 +224,10 @@ async function findSourcesForZip(zipInfo, db) {
             sponsor: source.sponsor,
             deadline: source.deadline,
             cfda_number: source.cfda_number
-          })
-        );
+          }),
+        ]
+
+        stmt.run(...values)
       } catch (error) {
         console.error(`[National ZIP Crawler] Failed to insert source for ${zip_code}:`, error.message);
       }
@@ -241,7 +271,9 @@ function ensureTables(db) {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       zip_code TEXT NOT NULL,
       source_name TEXT NOT NULL,
-      source_type TEXT NOT NULL CHECK(source_type IN ('OPPORTUNITY', 'PROGRAM', 'DIRECTORY')),
+      listing_type TEXT NOT NULL CHECK(listing_type IN ('OPPORTUNITY', 'PROGRAM', 'DIRECTORY')),
+      -- DEPRECATED: kept only for backward compatibility with legacy payloads.
+      source_type TEXT CHECK(source_type IN ('OPPORTUNITY', 'PROGRAM', 'DIRECTORY')),
       evidence_url TEXT,
       evidence_title TEXT,
       last_verified_at DATETIME,
@@ -250,6 +282,7 @@ function ensureTables(db) {
     );
     
     CREATE INDEX IF NOT EXISTS idx_zip_sources_zip ON zip_funding_sources(zip_code);
+    CREATE INDEX IF NOT EXISTS idx_zip_sources_listing_type ON zip_funding_sources(listing_type);
     CREATE INDEX IF NOT EXISTS idx_zip_sources_type ON zip_funding_sources(source_type);
     
     CREATE TABLE IF NOT EXISTS zip_crawl_checkpoints (
@@ -262,6 +295,35 @@ function ensureTables(db) {
       failed_zips INTEGER NOT NULL
     );
   `);
+
+  // If this table existed before the rename, it may be missing the new column.
+  // Add missing columns in a DB-safe way (SQLite supports ADD COLUMN).
+  const cols = getTableColumns(db, 'zip_funding_sources')
+  if (!cols.includes('listing_type')) {
+    try {
+      db.exec("ALTER TABLE zip_funding_sources ADD COLUMN listing_type TEXT CHECK(listing_type IN ('OPPORTUNITY','PROGRAM','DIRECTORY'))")
+      db.exec('CREATE INDEX IF NOT EXISTS idx_zip_sources_listing_type ON zip_funding_sources(listing_type)')
+    } catch (e) {
+      // ignore if concurrent or unsupported in older SQLite builds
+    }
+  }
+  if (!cols.includes('source_type')) {
+    try {
+      db.exec("ALTER TABLE zip_funding_sources ADD COLUMN source_type TEXT CHECK(source_type IN ('OPPORTUNITY','PROGRAM','DIRECTORY'))")
+      db.exec('CREATE INDEX IF NOT EXISTS idx_zip_sources_type ON zip_funding_sources(source_type)')
+    } catch (e) {
+      // ignore if concurrent or unsupported
+    }
+  }
+}
+
+function getTableColumns(db, tableName) {
+  try {
+    const rows = db.prepare(`PRAGMA table_info(${tableName})`).all()
+    return rows.map(r => r.name).filter(Boolean)
+  } catch {
+    return []
+  }
 }
 
 /**
