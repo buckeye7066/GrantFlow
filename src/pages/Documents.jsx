@@ -21,7 +21,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/components/ui/use-toast";
 import { listProfiles } from "@/api/profiles";
-import { listDocuments, deleteDocument, ingestDocument } from "@/api/documents";
+import { listDocuments, deleteDocument, ingestDocument, parseAllProfileDocuments } from "@/api/documents";
 import { listCrawlerJobs, triggerProfileEnrichment } from "@/api/crawlers";
 import { useAuthStore } from "@/stores/authStore";
 
@@ -34,6 +34,7 @@ export default function Documents() {
   const [deletingDoc, setDeletingDoc] = useState(null);
   const [uploadFile, setUploadFile] = useState(null);
   const [uploadError, setUploadError] = useState(null);
+  const [handwritingOcr, setHandwritingOcr] = useState(true);
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const fileInputRef = useRef(null);
@@ -60,6 +61,7 @@ export default function Documents() {
   useEffect(() => {
     setUploadError(null);
     setUploadFile(null);
+    setHandwritingOcr(true);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -86,6 +88,10 @@ export default function Documents() {
       const formData = new FormData();
       formData.append('profile_id', profileId);
       formData.append('document', file);
+      // Enable OCR for images (and optionally handwriting) during ingest.
+      formData.append('ocr', 'true');
+      formData.append('handwriting', handwritingOcr ? 'true' : 'false');
+      formData.append('ocr_language', 'eng');
       return ingestDocument(formData);
     },
     onSuccess: (_data, variables) => {
@@ -215,13 +221,40 @@ const latestDuration = describeDuration(latestEnrichmentJob)
       'application/msword',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       'text/plain',
+      'application/rtf',
+      'text/rtf',
+      'image/jpeg',
+      'image/jpg',
+      'image/png',
+      'image/webp',
+      'image/gif',
+      'image/bmp',
+      'image/tiff',
+      'image/heic',
+      'image/heif',
     ];
-    const allowedExtensions = ['pdf', 'doc', 'docx', 'txt'];
+    const allowedExtensions = [
+      'pdf',
+      'doc',
+      'docx',
+      'txt',
+      'rtf',
+      'jpg',
+      'jpeg',
+      'png',
+      'webp',
+      'gif',
+      'bmp',
+      'tif',
+      'tiff',
+      'heic',
+      'heif',
+    ];
     const extension = file.name?.split('.').pop()?.toLowerCase() ?? '';
 
     if (!allowedTypes.includes(file.type) && !allowedExtensions.includes(extension)) {
       setUploadFile(null);
-      setUploadError('Supported formats: PDF, DOC, DOCX, or TXT.');
+      setUploadError('Supported formats: PDF, DOC, DOCX, TXT, RTF, and images (JPG/JPEG/PNG/HEIC).');
       return;
     }
 
@@ -446,14 +479,26 @@ const latestDuration = describeDuration(latestEnrichmentJob)
                 <h3 className="text-sm font-semibold text-slate-900">Upload and parse a document</h3>
                 <p className="text-sm text-slate-600">
                   Files stay scoped to {selectedProfile?.display_name ?? "the selected profile"}. Supported formats:
-                  PDF, DOC, DOCX, or TXT (50MB max).
+                  PDF, DOC, DOCX, TXT, RTF, or image scans (JPG/PNG/HEIC/WEBP/GIF/TIFF/BMP). Handwriting is supported via OCR (50MB max).
                 </p>
+                <div className="flex items-center gap-2 pt-2">
+                  <input
+                    id="handwriting-ocr"
+                    type="checkbox"
+                    checked={handwritingOcr}
+                    onChange={(e) => setHandwritingOcr(e.target.checked)}
+                    disabled={!selectedProfileId || isUploading}
+                  />
+                  <label htmlFor="handwriting-ocr" className="text-xs text-slate-700">
+                    Handwritten / scanned form (enable OCR)
+                  </label>
+                </div>
               </div>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".pdf,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
+                  accept=".pdf,.doc,.docx,.txt,.rtf,.jpg,.jpeg,.png,.heic,.heif,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,application/rtf,text/rtf,image/jpeg,image/png,image/heic,image/heif,image/*"
                   onChange={handleFileChange}
                   disabled={!selectedProfileId || isUploading}
                   className="w-full sm:w-72 text-sm"
@@ -474,6 +519,36 @@ const latestDuration = describeDuration(latestEnrichmentJob)
                       Upload & parse
                     </>
                   )}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={async () => {
+                    if (!selectedProfileId) return
+                    if (documents.length === 0) {
+                      toast({ title: "No documents", description: "Upload at least one document first." })
+                      return
+                    }
+                    const ok = window.confirm("Queue parsing for up to 25 of the most recent documents in this profile?")
+                    if (!ok) return
+                    try {
+                      const result = await parseAllProfileDocuments(selectedProfileId, { handwriting: Boolean(handwritingOcr) })
+                      queryClient.invalidateQueries({ queryKey: ["documents", selectedProfileId] })
+                      queryClient.invalidateQueries({ queryKey: ["profile", selectedProfileId] })
+                      toast({
+                        title: "Parsing queued",
+                        description: `Queued ${result?.queued_count ?? "some"} document(s) for parsing.`,
+                      })
+                    } catch (error) {
+                      toast({
+                        variant: "destructive",
+                        title: "Parse-all failed",
+                        description: error instanceof Error ? error.message : "Unable to queue parsing for these documents.",
+                      })
+                    }
+                  }}
+                  disabled={!selectedProfileId || isUploading}
+                >
+                  Parse all
                 </Button>
               </div>
             </div>

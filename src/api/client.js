@@ -4,7 +4,7 @@
 // Use relative URLs in production (proxied by Vercel) to avoid CORS issues
 // In dev mode, use VITE_API_URL or default to localhost
 const API_URL = import.meta.env.DEV 
-  ? (import.meta.env.VITE_API_URL || 'http://localhost:8080')
+  ? (import.meta.env.VITE_API_URL || 'http://localhost:4000')
   : '';  // Empty string = relative URLs, proxied by Vercel
 const APP_BASE = import.meta.env.VITE_APP_BASE || '/grantflow';
 
@@ -521,7 +521,8 @@ class APIClient {
             : this.createStubEntityClient(prop);
 
           if (!resource && !this.stubWarnings.has(prop) && this.isDev && typeof console !== 'undefined') {
-            console.warn(
+            // Keep dev noise low (avoid surfacing as "errors" in some console collectors)
+            console.info(
               `[base44] Using in-memory stub for entity "${prop}". API endpoint not configured.`,
             );
             this.stubWarnings.add(prop);
