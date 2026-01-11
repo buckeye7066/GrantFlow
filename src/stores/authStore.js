@@ -72,40 +72,37 @@ function clearRefreshTimer() {
 
 const AUTH_METHODS = new Set(['email', 'phone', 'social'])
 
-// Crawler types to auto-trigger on admin login
-const ADMIN_CRAWLER_TYPES = ['local', 'scholarship', 'comprehensive']
 // Vite env values are typically strings, but be defensive (some tooling can coerce to boolean).
 const IS_SMOKE_UI =
   String(import.meta?.env?.VITE_SMOKE_MODE ?? '').toLowerCase() === 'true' ||
   // Playwright can inject a reliable marker before app code runs.
   (typeof globalThis !== 'undefined' && globalThis.__GF_SMOKE__ === true)
 
+// IMPORTANT:
+// We do NOT auto-trigger crawlers on admin login by default.
+// This was generating failed jobs (e.g. local/scholarship requiring profile context) and polluting diagnostics.
+const ENABLE_ADMIN_AUTO_CRAWL =
+  !IS_SMOKE_UI &&
+  String(import.meta?.env?.VITE_ENABLE_ADMIN_AUTO_CRAWL ?? '').toLowerCase() === 'true'
+
 // Helper function to trigger crawler jobs for admin
 async function triggerAdminCrawlers() {
   try {
-    if (IS_SMOKE_UI) {
-      // Smoke runs its own controlled crawler entrypoints; don't auto-trigger background crawlers.
-      return
-    }
-    const promises = ADMIN_CRAWLER_TYPES.map((type) =>
-      apiFetch('/api/crawlers/jobs', {
-        method: 'POST',
-        body: JSON.stringify({
-          type,
-          profile_id: null, // Admin crawls don't need a profile
-          parameters: {},
-        }),
-      }).catch((err) => {
-        console.error(`Failed to queue ${type} crawler:`, err)
-        return null
-      })
-    )
-    await Promise.all(promises)
-    
-    // Show success toast
+    if (!ENABLE_ADMIN_AUTO_CRAWL) return
+
+    // If enabled, only queue crawls that do NOT require a profile context.
+    // (Profile-scoped crawlers should be run explicitly from the UI with a selected profile.)
+    await apiFetch('/api/crawlers/jobs', {
+      method: 'POST',
+      body: JSON.stringify({
+        type: 'comprehensive',
+        parameters: { mode: 'national' },
+      }),
+    })
+
     toast({
-      title: 'Anya is starting automated crawls...',
-      description: 'Background crawlers are queued to find funding opportunities.',
+      title: 'Background crawl queued',
+      description: 'A comprehensive crawl was queued in the background.',
     })
   } catch (error) {
     console.error('Failed to trigger admin crawlers:', error)

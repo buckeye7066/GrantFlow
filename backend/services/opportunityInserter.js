@@ -24,6 +24,8 @@ export function upsertFundingOpportunity(db, opportunity) {
   const source = opportunity.source ?? 'crawler'
   const sourceId =
     opportunity.source_id ??
+    // Many crawler datasets ship a stable `id` field; treat that as the source_id when present.
+    opportunity.id ??
     `${source}-${crypto.randomUUID()}`
 
   // Check if record exists and if it's verified
@@ -51,7 +53,11 @@ export function upsertFundingOpportunity(db, opportunity) {
     return { id: existing.id, inserted: false }
   }
 
-  const id = opportunity.id ?? crypto.randomUUID()
+  // IMPORTANT:
+  // `funding_opportunities.id` is the DB primary key. Never reuse dataset IDs here because
+  // different sources can collide (e.g. "nat-snap") which triggers UNIQUE constraint failures.
+  // Stability/deduplication is achieved via (source, source_id), not the primary key.
+  const id = crypto.randomUUID()
   const isNational = deriveIsNational(opportunity)
   const record = {
     title: opportunity.title?.trim(),

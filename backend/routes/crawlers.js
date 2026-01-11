@@ -14,6 +14,18 @@ const ALLOWED_TYPES = new Set(CRAWLER_JOB_TYPES)
 const ALLOWED_STATUS = new Set(['queued', 'running', 'completed', 'failed', 'cancelled'])
 const MAX_LINEAGE_DEPTH = 15
 
+// Some crawler types are explicitly profile-scoped and cannot run without a profile context.
+// Enforce this at request time so we don't create guaranteed-to-fail jobs that pollute diagnostics.
+const TYPES_REQUIRING_PROFILE = new Set([
+  'local',
+  'scholarship',
+  'item_search',
+  'avatar_lookup',
+  'document_ingest',
+  'pipeline_automation',
+  'profile_enrichment',
+])
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const uploadDir = join(__dirname, '..', 'uploads')
@@ -933,6 +945,12 @@ router.post('/jobs', (req, res) => {
       if (bodyProfileId && bodyProfileId !== auth.profileId) {
         return res.status(403).json({ error: 'Cannot request jobs for another profile' })
       }
+    }
+
+    if (TYPES_REQUIRING_PROFILE.has(type) && !targetProfileId) {
+      return res.status(400).json({
+        error: `Crawler type "${type}" requires a profile_id. Select a profile and try again.`,
+      })
     }
 
     let organizationId = null
