@@ -233,8 +233,6 @@ async function searchGeneralItemGrants(itemInfo, profile) {
     'Placeholder URLs (communityfoundation.org, faithfoundation.org, etc.) are not allowed in production. ' +
     `Item type: ${itemInfo.type}, Profile: ${profile?.id || 'unknown'}`
   )
-  
-  return grants
 }
 
 function calculateItemMatchScore(opportunity, itemInfo, profile) {
