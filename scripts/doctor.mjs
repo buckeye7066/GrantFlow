@@ -233,6 +233,13 @@ async function main() {
     smokeProd: path.join(outDir, 'smoke-prod.log'),
   }
 
+  // Ensure devDependencies (eslint/vite/playwright) are installed even if the parent environment
+  // sets NODE_ENV=production (common in some shells/CI).
+  const installEnv = mergedEnv({
+    NODE_ENV: 'development',
+    npm_config_production: 'false',
+  })
+
   // Install check (non-destructive): if node_modules missing OR lock changed, do npm ci.
   const nodeModulesDir = path.join(root, 'node_modules')
   const fingerprintFile = path.join(nodeModulesDir, '.grantflow-doctor-install-fingerprint')
@@ -241,13 +248,36 @@ async function main() {
     fs.existsSync(fingerprintFile) ? fs.readFileSync(fingerprintFile, 'utf8').trim() : null
 
   if (!fs.existsSync(nodeModulesDir) || currentFingerprint !== expectedFingerprint) {
+    // Improve install reliability (Windows commonly fails with EPERM when unlinking native binaries).
+    // Best-effort: remove node_modules up-front so `npm ci` doesn't need to unlink locked files.
+    if (fs.existsSync(nodeModulesDir)) {
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          fs.rmSync(nodeModulesDir, { recursive: true, force: true })
+          break
+        } catch {
+          if (attempt === 3) break
+          await new Promise((r) => setTimeout(r, 500))
+        }
+      }
+    }
+
     const ci = await runCommand('npm', ['ci', '--no-audit', '--no-fund'], {
       cwd: root,
-      env: process.env,
+      env: installEnv,
       logFile: logs.install,
       label: 'npm ci',
     })
-    if (ci.code !== 0) process.exit(ci.code ?? 1)
+    if (ci.code !== 0) {
+      // Fallback: `npm install` is often more resilient on Windows than `npm ci`.
+      const install = await runCommand('npm', ['install', '--no-audit', '--no-fund'], {
+        cwd: root,
+        env: installEnv,
+        logFile: logs.install,
+        label: 'npm install (fallback after npm ci failure)',
+      })
+      if (install.code !== 0) process.exit(install.code ?? ci.code ?? 1)
+    }
     try {
       ensureDir(nodeModulesDir)
       writeFile(fingerprintFile, `${expectedFingerprint}\n`)
