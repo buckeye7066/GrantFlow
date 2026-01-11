@@ -790,7 +790,9 @@ app.use('/api/preferences', preferencesRouter);
 app.get('/api/health', (req, res) => {
   try {
     const healthSummary = getSafeHealthSummary(db);
-    const statusCode = healthSummary.status === 'healthy' ? 200 : 503;
+    // Treat "warning" as healthy for platform checks (Railway healthchecks, Docker HEALTHCHECK, etc.)
+    // Only fail hard when the health summary indicates a real error.
+    const statusCode = healthSummary.status === 'error' ? 500 : 200;
     res.status(statusCode).json(healthSummary);
   } catch (error) {
     console.error('[/api/health] Error:', error);
