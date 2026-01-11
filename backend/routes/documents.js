@@ -123,6 +123,21 @@ function normalizeProfileId(value) {
   return trimmed;
 }
 
+function ensureProfileAccess(res, context, profileId) {
+  if (!profileId) {
+    res.status(400).json({ error: 'profile_id is required' });
+    return false;
+  }
+  if (context.isAdmin) {
+    return true;
+  }
+  if (context.accessibleProfiles.has(profileId)) {
+    return true;
+  }
+  res.status(403).json({ error: 'Not authorized for this profile' });
+  return false;
+}
+
 // GET /api/documents
 router.get('/', (req, res) => {
   try {
@@ -382,6 +397,134 @@ router.delete('/:id', (req, res) => {
     req.db.prepare('DELETE FROM profile_documents WHERE document_id = ?').run(req.params.id);
     req.db.prepare('DELETE FROM documents WHERE id = ?').run(req.params.id);
     res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/documents/:id/parse
+// Queue AI parsing for a single document (creates a document_ingest crawler job).
+router.post('/:id/parse', (req, res) => {
+  try {
+    const context = buildAccessContext(req);
+    if (!ensureAuthenticated(res, context)) return;
+
+    const document = req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
+    if (!ensureDocumentAccess(res, context, document)) return;
+
+    const profileId = normalizeProfileId(document.profile_id);
+    const requestedBy = context.user?.profileId ?? context.user?.userId ?? 'system';
+
+    // De-dupe: if there's already a queued/running ingest job for this document, don't create another.
+    const existing = req.db
+      .prepare(
+        `
+          SELECT id, status
+          FROM crawler_jobs
+          WHERE type = 'document_ingest'
+            AND (status = 'queued' OR status = 'running')
+            AND parameters LIKE ?
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+      )
+      .get(`%"document_id":"${document.id}"%`);
+
+    if (!existing) {
+      req.db
+        .prepare(
+          `
+            INSERT INTO crawler_jobs (type, status, profile_id, organization_id, parameters, requested_by)
+            VALUES ('document_ingest', 'queued', ?, ?, ?, ?)
+          `,
+        )
+        .run(
+          profileId,
+          document.organization_id ?? null,
+          JSON.stringify({ document_id: document.id, source: 'manual_parse' }),
+          requestedBy,
+        );
+
+      // Mark document as pending/processing to surface UI state change immediately.
+      req.db
+        .prepare(
+          `
+            UPDATE documents
+            SET processing_status = CASE
+              WHEN processing_status = 'completed' THEN 'pending'
+              ELSE processing_status
+            END
+            WHERE id = ?
+          `,
+        )
+        .run(document.id);
+    }
+
+    res.json({ success: true, queued: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/documents/parse-all
+// Queue parsing for recent documents on a profile.
+router.post('/parse-all', (req, res) => {
+  try {
+    const context = buildAccessContext(req);
+    if (!ensureAuthenticated(res, context)) return;
+
+    const profileId = normalizeProfileId(req.body?.profile_id);
+    if (!ensureProfileAccess(res, context, profileId)) return;
+
+    const requestedBy = context.user?.profileId ?? context.user?.userId ?? 'system';
+
+    const docs = req.db
+      .prepare(
+        `
+          SELECT d.*
+          FROM documents d
+          WHERE d.profile_id = ?
+          ORDER BY d.created_at DESC
+          LIMIT 25
+        `,
+      )
+      .all(profileId);
+
+    let queued = 0;
+
+    const insertJob = req.db.prepare(
+      `
+        INSERT INTO crawler_jobs (type, status, profile_id, organization_id, parameters, requested_by)
+        VALUES ('document_ingest', 'queued', ?, ?, ?, ?)
+      `,
+    );
+
+    for (const doc of docs) {
+      const already = req.db
+        .prepare(
+          `
+            SELECT 1
+            FROM crawler_jobs
+            WHERE type = 'document_ingest'
+              AND (status = 'queued' OR status = 'running')
+              AND parameters LIKE ?
+            LIMIT 1
+          `,
+        )
+        .get(`%"document_id":"${doc.id}"%`);
+
+      if (already) continue;
+
+      insertJob.run(
+        profileId,
+        doc.organization_id ?? null,
+        JSON.stringify({ document_id: doc.id, source: 'parse_all' }),
+        requestedBy,
+      );
+      queued += 1;
+    }
+
+    res.json({ success: true, queued_count: queued, document_count: docs.length });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
