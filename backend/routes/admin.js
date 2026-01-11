@@ -23,6 +23,76 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const uploadDir = join(__dirname, '..', 'uploads');
 const repoRootDir = join(__dirname, '..', '..');
+const zipCoordinatesPath = join(repoRootDir, 'backend', 'data', 'crawlers', 'zip_coordinates.json');
+const countiesByStatePath = join(repoRootDir, 'county_batch1.json');
+
+let zipCoordinatesCache = null;
+let zipStateIndexCache = null;
+let countiesByStateCache = null;
+
+function ensureAdminRequest(req, res) {
+  const user = req.user;
+  const userEmail = user?.primary_email || user?.email || '';
+  const isAdmin =
+    user?.is_admin === true ||
+    user?.role === 'admin' ||
+    (userEmail && userEmail.toLowerCase().includes('buckeye7066'));
+
+  if (!isAdmin) {
+    res.status(403).json({
+      error: 'Access denied',
+      message: 'This endpoint is restricted to administrators only',
+    });
+    return false;
+  }
+  return true;
+}
+
+function loadZipCoordinates() {
+  if (zipCoordinatesCache) return zipCoordinatesCache;
+  if (!fs.existsSync(zipCoordinatesPath)) {
+    throw new Error(`ZIP coordinate dataset missing: ${zipCoordinatesPath}`);
+  }
+  zipCoordinatesCache = JSON.parse(fs.readFileSync(zipCoordinatesPath, 'utf8'));
+  return zipCoordinatesCache;
+}
+
+function buildZipStateIndex() {
+  if (zipStateIndexCache) return zipStateIndexCache;
+  const coords = loadZipCoordinates();
+  const index = new Map();
+
+  for (const [zip, meta] of Object.entries(coords)) {
+    const state = meta?.state;
+    if (!state) continue;
+    if (!index.has(state)) index.set(state, []);
+    index.get(state).push({
+      zip_code: zip,
+      city: meta.city ?? null,
+      state,
+      lat: meta.lat ?? null,
+      lng: meta.lng ?? null,
+    });
+  }
+
+  // Sort ZIPs within each state for stable UX.
+  for (const entries of index.values()) {
+    entries.sort((a, b) => String(a.zip_code).localeCompare(String(b.zip_code)));
+  }
+
+  zipStateIndexCache = index;
+  return zipStateIndexCache;
+}
+
+function loadCountiesByState() {
+  if (countiesByStateCache) return countiesByStateCache;
+  if (!fs.existsSync(countiesByStatePath)) {
+    countiesByStateCache = {};
+    return countiesByStateCache;
+  }
+  countiesByStateCache = JSON.parse(fs.readFileSync(countiesByStatePath, 'utf8'));
+  return countiesByStateCache;
+}
 
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
@@ -410,6 +480,103 @@ router.get('/diagnostics', (req, res) => {
       error: 'Failed to get diagnostics',
       message: error.message || 'An unexpected error occurred'
     });
+  }
+});
+
+/**
+ * Geo Crawl support endpoints (admin-only)
+ * These power the Geo Crawl UI state dropdown and scoping selectors.
+ */
+router.get('/geo/states', (req, res) => {
+  try {
+    if (!ensureAdminRequest(req, res)) return;
+    const index = buildZipStateIndex();
+    const states = Array.from(index.keys())
+      .sort()
+      .map((state) => ({ state, zip_count: index.get(state).length }));
+    res.json({ states });
+  } catch (error) {
+    console.error('[admin/geo/states] Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/geo/state/:state/zips', (req, res) => {
+  try {
+    if (!ensureAdminRequest(req, res)) return;
+    const state = String(req.params.state || '').toUpperCase();
+    const index = buildZipStateIndex();
+    res.json({ zips: index.get(state) ?? [] });
+  } catch (error) {
+    console.error('[admin/geo/state/zips] Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/geo/state/:state/counties', (req, res) => {
+  try {
+    if (!ensureAdminRequest(req, res)) return;
+    const state = String(req.params.state || '').toUpperCase();
+    const countiesByState = loadCountiesByState();
+    const list = Array.isArray(countiesByState?.[state]) ? countiesByState[state] : [];
+    res.json({ counties: list.map((county) => ({ county })) });
+  } catch (error) {
+    console.error('[admin/geo/state/counties] Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/geo/state/:state/index-counties', (req, res) => {
+  try {
+    if (!ensureAdminRequest(req, res)) return;
+    // Counties are shipped from a bundled JSON file. This endpoint exists so the UI can
+    // confirm availability / future-proof for DB-backed indexing.
+    const job = { id: crypto.randomUUID(), status: 'completed' };
+    res.json({ success: true, job });
+  } catch (error) {
+    console.error('[admin/geo/state/index-counties] Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/geo/crawl/status', (req, res) => {
+  try {
+    if (!ensureAdminRequest(req, res)) return;
+    const latest = req.db
+      .prepare(
+        `
+          SELECT id, type, status, created_at, completed_at, result_count, error
+          FROM crawler_jobs
+          WHERE type = 'geo_crawl'
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+      )
+      .get();
+    res.json({ geo_crawl: latest ?? null });
+  } catch (error) {
+    console.error('[admin/geo/crawl/status] Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/geo/crawl/start', (req, res) => {
+  try {
+    if (!ensureAdminRequest(req, res)) return;
+    const payload = req.body ?? {};
+    const jobId = crypto.randomUUID();
+    req.db
+      .prepare(
+        `
+          INSERT INTO crawler_jobs (id, type, status, parameters, requested_by, created_at)
+          VALUES (?, 'geo_crawl', 'queued', ?, ?, datetime('now'))
+        `,
+      )
+      .run(jobId, JSON.stringify(payload), req.user?.id || 'admin');
+    res.status(201).json({ success: true, job: { id: jobId, status: 'queued', parameters: payload } });
+  } catch (error) {
+    console.error('[admin/geo/crawl/start] Error:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 

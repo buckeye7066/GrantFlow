@@ -4,7 +4,6 @@ import { Shield, Activity, AlertCircle, Bot, DollarSign, Wrench, Workflow } from
 import AdminDocumentUpload from '@/components/admin/AdminDocumentUpload';
 import AdminDiagnostics from '@/components/admin/AdminDiagnostics';
 import AdminGeoCrawl from '@/components/admin/AdminGeoCrawl';
-import AdminNationalCrawl from '@/components/admin/AdminNationalCrawl';
 import AdminMaintenance from '@/components/admin/AdminMaintenance';
 import AdminAnyaConsole from '@/components/admin/AdminAnyaConsole';
 import Billing from '@/pages/Billing';
@@ -52,7 +51,6 @@ export default function Admin() {
             </TabsTrigger>
             <TabsTrigger value="upload">Upload Profile Document</TabsTrigger>
             <TabsTrigger value="geo">Geo Crawl</TabsTrigger>
-            <TabsTrigger value="national">National Crawl</TabsTrigger>
             <TabsTrigger value="automation">
               <Workflow className="w-4 h-4 mr-2" />
               Automation
@@ -81,10 +79,6 @@ export default function Admin() {
 
           <TabsContent value="geo" className="mt-6">
             <AdminGeoCrawl />
-          </TabsContent>
-
-          <TabsContent value="national" className="mt-6">
-            <AdminNationalCrawl />
           </TabsContent>
 
           <TabsContent value="automation" className="mt-6">
