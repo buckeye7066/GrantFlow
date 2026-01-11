@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import Combobox from '@/components/shared/Combobox';
 import {
   Search,
   Plus,
@@ -131,6 +132,15 @@ export default function SourceDirectory() {
       setSelectedOrgId(organizations[0].id);
     }
   }, [organizations, selectedOrgId]);
+
+  const organizationOptions = useMemo(() => {
+    return organizations
+      .map((org) => ({
+        value: org.id,
+        label: org.name || org.display_name || org.id,
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [organizations]);
 
   const crawlMutation = useMutation({
     mutationFn: async (sourceId) => {
@@ -539,19 +549,17 @@ export default function SourceDirectory() {
             </div>
 
             <div className="w-full md:w-80">
-              <Select value={selectedOrgId || ""} onValueChange={setSelectedOrgId}>
-                <SelectTrigger>
-                  <div className="flex items-center gap-2">
-                    <Building2 className="w-4 h-4 text-slate-500" />
-                    <SelectValue placeholder="Select a profile..." />
-                  </div>
-                </SelectTrigger>
-                <SelectContent>
-                  {organizations.map(org => (
-                    <SelectItem key={org.id} value={org.id}>{org.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="flex items-center gap-2">
+                <Building2 className="w-4 h-4 text-slate-500" />
+                <Combobox
+                  options={organizationOptions}
+                  value={selectedOrgId || ""}
+                  onChange={setSelectedOrgId}
+                  placeholder="Select a profile..."
+                  isLoading={isLoadingOrgs}
+                  className="w-full"
+                />
+              </div>
             </div>
           </div>
 
