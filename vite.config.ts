@@ -9,7 +9,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const proxyTarget = env.VITE_API_PROXY_TARGET || 'http://localhost:8080'
-  const rawBase = env.VITE_ASSET_BASE || env.VITE_APP_BASE || '/'
+  // Default to serving under /grantflow (matches backend SPA mount + smoke tests).
+  // Override with VITE_APP_BASE=/ for root deployments.
+  const rawBase = env.VITE_ASSET_BASE || env.VITE_APP_BASE || '/grantflow'
   const assetBase =
     rawBase === '/'
       ? '/'

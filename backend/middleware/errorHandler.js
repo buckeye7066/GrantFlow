@@ -9,10 +9,10 @@
  */
 export function formatError(error) {
   const isProduction = process.env.NODE_ENV === 'production';
-  
+
   return {
     error: isProduction ? 'Internal server error' : error.message,
-    ...(isProduction ? {} : { stack: error.stack })
+    ...(isProduction ? {} : { stack: error.stack }),
   };
 }
 
@@ -22,15 +22,36 @@ export function formatError(error) {
 export function errorHandler(err, req, res, next) {
   // Log error for debugging
   console.error('Error:', {
-    message: err.message,
-    stack: err.stack,
-    path: req.path,
-    method: req.method
+    message: err?.message,
+    stack: err?.stack,
+    path: req?.path,
+    method: req?.method,
   });
-  
+
   // Determine status code
-  const statusCode = err.statusCode || err.status || 500;
-  
+  let statusCode = err?.statusCode || err?.status || 500;
+
+  // Normalize common SQLite constraint errors into 4xx so callers (and smoke tests)
+  // see validation failures instead of 500s.
+  const sqliteConstraintCodes = new Set([
+    'SQLITE_CONSTRAINT',
+    'SQLITE_CONSTRAINT_CHECK',
+    'SQLITE_CONSTRAINT_FOREIGNKEY',
+    'SQLITE_CONSTRAINT_NOTNULL',
+    'SQLITE_CONSTRAINT_PRIMARYKEY',
+    'SQLITE_CONSTRAINT_TRIGGER',
+    'SQLITE_CONSTRAINT_UNIQUE',
+  ]);
+
+  if (
+    statusCode === 500 &&
+    err &&
+    (sqliteConstraintCodes.has(err.code) ||
+      (typeof err.message === 'string' && /constraint failed/i.test(err.message)))
+  ) {
+    statusCode = 400;
+  }
+
   // Send error response
   res.status(statusCode).json(formatError(err));
 }

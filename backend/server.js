@@ -128,6 +128,32 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json({ limit: MAX_JSON_BODY_SIZE }));
+
+// Guardrail: JSON write endpoints should not accept an empty body.
+// This prevents NOT NULL/constraint failures from bubbling up as 500s when callers
+// (including smoke tests) probe POST/PUT/PATCH routes with {}.
+app.use((req, res, next) => {
+  const method = String(req.method || '').toUpperCase();
+  const isWrite = method === 'POST' || method === 'PUT' || method === 'PATCH';
+  const isApi = typeof req.path === 'string' && req.path.startsWith('/api/');
+  const contentType = String(req.headers && req.headers['content-type'] ? req.headers['content-type'] : '').toLowerCase();
+  const isJson = contentType.includes('application/json');
+
+  if (isWrite && isApi && isJson) {
+    const body = req.body;
+    const hasBody =
+      body &&
+      typeof body === 'object' &&
+      !Array.isArray(body) &&
+      Object.keys(body).length > 0;
+
+    if (!hasBody) {
+      return res.status(400).json({ error: 'Request body required' });
+    }
+  }
+
+  return next();
+});
 try {
   if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
