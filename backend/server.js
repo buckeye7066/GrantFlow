@@ -788,6 +788,29 @@ app.use('/api/crawlers', crawlersRouter);
 app.use('/api/real-crawlers', realCrawlersRouter);
 app.use('/api/preferences', preferencesRouter);
 
+function resolveBuildSha() {
+  return (
+    process.env.RAILWAY_GIT_COMMIT_SHA ||
+    process.env.GIT_COMMIT_SHA ||
+    process.env.COMMIT_SHA ||
+    process.env.VERCEL_GIT_COMMIT_SHA ||
+    null
+  )
+}
+
+// Build metadata endpoint (public, no secrets)
+app.get('/api/meta/build', (_req, res) => {
+  res.json({
+    sha: resolveBuildSha(),
+    built_at:
+      process.env.BUILD_TIMESTAMP ||
+      process.env.RAILWAY_DEPLOYMENT_START_TIME ||
+      null,
+    node: process.version,
+    env: process.env.NODE_ENV || 'development',
+  })
+})
+
 // Public health endpoint - safe for non-admin users
 app.get('/api/health', (req, res) => {
   try {

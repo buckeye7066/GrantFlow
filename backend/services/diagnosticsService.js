@@ -249,7 +249,7 @@ function getRecentErrors(db) {
   try {
     // Get failed crawler jobs from last 7 days
     const failedJobs = db.prepare(`
-      SELECT type, error, created_at
+      SELECT id, type, status, profile_id, organization_id, error, created_at
       FROM crawler_jobs
       WHERE status = 'failed'
         AND created_at >= datetime('now', '-7 days')
@@ -260,7 +260,11 @@ function getRecentErrors(db) {
     failedJobs.forEach(job => {
       errors.push({
         scope: 'crawler_job',
+        job_id: job.id ?? null,
         crawler_type: job.type,
+        status: job.status ?? 'failed',
+        profile_id: job.profile_id ?? null,
+        organization_id: job.organization_id ?? null,
         message: job.error || 'Unknown error',
         time: job.created_at,
       });
@@ -268,7 +272,7 @@ function getRecentErrors(db) {
     
     // Get error crawl logs from last 7 days
     const errorLogs = db.prepare(`
-      SELECT source, error_message, created_at
+      SELECT id, source, status, error_message, created_at
       FROM crawl_logs
       WHERE status = 'error'
         AND created_at >= datetime('now', '-7 days')
@@ -279,7 +283,9 @@ function getRecentErrors(db) {
     errorLogs.forEach(log => {
       errors.push({
         scope: 'crawl_log',
+        log_id: log.id ?? null,
         source: log.source,
+        status: log.status ?? 'error',
         message: log.error_message || 'Unknown error',
         time: log.created_at,
       });
