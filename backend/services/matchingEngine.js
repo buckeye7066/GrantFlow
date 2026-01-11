@@ -42,7 +42,7 @@ export function calculateMatchScore(profile, opportunity) {
   }
   
   // Applicant type match (25 pts)
-  if (eligibilityMatchesApplicantType(opportunity, effectiveProfile)) {
+  if (eligibilityMatchesApplicantType(opportunity, effectiveSignals ?? effectiveProfile)) {
     score += 25;
     reasons.push('Applicant type match');
   }
@@ -97,9 +97,13 @@ export function calculateMatchScore(profile, opportunity) {
  */
 function eligibilityMatchesApplicantType(opportunity, profile) {
   const eligibility = safeParseArrayField(opportunity.eligibility_bullets, []);
+  const applicantTypesSet =
+    profile?.applicantTypes && typeof profile.applicantTypes[Symbol.iterator] === 'function'
+      ? new Set(Array.from(profile.applicantTypes).map((v) => String(v).toLowerCase()))
+      : null
   const profileType = profile.primary_type || profile.applicant_type || '';
   
-  if (!profileType) return false;
+  if ((!profileType || profileType.length === 0) && (!applicantTypesSet || applicantTypesSet.size === 0)) return false;
   
   const typeKeywords = {
     'individual_need': ['individual', 'person', 'resident', 'household'],
@@ -114,7 +118,14 @@ function eligibilityMatchesApplicantType(opportunity, profile) {
     'government': ['government', 'municipal', 'state', 'local government', 'public sector']
   };
   
-  const keywords = typeKeywords[profileType] || [profileType];
+  const profileTypesToCheck = applicantTypesSet?.size
+    ? Array.from(applicantTypesSet)
+    : [profileType]
+
+  const keywords = profileTypesToCheck
+    .flatMap((t) => typeKeywords[t] || [t])
+    .filter(Boolean)
+    .map((t) => String(t))
   const eligibilityText = eligibility.join(' ').toLowerCase();
   const oppText = `${opportunity.title || ''} ${opportunity.description || ''}`.toLowerCase();
   
@@ -128,11 +139,56 @@ function eligibilityMatchesApplicantType(opportunity, profile) {
  * Calculate keyword overlap score (0-25 points)
  */
 function calculateKeywordOverlap(profile, opportunity) {
+  const keywordSet =
+    profile?.keywordSet && typeof profile.keywordSet[Symbol.iterator] === 'function'
+      ? Array.from(profile.keywordSet)
+      : []
+  const phraseSet =
+    profile?.phrases && typeof profile.phrases[Symbol.iterator] === 'function'
+      ? Array.from(profile.phrases)
+      : []
+  const interestSet =
+    profile?.interests && typeof profile.interests[Symbol.iterator] === 'function'
+      ? Array.from(profile.interests)
+      : []
+  const demographicSet =
+    profile?.demographics && typeof profile.demographics[Symbol.iterator] === 'function'
+      ? Array.from(profile.demographics)
+      : []
+  const militarySet =
+    profile?.military && typeof profile.military[Symbol.iterator] === 'function'
+      ? Array.from(profile.military)
+      : []
+  const assistanceSet =
+    profile?.assistance && typeof profile.assistance[Symbol.iterator] === 'function'
+      ? Array.from(profile.assistance)
+      : []
+  const genderSet =
+    profile?.genders && typeof profile.genders[Symbol.iterator] === 'function'
+      ? Array.from(profile.genders)
+      : []
+  const applicantTypes =
+    profile?.applicantTypes && typeof profile.applicantTypes[Symbol.iterator] === 'function'
+      ? Array.from(profile.applicantTypes)
+      : []
+
   const profileKeywords = safeParseArrayField(profile.keywords, []);
   const focusAreas = safeParseArrayField(profile.focus_areas, []);
   const programAreas = safeParseArrayField(profile.program_areas, []);
   
-  const allProfileKeywords = [...profileKeywords, ...focusAreas, ...programAreas]
+  const allProfileKeywords = [
+    ...keywordSet,
+    ...phraseSet,
+    ...interestSet,
+    ...demographicSet,
+    ...militarySet,
+    ...assistanceSet,
+    ...genderSet,
+    ...applicantTypes,
+    ...profileKeywords,
+    ...focusAreas,
+    ...programAreas,
+  ]
     .map(k => String(k).toLowerCase().trim())
     .filter(k => k.length > 0);
   
@@ -143,7 +199,8 @@ function calculateKeywordOverlap(profile, opportunity) {
   const oppText = `${opportunity.title || ''} ${opportunity.description || ''}`.toLowerCase();
   
   let matches = 0;
-  allProfileKeywords.forEach(keyword => {
+  // Cap the number of profile keywords considered to keep scoring bounded but still comprehensive.
+  allProfileKeywords.slice(0, 250).forEach(keyword => {
     // Exact keyword match
     if (oppKeywords.some(ok => String(ok).toLowerCase().includes(keyword))) {
       matches += 2;
@@ -167,7 +224,12 @@ function calculateKeywordOverlap(profile, opportunity) {
  * Calculate category match score (0-20 points)
  */
 function calculateCategoryMatch(profile, opportunity) {
-  const profileCategories = safeParseArrayField(profile.program_areas, []);
+  const profileCategories = [
+    ...safeParseArrayField(profile.program_areas, []),
+    ...(profile?.interests && typeof profile.interests[Symbol.iterator] === 'function'
+      ? Array.from(profile.interests)
+      : []),
+  ];
   const oppCategories = safeParseArrayField(opportunity.categories, []);
   
   if (profileCategories.length === 0 || oppCategories.length === 0) return 0;

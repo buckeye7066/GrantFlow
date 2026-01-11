@@ -210,10 +210,12 @@ router.post('/run', ensureAuth, async (req, res) => {
     })
   }
   
-  if (!profile_id && !profile_data) {
-    return res.status(400).json({ 
-      error: 'Profile ID or data required',
-      message: 'Either profile_id or profile_data must be provided'
+  // Hard guard: we will not run crawlers unless we can load the full profile context
+  // (all profile_sections + derived signals) from the database.
+  if (!profile_id) {
+    return res.status(400).json({
+      error: 'Profile ID required',
+      message: 'Crawler runs require a profile_id so we can use 100% of the profile sections/signals.',
     })
   }
   
@@ -239,6 +241,16 @@ router.post('/run', ensureAuth, async (req, res) => {
       profile && profile.sections && profile.signals
         ? { profile, sections: profile.sections, signals: profile.signals }
         : { profile, sections: profile?.sections ?? {}, signals: profile?.signals ?? null }
+
+    const coveragePct = profileContext?.signals?.coverage?.pct ?? 0
+    if (!profileContext?.sections || Object.keys(profileContext.sections).length === 0 || coveragePct < 1) {
+      return res.status(400).json({
+        error: 'Profile context incomplete',
+        message:
+          'Refusing to run: crawler requires 100% profile coverage (all sections loaded and included in signals). Please complete/save the profile sections and retry.',
+        coverage: profileContext?.signals?.coverage ?? null,
+      })
+    }
     
     console.log(`[RealCrawlers] Running ${crawler_type} for profile ${profile_id || 'custom'}`)
     
@@ -382,6 +394,21 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
   const failed = []
   let totalFound = 0
   let totalInserted = 0
+
+  const profileContextBase =
+    profile && profile.sections && profile.signals
+      ? { profile, sections: profile.sections, signals: profile.signals }
+      : { profile, sections: profile?.sections ?? {}, signals: profile?.signals ?? null }
+
+  const coveragePct = profileContextBase?.signals?.coverage?.pct ?? 0
+  if (!profileContextBase?.sections || Object.keys(profileContextBase.sections).length === 0 || coveragePct < 1) {
+    return res.status(400).json({
+      error: 'Profile context incomplete',
+      message:
+        'Refusing to run: crawlers require 100% profile coverage (all sections loaded and included in signals). Please complete/save the profile sections and retry.',
+      coverage: profileContextBase?.signals?.coverage ?? null,
+    })
+  }
   
   for (const crawlerType of crawler_types) {
     if (!CRAWLER_TYPES.includes(crawlerType)) {
@@ -394,10 +421,7 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
     }
     
     try {
-      const profileContext =
-        profile && profile.sections && profile.signals
-          ? { profile, sections: profile.sections, signals: profile.signals }
-          : { profile, sections: profile?.sections ?? {}, signals: profile?.signals ?? null }
+      const profileContext = profileContextBase
 
       const tokens = buildSearchTokens(profileContext)
       const { sql, params } = buildCandidateOpportunityQuery({
