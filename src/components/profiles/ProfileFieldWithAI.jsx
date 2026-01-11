@@ -8,6 +8,20 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { requestProfileFieldAI } from "@/api/profiles"
 import { useToast } from "@/components/ui/use-toast"
 
+function safeStringifyValue(value) {
+  if (value === undefined || value === null) return ""
+  if (typeof value === "string") return value
+  if (typeof value === "number" || typeof value === "boolean") return String(value)
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value, null, 2)
+    } catch {
+      return String(value)
+    }
+  }
+  return String(value)
+}
+
 /**
  * Profile field with AI assistance button
  * Wraps any input component with an AI assist button
@@ -25,18 +39,36 @@ export default function ProfileFieldWithAI({
   const [isLoadingAI, setIsLoadingAI] = useState(false)
   const { toast } = useToast()
   
-  const FieldComponent = field.component || Input
+  const safeField = field ?? {
+    name: props?.name ?? "field",
+    label: props?.name ?? "Field",
+    description: "",
+    component: Input,
+    props: {},
+  }
+
+  const FieldComponent = safeField.component || Input
+  const displayValue = safeStringifyValue(value)
   
   const handleAIAssist = async () => {
+    if (!safeField?.name) {
+      toast({
+        title: "AI assist unavailable",
+        description: "This field is missing metadata (name).",
+        variant: "destructive",
+      })
+      return
+    }
+
     setIsLoadingAI(true)
     
     try {
       // Prepare context for AI
       const context = {
-        fieldName: field.name,
-        fieldLabel: field.label,
-        currentValue: value || '',
-        fieldDescription: field.description || '',
+        fieldName: safeField.name,
+        fieldLabel: safeField.label,
+        currentValue: displayValue || '',
+        fieldDescription: safeField.description || '',
         sectionKey,
         profileId,
         ...formContext // Additional form data for context
@@ -49,7 +81,7 @@ export default function ProfileFieldWithAI({
         onChange(response.suggestion)
         toast({
           title: "AI suggestion applied",
-          description: `Updated ${field.label} with AI-generated content`,
+          description: `Updated ${safeField.label} with AI-generated content`,
         })
       }
     } catch (error) {
@@ -67,7 +99,7 @@ export default function ProfileFieldWithAI({
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <Label htmlFor={field.name}>{field.label}</Label>
+        <Label htmlFor={safeField.name}>{safeField.label}</Label>
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -100,16 +132,16 @@ export default function ProfileFieldWithAI({
       </div>
       
       <FieldComponent
-        id={field.name}
-        value={value}
+        id={safeField.name}
+        value={displayValue}
         onChange={(e) => onChange(e.target ? e.target.value : e)}
         disabled={disabled || isLoadingAI}
-        {...field.props}
+        {...safeField.props}
         {...props}
       />
       
-      {field.description && (
-        <p className="text-xs text-slate-500">{field.description}</p>
+      {safeField.description && (
+        <p className="text-xs text-slate-500">{safeField.description}</p>
       )}
     </div>
   )
