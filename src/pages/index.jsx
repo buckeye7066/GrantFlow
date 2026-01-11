@@ -16,7 +16,6 @@ import ItemFunding from "./ItemFunding";
 import Pipeline from "./Pipeline";
 
 import Proposals from "./Proposals";
-import ContactAdmin from "./ContactAdmin";
 import Outreach from "./Outreach";
 import GrantDeadline from "./GrantDeadline";
 
@@ -126,8 +125,6 @@ const PAGES = {
     Pipeline: Pipeline,
     
     Proposals: Proposals,
-    
-    ContactAdmin: ContactAdmin,
     
     Outreach: Outreach,
     
@@ -264,8 +261,6 @@ function LayoutRoutes() {
                 <Route path="/Pipeline" element={<Pipeline />} />
 
                 <Route path="/Proposals" element={<Proposals />} />
-
-                <Route path="/ContactAdmin" element={<ContactAdmin />} />
 
                 <Route path="/Outreach" element={<Outreach />} />
 

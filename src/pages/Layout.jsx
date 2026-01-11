@@ -98,11 +98,6 @@ const navigationItems = [
     icon: Kanban,
   },
   {
-    title: "Contact Admin",
-    url: createPageUrl("ContactAdmin"),
-    icon: MessageSquare,
-  },
-  {
     title: "Outreach",
     url: createPageUrl("Outreach"),
     icon: Megaphone,
