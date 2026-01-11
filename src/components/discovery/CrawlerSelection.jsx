@@ -72,6 +72,7 @@ export default function CrawlerSelection({
   const [progress, setProgress] = useState({});
   const [results, setResults] = useState({});
   const [errors, setErrors] = useState({});
+  const [minMatchScore, setMinMatchScore] = useState(60);
   const { toast } = useToast();
 
   const handleToggleCrawler = (crawlerId) => {
@@ -128,7 +129,7 @@ export default function CrawlerSelection({
             profile_id: profileId,
             profile_data: profileData,
             item_request: itemRequest,
-            min_match_score: 80
+            min_match_score: minMatchScore
           })
         });
         
@@ -164,7 +165,7 @@ export default function CrawlerSelection({
 
     const failedResults = allResults.filter(r => !r.success);
 
-    console.log(`[CrawlerSelection] Found ${successfulResults.length} total opportunities`);
+    console.log(`[CrawlerSelection] Found ${successfulResults.length} total opportunities (minMatchScore=${minMatchScore})`);
 
     // Add to pipeline if callback provided
     if (onCrawlComplete && successfulResults.length > 0) {
@@ -214,6 +215,29 @@ export default function CrawlerSelection({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/* Match score threshold */}
+          <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-medium text-slate-900">Minimum match score</div>
+                <div className="text-xs text-slate-600">
+                  Lower this to see more results; raise it to keep only the strongest matches.
+                </div>
+              </div>
+              <div className="text-sm font-semibold text-slate-900">{minMatchScore}%</div>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={minMatchScore}
+              onChange={(e) => setMinMatchScore(Number(e.target.value))}
+              disabled={isRunning}
+              className="mt-3 w-full"
+            />
+          </div>
+
           {/* Select All Control */}
           <div className="flex items-center justify-between p-4 bg-slate-50 rounded-lg">
             <div className="flex items-center gap-3">
@@ -284,7 +308,7 @@ export default function CrawlerSelection({
                       
                       {result && (
                         <div className="mt-2 text-xs text-green-700 font-medium">
-                          Found {result.count || 0} opportunities
+                          Included {result.count || 0} of {result.total_found ?? (result.count || 0)} found
                         </div>
                       )}
                       
@@ -346,7 +370,7 @@ export default function CrawlerSelection({
                   return (
                     <div key={crawlerId} className="text-sm text-green-800">
                       <span className="font-medium">{crawler?.name}:</span>{' '}
-                      {result.count || 0} opportunities found
+                      {result.count || 0} included of {result.total_found ?? (result.count || 0)} found
                     </div>
                   );
                 })}

@@ -6,13 +6,8 @@
 
 import express from 'express'
 import { ensureAuth } from '../middleware/auth.js'
-import { getProfileWithLocation, formatOpportunity } from '../services/crawlers/crawlerHelpers.js'
-import { crawlLocalFunding } from '../services/crawlers/localFundingCrawler.js'
-import { crawlGovernmentFunding } from '../services/crawlers/governmentFundingCrawler.js'
-import { crawlStudentGrants } from '../services/crawlers/studentGrantsCrawler.js'
-import { crawlECFBenefits } from '../services/crawlers/ecfBenefitsCrawler.js'
-import { crawlItemFunding } from '../services/crawlers/itemFundingCrawler.js'
-import { crawlSpecialNeeds } from '../services/crawlers/specialNeedsCrawler.js'
+import { getProfileWithLocation } from '../services/crawlers/crawlerHelpers.js'
+import { calculateMatchScore } from '../services/matchingEngine.js'
 
 const router = express.Router()
 
@@ -26,12 +21,186 @@ const CRAWLER_TYPES = [
   'special_needs'
 ]
 
+const LOAN_TYPES = new Set(['loan', 'loan_program', 'microloan'])
+
+function normalizeString(value) {
+  if (typeof value !== 'string') return ''
+  return value.trim().toLowerCase()
+}
+
+function safeParseJSON(value, fallback) {
+  if (value === null || value === undefined) return fallback
+  if (Array.isArray(value)) return value
+  if (typeof value === 'object') return value
+  try {
+    return JSON.parse(value)
+  } catch {
+    return fallback
+  }
+}
+
+function buildSearchTokens(profileContext) {
+  const signals = profileContext?.signals
+  const tokens = new Set()
+
+  // Prefer richer signals when present.
+  if (signals?.phrases && typeof signals.phrases[Symbol.iterator] === 'function') {
+    for (const phrase of signals.phrases) {
+      const normalized = normalizeString(String(phrase))
+      if (normalized.length >= 4) tokens.add(normalized)
+      if (tokens.size >= 12) break
+    }
+  }
+
+  if (tokens.size < 12 && signals?.keywordSet && typeof signals.keywordSet[Symbol.iterator] === 'function') {
+    for (const kw of signals.keywordSet) {
+      const normalized = normalizeString(String(kw))
+      if (normalized.length >= 4) tokens.add(normalized)
+      if (tokens.size >= 12) break
+    }
+  }
+
+  // Fallback to tags/focus areas if signals missing.
+  const profile = profileContext?.profile
+  const fallback = []
+  if (Array.isArray(profile?.tags)) fallback.push(...profile.tags)
+  if (Array.isArray(profile?.interests)) fallback.push(...profile.interests)
+  fallback.forEach((value) => {
+    const normalized = normalizeString(String(value))
+    if (normalized.length >= 4) tokens.add(normalized)
+  })
+
+  return Array.from(tokens).slice(0, 12)
+}
+
+function isOpportunityCurrent(row) {
+  const deadlineType = normalizeString(row?.deadline_type)
+  if (deadlineType === 'rolling' || deadlineType === 'ongoing') return true
+
+  const deadline = row?.deadline
+  if (!deadline) return true
+
+  const parsed = new Date(deadline)
+  if (Number.isNaN(parsed.getTime())) {
+    // Unknown format; don't exclude automatically.
+    return true
+  }
+
+  const now = new Date()
+  // Expired deadlines are not relevant in 2026 (unless rolling/ongoing).
+  return parsed >= new Date(now.getFullYear(), now.getMonth(), now.getDate())
+}
+
+function formatDbOpportunity(row) {
+  if (!row) return null
+  const keywords = safeParseJSON(row.keywords, [])
+  const categories = safeParseJSON(row.categories, [])
+  const eligibility_bullets = safeParseJSON(row.eligibility_bullets, [])
+  const match_reasons = safeParseJSON(row.match_reasons, [])
+
+  return {
+    ...row,
+    keywords,
+    categories,
+    eligibility_bullets,
+    match_reasons,
+    // Normalize url fields used by frontend.
+    url: row.application_url ?? row.source_url ?? null,
+  }
+}
+
+function buildCandidateOpportunityQuery({ crawlerType, profileContext, tokens, itemRequest }) {
+  const conditions = ['is_active = 1']
+  const params = []
+
+  // Avoid obviously non-grant programs by default.
+  conditions.push("(requires_match IS NULL OR requires_match = 0 OR requires_match = '0' OR requires_match = 'false')")
+  conditions.push("(match_percentage IS NULL OR match_percentage = 0 OR match_percentage = '0')")
+  conditions.push("(opportunity_type IS NULL OR LOWER(opportunity_type) NOT IN ('loan','loan_program','microloan'))")
+
+  // Exclude expired deadlines by default (rolling/ongoing/NULL are allowed).
+  conditions.push('(deadline_type IN ("rolling","ongoing") OR deadline IS NULL OR deadline >= date("now"))')
+
+  // Geography: state + national.
+  const state = profileContext?.signals?.location?.state ?? profileContext?.profile?.state ?? null
+  if (state && typeof state === 'string' && state.trim().length === 2) {
+    conditions.push('(state = ? OR is_national = 1 OR state IS NULL)')
+    params.push(state.trim().toUpperCase())
+  }
+
+  // Crawler-type hints (lightweight pre-filter).
+  if (crawlerType === 'student_grants') {
+    conditions.push('(LOWER(opportunity_type) IN ("scholarship","grant") OR LOWER(title) LIKE "%scholar%" OR LOWER(description) LIKE "%scholar%")')
+  }
+  if (crawlerType === 'ecf_benefits') {
+    conditions.push('(LOWER(source) = "ecf_choices_discovery" OR LOWER(title) LIKE "%ecf%" OR LOWER(description) LIKE "%ecf%")')
+  }
+  if (crawlerType === 'special_needs') {
+    conditions.push('(LOWER(title) LIKE "%disab%" OR LOWER(description) LIKE "%disab%" OR LOWER(title) LIKE "%cancer%" OR LOWER(description) LIKE "%cancer%")')
+  }
+  if (crawlerType === 'government_funding') {
+    conditions.push('(LOWER(source) IN ("grants.gov","usaspending.gov","grants_gov","usa_spending","state_portal","hud_cdbg","liheap","snap_et") OR LOWER(title) LIKE "%federal%" OR LOWER(description) LIKE "%federal%")')
+  }
+
+  // Keyword narrowing from profile (kept small to avoid huge SQL).
+  if (tokens.length > 0) {
+    const tokenClauses = tokens
+      .map(() => '(LOWER(title) LIKE ? OR LOWER(description) LIKE ? OR LOWER(keywords) LIKE ? OR LOWER(categories) LIKE ?)')
+      .join(' OR ')
+    conditions.push(`(${tokenClauses})`)
+    tokens.forEach((token) => {
+      const pattern = `%${token}%`
+      params.push(pattern, pattern, pattern, pattern)
+    })
+  }
+
+  // Item-specific narrowing if provided.
+  if (crawlerType === 'item_matching' && itemRequest && typeof itemRequest === 'string') {
+    const itemTokens = itemRequest
+      .split(/[^a-z0-9]+/gi)
+      .map((t) => normalizeString(t))
+      .filter((t) => t.length >= 3)
+      .slice(0, 6)
+    if (itemTokens.length > 0) {
+      const itemClauses = itemTokens
+        .map(() => '(LOWER(title) LIKE ? OR LOWER(description) LIKE ? OR LOWER(keywords) LIKE ?)')
+        .join(' OR ')
+      conditions.push(`(${itemClauses})`)
+      itemTokens.forEach((token) => {
+        const pattern = `%${token}%`
+        params.push(pattern, pattern, pattern)
+      })
+    }
+  }
+
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+  // Prefer recent/updated opportunities so we don’t “drift” back into 2024-only data.
+  const sql = `
+    SELECT *
+    FROM funding_opportunities
+    ${where}
+    ORDER BY
+      CASE WHEN deadline IS NULL OR deadline = '' THEN 1 ELSE 0 END,
+      deadline ASC,
+      updated_at DESC
+    LIMIT 1500
+  `
+
+  return { sql, params }
+}
+
 /**
  * Run a specific crawler
  * POST /api/real-crawlers/run
  */
 router.post('/run', ensureAuth, async (req, res) => {
-  const { crawler_type, profile_id, profile_data, item_request, min_match_score = 80 } = req.body
+  const {
+    crawler_type,
+    profile_id,
+    profile_data,
+    item_request,
+    min_match_score = 60,
+  } = req.body
   
   if (!crawler_type || !CRAWLER_TYPES.includes(crawler_type)) {
     return res.status(400).json({ 
@@ -51,48 +220,41 @@ router.post('/run', ensureAuth, async (req, res) => {
   try {
     const db = req.db
     
-    // Get profile data with location
-    let profile = profile_data
-    if (!profile && profile_id) {
+    // Prefer DB-backed profile_id so we always use the full 22-page profile_sections context.
+    let profile = null
+    if (profile_id) {
       profile = getProfileWithLocation(db, profile_id)
-      
-      if (!profile) {
-        return res.status(404).json({ 
-          error: 'Profile not found',
-          message: `Profile with ID ${profile_id} does not exist`
-        })
-      }
+    } else {
+      profile = profile_data
     }
+
+    if (!profile) {
+      return res.status(404).json({
+        error: 'Profile not found',
+        message: `Profile with ID ${profile_id} does not exist`,
+      })
+    }
+
+    const profileContext =
+      profile && profile.sections && profile.signals
+        ? { profile, sections: profile.sections, signals: profile.signals }
+        : { profile, sections: profile?.sections ?? {}, signals: profile?.signals ?? null }
     
     console.log(`[RealCrawlers] Running ${crawler_type} for profile ${profile_id || 'custom'}`)
     
-    // Execute the appropriate real crawler
+    // Match against the live ingested opportunity database (fast, stable, always uses full profile data).
     const startTime = Date.now()
-    let opportunities = []
+    let candidates = []
     
     try {
-      switch (crawler_type) {
-        case 'local_funding':
-          opportunities = await crawlLocalFunding(profile, { min_match_score })
-          break
-        case 'government_funding':
-          opportunities = await crawlGovernmentFunding(profile, { min_match_score })
-          break
-        case 'student_grants':
-          opportunities = await crawlStudentGrants(profile, { min_match_score })
-          break
-        case 'ecf_benefits':
-          opportunities = await crawlECFBenefits(profile, { min_match_score })
-          break
-        case 'item_matching':
-          opportunities = await crawlItemFunding(profile, { item_request, min_match_score })
-          break
-        case 'special_needs':
-          opportunities = await crawlSpecialNeeds(profile, { min_match_score })
-          break
-        default:
-          throw new Error(`Crawler implementation not found for type: ${crawler_type}`)
-      }
+      const tokens = buildSearchTokens(profileContext)
+      const { sql, params } = buildCandidateOpportunityQuery({
+        crawlerType: crawler_type,
+        profileContext,
+        tokens,
+        itemRequest: item_request,
+      })
+      candidates = db.prepare(sql).all(...params).map(formatDbOpportunity).filter(Boolean)
     } catch (crawlerError) {
       console.error(`[RealCrawlers] Crawler ${crawler_type} failed:`, crawlerError)
       
@@ -120,23 +282,37 @@ router.post('/run', ensureAuth, async (req, res) => {
     
     const duration = Date.now() - startTime
     
-    console.log(`[RealCrawlers] ${crawler_type} found ${opportunities.length} opportunities in ${duration}ms`)
-    
-    // Filter by minimum match score
-    const filteredOpportunities = opportunities.filter(opp => 
-      opp.match_score >= min_match_score
+    // Score all candidates using the deterministic engine (uses full sections/signals).
+    const scored = candidates
+      .filter((row) => isOpportunityCurrent(row))
+      .map((row) => {
+        const { score, reasons } = calculateMatchScore(profileContext, row)
+        return {
+          ...row,
+          match_score: score,
+          match_reasons: reasons,
+          // Normalize sponsor/title for UI
+          sponsor: row.sponsor ?? row.funder ?? null,
+        }
+      })
+
+    const totalFound = scored.length
+
+    // Filter by minimum match score (default lowered; UI can adjust).
+    const filteredOpportunities = scored
+      .filter((opp) => typeof opp.match_score === 'number' && opp.match_score >= Number(min_match_score))
+      .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+      .slice(0, 50)
+
+    console.log(
+      `[RealCrawlers] ${crawler_type} evaluated ${totalFound} candidates; returning ${filteredOpportunities.length} (min_score=${min_match_score}) in ${duration}ms`,
     )
-    
-    // Save to database if profile_id provided
-    if (profile_id) {
-      await saveOpportunitiesToDB(db, filteredOpportunities, profile_id, crawler_type)
-    }
     
     res.json({
       success: true,
       crawler_type,
       count: filteredOpportunities.length,
-      total_found: opportunities.length,
+      total_found: totalFound,
       filtered_count: filteredOpportunities.length,
       min_match_score,
       duration,
@@ -176,7 +352,7 @@ router.get('/list', ensureAuth, (req, res) => {
  * POST /api/real-crawlers/run-multiple
  */
 router.post('/run-multiple', ensureAuth, async (req, res) => {
-  const { profile_id, crawler_types, min_match_score = 80 } = req.body
+  const { profile_id, crawler_types, min_match_score = 60 } = req.body
   
   if (!profile_id) {
     return res.status(400).json({ 
@@ -218,43 +394,38 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
     }
     
     try {
-      let opportunities = []
-      
-      // Execute real crawlers
-      switch (crawlerType) {
-        case 'local_funding':
-          opportunities = await crawlLocalFunding(profile, { min_match_score })
-          break
-        case 'government_funding':
-          opportunities = await crawlGovernmentFunding(profile, { min_match_score })
-          break
-        case 'student_grants':
-          opportunities = await crawlStudentGrants(profile, { min_match_score })
-          break
-        case 'ecf_benefits':
-          opportunities = await crawlECFBenefits(profile, { min_match_score })
-          break
-        case 'item_matching':
-          opportunities = await crawlItemFunding(profile, { min_match_score })
-          break
-        case 'special_needs':
-          opportunities = await crawlSpecialNeeds(profile, { min_match_score })
-          break
-        default:
-          throw new Error(`Crawler not implemented: ${crawlerType}`)
-      }
-      
-      const filteredOpportunities = opportunities.filter(opp => opp.match_score >= min_match_score)
-      
-      await saveOpportunitiesToDB(db, filteredOpportunities, profile_id, crawlerType)
-      
-      totalFound += opportunities.length
-      totalInserted += filteredOpportunities.length
+      const profileContext =
+        profile && profile.sections && profile.signals
+          ? { profile, sections: profile.sections, signals: profile.signals }
+          : { profile, sections: profile?.sections ?? {}, signals: profile?.signals ?? null }
+
+      const tokens = buildSearchTokens(profileContext)
+      const { sql, params } = buildCandidateOpportunityQuery({
+        crawlerType,
+        profileContext,
+        tokens,
+      })
+
+      const candidates = db.prepare(sql).all(...params).map(formatDbOpportunity).filter(Boolean)
+      const scored = candidates
+        .filter((row) => isOpportunityCurrent(row))
+        .map((row) => {
+          const { score, reasons } = calculateMatchScore(profileContext, row)
+          return { ...row, match_score: score, match_reasons: reasons }
+        })
+
+      const filtered = scored
+        .filter((opp) => typeof opp.match_score === 'number' && opp.match_score >= Number(min_match_score))
+        .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+        .slice(0, 50)
+
+      totalFound += scored.length
+      totalInserted += filtered.length
       
       succeeded.push({
         crawler: crawlerType,
-        found: opportunities.length,
-        inserted: filteredOpportunities.length
+        found: scored.length,
+        inserted: filtered.length
       })
     } catch (error) {
       console.error(`[RealCrawlers] Error in ${crawlerType}:`, error)
@@ -303,91 +474,9 @@ function getCrawlerDescription(type) {
 /**
  * Save opportunities to database
  */
-async function saveOpportunitiesToDB(db, opportunities, profileId, crawlerType) {
-  const timestamp = new Date().toISOString()
-  
-  for (const opp of opportunities) {
-    try {
-      // Check if opportunity already exists
-      const existing = db.prepare(
-        'SELECT id FROM funding_opportunities WHERE title = ? AND sponsor = ?'
-      ).get(opp.title, opp.sponsor)
-      
-      let oppId
-      
-      if (existing) {
-        oppId = existing.id
-        // Update existing opportunity
-        db.prepare(`
-          UPDATE funding_opportunities 
-          SET 
-            description = ?,
-            amount = ?,
-            deadline = ?,
-            url = ?,
-            updated_at = ?
-          WHERE id = ?
-        `).run(
-          opp.description,
-          opp.amount,
-          opp.deadline,
-          opp.url,
-          timestamp,
-          oppId
-        )
-      } else {
-        // Insert new opportunity
-        const result = db.prepare(`
-          INSERT INTO funding_opportunities (
-            title, description, sponsor, amount, deadline,
-            url, eligibility_criteria, state, is_loan, requires_match,
-            created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-          opp.title,
-          opp.description,
-          opp.sponsor,
-          opp.amount,
-          opp.deadline,
-          opp.url,
-          JSON.stringify(opp.eligibility_criteria || []),
-          opp.state,
-          opp.is_loan || 0,
-          opp.requires_match || 0,
-          timestamp,
-          timestamp
-        )
-        
-        oppId = result.lastInsertRowid
-      }
-      
-      // Add to grants table if match score >= 80
-      if (opp.match_score >= 80) {
-        const existingGrant = db.prepare(
-          'SELECT id FROM grants WHERE profile_id = ? AND opportunity_id = ?'
-        ).get(profileId, oppId)
-        
-        if (!existingGrant) {
-          db.prepare(`
-            INSERT INTO grants (
-              profile_id, opportunity_id, status, match_score,
-              source, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-          `).run(
-            profileId,
-            oppId,
-            'potential',
-            opp.match_score,
-            crawlerType,
-            timestamp,
-            timestamp
-          )
-        }
-      }
-    } catch (error) {
-      console.error('[RealCrawlers] Error saving opportunity:', error)
-    }
-  }
-}
+// NOTE:
+// We intentionally do not write crawler matches back into funding_opportunities here.
+// funding_opportunities is maintained by the ingestion pipeline; "crawler runs" should
+// query + score existing live opportunities for the selected profile.
 
 export default router
