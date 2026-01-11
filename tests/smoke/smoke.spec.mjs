@@ -209,11 +209,15 @@ function substituteParams(pathTemplate, ids = {}) {
 }
 
 test('UI routes: visit + click visible controls + no console errors', async ({ page }) => {
-  test.setTimeout(5 * 60_000)
-
   const basePath = normalizeBasePath(BASE_PATH)
   const allRoutes = extractFrontendRoutes()
   const routes = pickRoutes(allRoutes)
+  // Scale overall timeout with route count + per-route budget so larger SMOKE_MAX_ROUTES runs don't
+  // fail just because they exceed the default 5m cap.
+  const perRouteBudgetMs = Number.parseInt(process.env.SMOKE_ROUTE_CLICK_BUDGET_MS || '15000', 10)
+  const defaultUiTimeoutMs = Math.max(5 * 60_000, routes.length * (perRouteBudgetMs + 2000) + 60_000)
+  const uiTimeoutMs = Number.parseInt(process.env.SMOKE_UI_TEST_TIMEOUT_MS || '', 10) || defaultUiTimeoutMs
+  test.setTimeout(uiTimeoutMs)
   writeArtifact('repro/routes.json', { basePath, routes, allRoutesCount: allRoutes.length })
 
   const consoleErrors = []
