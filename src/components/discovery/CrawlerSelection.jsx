@@ -72,7 +72,7 @@ export default function CrawlerSelection({
   const [progress, setProgress] = useState({});
   const [results, setResults] = useState({});
   const [errors, setErrors] = useState({});
-  const [minMatchScore, setMinMatchScore] = useState(60);
+  const [minMatchScore, setMinMatchScore] = useState(50); // Lowered to 50 to show more results; crawlers now use 100% of profile signals for scoring
   const { toast } = useToast();
 
   const handleToggleCrawler = (crawlerId) => {

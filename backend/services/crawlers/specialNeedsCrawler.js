@@ -2,10 +2,13 @@
  * Special Needs Funding Crawler
  * Finds funding for specific populations: cancer survivors, single parents, disabled individuals
  * Searches specialized foundations and support programs
+ * 
+ * CRITICAL: Uses 100% of profile data via signals for search queries and scoring.
  */
 
 import axios from 'axios'
 import * as cheerio from 'cheerio'
+import { buildSearchKeywords, calculateMatchScore, filterByDeadline } from './crawlerHelpers.js'
 
 const SPECIAL_NEEDS_SOURCES = {
   cancer: [
@@ -82,17 +85,33 @@ const SPECIAL_NEEDS_SOURCES = {
 
 export async function crawlSpecialNeeds(profile, options = {}) {
   const results = []
-  const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 80
+  const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 50
   
-  // Identify special needs categories from profile
+  // CRITICAL: Use signals for all profile data
+  const signals = profile?.signals
+  if (!signals) {
+    console.error('[SpecialNeedsCrawler] No signals in profile - cannot search with 100% precision')
+    return results
+  }
+
+  // Build search keywords from ALL profile signals
+  const searchKeywords = buildSearchKeywords(profile, 25)
+  
+  console.log(`[SpecialNeedsCrawler] Using ${searchKeywords.length} keywords from profile signals`)
+  console.log(`[SpecialNeedsCrawler] Health signals: ${Array.from(signals.health || []).join(', ')}`)
+  console.log(`[SpecialNeedsCrawler] Family signals: ${Array.from(signals.family || []).join(', ')}`)
+  console.log(`[SpecialNeedsCrawler] Military signals: ${Array.from(signals.military || []).join(', ')}`)
+  console.log(`[SpecialNeedsCrawler] Assistance signals: ${Array.from(signals.assistance || []).join(', ')}`)
+  
+  // Identify special needs categories from profile signals (not just shallow fields)
   const specialNeeds = identifySpecialNeeds(profile)
   
   if (specialNeeds.length === 0) {
-    console.log('[SpecialNeedsCrawler] No special needs identified in profile')
+    console.log('[SpecialNeedsCrawler] No special needs identified in profile signals')
     return results
   }
   
-  console.log(`[SpecialNeedsCrawler] Identified special needs: ${specialNeeds.join(', ')}`)
+  console.log(`[SpecialNeedsCrawler] Identified special needs from signals: ${specialNeeds.join(', ')}`)
   
   for (const needCategory of specialNeeds) {
     const sources = SPECIAL_NEEDS_SOURCES[needCategory] || []
@@ -101,15 +120,24 @@ export async function crawlSpecialNeeds(profile, options = {}) {
       try {
         const opportunities = await searchSpecialNeedsSource(source, needCategory, profile)
         
-        for (const opp of opportunities) {
+        // Filter out expired deadlines
+        const activeOpps = filterByDeadline(opportunities)
+        
+        for (const opp of activeOpps) {
           if (isLoan(opp)) continue
           
-          const matchScore = calculateSpecialNeedsMatchScore(opp, needCategory, profile)
+          // Use comprehensive scoring with 100% of profile signals
+          const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profile)
           
-          if (matchScore >= minMatchScore) {
+          // Add category-specific bonus
+          let adjustedScore = matchScore + 15 // Bonus for matching need category
+          
+          if (adjustedScore >= minMatchScore) {
             results.push({
               ...opp,
-              match_score: matchScore,
+              match_score: Math.min(100, adjustedScore),
+              match_reasons: [...reasons, `Special need category: ${needCategory}`],
+              matched_signals: matchedSignals,
               crawler_type: 'special_needs',
               need_category: needCategory,
               source: source.name
@@ -122,7 +150,7 @@ export async function crawlSpecialNeeds(profile, options = {}) {
     }
   }
   
-  console.log(`[SpecialNeedsCrawler] Found ${results.length} special needs opportunities with 80%+ match`)
+  console.log(`[SpecialNeedsCrawler] Found ${results.length} special needs opportunities with ${minMatchScore}%+ match`)
   return results
 }
 

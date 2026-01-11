@@ -199,7 +199,7 @@ router.post('/run', ensureAuth, async (req, res) => {
     profile_id,
     profile_data,
     item_request,
-    min_match_score = 60,
+    min_match_score = 50, // Lowered to 50; crawlers now use 100% of profile signals
   } = req.body
   
   if (!crawler_type || !CRAWLER_TYPES.includes(crawler_type)) {
