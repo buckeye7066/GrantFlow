@@ -13,7 +13,9 @@ import { Info, X, CheckCircle } from 'lucide-react'
 
 // Properly encode the video path to handle spaces and special characters in filename
 // The path parts are joined to ensure proper encoding while keeping forward slashes
-const VIDEO_PATH = `${import.meta.env.BASE_URL}${encodeURIComponent('Grant Flow_ Get Started. mp4')}`
+const DEFAULT_VIDEO_FILENAME = 'Grant Flow_ Get Started. mp4'
+const DEFAULT_VIDEO_PATH = `${import.meta.env.BASE_URL}${encodeURIComponent(DEFAULT_VIDEO_FILENAME)}`
+const VIDEO_PATH = import.meta.env.VITE_ONBOARDING_VIDEO_URL || DEFAULT_VIDEO_PATH
 
 export default function OnboardingVideo({ open, onComplete, onSkip }) {
   const [videoError, setVideoError] = useState(false)
@@ -48,7 +50,8 @@ export default function OnboardingVideo({ open, onComplete, onSkip }) {
               <AlertDescription>
                 <p className="font-medium mb-2">Video file not found</p>
                 <p className="text-sm">
-                  The onboarding video should be placed at <code className="text-xs bg-slate-100 px-1 py-0.5 rounded">public/Grant Flow_ Get Started.mp4</code>
+                  If you want the onboarding video, provide it via <code className="text-xs bg-slate-100 px-1 py-0.5 rounded">VITE_ONBOARDING_VIDEO_URL</code> or place it at{' '}
+                  <code className="text-xs bg-slate-100 px-1 py-0.5 rounded">public/{DEFAULT_VIDEO_FILENAME}</code>
                 </p>
                 <p className="text-sm mt-2">
                   You can still proceed with using GrantFlow. Check out the documentation for help getting started.
