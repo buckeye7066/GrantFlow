@@ -273,7 +273,7 @@ export default function DataSources() {
           </Card>
         </div>
 
-        {!selectedOrgId ? (
+        {!selectedProfileId ? (
           <Card className="shadow-lg border-0">
             <CardContent className="p-12 text-center">
               <Building2 className="w-16 h-16 mx-auto text-slate-300 mb-4" />
@@ -286,7 +286,7 @@ export default function DataSources() {
         ) : (
           <>
             <h2 className="text-2xl font-bold text-slate-900 mb-4">
-              Data Sources for {selectedOrg.name}
+              Data Sources for {selectedProfile?.display_name || selectedProfile?.id || 'Selected Profile'}
             </h2>
 
             <div className="grid md:grid-cols-2 gap-6">
