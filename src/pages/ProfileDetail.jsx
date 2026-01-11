@@ -22,6 +22,8 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx"
 import { useSettingsStore } from "@/stores/settingsStore"
+import ProfileFilesPanel from "@/components/profiles/ProfileFilesPanel.jsx"
+import ProfileAppliedFundingPrint from "@/components/profiles/ProfileAppliedFundingPrint.jsx"
 
 export default function ProfileDetail() {
   const [searchParams] = useSearchParams()
@@ -352,13 +354,14 @@ export default function ProfileDetail() {
         </div>
 
         <Tabs defaultValue="profile" className="w-full">
-          <TabsList className="grid w-full grid-cols-7 lg:w-auto lg:inline-flex">
+          <TabsList className="grid w-full grid-cols-8 lg:w-auto lg:inline-flex">
             <TabsTrigger value="profile">Profile Information</TabsTrigger>
             <TabsTrigger value="pipeline">Pipeline</TabsTrigger>
             <TabsTrigger value="item-funding">Item Funding</TabsTrigger>
             <TabsTrigger value="deadlines">Grant Deadline</TabsTrigger>
             <TabsTrigger value="monitoring">Grant Monitoring</TabsTrigger>
             <TabsTrigger value="proposals">Proposals & Files</TabsTrigger>
+            <TabsTrigger value="documents">Documents</TabsTrigger>
             <TabsTrigger value="billing">Billing</TabsTrigger>
           </TabsList>
 
@@ -429,19 +432,28 @@ export default function ProfileDetail() {
           </TabsContent>
 
           <TabsContent value="proposals" className="mt-6">
-            <div className="rounded-lg border bg-white p-6">
-              <h3 className="text-lg font-semibold mb-4">Proposals & File Uploads</h3>
-              <p className="text-slate-600 mb-4">
-                Manage proposal documents and file uploads for this profile.
-              </p>
-              <div className="flex gap-3">
-                <Button onClick={() => navigate(createPageUrl("Proposals", { organization_id: profile.organization_id }))}>
-                  View Proposals
-                </Button>
-                <Button variant="outline" onClick={() => navigate(createPageUrl("Documents", { profile_id: profileId }))}>
-                  View Documents
-                </Button>
+            <div className="space-y-6">
+              <div className="rounded-lg border bg-white p-6">
+                <h3 className="text-lg font-semibold mb-2">Proposals</h3>
+                <p className="text-slate-600 mb-4">Manage grant proposals linked to this profile's organization.</p>
+                <div className="flex flex-wrap gap-3">
+                  <Button onClick={() => navigate(createPageUrl("Proposals", { organization_id: profile.organization_id }))}>
+                    View Proposals
+                  </Button>
+                  <Button variant="outline" onClick={() => navigate(createPageUrl("Documents", { profile_id: profileId }))}>
+                    View Document Library
+                  </Button>
+                </div>
               </div>
+
+              <ProfileFilesPanel profileId={profileId} profileName={profile.display_name} />
+            </div>
+          </TabsContent>
+
+          <TabsContent value="documents" className="mt-6">
+            <div className="space-y-6">
+              <ProfileFilesPanel profileId={profileId} profileName={profile.display_name} />
+              <ProfileAppliedFundingPrint organizationId={profile.organization_id} profileName={profile.display_name} />
             </div>
           </TabsContent>
 

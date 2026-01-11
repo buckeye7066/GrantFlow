@@ -333,6 +333,8 @@ function LayoutRoutes() {
 
                 <Route path="/OrganizationProfile" element={<OrganizationProfile />} />
 
+                <Route path="/Admin" element={<Admin />} />
+
                 </Routes>
             </Layout>
             <OnboardingFlow />

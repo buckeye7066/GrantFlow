@@ -7,6 +7,7 @@
 
 import axios from 'axios'
 import * as cheerio from 'cheerio'
+import zipcodes from 'zipcodes'
 
 // Mock calculateDistance if geoUtils doesn't exist
 const calculateDistance = (lat1, lng1, lat2, lng2) => {
@@ -215,6 +216,17 @@ async function getZipCoordinates(zip) {
   }
   
   try {
+    // Prefer local dataset to avoid network flakiness and "skipped" ZIP handling.
+    const local = zipcodes.lookup(zip)
+    if (local) {
+      return {
+        lat: parseFloat(local.latitude),
+        lng: parseFloat(local.longitude),
+        city: local.city,
+        state: local.state
+      }
+    }
+
     // Use a geocoding service or database
     const response = await axios.get(`https://api.zippopotam.us/us/${zip}`, { timeout: 5000 })
     if (response.data && response.data.places && response.data.places[0]) {

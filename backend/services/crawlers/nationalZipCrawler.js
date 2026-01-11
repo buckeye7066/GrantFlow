@@ -19,10 +19,11 @@
 
 import axios from 'axios'
 import Database from 'better-sqlite3'
+import zipcodes from 'zipcodes'
 
 // All US ZIP codes (43,859 total)
 // In production, this would be loaded from a file or database
-// For now, we'll generate a representative set
+// For now, we load from the local `zipcodes` dataset to avoid network lookups.
 const US_ZIP_CODES_SAMPLE = generateUSZipCodes()
 
 // Default configuration
@@ -39,19 +40,11 @@ const DEFAULT_CONFIG = {
  * In production, load from zipcodes library or database
  */
 function generateUSZipCodes() {
-  const zips = []
-  
-  // Generate ZIP codes from 00501 to 99950
-  // This is a simplified version - in production use actual ZIP database
-  for (let i = 501; i <= 99950; i++) {
-    const zip = String(i).padStart(5, '0')
-    // Skip some ranges that don't exist
-    if (!zip.startsWith('000') && !zip.startsWith('999')) {
-      zips.push(zip)
-    }
-  }
-  
-  return zips
+  // `zipcodes.codes` is an object keyed by ZIP string.
+  // This dramatically reduces "skipped" runs caused by invalid generated ZIPs
+  // and removes dependency on external geocoding APIs for basic ZIP metadata.
+  const codes = zipcodes?.codes && typeof zipcodes.codes === 'object' ? zipcodes.codes : {}
+  return Object.keys(codes).sort()
 }
 
 /**
@@ -177,6 +170,17 @@ async function searchFoundationLocator(zip, coords) {
  */
 async function getZipCoordinates(zip) {
   try {
+    // Prefer local dataset to avoid network flakiness and mass skipping.
+    const local = zipcodes.lookup(zip)
+    if (local) {
+      return {
+        lat: parseFloat(local.latitude),
+        lng: parseFloat(local.longitude),
+        city: local.city,
+        state: local.state
+      }
+    }
+
     const response = await axios.get(`https://api.zippopotam.us/us/${zip}`, {
       timeout: DEFAULT_CONFIG.timeout_ms
     })

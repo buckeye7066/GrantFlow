@@ -38,3 +38,17 @@ export function parseDocument(documentId) {
     method: 'POST',
   })
 }
+
+export function parseAllProfileDocuments(profileId, options = {}) {
+  if (!profileId) {
+    throw new Error('profileId is required')
+  }
+  const payload = {
+    profile_id: profileId,
+    ...(options || {}),
+  }
+  return apiFetch('/api/documents/parse-all', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}

@@ -74,10 +74,19 @@ const AUTH_METHODS = new Set(['email', 'phone', 'social'])
 
 // Crawler types to auto-trigger on admin login
 const ADMIN_CRAWLER_TYPES = ['local', 'scholarship', 'comprehensive']
+// Vite env values are typically strings, but be defensive (some tooling can coerce to boolean).
+const IS_SMOKE_UI =
+  String(import.meta?.env?.VITE_SMOKE_MODE ?? '').toLowerCase() === 'true' ||
+  // Playwright can inject a reliable marker before app code runs.
+  (typeof globalThis !== 'undefined' && globalThis.__GF_SMOKE__ === true)
 
 // Helper function to trigger crawler jobs for admin
 async function triggerAdminCrawlers() {
   try {
+    if (IS_SMOKE_UI) {
+      // Smoke runs its own controlled crawler entrypoints; don't auto-trigger background crawlers.
+      return
+    }
     const promises = ADMIN_CRAWLER_TYPES.map((type) =>
       apiFetch('/api/crawlers/jobs', {
         method: 'POST',
@@ -177,9 +186,15 @@ export const useAuthStore = create((set, get) => ({
     // Handle standard auth response with user object
     if (payload.user) {
       const user = payload.user
-      const profiles = Array.isArray(payload.profiles) ? payload.profiles : []
+
+      // Backend returns profiles nested under user (auth/me + auth/email/verify),
+      // while some legacy callers may still provide them at the top-level.
+      const profiles = Array.isArray(payload.profiles)
+        ? payload.profiles
+        : (Array.isArray(payload.user?.profiles) ? payload.user.profiles : [])
+
       const activeProfileId =
-        payload.active_profile_id ?? profiles[0]?.id ?? null
+        payload.active_profile_id ?? payload.user?.active_profile_id ?? profiles[0]?.id ?? null
       
       // Check if this is an admin user
       if (user.is_admin) {
