@@ -39,6 +39,7 @@ import { runStartupOperations } from './services/anyaStartupOperations.js';
 import ensureMinimumNationalOpportunities from './utils/ensureMinimumNationalOpportunities.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { MAX_JSON_BODY_SIZE } from './config/constants.js';
+import { getSafeHealthSummary } from './services/diagnosticsService.js';
 
 // Validate required environment variables at startup
 const requiredEnvVars = ['OPENAI_API_KEY'];
