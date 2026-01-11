@@ -23,6 +23,7 @@ import remindersRouter from './routes/reminders.js';
 import crawlersRouter from './routes/crawlers.js';
 import realCrawlersRouter from './routes/realCrawlers.js';
 import matchingRouter from './routes/matching.js';
+import grantMonitoringRouter from './routes/grantMonitoring.js';
 import billingRouter from './routes/billing.js';
 import authRouter from './routes/auth.js';
 import preferencesRouter from './routes/preferences.js';
@@ -782,6 +783,7 @@ app.use('/api/anya', anyaRouter); // Keep existing Anya routes for compatibility
 app.use('/api/profiles', profilesRouter);
 app.use('/api/reminders', remindersRouter);
 app.use('/api/matching', matchingRouter);
+app.use('/api/grant-monitoring', grantMonitoringRouter);
 app.use('/api/crawlers', crawlersRouter);
 app.use('/api/real-crawlers', realCrawlersRouter);
 app.use('/api/preferences', preferencesRouter);

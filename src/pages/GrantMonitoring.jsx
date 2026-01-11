@@ -30,6 +30,12 @@ import { createPageUrl } from '@/utils';
 import { format, formatDistanceToNow } from 'date-fns';
 import { useToast } from '@/components/ui/use-toast';
 import {
+  acknowledgeMonitoringEvent,
+  checkGrantAlerts,
+  listGrantMonitoringAlerts,
+  listGrantMonitoringLogs,
+} from '@/api/grantMonitoring';
+import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -56,21 +62,21 @@ export default function GrantMonitoring() {
 
   const { data: allAlertConfigs = [], isLoading: isLoadingAlerts } = useQuery({
     queryKey: ['grantAlerts'],
-    queryFn: () => base44.entities.GrantAlert.list(),
+    queryFn: () => listGrantMonitoringAlerts(),
   });
 
   const { data: allMonitoringLogs = [], isLoading: isLoadingLogs } = useQuery({
     queryKey: ['monitoringLogs'],
-    queryFn: () => base44.entities.GrantMonitoringLog.list('-created_date', 100),
+    queryFn: () => listGrantMonitoringLogs({ limit: 100 }),
   });
 
   const checkAlertsMutation = useMutation({
-    mutationFn: () => base44.functions.invoke('checkGrantAlerts', {}),
+    mutationFn: () => checkGrantAlerts({}),
     onSuccess: (response) => {
       queryClient.invalidateQueries({ queryKey: ['monitoringLogs'] });
       queryClient.invalidateQueries({ queryKey: ['grantAlerts'] });
       
-      const data = response.data;
+      const data = response ?? {};
       toast({
         title: 'Alerts Checked',
         description: `Found ${data.alerts_sent || 0} new alerts and logged ${data.events_logged || 0} events.`,
@@ -86,10 +92,7 @@ export default function GrantMonitoring() {
   });
 
   const acknowledgeEventMutation = useMutation({
-    mutationFn: (eventId) => base44.entities.GrantMonitoringLog.update(eventId, {
-      acknowledged: true,
-      acknowledged_at: new Date().toISOString()
-    }),
+    mutationFn: (eventId) => acknowledgeMonitoringEvent(eventId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['monitoringLogs'] });
       toast({ title: 'Event Acknowledged' });
