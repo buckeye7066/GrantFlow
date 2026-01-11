@@ -55,7 +55,8 @@ const GOVERNMENT_SOURCES = {
 
 export async function crawlGovernmentFunding(profile, options = {}) {
   const results = []
-  const profileState = profile.state || profile.location?.state || 'OH'
+  const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 80
+  const profileState = profile?.signals?.location?.state || profile.state || profile.location?.state || null
   
   console.log(`[GovernmentCrawler] Starting search for government funding`)
   console.log(`[GovernmentCrawler] Profile state: ${profileState}`)
@@ -71,7 +72,7 @@ export async function crawlGovernmentFunding(profile, options = {}) {
         
         const matchScore = calculateGovernmentMatchScore(opp, profile)
         
-        if (matchScore >= 80) {
+        if (matchScore >= minMatchScore) {
           results.push({
             ...opp,
             match_score: matchScore,
@@ -96,7 +97,7 @@ export async function crawlGovernmentFunding(profile, options = {}) {
         
         const matchScore = calculateGovernmentMatchScore(opp, profile)
         
-        if (matchScore >= 80) {
+        if (matchScore >= minMatchScore) {
           results.push({
             ...opp,
             match_score: matchScore,
@@ -122,7 +123,7 @@ export async function crawlGovernmentFunding(profile, options = {}) {
         
         const matchScore = calculateGovernmentMatchScore(opp, profile)
         
-        if (matchScore >= 80) {
+        if (matchScore >= minMatchScore) {
           results.push({
             ...opp,
             match_score: matchScore,
@@ -147,8 +148,15 @@ async function searchFederalSource(source, profile) {
   
   if (source.type === 'api' && source.name === 'Grants.gov') {
     // Use Grants.gov API
+    const keywordParts = []
+    if (profile?.signals?.interests && typeof profile.signals.interests[Symbol.iterator] === 'function') {
+      for (const entry of profile.signals.interests) keywordParts.push(entry)
+    }
+    if (Array.isArray(profile?.focus_areas)) keywordParts.push(...profile.focus_areas)
+    if (Array.isArray(profile?.tags)) keywordParts.push(...profile.tags)
+
     const searchParams = {
-      keyword: profile.focus_areas?.join(' ') || '',
+      keyword: keywordParts.filter(Boolean).slice(0, 12).join(' '),
       oppStatuses: 'Posted',
       sortBy: 'openDate|desc',
       rows: 100
@@ -273,7 +281,8 @@ function calculateGovernmentMatchScore(opportunity, profile) {
   }
   
   // State programs match state
-  if (opportunity.state === profile.state) {
+  const profileState = profile?.signals?.location?.state || profile.state || null
+  if (opportunity.state && profileState && opportunity.state === profileState) {
     score += 15
   }
   
@@ -288,7 +297,11 @@ function calculateGovernmentMatchScore(opportunity, profile) {
   }
   
   // Focus area match
-  const focusAreas = profile.focus_areas || []
+  const focusAreas = Array.isArray(profile.focus_areas)
+    ? profile.focus_areas
+    : profile?.signals?.keywordSet
+    ? Array.from(profile.signals.keywordSet).slice(0, 25)
+    : []
   const oppText = `${opportunity.title} ${opportunity.description}`.toLowerCase()
   
   const matchedAreas = focusAreas.filter(area => 

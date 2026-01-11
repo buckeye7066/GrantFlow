@@ -1,6 +1,7 @@
 import express from 'express'
 import { formatError } from '../middleware/errorHandler.js'
 import { calculateMatchScore } from '../services/matchingEngine.js'
+import { loadProfileContext } from '../services/profileHelpers.js'
 
 const router = express.Router()
 
@@ -38,13 +39,16 @@ router.get('/profile/:profileId/grants', (req, res) => {
   if (!auth) return
 
   try {
-    const profile = req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
-    if (!profile) {
+    const profileRow = req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
+    if (!profileRow) {
       return res.status(404).json({ error: 'Profile not found' })
     }
 
+    // Load full profile context (sections + signals) so scoring uses the 22-page application data.
+    const profileContext = loadProfileContext(req.db, profileId)
+
     // Use profile.organization_id to fetch the pipeline grants.
-    if (!profile.organization_id) {
+    if (!profileRow.organization_id) {
       return res.json([])
     }
 
@@ -66,7 +70,7 @@ router.get('/profile/:profileId/grants', (req, res) => {
           ORDER BY g.updated_at DESC, g.created_at DESC
         `,
       )
-      .all(profile.organization_id)
+      .all(profileRow.organization_id)
 
     const matches = rows.map((row) => {
       // Prefer opportunity fields (when a grant is linked), otherwise fall back to the grant's own fields.
@@ -99,7 +103,7 @@ router.get('/profile/:profileId/grants', (req, res) => {
             deadline: row.grant_deadline,
           }
 
-      const computed = calculateMatchScore(profile, candidate)
+      const computed = calculateMatchScore(profileContext, candidate)
 
       return {
         grant_id: row.grant_id,
