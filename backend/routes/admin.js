@@ -31,21 +31,47 @@ let zipStateIndexCache = null;
 let countiesByStateCache = null;
 
 function ensureAdminRequest(req, res) {
-  const user = req.user;
-  const userEmail = user?.primary_email || user?.email || '';
-  const isAdmin =
-    user?.is_admin === true ||
-    user?.role === 'admin' ||
-    (userEmail && userEmail.toLowerCase().includes('buckeye7066'));
+  const user = req.user ?? {};
 
-  if (!isAdmin) {
-    res.status(403).json({
-      error: 'Access denied',
-      message: 'This endpoint is restricted to administrators only',
-    });
-    return false;
+  // Fast path: middleware already marked admin.
+  if (user?.is_admin === true || user?.role === 'admin') {
+    return true;
   }
-  return true;
+
+  // Resolve the authenticated user from DB when middleware can't determine admin status
+  // (e.g., profile-scoped tokens that only carry profileId).
+  try {
+    const db = req.db;
+    const resolvedUserId = user?.userId
+      ? user.userId
+      : user?.profileId
+        ? db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(user.profileId)?.user_id
+        : null;
+
+    if (resolvedUserId) {
+      const row = db
+        .prepare('SELECT is_admin, primary_email FROM users WHERE id = ?')
+        .get(resolvedUserId);
+      const email = String(row?.primary_email || '').toLowerCase();
+
+      if (row?.is_admin === 1 || row?.is_admin === true) {
+        return true;
+      }
+
+      // Backwards-compatible admin allow-list.
+      if (email && email.includes('buckeye7066')) {
+        return true;
+      }
+    }
+  } catch (error) {
+    // fall through to 403
+  }
+
+  res.status(403).json({
+    error: 'Access denied',
+    message: 'This endpoint is restricted to administrators only',
+  });
+  return false;
 }
 
 function loadZipCoordinates() {
@@ -459,18 +485,7 @@ router.post('/reattach-users', (req, res) => {
 // GET /api/admin/diagnostics - System diagnostics (admin only)
 router.get('/diagnostics', (req, res) => {
   try {
-    // Check admin access - use consistent admin enforcement (is_admin flag or email-based)
-    const user = req.user;
-    const userEmail = user?.primary_email || user?.email || '';
-    const isAdmin = user?.is_admin === true || user?.role === 'admin' || 
-                    (userEmail && userEmail.toLowerCase().includes('buckeye7066'));
-    
-    if (!isAdmin) {
-      return res.status(403).json({ 
-        error: 'Access denied',
-        message: 'This endpoint is restricted to administrators only' 
-      });
-    }
+    if (!ensureAdminRequest(req, res)) return;
 
     const diagnostics = getSystemDiagnostics(req.db);
     res.json(diagnostics);
@@ -634,18 +649,7 @@ router.post('/sync-profiles', async (req, res) => {
 // Upsert the baseline 15 profiles + their sections from seed/baseline-profiles.json (production-safe).
 router.post('/seed-baseline-profiles', async (req, res) => {
   try {
-    // Check admin access - use consistent admin enforcement (is_admin flag or email-based)
-    const user = req.user;
-    const userEmail = user?.primary_email || user?.email || '';
-    const isAdmin = user?.is_admin === true || user?.role === 'admin' ||
-                    (userEmail && userEmail.toLowerCase().includes('buckeye7066'));
-
-    if (!isAdmin) {
-      return res.status(403).json({
-        error: 'Access denied',
-        message: 'This endpoint is restricted to administrators only'
-      });
-    }
+    if (!ensureAdminRequest(req, res)) return;
 
     const seedPath = join(repoRootDir, 'seed', 'baseline-profiles.json');
     if (!fs.existsSync(seedPath)) {
