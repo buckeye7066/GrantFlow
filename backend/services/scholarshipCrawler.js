@@ -268,9 +268,20 @@ export function processScholarshipCrawlerJob({
     .slice(0, job.parameters?.limit ?? 8)
 
   if (scored.length === 0) {
-    throw new Error(
-      'No scholarship matches found. Update profile data or add scholarship sources.',
-    )
+    // No matches is a valid outcome; mark job completed with zero results.
+    return {
+      evaluated: Array.isArray(scholarships) ? scholarships.length : 0,
+      matched: 0,
+      inserted: 0,
+      savedToPipeline: 0,
+      result_meta: {
+        inserted: 0,
+        evaluated: Array.isArray(scholarships) ? scholarships.length : 0,
+        matched: 0,
+        note: 'No scholarship matches found',
+      },
+      opportunityLogs: [],
+    }
   }
 
   let inserted = 0
