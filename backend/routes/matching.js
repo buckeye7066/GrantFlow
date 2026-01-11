@@ -59,9 +59,9 @@ router.get('/profile/:profileId/grants', (req, res) => {
             g.deadline AS grant_deadline,
             g.notes AS grant_notes,
             g.funding_opportunity_id,
-            o.*
+            fo.*
           FROM grants g
-          LEFT JOIN opportunities o ON o.id = g.funding_opportunity_id
+          LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
           WHERE g.organization_id = ?
           ORDER BY g.updated_at DESC, g.created_at DESC
         `,
