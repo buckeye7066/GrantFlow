@@ -11,6 +11,7 @@ import { seedRealOpportunities } from '../utils/seedRealOpportunities.js';
 import { ensureDesignatedProfiles } from '../utils/ensureDesignatedProfiles.js';
 import { buildProfileSignals, calculateMatchScore } from '../services/profileHelpers.js';
 import { getSystemDiagnostics } from '../services/diagnosticsService.js';
+import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
 
 const router = express.Router();
 
@@ -21,6 +22,7 @@ const AI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini'; // Configurable AI m
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const uploadDir = join(__dirname, '..', 'uploads');
+const repoRootDir = join(__dirname, '..', '..');
 
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
@@ -458,6 +460,97 @@ router.post('/sync-profiles', async (req, res) => {
   } catch (error) {
     console.error('[admin/sync-profiles] Error:', error);
     res.status(500).json({ success: false, error: error.message || 'Failed to sync profiles' });
+  }
+});
+
+// POST /api/admin/seed-baseline-profiles
+// Upsert the baseline 15 profiles + their sections from seed/baseline-profiles.json (production-safe).
+router.post('/seed-baseline-profiles', async (req, res) => {
+  try {
+    // Check admin access - use consistent admin enforcement (is_admin flag or email-based)
+    const user = req.user;
+    const userEmail = user?.primary_email || user?.email || '';
+    const isAdmin = user?.is_admin === true || user?.role === 'admin' ||
+                    (userEmail && userEmail.toLowerCase().includes('buckeye7066'));
+
+    if (!isAdmin) {
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'This endpoint is restricted to administrators only'
+      });
+    }
+
+    const seedPath = join(repoRootDir, 'seed', 'baseline-profiles.json');
+    if (!fs.existsSync(seedPath)) {
+      return res.status(500).json({ success: false, error: `Seed file not found at ${seedPath}` });
+    }
+
+    const payload = JSON.parse(fs.readFileSync(seedPath, 'utf8'));
+    if (!Array.isArray(payload?.profiles) || !Array.isArray(payload?.sections)) {
+      return res.status(400).json({ success: false, error: 'Seed file missing profiles/sections arrays' });
+    }
+
+    const before = req.db.prepare('SELECT COUNT(*) as count FROM profiles').get()?.count || 0;
+
+    const upsertProfile = req.db.prepare(`
+      INSERT INTO profiles (id, primary_type, display_name, status, tags, avatar_url, updated_at)
+      VALUES (@id, @primary_type, @display_name, @status, @tags, @avatar_url, CURRENT_TIMESTAMP)
+      ON CONFLICT(id) DO UPDATE SET
+        primary_type = excluded.primary_type,
+        display_name = excluded.display_name,
+        status = excluded.status,
+        tags = excluded.tags,
+        avatar_url = excluded.avatar_url,
+        updated_at = CURRENT_TIMESTAMP
+    `);
+
+    const upsertSection = req.db.prepare(`
+      INSERT INTO profile_sections (profile_id, section_key, data, updated_by, updated_at)
+      VALUES (@profile_id, @section_key, @data, 'system-seed', CURRENT_TIMESTAMP)
+      ON CONFLICT(profile_id, section_key) DO UPDATE SET
+        data = excluded.data,
+        updated_by = excluded.updated_by,
+        updated_at = CURRENT_TIMESTAMP
+    `);
+
+    const tx = req.db.transaction(() => {
+      payload.profiles.forEach((profile) => {
+        upsertProfile.run({
+          id: profile.id,
+          primary_type: profile.primary_type ?? null,
+          display_name: profile.display_name,
+          status: profile.status ?? 'active',
+          tags: JSON.stringify(profile.tags ?? []),
+          avatar_url: profile.avatar_url ?? null,
+        });
+        linkProfileToAdmin(req.db, profile.id);
+      });
+
+      payload.sections.forEach((section) => {
+        if (!section?.profile_id || !section?.section_key) return;
+        upsertSection.run({
+          profile_id: section.profile_id,
+          section_key: section.section_key,
+          data: JSON.stringify(section.data ?? {}),
+        });
+      });
+    });
+
+    tx();
+
+    const after = req.db.prepare('SELECT COUNT(*) as count FROM profiles').get()?.count || 0;
+    const sectionsCount = req.db.prepare('SELECT COUNT(*) as count FROM profile_sections').get()?.count || 0;
+
+    res.json({
+      success: true,
+      message: `Seeded baseline profiles (upsert). Profiles: ${before} → ${after}. Sections: ${sectionsCount}.`,
+      counts: { profiles_before: before, profiles_after: after, sections: sectionsCount },
+      seed_profiles: payload.profiles.length,
+      seed_sections: payload.sections.length,
+    });
+  } catch (error) {
+    console.error('[admin/seed-baseline-profiles] Error:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to seed baseline profiles' });
   }
 });
 

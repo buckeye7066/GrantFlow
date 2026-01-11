@@ -87,6 +87,15 @@ export default function AdminMaintenance() {
 
             <Button
               variant="outline"
+              onClick={() => run("Seed baseline profiles (15)", () => post("/api/admin/seed-baseline-profiles"))}
+              disabled={!!busy}
+            >
+              {busy === "Seed baseline profiles (15)" ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Wand2 className="w-4 h-4 mr-2" />}
+              Seed baseline profiles
+            </Button>
+
+            <Button
+              variant="outline"
               onClick={() => run("Ingest (Grants.gov + USASpending.gov)", () => post("/api/admin/ingest"))}
               disabled={!!busy}
             >
