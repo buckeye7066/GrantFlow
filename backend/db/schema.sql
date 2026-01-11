@@ -162,6 +162,27 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   profile_id TEXT
 );
 
+-- ZIP funding sources (national ZIP crawl support)
+-- listing_type: OPPORTUNITY/PROGRAM/DIRECTORY (canonical)
+-- source_type: legacy column name for listing_type (kept temporarily for backward compatibility)
+CREATE TABLE IF NOT EXISTS zip_funding_sources (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  zip_code TEXT NOT NULL,
+  source_name TEXT NOT NULL,
+  listing_type TEXT CHECK(listing_type IN ('OPPORTUNITY', 'PROGRAM', 'DIRECTORY')),
+  source_type TEXT CHECK(source_type IN ('OPPORTUNITY', 'PROGRAM', 'DIRECTORY')),
+  evidence_url TEXT,
+  evidence_title TEXT,
+  last_verified_at DATETIME,
+  number_of_opportunities_found INTEGER DEFAULT 0,
+  metadata TEXT DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_zip_sources_zip ON zip_funding_sources(zip_code);
+CREATE INDEX IF NOT EXISTS idx_zip_sources_listing_type ON zip_funding_sources(listing_type);
+CREATE INDEX IF NOT EXISTS idx_zip_sources_type ON zip_funding_sources(source_type);
+
 -- Grants (opportunities being actively tracked/pursued)
 CREATE TABLE IF NOT EXISTS grants (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
