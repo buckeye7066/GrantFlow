@@ -186,9 +186,15 @@ export const useAuthStore = create((set, get) => ({
     // Handle standard auth response with user object
     if (payload.user) {
       const user = payload.user
-      const profiles = Array.isArray(payload.profiles) ? payload.profiles : []
+
+      // Backend returns profiles nested under user (auth/me + auth/email/verify),
+      // while some legacy callers may still provide them at the top-level.
+      const profiles = Array.isArray(payload.profiles)
+        ? payload.profiles
+        : (Array.isArray(payload.user?.profiles) ? payload.user.profiles : [])
+
       const activeProfileId =
-        payload.active_profile_id ?? profiles[0]?.id ?? null
+        payload.active_profile_id ?? payload.user?.active_profile_id ?? profiles[0]?.id ?? null
       
       // Check if this is an admin user
       if (user.is_admin) {
