@@ -278,6 +278,39 @@ export function extractCityFromContext({ profile, sections, jobParameters = {} }
   return extractCityFromSections({ profile, sections, jobParameters })
 }
 
+/**
+ * Extract state abbreviation from an address string
+ */
+function extractStateFromAddress(address) {
+  if (!address || typeof address !== 'string') return null
+  // Match 2-letter state code before ZIP (e.g., "TN 38501" or "TN, 38501")
+  const match = address.match(/\b([A-Z]{2})\s*,?\s*\d{5}/)
+  return match ? match[1] : null
+}
+
+/**
+ * Extract ZIP code from an address string
+ */
+function extractZipFromAddress(address) {
+  if (!address || typeof address !== 'string') return null
+  const match = address.match(/\b(\d{5})(?:-\d{4})?\b/)
+  return match ? match[1] : null
+}
+
+/**
+ * Extract city from an address string (line before state/zip)
+ */
+function extractCityFromAddress(address) {
+  if (!address || typeof address !== 'string') return null
+  // Split by newlines, look for line with city, state ZIP pattern
+  const lines = address.split(/\n|,/).map(l => l.trim()).filter(Boolean)
+  for (const line of lines) {
+    const match = line.match(/^([A-Za-z\s]+),?\s+[A-Z]{2}\s*\d{5}/)
+    if (match) return match[1].trim()
+  }
+  return null
+}
+
 export function buildProfileSignals({ profile, sections }) {
   const keywordSet = new Set()
   const phraseSet = new Set()
@@ -287,11 +320,19 @@ export function buildProfileSignals({ profile, sections }) {
   const militarySet = new Set()
   const interestSet = new Set()
   const applicantTypeSet = new Set()
+  const healthSet = new Set()
+  const familySet = new Set()
+  const occupationSet = new Set()
+
+  // Extract location from multiple sources including address strings
+  const basic = sections?.basic_information ?? {}
+  const locationFocus = sections?.location_focus ?? {}
+  const organizationDetails = sections?.organization_details ?? {}
 
   const location = {
-    zip: extractZipFromContext({ profile, sections }),
-    state: extractStateFromContext({ profile, sections }),
-    city: extractCityFromSections({ profile, sections }),
+    zip: extractZipFromContext({ profile, sections }) || extractZipFromAddress(basic.address),
+    state: extractStateFromContext({ profile, sections }) || extractStateFromAddress(basic.address),
+    city: extractCityFromSections({ profile, sections }) || extractCityFromAddress(basic.address),
   }
 
   const academics = {
@@ -299,6 +340,13 @@ export function buildProfileSignals({ profile, sections }) {
     act: null,
     sat: null,
     psat: null,
+  }
+
+  const financial = {
+    householdIncome: null,
+    householdSize: null,
+    needLevel: null,
+    fundingAmountNeeded: null,
   }
 
   const registerKeyword = (value) => {
@@ -313,11 +361,18 @@ export function buildProfileSignals({ profile, sections }) {
     values.forEach((value) => registerKeyword(value))
   }
 
+  // ============ PROFILE TOP-LEVEL FIELDS ============
   const baseTags = Array.isArray(profile?.tags) ? profile.tags : []
   baseTags.forEach((tag) => {
     registerKeyword(tag)
     const normalized = normalizeString(tag)
     if (normalized) interestSet.add(normalized)
+  })
+
+  const baseInterests = Array.isArray(profile?.interests) ? profile.interests : []
+  baseInterests.forEach((interest) => {
+    registerKeyword(interest)
+    interestSet.add(normalizeString(interest))
   })
 
   if (profile?.primary_type) {
@@ -326,7 +381,13 @@ export function buildProfileSignals({ profile, sections }) {
     registerKeyword(profile.primary_type)
   }
 
-  const basic = sections?.basic_information ?? {}
+  if (profile?.display_name) {
+    // Extract keywords from display name (e.g., "Axiom Community Health Cooperative" -> community, health)
+    const nameWords = profile.display_name.split(/\s+/).filter(w => w.length > 3)
+    nameWords.forEach(word => registerKeyword(word))
+  }
+
+  // ============ BASIC INFORMATION ============
   if (basic.gender) {
     const normalizedGender = normalizeString(basic.gender)
     if (normalizedGender) {
@@ -338,19 +399,73 @@ export function buildProfileSignals({ profile, sections }) {
       }
     }
   }
-
-  const financial = sections?.financial_information ?? {}
-  if (financial.financial_need_level) {
-    registerKeyword(financial.financial_need_level)
+  if (basic.age) {
+    const age = parseNumber(basic.age)
+    if (age !== null) {
+      if (age < 18) { demographicSet.add('youth'); registerKeyword('youth'); registerKeyword('minor') }
+      if (age >= 18 && age <= 24) { demographicSet.add('young_adult'); registerKeyword('young adult') }
+      if (age >= 55) { demographicSet.add('senior'); registerKeyword('senior'); registerKeyword('elderly') }
+      if (age >= 65) { registerKeyword('retiree') }
+    }
   }
-  if (financial.low_income) {
+  if (basic.date_of_birth) {
+    // Calculate age from DOB
+    const dob = new Date(basic.date_of_birth)
+    if (!isNaN(dob.getTime())) {
+      const age = Math.floor((Date.now() - dob.getTime()) / (365.25 * 24 * 60 * 60 * 1000))
+      if (age < 18) { demographicSet.add('youth'); registerKeyword('youth') }
+      if (age >= 18 && age <= 24) { demographicSet.add('young_adult'); registerKeyword('young adult') }
+      if (age >= 55) { demographicSet.add('senior'); registerKeyword('senior') }
+    }
+  }
+  // Extract keywords from website/email domain for organization matching
+  if (basic.website) {
+    const domain = basic.website.replace(/^https?:\/\//, '').split('/')[0].replace('www.', '')
+    const domainName = domain.split('.')[0]
+    if (domainName && domainName.length > 3) registerKeyword(domainName)
+  }
+
+  // ============ FINANCIAL INFORMATION ============
+  const financialSection = sections?.financial_information ?? {}
+  if (financialSection.financial_need_level) {
+    financial.needLevel = financialSection.financial_need_level
+    registerKeyword(financialSection.financial_need_level)
+    if (['High', 'Critical', 'Extreme'].includes(financialSection.financial_need_level)) {
+      assistanceSet.add('high_financial_need')
+      registerKeyword('financial hardship')
+      registerKeyword('urgent need')
+    }
+  }
+  if (financialSection.household_income) {
+    financial.householdIncome = parseNumber(financialSection.household_income)
+    if (financial.householdIncome !== null && financial.householdIncome < 50000) {
+      assistanceSet.add('low_income')
+      ASSISTANCE_SYNONYMS.low_income.forEach((label) => registerKeyword(label))
+    }
+    if (financial.householdIncome !== null && financial.householdIncome < 25000) {
+      registerKeyword('poverty')
+      registerKeyword('extremely low income')
+    }
+  }
+  if (financialSection.household_size) {
+    financial.householdSize = parseNumber(financialSection.household_size)
+  }
+  if (financialSection.low_income) {
     assistanceSet.add('low_income')
     ASSISTANCE_SYNONYMS.low_income.forEach((label) => registerKeyword(label))
   }
-  if (financial.notes) {
-    collectNarrativeKeywords({ notes: financial.notes }, registerKeyword)
+  if (financialSection.notes) {
+    collectNarrativeKeywords({ notes: financialSection.notes }, registerKeyword)
+  }
+  if (financialSection.employment_status) {
+    registerKeyword(financialSection.employment_status)
+    if (financialSection.employment_status === 'unemployed') {
+      assistanceSet.add('unemployed')
+      registerKeyword('job seeker')
+    }
   }
 
+  // ============ GOVERNMENT ASSISTANCE ============
   const government = sections?.government_assistance ?? {}
   Object.entries(ASSISTANCE_SYNONYMS).forEach(([flag, labels]) => {
     if (government[flag]) {
@@ -358,14 +473,52 @@ export function buildProfileSignals({ profile, sections }) {
       labels.forEach((label) => registerKeyword(label))
     }
   })
+  // Medicaid enrollment (not in ASSISTANCE_SYNONYMS)
+  if (government.medicaid_enrolled) {
+    assistanceSet.add('medicaid')
+    registerKeyword('medicaid')
+    registerKeyword('healthcare assistance')
+  }
+  if (government.medicare_recipient) {
+    assistanceSet.add('medicare')
+    registerKeyword('medicare')
+  }
+  // Other programs as free text
+  if (government.other_programs && typeof government.other_programs === 'string') {
+    collectNarrativeKeywords({ other_programs: government.other_programs }, registerKeyword)
+    // Also register the whole thing as a keyword if short
+    if (government.other_programs.length < 100) {
+      registerKeyword(government.other_programs)
+    }
+  }
 
+  // ============ HEALTH/MEDICAL ============
   const health = sections?.health_medical ?? {}
   const disabilityTypes = Array.isArray(health.disability_type) ? health.disability_type : []
   registerKeywords(disabilityTypes)
-  if (health.wheelchair_user) registerKeyword('wheelchair user')
-  if (health.neurodivergent) registerKeyword('neurodivergent')
-  if (health.mental_health_condition) registerKeyword('mental health')
+  disabilityTypes.forEach(dt => healthSet.add(normalizeString(dt)))
 
+  if (health.wheelchair_user) { healthSet.add('wheelchair'); registerKeyword('wheelchair user'); registerKeyword('mobility impairment') }
+  if (health.neurodivergent) { healthSet.add('neurodivergent'); registerKeyword('neurodivergent'); registerKeyword('autism'); registerKeyword('adhd') }
+  if (health.mental_health_condition) { healthSet.add('mental_health'); registerKeyword('mental health'); registerKeyword('behavioral health') }
+  if (health.chronic_illness) { healthSet.add('chronic_illness'); registerKeyword('chronic illness'); registerKeyword('chronic condition') }
+  if (health.rare_disease) { healthSet.add('rare_disease'); registerKeyword('rare disease'); registerKeyword('orphan disease') }
+  if (health.visual_impairment) { healthSet.add('visual_impairment'); registerKeyword('visual impairment'); registerKeyword('blind'); registerKeyword('low vision') }
+  if (health.hearing_impairment) { healthSet.add('hearing_impairment'); registerKeyword('hearing impairment'); registerKeyword('deaf'); registerKeyword('hard of hearing') }
+  if (health.cancer_survivor) { healthSet.add('cancer'); registerKeyword('cancer survivor'); registerKeyword('oncology') }
+  if (health.terminal_illness) { healthSet.add('terminal'); registerKeyword('terminal illness'); registerKeyword('hospice') }
+  if (health.support_needs_level) {
+    registerKeyword(health.support_needs_level + ' support needs')
+    if (['High', 'Critical'].includes(health.support_needs_level)) {
+      healthSet.add('high_support_needs')
+      registerKeyword('intensive support')
+    }
+  }
+  if (health.notes) {
+    collectNarrativeKeywords({ notes: health.notes }, registerKeyword)
+  }
+
+  // ============ DEMOGRAPHICS ============
   const demographicsSection = sections?.demographics ?? {}
   Object.entries(DEMOGRAPHIC_SYNONYMS).forEach(([flag, labels]) => {
     if (demographicsSection[flag]) {
@@ -377,11 +530,27 @@ export function buildProfileSignals({ profile, sections }) {
     const statusLabel = demographicsSection.immigrant_status.replace(/_/g, ' ')
     demographicSet.add(demographicsSection.immigrant_status)
     registerKeyword(statusLabel)
+    if (['refugee', 'asylee', 'daca'].includes(demographicsSection.immigrant_status.toLowerCase())) {
+      registerKeyword('new american')
+      registerKeyword('immigrant')
+    }
+  }
+  if (demographicsSection.ethnicity) {
+    registerKeyword(demographicsSection.ethnicity)
+  }
+  if (demographicsSection.race) {
+    registerKeyword(demographicsSection.race)
+  }
+  if (demographicsSection.first_generation) {
+    demographicSet.add('first_generation')
+    registerKeyword('first generation')
+    registerKeyword('first gen')
   }
   if (demographicsSection.notes) {
     collectNarrativeKeywords({ notes: demographicsSection.notes }, registerKeyword)
   }
 
+  // ============ FAMILY LIFE ============
   const family = sections?.family_life ?? {}
   const familyFlags = [
     'single_parent',
@@ -393,19 +562,42 @@ export function buildProfileSignals({ profile, sections }) {
     'homeless',
     'caregiver',
     'disaster_survivor',
+    'widowed',
+    'divorced',
+    'expectant_parent',
+    'grandparent_caregiver',
+    'kinship_care',
   ]
   familyFlags.forEach((flag) => {
     if (family[flag]) {
+      familySet.add(flag)
       registerKeyword(flag.replace(/_/g, ' '))
     }
   })
+  if (family.child_count && parseNumber(family.child_count) > 0) {
+    familySet.add('parent')
+    registerKeyword('parent')
+    registerKeyword('children')
+    if (parseNumber(family.child_count) >= 3) {
+      registerKeyword('large family')
+    }
+  }
+  if (family.dependents && parseNumber(family.dependents) > 0) {
+    registerKeyword('dependents')
+  }
   if (family.notes) {
     collectNarrativeKeywords({ notes: family.notes }, registerKeyword)
   }
   if (family.first_time_parent || family.foster_youth) {
     assistanceSet.add('family_support')
   }
+  if (family.homeless) {
+    assistanceSet.add('homeless')
+    registerKeyword('housing insecure')
+    registerKeyword('unhoused')
+  }
 
+  // ============ MILITARY SERVICE ============
   const military = sections?.military_service ?? {}
   Object.entries(MILITARY_FLAGS).forEach(([flag, labels]) => {
     if (military[flag]) {
@@ -413,48 +605,155 @@ export function buildProfileSignals({ profile, sections }) {
       labels.forEach((label) => registerKeyword(label))
     }
   })
+  if (military.military_branch) {
+    registerKeyword(military.military_branch)
+    militarySet.add(normalizeString(military.military_branch))
+  }
+  if (military.service_era) {
+    registerKeyword(military.service_era)
+    if (['vietnam', 'korea', 'wwii', 'gulf_war', 'oef', 'oif'].includes(normalizeString(military.service_era))) {
+      registerKeyword('war veteran')
+    }
+  }
+  if (military.discharge_status) {
+    registerKeyword(military.discharge_status)
+  }
+  if (military.va_disability_rating) {
+    const rating = parseNumber(military.va_disability_rating)
+    if (rating !== null && rating > 0) {
+      militarySet.add('service_connected_disability')
+      registerKeyword('service connected disability')
+      registerKeyword('va disability')
+    }
+  }
 
+  // ============ OCCUPATION ============
   const occupation = sections?.occupation ?? {}
   Object.entries(occupation).forEach(([key, value]) => {
     if (!value) return
     if (key === 'healthcare_worker_type' && typeof value === 'string') {
+      occupationSet.add(normalizeString(value))
+      registerKeyword(value)
+      return
+    }
+    if (key === 'job_title' && typeof value === 'string') {
+      occupationSet.add(normalizeString(value))
+      registerKeyword(value)
+      return
+    }
+    if (key === 'employer' && typeof value === 'string') {
+      registerKeyword(value)
+      return
+    }
+    if (key === 'industry' && typeof value === 'string') {
+      occupationSet.add(normalizeString(value))
       registerKeyword(value)
       return
     }
     if (value === true) {
+      occupationSet.add(key)
       registerKeyword(key.replace(/_/g, ' '))
     }
     if (Array.isArray(value)) {
       registerKeywords(value)
+      value.forEach(v => occupationSet.add(normalizeString(v)))
     }
   })
 
-  const locationFocus = sections?.location_focus ?? {}
+  // ============ LOCATION FOCUS ============
   if (locationFocus.geographic_focus) {
     registerKeyword(locationFocus.geographic_focus)
+  }
+  if (locationFocus.service_area) {
+    registerKeyword(locationFocus.service_area)
+  }
+  if (locationFocus.counties_served && Array.isArray(locationFocus.counties_served)) {
+    locationFocus.counties_served.forEach(county => registerKeyword(county))
   }
   if (locationFocus.notes) {
     collectNarrativeKeywords({ notes: locationFocus.notes }, registerKeyword)
   }
-  if (locationFocus.rural_resident) registerKeyword('rural')
-  if (locationFocus.urban_underserved) registerKeyword('urban underserved')
+  if (locationFocus.rural_resident) { registerKeyword('rural'); demographicSet.add('rural') }
+  if (locationFocus.urban_underserved) { registerKeyword('urban underserved'); demographicSet.add('urban_underserved') }
   if (locationFocus.appalachian_region) {
     registerKeyword('appalachian')
+    registerKeyword('appalachia')
     demographicSet.add('appalachian')
   }
+  if (locationFocus.tribal_land) {
+    registerKeyword('tribal')
+    registerKeyword('reservation')
+    demographicSet.add('tribal')
+  }
+  if (locationFocus.frontier_community) {
+    registerKeyword('frontier')
+    registerKeyword('remote')
+    demographicSet.add('frontier')
+  }
 
-  const organizationDetails = sections?.organization_details ?? {}
+  // ============ ORGANIZATION DETAILS ============
   if (organizationDetails.organization_type) {
     registerKeyword(organizationDetails.organization_type)
+    applicantTypeSet.add(normalizeString(organizationDetails.organization_type))
   }
   if (organizationDetails.mission) {
     collectNarrativeKeywords({ mission: organizationDetails.mission }, registerKeyword)
   }
+  if (organizationDetails.ein) {
+    // Has EIN = likely 501c3
+    registerKeyword('501c3')
+    registerKeyword('nonprofit')
+  }
+  if (organizationDetails.founding_year) {
+    const age = new Date().getFullYear() - parseNumber(organizationDetails.founding_year)
+    if (age !== null && age <= 3) {
+      registerKeyword('new organization')
+      registerKeyword('startup nonprofit')
+    }
+  }
+  if (organizationDetails.annual_budget) {
+    const budget = parseNumber(organizationDetails.annual_budget)
+    if (budget !== null) {
+      if (budget < 100000) registerKeyword('small nonprofit')
+      if (budget < 500000) registerKeyword('grassroots')
+      if (budget >= 1000000) registerKeyword('established nonprofit')
+    }
+  }
+  if (organizationDetails.staff_count) {
+    const staff = parseNumber(organizationDetails.staff_count)
+    if (staff !== null && staff <= 5) {
+      registerKeyword('small organization')
+    }
+  }
+  if (organizationDetails.programs_offered && Array.isArray(organizationDetails.programs_offered)) {
+    organizationDetails.programs_offered.forEach(prog => registerKeyword(prog))
+  }
 
+  // ============ NARRATIVE ============
   const narrative = sections?.narrative ?? {}
   collectNarrativeKeywords(narrative, registerKeyword)
+  if (narrative.mission) {
+    collectNarrativeKeywords({ mission: narrative.mission }, registerKeyword)
+  }
   if (narrative.target_population) registerKeyword(narrative.target_population)
+  if (narrative.primary_goal) registerKeyword(narrative.primary_goal)
+  if (narrative.funding_amount_needed) {
+    // Extract dollar amount
+    const amountMatch = String(narrative.funding_amount_needed).match(/\$?([\d,]+)/g)
+    if (amountMatch) {
+      const amount = parseNumber(amountMatch[0].replace(/[$,]/g, ''))
+      if (amount !== null) {
+        financial.fundingAmountNeeded = amount
+      }
+    }
+    // Also register as keywords for matching
+    registerKeyword(narrative.funding_amount_needed)
+  }
+  if (narrative.use_of_funds) {
+    collectNarrativeKeywords({ use_of_funds: narrative.use_of_funds }, registerKeyword)
+  }
 
+  // ============ UNIVERSITY APPLICATIONS ============
   const universityApplications = sections?.university_applications?.applications ?? []
   universityApplications.forEach((application) => {
     if (!application) return
@@ -464,9 +763,17 @@ export function buildProfileSignals({ profile, sections }) {
         interestSet.add(normalizeString(interest))
       })
     }
+    if (application.name) registerKeyword(application.name)
     if (application.application_type) registerKeyword(application.application_type)
     if (application.institution_type) registerKeyword(application.institution_type)
-    const gpaCandidate = parseNumber(application.avg_gpa)
+    if (application.intended_major) {
+      registerKeyword(application.intended_major)
+      interestSet.add(normalizeString(application.intended_major))
+    }
+    if (application.notes) {
+      collectNarrativeKeywords({ notes: application.notes }, registerKeyword)
+    }
+    const gpaCandidate = parseNumber(application.avg_gpa ?? application.gpa)
     if (Number.isFinite(gpaCandidate) && (!academics.gpa || gpaCandidate > academics.gpa)) {
       academics.gpa = gpaCandidate
     }
@@ -482,6 +789,7 @@ export function buildProfileSignals({ profile, sections }) {
     }
   })
 
+  // ============ EDUCATION ============
   const education = sections?.education ?? sections?.education_details ?? {}
   if (education.gpa) {
     const gpaCandidate = parseNumber(education.gpa)
@@ -506,6 +814,32 @@ export function buildProfileSignals({ profile, sections }) {
   if (education.programs && Array.isArray(education.programs)) {
     education.programs.forEach((program) => registerKeyword(program))
   }
+  if (education.degree_type) registerKeyword(education.degree_type)
+  if (education.field_of_study) {
+    registerKeyword(education.field_of_study)
+    interestSet.add(normalizeString(education.field_of_study))
+  }
+  if (education.school_name) registerKeyword(education.school_name)
+  if (education.graduation_year) {
+    const gradYear = parseNumber(education.graduation_year)
+    const currentYear = new Date().getFullYear()
+    if (gradYear !== null) {
+      if (gradYear === currentYear || gradYear === currentYear + 1) {
+        registerKeyword('graduating senior')
+      }
+      if (gradYear > currentYear) {
+        registerKeyword('current student')
+      }
+    }
+  }
+  if (education.first_generation) {
+    demographicSet.add('first_generation')
+    registerKeyword('first generation college student')
+  }
+
+  // ============ RAW SECTIONS PASSTHROUGH ============
+  // Store the raw sections for crawlers that need direct access to any field
+  const rawSections = sections
 
   return {
     keywordSet,
@@ -516,8 +850,13 @@ export function buildProfileSignals({ profile, sections }) {
     military: militarySet,
     interests: interestSet,
     applicantTypes: applicantTypeSet,
+    health: healthSet,
+    family: familySet,
+    occupation: occupationSet,
     location,
     academics,
+    financial,
+    rawSections,
   }
 }
 

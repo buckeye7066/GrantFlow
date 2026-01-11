@@ -2,10 +2,13 @@
  * Government Funding Crawler
  * Searches NIH, FEMA, Medicare, Medicaid, Federal, State, and Local government sources
  * Excludes loans and matching funds
+ * 
+ * CRITICAL: Uses 100% of profile data via signals for search queries and scoring.
  */
 
 import axios from 'axios'
 import * as cheerio from 'cheerio'
+import { buildSearchKeywords, calculateMatchScore, filterByDeadline } from './crawlerHelpers.js'
 
 // Real government funding APIs and sources
 const GOVERNMENT_SOURCES = {
@@ -49,33 +52,65 @@ const GOVERNMENT_SOURCES = {
       baseUrl: 'https://grants.ohio.gov',
       searchUrl: 'https://grants.ohio.gov/Public/Search.aspx'
     },
+    'TN': {
+      name: 'Tennessee Grants',
+      baseUrl: 'https://www.tn.gov/finance/grants.html',
+      searchUrl: 'https://www.tn.gov/finance/grants.html'
+    },
+    'CO': {
+      name: 'Colorado Grants',
+      baseUrl: 'https://www.colorado.gov/grants',
+      searchUrl: 'https://www.colorado.gov/grants'
+    },
     // Add more states as needed
   }
 }
 
 export async function crawlGovernmentFunding(profile, options = {}) {
   const results = []
-  const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 80
-  const profileState = profile?.signals?.location?.state || profile.state || profile.location?.state || null
+  const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 50
   
-  console.log(`[GovernmentCrawler] Starting search for government funding`)
+  // CRITICAL: Use signals for all profile data
+  const signals = profile?.signals
+  if (!signals) {
+    console.error('[GovernmentCrawler] No signals in profile - cannot search with 100% precision')
+    return results
+  }
+
+  const profileState = signals.location?.state || profile.state || null
+  
+  // Build search keywords from ALL profile signals
+  const searchKeywords = buildSearchKeywords(profile, 25)
+  
+  console.log(`[GovernmentCrawler] Starting search with ${searchKeywords.length} keywords from profile signals`)
   console.log(`[GovernmentCrawler] Profile state: ${profileState}`)
+  console.log(`[GovernmentCrawler] Keywords: ${searchKeywords.slice(0, 10).join(', ')}...`)
+  console.log(`[GovernmentCrawler] Demographics: ${Array.from(signals.demographics || []).join(', ')}`)
+  console.log(`[GovernmentCrawler] Military: ${Array.from(signals.military || []).join(', ')}`)
+  console.log(`[GovernmentCrawler] Health: ${Array.from(signals.health || []).join(', ')}`)
+  console.log(`[GovernmentCrawler] Assistance: ${Array.from(signals.assistance || []).join(', ')}`)
   
   // Search Federal sources
   for (const source of GOVERNMENT_SOURCES.federal) {
     try {
-      const opportunities = await searchFederalSource(source, profile)
+      const opportunities = await searchFederalSource(source, profile, searchKeywords)
       
-      for (const opp of opportunities) {
+      // Filter out expired deadlines
+      const activeOpps = filterByDeadline(opportunities)
+      
+      for (const opp of activeOpps) {
         // Skip loans and matching funds
         if (isLoanOrMatchingFund(opp)) continue
         
-        const matchScore = calculateGovernmentMatchScore(opp, profile)
+        // Use comprehensive scoring with 100% of profile signals
+        const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profile)
         
         if (matchScore >= minMatchScore) {
           results.push({
             ...opp,
             match_score: matchScore,
+            match_reasons: reasons,
+            matched_signals: matchedSignals,
             crawler_type: 'government_funding',
             funding_level: 'federal',
             source: source.name
@@ -87,28 +122,38 @@ export async function crawlGovernmentFunding(profile, options = {}) {
     }
   }
   
-  // Search Medicare/Medicaid sources
-  for (const source of GOVERNMENT_SOURCES.medicare_medicaid) {
-    try {
-      const opportunities = await searchCMSSource(source, profile)
-      
-      for (const opp of opportunities) {
-        if (isLoanOrMatchingFund(opp)) continue
+  // Search Medicare/Medicaid sources (only if profile has healthcare-related signals)
+  const hasHealthcareSignals = signals.health?.size > 0 || 
+    signals.assistance?.has('medicaid') || 
+    signals.assistance?.has('medicare') ||
+    signals.occupation?.has('healthcare_worker')
+  
+  if (hasHealthcareSignals) {
+    for (const source of GOVERNMENT_SOURCES.medicare_medicaid) {
+      try {
+        const opportunities = await searchCMSSource(source, profile, searchKeywords)
+        const activeOpps = filterByDeadline(opportunities)
         
-        const matchScore = calculateGovernmentMatchScore(opp, profile)
-        
-        if (matchScore >= minMatchScore) {
-          results.push({
-            ...opp,
-            match_score: matchScore,
-            crawler_type: 'government_funding',
-            funding_level: 'federal_healthcare',
-            source: source.name
-          })
+        for (const opp of activeOpps) {
+          if (isLoanOrMatchingFund(opp)) continue
+          
+          const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profile)
+          
+          if (matchScore >= minMatchScore) {
+            results.push({
+              ...opp,
+              match_score: matchScore,
+              match_reasons: reasons,
+              matched_signals: matchedSignals,
+              crawler_type: 'government_funding',
+              funding_level: 'federal_healthcare',
+              source: source.name
+            })
+          }
         }
+      } catch (error) {
+        console.error(`[GovernmentCrawler] Error searching ${source.name}:`, error.message)
       }
-    } catch (error) {
-      console.error(`[GovernmentCrawler] Error searching ${source.name}:`, error.message)
     }
   }
   
@@ -116,17 +161,20 @@ export async function crawlGovernmentFunding(profile, options = {}) {
   const stateSource = GOVERNMENT_SOURCES.state[profileState]
   if (stateSource) {
     try {
-      const opportunities = await searchStateSource(stateSource, profile, profileState)
+      const opportunities = await searchStateSource(stateSource, profile, profileState, searchKeywords)
+      const activeOpps = filterByDeadline(opportunities)
       
-      for (const opp of opportunities) {
+      for (const opp of activeOpps) {
         if (isLoanOrMatchingFund(opp)) continue
         
-        const matchScore = calculateGovernmentMatchScore(opp, profile)
+        const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profile)
         
         if (matchScore >= minMatchScore) {
           results.push({
             ...opp,
             match_score: matchScore,
+            match_reasons: reasons,
+            matched_signals: matchedSignals,
             crawler_type: 'government_funding',
             funding_level: 'state',
             state: profileState,
@@ -139,24 +187,17 @@ export async function crawlGovernmentFunding(profile, options = {}) {
     }
   }
   
-  console.log(`[GovernmentCrawler] Found ${results.length} government opportunities with 80%+ match`)
+  console.log(`[GovernmentCrawler] Found ${results.length} government opportunities with ${minMatchScore}%+ match`)
   return results
 }
 
-async function searchFederalSource(source, profile) {
+async function searchFederalSource(source, profile, searchKeywords) {
   const opportunities = []
   
   if (source.type === 'api' && source.name === 'Grants.gov') {
-    // Use Grants.gov API
-    const keywordParts = []
-    if (profile?.signals?.interests && typeof profile.signals.interests[Symbol.iterator] === 'function') {
-      for (const entry of profile.signals.interests) keywordParts.push(entry)
-    }
-    if (Array.isArray(profile?.focus_areas)) keywordParts.push(...profile.focus_areas)
-    if (Array.isArray(profile?.tags)) keywordParts.push(...profile.tags)
-
+    // Use Grants.gov API with keywords from ALL profile signals
     const searchParams = {
-      keyword: keywordParts.filter(Boolean).slice(0, 12).join(' '),
+      keyword: searchKeywords.slice(0, 15).join(' '),
       oppStatuses: 'Posted',
       sortBy: 'openDate|desc',
       rows: 100
@@ -178,11 +219,13 @@ async function searchFederalSource(source, profile) {
             description: opp.oppDesc,
             url: `https://www.grants.gov/view-opportunity.html?oppId=${opp.oppId}`,
             opportunity_number: opp.oppNumber,
-            amount_min: 0, // Will need to parse from description
+            amount_min: 0,
             amount_max: 0,
             deadline: opp.closeDate,
+            deadline_type: opp.closeDate ? 'fixed' : 'rolling',
             eligibility: opp.eligibility || '',
-            cfda_number: opp.cfdaNumber
+            cfda_number: opp.cfdaNumber,
+            is_national: true,
           })
         }
       }
@@ -191,31 +234,35 @@ async function searchFederalSource(source, profile) {
     }
   } else if (source.type === 'scrape') {
     // Web scraping for other sources
-    const response = await axios.get(source.baseUrl, { timeout: 10000 })
-    const $ = cheerio.load(response.data)
-    
-    // NIH specific parsing
-    if (source.name === 'NIH Grants') {
-      $('.grant-listing').each((i, elem) => {
-        const $elem = $(elem)
-        opportunities.push({
-          title: $elem.find('.grant-title').text().trim(),
-          sponsor: 'National Institutes of Health',
-          description: $elem.find('.grant-description').text().trim(),
-          url: 'https://grants.nih.gov' + $elem.find('a').attr('href'),
-          opportunity_number: $elem.find('.grant-number').text().trim(),
-          deadline: $elem.find('.deadline').text().trim(),
-          eligibility: $elem.find('.eligibility').text().trim()
+    try {
+      const response = await axios.get(source.baseUrl, { timeout: 10000 })
+      const $ = cheerio.load(response.data)
+      
+      // NIH specific parsing
+      if (source.name === 'NIH Grants') {
+        $('.grant-listing').each((i, elem) => {
+          const $elem = $(elem)
+          opportunities.push({
+            title: $elem.find('.grant-title').text().trim(),
+            sponsor: 'National Institutes of Health',
+            description: $elem.find('.grant-description').text().trim(),
+            url: 'https://grants.nih.gov' + $elem.find('a').attr('href'),
+            opportunity_number: $elem.find('.grant-number').text().trim(),
+            deadline: $elem.find('.deadline').text().trim(),
+            eligibility: $elem.find('.eligibility').text().trim(),
+            is_national: true,
+          })
         })
-      })
+      }
+    } catch (error) {
+      console.error(`[GovernmentCrawler] Scrape error for ${source.name}:`, error.message)
     }
-    // Add more source-specific parsing
   }
   
   return opportunities
 }
 
-async function searchCMSSource(source, profile) {
+async function searchCMSSource(source, profile, searchKeywords) {
   const opportunities = []
   
   // Medicare/Medicaid specific crawling
@@ -231,7 +278,9 @@ async function searchCMSSource(source, profile) {
         description: $elem.find('.model-description, .opportunity-description').text().trim(),
         url: source.baseUrl + $elem.find('a').attr('href'),
         program_type: 'medicare_medicaid',
-        eligibility: $elem.find('.eligibility').text().trim()
+        eligibility: $elem.find('.eligibility').text().trim(),
+        is_national: true,
+        keywords: ['healthcare', 'medicaid', 'medicare', 'cms'],
       })
     })
   } catch (error) {
@@ -241,7 +290,7 @@ async function searchCMSSource(source, profile) {
   return opportunities
 }
 
-async function searchStateSource(source, profile, state) {
+async function searchStateSource(source, profile, state, searchKeywords) {
   const opportunities = []
   
   try {
@@ -260,64 +309,17 @@ async function searchStateSource(source, profile, state) {
           amount_min: parseAmount($elem.find('.min-award').text()),
           amount_max: parseAmount($elem.find('.max-award').text()),
           deadline: $elem.find('.deadline').text().trim(),
-          eligibility: $elem.find('.eligible-applicants').text().trim()
+          eligibility: $elem.find('.eligible-applicants').text().trim(),
+          state: state,
         })
       })
     }
-    // Add more state-specific parsing
+    // Add more state-specific parsing as needed
   } catch (error) {
     console.error(`[GovernmentCrawler] State crawl error:`, error.message)
   }
   
   return opportunities
-}
-
-function calculateGovernmentMatchScore(opportunity, profile) {
-  let score = 70 // Base score for government funding
-  
-  // Federal programs often have broad eligibility
-  if (opportunity.funding_level === 'federal') {
-    score += 10
-  }
-  
-  // State programs match state
-  const profileState = profile?.signals?.location?.state || profile.state || null
-  if (opportunity.state && profileState && opportunity.state === profileState) {
-    score += 15
-  }
-  
-  // Organization type match
-  const eligText = (opportunity.eligibility || '').toLowerCase()
-  const profileType = (profile.organization_type || profile.profile_type || '').toLowerCase()
-  
-  if (profileType === 'nonprofit' && eligText.includes('nonprofit')) {
-    score += 15
-  } else if (profileType === 'individual' && eligText.includes('individual')) {
-    score += 15
-  }
-  
-  // Focus area match
-  const focusAreas = Array.isArray(profile.focus_areas)
-    ? profile.focus_areas
-    : profile?.signals?.keywordSet
-    ? Array.from(profile.signals.keywordSet).slice(0, 25)
-    : []
-  const oppText = `${opportunity.title} ${opportunity.description}`.toLowerCase()
-  
-  const matchedAreas = focusAreas.filter(area => 
-    oppText.includes(area.toLowerCase())
-  )
-  
-  if (matchedAreas.length > 0) {
-    score += Math.min(20, matchedAreas.length * 10)
-  }
-  
-  // Healthcare specific
-  if (opportunity.program_type === 'medicare_medicaid' && profile.healthcare_needs) {
-    score += 20
-  }
-  
-  return Math.min(100, Math.round(score))
 }
 
 function isLoanOrMatchingFund(opportunity) {
