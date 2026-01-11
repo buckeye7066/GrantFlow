@@ -12,6 +12,7 @@ import { ensureDesignatedProfiles } from '../utils/ensureDesignatedProfiles.js';
 import { buildProfileSignals, calculateMatchScore } from '../services/profileHelpers.js';
 import { getSystemDiagnostics } from '../services/diagnosticsService.js';
 import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
+import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js';
 
 const router = express.Router();
 
@@ -560,9 +561,10 @@ router.get('/geo/crawl/status', (req, res) => {
     const latest = req.db
       .prepare(
         `
-          SELECT id, type, status, created_at, completed_at, result_count, error
+          SELECT id, type, status, created_at, started_at, completed_at, result_count, error
           FROM crawler_jobs
-          WHERE type = 'geo_crawl'
+          WHERE type = 'comprehensive'
+            AND parameters LIKE '%"mode":"geo"%'
           ORDER BY created_at DESC
           LIMIT 1
         `,
@@ -579,16 +581,40 @@ router.post('/geo/crawl/start', (req, res) => {
   try {
     if (!ensureAdminRequest(req, res)) return;
     const payload = req.body ?? {};
-    const jobId = crypto.randomUUID();
+
+    // IMPORTANT: crawler_jobs.type is CHECK-constrained in production. Use an allowed type.
+    // We tag the job with parameters.mode='geo' so it can be queried separately from other comprehensive runs.
+    const parameters = {
+      ...(payload && typeof payload === 'object' ? payload : {}),
+      mode: 'geo',
+    };
+
     req.db
       .prepare(
         `
-          INSERT INTO crawler_jobs (id, type, status, parameters, requested_by, created_at)
-          VALUES (?, 'geo_crawl', 'queued', ?, ?, datetime('now'))
+          INSERT INTO crawler_jobs (type, status, profile_id, organization_id, parameters, requested_by)
+          VALUES ('comprehensive', 'queued', NULL, NULL, ?, 'admin')
         `,
       )
-      .run(jobId, JSON.stringify(payload), req.user?.id || 'admin');
-    res.status(201).json({ success: true, job: { id: jobId, status: 'queued', parameters: payload } });
+      .run(JSON.stringify(parameters));
+
+    const job = req.db
+      .prepare('SELECT id, type, status, created_at, started_at, completed_at, result_count, error FROM crawler_jobs WHERE rowid = last_insert_rowid()')
+      .get();
+
+    // Dispatch asynchronously (don't block response).
+    try {
+      dispatchCrawlerJob({
+        db: req.db,
+        jobId: job.id,
+        uploadDir,
+        getOpenAI,
+      });
+    } catch (error) {
+      console.warn('[admin/geo/crawl/start] Failed to dispatch job:', error?.message || error);
+    }
+
+    res.status(201).json({ success: true, job });
   } catch (error) {
     console.error('[admin/geo/crawl/start] Error:', error);
     res.status(500).json({ error: error.message });
