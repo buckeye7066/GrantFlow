@@ -4,21 +4,23 @@ import { base44 } from '@/api/base44Client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import Combobox from '@/components/shared/Combobox';
 import { Loader2, Play, CheckCircle, AlertCircle, Database, TrendingUp, Building2, Clock } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { format } from 'date-fns';
+import { listProfiles } from '@/api/profiles';
 
 export default function DataSources() {
-  const [selectedOrgId, setSelectedOrgId] = useState(null);
+  const [selectedProfileId, setSelectedProfileId] = useState(null);
   const [crawlingInBackground, setCrawlingInBackground] = useState([]);
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  const { data: organizations = [], isLoading: isLoadingOrgs } = useQuery({
-    queryKey: ['organizations'],
-    queryFn: () => base44.entities.Organization.list('name'),
-  });
+  const { data: profiles = [], isLoading: isLoadingProfiles } = useQuery({
+    queryKey: ['profiles'],
+    queryFn: () => listProfiles(),
+    staleTime: 60_000,
+  })
 
   const { data: crawlLogs = [], isLoading: isLoadingLogs } = useQuery({
     queryKey: ['crawlLogs'],
@@ -43,10 +45,19 @@ export default function DataSources() {
 
   // Auto-select first organization if none selected
   useEffect(() => {
-    if (!selectedOrgId && organizations.length > 0) {
-      setSelectedOrgId(organizations[0].id);
+    if (!selectedProfileId && profiles.length > 0) {
+      setSelectedProfileId(profiles[0].id);
     }
-  }, [organizations, selectedOrgId]);
+  }, [profiles, selectedProfileId]);
+
+  const profileOptions = React.useMemo(() => {
+    return profiles
+      .map((p) => ({
+        value: p.id,
+        label: p.display_name || p.name || p.id,
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [profiles]);
 
   const crawlMutation = useMutation({
     mutationFn: async ({ crawlerName, payload }) => {
@@ -109,7 +120,7 @@ export default function DataSources() {
   };
 
   const handleRunCrawler = (crawler) => {
-    if (!selectedOrgId && crawler.needsProfile) {
+    if (!selectedProfileId && crawler.needsProfile) {
       toast({
         variant: "destructive",
         title: "Profile Required",
@@ -121,9 +132,13 @@ export default function DataSources() {
     const payload = {};
     
     // Add organization_id for crawlers that need profile context
-    if (crawler.needsProfile && selectedOrgId) {
-      payload.organization_id = selectedOrgId;
-      // TODO: Remove debug log - console.log(`[DataSources] Running ${crawler.function} with profile:`, selectedOrgId);
+    if (crawler.needsProfile && selectedProfileId) {
+      const selected = profiles.find(p => p.id === selectedProfileId)
+      // Some legacy base44 functions accept organization_id; map from the selected profile.
+      payload.profile_id = selectedProfileId
+      if (selected?.organization_id) {
+        payload.organization_id = selected.organization_id
+      }
     }
 
     crawlMutation.mutate({ 
@@ -132,9 +147,9 @@ export default function DataSources() {
     });
   };
 
-  const selectedOrg = organizations.find(o => o.id === selectedOrgId);
+  const selectedProfile = profiles.find(p => p.id === selectedProfileId);
 
-  if (isLoadingOrgs || isLoadingLogs || isLoadingOpportunities) {
+  if (isLoadingProfiles || isLoadingLogs || isLoadingOpportunities) {
     return (
       <div className="flex justify-center items-center h-screen">
         <Loader2 className="w-8 h-8 animate-spin text-slate-500" />
@@ -158,32 +173,25 @@ export default function DataSources() {
             </div>
 
             <div className="w-full md:w-80">
-              <Select value={selectedOrgId || ""} onValueChange={setSelectedOrgId}>
-                <SelectTrigger>
-                  <div className="flex items-center gap-2">
-                    <Building2 className="w-4 h-4 text-slate-500" />
-                    <SelectValue placeholder="Select a profile..." />
-                  </div>
-                </SelectTrigger>
-                <SelectContent>
-                  {organizations.map(org => (
-                    <SelectItem key={org.id} value={org.id}>{org.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="flex items-center gap-2">
+                <Building2 className="w-4 h-4 text-slate-500" />
+                <Combobox
+                  options={profileOptions}
+                  value={selectedProfileId || ""}
+                  onChange={setSelectedProfileId}
+                  placeholder="Select a profile..."
+                  isLoading={isLoadingProfiles}
+                  className="w-full"
+                />
+              </div>
             </div>
           </div>
 
-          {selectedOrg && (
+          {selectedProfile && (
             <div className="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
               <p className="text-sm text-blue-900">
                 <strong>🎯 Crawling for:</strong>{' '}
-                <span className="font-semibold">{selectedOrg.name}</span>
-                {selectedOrg.applicant_type && (
-                  <span className="ml-2 text-xs">
-                    ({selectedOrg.applicant_type.replace(/_/g, ' ')})
-                  </span>
-                )}
+                <span className="font-semibold">{selectedProfile.display_name || selectedProfile.id}</span>
                 {' '}— Profile-aware crawlers will search for opportunities relevant to this profile.
               </p>
             </div>
@@ -265,7 +273,7 @@ export default function DataSources() {
           </Card>
         </div>
 
-        {!selectedOrgId ? (
+        {!selectedProfileId ? (
           <Card className="shadow-lg border-0">
             <CardContent className="p-12 text-center">
               <Building2 className="w-16 h-16 mx-auto text-slate-300 mb-4" />
@@ -278,7 +286,7 @@ export default function DataSources() {
         ) : (
           <>
             <h2 className="text-2xl font-bold text-slate-900 mb-4">
-              Data Sources for {selectedOrg.name}
+              Data Sources for {selectedProfile?.display_name || selectedProfile?.id || 'Selected Profile'}
             </h2>
 
             <div className="grid md:grid-cols-2 gap-6">

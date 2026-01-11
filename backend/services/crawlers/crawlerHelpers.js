@@ -3,31 +3,38 @@
  * Provides common utilities and mock data
  */
 
+import { loadProfileContext, extractStateFromContext, extractZipFromContext, extractCityFromContext } from '../profileHelpers.js'
+
 export function getProfileWithLocation(db, profileId) {
-  // Get profile with organization location data
-  const query = `
-    SELECT 
-      p.*,
-      COALESCE(o.state, 'OH') as state,
-      COALESCE(o.city, 'Columbus') as city,
-      COALESCE(o.zip, '43215') as zip_code,
-      o.name as organization_name,
-      o.type as organization_type
-    FROM profiles p
-    LEFT JOIN organizations o ON p.organization_id = o.id
-    WHERE p.id = ?
-  `
-  
-  const profile = db.prepare(query).get(profileId)
-  
-  // Ensure profile has required fields
-  if (profile) {
-    profile.state = profile.state || 'OH'
-    profile.city = profile.city || 'Columbus'
-    profile.zip_code = profile.zip_code || '43215'
+  // Load the full profile context (profile + all profile_sections + derived signals).
+  // IMPORTANT: Do not fabricate fallback location data; missing location should be treated as missing data.
+  const context = loadProfileContext(db, profileId)
+
+  const organization =
+    context?.profile?.organization_id
+      ? db
+          .prepare('SELECT id, name, type, city, state, zip FROM organizations WHERE id = ?')
+          .get(context.profile.organization_id)
+      : null
+
+  const derivedLocation = {
+    state: extractStateFromContext({ profile: context.profile, sections: context.sections }),
+    city: extractCityFromContext({ profile: context.profile, sections: context.sections }),
+    zip_code: extractZipFromContext({ profile: context.profile, sections: context.sections }),
   }
-  
-  return profile
+
+  return {
+    ...context.profile,
+    // Attach full context for crawlers that can use it.
+    sections: context.sections,
+    signals: context.signals,
+    // Keep legacy location keys expected by crawler implementations.
+    state: derivedLocation.state ?? organization?.state ?? null,
+    city: derivedLocation.city ?? organization?.city ?? null,
+    zip_code: derivedLocation.zip_code ?? organization?.zip ?? null,
+    organization_name: organization?.name ?? null,
+    organization_type: organization?.type ?? null,
+  }
 }
 
 export function calculateMatchScore(opportunity, profile) {

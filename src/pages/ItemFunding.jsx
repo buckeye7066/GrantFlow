@@ -316,6 +316,7 @@ export default function ItemFunding() {
     includeNational: true,
     profileId: "all",
   })
+  const [includeDisqualified, setIncludeDisqualified] = useState(false)
   const [selectedOpportunity, setSelectedOpportunity] = useState(null)
   const [submittedItem, setSubmittedItem] = useState("")
 
@@ -352,7 +353,7 @@ export default function ItemFunding() {
   const opportunities = opportunitiesResponse?.data ?? []
   const totalResults = typeof opportunitiesResponse?.total === "number" ? opportunitiesResponse.total : opportunities.length
 
-  const results = useMemo(() => {
+  const scoredResults = useMemo(() => {
     const data = opportunities
     if (!submittedItem) return []
 
@@ -373,9 +374,18 @@ export default function ItemFunding() {
           },
         }
       })
-      .filter(({ match }) => !match.disqualified)
       .sort((a, b) => b.match.score - a.match.score)
   }, [opportunities, submittedItem, selectedProfile])
+
+  const results = useMemo(() => {
+    if (!scoredResults.length) return []
+    return includeDisqualified ? scoredResults : scoredResults.filter(({ match }) => !match.disqualified)
+  }, [includeDisqualified, scoredResults])
+
+  const disqualifiedCount = useMemo(
+    () => scoredResults.filter(({ match }) => match?.disqualified).length,
+    [scoredResults],
+  )
 
   const isLoading = opportunitiesQuery.isLoading && submittedItem
 
@@ -421,7 +431,7 @@ export default function ItemFunding() {
         },
       }
 
-      if (filters.profileId) {
+      if (filters.profileId && filters.profileId !== "all") {
         payload.profile_id = filters.profileId
       }
 
@@ -529,6 +539,16 @@ export default function ItemFunding() {
                     Include national programs
                   </Label>
                 </div>
+                <div className="flex items-center gap-2">
+                  <Switch
+                    id="include-disqualified"
+                    checked={includeDisqualified}
+                    onCheckedChange={(checked) => setIncludeDisqualified(Boolean(checked))}
+                  />
+                  <Label htmlFor="include-disqualified" className="text-sm text-slate-600">
+                    Show match/loan results
+                  </Label>
+                </div>
                 <Button variant="default" className="gap-2" onClick={handleSearch}>
                   <ShoppingCart className="w-4 h-4" />
                   Find funding
@@ -583,11 +603,22 @@ export default function ItemFunding() {
         <Card className="border border-slate-200 bg-white/70 backdrop-blur">
           <CardContent className="p-12 text-center space-y-4">
             <ShoppingCart className="w-12 h-12 mx-auto text-slate-300" />
-            <h3 className="text-xl font-semibold text-slate-900">No grant options yet</h3>
-            <p className="text-sm text-slate-600">
-              Trigger the item crawler to discover gift-based funding tied to this purchase. Fresh, non-repayable matches will
-              appear once the job completes.
-            </p>
+            <h3 className="text-xl font-semibold text-slate-900">No results with the current filters</h3>
+            <div className="space-y-2 text-sm text-slate-600">
+              <p>
+                We found <span className="font-semibold text-slate-800">{totalResults}</span> opportunities matching{" "}
+                <span className="font-semibold text-slate-800">{submittedItem}</span>, but none are currently visible.
+              </p>
+              {disqualifiedCount > 0 ? (
+                <p>
+                  <span className="font-semibold text-slate-800">{disqualifiedCount}</span> were excluded because they require
+                  matching funds or repayment. Toggle <span className="font-semibold">“Show match/loan results”</span> to
+                  review them.
+                </p>
+              ) : (
+                <p>Try a broader keyword (e.g., “software”, “equipment”, “technology”, “vehicle”) or run the crawler sweep.</p>
+              )}
+            </div>
             <Button variant="outline" onClick={handleRequestItemCrawler}>
               Request crawler sweep
             </Button>

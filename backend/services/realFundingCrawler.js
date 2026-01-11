@@ -791,7 +791,8 @@ export async function crawlRealOpportunities(db, state = null, options = {}) {
             created_at, updated_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         `).run(
-          opp.id, opp.title, opp.sponsor, opp.source, opp.source_id, opp.source_url,
+          // Never use dataset IDs as the DB primary key (can collide across sources/runs).
+          randomUUID(), opp.title, opp.sponsor, opp.source, opp.source_id, opp.source_url,
           opp.description, opp.amount_min, opp.amount_max, opp.deadline, opp.deadline_type,
           opp.application_url, opp.is_national ? 1 : 0, opp.state,
           JSON.stringify(opp.categories || []), JSON.stringify(opp.keywords || []),

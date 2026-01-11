@@ -5,6 +5,7 @@
  */
 
 import { safeParseArrayField } from './profileHelpers.js'
+import { buildProfileSignals } from './profileHelpers.js'
 
 /**
  * Calculate deterministic match score between profile and opportunity
@@ -13,41 +14,55 @@ import { safeParseArrayField } from './profileHelpers.js'
  * @returns {Object} { score: number (0-100), reasons: string[] }
  */
 export function calculateMatchScore(profile, opportunity) {
+  // Allow passing a full profileContext { profile, sections, signals } for richer matching.
+  const profileContext =
+    profile && typeof profile === 'object' && profile.profile && profile.sections
+      ? profile
+      : null
+  const effectiveProfile = profileContext?.profile ?? profile
+  const effectiveSignals =
+    profileContext?.signals ??
+    (profileContext?.sections ? buildProfileSignals({ profile: effectiveProfile, sections: profileContext.sections }) : null)
+
   const reasons = [];
   let score = 0;
   
   // Geographic match (20 pts)
-  if (opportunity.is_national || opportunity.state === profile.state) {
+  const profileState =
+    effectiveSignals?.location?.state ??
+    effectiveProfile?.state ??
+    null
+  if (opportunity.is_national || (opportunity.state && profileState && opportunity.state === profileState)) {
     score += 20;
     reasons.push(opportunity.is_national ? 'National eligibility' : 'Geographic eligibility');
   } else if (opportunity.state) {
     // State mismatch - significant penalty but not disqualifying
     score -= 10;
-    reasons.push(`State mismatch (opportunity in ${opportunity.state}, profile in ${profile.state})`);
+    reasons.push(`State mismatch (opportunity in ${opportunity.state}, profile in ${profileState || 'unknown'})`);
   }
   
   // Applicant type match (25 pts)
-  if (eligibilityMatchesApplicantType(opportunity, profile)) {
+  if (eligibilityMatchesApplicantType(opportunity, effectiveProfile)) {
     score += 25;
     reasons.push('Applicant type match');
   }
   
   // Keyword overlap (up to 25 pts)
-  const keywordScore = calculateKeywordOverlap(profile, opportunity);
+  const keywordScore = calculateKeywordOverlap(effectiveSignals ?? effectiveProfile, opportunity);
   score += keywordScore;
   if (keywordScore > 0) {
     reasons.push(`Keyword match (${keywordScore} pts)`);
   }
   
   // Category match (up to 20 pts)
-  const categoryScore = calculateCategoryMatch(profile, opportunity);
+  const categoryScore = calculateCategoryMatch(effectiveSignals ?? effectiveProfile, opportunity);
   score += categoryScore;
   if (categoryScore > 0) {
     reasons.push(`Category match (${categoryScore} pts)`);
   }
   
   // Amount eligibility (10 pts)
-  if (amountInRange(profile.funding_amount_needed, opportunity)) {
+  if (amountInRange(effectiveProfile?.funding_amount_needed, opportunity)) {
     score += 10;
     reasons.push('Amount eligibility');
   }
@@ -60,7 +75,8 @@ export function calculateMatchScore(profile, opportunity) {
   }
   
   // Requirements penalties
-  if (opportunity.requires_501c3 && !profile.ein) {
+  const ein = effectiveProfile?.ein ?? effectiveProfile?.uei ?? null
+  if (opportunity.requires_501c3 && !ein) {
     score -= 15;
     reasons.push('Requires 501(c)(3) status');
   }

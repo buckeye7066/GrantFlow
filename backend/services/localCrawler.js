@@ -78,6 +78,10 @@ function calculateLocalMatch(opp, profileState, signals) {
  */
 export function processLocalCrawlerJob({ db, job, dataDir, profileContext }) {
   console.log('[localCrawler] Starting local opportunity search...')
+
+  if (!profileContext?.profile) {
+    throw new Error('Local crawler requires a profile context')
+  }
   
   const parameters = job.parameters ?? {}
   const matchThreshold = parameters.match_threshold || 60

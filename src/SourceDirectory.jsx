@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import Combobox from '@/components/shared/Combobox';
 import {
   Search,
   Plus,
@@ -61,10 +62,11 @@ import { Label } from '@/components/ui/label'; // Added Label import
 import AddSourceForm from '@/components/sources/AddSourceForm';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
+import { listProfiles } from '@/api/profiles';
 
 export default function SourceDirectory() {
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedOrgId, setSelectedOrgId] = useState(null);
+  const [selectedProfileId, setSelectedProfileId] = useState(null);
   const [sourceTypeFilter, setSourceTypeFilter] = useState('all');
   const [isDiscoverOpen, setIsDiscoverOpen] = useState(false);
   const [isAddOpen, setIsAddOpen] = useState(false);
@@ -85,10 +87,11 @@ export default function SourceDirectory() {
     queryFn: () => base44.entities.SourceDirectory.list(),
   });
 
-  const { data: organizations = [], isLoading: isLoadingOrgs } = useQuery({
-    queryKey: ['organizations'],
-    queryFn: () => base44.entities.Organization.list('name'),
-  });
+  const { data: profiles = [], isLoading: isLoadingProfiles } = useQuery({
+    queryKey: ['profiles'],
+    queryFn: () => listProfiles(),
+    staleTime: 60_000,
+  })
 
   // NEW: Query for opportunities from expanded source
   const { data: sourceOpportunities = [], isLoading: isLoadingOpportunities } = useQuery({
@@ -127,10 +130,25 @@ export default function SourceDirectory() {
 
   // Auto-select first organization if none selected
   useEffect(() => {
-    if (!selectedOrgId && organizations.length > 0) {
-      setSelectedOrgId(organizations[0].id);
+    if (!selectedProfileId && profiles.length > 0) {
+      setSelectedProfileId(profiles[0].id);
     }
-  }, [organizations, selectedOrgId]);
+  }, [profiles, selectedProfileId]);
+
+  const profileOptions = useMemo(() => {
+    return profiles
+      .map((p) => ({
+        value: p.id,
+        label: p.display_name || p.name || p.id,
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [profiles]);
+
+  const selectedProfile = useMemo(
+    () => profiles.find((p) => p.id === selectedProfileId) ?? null,
+    [profiles, selectedProfileId],
+  )
+  const selectedOrgId = selectedProfile?.organization_id ?? null
 
   const crawlMutation = useMutation({
     mutationFn: async (sourceId) => {
@@ -300,43 +318,39 @@ export default function SourceDirectory() {
     }
   });
 
-  const selectedOrg = useMemo(() =>
-    organizations.find(o => o.id === selectedOrgId),
-    [organizations, selectedOrgId]
-  );
-
   const relevantSources = useMemo(() => {
-    if (!selectedOrgId || !selectedOrg) return [];
+    if (!selectedProfileId) return []
 
-    const isStudent = ['high_school_student', 'college_student', 'graduate_student'].includes(selectedOrg.applicant_type);
-    const isIndividual = ['individual_need', 'medical_assistance', 'family'].includes(selectedOrg.applicant_type);
+    // Some source directory behavior depends on "who" this profile represents.
+    // We derive this from the profile's primary_type rather than using a selectable organization record.
+    const primaryType = String(selectedProfile?.primary_type || '').toLowerCase()
+    const isStudent =
+      primaryType.includes('student')
+    const isIndividual =
+      primaryType.includes('individual') || primaryType.includes('family') || primaryType.includes('medical')
     const studentOnlyTypes = ['university', 'community_college'];
     const individualOnlyTypes = ['hospital_system'];
 
     return sources.filter(source => {
-      if (source.discovered_for_organization_id === selectedOrgId) {
-        return true;
+      // If the source is explicitly scoped to an organization, require a match.
+      if (source.discovered_for_organization_id && selectedOrgId) {
+        return source.discovered_for_organization_id === selectedOrgId
       }
-      if (source.discovered_for_organization_id && source.discovered_for_organization_id !== selectedOrgId) {
+
+      // If the source is scoped to a different org (and we have an org), exclude it.
+      if (source.discovered_for_organization_id && selectedOrgId && source.discovered_for_organization_id !== selectedOrgId) {
         return false;
       }
+
+      // Unscoped sources are "global-ish". Apply lightweight type gating.
       if (!source.discovered_for_organization_id) {
-        if (!isStudent && studentOnlyTypes.includes(source.source_type)) {
-          return false;
-        }
-        if (!isIndividual && individualOnlyTypes.includes(source.source_type)) {
-          return false;
-        }
-        if (!source.service_area || source.service_area.length === 0) {
-          return true;
-        }
-        if (selectedOrg.state && source.service_area.includes(selectedOrg.state)) return true;
-        if (selectedOrg.city && source.service_area.includes(selectedOrg.city)) return true;
-        if (source.service_area.includes('National') || source.service_area.includes('USA')) return true;
+        if (!isStudent && studentOnlyTypes.includes(source.source_type)) return false
+        if (!isIndividual && individualOnlyTypes.includes(source.source_type)) return false
+        return true;
       }
       return false;
     });
-  }, [sources, selectedOrgId, selectedOrg]);
+  }, [sources, selectedProfileId, selectedOrgId, selectedProfile]);
 
   const sourcesDue = useMemo(() => {
     const now = new Date();
@@ -509,12 +523,12 @@ export default function SourceDirectory() {
 
     searchSourceMutation.mutate({
       source_name: searchSourceName,
-      location: searchLocation || (selectedOrg ? `${selectedOrg.city}, ${selectedOrg.state}` : ''),
+      location: searchLocation || '',
       organization_id: selectedOrgId
     });
   };
 
-  if (isLoadingSources || isLoadingOrgs) {
+  if (isLoadingSources || isLoadingProfiles) {
     return (
       <div className="flex justify-center items-center h-screen">
         <Loader2 className="w-8 h-8 animate-spin text-slate-500" />
@@ -539,32 +553,32 @@ export default function SourceDirectory() {
             </div>
 
             <div className="w-full md:w-80">
-              <Select value={selectedOrgId || ""} onValueChange={setSelectedOrgId}>
-                <SelectTrigger>
-                  <div className="flex items-center gap-2">
-                    <Building2 className="w-4 h-4 text-slate-500" />
-                    <SelectValue placeholder="Select a profile..." />
-                  </div>
-                </SelectTrigger>
-                <SelectContent>
-                  {organizations.map(org => (
-                    <SelectItem key={org.id} value={org.id}>{org.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="flex items-center gap-2">
+                <Building2 className="w-4 h-4 text-slate-500" />
+                <Combobox
+                  options={profileOptions}
+                  value={selectedProfileId || ""}
+                  onChange={setSelectedProfileId}
+                  placeholder="Select a profile..."
+                  isLoading={isLoadingProfiles}
+                  className="w-full"
+                />
+              </div>
             </div>
           </div>
 
-          {selectedOrg && (
+          {selectedProfile && (
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
               <p className="text-sm text-blue-900">
                 <strong>📂 Showing sources for:</strong>{' '}
-                <span className="font-semibold">{selectedOrg.name}</span>
-                {selectedOrg.applicant_type && (
-                  <span className="ml-2 text-xs">
-                    ({selectedOrg.applicant_type.replace(/_/g, ' ')})
-                  </span>
-                )}
+                <span className="font-semibold">{selectedProfile.display_name || selectedProfile.id}</span>
+              </p>
+            </div>
+          )}
+          {selectedProfile && !selectedOrgId && (
+            <div className="mt-3 bg-amber-50 border border-amber-200 rounded-lg p-4">
+              <p className="text-sm text-amber-900">
+                <strong>Heads up:</strong> this profile isn’t linked to an organization yet, so org-scoped sources/crawls may be limited.
               </p>
             </div>
           )}
@@ -586,7 +600,7 @@ export default function SourceDirectory() {
           )}
         </div>
 
-        {!selectedOrgId ? (
+        {!selectedProfileId ? (
           <Card className="shadow-lg border-0">
             <CardContent className="p-12 text-center">
               <Building2 className="w-16 h-16 mx-auto text-slate-300 mb-4" />
@@ -1124,14 +1138,14 @@ export default function SourceDirectory() {
                 AI Source Discovery
               </DialogTitle>
               <DialogDescription>
-                Discover more funding sources for {selectedOrg?.name}
+                Discover more funding sources for {selectedProfile?.display_name || selectedProfile?.id || 'this profile'}
               </DialogDescription>
             </DialogHeader>
 
             <div className="py-4">
               <p className="text-sm text-slate-600 mb-4">
                 AI will search for universities, service clubs, foundations, and other local organizations
-                that offer funding in <strong>{selectedOrg?.city && selectedOrg?.state ? `${selectedOrg.city}, ${selectedOrg.state}` : selectedOrg?.state || 'your area'}</strong>.
+                that offer funding relevant to this profile.
               </p>
 
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
@@ -1147,7 +1161,7 @@ export default function SourceDirectory() {
               </Button>
               <Button
                 onClick={() => discoverMutation.mutate(selectedOrgId)}
-                disabled={!selectedOrgId}
+                disabled={!selectedProfileId}
               >
                 <Sparkles className="w-4 h-4 mr-2" />
                 Start Discovery
@@ -1189,12 +1203,12 @@ export default function SourceDirectory() {
                 <Label htmlFor="location">Location (Optional)</Label>
                 <Input
                   id="location"
-                  placeholder={selectedOrg ? `${selectedOrg.city}, ${selectedOrg.state}` : "e.g., Cleveland, TN"}
+                  placeholder="e.g., Cleveland, TN"
                   value={searchLocation}
                   onChange={(e) => setSearchLocation(e.target.value)}
                 />
                 <p className="text-xs text-slate-500">
-                  Leave blank to use profile location ({selectedOrg?.city}, {selectedOrg?.state})
+                  Optional. If blank, the search will run without a location hint.
                 </p>
               </div>
 

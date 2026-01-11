@@ -4,6 +4,14 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
 import { 
   AlertCircle, 
   CheckCircle2, 
@@ -26,6 +34,10 @@ export default function AdminDiagnostics() {
   const [refreshing, setRefreshing] = useState(false);
   const [copied, setCopied] = useState(false);
   const [jsonCopied, setJsonCopied] = useState(false);
+  const [inspectOpen, setInspectOpen] = useState(false);
+  const [inspectLoading, setInspectLoading] = useState(false);
+  const [inspectError, setInspectError] = useState(null);
+  const [inspectData, setInspectData] = useState(null);
 
   const loadDiagnostics = async () => {
     try {
@@ -82,6 +94,28 @@ export default function AdminDiagnostics() {
       navigator.clipboard.writeText(jsonText);
       setJsonCopied(true);
       setTimeout(() => setJsonCopied(false), 2000);
+    }
+  };
+
+  const handleInspectError = async (entry) => {
+    setInspectOpen(true);
+    setInspectError(null);
+    setInspectData(null);
+
+    if (!entry || entry.scope !== 'crawler_job' || !entry.job_id) {
+      setInspectData(entry || null);
+      return;
+    }
+
+    try {
+      setInspectLoading(true);
+      const job = await apiFetch(`/api/crawlers/jobs/${entry.job_id}`);
+      setInspectData({ entry, job });
+    } catch (err) {
+      setInspectError(err?.message || 'Failed to load job details');
+      setInspectData({ entry });
+    } finally {
+      setInspectLoading(false);
     }
   };
 
@@ -435,18 +469,43 @@ export default function AdminDiagnostics() {
           {diagnostics.errors && diagnostics.errors.length > 0 ? (
             <div className="space-y-3">
               {diagnostics.errors.slice(0, 10).map((error, index) => (
-                <Alert key={index} variant="destructive" className="border-l-4">
+                <Alert
+                  key={index}
+                  variant="destructive"
+                  className={`border-l-4 ${error?.scope === 'crawler_job' && error?.job_id ? 'cursor-pointer' : ''}`}
+                  onClick={() => {
+                    if (error?.scope === 'crawler_job' && error?.job_id) {
+                      handleInspectError(error);
+                    }
+                  }}
+                >
                   <AlertCircle className="h-4 w-4" />
                   <AlertDescription>
-                    <div className="space-y-1">
-                      <p className="font-medium">
-                        {error.scope === 'crawler_job' ? `Crawler: ${error.crawler_type}` : 
-                         error.source || error.scope}
-                      </p>
-                      <p className="text-sm">{error.message}</p>
-                      <p className="text-xs text-slate-600">
-                        {new Date(error.time).toLocaleString()}
-                      </p>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-1">
+                        <p className="font-medium">
+                          {error.scope === 'crawler_job' ? `Crawler: ${error.crawler_type}` : 
+                          error.source || error.scope}
+                        </p>
+                        <p className="text-sm">{error.message}</p>
+                        <p className="text-xs text-slate-600">
+                          {new Date(error.time).toLocaleString()}
+                          {error.job_id ? ` • job ${String(error.job_id).slice(0, 8)}…` : ''}
+                        </p>
+                      </div>
+                      {error.scope === 'crawler_job' && error.job_id && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            handleInspectError(error);
+                          }}
+                        >
+                          Inspect
+                        </Button>
+                      )}
                     </div>
                   </AlertDescription>
                 </Alert>
@@ -498,6 +557,45 @@ export default function AdminDiagnostics() {
           </CardContent>
         </Card>
       )}
+
+      <Dialog open={inspectOpen} onOpenChange={setInspectOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Error details</DialogTitle>
+            <DialogDescription>
+              Inspect the underlying crawler job payload so you can fix the real root cause.
+            </DialogDescription>
+          </DialogHeader>
+
+          {inspectLoading ? (
+            <div className="text-sm text-slate-600">Loading…</div>
+          ) : inspectError ? (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{inspectError}</AlertDescription>
+            </Alert>
+          ) : (
+            <pre className="max-h-[60vh] overflow-auto rounded bg-slate-950 p-3 text-xs text-slate-100">
+              {JSON.stringify(inspectData, null, 2)}
+            </pre>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (inspectData) {
+                  navigator.clipboard.writeText(JSON.stringify(inspectData, null, 2));
+                }
+              }}
+              disabled={!inspectData}
+            >
+              Copy JSON
+            </Button>
+            <Button onClick={() => setInspectOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
