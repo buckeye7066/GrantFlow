@@ -30,7 +30,7 @@ import CreateInvoice from "./CreateInvoice";
 
 import NOFOParser from "./NOFOParser";
 
-import AIGrantScorer from "./AIGrantScorer";
+import AIGrantScorer from "./pages/AIGrantScorer";
 
 import BudgetDetail from "./BudgetDetail";
 

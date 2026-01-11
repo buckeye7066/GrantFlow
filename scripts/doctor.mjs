@@ -237,7 +237,6 @@ async function main() {
   // sets NODE_ENV=production (common in some shells/CI).
   const installEnv = mergedEnv({
     NODE_ENV: 'development',
-    npm_config_production: 'false',
   })
 
   // Install check (non-destructive): if node_modules missing OR lock changed, do npm ci.
@@ -247,7 +246,21 @@ async function main() {
   const currentFingerprint =
     fs.existsSync(fingerprintFile) ? fs.readFileSync(fingerprintFile, 'utf8').trim() : null
 
-  if (!fs.existsSync(nodeModulesDir) || currentFingerprint !== expectedFingerprint) {
+  const binExists = (name) => {
+    const binDir = path.join(nodeModulesDir, '.bin')
+    const candidates =
+      process.platform === 'win32'
+        ? [`${name}.cmd`, `${name}.ps1`, `${name}.exe`, name]
+        : [name]
+    return candidates.some((f) => fs.existsSync(path.join(binDir, f)))
+  }
+
+  // If we have a fingerprint but dev deps weren't installed (common when NODE_ENV=production),
+  // `npm run lint` / `vite` / `playwright` will fail. Treat missing bins as needing reinstall.
+  const requiredBinsOk =
+    fs.existsSync(nodeModulesDir) && binExists('eslint') && binExists('vite') && binExists('playwright')
+
+  if (!fs.existsSync(nodeModulesDir) || currentFingerprint !== expectedFingerprint || !requiredBinsOk) {
     // Improve install reliability (Windows commonly fails with EPERM when unlinking native binaries).
     // Best-effort: remove node_modules up-front so `npm ci` doesn't need to unlink locked files.
     if (fs.existsSync(nodeModulesDir)) {
@@ -262,7 +275,7 @@ async function main() {
       }
     }
 
-    const ci = await runCommand('npm', ['ci', '--no-audit', '--no-fund'], {
+    const ci = await runCommand('npm', ['ci', '--include=dev', '--no-audit', '--no-fund'], {
       cwd: root,
       env: installEnv,
       logFile: logs.install,
@@ -270,7 +283,7 @@ async function main() {
     })
     if (ci.code !== 0) {
       // Fallback: `npm install` is often more resilient on Windows than `npm ci`.
-      const install = await runCommand('npm', ['install', '--no-audit', '--no-fund'], {
+      const install = await runCommand('npm', ['install', '--include=dev', '--no-audit', '--no-fund'], {
         cwd: root,
         env: installEnv,
         logFile: logs.install,
@@ -280,7 +293,10 @@ async function main() {
     }
     try {
       ensureDir(nodeModulesDir)
-      writeFile(fingerprintFile, `${expectedFingerprint}\n`)
+      // Only consider install successful once required tool shims exist.
+      if (binExists('eslint') && binExists('vite') && binExists('playwright')) {
+        writeFile(fingerprintFile, `${expectedFingerprint}\n`)
+      }
     } catch {}
   }
 
