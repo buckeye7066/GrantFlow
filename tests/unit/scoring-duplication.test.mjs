@@ -1,12 +1,15 @@
-/**
+﻿/**
  * Test to prevent duplicate scoring logic files
- * This test ensures that PR #133's fix remains in place and 
- * prevents regression of duplicate AIGrantScorer files.
+ *
+ * This test ensures that the scoring page implementation doesn't regress into
+ * multiple copies of AIGrantScorer living in different locations.
  */
 
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,7 +19,7 @@ const srcDir = path.join(rootDir, 'src');
 describe('Scoring Logic Duplication Prevention', () => {
   test('should not have duplicate AIGrantScorer files', () => {
     const scorerFiles = [];
-    
+
     // Check for AIGrantScorer files in various locations
     const possibleLocations = [
       path.join(srcDir, 'AIGrantScorer.jsx'),
@@ -25,25 +28,21 @@ describe('Scoring Logic Duplication Prevention', () => {
       path.join(srcDir, 'components', 'scoring', 'AIGrantScorer.jsx'),
     ];
 
-    possibleLocations.forEach(filePath => {
+    for (const filePath of possibleLocations) {
       if (fs.existsSync(filePath)) {
         scorerFiles.push(filePath);
       }
-    });
+    }
 
     // Should only have ONE AIGrantScorer file (in pages directory)
-    expect(scorerFiles).toHaveLength(1);
-    
+    assert.equal(
+      scorerFiles.length,
+      1,
+      `Expected exactly 1 AIGrantScorer file, found ${scorerFiles.length}:\n- ${scorerFiles.join('\n- ')}`,
+    );
+
     // The single file should be in the pages directory (canonical location)
-    if (scorerFiles.length === 1) {
-      expect(scorerFiles[0]).toMatch(/pages[\\\/]AIGrantScorer\.jsx$/);
-      console.log(`✓ Single AIGrantScorer found at: ${scorerFiles[0]}`);
-    } else if (scorerFiles.length > 1) {
-      console.error(`✗ Multiple AIGrantScorer files found:`);
-      scorerFiles.forEach(file => console.error(`  - ${file}`));
-    } else {
-      console.error(`✗ No AIGrantScorer files found`);
-    }
+    assert.match(scorerFiles[0], /pages[\\\/]AIGrantScorer\.jsx$/);
   });
 
   test('should have consistent imports for AIGrantScorer', () => {
@@ -54,33 +53,39 @@ describe('Scoring Logic Duplication Prevention', () => {
     ];
 
     const imports = [];
-    
-    indexFiles.forEach(indexFile => {
-      if (fs.existsSync(indexFile)) {
-        const content = fs.readFileSync(indexFile, 'utf-8');
-        const importMatch = content.match(/import\s+AIGrantScorer\s+from\s+['"](.+?)['"];/);
-        
-        if (importMatch) {
-          imports.push({
-            file: indexFile,
-            importPath: importMatch[1],
-            resolvedPath: path.resolve(path.dirname(indexFile), importMatch[1] + '.jsx')
-          });
-        }
-      }
-    });
 
-    // All imports should resolve to the same file
+    for (const indexFile of indexFiles) {
+      if (!fs.existsSync(indexFile)) continue;
+
+      const content = fs.readFileSync(indexFile, 'utf-8');
+      const importMatch = content.match(
+        /import\s+AIGrantScorer\s+from\s+['"](.+?)['"];?/,
+      );
+
+      if (!importMatch) continue;
+
+      const importPath = importMatch[1];
+      const resolvedPath = importPath.endsWith('.jsx')
+        ? path.resolve(path.dirname(indexFile), importPath)
+        : path.resolve(path.dirname(indexFile), `${importPath}.jsx`);
+
+      imports.push({
+        file: indexFile,
+        importPath,
+        resolvedPath,
+      });
+    }
+
+    // If multiple files import AIGrantScorer, they must resolve to the same file.
     if (imports.length > 1) {
-      const uniquePaths = new Set(imports.map(imp => imp.resolvedPath));
-      expect(uniquePaths.size).toBe(1);
-      
-      if (uniquePaths.size > 1) {
-        console.error('✗ Inconsistent AIGrantScorer imports:');
-        imports.forEach(imp => {
-          console.error(`  ${imp.file} imports from ${imp.importPath} (resolves to ${imp.resolvedPath})`);
-        });
-      }
+      const uniquePaths = new Set(imports.map((imp) => imp.resolvedPath));
+      assert.equal(
+        uniquePaths.size,
+        1,
+        `Inconsistent AIGrantScorer imports:\n${imports
+          .map((imp) => `- ${imp.file} imports ${imp.importPath} -> ${imp.resolvedPath}`)
+          .join('\n')}`,
+      );
     }
   });
 });
