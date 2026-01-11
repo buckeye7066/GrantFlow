@@ -5,8 +5,8 @@ It enumerates environment variables referenced in code and/or present in example
 
 ## Summary
 
-- Total vars: **129**
-- Vars referenced in code: **120**
+- Total vars: **133**
+- Vars referenced in code: **124**
 - Vars present in env templates: **57**
 
 ## Inventory
@@ -79,6 +79,7 @@ It enumerates environment variables referenced in code and/or present in example
 | `DATABASE_URL` | Required (local-run) | backend/data/grantflow.dev.db | Yes | Yes | Backend/Node |
 | `DB_PATH` | Optional | (has code fallback) | Yes | No | Backend/Node |
 | `DEV` | Optional |  | Yes | No | Frontend (Vite) |
+| `DIST_DIR` | Optional | (has code fallback) | Yes | No | Backend/Node |
 | `ENABLE_MIN_NATIONAL_ENSURE` | Optional |  | Yes | No | Backend/Node |
 | `FIREBASE_API_KEY` | Optional (feature-gated) |  | Yes | No | Backend/Node |
 | `FIREBASE_APP_ID` | Optional |  | Yes | No | Backend/Node |
@@ -111,6 +112,7 @@ It enumerates environment variables referenced in code and/or present in example
 | `SEED_PATH` | Optional |  | Yes | No | Backend/Node |
 | `SENTRY_DSN` | Optional (feature-gated) |  | No | Yes |  |
 | `SERVICE_APPLICATION_EMAIL` | Optional | (has code fallback) | Yes | No | Backend/Node |
+| `SMOKE_ACTION_TIMEOUT_MS` | Optional | (has code fallback) | Yes | No | Backend/Node |
 | `SMOKE_ADMIN_TOKEN` | Optional (feature-gated) | (has code fallback) | Yes | No | Backend/Node |
 | `SMOKE_API_BASE_URL` | Optional | (has code fallback) | Yes | No | Backend/Node |
 | `SMOKE_API_CONCURRENCY` | Optional | (has code fallback) | Yes | No | Backend/Node |
@@ -129,6 +131,7 @@ It enumerates environment variables referenced in code and/or present in example
 | `SMOKE_TARGET_PATH` | Optional |  | Yes | No | Backend/Node |
 | `SMOKE_UI_BASE_URL` | Optional | (has code fallback) | Yes | No | Backend/Node |
 | `SMOKE_UI_PORT` | Optional | (has code fallback) | Yes | No | Backend/Node |
+| `SMOKE_UI_TEST_TIMEOUT_MS` | Optional | (has code fallback) | Yes | No | Backend/Node |
 | `TEST_EMAIL` | Optional | (has code fallback) | Yes | No | Backend/Node |
 | `TEST_STATE` | Optional | (has code fallback) | Yes | No | Backend/Node |
 | `TWILIO_ACCOUNT_SID` | Optional | (has code fallback) | Yes | Yes | Backend/Node |
@@ -142,6 +145,7 @@ It enumerates environment variables referenced in code and/or present in example
 | `VITE_APP_BASE` | Optional | /grantflow | Yes | Yes | Used in both backend + frontend |
 | `VITE_ASSET_BASE` | Optional | /grantflow | Yes | Yes | Backend/Node |
 | `VITE_ONBOARDING_VIDEO_URL` | Optional |  | Yes | Yes | Frontend (Vite) |
+| `VITE_SMOKE_MODE` | Optional |  | Yes | No | Frontend (Vite) |
 
 ## Usage locations (file + line ranges)
 
@@ -180,7 +184,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/env.example:8` = `dev-admin-token`
 - **Code references**:
   - `backend/routes/anya.js:19-19` (process.env)
-  - `backend/server.js:59-673` (process.env)
+  - `backend/server.js:59-677` (process.env)
   - `scripts/diagnose-anya.mjs:20-20` (process.env)
   - `scripts/doctor.mjs:149-149` (process.env)
 
@@ -222,7 +226,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/env.example:13` = `anya-dev-token`
 - **Code references**:
   - `backend/routes/anya.js:19-19` (process.env)
-  - `backend/server.js:59-673` (process.env)
+  - `backend/server.js:59-677` (process.env)
   - `backend/services/diagnosticsService.js:178-178` (process.env)
   - `scripts/diagnose-anya.mjs:20-20` (process.env)
 
@@ -230,14 +234,14 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:562-562` (process.env)
+  - `backend/server.js:566-566` (process.env)
 
 ### `ANYA_AUTONOMOUS_ENABLED`
 
 - **Templates**:
   - `backend/env.example:49` = `false`
 - **Code references**:
-  - `backend/server.js:989-989` (process.env)
+  - `backend/server.js:993-993` (process.env)
   - `backend/services/anyaAutonomousScheduler.js:15-15` (process.env)
   - `scripts/check-anya-status.mjs:23-107` (process.env)
 
@@ -330,7 +334,7 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**:
   - `backend/env.example:52` = `false        # Run when server starts`
 - **Code references**:
-  - `backend/server.js:991-991` (process.env)
+  - `backend/server.js:995-995` (process.env)
   - `backend/services/anyaAutonomousScheduler.js:18-18` (process.env)
   - `scripts/check-anya-status.mjs:24-24` (process.env)
 
@@ -433,7 +437,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/env.example:27` = `/grantflow`
 - **Code references**:
   - `backend/routes/auth.js:125-125` (process.env)
-  - `backend/server.js:141-141` (process.env)
+  - `backend/server.js:145-145` (process.env)
   - `scripts/_doctor/http-proof.mjs:17-17` (process.env)
 
 ### `AUTH_FRONTEND_URL`
@@ -462,7 +466,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/env.example:16` = `dev-secret-change-me`
 - **Code references**:
   - `backend/routes/auth.js:37-37` (process.env)
-  - `backend/server.js:537-670` (process.env)
+  - `backend/server.js:541-674` (process.env)
 
 ### `AUTH_OAUTH_STATE_TTL`
 
@@ -528,7 +532,7 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**: (not present)
 - **Code references**:
   - `src/App.jsx:61-61` (import.meta.env)
-  - `src/components/anya/AnyaChat.jsx:452-452` (import.meta.env)
+  - `src/components/anya/AnyaChat.jsx:461-461` (import.meta.env)
   - `src/components/anya/AnyaFloatingButton.jsx:40-79` (import.meta.env)
   - `src/components/onboarding/OnboardingVideo.jsx:17-17` (import.meta.env)
   - `tests/smoke/playwright.config.mjs:21-21` (process.env)
@@ -541,8 +545,8 @@ It enumerates environment variables referenced in code and/or present in example
 - **Code references**:
   - `backend/routes/crawlerV2.js:9-9` (process.env)
   - `backend/routes/crawlers.js:1240-1801` (process.env)
-  - `backend/server.js:554-674` (process.env)
-  - `scripts/doctor.mjs:309-309` (process.env)
+  - `backend/server.js:558-678` (process.env)
+  - `scripts/doctor.mjs:313-358` (process.env)
   - `tests/smoke/smoke.spec.mjs:21-21` (process.env)
 
 ### `CORS_ORIGIN`
@@ -551,8 +555,8 @@ It enumerates environment variables referenced in code and/or present in example
   - `.env.example:24` = `http://localhost:5173,http://127.0.0.1:5173`
   - `backend/env.example:12` = `http://localhost:5173,http://127.0.0.1:5173`
 - **Code references**:
-  - `backend/server.js:82-83` (process.env)
-  - `scripts/doctor.mjs:152-152` (process.env)
+  - `backend/server.js:86-87` (process.env)
+  - `scripts/doctor.mjs:154-154` (process.env)
 
 ### `CRAWLER_MAX_SOURCES`
 
@@ -619,7 +623,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/env.example:6` = `backend/data/grantflow.dev.db`
 - **Code references**:
   - `backend/import-data.js:24-24` (process.env)
-  - `backend/server.js:163-163` (process.env)
+  - `backend/server.js:167-167` (process.env)
   - `scripts/anya-run-real-crawlers-all.mjs:20-20` (process.env)
   - `scripts/crawler-doctor.mjs:18-18` (process.env)
   - `scripts/crawler-run.mjs:19-19` (process.env)
@@ -647,11 +651,18 @@ It enumerates environment variables referenced in code and/or present in example
 - **Code references**:
   - `src/api/client.js:6-6` (import.meta.env)
 
+### `DIST_DIR`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `backend/server.js:69-70` (process.env)
+  - `scripts/doctor.mjs:151-151` (process.env)
+
 ### `ENABLE_MIN_NATIONAL_ENSURE`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:482-482` (process.env)
+  - `backend/server.js:486-486` (process.env)
 
 ### `FIREBASE_API_KEY`
 
@@ -732,7 +743,7 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**: (not present)
 - **Code references**:
   - `backend/routes/auth.js:37-37` (process.env)
-  - `backend/server.js:537-670` (process.env)
+  - `backend/server.js:541-674` (process.env)
 
 ### `LOG_LEVEL`
 
@@ -744,7 +755,7 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:478-478` (process.env)
+  - `backend/server.js:482-482` (process.env)
   - `scripts/opportunities-national-minimum.mjs:138-138` (process.env)
 
 ### `MIN_NATIONAL_VISIBLE`
@@ -758,25 +769,25 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:1011-1011` (process.env)
+  - `backend/server.js:1015-1015` (process.env)
 
 ### `NATIONAL_PROGRAMS_CRAWLER_INTERVAL_MINUTES`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:1013-1013` (process.env)
+  - `backend/server.js:1017-1017` (process.env)
 
 ### `NATIONAL_PROGRAMS_MAX_DEPTH`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:1017-1017` (process.env)
+  - `backend/server.js:1021-1021` (process.env)
 
 ### `NATIONAL_PROGRAMS_MAX_URLS`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:1016-1016` (process.env)
+  - `backend/server.js:1020-1020` (process.env)
 
 ### `NODE_ENV`
 
@@ -788,7 +799,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/routes/anya.js:121-121` (process.env)
   - `backend/routes/auth.js:1122-1801` (process.env)
   - `backend/routes/reminders.js:135-154` (process.env)
-  - `backend/server.js:52-939` (process.env)
+  - `backend/server.js:52-943` (process.env)
   - `backend/services/anyaTestRepair.js:155-155` (process.env)
   - `backend/services/crawlers/itemFundingCrawler.js:236-236` (process.env)
   - `backend/services/diagnosticsService.js:30-179` (process.env)
@@ -812,11 +823,11 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/routes/crawlers.js:26-26` (process.env)
   - `backend/routes/documents.js:67-67` (process.env)
   - `backend/routes/profiles.js:117-117` (process.env)
-  - `backend/server.js:658-658` (process.env)
+  - `backend/server.js:662-662` (process.env)
   - `backend/services/anyaOrchestrator.js:18-18` (process.env)
   - `backend/services/anyaToolRegistry.js:726-726` (process.env)
   - `backend/services/diagnosticsService.js:176-176` (process.env)
-  - `scripts/doctor.mjs:155-155` (process.env)
+  - `scripts/doctor.mjs:157-157` (process.env)
   - `scripts/fix-api-errors.mjs:25-27` (process.env)
   - `scripts/test-anya-ai.mjs:24-105` (process.env)
   - `scripts/test-anya-full.mjs:97-97` (process.env)
@@ -834,7 +845,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `.env.example:13` = `8080`
   - `backend/env.example:4` = `8080`
 - **Code references**:
-  - `backend/server.js:71-71` (process.env)
+  - `backend/server.js:75-75` (process.env)
   - `scripts/_doctor/http-proof.mjs:16-16` (process.env)
   - `tests/smoke/smoke.spec.mjs:11-11` (process.env)
 
@@ -848,7 +859,7 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:97-97` (process.env)
+  - `backend/server.js:101-101` (process.env)
 
 ### `RESEND_API_KEY`
 
@@ -884,11 +895,17 @@ It enumerates environment variables referenced in code and/or present in example
 - **Code references**:
   - `backend/routes/serviceApplication.js:7-7` (process.env)
 
+### `SMOKE_ACTION_TIMEOUT_MS`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `tests/smoke/smoke.spec.mjs:223-223` (process.env)
+
 ### `SMOKE_ADMIN_TOKEN`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `scripts/doctor.mjs:308-308` (process.env)
+  - `scripts/doctor.mjs:312-357` (process.env)
   - `tests/smoke/smoke.spec.mjs:20-20` (process.env)
 
 ### `SMOKE_API_BASE_URL`
@@ -901,7 +918,7 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `tests/smoke/smoke.spec.mjs:316-316` (process.env)
+  - `tests/smoke/smoke.spec.mjs:324-324` (process.env)
 
 ### `SMOKE_API_PORT`
 
@@ -913,13 +930,13 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `tests/smoke/smoke.spec.mjs:272-272` (process.env)
+  - `tests/smoke/smoke.spec.mjs:280-280` (process.env)
 
 ### `SMOKE_BASE_PATH`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `scripts/doctor.mjs:306-306` (process.env)
+  - `scripts/doctor.mjs:310-355` (process.env)
   - `scripts/smoke-auth-callback.mjs:49-49` (process.env)
   - `scripts/smoke-auth-refresh.mjs:51-51` (process.env)
   - `scripts/smoke-login.mjs:29-29` (process.env)
@@ -942,7 +959,7 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `scripts/doctor.mjs:309-309` (process.env)
+  - `scripts/doctor.mjs:313-358` (process.env)
   - `tests/smoke/smoke.spec.mjs:21-21` (process.env)
 
 ### `SMOKE_DEBUG`
@@ -961,21 +978,21 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `scripts/doctor.mjs:313-313` (process.env)
+  - `scripts/doctor.mjs:317-361` (process.env)
   - `tests/smoke/smoke.spec.mjs:100-100` (process.env)
 
 ### `SMOKE_MAX_PER_SELECTOR`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `scripts/doctor.mjs:314-314` (process.env)
+  - `scripts/doctor.mjs:318-362` (process.env)
   - `tests/smoke/smoke.spec.mjs:101-101` (process.env)
 
 ### `SMOKE_MAX_ROUTES`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `scripts/doctor.mjs:312-312` (process.env)
+  - `scripts/doctor.mjs:316-360` (process.env)
   - `tests/smoke/smoke.spec.mjs:61-61` (process.env)
 
 ### `SMOKE_MODE`
@@ -990,8 +1007,8 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `scripts/doctor.mjs:315-315` (process.env)
-  - `tests/smoke/smoke.spec.mjs:103-103` (process.env)
+  - `scripts/doctor.mjs:319-363` (process.env)
+  - `tests/smoke/smoke.spec.mjs:103-217` (process.env)
 
 ### `SMOKE_TARGET_PATH`
 
@@ -1012,6 +1029,12 @@ It enumerates environment variables referenced in code and/or present in example
 - **Code references**:
   - `tests/smoke/playwright.config.mjs:22-22` (process.env)
   - `tests/smoke/smoke.spec.mjs:10-10` (process.env)
+
+### `SMOKE_UI_TEST_TIMEOUT_MS`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `tests/smoke/smoke.spec.mjs:219-219` (process.env)
 
 ### `TEST_EMAIL`
 
@@ -1091,9 +1114,9 @@ It enumerates environment variables referenced in code and/or present in example
   - `env.example:5` = `/grantflow`
 - **Code references**:
   - `backend/routes/auth.js:125-125` (process.env)
-  - `backend/server.js:141-141` (process.env)
+  - `backend/server.js:145-145` (process.env)
   - `scripts/_doctor/http-proof.mjs:17-17` (process.env)
-  - `scripts/doctor.mjs:98-306` (process.env)
+  - `scripts/doctor.mjs:98-355` (process.env)
   - `src/App.jsx:61-61` (import.meta.env)
   - `src/api/client.js:9-9` (import.meta.env)
   - `src/components/auth/SessionExpiredDialog.jsx:10-10` (import.meta.env)
@@ -1104,11 +1127,17 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**:
   - `.env.example:53` = `/grantflow`
 - **Code references**:
-  - `scripts/doctor.mjs:99-270` (process.env)
+  - `scripts/doctor.mjs:99-274` (process.env)
 
 ### `VITE_ONBOARDING_VIDEO_URL`
 
 - **Templates**:
   - `env.example:11` = ``
 - **Code references**:
-  - `src/components/onboarding/OnboardingVideo.jsx:18-18` (import.meta.env)
+  - `src/components/onboarding/OnboardingVideo.jsx:25-28` (import.meta.env)
+
+### `VITE_SMOKE_MODE`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `src/components/onboarding/OnboardingVideo.jsx:19-19` (import.meta.env)

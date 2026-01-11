@@ -122,7 +122,7 @@ async function safeClickAll(page) {
       if (clicked.length >= MAX_TOTAL_CLICKS) break
       if (Date.now() - START > PER_ROUTE_BUDGET_MS) break
       const el = loc.nth(i)
-      const visible = await el.isVisible().catch(() => false)
+      const visible = await el.isVisible({ timeout: 250 }).catch(() => false)
       if (!visible) break
       const text = (await el.innerText().catch(() => '')) || ''
       if (skipRe.test(text)) continue
@@ -218,6 +218,10 @@ test('UI routes: visit + click visible controls + no console errors', async ({ p
   const defaultUiTimeoutMs = Math.max(5 * 60_000, routes.length * (perRouteBudgetMs + 2000) + 60_000)
   const uiTimeoutMs = Number.parseInt(process.env.SMOKE_UI_TEST_TIMEOUT_MS || '', 10) || defaultUiTimeoutMs
   test.setTimeout(uiTimeoutMs)
+  // Keep locator auto-waits tight so redirects (e.g. to /login) don't stall the suite.
+  // Navigation timeouts are set explicitly per goto().
+  const defaultActionTimeoutMs = Number.parseInt(process.env.SMOKE_ACTION_TIMEOUT_MS || '1500', 10)
+  page.setDefaultTimeout(defaultActionTimeoutMs)
   writeArtifact('repro/routes.json', { basePath, routes, allRoutesCount: allRoutes.length })
 
   const consoleErrors = []

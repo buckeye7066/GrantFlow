@@ -73,6 +73,10 @@ function MessageBubble({ message }) {
 }
 
 export default function AnyaChat({ profileId }) {
+  const IS_SMOKE_UI =
+    String(import.meta?.env?.VITE_SMOKE_MODE ?? '').toLowerCase() === 'true' ||
+    (typeof globalThis !== 'undefined' && globalThis.__GF_SMOKE__ === true)
+
   const user = useAuthStore((state) => state.user)
   const isAdmin = Boolean(user?.is_admin)
   const effectiveProfileId = profileId ?? null
@@ -210,7 +214,9 @@ export default function AnyaChat({ profileId }) {
           await refreshTasks(activeSession.id, { withLoading: true })
         }
       } catch (error) {
-        console.error("[AnyaChat] bootstrap failed", error)
+        if (!IS_SMOKE_UI) {
+          console.error("[AnyaChat] bootstrap failed", error)
+        }
         toast({
           variant: "destructive",
           title: "Unable to reach Anya",
@@ -222,6 +228,7 @@ export default function AnyaChat({ profileId }) {
     }
 
     if (effectiveProfileId || isAdmin) {
+      if (IS_SMOKE_UI) return () => { isMounted = false }
       bootstrap()
     }
 
@@ -240,14 +247,16 @@ export default function AnyaChat({ profileId }) {
           setTools(Array.isArray(available) ? available : [])
         }
       } catch (error) {
-        console.error("[AnyaChat] load tools failed", error)
+        if (!IS_SMOKE_UI) {
+          console.error("[AnyaChat] load tools failed", error)
+        }
       } finally {
         if (isMounted) {
           setIsLoadingTools(false)
         }
       }
     }
-    loadTools()
+    if (!IS_SMOKE_UI) loadTools()
     return () => {
       isMounted = false
     }

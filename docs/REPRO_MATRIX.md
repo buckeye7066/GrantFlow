@@ -37,10 +37,11 @@ This document describes the automated coverage provided by `npm run doctor` and 
 2. Lint: `npm run lint`
 3. Typecheck: `npm run typecheck`
 4. Unit tests: `npm run unit`
-5. Production build: `npm run build` (doctor writes output under `artifacts/YYYY-MM-DD/dist/` for reproducibility)
+5. Production build: `npm run build` (doctor writes output under `artifacts/YYYY-MM-DD/run-*/dist/` for reproducibility)
 6. Starts backend (Express): `node backend/server.js` (doctor selects an available port 8080/8081/8082)
 7. Starts frontend (Vite dev): `npm run dev` (doctor selects an available port 5173/5174/5175)
 8. Runs Playwright smoke (UI on Vite dev + API on Express): `npm run smoke`
+9. Runs Playwright smoke again against a prod-like server shape (backend-served SPA from DIST_DIR): npm run smoke
 
 ### Smoke suite (`tests/smoke/smoke.spec.mjs`)
 
@@ -59,11 +60,14 @@ This document describes the automated coverage provided by `npm run doctor` and 
 
 Doctor writes evidence to:
 
-- `artifacts/YYYY-MM-DD/`
+- `artifacts/YYYY-MM-DD/run-<timestamp>/`
   - `lint.log`, `typecheck.log`, `test.log`, `build.log`
   - `backend.log`
   - `frontend.log`
   - `smoke.log`
+  - `smoke-prod.log`
   - `playwright-report/` + `playwright-output/` (traces/screenshots/videos on failures)
   - `repro/` (routes/actions and console errors JSON)
 
+Convenience pointer:
+- `artifacts/YYYY-MM-DD/doctor-latest.txt` contains the latest `run-*` output directory path.

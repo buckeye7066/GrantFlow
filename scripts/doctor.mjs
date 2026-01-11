@@ -147,6 +147,8 @@ async function startBackend(root, { outDir, logFile }) {
       SMOKE_MODE: 'true',
       PORT: String(port),
       ADMIN_TOKEN: process.env.ADMIN_TOKEN || 'dev-admin-token',
+      // Serve the production build from the doctor run output directory (prod-like server shape).
+      DIST_DIR: process.env.DIST_DIR || path.join(outDir, 'dist'),
       // Include a few candidate dev ports so we can start Vite on any of them without restarting backend.
       CORS_ORIGIN:
         process.env.CORS_ORIGIN || corsOrigins.join(','),
@@ -197,6 +199,7 @@ async function main() {
     path.join(outDir, 'backend.log'),
     path.join(outDir, 'frontend.log'),
     path.join(outDir, 'smoke.log'),
+    path.join(outDir, 'smoke-prod.log'),
     path.join(outDir, 'repro'),
     path.join(outDir, 'playwright-report'),
     path.join(outDir, 'playwright-output'),
@@ -227,6 +230,7 @@ async function main() {
     backend: path.join(outDir, 'backend.log'),
     frontend: path.join(outDir, 'frontend.log'),
     smoke: path.join(outDir, 'smoke.log'),
+    smokeProd: path.join(outDir, 'smoke-prod.log'),
   }
 
   // Install check (non-destructive): if node_modules missing OR lock changed, do npm ci.
@@ -344,7 +348,34 @@ async function main() {
         }
       } catch {}
     } else {
-      writeFile(path.join(outDir, 'doctor-success.txt'), 'doctor: OK\n')
+      // Also exercise "prod-like" server shape: backend serving the built SPA from DIST_DIR.
+      const smokeProdEnv = mergedEnv({
+        SMOKE_UI_BASE_URL: baseUrl,
+        SMOKE_BASE_URL: baseUrl,
+        SMOKE_BASE_PATH: process.env.SMOKE_BASE_PATH || process.env.VITE_APP_BASE || '/grantflow',
+        API_BASE_URL: baseUrl,
+        SMOKE_ADMIN_TOKEN: process.env.SMOKE_ADMIN_TOKEN || backend.env.ADMIN_TOKEN,
+        SMOKE_BULK_KEY: process.env.SMOKE_BULK_KEY || process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026',
+        ARTIFACTS_DIR: outDir,
+        SMOKE_MAX_ROUTES: process.env.SMOKE_MAX_ROUTES || '3',
+        SMOKE_MAX_CLICKS: process.env.SMOKE_MAX_CLICKS || '10',
+        SMOKE_MAX_PER_SELECTOR: process.env.SMOKE_MAX_PER_SELECTOR || '6',
+        SMOKE_ROUTE_CLICK_BUDGET_MS: process.env.SMOKE_ROUTE_CLICK_BUDGET_MS || '15000',
+      })
+
+      const smokeProd = await runCommand('npm', ['run', 'smoke'], {
+        cwd: root,
+        env: smokeProdEnv,
+        logFile: logs.smokeProd,
+        label: 'npm run smoke (backend-served SPA)',
+        timeoutMs: 10 * 60_000,
+      })
+
+      if (smokeProd.code !== 0) {
+        exitCode = smokeProd.code ?? 1
+      } else {
+        writeFile(path.join(outDir, 'doctor-success.txt'), 'doctor: OK\n')
+      }
     }
   } finally {
     // Always clean up; otherwise a failed run can leave ports occupied and break the next run.

@@ -15,10 +15,17 @@ import { Info, X, CheckCircle } from 'lucide-react'
 // The path parts are joined to ensure proper encoding while keeping forward slashes
 const DEFAULT_VIDEO_FILENAME = 'Grant Flow_ Get Started. mp4'
 const DEFAULT_VIDEO_PATH = `${import.meta.env.BASE_URL}${encodeURIComponent(DEFAULT_VIDEO_FILENAME)}`
-const VIDEO_PATH = import.meta.env.VITE_ONBOARDING_VIDEO_URL || DEFAULT_VIDEO_PATH
+const IS_SMOKE_UI =
+  String(import.meta.env.VITE_SMOKE_MODE ?? '').toLowerCase() === 'true' ||
+  (typeof globalThis !== 'undefined' && globalThis.__GF_SMOKE__ === true)
+
+// In smoke runs, don't attempt to load a local MP4 by default (it may not be present in build output),
+// because a 404 becomes a console error and fails the smoke suite.
+const VIDEO_PATH =
+  import.meta.env.VITE_ONBOARDING_VIDEO_URL || (IS_SMOKE_UI ? null : DEFAULT_VIDEO_PATH)
 
 export default function OnboardingVideo({ open, onComplete, onSkip }) {
-  const [videoError, setVideoError] = useState(false)
+  const [videoError, setVideoError] = useState(IS_SMOKE_UI && !import.meta.env.VITE_ONBOARDING_VIDEO_URL)
 
   const handleComplete = () => {
     onComplete?.()
@@ -44,7 +51,7 @@ export default function OnboardingVideo({ open, onComplete, onSkip }) {
         </DialogHeader>
 
         <div className="py-4">
-          {videoError ? (
+          {videoError || !VIDEO_PATH ? (
             <Alert>
               <Info className="h-4 w-4" />
               <AlertDescription>

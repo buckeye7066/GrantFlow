@@ -3,7 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import Database from 'better-sqlite3';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { dirname, join, resolve } from 'path';
 import fs from 'fs';
 import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
@@ -64,7 +64,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const uploadsDir = join(__dirname, '..', 'uploads');
 const privateUploadsDir = join(__dirname, '..', 'uploads_private');
-const distPath = join(__dirname, '..', 'dist');
+// Allow overriding the frontend build directory (useful for doctor runs that build into artifacts/).
+// Defaults to repo-root ./dist
+const distPath = process.env.DIST_DIR
+  ? resolve(process.env.DIST_DIR)
+  : join(__dirname, '..', 'dist');
 
 const app = express();
 app.set('trust proxy', 1);
