@@ -176,47 +176,42 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete }) {
 
       <div className="px-6 pb-6 pt-0">
         <div className="flex gap-2 border-t border-slate-100 pt-3">
-          {isOrphanedProfile ? (
-            <Button
-              variant="destructive"
-              size="sm"
-              className="w-full"
-              onClick={(event) => {
-                event.stopPropagation();
-                onDelete?.(profile);
-              }}
-            >
-              <Trash2 className="mr-2 h-4 w-4" />
-              Delete Profile
-            </Button>
-          ) : (
-            <>
-              <Button
-                variant="outline"
-                size="sm"
-                className="flex-1"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onViewInvoices?.(profile);
-                }}
-              >
-                <Receipt className="mr-2 h-4 w-4" />
-                Invoices
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="flex-1"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  navigate(createPageUrl("Billing", { profile_id: profile.id }));
-                }}
-              >
-                <FileText className="mr-2 h-4 w-4" />
-                Billing
-              </Button>
-            </>
-          )}
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-1"
+            onClick={(event) => {
+              event.stopPropagation();
+              onViewInvoices?.(profile);
+            }}
+          >
+            <Receipt className="mr-2 h-4 w-4" />
+            Invoices
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-1"
+            onClick={(event) => {
+              event.stopPropagation();
+              navigate(createPageUrl("Billing", { profile_id: profile.id }));
+            }}
+          >
+            <FileText className="mr-2 h-4 w-4" />
+            Billing
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            className="shrink-0"
+            aria-label={`Delete profile ${profile.display_name}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onDelete?.(profile);
+            }}
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
         </div>
       </div>
     </Card>

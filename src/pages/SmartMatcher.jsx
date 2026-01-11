@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react"
+import React, { useMemo, useState } from "react"
 import { Sparkles, Search, Filter, SlidersHorizontal, Star, TrendingUp, Award } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -9,91 +9,64 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useQuery } from "@tanstack/react-query"
 import { apiFetch } from "@/api/client"
 import ProfileSelect from "@/components/shared/ProfileSelect"
-import { getProfile } from "@/api/profiles"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { useToast } from "@/components/ui/use-toast"
 
 export default function SmartMatcher() {
   const [selectedProfileId, setSelectedProfileId] = useState("")
   const [searchQuery, setSearchQuery] = useState("")
   const [minScore, setMinScore] = useState(50)
+  const [selectedOpp, setSelectedOpp] = useState(null)
+  const { toast } = useToast()
 
-  const { data: opportunitiesResponse } = useQuery({
-    queryKey: ['opportunities'],
-    queryFn: () => apiFetch('/api/opportunities'),
+  const { data: scoredResponse, isLoading: isScoring } = useQuery({
+    queryKey: ['smart-matcher', selectedProfileId, minScore, searchQuery],
+    queryFn: async () => {
+      if (!selectedProfileId || selectedProfileId === 'all') {
+        return { opportunities: [], total_scored: 0, returned: 0 }
+      }
+      const qs = new URLSearchParams()
+      qs.set('min_score', String(minScore))
+      qs.set('limit', '500')
+      if (searchQuery?.trim()) qs.set('q', searchQuery.trim())
+      return await apiFetch(`/api/matching/profile/${selectedProfileId}/opportunities?${qs.toString()}`)
+    },
+    enabled: Boolean(selectedProfileId) && selectedProfileId !== 'all',
     staleTime: 60_000,
   })
 
-  const opportunities = opportunitiesResponse?.data ?? []
-
-  const { data: profile } = useQuery({
-    queryKey: ['profile-detail', selectedProfileId],
-    queryFn: () => getProfile(selectedProfileId),
-    enabled: Boolean(selectedProfileId) && selectedProfileId !== 'all',
-  })
-
-  // Simple matching algorithm based on profile data
   const scoredOpportunities = useMemo(() => {
-    if (!profile || !selectedProfileId || selectedProfileId === 'all') {
-      return opportunities.map(opp => ({ ...opp, score: 0, reasons: [] }))
-    }
-
-    const profileTags = new Set((profile.tags || []).map(t => t.toLowerCase()))
-    const profileState = profile.sections?.find(s => s.section_key === 'basic_information')?.data?.state
-
-    return opportunities.map(opp => {
-      let score = 40 // Base score
-      const reasons = []
-
-      // State match
-      if (opp.state && profileState && opp.state.toLowerCase() === profileState.toLowerCase()) {
-        score += 20
-        reasons.push(`Matches your state (${profileState})`)
-      }
-
-      // Is national
-      if (opp.is_national) {
-        score += 10
-        reasons.push('National opportunity')
-      }
-
-      // Title/description keyword match
-      const oppText = `${opp.title || ''} ${opp.description || ''}`.toLowerCase()
-      let keywordMatches = 0
-      profileTags.forEach(tag => {
-        if (oppText.includes(tag)) {
-          keywordMatches++
-        }
-      })
-      
-      if (keywordMatches > 0) {
-        score += Math.min(30, keywordMatches * 10)
-        reasons.push(`${keywordMatches} keyword match${keywordMatches > 1 ? 'es' : ''}`)
-      }
-
-      return { ...opp, score: Math.min(100, score), reasons }
-    })
-  }, [opportunities, profile, selectedProfileId])
+    const payload = scoredResponse?.data ?? scoredResponse ?? {}
+    const rows = payload?.opportunities ?? []
+    return Array.isArray(rows) ? rows : []
+  }, [scoredResponse])
 
   // Filter and sort
   const filteredOpportunities = useMemo(() => {
-    let filtered = scoredOpportunities
-
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase()
-      filtered = filtered.filter(opp => 
-        opp.title?.toLowerCase().includes(query) ||
-        opp.description?.toLowerCase().includes(query) ||
-        opp.funder?.toLowerCase().includes(query)
-      )
-    }
-
-    filtered = filtered.filter(opp => opp.score >= minScore)
-
-    return filtered.sort((a, b) => b.score - a.score)
-  }, [scoredOpportunities, searchQuery, minScore])
+    // Already filtered server-side by q + min_score.
+    return [...scoredOpportunities].sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+  }, [scoredOpportunities])
 
   const topMatches = filteredOpportunities.slice(0, 10)
-  const goodMatches = filteredOpportunities.filter(o => o.score >= 70 && o.score < 85)
-  const allQualified = filteredOpportunities.filter(o => o.score >= minScore)
+  const goodMatches = filteredOpportunities.filter(o => (o.match_score ?? 0) >= 70 && (o.match_score ?? 0) < 85)
+  const allQualified = filteredOpportunities
+
+  const handleOpenOpp = (opp) => {
+    setSelectedOpp(opp)
+  }
+
+  const handleOpenLink = () => {
+    const url = selectedOpp?.application_url ?? selectedOpp?.source_url ?? selectedOpp?.url ?? null
+    if (!url || typeof url !== 'string') {
+      toast({
+        title: 'No application link available',
+        description: 'This opportunity does not include a valid URL yet.',
+        variant: 'destructive',
+      })
+      return
+    }
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
 
   return (
     <div className="p-6 md:p-8">
@@ -153,6 +126,12 @@ export default function SmartMatcher() {
                 </div>
               </div>
             </div>
+
+            {selectedProfileId && selectedProfileId !== 'all' && (
+              <div className="text-xs text-slate-600">
+                {isScoring ? 'Scoring opportunities using full profile data…' : `Showing ${filteredOpportunities.length} matches (server-scored)`}
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -222,18 +201,18 @@ export default function SmartMatcher() {
                               <div className="flex items-center gap-2 mb-2">
                                 <h3 className="font-semibold text-slate-900">{opp.title}</h3>
                                 <Badge variant="default" className="bg-green-600">
-                                  {opp.score}% Match
+                                  {opp.match_score ?? 0}% Match
                                 </Badge>
                               </div>
                               <p className="text-sm text-slate-600 mb-2 line-clamp-2">{opp.description}</p>
                               <div className="flex flex-wrap gap-2 text-xs text-slate-500">
-                                {opp.funder && <span>• {opp.funder}</span>}
+                                {opp.sponsor && <span>• {opp.sponsor}</span>}
                                 {opp.state && <span>• {opp.state}</span>}
                                 {opp.deadline && <span>• Due: {opp.deadline}</span>}
                               </div>
-                              {opp.reasons && opp.reasons.length > 0 && (
+                              {opp.match_reasons && opp.match_reasons.length > 0 && (
                                 <div className="mt-2 flex flex-wrap gap-1">
-                                  {opp.reasons.map((reason, i) => (
+                                  {opp.match_reasons.slice(0, 6).map((reason, i) => (
                                     <Badge key={i} variant="secondary" className="text-xs">
                                       {reason}
                                     </Badge>
@@ -241,7 +220,7 @@ export default function SmartMatcher() {
                                 </div>
                               )}
                             </div>
-                            <Button size="sm">View</Button>
+                            <Button size="sm" onClick={() => handleOpenOpp(opp)}>View</Button>
                           </div>
                         </CardContent>
                       </Card>
@@ -266,18 +245,18 @@ export default function SmartMatcher() {
                             <div className="flex-1">
                               <div className="flex items-center gap-2 mb-2">
                                 <h3 className="font-semibold text-slate-900">{opp.title}</h3>
-                                <Badge variant={opp.score >= 85 ? "default" : "secondary"}>
-                                  {opp.score}%
+                                <Badge variant={(opp.match_score ?? 0) >= 85 ? "default" : "secondary"}>
+                                  {opp.match_score ?? 0}%
                                 </Badge>
                               </div>
                               <p className="text-sm text-slate-600 mb-2 line-clamp-2">{opp.description}</p>
                               <div className="flex flex-wrap gap-2 text-xs text-slate-500">
-                                {opp.funder && <span>• {opp.funder}</span>}
+                                {opp.sponsor && <span>• {opp.sponsor}</span>}
                                 {opp.state && <span>• {opp.state}</span>}
                                 {opp.deadline && <span>• Due: {opp.deadline}</span>}
                               </div>
                             </div>
-                            <Button size="sm" variant="outline">View</Button>
+                            <Button size="sm" variant="outline" onClick={() => handleOpenOpp(opp)}>View</Button>
                           </div>
                         </CardContent>
                       </Card>
@@ -294,6 +273,49 @@ export default function SmartMatcher() {
             </Tabs>
           </>
         )}
+
+        <Dialog open={Boolean(selectedOpp)} onOpenChange={(open) => !open && setSelectedOpp(null)}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>{selectedOpp?.title ?? 'Opportunity'}</DialogTitle>
+              <DialogDescription>
+                {(selectedOpp?.sponsor || selectedOpp?.state || selectedOpp?.deadline)
+                  ? [
+                      selectedOpp?.sponsor ? `Sponsor: ${selectedOpp.sponsor}` : null,
+                      selectedOpp?.state ? `State: ${selectedOpp.state}` : null,
+                      selectedOpp?.deadline ? `Deadline: ${selectedOpp.deadline}` : null,
+                    ].filter(Boolean).join(' • ')
+                  : 'Details'}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              {selectedOpp?.description && (
+                <div className="text-sm text-slate-700 whitespace-pre-wrap">{selectedOpp.description}</div>
+              )}
+
+              {Array.isArray(selectedOpp?.match_reasons) && selectedOpp.match_reasons.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-sm font-semibold text-slate-900">Why this matched</div>
+                  <div className="flex flex-wrap gap-1">
+                    {selectedOpp.match_reasons.map((reason, idx) => (
+                      <Badge key={idx} variant="secondary" className="text-xs">
+                        {reason}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setSelectedOpp(null)}>
+                Close
+              </Button>
+              <Button onClick={handleOpenLink}>Open link</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   )
