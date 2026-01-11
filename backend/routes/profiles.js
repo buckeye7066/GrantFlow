@@ -148,8 +148,16 @@ router.get('/', (req, res) => {
   const user = req.user
   const includeSummary = req.query.summary === 'true'
   
-  // Validate pagination parameters
-  const { limit, offset } = validatePagination(req.query);
+  // Validate pagination parameters.
+  // For admins, default to the max page size unless a limit is explicitly provided.
+  // This prevents "missing profiles" in the UI when admins expect to see everything.
+  const paginationQuery = { ...req.query }
+  const limitProvided = Object.prototype.hasOwnProperty.call(req.query ?? {}, 'limit')
+  if (isAdmin(user) && !limitProvided) {
+    paginationQuery.limit = 1000
+    paginationQuery.offset = 0
+  }
+  const { limit, offset } = validatePagination(paginationQuery);
 
   // Check if user is admin
   if (!isAdmin(user)) {
