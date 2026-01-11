@@ -321,7 +321,7 @@ export default function ItemFunding() {
 
   const statesQuery = useQuery({
     queryKey: ["opportunity-states"],
-    queryFn: listOpportunityStates,
+    queryFn: () => listOpportunityStates(),
   })
 
   const profilesQuery = useQuery({
