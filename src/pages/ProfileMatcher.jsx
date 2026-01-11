@@ -1,6 +1,5 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -11,36 +10,34 @@ import { Loader2, Target, TrendingUp, AlertTriangle, CheckCircle2, Calendar, Dol
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import { format } from 'date-fns';
+import { listProfiles } from '@/api/profiles';
+import { matchProfileToGrants } from '@/api/matching';
 
 export default function ProfileMatcher() {
-  const [selectedOrgId, setSelectedOrgId] = useState('');
+  const [selectedProfileId, setSelectedProfileId] = useState('');
   const [matches, setMatches] = useState(null);
   const [isMatching, setIsMatching] = useState(false);
   const [error, setError] = useState(null);
 
-  const { data: organizations = [], isLoading: isLoadingOrgs } = useQuery({
-    queryKey: ['organizations'],
-    queryFn: () => base44.entities.Organization.list('name'),
+  const { data: profiles = [], isLoading: isLoadingProfiles } = useQuery({
+    queryKey: ['profiles'],
+    queryFn: listProfiles,
   });
 
-  const selectedOrg = organizations.find(org => org.id === selectedOrgId);
+  const selectedProfile = useMemo(
+    () => profiles.find((profile) => profile.id === selectedProfileId),
+    [profiles, selectedProfileId],
+  )
 
   const handleMatch = async () => {
-    if (!selectedOrgId) return;
+    if (!selectedProfileId) return;
     
     setIsMatching(true);
     setError(null);
     
     try {
-      const response = await base44.functions.invoke('matchProfileToGrants', {
-        organization_id: selectedOrgId
-      });
-      
-      if (response.data.success) {
-        setMatches(response.data.matches);
-      } else {
-        setError(response.data.message || 'Failed to calculate matches');
-      }
+      const response = await matchProfileToGrants(selectedProfileId)
+      setMatches(Array.isArray(response) ? response : [])
     } catch (err) {
       console.error('Matching failed:', err);
       setError(err.message || 'An error occurred while matching grants');
@@ -87,19 +84,19 @@ export default function ProfileMatcher() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="md:col-span-2">
                 <Select 
-                  value={selectedOrgId} 
-                  onValueChange={setSelectedOrgId}
-                  disabled={isLoadingOrgs || isMatching}
+                  value={selectedProfileId} 
+                  onValueChange={setSelectedProfileId}
+                  disabled={isLoadingProfiles || isMatching}
                 >
                   <SelectTrigger className="h-12">
                     <SelectValue placeholder="Select a profile..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {organizations.map(org => (
-                      <SelectItem key={org.id} value={org.id}>
+                    {profiles.map(profile => (
+                      <SelectItem key={profile.id} value={profile.id}>
                         <div className="flex items-center gap-2">
                           <User className="w-4 h-4" />
-                          {org.name}
+                          {profile.name}
                         </div>
                       </SelectItem>
                     ))}
@@ -109,7 +106,7 @@ export default function ProfileMatcher() {
               
               <Button
                 onClick={handleMatch}
-                disabled={!selectedOrgId || isMatching}
+                disabled={!selectedProfileId || isMatching}
                 className="bg-purple-600 hover:bg-purple-700"
                 size="lg"
               >
@@ -127,13 +124,14 @@ export default function ProfileMatcher() {
               </Button>
             </div>
 
-            {selectedOrg && (
+            {selectedProfile && (
               <Alert className="bg-blue-50 border-blue-200">
                 <User className="h-4 w-4 text-blue-600" />
                 <AlertDescription className="text-blue-800">
-                  <strong>Selected Profile:</strong> {selectedOrg.name} ({selectedOrg.applicant_type?.replace(/_/g, ' ') || 'organization'})
-                  {selectedOrg.state && ` • ${selectedOrg.state}`}
-                  {selectedOrg.gpa && ` • GPA: ${selectedOrg.gpa}`}
+                  <strong>Selected Profile:</strong> {selectedProfile.name}{' '}
+                  ({(selectedProfile.primary_type || selectedProfile.applicant_type || 'profile').replace(/_/g, ' ')})
+                  {selectedProfile.state && ` • ${selectedProfile.state}`}
+                  {selectedProfile.gpa && ` • GPA: ${selectedProfile.gpa}`}
                 </AlertDescription>
               </Alert>
             )}
