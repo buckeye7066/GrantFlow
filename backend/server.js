@@ -22,6 +22,8 @@ import profilesRouter from './routes/profiles.js';
 import remindersRouter from './routes/reminders.js';
 import crawlersRouter from './routes/crawlers.js';
 import realCrawlersRouter from './routes/realCrawlers.js';
+import matchingRouter from './routes/matching.js';
+import grantMonitoringRouter from './routes/grantMonitoring.js';
 import billingRouter from './routes/billing.js';
 import authRouter from './routes/auth.js';
 import preferencesRouter from './routes/preferences.js';
@@ -780,6 +782,8 @@ app.use('/api/ai', aiRouter);
 app.use('/api/anya', anyaRouter); // Keep existing Anya routes for compatibility
 app.use('/api/profiles', profilesRouter);
 app.use('/api/reminders', remindersRouter);
+app.use('/api/matching', matchingRouter);
+app.use('/api/grant-monitoring', grantMonitoringRouter);
 app.use('/api/crawlers', crawlersRouter);
 app.use('/api/real-crawlers', realCrawlersRouter);
 app.use('/api/preferences', preferencesRouter);
@@ -788,7 +792,9 @@ app.use('/api/preferences', preferencesRouter);
 app.get('/api/health', (req, res) => {
   try {
     const healthSummary = getSafeHealthSummary(db);
-    const statusCode = healthSummary.status === 'healthy' ? 200 : 503;
+    // Treat "warning" as healthy for platform checks (Railway healthchecks, Docker HEALTHCHECK, etc.)
+    // Only fail hard when the health summary indicates a real error.
+    const statusCode = healthSummary.status === 'error' ? 500 : 200;
     res.status(statusCode).json(healthSummary);
   } catch (error) {
     console.error('[/api/health] Error:', error);

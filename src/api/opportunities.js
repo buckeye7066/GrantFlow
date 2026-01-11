@@ -1,10 +1,24 @@
 import { apiFetch } from "@/api/client"
 
 function buildQuery(params = {}) {
+  // React Query passes a "query function context" object into queryFn by default.
+  // If callers pass an API function directly as `queryFn`, we must ignore that context
+  // to avoid generating URLs like `?queryKey=[object Object]&signal=[object AbortSignal]`.
+  const looksLikeQueryContext =
+    params &&
+    typeof params === "object" &&
+    (Object.prototype.hasOwnProperty.call(params, "queryKey") ||
+      Object.prototype.hasOwnProperty.call(params, "signal") ||
+      Object.prototype.hasOwnProperty.call(params, "meta") ||
+      Object.prototype.hasOwnProperty.call(params, "client"))
+
+  const effectiveParams = looksLikeQueryContext ? {} : params
+
   const searchParams = new URLSearchParams()
-  Object.entries(params).forEach(([key, value]) => {
+  Object.entries(effectiveParams).forEach(([key, value]) => {
     if (value === undefined || value === null || value === "") return
     if (key !== "compliance" && value === "all") return
+    if (value && typeof value === "object" && !Array.isArray(value)) return
     searchParams.set(key, String(value))
   })
   return searchParams.toString() ? `?${searchParams.toString()}` : ""
