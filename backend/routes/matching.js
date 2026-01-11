@@ -193,7 +193,7 @@ router.get('/profile/:profileId/opportunities', (req, res) => {
           match_score: computed.score,
           match_reasons: computed.reasons,
           // Normalize for frontend convenience.
-          url: opp.application_url ?? opp.source_url ?? opp.record_origin ?? null,
+          url: opp.application_url ?? opp.source_url ?? null,
         }
       })
       .filter((opp) => (Number.isFinite(minScore) ? (opp.match_score ?? 0) >= minScore : true))
