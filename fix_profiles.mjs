@@ -23,7 +23,6 @@ try {
     console.error(`Admin user not found for email: ${adminEmail}`)
     process.exit(1)
   }
-
   const total = db.prepare('SELECT COUNT(*) AS count FROM profiles').get()?.count ?? 0
   const linked = db.prepare('SELECT COUNT(*) AS count FROM profiles WHERE user_id IS NOT NULL').get()?.count ?? 0
   const unlinked = total - linked
