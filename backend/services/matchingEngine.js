@@ -179,7 +179,7 @@ function amountInRange(profileAmount, opportunity) {
   if (!profileAmount) return true; // No preference specified
   
   // Parse profile amount (could be "$50,000" or "50000" or "$25,000 - $100,000")
-  const amountStr = String(profileAmount).replace(/[\$,]/g, '');
+  const amountStr = String(profileAmount).replace(/[$,]/g, '');
   const amountMatch = amountStr.match(/(\d+)/);
   if (!amountMatch) return true;
   
