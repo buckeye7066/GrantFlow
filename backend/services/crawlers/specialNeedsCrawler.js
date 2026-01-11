@@ -82,6 +82,7 @@ const SPECIAL_NEEDS_SOURCES = {
 
 export async function crawlSpecialNeeds(profile, options = {}) {
   const results = []
+  const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 80
   
   // Identify special needs categories from profile
   const specialNeeds = identifySpecialNeeds(profile)
@@ -105,7 +106,7 @@ export async function crawlSpecialNeeds(profile, options = {}) {
           
           const matchScore = calculateSpecialNeedsMatchScore(opp, needCategory, profile)
           
-          if (matchScore >= 80) {
+          if (matchScore >= minMatchScore) {
             results.push({
               ...opp,
               match_score: matchScore,
@@ -127,47 +128,61 @@ export async function crawlSpecialNeeds(profile, options = {}) {
 
 function identifySpecialNeeds(profile) {
   const needs = []
+  const sections = profile?.sections ?? {}
+  const health = sections?.health_medical ?? {}
+  const family = sections?.family_life ?? {}
+  const military = sections?.military_service ?? {}
+  const assistance = sections?.government_assistance ?? {}
+  const tags = Array.isArray(profile?.tags) ? profile.tags.map(t => String(t).toLowerCase()) : []
+  const keywords =
+    profile?.signals?.keywordSet
+      ? Array.from(profile.signals.keywordSet)
+      : []
   
   // Check for cancer history
-  if (profile.cancer_survivor === true ||
-      profile.medical_history?.includes('cancer') ||
-      profile.health_conditions?.some(c => c.toLowerCase().includes('cancer')) ||
-      profile.tags?.some(t => t.toLowerCase().includes('cancer'))) {
+  const chronicType = String(health?.chronic_illness_type || '').toLowerCase()
+  const disabilityTypes = Array.isArray(health?.disability_type) ? health.disability_type.map(v => String(v).toLowerCase()) : []
+  const mentionsCancer =
+    chronicType.includes('cancer') ||
+    disabilityTypes.some(v => v.includes('cancer')) ||
+    keywords.some(v => v.includes('cancer')) ||
+    tags.some(t => t.includes('cancer'))
+  if (mentionsCancer) {
     needs.push('cancer')
   }
   
   // Check for single parent status
-  if (profile.single_parent === true ||
-      profile.family_status === 'single_parent' ||
-      profile.household_type === 'single_parent' ||
-      profile.tags?.some(t => t.toLowerCase().includes('single parent'))) {
+  if (family?.single_parent === true || tags.some(t => t.includes('single parent'))) {
     needs.push('single_parent')
   }
   
   // Check for disability
-  if (profile.disability_status === true ||
-      profile.disabled === true ||
-      profile.has_disability === true ||
-      profile.health_conditions?.length > 0 ||
-      profile.tags?.some(t => t.toLowerCase().includes('disability'))) {
+  const hasDisability =
+    disabilityTypes.length > 0 ||
+    health?.wheelchair_user === true ||
+    health?.visual_impairment === true ||
+    health?.hearing_impairment === true ||
+    assistance?.ssi_recipient === true ||
+    assistance?.ssdi_recipient === true ||
+    tags.some(t => t.includes('disability'))
+  if (hasDisability) {
     needs.push('disability')
   }
   
   // Check for veteran status
-  if (profile.veteran === true ||
-      profile.military_service === true ||
-      profile.veteran_status === true ||
-      profile.tags?.some(t => t.toLowerCase().includes('veteran'))) {
+  if (military?.veteran === true || military?.disabled_veteran === true || tags.some(t => t.includes('veteran'))) {
     needs.push('veteran')
   }
   
   // Check for mental health needs
-  if (profile.mental_health_needs === true ||
-      profile.health_conditions?.some(c => 
-        c.toLowerCase().includes('mental') || 
-        c.toLowerCase().includes('depression') ||
-        c.toLowerCase().includes('anxiety')) ||
-      profile.tags?.some(t => t.toLowerCase().includes('mental health'))) {
+  const hasMentalHealth =
+    health?.mental_health_condition === true ||
+    chronicType.includes('mental') ||
+    chronicType.includes('depression') ||
+    chronicType.includes('anxiety') ||
+    tags.some(t => t.includes('mental health')) ||
+    keywords.some(v => v.includes('mental health'))
+  if (hasMentalHealth) {
     needs.push('mental_health')
   }
   
