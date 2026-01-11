@@ -37,7 +37,7 @@ This document describes the automated coverage provided by `npm run doctor` and 
 2. Lint: `npm run lint`
 3. Typecheck: `npm run typecheck`
 4. Unit tests: `npm run unit`
-5. Production build: `npm run build`
+5. Production build: `npm run build` (doctor writes output under `artifacts/YYYY-MM-DD/dist/` for reproducibility)
 6. Starts backend (Express): `node backend/server.js` (doctor selects an available port 8080/8081/8082)
 7. Starts frontend (Vite dev): `npm run dev` (doctor selects an available port 5173/5174/5175)
 8. Runs Playwright smoke (UI on Vite dev + API on Express): `npm run smoke`

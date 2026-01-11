@@ -177,10 +177,17 @@ async function startBackend(root, { outDir, logFile }) {
 async function main() {
   const root = repoRoot()
   const stamp = todayStamp()
-  const outDir = artifactsDir(root, stamp)
+  const dayDir = artifactsDir(root, stamp)
+  ensureDir(dayDir)
+  const runId = new Date().toISOString().replace(/[:.]/g, '-')
+  const outDir = path.join(dayDir, `run-${runId}`)
   ensureDir(outDir)
+  // Convenience pointer for humans/tools.
+  try {
+    writeFile(path.join(dayDir, 'doctor-latest.txt'), `${outDir}\n`)
+  } catch {}
 
-  // Wipe prior artifacts for the day so reruns are easier to read.
+  // Wipe prior artifacts for THIS run directory so reruns are easier to read.
   const wipeTargets = [
     path.join(outDir, 'install.log'),
     path.join(outDir, 'lint.log'),
@@ -264,7 +271,15 @@ async function main() {
     // Prevent local .env files from hardcoding a cross-origin backend URL into the production bundle.
     VITE_API_URL: '',
   })
-  const build = await runCommand('npm', ['run', 'build'], { cwd: root, env: buildEnv, logFile: logs.build, label: 'npm run build' })
+  // Build output goes into artifacts to avoid Windows file-lock issues on repo-level dist/
+  // and to keep "hard evidence" outputs co-located with logs.
+  const doctorDistDir = path.join(outDir, 'dist')
+  const build = await runCommand('npm', ['run', 'build', '--', '--outDir', doctorDistDir], {
+    cwd: root,
+    env: buildEnv,
+    logFile: logs.build,
+    label: `npm run build -- --outDir ${doctorDistDir}`,
+  })
   if (build.code !== 0) process.exit(build.code ?? 1)
 
   // Start backend first, then Vite dev server (for "dev servers" evidence), then run smoke.
