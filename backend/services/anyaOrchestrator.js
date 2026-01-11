@@ -594,78 +594,101 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     console.log('[Anya] Health query detected, invoking system.health tool')
     const healthData = await invokeRegisteredTool('system.health', {}, { db, user })
 
-      // Format the health data into a human-readable response
-      const lines = []
-      lines.push(`**System Status: ${healthData.status}**\n`)
-
-      if (healthData.issues && healthData.issues.length > 0) {
-        lines.push('**Issues:**')
-        healthData.issues.forEach(issue => lines.push(`• ${issue}`))
-        lines.push('')
+    // Format the health data into a human-readable response.
+    // IMPORTANT: system.health may return different shapes depending on auth level or internal errors.
+    const status = healthData?.status ?? 'UNKNOWN'
+    const counts = healthData?.counts ?? { opportunities: 0, profiles: 0, crawl_logs: 0 }
+    const crawlerStats = healthData?.crawler_stats ?? healthData?.crawlers ?? null
+    const envFlags =
+      healthData?.env_flags ?? {
+        OPENAI_API_KEY_present: Boolean(healthData?.environment?.hasOpenAIKey),
+        ANTHROPIC_API_KEY_present: false,
+        SAM_GOV_API_KEY_present: Boolean(healthData?.environment?.hasSamGovKey),
       }
+    const lastError = healthData?.last_error ?? healthData?.lastError ?? null
+    const issues = Array.isArray(healthData?.issues) ? healthData.issues : []
+    const warnings = Array.isArray(healthData?.warnings) ? healthData.warnings : []
 
-      if (healthData.warnings && healthData.warnings.length > 0) {
-        lines.push('**Warnings:**')
-        healthData.warnings.forEach(warning => lines.push(`• ${warning}`))
-        lines.push('')
-      }
+    const lines = []
+    lines.push(`**System Status: ${status}**\n`)
 
-      lines.push('**Quick Stats:**')
-      lines.push(`• ${healthData.counts.opportunities} funding opportunities`)
-      lines.push(`• ${healthData.counts.profiles} active profiles`)
-      lines.push(`• ${healthData.counts.crawl_logs} crawl logs`)
+    if (healthData?.error) {
+      lines.push('**Error:**')
+      lines.push(`• ${healthData.error}`)
       lines.push('')
-
-      if (healthData.crawler_stats) {
-        lines.push(`• Crawler runs (24h): ${healthData.crawler_stats.totalRuns}`)
-        lines.push(`• Recent failures: ${healthData.crawler_stats.recentFailures}`)
-        lines.push('')
-      }
-
-      lines.push('**Environment:**')
-      lines.push(`• OPENAI_API_KEY: ${healthData.env_flags.OPENAI_API_KEY_present ? '✓ Present' : '✗ Not set'}`)
-      lines.push(`• ANTHROPIC_API_KEY: ${healthData.env_flags.ANTHROPIC_API_KEY_present ? '✓ Present' : '✗ Not set'}`)
-      lines.push(`• SAM_GOV_API_KEY: ${healthData.env_flags.SAM_GOV_API_KEY_present ? '✓ Present' : '✗ Not set'}`)
-      lines.push('')
-
-      if (healthData.last_error) {
-        lines.push('**Last Error:**')
-        lines.push(`• ${healthData.last_error.crawler}: ${healthData.last_error.message}`)
-        lines.push(`• Time: ${new Date(healthData.last_error.time).toLocaleString()}`)
-        lines.push('')
-      }
-
-      // Provide actionable next steps based on status
-      if (healthData.status === 'ERROR') {
-        lines.push('**Next Action:**')
-        if (!healthData.env_flags.SAM_GOV_API_KEY_present) {
-          lines.push('• Configure SAM_GOV_API_KEY environment variable')
-        }
-        if (healthData.issues.includes('Database connection failed')) {
-          lines.push('• Check database connection and restart the server')
-        }
-        lines.push('• Review error logs for detailed information')
-      } else if (healthData.status === 'WARNING' || healthData.status === 'DEGRADED') {
-        lines.push('**Next Action:**')
-        if (healthData.counts.opportunities === 0) {
-          lines.push('• Run crawlers to populate funding opportunities')
-        }
-        if (healthData.crawler_stats.recentFailures > 0) {
-          lines.push('• Review and retry failed crawler jobs')
-        }
-        if (!healthData.env_flags.OPENAI_API_KEY_present && !healthData.env_flags.ANTHROPIC_API_KEY_present) {
-          lines.push('• Configure AI API keys for full functionality')
-        }
-      } else {
-        lines.push('**Status:** System is operating normally ✓')
-      }
-
-      return lines.join('\n')
-    } catch (error) {
-      console.error('[Anya] Failed to retrieve system health:', error)
-      return `I could not retrieve diagnostics; the system may be degraded.\n\nError: ${error.message}\n\nPlease check the logs or contact support.`
     }
+
+    if (issues.length > 0) {
+      lines.push('**Issues:**')
+      issues.forEach((issue) => lines.push(`• ${issue}`))
+      lines.push('')
+    }
+
+    if (warnings.length > 0) {
+      lines.push('**Warnings:**')
+      warnings.forEach((warning) => lines.push(`• ${warning}`))
+      lines.push('')
+    }
+
+    lines.push('**Quick Stats:**')
+    lines.push(`• ${counts.opportunities ?? 0} funding opportunities`)
+    lines.push(`• ${counts.profiles ?? 0} active profiles`)
+    lines.push(`• ${counts.crawl_logs ?? 0} crawl logs`)
+    lines.push('')
+
+    if (crawlerStats) {
+      lines.push(`• Crawler runs (24h): ${crawlerStats.totalRuns ?? crawlerStats.totalRuns ?? 0}`)
+      lines.push(`• Recent failures: ${crawlerStats.recentFailures ?? 0}`)
+      lines.push('')
+    }
+
+    lines.push('**Environment:**')
+    lines.push(`• OPENAI_API_KEY: ${envFlags.OPENAI_API_KEY_present ? '✓ Present' : '✗ Not set'}`)
+    lines.push(`• ANTHROPIC_API_KEY: ${envFlags.ANTHROPIC_API_KEY_present ? '✓ Present' : '✗ Not set'}`)
+    lines.push(`• SAM_GOV_API_KEY: ${envFlags.SAM_GOV_API_KEY_present ? '✓ Present' : '✗ Not set'}`)
+    lines.push('')
+
+    if (lastError) {
+      const timeValue = lastError.time ?? lastError.timestamp
+      lines.push('**Last Error:**')
+      lines.push(`• ${lastError.crawler || 'unknown'}: ${lastError.message || 'Unknown error'}`)
+      if (timeValue) {
+        lines.push(`• Time: ${new Date(timeValue).toLocaleString()}`)
+      }
+      lines.push('')
+    }
+
+    // Provide actionable next steps based on status
+    if (status === 'ERROR') {
+      lines.push('**Next Action:**')
+      if (!envFlags.SAM_GOV_API_KEY_present) {
+        lines.push('• Configure SAM_GOV_API_KEY environment variable')
+      }
+      if (issues.includes('Database connection failed')) {
+        lines.push('• Check database connection and restart the server')
+      }
+      lines.push('• Review error logs for detailed information')
+    } else if (status === 'WARNING' || status === 'DEGRADED') {
+      lines.push('**Next Action:**')
+      if ((counts.opportunities ?? 0) === 0) {
+        lines.push('• Run crawlers to populate funding opportunities')
+      }
+      if ((crawlerStats?.recentFailures ?? 0) > 0) {
+        lines.push('• Review and retry failed crawler jobs')
+      }
+      if (!envFlags.OPENAI_API_KEY_present && !envFlags.ANTHROPIC_API_KEY_present) {
+        lines.push('• Configure AI API keys for full functionality')
+      }
+    } else {
+      lines.push('**Status:** System is operating normally ✓')
+    }
+
+    return lines.join('\n')
+  } catch (error) {
+    console.error('[Anya] Failed to retrieve system health:', error)
+    return `I could not retrieve diagnostics; the system may be degraded.\n\nError: ${error.message}\n\nPlease check the logs or contact support.`
   }
+ }
 
   let openai = null
   try {
