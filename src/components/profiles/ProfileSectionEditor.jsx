@@ -21,6 +21,76 @@ import { Switch } from "@/components/ui/switch"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import ProfileFieldWithAI from "@/components/profiles/ProfileFieldWithAI"
 
+function isPlainObject(value) {
+  if (!value || typeof value !== 'object') return false
+  return Object.prototype.toString.call(value) === '[object Object]'
+}
+
+function formatAddressObject(address) {
+  if (!isPlainObject(address)) return null
+
+  const parts = []
+  const line1 = address.line1 ?? address.address1 ?? address.street ?? address.street1
+  const line2 = address.line2 ?? address.address2 ?? address.street2
+  if (line1) parts.push(String(line1).trim())
+  if (line2) parts.push(String(line2).trim())
+
+  const city = address.city
+  const state = address.state ?? address.region
+  const postal = address.zip ?? address.postal ?? address.postal_code ?? address.zip_code
+
+  const cityLineParts = [city, state].filter(Boolean).map((v) => String(v).trim())
+  const cityLine = cityLineParts.join(', ')
+  const cityPostal = [cityLine, postal].filter(Boolean).join(' ')
+  if (cityPostal) parts.push(cityPostal.trim())
+
+  const country = address.country
+  if (country) parts.push(String(country).trim())
+
+  return parts.filter(Boolean).join('\n').trim() || null
+}
+
+function normalizeTextValue(fieldName, value) {
+  if (value === undefined || value === null) return ""
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+
+  if (isPlainObject(value) && fieldName === 'address') {
+    const formatted = formatAddressObject(value)
+    if (formatted) return formatted
+  }
+
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value, null, 2)
+    } catch {
+      return String(value)
+    }
+  }
+
+  return String(value)
+}
+
+function normalizeInitialData(config, initialData) {
+  if (!config) return {}
+  if (!initialData || typeof initialData !== 'object') return {}
+
+  const out = { ...initialData }
+
+  for (const field of config.fields ?? []) {
+    if (!field?.name) continue
+    if (field.type === 'boolean') continue
+
+    const current = out[field.name]
+    // Inputs/Textareas should never receive an object value
+    if (typeof current === 'object' && current !== null) {
+      out[field.name] = normalizeTextValue(field.name, current)
+    }
+  }
+
+  return out
+}
+
 const basicInfoSchema = z.object({
   full_name: z.string().min(1, "Name is required"),
   email: z.string().email("Enter a valid email address").optional().or(z.literal("")),
@@ -553,7 +623,8 @@ export default function ProfileSectionEditor({
 }) {
   const config = SECTION_CONFIG[sectionKey]
   const defaults = config?.defaults ?? {}
-  const initialValues = config ? { ...defaults, ...(initialData ?? {}) } : {}
+  const normalizedData = config ? normalizeInitialData(config, initialData) : {}
+  const initialValues = config ? { ...defaults, ...(normalizedData ?? {}) } : {}
   const [aiStatus, setAiStatus] = useState('idle')
   const [aiError, setAiError] = useState(null)
 
@@ -564,7 +635,7 @@ export default function ProfileSectionEditor({
 
   useEffect(() => {
     if (config) {
-      form.reset({ ...defaults, ...(initialData ?? {}) })
+      form.reset({ ...defaults, ...(normalizeInitialData(config, initialData) ?? {}) })
       setAiStatus('idle')
       setAiError(null)
     }
