@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
+import { parseTimestamp } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -172,8 +173,9 @@ export default function Documents() {
 
   const describeTimestamp = (value) => {
     if (!value) return null
-    const date = new Date(value)
-    if (Number.isNaN(date.getTime())) return null
+    // Use parseTimestamp to handle SQLite's timezone-less format
+    const date = parseTimestamp(value)
+    if (!date) return null
     return formatDistanceToNow(date, { addSuffix: true })
   }
 
