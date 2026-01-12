@@ -2,6 +2,7 @@ import React from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useAuthStore } from '@/stores/authStore'
 import { apiFetch } from '@/api/client'
+import { isAdminUser } from '@/utils/isAdminUser'
 import {
   Select,
   SelectContent,
@@ -36,7 +37,7 @@ export default function ProfileSelect({
   disabled = false,
 }) {
   const user = useAuthStore((state) => state.user)
-  const isAdmin = Boolean(user?.is_admin) || user?.role === "admin"
+  const isAdmin = isAdminUser(user)
 
   // Fetch profiles from API
   const { data: profiles = [], isLoading } = useQuery({

@@ -75,6 +75,12 @@ function ensureAdminRequest(req, res) {
   return false;
 }
 
+// RBAC hard-stop: everything under /api/admin is admin-only.
+router.use((req, res, next) => {
+  if (!ensureAdminRequest(req, res)) return;
+  next();
+});
+
 function loadZipCoordinates() {
   if (zipCoordinatesCache) return zipCoordinatesCache;
   if (!fs.existsSync(zipCoordinatesPath)) {

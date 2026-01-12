@@ -10,10 +10,11 @@ import Billing from '@/pages/Billing';
 import Automation from '@/pages/Automation';
 import { useAuthStore } from '@/stores/authStore';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { isAdminUser } from '@/utils/isAdminUser';
 
 export default function Admin() {
   const user = useAuthStore((state) => state.user);
-  const isAdmin = Boolean(user?.is_admin) || user?.role === "admin";
+  const isAdmin = isAdminUser(user);
 
   if (!isAdmin) {
     return (

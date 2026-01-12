@@ -72,43 +72,6 @@ function clearRefreshTimer() {
 
 const AUTH_METHODS = new Set(['email', 'phone', 'social'])
 
-// Vite env values are typically strings, but be defensive (some tooling can coerce to boolean).
-const IS_SMOKE_UI =
-  String(import.meta?.env?.VITE_SMOKE_MODE ?? '').toLowerCase() === 'true' ||
-  // Playwright can inject a reliable marker before app code runs.
-  (typeof globalThis !== 'undefined' && globalThis.__GF_SMOKE__ === true)
-
-// IMPORTANT:
-// We do NOT auto-trigger crawlers on admin login by default.
-// This was generating failed jobs (e.g. local/scholarship requiring profile context) and polluting diagnostics.
-const ENABLE_ADMIN_AUTO_CRAWL =
-  !IS_SMOKE_UI &&
-  String(import.meta?.env?.VITE_ENABLE_ADMIN_AUTO_CRAWL ?? '').toLowerCase() === 'true'
-
-// Helper function to trigger crawler jobs for admin
-async function triggerAdminCrawlers() {
-  try {
-    if (!ENABLE_ADMIN_AUTO_CRAWL) return
-
-    // If enabled, only queue crawls that do NOT require a profile context.
-    // (Profile-scoped crawlers should be run explicitly from the UI with a selected profile.)
-    await apiFetch('/api/crawlers/jobs', {
-      method: 'POST',
-      body: JSON.stringify({
-        type: 'comprehensive',
-        parameters: { mode: 'national' },
-      }),
-    })
-
-    toast({
-      title: 'Background crawl queued',
-      description: 'A comprehensive crawl was queued in the background.',
-    })
-  } catch (error) {
-    console.error('Failed to trigger admin crawlers:', error)
-  }
-}
-
 const initialState = {
   user: null,
   profiles: [],
@@ -207,12 +170,6 @@ export const useAuthStore = create((set, get) => ({
           needsProfileCreation: false, // Admins don't need profiles
           hasSeenOnboarding: true, // Skip onboarding for admins
         })
-        
-        // Trigger crawler jobs asynchronously (fire-and-forget)
-        triggerAdminCrawlers().catch(err => {
-          console.warn('Failed to trigger admin crawlers:', err)
-        })
-        
         return
       }
       
@@ -252,12 +209,6 @@ export const useAuthStore = create((set, get) => ({
         needsProfileCreation: false, // Admins don't need profiles
         hasSeenOnboarding: true, // Skip onboarding for admins
       })
-      
-      // Trigger crawler jobs asynchronously (fire-and-forget)
-      triggerAdminCrawlers().catch(err => {
-        console.warn('Failed to trigger admin crawlers:', err)
-      })
-      
       return
     }
 

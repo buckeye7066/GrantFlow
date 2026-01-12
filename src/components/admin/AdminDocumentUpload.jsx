@@ -10,6 +10,7 @@ import { Loader2, Upload, FileText, CheckCircle2, AlertCircle, UserPlus } from '
 import { useToast } from '@/components/ui/use-toast';
 import { useAuthStore } from '@/stores/authStore';
 import { apiFetch } from '@/api/client';
+import { isAdminUser } from '@/utils/isAdminUser';
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -21,7 +22,7 @@ export default function AdminDocumentUpload() {
   const user = useAuthStore((state) => state.user);
 
   // Check if user is admin
-  const isAdmin = Boolean(user?.is_admin) || user?.role === "admin";
+  const isAdmin = isAdminUser(user);
 
   const uploadMutation = useMutation({
     mutationFn: async (file) => {
