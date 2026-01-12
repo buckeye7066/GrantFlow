@@ -1,5 +1,6 @@
 import path from 'path'
 import { promises as fs } from 'fs'
+import { dispatchCrawlerJob } from './crawlerDispatcher.js'
 
 const REPO_ROOT = path.resolve(process.cwd())
 
@@ -92,6 +93,8 @@ export async function runAutonomousCrawlers(options, context) {
     report.profiles_processed = profiles.length
 
     // Create crawler jobs for each profile
+    const createdJobs = []
+    
     for (const profile of profiles) {
       for (const crawlerType of crawlerTypes) {
         try {
@@ -116,6 +119,9 @@ export async function runAutonomousCrawlers(options, context) {
             crawler_type: crawlerType,
             status: 'queued',
           })
+          
+          // Track job for dispatch
+          createdJobs.push({ jobId, crawlerType, profileId: profile.id })
 
           await auditLog({
             action: 'crawler_job_created',
@@ -131,6 +137,35 @@ export async function runAutonomousCrawlers(options, context) {
           })
         }
       }
+    }
+    
+    // Dispatch all jobs asynchronously (fire and forget unless waitForCompletion)
+    const dispatchPromises = createdJobs.map(({ jobId, crawlerType, profileId }) => {
+      return dispatchCrawlerJob({
+        db,
+        jobId,
+        uploadDir: context.uploadDir,
+        getOpenAI: context.getOpenAI,
+      }).catch(err => {
+        console.error(`[autonomous] Job ${jobId} (${crawlerType}) dispatch failed:`, err)
+        report.errors.push({
+          job_id: jobId,
+          profile_id: profileId,
+          crawler_type: crawlerType,
+          error: `Dispatch failed: ${err.message}`,
+        })
+      })
+    })
+    
+    // If not waiting, let dispatches run in background
+    if (!waitForCompletion) {
+      // Fire and forget - don't await
+      Promise.all(dispatchPromises).catch(err => {
+        console.error('[autonomous] Background dispatch batch error:', err)
+      })
+    } else {
+      // Wait for initial dispatch to complete before monitoring
+      await Promise.all(dispatchPromises)
     }
 
     // If waiting for completion, monitor jobs
