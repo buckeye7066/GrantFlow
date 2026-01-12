@@ -1,32 +1,11 @@
--- Migration 003: Add national ZIP crawl support and contact info
+-- Migration 003: Add contact info + crawler logs + updated crawler job constraints
 -- Date: 2026-01-09
 
 -- Add contact_info to funding_opportunities table
 -- Contact information stored as JSON: { name, email, phone, address, website }
 ALTER TABLE funding_opportunities ADD COLUMN contact_info TEXT DEFAULT NULL;
 
--- Create national_zip_progress table for tracking national crawl
-CREATE TABLE IF NOT EXISTS national_zip_progress (
-  zip TEXT PRIMARY KEY,
-  last_run_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  sources_found INTEGER DEFAULT 0,
-  cursor_meta TEXT DEFAULT '{}', -- JSON for pagination/state
-  status TEXT DEFAULT 'pending' CHECK(status IN (
-    'pending',
-    'in_progress',
-    'completed',
-    'failed',
-    'skipped'
-  )),
-  error TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_national_zip_status ON national_zip_progress(status);
-CREATE INDEX IF NOT EXISTS idx_national_zip_last_run ON national_zip_progress(last_run_at);
-
--- Update crawler_jobs table to support national_zip_scan type
+-- Update crawler_jobs table constraint (schema-aligned; Geo Crawl uses type='comprehensive' + parameters.mode='geo')
 -- Note: SQLite doesn't support modifying CHECK constraints directly
 -- We need to recreate the table with the updated constraint
 
@@ -45,8 +24,7 @@ CREATE TABLE IF NOT EXISTS crawler_jobs_new (
     'avatar_lookup',
     'document_ingest',
     'pipeline_automation',
-    'profile_enrichment',
-    'national_zip_scan'
+    'profile_enrichment'
   )),
   status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
     'queued',

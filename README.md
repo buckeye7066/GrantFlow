@@ -211,64 +211,42 @@ See `package.json` for the full script catalogue.
 
 ---
 
-## National Crawl
+## Geo Crawl
 
-The National ZIP Crawl feature enables comprehensive funding source discovery across all ~43,859 US ZIP codes.
+Geo Crawl is the canonical admin discovery mechanism. It runs a **state → (county/ZIP) scoped** crawl and persists real opportunities into the Opportunities view over time.
 
-### How to Run
+### How to Run (Admin only)
 
-**Start a national crawl (Admin only):**
+**Start a Geo Crawl:**
 
 ```bash
-POST /api/admin/national-crawl/start
+POST /api/admin/geo/crawl/start
 {
-  "batch_size": 50,
-  "min_sources_per_zip": 3
+  "state": "OH",
+  "min_sources_per_zip": 3,
+  "zips": ["43004", "43005"]            // optional
+  // OR "counties": ["Franklin"]        // optional (ZIPs override counties)
 }
 ```
 
-**Monitor progress:**
+**Check status:**
 
 ```bash
-GET /api/admin/national-crawl/status
+GET /api/admin/geo/crawl/status
 ```
 
-**Stop a running crawl:**
+**CLI helper (local):**
 
 ```bash
-POST /api/admin/national-crawl/stop
+npm run crawl:geo -- --state=OH
 ```
 
-### Features
+### Implementation rules (important)
 
-- **Batch Processing:** Processes ZIPs in configurable batches (default: 50)
-- **Checkpointing:** Saves progress after every batch to `national_zip_progress` table
-- **Resumable:** If interrupted, automatically resumes from last checkpoint
-- **Rate Limited:** Respects upstream API limits (configurable delay between requests)
-- **Memory Safe:** Processes in batches to avoid memory accumulation
-- **Real Data Only:** Uses Grants.gov API, state portals, and foundation locators
-
-### Data Sources
-
-The national crawl integrates with multiple real data sources:
-- **Grants.gov API** - Federal grant opportunities
-- **State Grant Portals** - State-specific funding (OH, CA, TX, NY, FL configured)
-- **Foundation Locator** - Community foundation grants
-
-See [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md) for complete source documentation.
-
-### Monitoring
-
-Track crawl progress in the database:
-
-```sql
-SELECT 
-  COUNT(*) as total_zips,
-  SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
-  SUM(sources_found) as total_sources,
-  AVG(sources_found) as avg_per_zip
-FROM national_zip_progress;
-```
+- Geo Crawl is represented as a crawler job with:
+  - `type = 'comprehensive'`
+  - `parameters.mode = 'geo'`
+- No new `crawler_jobs.type` values should be introduced (production DB may be CHECK constrained).
 
 ---
 

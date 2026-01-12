@@ -18,7 +18,8 @@ SSH into the Railway production server and run the crawler there:
 # On Railway production server
 cd /app
 npm run seed:db           # Create database with profiles
-npm run crawl:nationwide  # Run nationwide crawler (20-30 mins)
+npm run crawl:geo -- --state=CA  # Geo Crawl (admin; state scoped)
+npm run ingest                   # Official APIs (Grants.gov + USASpending.gov)
 npm run prepopulate:grants # Match grants to profiles
 ```
 
@@ -44,7 +45,7 @@ railway link
 
 # Run commands on production
 railway run npm run seed:db
-railway run npm run crawl:nationwide
+railway run npm run crawl:geo -- --state=CA
 railway run npm run prepopulate:grants
 ```
 
@@ -54,7 +55,7 @@ Create a deployment script that runs automatically:
 
 ```bash
 # Add to package.json scripts
-"deploy:seed": "npm run seed:db && npm run crawl:nationwide && npm run prepopulate:grants"
+"deploy:seed": "npm run seed:db && npm run ingest && npm run prepopulate:grants"
 ```
 
 Then configure Railway to run this on deployment.
@@ -98,7 +99,7 @@ For immediate fix, run these commands on the Railway production server:
 npm run seed:db
 
 # Step 2: Crawl opportunities (takes 20-30 minutes)
-npm run crawl:nationwide
+npm run ingest
 
 # Step 3: Match to profiles
 npm run prepopulate:grants
@@ -123,7 +124,7 @@ Add to your deployment workflow:
 
 3. **Post-Deploy Hook**: Run crawler after deployment
    ```bash
-   npm run crawl:nationwide && npm run prepopulate:grants
+   npm run ingest && npm run prepopulate:grants
    ```
 
 ## Contact
@@ -135,4 +136,4 @@ If you need help running these commands on the production server, you'll need ac
 
 ---
 
-**TL;DR**: The database with opportunities exists locally but needs to be on the Railway production server. Run `npm run seed:db && npm run crawl:nationwide && npm run prepopulate:grants` on the production server.
+**TL;DR**: The database with opportunities exists locally but needs to be on the Railway production server. Run `npm run seed:db && npm run ingest && npm run prepopulate:grants` on the production server.

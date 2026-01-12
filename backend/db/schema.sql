@@ -659,8 +659,7 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
     'avatar_lookup',
     'document_ingest',
     'pipeline_automation',
-    'profile_enrichment',
-    'national_zip_scan'
+    'profile_enrichment'
   )),
   status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
     'queued',
@@ -685,27 +684,6 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_status ON crawler_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_profile ON crawler_jobs(profile_id);
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_type ON crawler_jobs(type);
-
--- National ZIP progress tracking for comprehensive national crawl
-CREATE TABLE IF NOT EXISTS national_zip_progress (
-  zip TEXT PRIMARY KEY,
-  last_run_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  sources_found INTEGER DEFAULT 0,
-  cursor_meta TEXT DEFAULT '{}', -- JSON for pagination/state
-  status TEXT DEFAULT 'pending' CHECK(status IN (
-    'pending',
-    'in_progress',
-    'completed',
-    'failed',
-    'skipped'
-  )),
-  error TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_national_zip_status ON national_zip_progress(status);
-CREATE INDEX IF NOT EXISTS idx_national_zip_last_run ON national_zip_progress(last_run_at);
 
 -- Anya assistant sessions
 CREATE TABLE IF NOT EXISTS anya_sessions (

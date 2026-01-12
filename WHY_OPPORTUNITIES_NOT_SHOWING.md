@@ -52,7 +52,8 @@ Or for full nationwide coverage:
 
 ```bash
 npm run seed:db              # Create database
-npm run crawl:nationwide     # Full nationwide crawler (20-30 min)
+npm run crawl:geo -- --state=CA   # Geo Crawl (admin; state scoped)
+npm run ingest                    # Official APIs (Grants.gov + USASpending.gov)
 npm run prepopulate:grants   # Match to profiles
 ```
 
@@ -67,7 +68,7 @@ Crawls 50 ZIPs per organization state (450 total ZIPs).
 - **Result**: ~1,350-2,250 opportunities
 - **Coverage**: 9 states where organizations are located
 
-### `npm run crawl:nationwide`
+### `npm run crawl:geo`
 Crawls all 43,859 USA ZIP codes.
 - **Time**: 20-30 minutes  
 - **Result**: ~131,577+ opportunities

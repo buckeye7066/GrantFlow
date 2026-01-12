@@ -28,21 +28,20 @@ All 11 profiles have 50+ grants matching at ≥80%:
 
 **Average: 71 grants per profile**
 
-### 4. Nationwide Crawler - READY
-- Script: `scripts/nationwide-comprehensive-crawl.mjs`
-- Tested with 550 ZIPs: 1,380 opportunities created
-- Ready for full 43,859 ZIP crawl (run: `npm run crawl:nationwide`)
-- Minimum 3 opportunities per ZIP validated
+### 4. Geo Crawl - READY
+- Script: `scripts/geo-crawl.mjs`
+- Admin endpoint: `POST /api/admin/geo/crawl/start` (queues `type='comprehensive'` with `parameters.mode='geo'`)
+- Run locally: `npm run crawl:geo -- --state=CA`
 
 ## Scripts Created
-1. `scripts/nationwide-comprehensive-crawl.mjs` - Full USA crawler
+1. `scripts/geo-crawl.mjs` - Geo Crawl (admin; state/county/ZIP scoped)
 2. `scripts/prepopulate-profile-grants.mjs` - Profile prepopulation
 3. `scripts/extended-state-crawler.mjs` - State-focused crawler
 4. Test scripts for validation
 
 ## NPM Commands
 ```bash
-npm run crawl:nationwide     # Full USA crawl (43,859 ZIPs)
+npm run crawl:geo -- --state=CA  # Geo Crawl (admin; state scoped)
 npm run prepopulate:grants   # Prepopulate profiles
 ```
 

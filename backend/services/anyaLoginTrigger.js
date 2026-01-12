@@ -180,7 +180,7 @@ export function initializeAnyaForAdmin(db, user, profileId = null, { uploadDir, 
 
 1. **Local Opportunities** - Searching within 50 miles
 2. **Scholarship Opportunities** - Finding relevant scholarships
-3. **Comprehensive National Search** - Scanning nationwide funding sources
+3. **Comprehensive Search** - Scanning broad funding sources based on your profile
 4. **Profile Enrichment** - Updating profile data
 
 I'll notify you when these crawlers complete. You can check their progress anytime by asking me about crawler status.

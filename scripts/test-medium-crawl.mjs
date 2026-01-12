@@ -102,8 +102,8 @@ db.close()
 
 if (totalInserted >= testZips.length * 2) {
   console.log('\n✅ Test successful! Crawler is working well at scale.')
-  console.log(`\nTo create 100K+ opportunities, run: npm run crawl:nationwide`)
-  console.log(`This will process all ${allZips.length.toLocaleString()} US ZIP codes.`)
+  console.log(`\nFor broader coverage, use Geo Crawl (admin): npm run crawl:geo -- --state=CA`)
+  console.log(`Or ingest official sources: npm run ingest (Grants.gov + USASpending.gov).`)
 } else {
   console.log('\n⚠️  Warning: Expected more opportunities to be inserted.')
 }

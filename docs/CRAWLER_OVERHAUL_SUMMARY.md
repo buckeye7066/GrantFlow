@@ -62,58 +62,25 @@ This comprehensive overhaul transforms the GrantFlow crawler system from a proto
    - Stores JSON: `{ name, email, phone, address, website }`
    - Enables display of contact information to users
 
-2. **Created `national_zip_progress` table**
-   ```sql
-   CREATE TABLE national_zip_progress (
-     zip TEXT PRIMARY KEY,
-     last_run_at DATETIME,
-     sources_found INTEGER,
-     cursor_meta TEXT, -- JSON for state
-     status TEXT, -- pending, in_progress, completed, failed, skipped
-     error TEXT
-   )
-   ```
-
-3. **Updated `crawler_jobs` table**
-   - Added 'national_zip_scan' to type CHECK constraint
-   - Safely rebuilt table with updated constraint
+2. **Updated crawler job constraints + admin UX**
+   - Geo Crawl is represented as `crawler_jobs.type='comprehensive'` with `parameters.mode='geo'`
+   - Admin UI uses `/api/admin/geo/crawl/*` and queries the latest geo-tagged comprehensive job
 
 **Migration:** `backend/db/migrations/003_add_national_crawl_and_contact_info.sql`
 
 ---
 
-### 4. National ZIP Crawl ✅
+### 4. Geo Crawl ✅
 
-**Created:** `backend/services/crawlers/nationalZipCrawler.js`
+Geo Crawl is the canonical admin discovery mechanism (state → county/ZIP scoped), and it is represented in jobs as:
 
-**Features:**
-- Processes all ~43,859 US ZIP codes
-- Finds minimum 3 real sources per ZIP
-- Batch processing (default: 50 ZIPs per batch)
-- Checkpointing after every batch
-- Resumable after interruption
-- Rate limiting (configurable, default 1000ms)
-- Memory-safe (no accumulating arrays)
+- `crawler_jobs.type = 'comprehensive'`
+- `crawler_jobs.parameters.mode = 'geo'`
 
-**Real Data Sources:**
-- Grants.gov API - Federal opportunities
-- State grant portals (OH, CA, TX, NY, FL)
-- Foundation locator services
+**Admin endpoints:**
 
-**Admin Endpoints:**
-- `POST /api/admin/national-crawl/start` - Start crawl
-- `POST /api/admin/national-crawl/stop` - Stop crawl
-- `GET /api/admin/national-crawl/status` - Get progress
-
-**Progress Tracking:**
-```sql
-SELECT 
-  COUNT(*) as total_zips,
-  SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
-  SUM(sources_found) as total_sources,
-  AVG(sources_found) as avg_per_zip
-FROM national_zip_progress;
-```
+- `POST /api/admin/geo/crawl/start` - queue a geo-tagged comprehensive job
+- `GET /api/admin/geo/crawl/status` - view latest Geo Crawl job
 
 ---
 
@@ -175,7 +142,7 @@ Documents all real data sources:
 - Documentation links
 
 **Updated README:**
-- National Crawl section (how to run, monitor, resume)
+- Geo Crawl section (how to run + status + constraints)
 - Crawler Matrix Test section (validation, output, exit codes)
 - Admin Profile Access section (permissions, enforcement)
 
@@ -240,23 +207,22 @@ The following are absolutely prohibited and now enforced:
 
 ## Files Changed
 
-### Created Files (8)
+### Created Files (5)
 1. `scripts/test-all-crawlers-all-profiles.mjs` - Test harness
-2. `backend/services/crawlers/nationalZipCrawler.js` - National crawler
-3. `backend/db/migrations/003_add_national_crawl_and_contact_info.sql` - Migration
-4. `docs/DATA_SOURCES.md` - Source documentation
-5. `docs/CRAWLER_OVERHAUL_SUMMARY.md` - This file
+2. `backend/db/migrations/003_add_national_crawl_and_contact_info.sql` - Migration (contact_info + crawler logs + job constraints)
+3. `docs/DATA_SOURCES.md` - Source documentation
+4. `docs/CRAWLER_OVERHAUL_SUMMARY.md` - This file
 
-### Modified Files (6)
+### Modified Files (8)
 1. `backend/services/crawlers/crawlerHelpers.js` - Remove Math.random(), disable mocks
 2. `backend/services/crawlers/localFundingCrawler.js` - Remove mock fallbacks
 3. `backend/services/crawlers/studentGrantsCrawler.js` - Remove mock generation
 4. `backend/services/crawlers/itemFundingCrawler.js` - Remove placeholder URLs
 5. `backend/routes/realCrawlers.js` - Use real crawlers, fix imports
 6. `backend/routes/profiles.js` - Add admin access control
-7. `backend/routes/admin.js` - Add national crawl endpoints
-8. `backend/db/schema.sql` - Add contact_info, national_zip_progress
-9. `README.md` - Add documentation sections
+7. `backend/routes/admin.js` - Admin geo crawl endpoints (`/api/admin/geo/crawl/*`)
+8. `backend/db/schema.sql` - Update crawler job constraints + schemas
+9. `README.md` - Documentation sections
 
 ---
 
