@@ -10,7 +10,6 @@ import { processDocumentIngestionJob } from './documentIngestion.js'
 import { processPipelineAutomationJob } from './pipelineAutomation.js'
 import { loadProfileContext } from './profileHelpers.js'
 import { processProfileEnrichmentJob } from './profileEnrichment.js'
-import { processNationalJob } from './nationalJobRouter.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -21,12 +20,14 @@ const HANDLERS = {
   local: processLocalCrawlerJob,
   scholarship: processScholarshipCrawlerJob,
   comprehensive: processComprehensiveCrawlerJob,
-  national: processNationalJob,
   item_search: processItemCrawlerJob,
   document_ingest: processDocumentIngestionJob,
   pipeline_automation: processPipelineAutomationJob,
   profile_enrichment: processProfileEnrichmentJob,
 }
+
+const MAX_RETRIES = 3
+const RETRY_DELAY_BASE_MS = 2000
 
 function parseJSON(value) {
   if (!value) return {}
@@ -38,15 +39,20 @@ function parseJSON(value) {
   }
 }
 
+async function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
 export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
-  const handle = async () => {
+  const handle = async (retryCount = 0) => {
     const job = db.prepare('SELECT * FROM crawler_jobs WHERE id = ? LIMIT 1').get(jobId)
     if (!job) {
       console.warn('[crawlerDispatcher] Job not found', jobId)
       return
     }
 
-    if (job.status && job.status !== 'queued') {
+    // Allow 'failed' jobs to be retried if under max
+    if (job.status && job.status !== 'queued' && job.status !== 'failed') {
       return
     }
 
@@ -91,7 +97,6 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
     }
 
     let result = null
-
     const startedAt = Date.now()
 
     try {
@@ -118,7 +123,6 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         `).run(result.avatarUrl, profileContext.profile.id)
 
         if (previous?.avatar_url && previous.avatar_url.startsWith('/uploads/')) {
-          // best-effort cleanup
           try {
             const absolutePath = join(uploadDir, previous.avatar_url.replace('/uploads/', ''))
             await fs.promises.unlink(absolutePath)
@@ -139,6 +143,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       const finalResultMeta = {
         ...(result?.result_meta ?? {}),
         duration_seconds: durationSeconds,
+        retry_attempt: retryCount
       }
       const resultMetaJson = JSON.stringify(finalResultMeta)
 
@@ -152,10 +157,29 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         WHERE id = ?
       `).run(resultCountValue, resultCountValue, resultMetaJson, jobId)
     } catch (error) {
+      console.error(`[crawlerDispatcher] Job ${jobId} failed (attempt ${retryCount}):`, error.message)
+      
+      if (retryCount < MAX_RETRIES) {
+        const delay = RETRY_DELAY_BASE_MS * Math.pow(2, retryCount)
+        console.log(`[crawlerDispatcher] Retrying job ${jobId} in ${delay}ms...`)
+        
+        db.prepare(`
+          UPDATE crawler_jobs
+          SET retry_count = COALESCE(retry_count, 0) + 1,
+              last_retry_at = CURRENT_TIMESTAMP,
+              error = ?
+          WHERE id = ?
+        `).run(error.message, jobId)
+        
+        await sleep(delay)
+        return handle(retryCount + 1)
+      }
+
       const durationSeconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000))
       const finalResultMeta = {
         duration_seconds: durationSeconds,
         error: error instanceof Error ? error.message : String(error),
+        final_attempt: retryCount
       }
 
       db.prepare(`
@@ -173,12 +197,11 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
     }
   }
 
-  // Return a Promise that resolves when the job completes
   return new Promise((resolve) => {
     setImmediate(() => {
       handle().then(resolve).catch((err) => {
         console.error('[crawlerDispatcher] Unhandled job error:', err)
-        resolve() // Resolve anyway to not block
+        resolve()
       })
     })
   })

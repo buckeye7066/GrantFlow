@@ -20,20 +20,58 @@ function deriveRecordOrigin(opportunity) {
   return 'live_crawl'
 }
 
+/**
+ * Generate a stable hash for an opportunity to prevent duplicates across sources.
+ * Combines title, sponsor, and deadline.
+ */
+function generateOpportunityHash(opp) {
+  const title = String(opp.title || '').trim().toLowerCase()
+  const sponsor = String(opp.sponsor || '').trim().toLowerCase()
+  const deadline = String(opp.deadline || '').split('T')[0] // Only the date part
+  
+  // Create a base string for hashing
+  const base = `${title}|${sponsor}|${deadline}`
+  return crypto.createHash('md5').update(base).digest('hex')
+}
+
+/**
+ * Canonicalize a URL to prevent slight variations causing duplicates.
+ */
+function canonicalizeUrl(url) {
+  if (!url) return null
+  try {
+    const u = new URL(url)
+    // Remove common tracking params, protocol variations, etc.
+    return u.origin + u.pathname.replace(/\/$/, '')
+  } catch {
+    return url.trim()
+  }
+}
+
 export function upsertFundingOpportunity(db, opportunity) {
   const source = opportunity.source ?? 'crawler'
+  
+  // Use explicit source_id if provided, otherwise fallback to hash-based dedupe
   const sourceId =
     opportunity.source_id ??
-    // Many crawler datasets ship a stable `id` field; treat that as the source_id when present.
     opportunity.id ??
-    `${source}-${crypto.randomUUID()}`
+    generateOpportunityHash(opportunity)
 
-  // Check if record exists and if it's verified
-  const existing = db
+  const url = canonicalizeUrl(opportunity.source_url ?? opportunity.url ?? opportunity.application_url)
+
+  // 1. Check by (source, source_id)
+  let existing = db
     .prepare(
-      `SELECT id, last_verified_at FROM funding_opportunities WHERE source = ? AND source_id = ? LIMIT 1`,
+      `SELECT id, last_verified_at, source_url FROM funding_opportunities WHERE source = ? AND source_id = ? LIMIT 1`,
     )
     .get(source, sourceId)
+
+  // 2. Fallback: check by canonical URL if available
+  if (!existing && url) {
+    existing = db
+      .prepare(`SELECT id, last_verified_at FROM funding_opportunities WHERE source_url = ? LIMIT 1`)
+      .get(url)
+  }
 
   const incomingIsBaseline = opportunity.last_verified_at == null
   const existingIsVerified = existing?.last_verified_at != null
@@ -48,22 +86,20 @@ export function upsertFundingOpportunity(db, opportunity) {
     }
   }
 
-  // Otherwise allow updates (including verified→verified ingestion refresh)
+  // If already exists and is current enough, skip
   if (existing?.id) {
+    // Optionally update last_crawled
+    db.prepare('UPDATE funding_opportunities SET last_crawled = CURRENT_TIMESTAMP WHERE id = ?').run(existing.id)
     return { id: existing.id, inserted: false }
   }
 
-  // IMPORTANT:
-  // `funding_opportunities.id` is the DB primary key. Never reuse dataset IDs here because
-  // different sources can collide (e.g. "nat-snap") which triggers UNIQUE constraint failures.
-  // Stability/deduplication is achieved via (source, source_id), not the primary key.
   const id = crypto.randomUUID()
   const isNational = deriveIsNational(opportunity)
   const record = {
     title: opportunity.title?.trim(),
     sponsor: opportunity.sponsor?.trim() ?? null,
     description: opportunity.description ?? null,
-    source_url: opportunity.source_url ?? opportunity.url ?? opportunity.application_url ?? null,
+    source_url: url,
     eligibility_bullets: JSON.stringify(
       ensureArray(opportunity.eligibility_bullets),
     ),
@@ -79,7 +115,7 @@ export function upsertFundingOpportunity(db, opportunity) {
     amount_description: opportunity.amount_description ?? null,
     deadline: opportunity.deadline ?? null,
     deadline_type: opportunity.deadline_type ?? null,
-    application_url: opportunity.application_url ?? null,
+    application_url: opportunity.application_url ?? url ?? null,
     is_national: isNational ? 1 : 0,
     state: opportunity.state ?? (isNational ? 'nationwide' : null),
     categories: JSON.stringify(ensureArray(opportunity.categories)),

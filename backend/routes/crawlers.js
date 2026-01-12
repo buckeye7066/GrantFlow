@@ -351,6 +351,36 @@ function deriveJobSummary(type, job) {
   }
 }
 
+// Health endpoint for crawlers
+router.get('/health', (req, res) => {
+  const auth = ensureAuth(req, res)
+  if (!auth) return
+
+  try {
+    const stats = req.db.prepare(`
+      SELECT 
+        status, 
+        COUNT(*) as count,
+        MAX(completed_at) as last_activity
+      FROM crawler_jobs
+      GROUP BY status
+    `).all()
+
+    const queueDepth = req.db.prepare("SELECT COUNT(*) as count FROM crawler_jobs WHERE status = 'queued'").get().count
+    const workerOnline = true // Basic assumption for now
+
+    res.json({
+      worker_online: workerOnline,
+      queue_depth: queueDepth,
+      stats,
+      generated_at: new Date().toISOString()
+    })
+  } catch (error) {
+    console.error('Error fetching crawler health:', error)
+    res.status(500).json(formatError(error))
+  }
+})
+
 router.get('/jobs', (req, res) => {
   const auth = ensureAuth(req, res)
   if (!auth) return
