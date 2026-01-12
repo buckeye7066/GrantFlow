@@ -1256,7 +1256,7 @@ export default function FundingOpportunities() {
             <ul className="list-disc list-inside space-y-1 text-xs">
               <li>Local crawler: 50-mile radius of profile zip codes (and student campus ZIPs).</li>
               <li>Scholarship crawler: FAFSA, Common App, and campus portals.</li>
-              <li>Comprehensive crawler: 44k+ US ZIP searches, minimum 3 results per ZIP.</li>
+              <li>Geo Crawl: Nationwide discovery across 42k+ US ZIPs, matching local, state, and federal scopes.</li>
               <li>Default view surfaces grant funds only. Adjust the Funding terms filter to review programs with match or repayment requirements.</li>
             </ul>
           </div>

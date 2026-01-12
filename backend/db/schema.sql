@@ -686,7 +686,7 @@ CREATE INDEX IF NOT EXISTS idx_crawler_jobs_status ON crawler_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_profile ON crawler_jobs(profile_id);
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_type ON crawler_jobs(type);
 
--- National ZIP progress tracking for comprehensive national crawl
+-- National ZIP progress tracking for Geo Crawl discovery
 CREATE TABLE IF NOT EXISTS national_zip_progress (
   zip TEXT PRIMARY KEY,
   last_run_at DATETIME DEFAULT CURRENT_TIMESTAMP,

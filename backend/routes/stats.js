@@ -21,7 +21,7 @@ router.get('/dashboard', (req, res) => {
     const auth = req.user ?? { role: 'guest' }
     const isAdmin =
       auth.role === 'admin' ||
-      auth.is_admin === true ||
+      Boolean(auth.is_admin) ||
       (Array.isArray(auth.roles) && auth.roles.includes('admin'))
 
     if (isAdmin) {

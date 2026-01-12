@@ -13,7 +13,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 
 export default function Admin() {
   const user = useAuthStore((state) => state.user);
-  const isAdmin = user?.is_admin === true;
+  const isAdmin = Boolean(user?.is_admin) || user?.role === "admin";
 
   if (!isAdmin) {
     return (
