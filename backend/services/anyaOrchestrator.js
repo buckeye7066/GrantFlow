@@ -741,17 +741,21 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
   }
 
   // Build personalized system prompt
-  // Extract first name safely, handling edge cases
   const firstName = (!userName || userName === 'there') 
     ? 'the user' 
     : (typeof userName === 'string' ? userName.split(' ')[0] : userName)
   
+  // Get session state for context
+  const session = await getSession(db, user, sessionId)
+  const assistantState = session.metadata?.assistant_state ?? {}
+
   const systemPromptParts = [
     'You are Anya, the GrantFlow AI assistant. You are helpful, warm, and personable.',
     '',
     `Current User: ${userName}`,
     `User Email: ${userEmail}`,
     `Is Admin: ${isAdmin ? 'Yes' : 'No'}`,
+    `Current Goal: ${assistantState.current_goal || 'Discovery and setup'}`,
     '',
     'Personalization Guidelines:',
     (!userName || userName === 'there')

@@ -33,6 +33,7 @@ import {
   testButtonFunctionality,
   getAutonomousFunctionTestsStatus,
 } from './anyaAutonomousFunctionTesting.js'
+import { SECTION_PROMPTS } from '../prompts/profileSections.js'
 
 const tools = new Map()
 
@@ -516,6 +517,115 @@ function summarizeGrants(db, params, context) {
     opportunities: formatted,
   }
 }
+
+// ============================================================================
+// Anya Intelligence Tools
+// ============================================================================
+
+registerTool({
+  name: 'anya.profile.analyzeGaps',
+  description: 'Analyze a profile for missing information and provide a repair plan. Use this to help users complete their applications.',
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'Profile ID to analyze' }
+    },
+    required: ['profileId']
+  },
+  handler: async (params, context) => {
+    const { profileId } = params
+    const { db } = context
+    
+    // Fetch completeness using internal logic
+    const sectionsRows = db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId)
+    const sectionsMap = Object.fromEntries(sectionsRows.map(s => [s.section_key, safeParseJSON(s.data, {})]))
+    
+    const missing_sections = []
+    const missing_keys = {}
+    let totalKeys = 0
+    let filledKeys = 0
+
+    Object.entries(SECTION_PROMPTS).forEach(([sectionKey, config]) => {
+      const sectionData = sectionsMap[sectionKey]
+      if (!sectionData) {
+        missing_sections.push(sectionKey)
+        missing_keys[sectionKey] = config.keys
+        totalKeys += config.keys.length
+      } else {
+        missing_keys[sectionKey] = []
+        config.keys.forEach((key) => {
+          totalKeys++
+          const val = sectionData[key]
+          if (val !== undefined && val !== null && val !== '' && val !== false && (Array.isArray(val) ? val.length > 0 : true)) {
+            filledKeys++
+          } else {
+            missing_keys[sectionKey].push(key)
+          }
+        })
+      }
+    })
+
+    return {
+      percent_complete: totalKeys > 0 ? Math.round((filledKeys / totalKeys) * 100) : 0,
+      missing_sections,
+      missing_keys,
+      repaired_plan: missing_sections.length > 0 ? 'User needs to run repair or manually add sections.' : 'Profile has all canonical sections.'
+    }
+  }
+})
+
+registerTool({
+  name: 'anya.actions.suggestNext',
+  description: 'Suggest the next best actions for a user based on their profile state and matched grants.',
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'Profile ID' }
+    },
+    required: ['profileId']
+  },
+  handler: async (params, context) => {
+    const { profileId } = params
+    const { db } = context
+    
+    const profile = db.prepare('SELECT status, organization_id FROM profiles WHERE id = ?').get(profileId)
+    const matches = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1 AND profile_id = ?').get(profileId).count
+    const pipeline = db.prepare('SELECT COUNT(*) as count FROM grants WHERE organization_id = ?').get(profile.organization_id).count
+    
+    const suggestions = []
+    if (matches === 0) suggestions.push('Run a Comprehensive Search to find initial grant matches.')
+    if (pipeline === 0 && matches > 0) suggestions.push('Review your matches and move high-potential grants to your Pipeline.')
+    if (pipeline > 0) suggestions.push('Start preparing a proposal for your top pipeline item.')
+    
+    return { suggestions }
+  }
+})
+
+registerTool({
+  name: 'anya.state.updateGoal',
+  description: 'Update the persistent goal for the current assistant session.',
+  schema: {
+    type: 'object',
+    properties: {
+      goal: { type: 'string', description: 'The new goal description' }
+    },
+    required: ['goal']
+  },
+  handler: async (params, context) => {
+    const { goal } = params
+    const { db, sessionId } = context
+    if (!sessionId) throw new Error('Session ID required')
+    
+    const session = db.prepare('SELECT metadata FROM anya_sessions WHERE id = ?').get(sessionId)
+    const metadata = safeParseJSON(session.metadata, {})
+    metadata.assistant_state = metadata.assistant_state || {}
+    metadata.assistant_state.current_goal = goal
+    
+    db.prepare('UPDATE anya_sessions SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(JSON.stringify(metadata), sessionId)
+    
+    return { success: true, goal }
+  }
+})
 
 export function registerTool({ name, description, schema, handler, requiresAdmin = false }) {
   if (!name || typeof name !== 'string') {
