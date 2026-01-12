@@ -15,14 +15,26 @@ const ADMIN_EMAIL = 'buckeye7066@gmail.com';
 
 /**
  * Check if user is admin
- * @param {Object} user - User object with email
+ * @param {Object} user - User object with email/role
  * @returns {boolean} True if user is admin
  */
 export function isAdmin(user) {
-  if (!user || !user.primary_email) {
+  if (!user) {
     return false;
   }
-  return user.primary_email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+  
+  // Check explicit admin flags first (set by auth middleware)
+  if (user.role === 'admin' || user.is_admin === true) {
+    return true;
+  }
+  
+  // Fall back to email check (supports both property names)
+  const email = user.primary_email || user.email;
+  if (email && email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+    return true;
+  }
+  
+  return false;
 }
 
 /**
