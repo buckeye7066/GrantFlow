@@ -172,10 +172,10 @@ function checkFundingOpportunitiesSchema(db) {
  */
 function getEnvironmentFlags() {
   return {
-    SAM_GOV_API_KEY_present: Boolean(process.env.SAM_GOV_API_KEY),
+    SAM_GOV_API_KEY_present: Boolean(process.env.SAM_GOV_API_KEY) || 'optional',
     OPENAI_API_KEY_present: Boolean(process.env.OPENAI_API_KEY),
     ANTHROPIC_API_KEY_present: Boolean(process.env.ANTHROPIC_API_KEY),
-    ANYA_ADMIN_TOKEN_present: Boolean(process.env.ANYA_ADMIN_TOKEN),
+    ANYA_ADMIN_TOKEN_present: Boolean(process.env.ANYA_ADMIN_TOKEN) || 'optional',
     NODE_ENV: process.env.NODE_ENV || 'development',
     DB_PATH_set: Boolean(process.env.DB_PATH),
   };
