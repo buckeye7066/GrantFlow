@@ -253,83 +253,39 @@ Focus areas should be:
       {/* Keywords & Focus Areas */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center gap-2">
-              <Tags className="w-5 h-5 text-blue-600" />
-              Keywords
-            </CardTitle>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleSuggestKeywords}
-              disabled={isGeneratingKeywords || isUpdating}
-              className="text-purple-600 hover:text-purple-700 hover:bg-purple-50"
-            >
-              {isGeneratingKeywords ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Generating...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-4 h-4 mr-2" />
-                  Suggest with AI
-                </>
-              )}
-            </Button>
-          </div>
+          <CardTitle className="flex items-center gap-2">
+            <Tags className="w-5 h-5 text-blue-600" />
+            Keywords
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <EditableTagList
+            title="Tags"
+            description="Keywords help match you with relevant funding opportunities"
             tags={organization.keywords || []}
-            onUpdate={(newTags) => handleUpdate('keywords', newTags)}
-            placeholder="Type keywords (e.g., education, healthcare, community service)..."
-            disabled={isUpdating}
+            onTagsChange={(newTags) => handleUpdate('keywords', newTags)}
+            onSuggest={handleSuggestKeywords}
+            isSuggesting={isGeneratingKeywords}
           />
-          <p className="text-xs text-slate-500 mt-2">
-            Keywords help match you with relevant funding opportunities
-          </p>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center gap-2">
-              <Target className="w-5 h-5 text-blue-600" />
-              Focus Areas / Interests
-            </CardTitle>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleSuggestFocusAreas}
-              disabled={isGeneratingFocusAreas || isUpdating}
-              className="text-purple-600 hover:text-purple-700 hover:bg-purple-50"
-            >
-              {isGeneratingFocusAreas ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Generating...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-4 h-4 mr-2" />
-                  Suggest with AI
-                </>
-              )}
-            </Button>
-          </div>
+          <CardTitle className="flex items-center gap-2">
+            <Target className="w-5 h-5 text-blue-600" />
+            Focus Areas / Interests
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <EditableTagList
+            title="Tags"
+            description="What areas of work or interest are you focused on?"
             tags={organization.focus_areas || []}
-            onUpdate={(newTags) => handleUpdate('focus_areas', newTags)}
-            placeholder="Type focus areas (e.g., youth development, mental health, arts)..."
-            disabled={isUpdating}
+            onTagsChange={(newTags) => handleUpdate('focus_areas', newTags)}
+            onSuggest={handleSuggestFocusAreas}
+            isSuggesting={isGeneratingFocusAreas}
           />
-          <p className="text-xs text-slate-500 mt-2">
-            What areas of work or interest are you focused on?
-          </p>
         </CardContent>
       </Card>
 
@@ -354,14 +310,11 @@ Focus areas should be:
             <div className="mb-3">
               <div className="text-sm font-medium text-slate-700 mb-2">Target/Interested Colleges</div>
               <EditableTagList
+                title="Colleges"
+                description="Add all colleges/universities you're interested in, applying to, or attending. We'll search for school-specific scholarships and opportunities from these institutions."
                 tags={organization.target_colleges || []}
-                onUpdate={(newTags) => handleUpdate('target_colleges', newTags)}
-                placeholder="Add colleges you're interested in or attending..."
-                disabled={isUpdating}
+                onTagsChange={(newTags) => handleUpdate('target_colleges', newTags)}
               />
-              <p className="text-xs text-slate-500 mt-2">
-                Add all colleges/universities you're interested in, applying to, or attending. We'll search for school-specific scholarships and opportunities from these institutions.
-              </p>
             </div>
 
             {organization.intended_major && (
@@ -401,10 +354,9 @@ Focus areas should be:
               <div className="mt-3">
                 <div className="text-sm font-medium text-slate-700 mb-2">Extracurricular Activities</div>
                 <EditableTagList
+                  title="Activities"
                   tags={organization.extracurricular_activities}
-                  onUpdate={(newTags) => handleUpdate('extracurricular_activities', newTags)}
-                  placeholder="Add activities..."
-                  disabled={isUpdating}
+                  onTagsChange={(newTags) => handleUpdate('extracurricular_activities', newTags)}
                 />
               </div>
             )}
@@ -694,10 +646,9 @@ Focus areas should be:
           </CardHeader>
           <CardContent>
             <EditableTagList
+              title="Program Areas"
               tags={organization.program_areas}
-              onUpdate={(newTags) => handleUpdate('program_areas', newTags)}
-              placeholder="Add program area..."
-              disabled={isUpdating}
+              onTagsChange={(newTags) => handleUpdate('program_areas', newTags)}
             />
           </CardContent>
         </Card>
