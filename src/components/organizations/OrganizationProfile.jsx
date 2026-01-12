@@ -78,10 +78,17 @@ export default function OrganizationProfile({
       }
     },
     enabled: !!organizationId,
-    retry: 8, // Increased to 8 attempts
+    retry: (failureCount, error) => {
+      // Don't retry on 404 (profile doesn't exist)
+      if (error?.response?.status === 404 || error?.message?.includes('not found')) {
+        return false;
+      }
+      // Retry up to 3 times for other errors
+      return failureCount < 3;
+    },
     retryDelay: (attemptIndex) => {
-      // More aggressive exponential backoff: 500ms, 1s, 2s, 4s, 6s, 8s, 10s, 12s
-      return Math.min(500 * Math.pow(2, Math.min(attemptIndex, 4)), 12000);
+      // Shorter retry delays: 500ms, 1s, 2s
+      return Math.min(500 * Math.pow(2, attemptIndex), 2000);
     },
     staleTime: 0,
     // Add gcTime to keep data in cache longer
