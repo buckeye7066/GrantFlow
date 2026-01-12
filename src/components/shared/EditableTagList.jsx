@@ -8,11 +8,17 @@ export default function EditableTagList({
   title = 'Tags', 
   description = '', 
   tags, 
-  onTagsChange, 
+  onTagsChange,
+  onUpdate,  // Legacy prop name for backwards compatibility
   onSuggest, 
-  isSuggesting 
+  isSuggesting,
+  placeholder,  // Legacy prop (ignored, use title/description instead)
+  disabled,  // Legacy prop (ignored)
 }) {
   const [newTag, setNewTag] = useState('');
+  
+  // Support both prop names for backwards compatibility
+  const handleTagsUpdate = onTagsChange || onUpdate;
 
   // Sanitize tags: filter out null, undefined, and empty strings, ensure all are strings
   const sanitizedTags = (tags || []).filter(
@@ -30,25 +36,25 @@ export default function EditableTagList({
 
   const handleAddTag = () => {
     const trimmedTag = newTag.trim();
-    if (trimmedTag) {
+    if (trimmedTag && handleTagsUpdate) {
       // Filter existing tags to remove any invalid values, then add the new tag
       const validExistingTags = (tags || []).filter(
         (tag) => tag != null && typeof tag === 'string' && tag.trim() !== ''
       );
       const updatedTags = [...new Set([...validExistingTags, trimmedTag])];
-      onTagsChange(updatedTags);
+      handleTagsUpdate(updatedTags);
       setNewTag('');
     }
   };
 
   const handleRemoveTag = (tagToRemove) => {
-    if (tagToRemove == null) return;
+    if (tagToRemove == null || !handleTagsUpdate) return;
     
     // Filter out the tag to remove and any invalid values
     const updatedTags = (tags || []).filter(
       (tag) => tag != null && typeof tag === 'string' && tag.trim() !== '' && tag !== tagToRemove
     );
-    onTagsChange(updatedTags);
+    handleTagsUpdate(updatedTags);
   };
 
   const handleKeyDown = (e) => {
