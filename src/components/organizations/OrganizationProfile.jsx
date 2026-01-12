@@ -165,16 +165,17 @@ export default function OrganizationProfile({
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       setShowEditForm(false);
       toast({
-        title: "Profile Updated",
-        description: "The profile has been successfully updated.",
+        title: "✓ Saved",
+        description: "Your changes have been saved automatically.",
+        duration: 2000,
       });
     },
     onError: (error) => {
       console.error("Error updating organization:", error);
       toast({
         variant: "destructive",
-        title: "Update Failed",
-        description: error.message || "There was an error updating the profile.",
+        title: "Save Failed",
+        description: error.message || "There was an error saving your changes. Please try again.",
       });
     }
   });
@@ -454,6 +455,13 @@ Return a single JSON object with the key "logo_url" containing the absolute, dir
             </div>
         </div>
         <div className="flex items-start gap-2 flex-wrap">
+           {/* Auto-save indicator */}
+           {updateOrgMutation.isPending && (
+             <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 rounded-lg border border-blue-200">
+               <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+               <span className="text-sm text-blue-700">Saving...</span>
+             </div>
+           )}
            <Link to={createPageUrl("Pricing")}>
              <Button variant="outline">
                <DollarSign className="w-4 h-4 mr-2" />
@@ -479,7 +487,6 @@ Return a single JSON object with the key "logo_url" containing the absolute, dir
              <Printer className="w-4 h-4 mr-2" />
              Print Profile
            </Button>
-           <Button variant="outline" onClick={handleEdit}>Edit</Button>
            <Button variant="destructive" onClick={handleDelete}>Delete</Button>
         </div>
       </header>
