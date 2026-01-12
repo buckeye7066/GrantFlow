@@ -24,7 +24,7 @@ export default function AdminNationalCrawl() {
       const res = await fetchStatus()
       setStatus(res)
     } catch (err) {
-      toast({ title: "Failed to load national crawl status", description: err.message, variant: "destructive" })
+      toast({ title: "Failed to load Geo Crawl status", description: err.message, variant: "destructive" })
     }
   }
 
@@ -44,10 +44,10 @@ export default function AdminNationalCrawl() {
           min_sources_per_zip: Number(minSources) || 3,
         }),
       })
-      toast({ title: "National crawl started", description: res?.message || "Started" })
+      toast({ title: "Geo Crawl started", description: res?.message || "Started" })
       await refresh()
     } catch (err) {
-      toast({ title: "Failed to start national crawl", description: err.message, variant: "destructive" })
+      toast({ title: "Failed to start Geo Crawl", description: err.message, variant: "destructive" })
     } finally {
       setBusy(false)
     }
@@ -57,10 +57,10 @@ export default function AdminNationalCrawl() {
     setBusy(true)
     try {
       const res = await apiFetch("/api/admin/national-crawl/stop", { method: "POST" })
-      toast({ title: "National crawl stopped", description: res?.message || "Stopped" })
+      toast({ title: "Geo Crawl stopped", description: res?.message || "Stopped" })
       await refresh()
     } catch (err) {
-      toast({ title: "Failed to stop national crawl", description: err.message, variant: "destructive" })
+      toast({ title: "Failed to stop Geo Crawl", description: err.message, variant: "destructive" })
     } finally {
       setBusy(false)
     }
@@ -72,14 +72,14 @@ export default function AdminNationalCrawl() {
     <div className="space-y-6">
       <Card className="border border-slate-200 bg-white/70 backdrop-blur">
         <CardHeader>
-          <CardTitle>National ZIP Crawl (legacy)</CardTitle>
+          <CardTitle>Geo Crawl Control Panel</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <Alert>
             <AlertCircle className="w-4 h-4" />
             <AlertDescription>
-              This is the legacy nationwide ZIP crawl. Your new approach is state/county/ZIP scoped via Geo Crawl. Keep
-              this separate as requested.
+              Geo Crawl is the canonical nationwide discovery mechanism. It scans for funding opportunities across all
+              geographic scopes (National, State, County, City, ZIP).
             </AlertDescription>
           </Alert>
 
@@ -95,7 +95,7 @@ export default function AdminNationalCrawl() {
             <div className="flex items-end gap-2">
               <Button onClick={start} disabled={busy}>
                 {busy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <PlayCircle className="w-4 h-4 mr-2" />}
-                Start
+                Run Geo Crawl
               </Button>
               <Button variant="outline" onClick={stop} disabled={busy}>
                 <PauseCircle className="w-4 h-4 mr-2" />

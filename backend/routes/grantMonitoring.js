@@ -7,7 +7,7 @@ const router = express.Router()
 function isAdminUser(user) {
   const userEmail = user?.primary_email || user?.email || ''
   return (
-    user?.is_admin === true ||
+    Boolean(user?.is_admin) ||
     user?.role === 'admin' ||
     (userEmail && String(userEmail).toLowerCase().includes('buckeye7066'))
   )

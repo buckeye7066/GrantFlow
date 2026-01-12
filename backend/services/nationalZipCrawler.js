@@ -1,6 +1,6 @@
 /**
- * National ZIP Code Crawler
- * Iterates ALL ~43,859 US ZIP codes and finds ≥3 REAL funding sources for each
+ * Geo Crawl Engine (formerly National ZIP Crawler)
+ * Iterates US ZIP codes and finds REAL funding sources across multiple geographic scopes.
  * 
  * Features:
  * - Batching and checkpointing for resumability
@@ -10,8 +10,8 @@
  * - Fallback logic: OPPORTUNITY → PROGRAM → DIRECTORY
  * 
  * Usage:
- *   import { startNationalCrawl, resumeCrawl, getCrawlStatus } from './nationalZipCrawler.js'
- *   await startNationalCrawl(db)
+ *   import { runNationalZipCrawl } from './nationalZipCrawler.js'
+ *   await runNationalZipCrawl(dbPath, params)
  */
 
 import zipcodes from 'zipcodes';

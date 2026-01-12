@@ -21,7 +21,7 @@ export default function AdminDocumentUpload() {
   const user = useAuthStore((state) => state.user);
 
   // Check if user is admin
-  const isAdmin = user?.is_admin === true;
+  const isAdmin = Boolean(user?.is_admin) || user?.role === "admin";
 
   const uploadMutation = useMutation({
     mutationFn: async (file) => {

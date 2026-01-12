@@ -1,4 +1,4 @@
-import React, { useMemo, useRef } from "react"
+import React, { useMemo, useRef, useState, useEffect } from "react"
 import { format, formatDistanceToNow } from "date-fns"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -25,9 +25,18 @@ import {
   Loader2,
   Upload,
   UploadCloud,
+  Download,
+  AlertTriangle,
+  CheckCircle2,
+  Info,
+  Wrench,
 } from "lucide-react"
 import { SECTION_CONFIG } from "@/components/profiles/ProfileSectionEditor.jsx"
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx"
+import { apiFetch } from "@/api/client"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Progress } from "@/components/ui/progress"
+import { useToast } from "@/components/ui/use-toast"
 
 const SECTION_ICONS = {
   basic_information: UserCircle,
@@ -272,8 +281,92 @@ export default function ProfileOverview({
   isUploadingDocument,
   fundsTotal = 0,
   billing = null,
+  onRefresh,
 }) {
+  const { toast } = useToast()
   const { state: dashboardPrefs } = useDashboardPreferences()
+  const [completeness, setCompleteness] = useState(null)
+  const [isRepairing, setIsRepairing] = useState(false)
+  const [isExporting, setIsExporting] = useState(false)
+  const [isImporting, setIsImporting] = useState(false)
+  const importInputRef = useRef(null)
+
+  const fetchCompleteness = async () => {
+    try {
+      const data = await apiFetch(`/api/profiles/${profile.id}/completeness`)
+      setCompleteness(data)
+    } catch (err) {
+      console.error("Failed to fetch completeness", err)
+    }
+  }
+
+  useEffect(() => {
+    fetchCompleteness()
+  }, [profile.id, profile.sections])
+
+  const handleRepair = async () => {
+    setIsRepairing(true)
+    try {
+      await apiFetch(`/api/profiles/${profile.id}/repair`, { method: "POST" })
+      toast({ title: "Profile repaired", description: "Missing sections have been created." })
+      if (onRefresh) onRefresh()
+      fetchCompleteness()
+    } catch (err) {
+      toast({ title: "Repair failed", description: err.message, variant: "destructive" })
+    } finally {
+      setIsRepairing(false)
+    }
+  }
+
+  const handleExport = async () => {
+    setIsExporting(true)
+    try {
+      const data = await apiFetch(`/api/profiles/${profile.id}/export`)
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" })
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `profile-${profile.id}.json`
+      a.click()
+      window.URL.revokeObjectURL(url)
+      toast({ title: "Profile exported", description: "JSON file downloaded." })
+    } catch (err) {
+      toast({ title: "Export failed", description: err.message, variant: "destructive" })
+    } finally {
+      setIsExporting(false)
+    }
+  }
+
+  const handleImport = async (event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    setIsImporting(true)
+    try {
+      const reader = new FileReader()
+      reader.onload = async (e) => {
+        try {
+          const content = JSON.parse(e.target.result)
+          await apiFetch(`/api/profiles/${profile.id}/import`, {
+            method: "POST",
+            body: JSON.stringify(content),
+          })
+          toast({ title: "Profile imported", description: "Sections updated successfully." })
+          if (onRefresh) onRefresh()
+          fetchCompleteness()
+        } catch (err) {
+          toast({ title: "Import failed", description: "Invalid JSON or network error", variant: "destructive" })
+        } finally {
+          setIsImporting(false)
+        }
+      }
+      reader.readAsText(file)
+    } catch (err) {
+      toast({ title: "Import failed", description: err.message, variant: "destructive" })
+      setIsImporting(false)
+    }
+    if (event.target) event.target.value = ""
+  }
+
   const theme = THEME_PRESETS[dashboardPrefs.colorTheme] ?? THEME_PRESETS.blue
   const columnMap = {
     1: "md:grid-cols-1",
@@ -349,6 +442,13 @@ export default function ProfileOverview({
 
   const headerMetrics = [
     {
+      label: "Completeness",
+      value: `${completeness?.percent_complete ?? 0}%`,
+      icon: completeness?.percent_complete === 100 ? CheckCircle2 : AlertTriangle,
+      tone: completeness?.percent_complete === 100 ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200",
+      subtext: completeness?.missing_sections?.length ? `${completeness.missing_sections.length} sections missing` : "All sections present",
+    },
+    {
       label: "Sections Complete",
       value: `${completedSections}/${totalSections}`,
       icon: ClipboardList,
@@ -358,13 +458,7 @@ export default function ProfileOverview({
       label: "Last Updated",
       value: relativeUpdated ?? lastUpdated,
       icon: Timer,
-      tone: "bg-amber-50 text-amber-700 border-amber-200",
-    },
-    {
-      label: "Tags",
-      value: `${profile.tags?.length ?? 0}`,
-      icon: Tag,
-      tone: theme.subtleMetric,
+      tone: "bg-slate-50 text-slate-600 border-slate-200",
     },
   ]
 
@@ -493,6 +587,21 @@ export default function ProfileOverview({
                     {isUploadingDocument ? "Uploading…" : "Upload Document"}
                   </Button>
                 ) : null}
+                <Button variant="outline" size="sm" className="gap-2" onClick={handleExport} disabled={isExporting}>
+                  {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                  Export JSON
+                </Button>
+                <input
+                  ref={importInputRef}
+                  type="file"
+                  accept=".json"
+                  className="hidden"
+                  onChange={handleImport}
+                />
+                <Button variant="outline" size="sm" className="gap-2" onClick={() => importInputRef.current?.click()} disabled={isImporting}>
+                  {isImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                  Import JSON
+                </Button>
               </div>
             </div>
           </div>
@@ -512,16 +621,35 @@ export default function ProfileOverview({
         <div
           className={`flex flex-col gap-4 rounded-2xl border ${theme.banner} p-4 text-sm text-slate-900 md:flex-row md:items-center md:justify-between`}
         >
-          <div className="flex items-start gap-3">
+          <div className="flex items-start gap-3 flex-1">
             <span className={`p-2 rounded-xl bg-white/70 shadow-sm ${theme.iconTone}`}>
-              <Sparkles className="w-4 h-4" />
+              <ClipboardList className="w-4 h-4" />
             </span>
-            <div>
-              <p className="font-semibold">Comprehensive application parity in progress</p>
-              <p className="text-sm mt-1 text-blue-800">
-                Each section below mirrors the Base44 schema. Edit manually or use AI assistance in the section editor to keep
-                data synced between local and production deployments.
-              </p>
+            <div className="space-y-2 w-full">
+              <div className="flex items-center justify-between">
+                <p className="font-semibold">Profile Completeness ({completeness?.percent_complete ?? 0}%)</p>
+                {completeness?.missing_sections?.length > 0 && (
+                  <Button variant="ghost" size="sm" className="h-6 text-xs text-blue-700 hover:bg-blue-100" onClick={handleRepair} disabled={isRepairing}>
+                    {isRepairing ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Wrench className="w-3 h-3 mr-1" />}
+                    Repair Missing Sections
+                  </Button>
+                )}
+              </div>
+              <Progress value={completeness?.percent_complete ?? 0} className="h-2" />
+              {completeness?.missing_keys && Object.values(completeness.missing_keys).flat().length > 0 ? (
+                <p className="text-xs text-slate-500">
+                  Critical gaps: {Object.entries(completeness.missing_keys)
+                    .filter(([_, keys]) => keys.length > 0)
+                    .slice(0, 3)
+                    .map(([section, keys]) => `${titleCase(section)} (${keys.length} fields)`)
+                    .join(", ")}
+                  {Object.entries(completeness.missing_keys).filter(([_, keys]) => keys.length > 0).length > 3 ? " ..." : ""}
+                </p>
+              ) : (
+                <p className="text-xs text-emerald-600 font-medium flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3" /> All fields populated for matching.
+                </p>
+              )}
             </div>
           </div>
           <div className="flex flex-col items-start gap-3 md:flex-row md:items-center">

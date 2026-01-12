@@ -4,7 +4,7 @@ import multer from 'multer'
 import fs from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
-import { buildProfileSectionPrompt, supportedSectionKeys } from '../prompts/profileSections.js'
+import { buildProfileSectionPrompt, supportedSectionKeys, SECTION_PROMPTS } from '../prompts/profileSections.js'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
 import { ensureBillingAccount, mapAccountRow } from '../services/billingAccounts.js'
 import { extractCompletionText } from '../utils/openai.js'
@@ -245,9 +245,241 @@ router.post('/', (req, res) => {
   const row = req.db.prepare(`${profileSelect} WHERE p.rowid = ?`).get(info.lastInsertRowid)
   if (row?.id) {
     linkProfileToAdmin(req.db, row.id)
+    
+    // Auto-create profile sections for every canonical section_key
+    const sectionStmt = req.db.prepare(`
+      INSERT INTO profile_sections (profile_id, section_key, data) 
+      VALUES (?, ?, ?)
+    `)
+    supportedSectionKeys.forEach(key => {
+      sectionStmt.run(row.id, key, JSON.stringify({}))
+    })
   }
   const refreshed = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(row.id)
   res.status(201).json(mapProfile(refreshed))
+})
+
+/**
+ * Get profile completeness stats
+ * GET /api/profiles/:id/completeness
+ */
+router.get('/:id/completeness', (req, res) => {
+  const { id } = req.params
+  const user = req.user
+
+  // Check access permissions
+  const profileRow = req.db.prepare('SELECT id, user_id FROM profiles WHERE id = ?').get(id)
+  if (!profileRow) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!isAdmin(user) && profileRow.user_id !== user.id) {
+    return res.status(403).json({ error: 'Access denied' })
+  }
+
+  // Get canonical sections and keys from profileSections.js
+  const { SECTION_PROMPTS } = req.db.supportedSectionConfigs || {} 
+  // Wait, I can't access it like that. I'll import SECTION_PROMPTS or just use supportedSectionKeys.
+  // Actually, I'll need to know which keys are in which sections.
+  
+  // Let's import SECTION_PROMPTS in profiles.js
+  // (I'll do that in a separate search_replace)
+  
+  const existingSections = req.db.prepare(`
+    SELECT section_key, data FROM profile_sections WHERE profile_id = ?
+  `).all(id)
+
+  const sectionsMap = Object.fromEntries(existingSections.map(s => [s.section_key, safeParseJSON(s.data, {})]))
+  
+  const missing_sections = []
+  const missing_keys = {}
+  let totalKeys = 0
+  let filledKeys = 0
+
+  Object.entries(SECTION_PROMPTS).forEach(([sectionKey, config]) => {
+    const sectionData = sectionsMap[sectionKey]
+    if (!sectionData) {
+      missing_sections.push(sectionKey)
+      missing_keys[sectionKey] = config.keys
+      totalKeys += config.keys.length
+    } else {
+      missing_keys[sectionKey] = []
+      config.keys.forEach((key) => {
+        totalKeys++
+        const val = sectionData[key]
+        if (
+          val !== undefined &&
+          val !== null &&
+          val !== '' &&
+          val !== false &&
+          (Array.isArray(val) ? val.length > 0 : true)
+        ) {
+          filledKeys++
+        } else {
+          missing_keys[sectionKey].push(key)
+        }
+      })
+    }
+  })
+
+  const percent_complete = totalKeys > 0 ? Math.round((filledKeys / totalKeys) * 100) : 0
+
+  res.json({
+    profile_id: id,
+    missing_sections,
+    missing_keys,
+    percent_complete,
+    total_keys: totalKeys,
+    filled_keys: filledKeys,
+  })
+})
+
+/**
+ * Repair a profile by adding missing sections
+ * POST /api/profiles/:id/repair
+ */
+router.post('/:id/repair', (req, res) => {
+  const { id } = req.params
+  const user = req.user
+
+  const profileRow = req.db.prepare('SELECT id, user_id FROM profiles WHERE id = ?').get(id)
+  if (!profileRow) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!isAdmin(user) && profileRow.user_id !== user.id) {
+    return res.status(403).json({ error: 'Access denied' })
+  }
+
+  const existingSections = req.db.prepare('SELECT section_key FROM profile_sections WHERE profile_id = ?').all(id).map(s => s.section_key)
+  const insert = req.db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
+  
+  let repairedCount = 0
+  supportedSectionKeys.forEach(key => {
+    if (!existingSections.includes(key)) {
+      insert.run(id, key, JSON.stringify({}))
+      repairedCount++
+    }
+  })
+
+  res.json({
+    success: true,
+    repaired_count: repairedCount,
+    message: `Repaired ${repairedCount} missing sections.`
+  })
+})
+
+/**
+ * Repair all profiles (Admin only)
+ * POST /api/admin/repair-all-profiles
+ */
+router.post('/admin/repair-all-profiles', (req, res) => {
+  const user = req.user
+  if (!isAdmin(user)) {
+    return res.status(403).json({ error: 'Admin privileges required' })
+  }
+
+  const profiles = req.db.prepare('SELECT id FROM profiles').all()
+  let totalRepaired = 0
+  let affectedProfiles = 0
+
+  req.db.transaction(() => {
+    const insert = req.db.prepare('INSERT OR IGNORE INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
+    profiles.forEach(p => {
+      let count = 0
+      supportedSectionKeys.forEach(key => {
+        const result = insert.run(p.id, key, JSON.stringify({}))
+        if (result.changes > 0) count++
+      })
+      if (count > 0) {
+        totalRepaired += count
+        affectedProfiles++
+      }
+    })
+  })()
+
+  res.json({
+    success: true,
+    total_repaired_sections: totalRepaired,
+    affected_profiles: affectedProfiles,
+    message: `Repaired ${totalRepaired} sections across ${affectedProfiles} profiles.`
+  })
+})
+
+/**
+ * Export profile as JSON
+ * GET /api/profiles/:id/export
+ */
+router.get('/:id/export', (req, res) => {
+  const { id } = req.params
+  const user = req.user
+
+  const profileRow = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!profileRow) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!isAdmin(user) && profileRow.user_id !== user.id) {
+    return res.status(403).json({ error: 'Access denied' })
+  }
+
+  const sections = req.db.prepare(`
+    SELECT section_key, data FROM profile_sections WHERE profile_id = ?
+  `).all(id)
+
+  const exportData = {
+    ...mapProfile(profileRow),
+    sections: sections.map(s => ({
+      section_key: s.section_key,
+      data: safeParseJSON(s.data, {})
+    }))
+  }
+
+  res.setHeader('Content-Type', 'application/json')
+  res.setHeader('Content-Disposition', `attachment; filename=profile-${id}.json`)
+  res.json(exportData)
+})
+
+/**
+ * Import profile from JSON
+ * POST /api/profiles/:id/import
+ */
+router.post('/:id/import', (req, res) => {
+  const { id } = req.params
+  const user = req.user
+  const { sections: importedSections } = req.body ?? {}
+
+  if (!Array.isArray(importedSections)) {
+    return res.status(400).json({ error: 'Invalid import data: sections array required' })
+  }
+
+  const profileRow = req.db.prepare('SELECT id, user_id FROM profiles WHERE id = ?').get(id)
+  if (!profileRow) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!isAdmin(user) && profileRow.user_id !== user.id) {
+    return res.status(403).json({ error: 'Access denied' })
+  }
+
+  req.db.transaction(() => {
+    const upsert = req.db.prepare(`
+      INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(profile_id, section_key) DO UPDATE SET
+        data = excluded.data,
+        updated_by = excluded.updated_by,
+        updated_at = CURRENT_TIMESTAMP
+    `)
+
+    importedSections.forEach(section => {
+      if (supportedSectionKeys.includes(section.section_key)) {
+        upsert.run(id, section.section_key, JSON.stringify(section.data || {}), user.id)
+      }
+    })
+  })()
+
+  res.json({ success: true, message: 'Profile imported successfully' })
 })
 
 router.get('/:id', (req, res) => {

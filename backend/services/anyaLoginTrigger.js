@@ -148,9 +148,6 @@ export function initializeAnyaForAdmin(db, user, profileId = null, { uploadDir, 
       scholarship: createCrawlerJob(db, profileId, 'scholarship', {
         max_results: 50,
       }),
-      comprehensive: createCrawlerJob(db, profileId, 'comprehensive', {
-        max_results: 200,
-      }),
       profile_enrichment: createCrawlerJob(db, profileId, 'profile_enrichment', {}),
     }
     
@@ -180,8 +177,7 @@ export function initializeAnyaForAdmin(db, user, profileId = null, { uploadDir, 
 
 1. **Local Opportunities** - Searching within 50 miles
 2. **Scholarship Opportunities** - Finding relevant scholarships
-3. **Comprehensive National Search** - Scanning nationwide funding sources
-4. **Profile Enrichment** - Updating profile data
+3. **Profile Enrichment** - Updating profile data
 
 I'll notify you when these crawlers complete. You can check their progress anytime by asking me about crawler status.
 

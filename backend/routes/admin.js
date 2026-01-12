@@ -35,7 +35,7 @@ function ensureAdminRequest(req, res) {
   const user = req.user ?? {};
 
   // Fast path: middleware already marked admin.
-  if (user?.is_admin === true || user?.role === 'admin') {
+  if (Boolean(user?.is_admin) || user?.role === 'admin') {
     return true;
   }
 
@@ -55,7 +55,7 @@ function ensureAdminRequest(req, res) {
         .get(resolvedUserId);
       const email = String(row?.primary_email || '').toLowerCase();
 
-      if (row?.is_admin === 1 || row?.is_admin === true) {
+      if (row?.is_admin === 1 || Boolean(row?.is_admin)) {
         return true;
       }
 
@@ -221,7 +221,7 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
     // Check admin access - use consistent admin enforcement (is_admin flag or email-based)
     const user = req.user;
     const userEmail = user?.primary_email || user?.email || '';
-    const isAdmin = user?.is_admin === true || user?.role === 'admin' || 
+    const isAdmin = Boolean(user?.is_admin) || user?.role === 'admin' || 
                     (userEmail && userEmail.toLowerCase().includes('buckeye7066'));
     
     if (!isAdmin) {
@@ -937,7 +937,8 @@ router.post('/national-crawl/start', async (req, res) => {
     const jobId = crypto.randomUUID()
     const params = {
       batch_size: batch_size || 50,
-      min_sources_per_zip: min_sources_per_zip || 3
+      min_sources_per_zip: min_sources_per_zip || 3,
+      mode: 'geo'
     }
     
     db.prepare(`
@@ -946,7 +947,7 @@ router.post('/national-crawl/start', async (req, res) => {
       ) VALUES (?, ?, ?, ?, ?, datetime('now'))
     `).run(
       jobId,
-      'national_zip_scan',
+      'comprehensive',
       'running',
       JSON.stringify(params),
       req.user?.id || 'admin'
@@ -1074,7 +1075,7 @@ router.get('/national-crawl/status', async (req, res) => {
     // Get last completed job
     const lastJob = db.prepare(`
       SELECT * FROM crawler_jobs 
-      WHERE type = 'national_zip_scan' 
+      WHERE type = 'comprehensive' AND json_extract(parameters, '$.mode') = 'geo'
       ORDER BY created_at DESC 
       LIMIT 1
     `).get()

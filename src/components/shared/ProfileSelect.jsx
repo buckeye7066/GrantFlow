@@ -36,7 +36,7 @@ export default function ProfileSelect({
   disabled = false,
 }) {
   const user = useAuthStore((state) => state.user)
-  const isAdmin = user?.is_admin === true
+  const isAdmin = Boolean(user?.is_admin) || user?.role === "admin"
 
   // Fetch profiles from API
   const { data: profiles = [], isLoading } = useQuery({
