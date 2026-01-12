@@ -68,20 +68,23 @@ export default function EditableTagList({
     <div>
       <div className="flex items-center justify-between mb-2">
         <h4 className="font-semibold text-slate-800">{safeTitle}</h4>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onSuggest}
-          disabled={isSuggesting}
-          className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-        >
-          {isSuggesting ? (
-            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-          ) : (
-            <Sparkles className="w-4 h-4 mr-2" />
-          )}
-          Suggest with AI
-        </Button>
+        {/* Only show AI button if onSuggest handler is provided */}
+        {onSuggest && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onSuggest}
+            disabled={isSuggesting}
+            className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+          >
+            {isSuggesting ? (
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            ) : (
+              <Sparkles className="w-4 h-4 mr-2" />
+            )}
+            Suggest with AI
+          </Button>
+        )}
       </div>
       {description && (
         <p className="text-sm text-slate-500 mb-4">{description}</p>
