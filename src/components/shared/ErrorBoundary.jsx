@@ -1,0 +1,47 @@
+import React from 'react';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { AlertTriangle } from 'lucide-react';
+
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.error("Uncaught error:", error, errorInfo);
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <Card className="border-red-500 bg-red-50">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-red-700">
+              <AlertTriangle className="w-5 h-5" />
+              Component Error
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-red-600">Something went wrong while loading this section.</p>
+            {this.state.error && (
+                <pre className="text-xs text-red-500 mt-2 bg-red-100 p-2 rounded">
+                    {this.state.error.toString()}
+                </pre>
+            )}
+          </CardContent>
+        </Card>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+export default ErrorBoundary;

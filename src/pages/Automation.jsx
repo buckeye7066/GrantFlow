@@ -1,0 +1,2029 @@
+import React, { useMemo, useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  AlertTriangle,
+  Bot,
+  FileText,
+  Globe2,
+  GraduationCap,
+  History,
+  Loader2,
+  MapPin,
+  RefreshCw,
+  Rocket,
+  ShoppingCart,
+  Sparkles,
+  Target,
+  UserCircle2,
+  Workflow,
+  Zap,
+  XCircle,
+} from "lucide-react"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Badge } from "@/components/ui/badge"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Separator } from "@/components/ui/separator"
+import { format, formatDistanceToNow } from "date-fns"
+import { useToast } from "@/components/ui/use-toast"
+import {
+  listCrawlerJobs,
+  createCrawlerJob,
+  listCrawlerMetrics,
+  getCrawlerJob,
+  retryCrawlerJob,
+  cancelCrawlerJob,
+} from "@/api/crawlers"
+import { listProfiles, getProfile } from "@/api/profiles"
+import { useAuthStore } from "@/stores/authStore"
+import { cn } from "@/lib/utils"
+import { getAnyaProfileTasks, updateAnyaTask } from "@/lib/anyaClient"
+import PipelineAutomationPanel from "@/components/pipeline/PipelineAutomationPanel"
+import CrawlerProgressMeter from "@/components/automation/CrawlerProgressMeter"
+import { SECTION_CONFIG } from "@/components/profiles/ProfileSectionEditor"
+
+const JOB_LABELS = {
+  local: "Local 50-mile sweep",
+  scholarship: "Scholarship intelligence",
+  comprehensive: "Nationwide crawl",
+  item_search: "Item funding search",
+  avatar_lookup: "AI avatar lookup",
+  document_ingest: "Document enrichment",
+  pipeline_automation: "Pipeline automation",
+  profile_enrichment: "Profile enrichment",
+}
+
+const STATUS_VARIANTS = {
+  queued: "bg-slate-100 text-slate-700",
+  running: "bg-blue-100 text-blue-700",
+  completed: "bg-emerald-100 text-emerald-700",
+  failed: "bg-red-100 text-red-700",
+  cancelled: "bg-amber-100 text-amber-700",
+}
+
+const METRIC_TYPE_ORDER = Object.keys(JOB_LABELS)
+
+const JOB_ICON_MAP = {
+  local: MapPin,
+  scholarship: GraduationCap,
+  comprehensive: Globe2,
+  item_search: ShoppingCart,
+  document_ingest: FileText,
+  pipeline_automation: Workflow,
+  profile_enrichment: Sparkles,
+  avatar_lookup: UserCircle2,
+}
+
+function formatNumber(value) {
+  if (typeof value !== "number" || Number.isNaN(value)) return null
+  return value.toLocaleString("en-US")
+}
+
+function formatDuration(seconds) {
+  if (typeof seconds !== "number" || Number.isNaN(seconds) || seconds <= 0) return "—"
+  const totalSeconds = Math.round(seconds)
+  const mins = Math.floor(totalSeconds / 60)
+  const secs = totalSeconds % 60
+  if (mins === 0) return `${secs}s`
+  if (mins < 60) return `${mins}m ${secs.toString().padStart(2, "0")}s`
+  const hours = Math.floor(mins / 60)
+  const remainingMins = mins % 60
+  return `${hours}h ${remainingMins}m`
+}
+
+function summarizeJob(job) {
+  if (!job) return null
+  const meta = job.result_meta ?? {}
+
+  let summary = null
+
+  switch (job.type) {
+    case "local": {
+      const inserted = formatNumber(meta.inserted ?? job.result_count)
+      const evaluated = formatNumber(meta.evaluated)
+      const radius = formatNumber(meta.radius)
+      const parts = []
+      if (inserted) parts.push(`Saved ${inserted} local matches`)
+      if (evaluated) parts.push(`evaluated ${evaluated}`)
+      if (radius) parts.push(`within ${radius} miles`)
+      summary = parts.length > 0 ? parts.join(" • ") : null
+      break
+    }
+    case "scholarship": {
+      const inserted = formatNumber(meta.inserted ?? job.result_count)
+      const evaluated = formatNumber(meta.evaluated)
+      if (!inserted && !evaluated) {
+        summary = null
+      } else {
+        summary = [inserted ? `Saved ${inserted} scholarships` : null, evaluated ? `evaluated ${evaluated}` : null]
+          .filter(Boolean)
+          .join(" • ")
+      }
+      break
+    }
+    case "comprehensive": {
+      const inserted = formatNumber(meta.inserted ?? job.result_count)
+      const zips = formatNumber(meta.zipsProcessed)
+      const evaluated = formatNumber(meta.evaluated)
+      const parts = []
+      if (inserted) parts.push(`Saved ${inserted} nationwide opportunities`)
+      if (zips) parts.push(`across ${zips} ZIPs`)
+      if (evaluated) parts.push(`evaluated ${evaluated}`)
+      summary = parts.length > 0 ? parts.join(" • ") : null
+      break
+    }
+    case "item_search": {
+      const inserted = formatNumber(meta.inserted ?? job.result_count)
+      const evaluated = formatNumber(meta.evaluated)
+      const item =
+        typeof meta.item === "string"
+          ? meta.item
+          : job.parameters?.item
+          ? String(job.parameters.item)
+          : null
+      const parts = []
+      if (inserted) parts.push(`Saved ${inserted} item matches`)
+      if (evaluated) parts.push(`evaluated ${evaluated}`)
+      if (item) parts.push(`for “${item}”`)
+      summary = parts.length > 0 ? parts.join(" • ") : null
+      break
+    }
+    case "document_ingest": {
+      if (typeof meta.summary === "string" && meta.summary.trim()) {
+        summary = meta.summary.length > 200 ? `${meta.summary.slice(0, 199)}…` : meta.summary
+        break
+      }
+      const total =
+        formatNumber(meta.total_sections_updated) ??
+        (Array.isArray(meta.sections_updated) ? formatNumber(meta.sections_updated.length) : null)
+      if (total) {
+        summary = `Extracted data into ${total} section${total === "1" ? "" : "s"}`
+      }
+      break
+    }
+    case "pipeline_automation": {
+      const advanced = formatNumber(meta.advanced)
+      const handoffs = formatNumber(meta.handoffs)
+      const parts = []
+      if (advanced) parts.push(`Advanced ${advanced} grant${meta.advanced === 1 ? "" : "s"}`)
+      if (handoffs) parts.push(`${handoffs} handoff${meta.handoffs === 1 ? "" : "s"}`)
+      summary = parts.length > 0 ? parts.join(" • ") : null
+      break
+    }
+    case "profile_enrichment": {
+      const sections = Array.isArray(meta.sections) ? meta.sections.length : null
+      if (!sections) {
+        summary = null
+      } else {
+        const display = sections.toLocaleString("en-US")
+        summary = `Updated ${display} profile section${sections === 1 ? "" : "s"}`
+      }
+      break
+    }
+    case "avatar_lookup":
+      summary = "Generated AI avatar"
+      break
+    default: {
+      const resultCount = formatNumber(job.result_count)
+      summary = resultCount ? `Processed ${resultCount} record${job.result_count === 1 ? "" : "s"}` : null
+      break
+    }
+  }
+
+  if (summary && typeof meta.duration_seconds === "number") {
+    const formattedDuration = formatDuration(meta.duration_seconds)
+    if (formattedDuration && formattedDuration !== "—") {
+      summary = `${summary} • Duration ${formattedDuration}`
+    }
+  }
+
+  return summary
+}
+
+function describeJobParameters(job) {
+  const params = job?.parameters
+  if (!params) return null
+
+  if (typeof params.item === "string" && params.item.trim()) {
+    return `Item: ${params.item}`
+  }
+
+  if (Array.isArray(params.zip_list) && params.zip_list.length > 0) {
+    const display = params.zip_list.slice(0, 4).join(", ")
+    const extra = params.zip_list.length > 4 ? ` +${params.zip_list.length - 4}` : ""
+    return `ZIPs: ${display}${extra}`
+  }
+
+  if (typeof params.zip_list === "string" && params.zip_list.trim()) {
+    const segments = params.zip_list.split(",").map((segment) => segment.trim())
+    const display = segments.slice(0, 4).join(", ")
+    const extra = segments.length > 4 ? ` +${segments.length - 4}` : ""
+    return `ZIPs: ${display}${extra}`
+  }
+
+  if (Array.isArray(params.sections) && params.sections.length > 0) {
+    return `Sections: ${params.sections.join(", ")}`
+  }
+
+  if (typeof params.prompt === "string" && params.prompt.trim()) {
+    const prompt = params.prompt.length > 60 ? `${params.prompt.slice(0, 60)}…` : params.prompt
+    return `Prompt: ${prompt}`
+  }
+
+  if (typeof params.radius_miles === "number") {
+    return `Radius: ${params.radius_miles} miles`
+  }
+
+  if (typeof params.limit_per_zip === "number") {
+    return `Limit per ZIP: ${params.limit_per_zip}`
+  }
+
+  return null
+}
+
+function OverallMetricsCard({ overall, generatedAt, isLoading }) {
+  const running = overall?.running ?? 0
+  const queued = overall?.queued ?? 0
+  const failed = overall?.failed ?? 0
+  const completed = overall?.completed ?? 0
+  const cancelled = overall?.cancelled ?? 0
+  const totalRetries = overall?.total_retries ?? 0
+  const retryJobs = overall?.jobs_with_retries ?? 0
+  const recentRetryJobs = overall?.recent_retry_jobs ?? 0
+  const topOverallFailure =
+    Array.isArray(overall?.failure_reasons) && overall.failure_reasons.length > 0
+      ? overall.failure_reasons[0]
+      : null
+  const avgDuration = overall?.average_duration_seconds ?? null
+  const lastActivity = overall?.last_activity
+    ? formatDistanceToNow(new Date(overall.last_activity), { addSuffix: true })
+    : null
+  const lastRetryText = overall?.last_retry_at
+    ? formatDistanceToNow(new Date(overall.last_retry_at), { addSuffix: true })
+    : null
+  const isActive = running > 0 || queued > 0
+
+  return (
+    <Card className="border border-slate-200 bg-white/80 shadow-sm">
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Zap className="h-5 w-5 text-blue-600" />
+            Automation health
+          </CardTitle>
+          <Badge
+            className={cn(
+              "text-xs uppercase tracking-wide",
+              isActive ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-700",
+            )}
+          >
+            {isActive ? "Active" : "Idle"}
+          </Badge>
+        </div>
+        <CardDescription>
+          {isLoading ? "Refreshing metrics…" : lastActivity ? `Last activity ${lastActivity}` : "No runs yet"}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid grid-cols-2 gap-4 text-sm text-slate-600">
+        <div>
+          <p className="text-xs uppercase tracking-wide text-slate-500">Running</p>
+          <p className="text-lg font-semibold text-slate-900">{formatNumber(running) ?? "0"}</p>
+        </div>
+        <div>
+          <p className="text-xs uppercase tracking-wide text-slate-500">Queued</p>
+          <p className="text-lg font-semibold text-slate-900">{formatNumber(queued) ?? "0"}</p>
+        </div>
+        <div>
+          <p className="text-xs uppercase tracking-wide text-slate-500">Completed</p>
+          <p className="text-lg font-semibold text-slate-900">{formatNumber(completed) ?? "0"}</p>
+        </div>
+        <div>
+          <p className="text-xs uppercase tracking-wide text-slate-500">Failed</p>
+          <p className="text-lg font-semibold text-slate-900">{formatNumber(failed) ?? "0"}</p>
+        </div>
+        <div>
+          <p className="text-xs uppercase tracking-wide text-slate-500">Cancelled</p>
+          <p className="text-lg font-semibold text-slate-900">{formatNumber(cancelled) ?? "0"}</p>
+        </div>
+        <div className="col-span-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500">
+          <span>
+            Retries: <span className="font-semibold text-slate-800">{formatNumber(totalRetries) ?? "0"}</span>
+          </span>
+          <span>
+            Jobs retried: <span className="font-semibold text-slate-800">{formatNumber(retryJobs) ?? "0"}</span>
+          </span>
+          {recentRetryJobs ? (
+            <span>
+              Last 7 days:{" "}
+              <span className="font-semibold text-slate-800">{formatNumber(recentRetryJobs) ?? "0"}</span>
+            </span>
+          ) : null}
+          {lastRetryText ? <span>Last retry {lastRetryText}</span> : null}
+        </div>
+        <div className="col-span-2 flex items-center justify-between text-xs text-slate-500">
+          <span>
+            Generated{" "}
+            {generatedAt ? formatDistanceToNow(new Date(generatedAt), { addSuffix: true }) : "moments ago"}
+          </span>
+          <div className="flex items-center gap-3">
+            {avgDuration ? (
+              <span className="text-slate-500">
+                Avg duration: <span className="font-semibold text-slate-800">{formatDuration(avgDuration)}</span>
+              </span>
+            ) : null}
+            {isLoading ? (
+              <span className="flex items-center gap-1 text-slate-400">
+                <Loader2 className="h-3 w-3 animate-spin" /> updating
+              </span>
+            ) : null}
+          </div>
+        </div>
+        {topOverallFailure ? (
+          <div className="col-span-2 rounded-md border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-900">
+            <p className="font-semibold text-amber-900">Top recent failure</p>
+            <p className="mt-1">
+              {topOverallFailure.message}{" "}
+              <span className="text-amber-700">
+                ({formatNumber(topOverallFailure.count) ?? topOverallFailure.count} occurrence
+                {topOverallFailure.count === 1 ? "" : "s"})
+              </span>
+            </p>
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  )
+}
+
+function RecentActivityChart({ activity }) {
+  if (!Array.isArray(activity) || activity.length === 0) {
+    return null
+  }
+
+  const totals = activity.map(
+    (entry) => (entry?.completed ?? 0) + (entry?.failed ?? 0),
+  )
+  const max = Math.max(...totals, 1)
+
+  return (
+    <div className="space-y-1">
+      <div className="flex h-16 items-end gap-1">
+        {activity.map((entry) => {
+          const total = (entry?.completed ?? 0) + (entry?.failed ?? 0)
+          const height = total > 0 ? Math.max(4, Math.round((total / max) * 56)) : 4
+          const completedRatio = total > 0 ? (entry?.completed ?? 0) / total : 0
+          let completedHeight = Math.round(height * completedRatio)
+          let failedHeight = height - completedHeight
+
+          if (completedHeight > 0 && completedHeight < 2) {
+            completedHeight = 2
+            failedHeight = Math.max(0, height - completedHeight)
+          }
+          if (failedHeight > 0 && failedHeight < 2) {
+            failedHeight = 2
+            completedHeight = Math.max(0, height - failedHeight)
+          }
+
+          const dayLabel = format(new Date(entry.date), "EEE")
+          const tooltip = `${dayLabel} • ${entry.completed ?? 0} completed${
+            entry.failed ? `, ${entry.failed} failed` : ""
+          }`
+
+          return (
+            <div key={entry.date} className="flex flex-1 flex-col items-center gap-1">
+              <div className="flex w-full flex-col justify-end" title={tooltip} aria-label={tooltip}>
+                {completedHeight > 0 ? (
+                  <div
+                    className="w-full rounded-t-sm bg-emerald-400"
+                    style={{ height: `${completedHeight}px` }}
+                  />
+                ) : null}
+                {failedHeight > 0 ? (
+                  <div
+                    className={cn(
+                      "w-full bg-red-300",
+                      completedHeight === 0 ? "rounded-t-sm" : "",
+                      "rounded-b-sm",
+                    )}
+                    style={{ height: `${failedHeight}px` }}
+                  />
+                ) : null}
+                {total === 0 ? (
+                  <div className="w-full rounded-sm bg-slate-200" style={{ height: `${height}px` }} />
+                ) : null}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      <div className="grid grid-cols-7 gap-1 text-[10px] uppercase tracking-wide text-slate-400">
+        {activity.map((entry) => (
+          <span key={`${entry.date}-label`} className="text-center">
+            {format(new Date(entry.date), "EEE")}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function MetricCard({ metric, onInspect, inspectionState, isLoading }) {
+  const Icon = JOB_ICON_MAP[metric.type] ?? Bot
+  const label = JOB_LABELS[metric.type] ?? metric.type
+
+  if (isLoading) {
+    return (
+      <Card className="border border-slate-200 bg-white/60 shadow-sm">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base text-slate-600">
+            <Icon className="h-5 w-5 text-slate-400 animate-pulse" />
+            {label}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex items-center gap-2 text-sm text-slate-500">
+          <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
+          Loading metrics…
+        </CardContent>
+      </Card>
+    )
+  }
+
+  const counts = metric.counts ?? {}
+  const completed = counts.completed ?? 0
+  const running = counts.running ?? 0
+  const queued = counts.queued ?? 0
+  const failed = counts.failed ?? 0
+  const cancelled = counts.cancelled ?? 0
+  const retryStats = metric.retry_stats ?? {}
+  const totalRetries = retryStats.total_retries ?? 0
+  const jobsWithRetries = retryStats.jobs_with_retries ?? 0
+  const recentRetryJobs = retryStats.recent_retry_jobs ?? 0
+  const lastRetryAtText = retryStats.last_retry_at
+    ? formatDistanceToNow(new Date(retryStats.last_retry_at), { addSuffix: true })
+    : null
+  const topFailureReason =
+    Array.isArray(metric.failure_reasons) && metric.failure_reasons.length > 0
+      ? metric.failure_reasons[0]
+      : null
+  const averageDuration = metric.average_duration_seconds ?? null
+  const lastJob = metric.last_job ?? null
+  const summary = lastJob?.summary ?? metric.last_summary ?? "Awaiting first run"
+  const lastCompletedAt = lastJob?.completed_at
+  const lastRunText = lastCompletedAt
+    ? `Last run ${formatDistanceToNow(new Date(lastCompletedAt), { addSuffix: true })}`
+    : "Awaiting first run"
+  const hasAttention = failed > 0
+  const isActive = running > 0 || queued > 0
+  const isInspecting =
+    inspectionState?.isLoading && inspectionState.jobId && inspectionState.jobId === lastJob?.id
+  const recentActivity = Array.isArray(metric.recent_activity) ? metric.recent_activity : null
+  const recentTotals = recentActivity
+    ? recentActivity.reduce(
+        (acc, entry) => ({
+          completed: acc.completed + (entry?.completed ?? 0),
+          failed: acc.failed + (entry?.failed ?? 0),
+        }),
+        { completed: 0, failed: 0 },
+      )
+    : { completed: 0, failed: 0 }
+  const recentRunSum = recentTotals.completed + recentTotals.failed
+
+  return (
+    <Card className="border border-slate-200 bg-white/80 shadow-sm">
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Icon className="h-5 w-5 text-blue-600" />
+            {label}
+          </CardTitle>
+          <Badge
+            className={cn(
+              "text-xs uppercase tracking-wide",
+              hasAttention
+                ? "bg-red-100 text-red-700"
+                : isActive
+                ? "bg-blue-100 text-blue-700"
+                : "bg-slate-100 text-slate-600",
+            )}
+          >
+            {hasAttention ? "Attention" : isActive ? "Running" : "Idle"}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-slate-700 min-h-[40px]">{summary}</p>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs text-slate-600">
+          <div>
+            <p className="text-[11px] uppercase tracking-wide text-slate-500">Completed</p>
+            <p className="text-base font-semibold text-slate-900">{formatNumber(completed) ?? "0"}</p>
+          </div>
+          <div>
+            <p className="text-[11px] uppercase tracking-wide text-slate-500">Running</p>
+            <p className="text-base font-semibold text-slate-900">{formatNumber(running) ?? "0"}</p>
+          </div>
+          <div>
+            <p className="text-[11px] uppercase tracking-wide text-slate-500">Queued</p>
+            <p className="text-base font-semibold text-slate-900">{formatNumber(queued) ?? "0"}</p>
+          </div>
+          <div>
+            <p className="text-[11px] uppercase tracking-wide text-slate-500">Failed</p>
+            <p className="text-base font-semibold text-slate-900">{formatNumber(failed) ?? "0"}</p>
+          </div>
+          <div className="sm:col-span-2">
+            <p className="text-[11px] uppercase tracking-wide text-slate-500">Cancelled</p>
+            <p className="text-base font-semibold text-slate-900">{formatNumber(cancelled) ?? "0"}</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500">
+          <span>
+            Retries: <span className="font-semibold text-slate-800">{formatNumber(totalRetries) ?? "0"}</span>
+          </span>
+          <span>
+            Jobs retried:{" "}
+            <span className="font-semibold text-slate-800">{formatNumber(jobsWithRetries) ?? "0"}</span>
+          </span>
+          {recentRetryJobs ? (
+            <span>
+              Last 7 days:{" "}
+              <span className="font-semibold text-slate-800">{formatNumber(recentRetryJobs) ?? "0"}</span>
+            </span>
+          ) : null}
+          {lastRetryAtText ? <span>Last retry {lastRetryAtText}</span> : null}
+        </div>
+        {topFailureReason ? (
+          <div className="rounded-md border border-amber-200 bg-amber-50/70 p-2 text-xs text-amber-900">
+            <p className="font-semibold text-amber-900">Top failure</p>
+            <p className="mt-1">
+              {topFailureReason.message}{" "}
+              <span className="text-amber-700">
+                ({formatNumber(topFailureReason.count) ?? topFailureReason.count})
+              </span>
+            </p>
+          </div>
+        ) : null}
+        <div className="text-xs text-slate-500">
+          Avg duration:{" "}
+          <span className="font-semibold text-slate-800">
+            {averageDuration ? formatDuration(averageDuration) : "—"}
+          </span>
+        </div>
+        {recentActivity ? (
+          <div className="space-y-2">
+            <div className="text-[11px] uppercase tracking-wide text-slate-500">
+              Last 7 days · {formatNumber(recentRunSum) ?? "0"} run{recentRunSum === 1 ? "" : "s"}
+              {recentTotals.failed
+                ? ` • ${formatNumber(recentTotals.failed)} failed`
+                : ""}
+            </div>
+            <RecentActivityChart activity={recentActivity} />
+          </div>
+        ) : null}
+        <div className="flex items-center justify-between gap-3 text-xs text-slate-500">
+          <span>{lastRunText}</span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => lastJob && onInspect(lastJob.id)}
+            disabled={!lastJob}
+            className="flex items-center gap-2"
+          >
+            {isInspecting ? <Loader2 className="h-3 w-3 animate-spin" /> : <History className="h-3 w-3" />}
+            Inspect
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function LiveQueueCard({ runningJobs, recentFailures, onInspect, onRetry, onCancel, retryingJobId, cancellingJobId }) {
+  const hasRunning = Array.isArray(runningJobs) && runningJobs.length > 0
+  const hasFailures = Array.isArray(recentFailures) && recentFailures.length > 0
+
+  const renderJobRow = (job) => {
+    const summary = summarizeJob(job)
+    const parameters = describeJobParameters(job)
+    const createdText = job.created_at
+      ? formatDistanceToNow(new Date(job.created_at), { addSuffix: true })
+      : null
+    const lastRetryText = job.last_retry_at
+      ? formatDistanceToNow(new Date(job.last_retry_at), { addSuffix: true })
+      : null
+
+    return (
+      <li
+        key={job.id}
+        className="flex flex-col gap-1 rounded-md border border-slate-200/80 bg-white/80 px-3 py-2"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <JobTypeBadge type={job.type} />
+          <Badge className={cn("text-[10px] uppercase tracking-wide", STATUS_VARIANTS[job.status] ?? STATUS_VARIANTS.queued)}>
+            {job.status.replace(/_/g, " ")}
+          </Badge>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+          <span className="font-mono text-[10px] text-slate-400">{job.id.slice(0, 10)}…</span>
+          {createdText ? <span>Queued {createdText}</span> : null}
+          {job.profile_id ? <span>Profile {job.profile_id}</span> : null}
+          {job.retried_from_job_id ? (
+            <span className="text-slate-400">
+              Retry of {String(job.retried_from_job_id).slice(0, 8)}…
+            </span>
+          ) : null}
+          {typeof job.retry_count === "number" && job.retry_count > 0 ? (
+            <span className="text-slate-400">Attempts: {job.retry_count}</span>
+          ) : null}
+          {lastRetryText ? <span className="text-slate-400">Last retry {lastRetryText}</span> : null}
+        </div>
+        {summary ? <p className="text-xs text-slate-700">{summary}</p> : null}
+        {parameters ? <p className="text-[11px] text-slate-500">{parameters}</p> : null}
+        <div className="flex justify-end gap-2">
+          {typeof onCancel === "function" && job.status === "queued" ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs"
+              onClick={() => onCancel(job.id)}
+              disabled={cancellingJobId === job.id}
+            >
+              {cancellingJobId === job.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <XCircle className="h-3 w-3" />}
+              {cancellingJobId === job.id ? "Cancelling…" : "Cancel"}
+            </Button>
+          ) : null}
+          <Button variant="ghost" size="sm" className="text-xs" onClick={() => onInspect(job.id)}>
+            View job
+          </Button>
+        </div>
+      </li>
+    )
+  }
+
+  const renderFailureRow = (job) => {
+    const summary = summarizeJob(job)
+    const parameters = describeJobParameters(job)
+    const failedText = job.completed_at
+      ? formatDistanceToNow(new Date(job.completed_at), { addSuffix: true })
+      : null
+    const lastRetryText = job.last_retry_at
+      ? formatDistanceToNow(new Date(job.last_retry_at), { addSuffix: true })
+      : null
+
+    return (
+      <li
+        key={job.id}
+        className="flex flex-col gap-1 rounded-md border border-red-200/70 bg-red-50 px-3 py-2"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <JobTypeBadge type={job.type} />
+          <Badge className="text-[10px] uppercase tracking-wide bg-red-100 text-red-700">Failed</Badge>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-red-600">
+          <span className="font-mono text-[10px] text-red-400">{job.id.slice(0, 10)}…</span>
+          {failedText ? <span>Failed {failedText}</span> : null}
+          {job.retried_from_job_id ? (
+            <span className="text-red-400">
+              Retry of {String(job.retried_from_job_id).slice(0, 8)}…
+            </span>
+          ) : null}
+          {typeof job.retry_count === "number" && job.retry_count > 0 ? (
+            <span className="text-red-400">Attempts: {job.retry_count}</span>
+          ) : null}
+          {lastRetryText ? <span className="text-red-400">Last retry {lastRetryText}</span> : null}
+        </div>
+        {summary ? <p className="text-xs text-red-700">{summary}</p> : null}
+        {parameters ? <p className="text-[11px] text-red-600">{parameters}</p> : null}
+        {job.error ? (
+          <p className="text-[11px] text-red-500 line-clamp-2" title={job.error}>
+            {job.error}
+          </p>
+        ) : null}
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" size="sm" className="text-xs" onClick={() => onInspect(job.id)}>
+            Inspect failure
+          </Button>
+          {typeof onRetry === "function" ? (
+            <Button
+              variant="destructive"
+              size="sm"
+              className="text-xs gap-2"
+              onClick={() => onRetry(job.id)}
+              disabled={retryingJobId === job.id}
+            >
+              {retryingJobId === job.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+              {retryingJobId === job.id ? "Retrying…" : "Retry"}
+            </Button>
+          ) : null}
+        </div>
+      </li>
+    )
+  }
+
+  return (
+    <Card className="border border-slate-200 bg-white/80 shadow-sm md:col-span-2 xl:col-span-1">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Loader2 className="h-5 w-5 text-blue-600" />
+          Live queue & failures
+        </CardTitle>
+        <CardDescription>
+          Monitor active automation jobs and review the most recent failures for follow-up.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div>
+          <p className="text-xs uppercase tracking-wide text-slate-500 mb-2">
+            Running & queued
+          </p>
+          {hasRunning ? (
+            <ul className="space-y-2">
+              {runningJobs.slice(0, 6).map(renderJobRow)}
+            </ul>
+          ) : (
+            <p className="text-sm text-slate-500">All clear. No jobs are running right now.</p>
+          )}
+        </div>
+        <div>
+          <p className="text-xs uppercase tracking-wide text-slate-500 mb-2">
+            Recent failures
+          </p>
+          {hasFailures ? (
+            <ul className="space-y-2">
+              {recentFailures.slice(0, 4).map(renderFailureRow)}
+            </ul>
+          ) : (
+            <p className="text-sm text-slate-500">No failures in the last few runs.</p>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function JobStatusBadge({ status }) {
+  if (!status) return null
+  const variant = STATUS_VARIANTS[status] ?? STATUS_VARIANTS.queued
+  return (
+    <Badge className={cn("text-xs capitalize", variant)}>
+      {status.replace(/_/g, " ")}
+    </Badge>
+  )
+}
+
+function JobTypeBadge({ type }) {
+  const label = JOB_LABELS[type] ?? type ?? "Unknown job"
+  return (
+    <Badge variant="outline" className="text-xs uppercase tracking-wide text-slate-600">
+      {label}
+    </Badge>
+  )
+}
+
+function JobDetailsDialog({ job, onOpenChange, onRetry, retrying, onCancel, cancelling, onInspectJob }) {
+  if (!job) return null
+
+  const lineage = job.lineage ?? null
+  const ancestorAttempts = Array.isArray(lineage?.ancestors) ? lineage.ancestors : []
+  const descendantAttempts = Array.isArray(lineage?.descendants) ? lineage.descendants : []
+  const attemptTimeline = [...ancestorAttempts, job, ...descendantAttempts]
+
+  return (
+    <Dialog open={Boolean(job)} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-lg">
+            <Sparkles className="h-5 w-5 text-blue-600" />
+            Automation job details
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 text-sm text-slate-700">
+          <div className="flex justify-end gap-2">
+            {job.status === "queued" && typeof onCancel === "function" ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                onClick={() => onCancel(job.id)}
+                disabled={cancelling}
+              >
+                {cancelling ? <Loader2 className="h-3 w-3 animate-spin" /> : <XCircle className="h-3 w-3" />}
+                {cancelling ? "Cancelling…" : "Cancel job"}
+              </Button>
+            ) : null}
+            {["failed", "cancelled"].includes(job.status) && typeof onRetry === "function" ? (
+              <Button
+                variant="destructive"
+                size="sm"
+                className="gap-2"
+                onClick={() => onRetry(job.id)}
+                disabled={retrying}
+              >
+                {retrying ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                {retrying ? "Retrying…" : "Retry job"}
+              </Button>
+            ) : null}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <span className="text-xs uppercase tracking-wide text-slate-500">Job ID</span>
+              <p className="font-mono text-xs text-slate-600 mt-1">{job.id}</p>
+            </div>
+            {job.retried_from_job_id ? (
+              <div>
+                <span className="text-xs uppercase tracking-wide text-slate-500">Retry of</span>
+                <div className="flex items-center gap-2 mt-1">
+                  <p className="font-mono text-xs text-slate-600">
+                    {String(job.retried_from_job_id)}
+                  </p>
+                  {typeof onInspectJob === "function" ? (
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="text-xs"
+                      onClick={() => onInspectJob(String(job.retried_from_job_id))}
+                    >
+                      Inspect parent
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wide text-slate-500">Type</span>
+              <JobTypeBadge type={job.type} />
+            </div>
+            <div>
+              <span className="text-xs uppercase tracking-wide text-slate-500">Profile ID</span>
+              <p className="font-mono text-xs text-slate-600 mt-1">{job.profile_id ?? "—"}</p>
+            </div>
+            <div>
+              <span className="text-xs uppercase tracking-wide text-slate-500">Organization ID</span>
+              <p className="font-mono text-xs text-slate-600 mt-1">{job.organization_id ?? "—"}</p>
+            </div>
+            <div>
+              <span className="text-xs uppercase tracking-wide text-slate-500">Requested by</span>
+              <p className="text-xs text-slate-700 mt-1">{job.requested_by ?? "system"}</p>
+            </div>
+            <div>
+              <span className="text-xs uppercase tracking-wide text-slate-500">Retry count</span>
+              <p className="font-mono text-xs text-slate-600 mt-1">
+                {typeof job.retry_count === "number" ? job.retry_count : 0}
+              </p>
+            </div>
+            <div>
+              <span className="text-xs uppercase tracking-wide text-slate-500">Last retry</span>
+              <p className="text-xs text-slate-600 mt-1">
+                {job.last_retry_at
+                  ? formatDistanceToNow(new Date(job.last_retry_at), { addSuffix: true })
+                  : "—"}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wide text-slate-500">Status</span>
+              <JobStatusBadge status={job.status} />
+            </div>
+          </div>
+
+          <Separator />
+
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs text-slate-600">
+            <div>
+              <span className="block uppercase tracking-wide text-slate-500">Created</span>
+              <p className="mt-1">{job.created_at ?? "—"}</p>
+            </div>
+            <div>
+              <span className="block uppercase tracking-wide text-slate-500">Started</span>
+              <p className="mt-1">{job.started_at ?? "—"}</p>
+            </div>
+            <div>
+              <span className="block uppercase tracking-wide text-slate-500">Completed</span>
+              <p className="mt-1">{job.completed_at ?? "—"}</p>
+            </div>
+            <div>
+              <span className="block uppercase tracking-wide text-slate-500">Duration</span>
+              <p className="mt-1">
+                {formatDuration(
+                  typeof job.result_meta?.duration_seconds === "number"
+                    ? job.result_meta.duration_seconds
+                    : typeof job.duration_seconds === "number"
+                    ? job.duration_seconds
+                    : null,
+                )}
+              </p>
+            </div>
+          </div>
+
+          <Separator />
+
+          <div>
+            <span className="text-xs uppercase tracking-wide text-slate-500">Parameters</span>
+            <ScrollArea className="mt-2 max-h-48 rounded-md border border-slate-200 bg-slate-50 p-2">
+              <pre className="text-xs text-slate-700 whitespace-pre-wrap">
+                {JSON.stringify(job.parameters ?? {}, null, 2)}
+              </pre>
+            </ScrollArea>
+          </div>
+
+          <Separator />
+
+          <div>
+            <span className="text-xs uppercase tracking-wide text-slate-500">
+              Retry history{typeof lineage?.attempts === "number" ? ` · ${lineage.attempts} attempt${lineage.attempts === 1 ? "" : "s"}` : ""}
+            </span>
+            {attemptTimeline.length <= 1 ? (
+              <p className="mt-2 text-xs text-slate-500">No retry attempts recorded.</p>
+            ) : (
+              <ol className="mt-2 space-y-3">
+                {attemptTimeline.map((attempt, index) => {
+                  const isCurrent = attempt.id === job.id
+                  const attemptNumber = index + 1
+                  const queuedText = attempt.created_at
+                    ? formatDistanceToNow(new Date(attempt.created_at), { addSuffix: true })
+                    : null
+                  const completedText = attempt.completed_at
+                    ? formatDistanceToNow(new Date(attempt.completed_at), { addSuffix: true })
+                    : null
+                  const resultCount =
+                    typeof attempt.result_count === "number"
+                      ? attempt.result_count
+                      : typeof attempt.result_meta?.inserted === "number"
+                      ? attempt.result_meta.inserted
+                      : null
+
+                  return (
+                    <li
+                      key={`${attempt.id}-attempt`}
+                      className={cn(
+                        "rounded-md border px-3 py-2 text-xs transition",
+                        isCurrent
+                          ? "border-blue-200 bg-blue-50/70 text-blue-900"
+                          : "border-slate-200 bg-white text-slate-600",
+                      )}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <Badge
+                            className={cn(
+                              "text-[10px] uppercase tracking-wide",
+                              isCurrent ? "bg-blue-600 text-white" : "bg-slate-200 text-slate-700",
+                            )}
+                          >
+                            Attempt {attemptNumber}
+                          </Badge>
+                          <JobStatusBadge status={attempt.status} />
+                          {isCurrent ? <span className="text-[11px] font-semibold">(current)</span> : null}
+                        </div>
+                        {isCurrent ? null : typeof onInspectJob === "function" ? (
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            className="text-[11px]"
+                            onClick={() => onInspectJob(String(attempt.id))}
+                          >
+                            Inspect
+                          </Button>
+                        ) : null}
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+                        {queuedText ? <span>Queued {queuedText}</span> : null}
+                        {completedText ? <span>Completed {completedText}</span> : null}
+                        {typeof attempt.retry_count === "number" && attempt.retry_count > 0 ? (
+                          <span>{attempt.retry_count} retries triggered</span>
+                        ) : null}
+                        {attempt.last_retry_at ? (
+                          <span>
+                            Last retry{" "}
+                            {formatDistanceToNow(new Date(attempt.last_retry_at), {
+                              addSuffix: true,
+                            })}
+                          </span>
+                        ) : null}
+                        {resultCount !== null ? <span>Result count {formatNumber(resultCount)}</span> : null}
+                      </div>
+                      {attempt.error ? (
+                        <p className="mt-2 text-[11px] text-red-600">Error: {attempt.error}</p>
+                      ) : null}
+                    </li>
+                  )
+                })}
+              </ol>
+            )}
+          </div>
+
+          {job.result_meta ? (
+            <div className="space-y-3">
+              <div className="space-y-1 text-xs text-slate-600">
+                {typeof job.result_meta.evaluated === "number" ? (
+                  <p>
+                    Evaluated{" "}
+                    <span className="font-semibold text-slate-800">{job.result_meta.evaluated}</span>{" "}
+                    record{job.result_meta.evaluated === 1 ? "" : "s"}.
+                  </p>
+                ) : null}
+                {typeof job.result_meta.inserted === "number" ? (
+                  <p>
+                    Inserted{" "}
+                    <span className="font-semibold text-slate-800">{job.result_meta.inserted}</span>{" "}
+                    opportunity{job.result_meta.inserted === 1 ? "" : "ies"}.
+                  </p>
+                ) : null}
+                {typeof job.result_meta.handoffs === "number" ? (
+                  <p>
+                    Human handoffs required:{" "}
+                    <span className="font-semibold text-slate-800">{job.result_meta.handoffs}</span>
+                  </p>
+                ) : null}
+                {typeof job.result_meta.total_sections_updated === "number" ? (
+                  <p>
+                    Updated{" "}
+                    <span className="font-semibold text-slate-800">
+                      {job.result_meta.total_sections_updated}
+                    </span>{" "}
+                    section{job.result_meta.total_sections_updated === 1 ? "" : "s"} from the source document.
+                  </p>
+                ) : null}
+              </div>
+
+              {job.result_meta.summary ? (
+                <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900">
+                  <p className="font-semibold uppercase tracking-wide text-[11px] mb-1">Summary</p>
+                  <p>{job.result_meta.summary}</p>
+                </div>
+              ) : null}
+
+              <div className="grid gap-2 sm:grid-cols-2 text-xs text-slate-600">
+                {job.result_meta.zip ? (
+                  <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
+                    <p className="uppercase tracking-wide text-[11px] text-slate-500">ZIP</p>
+                    <p className="font-semibold text-slate-800">{job.result_meta.zip}</p>
+                  </div>
+                ) : null}
+                {job.result_meta.radius ? (
+                  <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
+                    <p className="uppercase tracking-wide text-[11px] text-slate-500">Radius</p>
+                    <p className="font-semibold text-slate-800">
+                      {job.result_meta.radius} miles
+                    </p>
+                  </div>
+                ) : null}
+                {job.result_meta.item ? (
+                  <div className="rounded-md border border-slate-200 bg-slate-50 p-2 sm:col-span-2">
+                    <p className="uppercase tracking-wide text-[11px] text-slate-500">Item query</p>
+                    <p className="font-semibold text-slate-800">{job.result_meta.item}</p>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          {job.result_meta ? (
+            <div className="space-y-3">
+              {Array.isArray(job.result_meta.grants) && job.result_meta.grants.length > 0 ? (
+                <div className="rounded-md border border-slate-200 bg-slate-50">
+                  <div className="px-3 py-2 border-b border-slate-200 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Grant outcomes
+                  </div>
+                  <ScrollArea className="max-h-40">
+                    <ul className="space-y-2 px-3 py-2 text-xs text-slate-700">
+                      {job.result_meta.grants.map((entry) => (
+                        <li key={entry.grant_id} className="border border-slate-200/60 rounded-md p-2 bg-white/80">
+                          <p className="font-semibold text-slate-800">{entry.title ?? entry.grant_id}</p>
+                          <p className="text-slate-600">
+                            {entry.previous_status ?? "unknown"} → {entry.applied_status ?? "unchanged"}
+                          </p>
+                          {entry.handoff_required ? (
+                            <p className="text-amber-700 flex items-center gap-1">
+                              <AlertTriangle className="h-3 w-3" />
+                              {entry.handoff_reason ?? "Manual review required"}
+                            </p>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </ScrollArea>
+                </div>
+              ) : null}
+
+              {Array.isArray(job.result_meta.opportunities) && job.result_meta.opportunities.length > 0 ? (
+                <div className="rounded-md border border-slate-200 bg-slate-50">
+                  <div className="px-3 py-2 border-b border-slate-200 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Opportunity matches
+                  </div>
+                  <ScrollArea className="max-h-56">
+                    <ul className="space-y-2 px-3 py-2 text-xs text-slate-700">
+                      {job.result_meta.opportunities.map((entry, index) => (
+                        <li key={entry.title ?? index} className="border border-slate-200/60 rounded-md p-2 bg-white/80 space-y-1.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="font-semibold text-slate-800 leading-tight">
+                              {entry.title ?? "Untitled opportunity"}
+                            </p>
+                            <Badge variant={entry.inserted ? "secondary" : "outline"} className="text-[10px] uppercase tracking-wide">
+                              {entry.inserted ? "Saved" : "Existing"}
+                            </Badge>
+                          </div>
+                          {entry.sponsor ? <p className="text-slate-600">Sponsor: {entry.sponsor}</p> : null}
+                          {entry.deadline ? <p className="text-slate-600">Deadline: {entry.deadline}</p> : null}
+                          {typeof entry.match_score === "number" ? (
+                            <p className="text-slate-600">Match score: {entry.match_score}</p>
+                          ) : null}
+                          {Array.isArray(entry.match_reasons) && entry.match_reasons.length > 0 ? (
+                            <ul className="list-disc pl-4 text-slate-500 space-y-0.5">
+                              {entry.match_reasons.slice(0, 4).map((reason, reasonIndex) => (
+                                <li key={reasonIndex}>{reason}</li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </ScrollArea>
+                </div>
+              ) : null}
+
+              {Array.isArray(job.result_meta.sections_updated) && job.result_meta.sections_updated.length > 0 ? (
+                <div className="rounded-md border border-slate-200 bg-slate-50">
+                  <div className="px-3 py-2 border-b border-slate-200 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Document ingestion updates
+                  </div>
+                  <div className="px-3 py-2 space-y-2 text-xs text-slate-700">
+                    {job.result_meta.sections_updated.map((entry, index) => (
+                      <div key={`${entry.section_key ?? index}`} className="border border-slate-200 rounded-md p-2 bg-white/80">
+                        <p className="font-semibold text-slate-800">{entry.section_key?.replace(/_/g, " ") ?? "Unknown section"}</p>
+                        {Array.isArray(entry.updated_fields) && entry.updated_fields.length > 0 ? (
+                          <p className="text-slate-600">
+                            Fields: <span className="text-slate-800">{entry.updated_fields.join(", ")}</span>
+                          </p>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              <div>
+                <span className="text-xs uppercase tracking-wide text-slate-500">Result payload</span>
+                <ScrollArea className="mt-2 max-h-48 rounded-md border border-slate-200 bg-slate-50 p-2">
+                  <pre className="text-xs text-slate-700 whitespace-pre-wrap">
+                    {JSON.stringify(job.result_meta, null, 2)}
+                  </pre>
+                </ScrollArea>
+              </div>
+            </div>
+          ) : null}
+
+          {job.error ? (
+            <div className="rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700 flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 mt-0.5" />
+              <span>{job.error}</span>
+            </div>
+          ) : null}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function QuickActionCard({ icon: Icon, title, description, onClick, disabled, loading }) {
+  return (
+    <Card className="border border-slate-200 bg-white/80 shadow-sm">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Icon className="h-5 w-5 text-blue-600" />
+          {title}
+        </CardTitle>
+        <CardDescription>{description}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Button onClick={onClick} disabled={disabled || loading} className="w-full bg-blue-600 hover:bg-blue-700 gap-2">
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+          {loading ? "Queuing…" : "Run now"}
+        </Button>
+      </CardContent>
+    </Card>
+  )
+}
+
+function AutomationTasksPanel({
+  tasks,
+  isLoading,
+  isFetching,
+  onToggleTask,
+  updatingTaskId,
+  isUpdating,
+  onRefresh,
+  profileName,
+}) {
+  const hasTasks = Array.isArray(tasks) && tasks.length > 0
+
+  return (
+    <Card className="border border-slate-200 bg-white/80 shadow-sm">
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <History className="h-5 w-5 text-blue-600" />
+              AI follow-ups
+            </CardTitle>
+            <CardDescription>
+              {profileName
+                ? `Tasks captured by Anya for ${profileName}.`
+                : "Tasks captured by Anya for this profile."}
+            </CardDescription>
+          </div>
+          <Button variant="ghost" size="sm" className="gap-2 text-xs" onClick={onRefresh} disabled={isFetching}>
+            {isFetching ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            Refresh
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {isLoading ? (
+          <div className="flex items-center gap-2 text-sm text-slate-500">
+            <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+            Loading tasks…
+          </div>
+        ) : hasTasks ? (
+          <div className="space-y-3">
+            {tasks.map((task) => {
+              const isCompleted = task.status === "completed"
+              const isInProgress = task.status === "in_progress"
+              const isUpdatingTask = isUpdating && updatingTaskId === task.id
+              const dueDate = task.due_date ? new Date(`${task.due_date}T00:00:00`) : null
+              const createdAt = task.created_at ? new Date(task.created_at) : null
+              const dueDistance =
+                dueDate && !Number.isNaN(dueDate.getTime())
+                  ? formatDistanceToNow(dueDate, { addSuffix: true })
+                  : null
+              const isOverdue =
+                dueDate && !Number.isNaN(dueDate.getTime())
+                  ? dueDate.getTime() < new Date().setHours(0, 0, 0, 0)
+                  : false
+
+              return (
+                <div
+                  key={task.id}
+                  className="flex items-start gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm"
+                >
+                  <Checkbox
+                    id={`automation-task-${task.id}`}
+                    checked={isCompleted}
+                    disabled={isUpdating || isUpdatingTask}
+                    onCheckedChange={(checked) => onToggleTask(task, checked === true)}
+                    className="mt-1"
+                  />
+                  <div className="flex flex-1 flex-col gap-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label
+                        htmlFor={`automation-task-${task.id}`}
+                        className={cn(
+                          "text-sm font-medium text-slate-800",
+                          isCompleted && "line-through text-slate-400",
+                        )}
+                      >
+                        {task.title}
+                      </label>
+                      {isInProgress ? (
+                        <Badge variant="secondary" className="text-[10px] uppercase tracking-wide">
+                          In progress
+                        </Badge>
+                      ) : null}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                      {dueDistance ? (
+                        <span className={cn(isOverdue ? "text-red-600 font-semibold" : undefined)}>
+                          Due {dueDistance}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">No due date</span>
+                      )}
+                      {createdAt && !Number.isNaN(createdAt.getTime()) ? (
+                        <span>Logged {formatDistanceToNow(createdAt, { addSuffix: true })}</span>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="text-sm text-slate-500">
+            No open follow-ups yet. Ask Anya in the dashboard to capture next steps during automation runs.
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+export default function Automation() {
+  const queryClient = useQueryClient()
+  const { toast } = useToast()
+  const { user, activeProfileId } = useAuthStore((state) => ({
+    user: state.user,
+    activeProfileId: state.activeProfileId,
+  }))
+
+  const isAdmin = Boolean(user?.is_admin || user?.id === "admin")
+  const [jobTypeFilter, setJobTypeFilter] = useState("all")
+  const [jobStatusFilter, setJobStatusFilter] = useState("all")
+  const [profileFilter, setProfileFilter] = useState(isAdmin ? "all" : activeProfileId ?? "all")
+  const [selectedProfile, setSelectedProfile] = useState(activeProfileId ?? "none")
+  const [selectedJob, setSelectedJob] = useState(null)
+  const [itemQuery, setItemQuery] = useState("15 passenger van")
+  const [selectedSections, setSelectedSections] = useState(["basic_information"])
+  const [enrichmentPrompt, setEnrichmentPrompt] = useState("")
+
+  const profilesQuery = useQuery({
+    queryKey: ["automation-profiles"],
+    queryFn: () => listProfiles(),
+    enabled: isAdmin,
+  })
+
+  const metricsQuery = useQuery({
+    queryKey: ["crawler-metrics", isAdmin ? profileFilter : activeProfileId],
+    queryFn: () =>
+      listCrawlerMetrics(
+        isAdmin
+          ? {
+              profile_id: profileFilter && profileFilter !== "all" ? profileFilter : undefined,
+            }
+          : {},
+      ),
+    refetchInterval: 30000,
+  })
+
+  const jobsQuery = useQuery({
+    queryKey: ["crawler-jobs", jobTypeFilter, jobStatusFilter, profileFilter, isAdmin],
+    queryFn: () =>
+      listCrawlerJobs({
+        type: jobTypeFilter !== "all" ? jobTypeFilter : undefined,
+        status: jobStatusFilter !== "all" ? jobStatusFilter : undefined,
+        profile_id: isAdmin && profileFilter && profileFilter !== "all" ? profileFilter : undefined,
+        limit: 100,
+      }),
+  })
+
+  const profileDetailQuery = useQuery({
+    queryKey: ["automation-profile-detail", isAdmin ? selectedProfile : activeProfileId],
+    queryFn: () => getProfile(isAdmin ? selectedProfile : activeProfileId),
+    enabled: Boolean(isAdmin ? (selectedProfile && selectedProfile !== "none") : activeProfileId),
+  })
+
+  const profileForTasks = isAdmin ? selectedProfile : activeProfileId
+
+  const tasksQuery = useQuery({
+    queryKey: ["anya-profile-tasks", profileForTasks],
+    queryFn: () => getAnyaProfileTasks(profileForTasks, { status: "active" }),
+    enabled: Boolean(profileForTasks),
+    refetchInterval: 45000,
+  })
+
+  const sectionOptions = useMemo(
+    () =>
+      Object.keys(SECTION_CONFIG).map((key) => ({
+        key,
+        label: SECTION_CONFIG[key]?.title ?? key.replace(/_/g, " "),
+      })),
+    [],
+  )
+
+  const createJobMutation = useMutation({
+    mutationFn: (payload) => createCrawlerJob(payload),
+    onSuccess: (job) => {
+      toast({
+        title: "Automation queued",
+        description: job?.id
+          ? `Job ${job.id.slice(0, 8)}… is running.`
+          : "Crawler will start shortly.",
+      })
+      queryClient.invalidateQueries({ queryKey: ["crawler-jobs"] })
+      queryClient.invalidateQueries({ queryKey: ["crawler-metrics"] })
+    },
+    onError: (error) => {
+      toast({
+        variant: "destructive",
+        title: "Unable to queue automation",
+        description: error instanceof Error ? error.message : "Try again shortly.",
+      })
+    },
+  })
+
+  const retryJobMutation = useMutation({
+    mutationFn: (jobId) => retryCrawlerJob(jobId),
+    onSuccess: (newJob) => {
+      toast({
+        title: "Job retried",
+        description: newJob?.id ? `Job ${String(newJob.id).slice(0, 8)}… requeued.` : "Retry queued.",
+      })
+      queryClient.invalidateQueries({ queryKey: ["crawler-jobs"] })
+      queryClient.invalidateQueries({ queryKey: ["crawler-metrics"] })
+      handleInspectJob(newJob)
+    },
+    onError: (error) => {
+      toast({
+        variant: "destructive",
+        title: "Unable to retry job",
+        description: error instanceof Error ? error.message : "Please try again shortly.",
+      })
+    },
+  })
+
+  const cancelJobMutation = useMutation({
+    mutationFn: ({ jobId, reason }) => cancelCrawlerJob(jobId, reason),
+    onSuccess: (job) => {
+      toast({
+        title: "Job cancelled",
+        description: job?.id
+          ? `Job ${String(job.id).slice(0, 8)}… marked as cancelled.`
+          : "Cancellation recorded.",
+      })
+      queryClient.invalidateQueries({ queryKey: ["crawler-jobs"] })
+      queryClient.invalidateQueries({ queryKey: ["crawler-metrics"] })
+    },
+    onError: (error) => {
+      toast({
+        variant: "destructive",
+        title: "Unable to cancel job",
+        description: error instanceof Error ? error.message : "Please try again shortly.",
+      })
+    },
+  })
+
+  const jobDetailsMutation = useMutation({
+    mutationFn: (jobId) => getCrawlerJob(jobId),
+    onSuccess: (job) => {
+      setSelectedJob(job)
+    },
+    onError: (error) => {
+      toast({
+        variant: "destructive",
+        title: "Unable to load job details",
+        description: error instanceof Error ? error.message : "Please try again shortly.",
+      })
+    },
+  })
+
+  const updateTaskMutation = useMutation({
+    mutationFn: ({ sessionId, taskId, status }) => updateAnyaTask(sessionId, taskId, { status }),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["anya-profile-tasks"] })
+      toast({
+        title: variables?.status === "completed" ? "Task completed" : "Task updated",
+        description:
+          variables?.status === "completed"
+            ? "Marked as complete in Anya."
+            : "Task status updated in Anya.",
+      })
+    },
+    onError: (error) => {
+      toast({
+        variant: "destructive",
+        title: "Unable to update task",
+        description: error instanceof Error ? error.message : "Please try again shortly.",
+      })
+    },
+  })
+
+  const selectedProfileEntity = useMemo(() => {
+    if (!selectedProfile || selectedProfile === "none") return null
+    if (!profilesQuery.data) return null
+    return profilesQuery.data.find((profile) => profile.id === selectedProfile) ?? null
+  }, [profilesQuery.data, selectedProfile])
+
+  const handleQueueJob = (type, params = {}) => {
+    const profileId = !isAdmin ? activeProfileId : (selectedProfile && selectedProfile !== "none" ? selectedProfile : undefined)
+    createJobMutation.mutate({
+      type,
+      profile_id: profileId,
+      parameters: params,
+    })
+  }
+
+  const handleInspectJob = (jobOrId) => {
+    if (!jobOrId) return
+    if (typeof jobOrId === "string") {
+      jobDetailsMutation.mutate(jobOrId)
+      return
+    }
+    setSelectedJob(jobOrId)
+  }
+
+  const handleRetryJob = (jobId) => {
+    if (!jobId) return
+    retryJobMutation.mutate(jobId)
+  }
+
+  const handleCancelJob = (jobId) => {
+    if (!jobId) return
+    let reason = ""
+    if (typeof window !== "undefined") {
+      const input = window.prompt("Add an optional cancellation reason:", "")
+      if (input === null) return
+      reason = input?.trim() ?? ""
+    }
+    cancelJobMutation.mutate({ jobId, reason })
+  }
+
+  const metricsLoading = metricsQuery.isLoading && !metricsQuery.data
+  const metricsData = metricsQuery.data?.types ?? []
+  const metricsForDisplay = metricsLoading ? METRIC_TYPE_ORDER.map((type) => ({ type })) : metricsData
+  const overallMetrics = metricsQuery.data?.overall ?? null
+  const runningJobs = metricsQuery.data?.running_jobs ?? []
+  const recentFailures = metricsQuery.data?.recent_failures ?? []
+  const inspectionState = {
+    isLoading: jobDetailsMutation.isPending,
+    jobId: jobDetailsMutation.variables ?? null,
+  }
+
+  const retryingJobId = retryJobMutation.isPending ? retryJobMutation.variables ?? null : null
+  const cancellingJobId = cancelJobMutation.isPending ? cancelJobMutation.variables?.jobId ?? null : null
+
+  const jobs = jobsQuery.data ?? []
+  const hasJobs = jobs.length > 0
+  const tasksForPanel = tasksQuery.data ?? []
+  const automationProfileName =
+    profileDetailQuery.data?.display_name ??
+    profileDetailQuery.data?.name ??
+    selectedProfileEntity?.name ??
+    null
+  const isUpdatingTask = updateTaskMutation.isPending
+  const updatingTaskId =
+    isUpdatingTask && updateTaskMutation.variables ? updateTaskMutation.variables.taskId : null
+
+  const handleToggleTaskStatus = (task, checked) => {
+    if (!task?.id || !task?.session_id) return
+    const nextStatus = checked ? "completed" : "open"
+    updateTaskMutation.mutate({
+      sessionId: task.session_id,
+      taskId: task.id,
+      status: nextStatus,
+    })
+  }
+
+  return (
+    <div className="p-6 md:p-10 space-y-8">
+      <header className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+        <div className="space-y-3">
+          <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-2">
+            <Bot className="h-8 w-8 text-blue-600" />
+            Automation Control Center
+          </h1>
+          <p className="max-w-3xl text-sm text-slate-600">
+            Launch AI crawlers, monitor job output, and advance grants with a single click. Automations respect profile
+            permissions, match funding to demographics, and surface handoffs when human judgment is required.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <Button variant="outline" size="sm" className="gap-2" onClick={() => jobsQuery.refetch()} disabled={jobsQuery.isFetching}>
+            {jobsQuery.isFetching ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            Refresh jobs
+          </Button>
+        </div>
+      </header>
+
+      <section className="grid gap-4 lg:grid-cols-3">
+        <QuickActionCard
+          icon={Rocket}
+          title="Launch local sweep"
+          description="Search within 50 miles of the profile’s ZIP for non-repayable opportunities."
+          onClick={() => handleQueueJob("local")}
+          disabled={!isAdmin && !activeProfileId}
+          loading={createJobMutation.isPending && createJobMutation.variables?.type === "local"}
+        />
+        <QuickActionCard
+          icon={Sparkles}
+          title="Scholarship & endowment match"
+          description="Match students to scholarships using FAFSA, Common App, and campus portals."
+          onClick={() => handleQueueJob("scholarship")}
+          disabled={!isAdmin && !activeProfileId}
+          loading={createJobMutation.isPending && createJobMutation.variables?.type === "scholarship"}
+        />
+        <QuickActionCard
+          icon={Target}
+          title="Nationwide crawl"
+          description="Populate the Funding Opportunities catalog with at least three grants per ZIP."
+          onClick={() => handleQueueJob("comprehensive")}
+          disabled={createJobMutation.isPending}
+          loading={createJobMutation.isPending && createJobMutation.variables?.type === "comprehensive"}
+        />
+        <QuickActionCard
+          icon={Sparkles}
+          title="Profile enrichment"
+          description="Refresh profile sections using AI and recent context."
+          onClick={() =>
+            handleQueueJob("profile_enrichment", {
+              sections: selectedSections,
+              prompt: enrichmentPrompt || undefined,
+            })
+          }
+          disabled={selectedSections.length === 0 || (!isAdmin && !activeProfileId)}
+          loading={createJobMutation.isPending && createJobMutation.variables?.type === "profile_enrichment"}
+        />
+      </section>
+
+      {/* Live Progress Meters for Running Jobs */}
+      {runningJobs.length > 0 && (
+        <section className="space-y-4">
+          {runningJobs.slice(0, 3).map((job) => (
+            <CrawlerProgressMeter key={job.id} jobId={job.id} />
+          ))}
+        </section>
+      )}
+
+      {profileForTasks ? (
+        <AutomationTasksPanel
+          tasks={tasksForPanel}
+          isLoading={tasksQuery.isLoading && !tasksQuery.data}
+          isFetching={tasksQuery.isFetching}
+          onToggleTask={handleToggleTaskStatus}
+          updatingTaskId={updatingTaskId}
+          isUpdating={isUpdatingTask}
+          onRefresh={() => tasksQuery.refetch()}
+          profileName={automationProfileName}
+        />
+      ) : isAdmin ? (
+        <Card className="border border-dashed border-slate-300 bg-slate-50/50 shadow-none">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base text-slate-700">Select a profile to view AI tasks</CardTitle>
+            <CardDescription>
+              Choose a profile above to surface Anya follow-ups alongside automation jobs.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      ) : null}
+
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        <OverallMetricsCard
+          overall={overallMetrics}
+          generatedAt={metricsQuery.data?.generated_at ?? null}
+          isLoading={metricsQuery.isFetching}
+        />
+        {metricsQuery.isError ? (
+          <Card className="border border-red-200 bg-red-50 text-sm text-red-700 shadow-sm">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Metrics unavailable</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {metricsQuery.error instanceof Error
+                ? metricsQuery.error.message
+                : "Unable to load crawler metrics right now."}
+            </CardContent>
+          </Card>
+        ) : null}
+        {metricsForDisplay.map((metric) => (
+          <MetricCard
+            key={metric.type}
+            metric={metric}
+            onInspect={handleInspectJob}
+            inspectionState={inspectionState}
+            isLoading={metricsLoading && !metric.counts}
+          />
+        ))}
+        <LiveQueueCard
+          runningJobs={runningJobs}
+          recentFailures={recentFailures}
+          onInspect={handleInspectJob}
+          onRetry={handleRetryJob}
+          onCancel={handleCancelJob}
+          retryingJobId={retryingJobId}
+          cancellingJobId={cancellingJobId}
+        />
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <Card className="border border-slate-200 bg-white/80 shadow-sm">
+          <CardHeader className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <CardTitle className="text-lg">Automation queue</CardTitle>
+              <CardDescription>Track crawlers, AI enrichment, and pipeline automation jobs.</CardDescription>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <Select value={jobTypeFilter} onValueChange={setJobTypeFilter}>
+                <SelectTrigger className="w-[170px]">
+                  <SelectValue placeholder="Filter by type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All types</SelectItem>
+                  {Object.entries(JOB_LABELS).map(([value, label]) => (
+                    <SelectItem key={value} value={value}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={jobStatusFilter} onValueChange={setJobStatusFilter}>
+                <SelectTrigger className="w-[150px]">
+                  <SelectValue placeholder="Status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All statuses</SelectItem>
+                  {Object.keys(STATUS_VARIANTS).map((status) => (
+                    <SelectItem key={status} value={status}>
+                      {status.replace(/_/g, " ")}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {isAdmin ? (
+                <Select value={profileFilter} onValueChange={setProfileFilter}>
+                  <SelectTrigger className="w-[220px]">
+                    <SelectValue placeholder="Filter by profile" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All profiles</SelectItem>
+                    {(profilesQuery.data ?? []).map((profile) => (
+                      <SelectItem key={profile.id} value={profile.id}>
+                        {profile.display_name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : null}
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            {jobsQuery.isLoading ? (
+              <div className="flex min-h-[300px] items-center justify-center text-sm text-slate-600">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin text-blue-600" />
+                Loading jobs…
+              </div>
+            ) : !hasJobs ? (
+              <div className="flex min-h-[300px] items-center justify-center text-sm text-slate-600">
+                No automation jobs found for the selected filters.
+              </div>
+            ) : (
+              <ScrollArea className="h-[360px]">
+                <table className="w-full table-fixed border-collapse text-sm">
+                  <thead className="bg-slate-50 text-slate-500 uppercase text-xs tracking-wide">
+                    <tr>
+                      <th className="px-4 py-3 text-left w-36">Job</th>
+                      <th className="px-4 py-3 text-left w-36">Profile</th>
+                      <th className="px-4 py-3 text-left w-24">Status</th>
+                      <th className="px-4 py-3 text-left w-20">Results</th>
+                      <th className="px-4 py-3 text-left w-40">Created</th>
+                      <th className="px-4 py-3 text-left">Notes</th>
+                      <th className="px-4 py-3 text-right w-24"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {jobs.map((job) => {
+                      const jobSummary = summarizeJob(job)
+                      const parameterSummary = describeJobParameters(job)
+                      return (
+                        <tr key={job.id} className="hover:bg-slate-50/60">
+                          <td className="px-4 py-3">
+                            <div className="flex flex-col gap-1">
+                              <JobTypeBadge type={job.type} />
+                              <span className="font-mono text-[11px] text-slate-500">{job.id.slice(0, 10)}…</span>
+                              {job.retried_from_job_id ? (
+                                <span className="text-[10px] uppercase tracking-wide text-slate-400">
+                                  Retry of {String(job.retried_from_job_id).slice(0, 10)}…
+                                </span>
+                              ) : null}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex flex-col gap-1 text-xs text-slate-600">
+                              <span>{job.profile_id ?? "—"}</span>
+                              <span className="text-[11px] text-slate-400">{job.organization_id ?? "org: n/a"}</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <JobStatusBadge status={job.status} />
+                          </td>
+                          <td className="px-4 py-3 text-xs text-slate-600">
+                            {formatNumber(typeof job.result_count === "number" ? job.result_count : null) ?? "—"}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-slate-600">
+                            <div className="flex flex-col gap-1">
+                              <span>{job.created_at ?? "—"}</span>
+                              {job.started_at ? (
+                                <span className="text-[11px] text-slate-400">Started {job.started_at}</span>
+                              ) : null}
+                              {job.last_retry_at ? (
+                                <span className="text-[11px] text-slate-400">
+                                  Last retry {formatDistanceToNow(new Date(job.last_retry_at), { addSuffix: true })}
+                                </span>
+                              ) : null}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-xs text-slate-600">
+                            {job.error ? (
+                              <span className="text-red-600">{job.error}</span>
+                            ) : jobSummary || parameterSummary ? (
+                              <div className="flex flex-col gap-1">
+                                {jobSummary ? <span>{jobSummary}</span> : null}
+                                {typeof job.retry_count === "number" && job.retry_count > 0 ? (
+                                  <span className="text-[11px] text-slate-400">Retry attempts: {job.retry_count}</span>
+                                ) : null}
+                                {job.retried_from_job_id ? (
+                                  <span className="text-[11px] text-slate-400">
+                                    Retry of job {String(job.retried_from_job_id).slice(0, 10)}…
+                                  </span>
+                                ) : null}
+                                {parameterSummary ? (
+                                  <span className="text-[11px] text-slate-400">{parameterSummary}</span>
+                                ) : null}
+                              </div>
+                            ) : (
+                              <span className="text-slate-400">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <div className="flex justify-end gap-2">
+                              {job.status === "queued" && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="text-xs"
+                                  onClick={() => handleCancelJob(job.id)}
+                                  disabled={cancellingJobId === job.id}
+                                >
+                                  {cancellingJobId === job.id ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                <XCircle className="h-3 w-3" />
+                                  )}
+                                  {cancellingJobId === job.id ? "Cancelling…" : "Cancel"}
+                                </Button>
+                              )}
+                              {(job.status === "failed" || job.status === "cancelled") && (
+                                <Button
+                                  variant="destructive"
+                                  size="sm"
+                                  className="text-xs gap-2"
+                                  onClick={() => handleRetryJob(job.id)}
+                                  disabled={retryingJobId === job.id}
+                                >
+                                  {retryingJobId === job.id ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <RefreshCw className="h-3 w-3" />
+                                  )}
+                                  {retryingJobId === job.id ? "Retrying…" : "Retry"}
+                                </Button>
+                              )}
+                              <Button variant="outline" size="sm" onClick={() => handleInspectJob(job)}>
+                                Inspect
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </ScrollArea>
+            )}
+          </CardContent>
+        </Card>
+
+        <div className="space-y-4">
+          <Card className="border border-slate-200 bg-white/80 shadow-sm">
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Bot className="h-4 w-4 text-blue-600" />
+                Pipeline automation
+              </CardTitle>
+              <CardDescription>Advance grants, record AI reasoning, and capture human handoffs.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {isAdmin ? (
+                <Select value={selectedProfile} onValueChange={setSelectedProfile}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select profile to run automation" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Use organization grants</SelectItem>
+                    {(profilesQuery.data ?? []).map((profile) => (
+                      <SelectItem key={profile.id} value={profile.id}>
+                        {profile.display_name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : null}
+                <PipelineAutomationPanel
+                  organizationId={profileDetailQuery.data?.organization_id ?? selectedProfileEntity?.organization_id ?? null}
+                  profileId={isAdmin ? (selectedProfile && selectedProfile !== "none" ? selectedProfile : undefined) : activeProfileId}
+                />
+            </CardContent>
+          </Card>
+
+          <Card className="border border-slate-200 bg-white/80 shadow-sm">
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Target className="h-4 w-4 text-blue-600" />
+                Item funding lookup
+              </CardTitle>
+              <CardDescription>Queue the item crawler to research funding for specific equipment or purchases.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Input
+                value={itemQuery}
+                onChange={(event) => setItemQuery(event.target.value)}
+                placeholder='e.g. "STEM lab laptops"'
+              />
+              <Button
+                className="w-full bg-blue-600 hover:bg-blue-700 gap-2"
+                onClick={() =>
+                  handleQueueJob("item_search", {
+                    item: itemQuery,
+                  })
+                }
+                disabled={!itemQuery.trim() || (!isAdmin && !activeProfileId)}
+              >
+                {createJobMutation.isPending && createJobMutation.variables?.type === "item_search" ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Zap className="h-4 w-4" />
+                )}
+                Run item search
+              </Button>
+              <p className="text-xs text-slate-500">
+                Uses profile demographics, assistance flags, and location to prioritise relevant funding. Results appear
+                under Funding Opportunities.
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card className="border border-slate-200 bg-white/80 shadow-sm">
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-blue-600" />
+                Profile enrichment
+              </CardTitle>
+              <CardDescription>Queue AI to enrich selected sections with structured data pulled from recent context.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="space-y-2">
+                <p className="text-xs uppercase tracking-wide text-slate-500">Target sections</p>
+                <div className="flex flex-wrap gap-2">
+                  {sectionOptions.map((section) => {
+                    const isActive = selectedSections.includes(section.key)
+                    return (
+                      <Button
+                        key={section.key}
+                        variant={isActive ? "secondary" : "outline"}
+                        size="sm"
+                        className="text-xs"
+                        onClick={() =>
+                          setSelectedSections((prev) =>
+                            isActive ? prev.filter((key) => key !== section.key) : [...prev, section.key],
+                          )
+                        }
+                      >
+                        {section.label}
+                      </Button>
+                    )
+                  })}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <p className="text-xs uppercase tracking-wide text-slate-500">Optional instructions</p>
+                <Textarea
+                  value={enrichmentPrompt}
+                  onChange={(event) => setEnrichmentPrompt(event.target.value)}
+                  placeholder="Highlight specific details to extract, e.g. “focus on medical licensing and board certifications.”"
+                  rows={3}
+                />
+              </div>
+              <Button
+                className="w-full bg-blue-600 hover:bg-blue-700 gap-2"
+                onClick={() =>
+                  handleQueueJob("profile_enrichment", {
+                    sections: selectedSections,
+                    prompt: enrichmentPrompt || undefined,
+                  })
+                }
+                disabled={selectedSections.length === 0 || (!isAdmin && !activeProfileId)}
+              >
+                {createJobMutation.isPending && createJobMutation.variables?.type === "profile_enrichment" ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Sparkles className="h-4 w-4" />
+                )}
+                Enrich profile
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </section>
+
+      <JobDetailsDialog
+        job={selectedJob}
+        onOpenChange={() => setSelectedJob(null)}
+        onRetry={handleRetryJob}
+        retrying={retryJobMutation.isPending && retryJobMutation.variables === selectedJob?.id}
+        onCancel={handleCancelJob}
+        cancelling={cancelJobMutation.isPending && cancelJobMutation.variables?.jobId === selectedJob?.id}
+        onInspectJob={handleInspectJob}
+      />
+    </div>
+  )
+}
