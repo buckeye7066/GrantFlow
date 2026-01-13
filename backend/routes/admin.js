@@ -1078,10 +1078,11 @@ router.post('/seed-baseline-profiles', async (req, res) => {
     const grantsCount = req.db.prepare('SELECT COUNT(*) as count FROM grants').get()?.count || 0;
     const oppsCount = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get()?.count || 0;
     const docsCount = req.db.prepare('SELECT COUNT(*) as count FROM documents').get()?.count || 0;
+    const profileDocsCount = req.db.prepare('SELECT COUNT(*) as count FROM profile_documents').get()?.count || 0;
 
     res.json({
       success: true,
-      message: `Seeded baseline data. Profiles: ${before} → ${after}. Sections: ${sectionsCount}. Orgs: ${orgsCount}. Grants: ${grantsCount}. Docs: ${docsCount}.`,
+      message: `Seeded baseline data. Profiles: ${before} → ${after}. Sections: ${sectionsCount}. Orgs: ${orgsCount}. Grants: ${grantsCount}. Docs: ${docsCount}. DocLinks: ${profileDocsCount}.`,
       counts: { 
         profiles_before: before, 
         profiles_after: after, 
@@ -1089,13 +1090,15 @@ router.post('/seed-baseline-profiles', async (req, res) => {
         organizations: orgsCount,
         grants: grantsCount,
         opportunities: oppsCount,
-        documents: docsCount
+        documents: docsCount,
+        profile_document_links: profileDocsCount
       },
       seed_profiles: payload.profiles.length,
       seed_sections: payload.sections.length,
       seed_organizations: payload.organizations?.length ?? 0,
       seed_grants: payload.grants?.length ?? 0,
       seed_documents: payload.documents?.length ?? 0,
+      seed_profile_documents: payload.profile_documents?.length ?? 0,
     });
   } catch (error) {
     console.error('[admin/seed-baseline-profiles] Error:', error);
