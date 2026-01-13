@@ -58,6 +58,21 @@ const grants = db.prepare(`
 
 console.log(`Found ${grants.length} grants`);
 
+// Export documents
+const documents = db.prepare(`
+  SELECT id, profile_id, name, type, file_url, mime_type, extracted_text, processing_status, status, notes
+  FROM documents
+`).all();
+
+console.log(`Found ${documents.length} documents`);
+
+// Export profile_documents links
+const profileDocs = db.prepare(`
+  SELECT profile_id, document_id FROM profile_documents
+`).all();
+
+console.log(`Found ${profileDocs.length} profile-document links`);
+
 // Create seed payload
 const payload = {
   exported_at: new Date().toISOString(),
@@ -79,7 +94,20 @@ const payload = {
   organizations: organizations,
   profile_organizations: profileOrgs,
   funding_opportunities: opportunities,
-  grants: grants
+  grants: grants,
+  documents: documents.map(d => ({
+    id: d.id,
+    profile_id: d.profile_id,
+    name: d.name,
+    type: d.type || 'profile_document',
+    file_url: d.file_url,
+    mime_type: d.mime_type,
+    extracted_text: d.extracted_text,
+    processing_status: d.processing_status || 'completed',
+    status: d.status || 'active',
+    notes: d.notes
+  })),
+  profile_documents: profileDocs
 };
 
 // Write to seed file (in root seed/ directory)
@@ -95,5 +123,7 @@ console.log(`  - ${payload.profiles.length} profiles`);
 console.log(`  - ${payload.sections.length} sections`);
 console.log(`  - ${payload.organizations.length} organizations`);
 console.log(`  - ${payload.grants.length} grants`);
+console.log(`  - ${payload.documents.length} documents`);
+console.log(`  - ${payload.profile_documents.length} profile-document links`);
 
 db.close();

@@ -1027,6 +1027,47 @@ router.post('/seed-baseline-profiles', async (req, res) => {
           });
         });
       }
+
+      // 7. Seed documents (if present)
+      if (Array.isArray(payload.documents)) {
+        const upsertDoc = req.db.prepare(`
+          INSERT INTO documents (id, profile_id, name, type, file_url, mime_type, extracted_text, processing_status, status, notes)
+          VALUES (@id, @profile_id, @name, @type, @file_url, @mime_type, @extracted_text, @processing_status, @status, @notes)
+          ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            extracted_text = excluded.extracted_text,
+            processing_status = excluded.processing_status,
+            status = excluded.status,
+            updated_at = CURRENT_TIMESTAMP
+        `);
+        
+        payload.documents.forEach((doc) => {
+          upsertDoc.run({
+            id: doc.id,
+            profile_id: doc.profile_id,
+            name: doc.name,
+            type: doc.type ?? 'profile_document',
+            file_url: doc.file_url ?? null,
+            mime_type: doc.mime_type ?? 'application/pdf',
+            extracted_text: doc.extracted_text ?? null,
+            processing_status: doc.processing_status ?? 'completed',
+            status: doc.status ?? 'active',
+            notes: doc.notes ?? null,
+          });
+        });
+      }
+
+      // 8. Seed profile-document links (if present)
+      if (Array.isArray(payload.profile_documents)) {
+        const upsertProfileDoc = req.db.prepare(`
+          INSERT OR IGNORE INTO profile_documents (profile_id, document_id)
+          VALUES (?, ?)
+        `);
+        
+        payload.profile_documents.forEach((link) => {
+          upsertProfileDoc.run(link.profile_id, link.document_id);
+        });
+      }
     });
 
     tx();
@@ -1036,22 +1077,25 @@ router.post('/seed-baseline-profiles', async (req, res) => {
     const orgsCount = req.db.prepare('SELECT COUNT(*) as count FROM organizations').get()?.count || 0;
     const grantsCount = req.db.prepare('SELECT COUNT(*) as count FROM grants').get()?.count || 0;
     const oppsCount = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get()?.count || 0;
+    const docsCount = req.db.prepare('SELECT COUNT(*) as count FROM documents').get()?.count || 0;
 
     res.json({
       success: true,
-      message: `Seeded baseline data. Profiles: ${before} → ${after}. Sections: ${sectionsCount}. Orgs: ${orgsCount}. Grants: ${grantsCount}.`,
+      message: `Seeded baseline data. Profiles: ${before} → ${after}. Sections: ${sectionsCount}. Orgs: ${orgsCount}. Grants: ${grantsCount}. Docs: ${docsCount}.`,
       counts: { 
         profiles_before: before, 
         profiles_after: after, 
         sections: sectionsCount,
         organizations: orgsCount,
         grants: grantsCount,
-        opportunities: oppsCount
+        opportunities: oppsCount,
+        documents: docsCount
       },
       seed_profiles: payload.profiles.length,
       seed_sections: payload.sections.length,
       seed_organizations: payload.organizations?.length ?? 0,
       seed_grants: payload.grants?.length ?? 0,
+      seed_documents: payload.documents?.length ?? 0,
     });
   } catch (error) {
     console.error('[admin/seed-baseline-profiles] Error:', error);
