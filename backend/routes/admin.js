@@ -931,14 +931,22 @@ router.post('/seed-baseline-profiles', async (req, res) => {
 
     const tx = req.db.transaction(() => {
       // 1. Seed organizations first (if present)
+      // Allowed applicant_types per production schema CHECK constraint
+      const validApplicantTypes = ['individual_need', 'family', 'organization', 'nonprofit', 'small_business', 'student', 'college_student', 'high_school_student', 'medical_assistance', 'government', 'other'];
+      
       if (Array.isArray(payload.organizations)) {
         payload.organizations.forEach((org) => {
+          // Map 'individual' to 'individual_need' for production schema compatibility
+          let applicantType = org.applicant_type ?? 'individual_need';
+          if (!validApplicantTypes.includes(applicantType)) {
+            applicantType = 'individual_need';
+          }
           upsertOrg.run({
             id: org.id,
             name: org.name,
             email: org.email ?? null,
             phone: org.phone ?? null,
-            applicant_type: org.applicant_type ?? 'individual',
+            applicant_type: applicantType,
           });
         });
       }
