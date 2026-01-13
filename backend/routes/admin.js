@@ -879,15 +879,15 @@ router.post('/seed-baseline-profiles', async (req, res) => {
     `);
 
     // Prepare organization upsert if organizations exist in payload
+    // Note: only insert core fields that exist in schema
     const upsertOrg = req.db.prepare(`
-      INSERT INTO organizations (id, name, email, phone, applicant_type, status, created_at, updated_at)
-      VALUES (@id, @name, @email, @phone, @applicant_type, @status, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      INSERT INTO organizations (id, name, email, phone, applicant_type, created_at, updated_at)
+      VALUES (@id, @name, @email, @phone, @applicant_type, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         email = excluded.email,
         phone = excluded.phone,
         applicant_type = excluded.applicant_type,
-        status = excluded.status,
         updated_at = CURRENT_TIMESTAMP
     `);
 
@@ -939,7 +939,6 @@ router.post('/seed-baseline-profiles', async (req, res) => {
             email: org.email ?? null,
             phone: org.phone ?? null,
             applicant_type: org.applicant_type ?? 'individual',
-            status: org.status ?? 'active',
           });
         });
       }
