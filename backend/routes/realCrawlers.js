@@ -358,7 +358,7 @@ router.post('/run', ensureAuth, async (req, res) => {
     // Prefer DB-backed profile_id so we always use the full 22-page profile_sections context.
     let profile = null
     if (profile_id) {
-      profile = getProfileWithLocation(db, profile_id)
+      profile = await getProfileWithLocation(db, profile_id)
     } else {
       profile = profile_data
     }
@@ -612,7 +612,7 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
   }
   
   const db = req.db
-  const profile = getProfileWithLocation(db, profile_id)
+  const profile = await getProfileWithLocation(db, profile_id)
   
   if (!profile) {
     return res.status(404).json({ 

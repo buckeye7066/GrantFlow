@@ -33,26 +33,26 @@ function requireProfileAccess(req, res, profileId) {
  * Match a profile to grants in its organization pipeline.
  * Returns: [{ grant_id, title, funder, status, deadline, match_score, match_reasons, funding_opportunity_id }]
  */
-router.get('/profile/:profileId/grants', (req, res) => {
+router.get('/profile/:profileId/grants', async (req, res) => {
   const profileId = req.params.profileId
   const auth = requireProfileAccess(req, res, profileId)
   if (!auth) return
 
   try {
-    const profileRow = req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
+    const profileRow = await req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
     if (!profileRow) {
       return res.status(404).json({ error: 'Profile not found' })
     }
 
     // Load full profile context (sections + signals) so scoring uses the 22-page application data.
-    const profileContext = loadProfileContext(req.db, profileId)
+    const profileContext = await loadProfileContext(req.db, profileId)
 
     // Use profile.organization_id to fetch the pipeline grants.
     if (!profileRow.organization_id) {
       return res.json([])
     }
 
-    const rows = req.db
+    const rows = await req.db
       .prepare(
         `
           SELECT
@@ -131,13 +131,13 @@ router.get('/profile/:profileId/grants', (req, res) => {
  *
  * GET /api/matching/profile/:profileId/opportunities?min_score=60&limit=200&q=keyword
  */
-router.get('/profile/:profileId/opportunities', (req, res) => {
+router.get('/profile/:profileId/opportunities', async (req, res) => {
   const profileId = req.params.profileId
   const auth = requireProfileAccess(req, res, profileId)
   if (!auth) return
 
   try {
-    const profileRow = req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
+    const profileRow = await req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
     if (!profileRow) {
       return res.status(404).json({ error: 'Profile not found' })
     }
@@ -146,19 +146,21 @@ router.get('/profile/:profileId/opportunities', (req, res) => {
     const limit = Math.min(Math.max(Number.parseInt(req.query.limit ?? '200', 10) || 200, 1), 2000)
     const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : ''
 
-    const profileContext = loadProfileContext(req.db, profileId)
+    const profileContext = await loadProfileContext(req.db, profileId)
     const profileState = profileContext?.signals?.location?.state ?? null
 
-    const conditions = ['is_active = 1']
+    const conditions = ['is_active = ?']
     const params = []
+    params.push(true)
 
     // Keep results current: no expired deadlines unless rolling/ongoing/NULL.
-    conditions.push('(deadline_type IN ("rolling","ongoing") OR deadline IS NULL OR deadline >= date("now"))')
+    conditions.push(`(deadline_type IN ('rolling','ongoing') OR deadline IS NULL OR deadline >= ${req.db?.dialect === 'postgres' ? 'CURRENT_DATE' : "date('now')"})`)
 
     // Default geography behavior: state + national + NULL state.
     if (profileState && typeof profileState === 'string' && profileState.length === 2) {
-      conditions.push('(state = ? OR is_national = 1 OR state IS NULL)')
+      conditions.push('(state = ? OR is_national = ? OR state IS NULL)')
       params.push(profileState)
+      params.push(true)
     }
 
     if (q) {
@@ -170,7 +172,7 @@ router.get('/profile/:profileId/opportunities', (req, res) => {
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
 
     // Candidate set: prioritize upcoming deadlines first, then recently updated.
-    const candidates = req.db
+    const candidates = await req.db
       .prepare(
         `
           SELECT *

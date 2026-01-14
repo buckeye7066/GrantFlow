@@ -71,7 +71,7 @@ async function withTimeout(promise, ms, label) {
   }
 }
 
-function ensureAdminRequest(req, res) {
+async function ensureAdminRequest(req, res) {
   const user = req.user ?? {};
 
   // Fast path: middleware already marked admin.
@@ -86,16 +86,16 @@ function ensureAdminRequest(req, res) {
     const resolvedUserId = user?.userId
       ? user.userId
       : user?.profileId
-        ? db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(user.profileId)?.user_id
+        ? (await db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(user.profileId))?.user_id
         : null;
 
     if (resolvedUserId) {
-      const row = db
+      const row = await db
         .prepare('SELECT is_admin, primary_email FROM users WHERE id = ?')
         .get(resolvedUserId);
       const email = String(row?.primary_email || '').toLowerCase();
 
-      if (row?.is_admin === 1 || row?.is_admin === true) {
+      if (row?.is_admin === true || row?.is_admin === 1) {
         return true;
       }
 
@@ -207,7 +207,7 @@ function getOpenAI() {
 // GET /api/admin/openai/verify
 // Verifies that the server-side OpenAI key is present and can successfully call the API.
 router.get('/openai/verify', async (req, res) => {
-  if (!ensureAdminRequest(req, res)) return;
+  if (!(await ensureAdminRequest(req, res))) return;
 
   try {
     const { openai, diagnostics } = createOpenAIClient();
@@ -240,7 +240,7 @@ router.get('/openai/verify', async (req, res) => {
 // Verifies a key provided in the request body (one-off), without saving it to env or disk.
 // Body: { "apiKey": "sk-..." }
 router.post('/openai/verify-key', async (req, res) => {
-  if (!ensureAdminRequest(req, res)) return;
+  if (!(await ensureAdminRequest(req, res))) return;
 
   const apiKey = typeof req.body?.apiKey === 'string' ? req.body.apiKey.trim() : '';
   if (!apiKey) {
@@ -282,7 +282,7 @@ router.post('/openai/verify-key', async (req, res) => {
 // This avoids env-var tooling/restarts for local/dev use. It does NOT persist across restarts.
 // Body: { "apiKey": "sk-..." }
 router.post('/openai/apply-key', async (req, res) => {
-  if (!ensureAdminRequest(req, res)) return;
+  if (!(await ensureAdminRequest(req, res))) return;
 
   const apiKey = typeof req.body?.apiKey === 'string' ? req.body.apiKey.trim() : '';
   const persist = Boolean(req.body?.persist);
@@ -302,7 +302,7 @@ router.post('/openai/apply-key', async (req, res) => {
   if (persist) {
     try {
       const encrypted = encryptRuntimeSecret(apiKey);
-      req.db
+      await req.db
         .prepare(
           `
             INSERT INTO app_runtime_secrets (key, value_ciphertext, iv, tag, updated_at)
@@ -357,10 +357,10 @@ router.post('/openai/apply-key', async (req, res) => {
 // GET /api/admin/openai/runtime-secret-status
 // Shows whether an encrypted runtime key is persisted in DB (never returns the key).
 router.get('/openai/runtime-secret-status', async (req, res) => {
-  if (!ensureAdminRequest(req, res)) return;
+  if (!(await ensureAdminRequest(req, res))) return;
 
   try {
-    const row = req.db
+    const row = await req.db
       .prepare(
         `
           SELECT key, updated_at
@@ -385,7 +385,7 @@ router.get('/openai/runtime-secret-status', async (req, res) => {
 // Persists the currently active server-side OpenAI key (process.env.OPENAI_API_KEY) into DB (encrypted),
 // so it can be restored on restart. Never returns the key.
 router.post('/openai/persist-current', async (req, res) => {
-  if (!ensureAdminRequest(req, res)) return;
+  if (!(await ensureAdminRequest(req, res))) return;
 
   const apiKey = typeof process.env.OPENAI_API_KEY === 'string' ? process.env.OPENAI_API_KEY.trim() : ''
   if (!apiKey) {
@@ -401,7 +401,7 @@ router.post('/openai/persist-current', async (req, res) => {
     await openai.models.list()
 
     const encrypted = encryptRuntimeSecret(apiKey)
-    req.db
+    await req.db
       .prepare(
         `
           INSERT INTO app_runtime_secrets (key, value_ciphertext, iv, tag, updated_at)
@@ -415,7 +415,7 @@ router.post('/openai/persist-current', async (req, res) => {
       )
       .run(encrypted.value_ciphertext, encrypted.iv, encrypted.tag)
 
-    const status = req.db
+    const status = await req.db
       .prepare(
         `
           SELECT updated_at
@@ -852,9 +852,9 @@ router.post('/reattach-users', async (req, res) => {
 // GET /api/admin/diagnostics - System diagnostics (admin only)
 router.get('/diagnostics', async (req, res) => {
   try {
-    if (!ensureAdminRequest(req, res)) return;
+    if (!(await ensureAdminRequest(req, res))) return;
 
-    const diagnostics = getSystemDiagnostics(req.db);
+    const diagnostics = await getSystemDiagnostics(req.db);
     res.json(diagnostics);
   } catch (error) {
     console.error('[admin/diagnostics] Error:', error);
@@ -869,9 +869,9 @@ router.get('/diagnostics', async (req, res) => {
  * Geo Crawl support endpoints (admin-only)
  * These power the Geo Crawl UI state dropdown and scoping selectors.
  */
-router.get('/geo/states', (req, res) => {
+router.get('/geo/states', async (req, res) => {
   try {
-    if (!ensureAdminRequest(req, res)) return;
+    if (!(await ensureAdminRequest(req, res))) return;
     const index = buildZipStateIndex();
     const states = Array.from(index.keys())
       .sort()
@@ -883,9 +883,9 @@ router.get('/geo/states', (req, res) => {
   }
 });
 
-router.get('/geo/state/:state/zips', (req, res) => {
+router.get('/geo/state/:state/zips', async (req, res) => {
   try {
-    if (!ensureAdminRequest(req, res)) return;
+    if (!(await ensureAdminRequest(req, res))) return;
     const state = String(req.params.state || '').toUpperCase();
     const index = buildZipStateIndex();
     res.json({ zips: index.get(state) ?? [] });
@@ -895,9 +895,9 @@ router.get('/geo/state/:state/zips', (req, res) => {
   }
 });
 
-router.get('/geo/state/:state/counties', (req, res) => {
+router.get('/geo/state/:state/counties', async (req, res) => {
   try {
-    if (!ensureAdminRequest(req, res)) return;
+    if (!(await ensureAdminRequest(req, res))) return;
     const state = String(req.params.state || '').toUpperCase();
     const countiesByState = loadCountiesByState();
     const list = Array.isArray(countiesByState?.[state]) ? countiesByState[state] : [];
@@ -908,9 +908,9 @@ router.get('/geo/state/:state/counties', (req, res) => {
   }
 });
 
-router.post('/geo/state/:state/index-counties', (req, res) => {
+router.post('/geo/state/:state/index-counties', async (req, res) => {
   try {
-    if (!ensureAdminRequest(req, res)) return;
+    if (!(await ensureAdminRequest(req, res))) return;
     // Counties are shipped from a bundled JSON file. This endpoint exists so the UI can
     // confirm availability / future-proof for DB-backed indexing.
     const job = { id: crypto.randomUUID(), status: 'completed' };
@@ -923,7 +923,7 @@ router.post('/geo/state/:state/index-counties', (req, res) => {
 
 router.get('/geo/crawl/status', async (req, res) => {
   try {
-    if (!ensureAdminRequest(req, res)) return;
+    if (!(await ensureAdminRequest(req, res))) return;
     const latest = await req.db
       .prepare(
         `
@@ -945,7 +945,7 @@ router.get('/geo/crawl/status', async (req, res) => {
 
 router.post('/geo/crawl/start', async (req, res) => {
   try {
-    if (!ensureAdminRequest(req, res)) return;
+    if (!(await ensureAdminRequest(req, res))) return;
     const payload = req.body ?? {};
 
     // IMPORTANT: crawler_jobs.type is CHECK-constrained in production. Use an allowed type.
@@ -1023,7 +1023,7 @@ router.get('/db-stats', async (req, res) => {
 // POST /api/admin/seed-opportunities - Seed real funding opportunities
 router.post('/seed-opportunities', async (req, res) => {
   try {
-    if (!ensureAdminRequest(req, res)) return;
+    if (!(await ensureAdminRequest(req, res))) return;
     const { totalLoaded } = seedRealOpportunities(req.db);
     const totalInDb = Number((await req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get())?.count || 0);
     res.json({ success: true, message: `Seeded ${totalLoaded} opportunities`, total_in_database: totalInDb, loaded_from_files: totalLoaded });
@@ -1036,7 +1036,7 @@ router.post('/seed-opportunities', async (req, res) => {
 // POST /api/admin/seed-assistance-directories - Seed state 211 + national assistance directories
 router.post('/seed-assistance-directories', async (req, res) => {
   try {
-    if (!ensureAdminRequest(req, res)) return;
+    if (!(await ensureAdminRequest(req, res))) return;
     const before = Number(
       (await req.db
         .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")
@@ -1064,7 +1064,7 @@ router.post('/seed-assistance-directories', async (req, res) => {
 // POST /api/admin/repair-all-profiles - Repair all profiles by creating missing sections
 router.post('/repair-all-profiles', async (req, res) => {
   try {
-    if (!ensureAdminRequest(req, res)) return;
+    if (!(await ensureAdminRequest(req, res))) return;
 
     // Import canonical sections
     const { supportedSectionKeys } = await import('../prompts/profileSections.js');
@@ -1146,7 +1146,7 @@ router.post('/repair-all-profiles', async (req, res) => {
 // POST /api/admin/sync-profiles - Sync designated profiles
 router.post('/sync-profiles', async (req, res) => {
   try {
-    ensureDesignatedProfiles(req.db);
+    await ensureDesignatedProfiles(req.db);
     const profilesCount = Number((await req.db.prepare('SELECT COUNT(*) as count FROM profiles').get())?.count || 0);
     const sectionsCount = Number((await req.db.prepare('SELECT COUNT(*) as count FROM profile_sections').get())?.count || 0);
     res.json({ success: true, message: 'Profiles synchronized', profiles: profilesCount, total_sections: sectionsCount });
@@ -1166,7 +1166,7 @@ router.post('/seed-baseline-profiles', async (req, res) => {
     const expectedSeedKey = process.env.SEED_KEY || 'grantflow-seed-2026';
     const isSeedKeyValid = seedKey && seedKey === expectedSeedKey;
     
-    if (!isSeedKeyValid && !ensureAdminRequest(req, res)) return;
+    if (!isSeedKeyValid && !(await ensureAdminRequest(req, res))) return;
 
     const seedPath = join(repoRootDir, 'seed', 'baseline-profiles.json');
     if (!fs.existsSync(seedPath)) {
@@ -1821,7 +1821,7 @@ router.get('/national-crawl/status', async (req, res) => {
  */
 router.get('/audit-logs', async (req, res) => {
   try {
-    if (!ensureAdminRequest(req, res)) return;
+    if (!(await ensureAdminRequest(req, res))) return;
     
     const {
       category,
@@ -1862,7 +1862,7 @@ router.get('/audit-logs', async (req, res) => {
  */
 router.get('/audit-logs/summary', async (req, res) => {
   try {
-    if (!ensureAdminRequest(req, res)) return;
+    if (!(await ensureAdminRequest(req, res))) return;
     
     const days = Math.min(parseInt(req.query.days) || 7, 90);
     const summary = getAuditSummary(req.db, { days });
@@ -1880,7 +1880,7 @@ router.get('/audit-logs/summary', async (req, res) => {
  */
 router.post('/audit-logs/cleanup', async (req, res) => {
   try {
-    if (!ensureAdminRequest(req, res)) return;
+    if (!(await ensureAdminRequest(req, res))) return;
     
     const retentionDays = Math.min(parseInt(req.body.retentionDays) || 90, 365);
     const result = cleanupAuditLogs(req.db, { retentionDays });
@@ -1910,7 +1910,7 @@ router.post('/audit-logs/cleanup', async (req, res) => {
  */
 router.post('/feature-flags/init', async (req, res) => {
   try {
-    if (!ensureAdminRequest(req, res)) return;
+    if (!(await ensureAdminRequest(req, res))) return;
     
     initializeFeatureFlags(req.db);
     
@@ -1933,7 +1933,7 @@ router.post('/feature-flags/init', async (req, res) => {
  */
 router.get('/feature-flags', async (req, res) => {
   try {
-    if (!ensureAdminRequest(req, res)) return;
+    if (!(await ensureAdminRequest(req, res))) return;
     
     const flags = getAllFlags(req.db);
     res.json({ flags });
@@ -1972,7 +1972,7 @@ router.get('/feature-flags/:key/check', async (req, res) => {
  */
 router.patch('/feature-flags/:key', async (req, res) => {
   try {
-    if (!ensureAdminRequest(req, res)) return;
+    if (!(await ensureAdminRequest(req, res))) return;
     
     const { key } = req.params;
     const { enabled, description, percentage, metadata } = req.body;
@@ -2001,7 +2001,7 @@ router.patch('/feature-flags/:key', async (req, res) => {
  */
 router.post('/feature-flags/:key/override', async (req, res) => {
   try {
-    if (!ensureAdminRequest(req, res)) return;
+    if (!(await ensureAdminRequest(req, res))) return;
     
     const { key } = req.params;
     const { userId, profileId, enabled, expiresInDays } = req.body;
@@ -2035,7 +2035,7 @@ router.post('/feature-flags/:key/override', async (req, res) => {
  */
 router.delete('/feature-flags/:key/override', async (req, res) => {
   try {
-    if (!ensureAdminRequest(req, res)) return;
+    if (!(await ensureAdminRequest(req, res))) return;
     
     const { key } = req.params;
     const { userId, profileId } = req.body;
@@ -2064,7 +2064,7 @@ router.delete('/feature-flags/:key/override', async (req, res) => {
  */
 router.get('/feature-flags/overrides', async (req, res) => {
   try {
-    if (!ensureAdminRequest(req, res)) return;
+    if (!(await ensureAdminRequest(req, res))) return;
     
     const { userId, profileId } = req.query;
     const overrides = getFlagOverrides(req.db, {
@@ -2085,7 +2085,7 @@ router.get('/feature-flags/overrides', async (req, res) => {
  */
 router.post('/feature-flags/cleanup', async (req, res) => {
   try {
-    if (!ensureAdminRequest(req, res)) return;
+    if (!(await ensureAdminRequest(req, res))) return;
     
     const result = cleanupExpiredOverrides(req.db);
     
@@ -2110,7 +2110,7 @@ router.post('/feature-flags/cleanup', async (req, res) => {
  */
 router.post('/crawlers/audit-live', async (req, res) => {
   try {
-    if (!ensureAdminRequest(req, res)) return;
+    if (!(await ensureAdminRequest(req, res))) return;
 
     const {
       profile_ids,
@@ -2127,12 +2127,12 @@ router.post('/crawlers/audit-live', async (req, res) => {
 
     let profiles = [];
     if (Array.isArray(profile_ids) && profile_ids.length) {
-      profiles = req.db
+      profiles = await req.db
         .prepare(`SELECT id, display_name, primary_type, status FROM profiles WHERE id IN (${profile_ids.map(() => '?').join(',')})`)
         .all(...profile_ids);
     } else {
       const lim = Math.max(1, Math.min(Number(limit_profiles) || 25, 200));
-      profiles = req.db
+      profiles = await req.db
         .prepare(`SELECT id, display_name, primary_type, status FROM profiles WHERE status = 'active' ORDER BY updated_at DESC LIMIT ?`)
         .all(lim);
     }
@@ -2145,7 +2145,7 @@ router.post('/crawlers/audit-live', async (req, res) => {
       let profile = null;
       let profileContextError = null;
       try {
-        profile = getProfileWithLocation(req.db, profileId);
+        profile = await getProfileWithLocation(req.db, profileId);
       } catch (error) {
         profileContextError = error?.message || String(error);
       }
