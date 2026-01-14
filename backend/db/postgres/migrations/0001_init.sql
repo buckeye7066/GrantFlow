@@ -538,9 +538,9 @@ INSERT INTO billing_tiers (
     'Baseline research support with curated grant discovery and shared AI document enrichment.',
     0,
     0,
-    0,
-    1,
-    1
+    FALSE,
+    TRUE,
+    TRUE
   ),
   (
     'growth',
@@ -548,9 +548,9 @@ INSERT INTO billing_tiers (
     'Expanded automation, itemized funding intelligence, and AI-supported document ingestion.',
     9900,
     15000,
-    1,
-    1,
-    1
+    TRUE,
+    TRUE,
+    TRUE
   ),
   (
     'enterprise',
@@ -558,9 +558,9 @@ INSERT INTO billing_tiers (
     'Full-service concierge with custom automation rules and dedicated analyst support.',
     24900,
     22500,
-    1,
-    1,
-    1
+    TRUE,
+    TRUE,
+    TRUE
   ),
   (
     'individual',
@@ -568,9 +568,9 @@ INSERT INTO billing_tiers (
     'Individuals/families seeking assistance.',
     0,
     8500,
-    0,
-    1,
-    1
+    FALSE,
+    TRUE,
+    TRUE
   ),
   (
     'small_org',
@@ -578,9 +578,9 @@ INSERT INTO billing_tiers (
     'Annual budget under $250,000.',
     0,
     8500,
-    0,
-    1,
-    1
+    FALSE,
+    TRUE,
+    TRUE
   ),
   (
     'mid_size',
@@ -588,9 +588,9 @@ INSERT INTO billing_tiers (
     'Annual budget $250,000 - $2,000,000.',
     0,
     11500,
-    1,
-    1,
-    1
+    TRUE,
+    TRUE,
+    TRUE
   ),
   (
     'large_org',
@@ -598,9 +598,9 @@ INSERT INTO billing_tiers (
     'Annual budget over $2,000,000.',
     0,
     15000,
-    1,
-    1,
-    1
+    TRUE,
+    TRUE,
+    TRUE
   )
 ON CONFLICT (id) DO NOTHING;
 
