@@ -11,7 +11,7 @@ const __dirname = dirname(__filename);
  * @param {Object} db - Database connection
  * @returns {Object} Diagnostics data
  */
-export function getSystemDiagnostics(db) {
+export async function getSystemDiagnostics(db) {
   const timestamp = new Date().toISOString();
   
   // Get app version from git or package.json
@@ -33,10 +33,10 @@ export function getSystemDiagnostics(db) {
       uptime_seconds: Math.round(process.uptime()),
       memory_usage_mb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
     },
-    db: getDatabaseDiagnostics(db),
+    db: await getDatabaseDiagnostics(db),
     env_flags: getEnvironmentFlags(),
-    last_activity: getLastActivity(db),
-    errors: getRecentErrors(db),
+    last_activity: await getLastActivity(db),
+    errors: await getRecentErrors(db),
   };
   
   return diagnostics;
@@ -47,7 +47,7 @@ export function getSystemDiagnostics(db) {
  * @param {Object} db - Database connection
  * @returns {Object} Database diagnostics
  */
-function getDatabaseDiagnostics(db) {
+async function getDatabaseDiagnostics(db) {
   if (!db) {
     return {
       ok: false,
@@ -57,32 +57,34 @@ function getDatabaseDiagnostics(db) {
   
   try {
     // Test database connectivity
-    db.prepare('SELECT 1').get();
+    await db.prepare('SELECT 1').get();
     
     // Get database file path
     const dbPath = process.env.DB_PATH || 'data/grantflow.db';
     
     // Check if database is writable by attempting a simple query
     let writable = true;
-    try {
-      db.prepare('SELECT COUNT(*) FROM sqlite_master').get();
-    } catch (error) {
-      writable = false;
+    if (db?.dialect === 'sqlite') {
+      try {
+        await db.prepare('SELECT COUNT(*) FROM sqlite_master').get();
+      } catch (error) {
+        writable = false;
+      }
     }
     
     // Get table counts
     const tables = {
-      funding_opportunities: getTableCount(db, 'funding_opportunities'),
-      crawl_logs: getTableCount(db, 'crawl_logs'),
-      grants: getTableCount(db, 'grants'),
-      profiles: getTableCount(db, 'profiles'),
-      users: getTableCount(db, 'users'),
-      organizations: getTableCount(db, 'organizations'),
-      crawler_jobs: getTableCount(db, 'crawler_jobs'),
+      funding_opportunities: await getTableCount(db, 'funding_opportunities'),
+      crawl_logs: await getTableCount(db, 'crawl_logs'),
+      grants: await getTableCount(db, 'grants'),
+      profiles: await getTableCount(db, 'profiles'),
+      users: await getTableCount(db, 'users'),
+      organizations: await getTableCount(db, 'organizations'),
+      crawler_jobs: await getTableCount(db, 'crawler_jobs'),
     };
     
     // Schema checks for funding_opportunities table
-    const schema_checks = checkFundingOpportunitiesSchema(db);
+    const schema_checks = await checkFundingOpportunitiesSchema(db);
     
     return {
       ok: true,
@@ -135,15 +137,22 @@ async function getTableCount(db, tableName) {
  * @param {Object} db - Database connection
  * @returns {Object} Schema check results
  */
-function checkFundingOpportunitiesSchema(db) {
+async function checkFundingOpportunitiesSchema(db) {
+  if (db?.dialect === 'postgres') {
+    return {
+      skipped: true,
+      reason: 'Postgres schema is managed by migrations',
+    };
+  }
+
   try {
-    const tableInfo = db.prepare('PRAGMA table_info(funding_opportunities)').all();
+    const tableInfo = await db.prepare('PRAGMA table_info(funding_opportunities)').all();
     const columnNames = tableInfo.map(col => col.name);
     
     // Also check if crawl_logs table exists
     let crawlLogsExists = false;
     try {
-      db.prepare('SELECT 1 FROM crawl_logs LIMIT 1').get();
+      await db.prepare('SELECT 1 FROM crawl_logs LIMIT 1').get();
       crawlLogsExists = true;
     } catch (e) {
       crawlLogsExists = false;
@@ -193,7 +202,7 @@ function getEnvironmentFlags() {
  * @param {Object} db - Database connection
  * @returns {Object} Last activity data
  */
-function getLastActivity(db) {
+async function getLastActivity(db) {
   if (!db) {
     return {
       last_crawl_log: null,
@@ -203,7 +212,7 @@ function getLastActivity(db) {
   
   try {
     // Get last crawl log
-    const lastCrawlLog = db.prepare(`
+    const lastCrawlLog = await db.prepare(`
       SELECT source, status, created_at, records_found, records_imported
       FROM crawl_logs
       ORDER BY created_at DESC
@@ -211,7 +220,7 @@ function getLastActivity(db) {
     `).get();
     
     // Get last crawler job
-    const lastCrawlerJob = db.prepare(`
+    const lastCrawlerJob = await db.prepare(`
       SELECT type, status, completed_at, result_count
       FROM crawler_jobs
       ORDER BY created_at DESC
@@ -246,7 +255,7 @@ function getLastActivity(db) {
  * @param {Object} db - Database connection
  * @returns {Array} Recent errors
  */
-function getRecentErrors(db) {
+async function getRecentErrors(db) {
   if (!db) {
     return [];
   }
@@ -254,12 +263,17 @@ function getRecentErrors(db) {
   const errors = [];
   
   try {
+    const since7dPredicate =
+      db?.dialect === 'postgres'
+        ? `created_at >= (NOW() - INTERVAL '7 days')`
+        : `created_at >= datetime('now', '-7 days')`
+
     // Get failed crawler jobs from last 7 days
-    const failedJobs = db.prepare(`
+    const failedJobs = await db.prepare(`
       SELECT id, type, status, profile_id, organization_id, error, created_at
       FROM crawler_jobs
       WHERE status = 'failed'
-        AND created_at >= datetime('now', '-7 days')
+        AND ${since7dPredicate}
       ORDER BY created_at DESC
       LIMIT 10
     `).all();
@@ -278,11 +292,11 @@ function getRecentErrors(db) {
     });
     
     // Get error crawl logs from last 7 days
-    const errorLogs = db.prepare(`
+    const errorLogs = await db.prepare(`
       SELECT id, source, status, error_message, created_at
       FROM crawl_logs
       WHERE status = 'error'
-        AND created_at >= datetime('now', '-7 days')
+        AND ${since7dPredicate}
       ORDER BY created_at DESC
       LIMIT 10
     `).all();

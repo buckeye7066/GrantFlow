@@ -12,26 +12,26 @@ import { loadProfileContext, extractStateFromContext, extractZipFromContext, ext
  * Load complete profile context including ALL profile sections and derived signals.
  * Crawlers MUST use the returned signals object for search queries and scoring.
  */
-export function getProfileWithLocation(db, profileId) {
+export async function getProfileWithLocation(db, profileId) {
   // Load the full profile context (profile + all profile_sections + derived signals).
   // IMPORTANT: Do not fabricate fallback location data; missing location should be treated as missing data.
-  const context = loadProfileContext(db, profileId)
+  const context = await loadProfileContext(db, profileId)
 
   let organization = null
   if (context?.profile?.organization_id) {
     const orgId = context.profile.organization_id
     // Backwards-compatible org lookup: some DBs have `type`, some have `organization_type`, some have neither.
     try {
-      organization = db
+      organization = await db
         .prepare('SELECT id, name, type, city, state, zip FROM organizations WHERE id = ?')
         .get(orgId)
     } catch (error) {
       try {
-        organization = db
+        organization = await db
           .prepare('SELECT id, name, organization_type AS type, city, state, zip FROM organizations WHERE id = ?')
           .get(orgId)
       } catch {
-        organization = db
+        organization = await db
           .prepare('SELECT id, name, city, state, zip FROM organizations WHERE id = ?')
           .get(orgId)
       }

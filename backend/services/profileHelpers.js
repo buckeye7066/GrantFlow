@@ -37,15 +37,15 @@ export function safeParseArrayField(value, fallback = []) {
   return fallback
 }
 
-export function loadProfileContext(db, profileId) {
-  const profile = db
+export async function loadProfileContext(db, profileId) {
+  const profile = await db
     .prepare('SELECT * FROM profiles WHERE id = ? LIMIT 1')
     .get(profileId)
   if (!profile) {
     throw new Error(`Profile ${profileId} not found`)
   }
 
-  const sections = db
+  const sections = (await db
     .prepare(
       `
       SELECT section_key, data
@@ -53,7 +53,7 @@ export function loadProfileContext(db, profileId) {
       WHERE profile_id = ?
     `,
     )
-    .all(profileId)
+    .all(profileId))
     .reduce((acc, row) => {
       acc[row.section_key] = safeParseJSON(row.data, {})
       return acc
@@ -68,7 +68,9 @@ export function loadProfileContext(db, profileId) {
   let organization = null
   if (profile.organization_id) {
     try {
-      organization = db.prepare('SELECT * FROM organizations WHERE id = ? LIMIT 1').get(profile.organization_id)
+      organization = await db
+        .prepare('SELECT * FROM organizations WHERE id = ? LIMIT 1')
+        .get(profile.organization_id)
     } catch {
       organization = null
     }

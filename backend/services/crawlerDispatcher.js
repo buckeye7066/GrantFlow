@@ -40,7 +40,7 @@ function parseJSON(value) {
 
 export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
   const handle = async () => {
-    const job = db.prepare('SELECT * FROM crawler_jobs WHERE id = ? LIMIT 1').get(jobId)
+    const job = await db.prepare('SELECT * FROM crawler_jobs WHERE id = ? LIMIT 1').get(jobId)
     if (!job) {
       console.warn('[crawlerDispatcher] Job not found', jobId)
       return
@@ -52,7 +52,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
 
     const handler = HANDLERS[job.type]
     if (!handler) {
-      db.prepare(`
+      await db.prepare(`
         UPDATE crawler_jobs
         SET status = 'failed',
             completed_at = CURRENT_TIMESTAMP,
@@ -62,7 +62,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       return
     }
 
-    db.prepare(`
+    await db.prepare(`
       UPDATE crawler_jobs
       SET status = 'running',
           started_at = CURRENT_TIMESTAMP,
@@ -74,10 +74,10 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
     let profileContext = null
     try {
       if (job.profile_id) {
-        profileContext = loadProfileContext(db, job.profile_id)
+        profileContext = await loadProfileContext(db, job.profile_id)
       }
     } catch (error) {
-      db.prepare(`
+      await db.prepare(`
         UPDATE crawler_jobs
         SET status = 'failed',
             completed_at = CURRENT_TIMESTAMP,
@@ -108,10 +108,10 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       result = await handler(context)
 
       if (job.type === 'avatar_lookup' && result?.avatarUrl && profileContext?.profile) {
-        const previous = db
+        const previous = await db
           .prepare('SELECT avatar_url FROM profiles WHERE id = ?')
           .get(profileContext.profile.id)
-        db.prepare(`
+        await db.prepare(`
           UPDATE profiles
           SET avatar_url = ?, updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
@@ -142,7 +142,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       }
       const resultMetaJson = JSON.stringify(finalResultMeta)
 
-      db.prepare(`
+      await db.prepare(`
         UPDATE crawler_jobs
         SET status = 'completed',
             completed_at = CURRENT_TIMESTAMP,
@@ -158,7 +158,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         error: error instanceof Error ? error.message : String(error),
       }
 
-      db.prepare(`
+      await db.prepare(`
         UPDATE crawler_jobs
         SET status = 'failed',
             completed_at = CURRENT_TIMESTAMP,

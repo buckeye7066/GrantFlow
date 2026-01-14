@@ -1049,7 +1049,7 @@ registerTool({
     if (!db) {
       throw new Error('Database connection unavailable')
     }
-    const diagnostics = getSystemDiagnostics(db)
+    const diagnostics = await getSystemDiagnostics(db)
     const health = analyzeSystemHealth(diagnostics)
     return {
       ...diagnostics,
@@ -1083,7 +1083,7 @@ registerTool({
     if (!isAdmin) {
       try {
         const { getSafeHealthSummary } = await import('./diagnosticsService.js')
-        const safeSummary = getSafeHealthSummary(db)
+        const safeSummary = await getSafeHealthSummary(db)
         return {
           status: safeSummary.status.toUpperCase(),
           counts: safeSummary.counts,
@@ -1101,19 +1101,28 @@ registerTool({
 
     // For admin users, return detailed diagnostics
     try {
-      const diagnostics = getSystemDiagnostics(db)
+      const diagnostics = await getSystemDiagnostics(db)
       const health = analyzeSystemHealth(diagnostics)
 
       // Get crawler stats from last 24 hours
       let crawlerStats = { totalRuns: 0, recentFailures: 0, lastRuns: [] }
       try {
-        const last24h = db.prepare(`
-          SELECT type, status, created_at, error
-          FROM crawler_jobs
-          WHERE created_at >= datetime('now', '-24 hours')
-          ORDER BY created_at DESC
-          LIMIT 20
-        `).all()
+        const since24hPredicate =
+          db?.dialect === 'postgres'
+            ? `created_at >= (NOW() - INTERVAL '24 hours')`
+            : `created_at >= datetime('now', '-24 hours')`
+
+        const last24h = await db
+          .prepare(
+            `
+              SELECT type, status, created_at, error
+              FROM crawler_jobs
+              WHERE ${since24hPredicate}
+              ORDER BY created_at DESC
+              LIMIT 20
+            `,
+          )
+          .all()
 
         crawlerStats.totalRuns = last24h.length
         crawlerStats.recentFailures = last24h.filter(j => j.status === 'failed').length

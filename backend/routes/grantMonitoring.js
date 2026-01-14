@@ -26,9 +26,9 @@ function requireAdmin(req, res) {
   return true
 }
 
-function ensureDefaults(db) {
+async function ensureDefaults(db) {
   // Ensure default alert configs exist for all organizations.
-  const orgs = db.prepare('SELECT id FROM organizations').all()
+  const orgs = await db.prepare('SELECT id FROM organizations').all()
   const insert = db.prepare(`
     INSERT INTO grant_monitoring_alerts (id, organization_id, alert_type, enabled, threshold_days, notification_methods)
     VALUES (@id, @organization_id, @alert_type, @enabled, @threshold_days, @notification_methods)
@@ -39,39 +39,45 @@ function ensureDefaults(db) {
   )
 
   const defaults = [
-    { alert_type: 'deadline_approaching', enabled: 1, threshold_days: 14 },
-    { alert_type: 'status_change', enabled: 1, threshold_days: null },
-    { alert_type: 'new_match', enabled: 1, threshold_days: null },
-    { alert_type: 'milestone_due', enabled: 1, threshold_days: 14 },
+    { alert_type: 'deadline_approaching', enabled: true, threshold_days: 14 },
+    { alert_type: 'status_change', enabled: true, threshold_days: null },
+    { alert_type: 'new_match', enabled: true, threshold_days: null },
+    { alert_type: 'milestone_due', enabled: true, threshold_days: 14 },
   ]
 
-  const tx = db.transaction(() => {
+  await db.withTransaction(async (tx) => {
+    const insertTx = tx.prepare(`
+      INSERT INTO grant_monitoring_alerts (id, organization_id, alert_type, enabled, threshold_days, notification_methods)
+      VALUES (@id, @organization_id, @alert_type, @enabled, @threshold_days, @notification_methods)
+    `)
+    const existsTx = tx.prepare(
+      'SELECT 1 FROM grant_monitoring_alerts WHERE organization_id = ? AND alert_type = ? LIMIT 1',
+    )
+
     for (const org of orgs) {
       for (const def of defaults) {
-        const already = exists.get(org.id, def.alert_type)
+        const already = await existsTx.get(org.id, def.alert_type)
         if (already) continue
-        insert.run({
+        await insertTx.run({
           id: crypto.randomUUID(),
           organization_id: org.id,
           alert_type: def.alert_type,
-          enabled: def.enabled,
+          enabled: Boolean(def.enabled),
           threshold_days: def.threshold_days,
           notification_methods: JSON.stringify(['in_app']),
         })
       }
     }
   })
-
-  tx()
 }
 
-router.get('/alerts', (req, res) => {
+router.get('/alerts', async (req, res) => {
   if (!requireAdmin(req, res)) return
   try {
-    ensureDefaults(req.db)
+    await ensureDefaults(req.db)
     const { organization_id } = req.query
     const rows = organization_id
-      ? req.db
+      ? await req.db
           .prepare(
             `
               SELECT *
@@ -81,7 +87,7 @@ router.get('/alerts', (req, res) => {
             `,
           )
           .all(String(organization_id))
-      : req.db
+      : await req.db
           .prepare(
             `
               SELECT *
@@ -98,30 +104,30 @@ router.get('/alerts', (req, res) => {
   }
 })
 
-router.get('/logs', (req, res) => {
+router.get('/logs', async (req, res) => {
   if (!requireAdmin(req, res)) return
   try {
     const limit = Math.min(500, Math.max(1, Number.parseInt(req.query.limit ?? 100, 10)))
     const { organization_id } = req.query
 
     const rows = organization_id
-      ? req.db
+      ? await req.db
           .prepare(
             `
               SELECT *
               FROM grant_monitoring_logs
               WHERE organization_id = ?
-              ORDER BY datetime(created_date) DESC
+              ORDER BY created_date DESC
               LIMIT ?
             `,
           )
           .all(String(organization_id), limit)
-      : req.db
+      : await req.db
           .prepare(
             `
               SELECT *
               FROM grant_monitoring_logs
-              ORDER BY datetime(created_date) DESC
+              ORDER BY created_date DESC
               LIMIT ?
             `,
           )
@@ -134,19 +140,19 @@ router.get('/logs', (req, res) => {
   }
 })
 
-router.put('/logs/:id', (req, res) => {
+router.put('/logs/:id', async (req, res) => {
   if (!requireAdmin(req, res)) return
   try {
     const id = req.params.id
     const acknowledged = Boolean(req.body?.acknowledged)
     const acknowledgedAt = req.body?.acknowledged_at ?? new Date().toISOString()
 
-    const existing = req.db.prepare('SELECT id FROM grant_monitoring_logs WHERE id = ?').get(id)
+    const existing = await req.db.prepare('SELECT id FROM grant_monitoring_logs WHERE id = ?').get(id)
     if (!existing) {
       return res.status(404).json({ error: 'Monitoring event not found' })
     }
 
-    req.db
+    await req.db
       .prepare(
         `
           UPDATE grant_monitoring_logs
@@ -154,9 +160,9 @@ router.put('/logs/:id', (req, res) => {
           WHERE id = ?
         `,
       )
-      .run(acknowledged ? 1 : 0, acknowledged ? acknowledgedAt : null, id)
+      .run(acknowledged, acknowledged ? acknowledgedAt : null, id)
 
-    const updated = req.db.prepare('SELECT * FROM grant_monitoring_logs WHERE id = ?').get(id)
+    const updated = await req.db.prepare('SELECT * FROM grant_monitoring_logs WHERE id = ?').get(id)
     res.json(updated)
   } catch (error) {
     console.error('[grant-monitoring/logs/:id] Error:', error)
