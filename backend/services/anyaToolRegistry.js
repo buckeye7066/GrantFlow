@@ -387,6 +387,7 @@ async function performCodeSearch({ query, scopePath, maxResults = 20 }) {
 }
 
 function collectGrantMatches(db, profileId, limit) {
+  const activePredicate = db?.dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1'
   const primary = db
     .prepare(
       `
@@ -395,7 +396,7 @@ function collectGrantMatches(db, profileId, limit) {
                eligibility_bullets, categories, source, source_url, updated_at, match_reasons,
                description, regions, keywords
         FROM funding_opportunities
-        WHERE is_active = 1 AND profile_id = ?
+        WHERE ${activePredicate} AND profile_id = ?
         ORDER BY updated_at DESC
         LIMIT ?
       `,
@@ -417,7 +418,7 @@ function collectGrantMatches(db, profileId, limit) {
                eligibility_bullets, categories, source, source_url, updated_at, match_reasons,
                description, regions, keywords
         FROM funding_opportunities
-        WHERE is_active = 1
+        WHERE ${activePredicate}
         ORDER BY updated_at DESC
         LIMIT ?
       `,

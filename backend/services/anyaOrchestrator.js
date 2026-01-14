@@ -251,9 +251,9 @@ export async function listSessions(db, user, { limit = 20 } = {}) {
   return rows.map(mapSession)
 }
 
-export function addMessage(db, user, sessionId, { role, content, toolName, toolPayload } = {}) {
+export async function addMessage(db, user, sessionId, { role, content, toolName, toolPayload } = {}) {
   assertAuthenticated(user)
-  const session = getSession(db, user, sessionId)
+  const session = await getSession(db, user, sessionId)
 
   if (!content || typeof content !== 'string') {
     const error = new Error('Message content required')
@@ -270,9 +270,9 @@ export function addMessage(db, user, sessionId, { role, content, toolName, toolP
     `,
   )
 
-  stmt.run(messageId, session.id, role, content, toolName ?? null, payload)
+  await stmt.run(messageId, session.id, role, content, toolName ?? null, payload)
 
-  db.prepare(
+  await db.prepare(
     `
       UPDATE anya_sessions
       SET updated_at = CURRENT_TIMESTAMP
@@ -280,12 +280,13 @@ export function addMessage(db, user, sessionId, { role, content, toolName, toolP
     `,
   ).run(session.id)
 
-  return getMessages(db, user, session.id, { limit: 1, direction: 'latest' })[0]
+  const latest = await getMessages(db, user, session.id, { limit: 1, direction: 'latest' })
+  return latest[0]
 }
 
-export function getMessages(db, user, sessionId, { limit = 50, direction = 'asc' } = {}) {
+export async function getMessages(db, user, sessionId, { limit = 50, direction = 'asc' } = {}) {
   assertAuthenticated(user)
-  const session = getSession(db, user, sessionId)
+  const session = await getSession(db, user, sessionId)
   const safeLimit = Math.max(1, Math.min(Number(limit) || 50, 200))
   const order = direction === 'latest' ? 'DESC' : 'ASC'
 
@@ -293,7 +294,7 @@ export function getMessages(db, user, sessionId, { limit = 50, direction = 'asc'
     ? `ORDER BY created_at ${order}, id ${order}`
     : `ORDER BY created_at ${order}, rowid ${order}`
 
-  const rows = db
+  const rows = await db
     .prepare(
       `
         SELECT *
@@ -309,15 +310,15 @@ export function getMessages(db, user, sessionId, { limit = 50, direction = 'asc'
   return direction === 'latest' ? mapped : mapped
 }
 
-export function listTasks(db, user, sessionId) {
+export async function listTasks(db, user, sessionId) {
   assertAuthenticated(user)
-  const session = getSession(db, user, sessionId)
+  const session = await getSession(db, user, sessionId)
 
   const orderBy = db?.dialect === 'postgres'
     ? `ORDER BY created_at ASC, id ASC`
     : `ORDER BY created_at ASC, rowid ASC`
 
-  const rows = db
+  const rows = await db
     .prepare(
       `
         SELECT *
@@ -331,7 +332,7 @@ export function listTasks(db, user, sessionId) {
   return rows.map(mapTask)
 }
 
-export function listProfileTasks(db, user, profileId, { status } = {}) {
+export async function listProfileTasks(db, user, profileId, { status } = {}) {
   assertAuthenticated(user)
   const normalizedProfileId = coerceProfileId(profileId ?? user.profileId ?? null)
   assertProfileAccess(user, normalizedProfileId)
@@ -366,7 +367,7 @@ export function listProfileTasks(db, user, profileId, { status } = {}) {
     }
   }
 
-  const rows = db
+  const rows = await db
     .prepare(
       `
         SELECT *
@@ -390,14 +391,14 @@ export function listProfileTasks(db, user, profileId, { status } = {}) {
   return rows.map(mapTask)
 }
 
-export function createTask(
+export async function createTask(
   db,
   user,
   sessionId,
   { title, notes = null, status = 'open', priority = 'normal', dueDate = null, metadata = null } = {},
 ) {
   assertAuthenticated(user)
-  const session = getSession(db, user, sessionId)
+  const session = await getSession(db, user, sessionId)
 
   const normalizedTitle = typeof title === 'string' ? title.trim() : ''
   if (!normalizedTitle) {
@@ -413,7 +414,7 @@ export function createTask(
   const metadataJson = metadata ? JSON.stringify(metadata) : '{}'
 
   const id = randomUUID()
-  db.prepare(
+  await db.prepare(
     `
       INSERT INTO anya_tasks (
         id,
@@ -442,7 +443,7 @@ export function createTask(
     metadataJson,
   )
 
-  const task = db
+  const task = await db
     .prepare(
       `
         SELECT *
