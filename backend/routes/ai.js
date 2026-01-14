@@ -1,5 +1,4 @@
 import express from 'express';
-import OpenAI from 'openai';
 import { fetchReminderSnapshot } from './reminders.js';
 import { buildReminderPlanPrompt } from '../prompts/reminderPlan.js';
 import { extractCompletionText } from '../utils/openai.js';
@@ -8,17 +7,13 @@ import { formatError } from '../middleware/errorHandler.js';
 import { validatePagination } from '../utils/validation.js';
 import { DEFAULT_OPENAI_MODEL, OPENAI_TIMEOUT_MS, MAX_PROMPT_LENGTH } from '../config/constants.js';
 import { calculateMatchScore } from '../services/matchingEngine.js';
+import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';
 
 const router = express.Router();
 
-// Initialize OpenAI client
-const getOpenAI = () => {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY environment variable is not set');
-  }
-  return new OpenAI({ apiKey });
-};
+function getOpenAI() {
+  return createOpenAIClient().openai;
+}
 
 // Match opportunities to a profile
 // Comprehensive match endpoint for discovery
@@ -27,9 +22,9 @@ router.post('/comprehensive-match', async (req, res) => {
     const { profile } = req.body
     
     // Get all opportunities from database
-    const opportunities = req.db.prepare(`
+    const opportunities = await req.db.prepare(`
       SELECT * FROM funding_opportunities 
-      WHERE is_active = 1 
+      WHERE is_active = TRUE 
       ORDER BY created_at DESC 
       LIMIT 100
     `).all()
@@ -102,7 +97,7 @@ router.post('/match', async (req, res) => {
     }
     
     // Get the organization profile
-    const profile = req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(profile_id);
+    const profile = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(profile_id);
     if (!profile) {
       return res.status(404).json({ error: 'Profile not found' });
     }
@@ -115,18 +110,18 @@ router.post('/match', async (req, res) => {
     // Get opportunities matching state or national
     let query = `
       SELECT * FROM funding_opportunities 
-      WHERE is_active = 1 
-      AND (is_national = 1 OR state = ? OR state IS NULL)
+      WHERE is_active = TRUE 
+      AND (is_national = TRUE OR state = ? OR state IS NULL)
     `;
     const params = [profile.state];
     
     // Filter by deadline (not expired)
-    query += ` AND (deadline >= date('now') OR deadline IS NULL OR deadline_type = 'rolling')`;
+    query += ` AND (deadline >= CURRENT_DATE OR deadline IS NULL OR deadline_type = 'rolling')`;
     
     query += ' ORDER BY deadline ASC NULLS LAST LIMIT ?';
     params.push(limit * 2); // Get more than needed for AI scoring
     
-    const opportunities = req.db.prepare(query).all(...params);
+    const opportunities = await req.db.prepare(query).all(...params);
     
     if (opportunities.length === 0) {
       return res.json({ opportunities: [], count: 0, profile_id });
@@ -246,7 +241,7 @@ router.post('/match/ai', async (req, res) => {
     const openai = getOpenAI();
     
     // Get the profile
-    const profile = req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(profile_id);
+    const profile = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(profile_id);
     if (!profile) {
       return res.status(404).json({ error: 'Profile not found' });
     }
@@ -255,16 +250,16 @@ router.post('/match/ai', async (req, res) => {
     let opportunities;
     if (opportunity_ids && opportunity_ids.length > 0) {
       const placeholders = opportunity_ids.map(() => '?').join(',');
-      opportunities = req.db.prepare(`
+      opportunities = await req.db.prepare(`
         SELECT * FROM funding_opportunities WHERE id IN (${placeholders})
       `).all(...opportunity_ids);
     } else {
       // Get basic matches first
-      opportunities = req.db.prepare(`
+      opportunities = await req.db.prepare(`
         SELECT * FROM funding_opportunities 
-        WHERE is_active = 1 
-        AND (is_national = 1 OR state = ? OR state IS NULL)
-        AND (deadline >= date('now') OR deadline IS NULL OR deadline_type = 'rolling')
+        WHERE is_active = TRUE 
+        AND (is_national = TRUE OR state = ? OR state IS NULL)
+        AND (deadline >= CURRENT_DATE OR deadline IS NULL OR deadline_type = 'rolling')
         LIMIT ?
       `).all(profile.state, limit * 2);
     }
@@ -318,12 +313,27 @@ Return ONLY valid JSON in this format:
   ]
 }`;
 
-    const completion = await openai.chat.completions.create({
-      model: DEFAULT_OPENAI_MODEL,
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.3,
-      max_tokens: 2000
-    });
+    let completion;
+    try {
+      completion = await openai.chat.completions.create({
+        model: DEFAULT_OPENAI_MODEL,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.3,
+        max_tokens: 2000,
+      });
+    } catch (openaiError) {
+      const summary = summarizeOpenAIError(openaiError);
+      console.warn('[ai/match/ai] OpenAI unavailable, falling back to basic match:', summary);
+      return res.json({
+        opportunities: opportunities.slice(0, limit).map((o) => ({
+          ...o,
+          match_score: 50,
+          match_reasons: ['AI scoring unavailable - basic match'],
+        })),
+        count: Math.min(opportunities.length, limit),
+        ai_enhanced: false,
+      });
+    }
     
     let aiResults;
     try {
@@ -385,7 +395,7 @@ router.post('/generate/proposal', async (req, res) => {
     const openai = getOpenAI();
     
     // Get grant details
-    const grant = req.db.prepare(`
+    const grant = await req.db.prepare(`
       SELECT g.*, o.* 
       FROM grants g
       JOIN organizations o ON g.organization_id = o.id
@@ -412,15 +422,24 @@ FUNDER: ${grant.funder}
 
 Generate a well-structured, compelling ${section || 'narrative'} of about 300-500 words.`;
 
-    const completion = await openai.chat.completions.create({
-      model: DEFAULT_OPENAI_MODEL,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: prompt }
-      ],
-      temperature: 0.7,
-      max_tokens: 1500
-    });
+    let completion;
+    try {
+      completion = await openai.chat.completions.create({
+        model: DEFAULT_OPENAI_MODEL,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: prompt },
+        ],
+        temperature: 0.7,
+        max_tokens: 1500,
+      });
+    } catch (openaiError) {
+      const summary = summarizeOpenAIError(openaiError);
+      return res.status(summary.isRateLimit ? 429 : 503).json({
+        error: 'OpenAI unavailable',
+        detail: summary.message,
+      });
+    }
     
     res.json({
       content: extractCompletionText(completion),
@@ -442,8 +461,8 @@ router.post('/analyze/eligibility', async (req, res) => {
     
     const openai = getOpenAI();
     
-    const profile = req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(profile_id);
-    const opportunity = req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunity_id);
+    const profile = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(profile_id);
+    const opportunity = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunity_id);
     
     if (!profile || !opportunity) {
       return res.status(404).json({ error: 'Profile or opportunity not found' });
@@ -480,12 +499,21 @@ Return as JSON:
   "recommendations": [...]
 }`;
 
-    const completion = await openai.chat.completions.create({
-      model: DEFAULT_OPENAI_MODEL,
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.3,
-      max_tokens: 1000
-    });
+    let completion;
+    try {
+      completion = await openai.chat.completions.create({
+        model: DEFAULT_OPENAI_MODEL,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.3,
+        max_tokens: 1000,
+      });
+    } catch (openaiError) {
+      const summary = summarizeOpenAIError(openaiError);
+      return res.status(summary.isRateLimit ? 429 : 503).json({
+        error: 'OpenAI unavailable',
+        detail: summary.message,
+      });
+    }
     
     let analysis;
     try {
