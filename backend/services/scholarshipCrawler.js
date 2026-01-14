@@ -224,7 +224,7 @@ function scoreScholarshipOpportunity(opportunity, signals, state, campusZip, con
   return { score, reasons: Array.from(new Set(reasons)) }
 }
 
-export function processScholarshipCrawlerJob({
+export async function processScholarshipCrawlerJob({
   db,
   job,
   profileContext,
@@ -292,7 +292,7 @@ export function processScholarshipCrawlerJob({
     const matchSummary =
       reasons.length > 0 ? `Scholarship match: ${reasons.join('; ')} (score ${score})` : summarizeProfileSignals(signals)
 
-    const result = upsertFundingOpportunity(db, {
+    const result = await upsertFundingOpportunity(db, {
       ...opportunity,
       source: 'scholarship_crawler',
       source_id: opportunity.id,
@@ -312,7 +312,7 @@ export function processScholarshipCrawlerJob({
     // Save to profile pipeline if match >= 80%
     if (profileId && score >= 80) {
       const oppWithId = { ...opportunity, id: result.id }
-      const pipelineResult = saveToProfilePipeline(db, oppWithId, profileId, profileContext, score)
+      const pipelineResult = await saveToProfilePipeline(db, oppWithId, profileId, profileContext, score)
       if (pipelineResult.saved) {
         savedToPipeline++
       }

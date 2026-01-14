@@ -76,7 +76,7 @@ function calculateLocalMatch(opp, profileState, signals) {
 /**
  * Process local crawler job - matches local community grants to profile
  */
-export function processLocalCrawlerJob({ db, job, dataDir, profileContext }) {
+export async function processLocalCrawlerJob({ db, job, dataDir, profileContext }) {
   console.log('[localCrawler] Starting local opportunity search...')
 
   if (!profileContext?.profile) {
@@ -106,7 +106,7 @@ export function processLocalCrawlerJob({ db, job, dataDir, profileContext }) {
   console.log(`[localCrawler] Loaded ${localOpps.length} local opportunities`)
   
   // Also check database for local opportunities
-  const dbOpps = db.prepare(`
+  const dbOpps = await db.prepare(`
     SELECT * FROM funding_opportunities 
     WHERE is_active = 1 
     AND state = ?
@@ -170,7 +170,7 @@ export function processLocalCrawlerJob({ db, job, dataDir, profileContext }) {
   
   for (const opp of topOpps) {
     try {
-      const result = upsertFundingOpportunity(db, {
+      const result = await upsertFundingOpportunity(db, {
         title: opp.title,
         sponsor: opp.sponsor,
         description: opp.description,
@@ -196,7 +196,7 @@ export function processLocalCrawlerJob({ db, job, dataDir, profileContext }) {
       // Save to profile pipeline if match >= 80%
       if (profileId && opp.match_score >= 80) {
         const oppWithId = { ...opp, id: result.id }
-        const pipelineResult = saveToProfilePipeline(db, oppWithId, profileId, profileContext, opp.match_score)
+        const pipelineResult = await saveToProfilePipeline(db, oppWithId, profileId, profileContext, opp.match_score)
         if (pipelineResult.saved) {
           savedToPipeline++
         }
