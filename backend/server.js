@@ -375,87 +375,93 @@ function ensureCrawlerJobsSupportsAllTypes() {
   rebuild()
 }
 
-ensureCrawlerJobsSupportsAllTypes()
+if (db.dialect === 'sqlite') {
+  ensureCrawlerJobsSupportsAllTypes()
+}
 await ensureDesignatedProfiles(db)
-linkAllProfilesToAdmin(db)
+await linkAllProfilesToAdmin(db)
 await ensureUserPreferencesTable(db)
 
 // Check funding opportunities count and provide guidance
-try {
-  const oppCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get();
-  if (oppCount && oppCount.count === 0) {
-    console.info('[startup] No funding opportunities found, auto-seeding...');
-    
-    // Load opportunity files
-    const crawlersDir = join(__dirname, 'data', 'crawlers');
-    const files = [
-      { path: join(crawlersDir, 'real_funding_opportunities.json'), type: 'structured' },
-      { path: join(crawlersDir, 'scholarship_opportunities.json'), type: 'array' },
-      { path: join(crawlersDir, 'local_opportunities.json'), type: 'array' },
-      { path: join(crawlersDir, 'item_funding_sources.json'), type: 'array' },
-    ];
-    
-    const allOpportunities = [];
-    for (const file of files) {
-      try {
-        if (fs.existsSync(file.path)) {
-          const content = fs.readFileSync(file.path, 'utf8');
-          const data = JSON.parse(content);
-          if (file.type === 'structured') {
-            Object.values(data).forEach(category => {
-              if (Array.isArray(category)) allOpportunities.push(...category);
-            });
-          } else if (Array.isArray(data)) {
-            allOpportunities.push(...data);
+if (db.dialect === 'sqlite') {
+  try {
+    const oppCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get();
+    if (oppCount && oppCount.count === 0) {
+      console.info('[startup] No funding opportunities found, auto-seeding...');
+
+      // Load opportunity files
+      const crawlersDir = join(__dirname, 'data', 'crawlers');
+      const files = [
+        { path: join(crawlersDir, 'real_funding_opportunities.json'), type: 'structured' },
+        { path: join(crawlersDir, 'scholarship_opportunities.json'), type: 'array' },
+        { path: join(crawlersDir, 'local_opportunities.json'), type: 'array' },
+        { path: join(crawlersDir, 'item_funding_sources.json'), type: 'array' },
+      ];
+
+      const allOpportunities = [];
+      for (const file of files) {
+        try {
+          if (fs.existsSync(file.path)) {
+            const content = fs.readFileSync(file.path, 'utf8');
+            const data = JSON.parse(content);
+            if (file.type === 'structured') {
+              Object.values(data).forEach(category => {
+                if (Array.isArray(category)) allOpportunities.push(...category);
+              });
+            } else if (Array.isArray(data)) {
+              allOpportunities.push(...data);
+            }
           }
+        } catch (e) {
+          console.warn(`[startup] Failed to load ${file.path}:`, e.message);
         }
-      } catch (e) {
-        console.warn(`[startup] Failed to load ${file.path}:`, e.message);
       }
+
+      if (allOpportunities.length > 0) {
+        const upsert = db.prepare(`
+          INSERT INTO funding_opportunities (
+            id, source, source_id, title, sponsor, description,
+            application_url, source_url, deadline, amount_min, amount_max,
+            categories, keywords, eligibility_bullets, match_reasons,
+            state, requires_match, requires_501c3, is_active, is_national, record_origin,
+            opportunity_type, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          ON CONFLICT(id) DO NOTHING
+        `);
+
+        const transaction = db.transaction(() => {
+          for (const opp of allOpportunities) {
+            try {
+              const id = opp.id || crypto.randomUUID();
+              const isNational = opp.is_national === true || opp.is_national === 1 || opp.state === 'nationwide';
+              upsert.run(
+                id, opp.source || 'seeded_real', opp.source_id || id,
+                opp.title || opp.program_name, opp.sponsor || opp.funder, opp.description || opp.summary,
+                opp.application_url || opp.url, opp.url || opp.source_url || opp.application_url, opp.deadline,
+                opp.amount_min || opp.award_floor, opp.amount_max || opp.award_ceiling,
+                JSON.stringify(opp.categories || []), JSON.stringify(opp.keywords || []),
+                JSON.stringify(opp.eligibility_bullets || []), JSON.stringify(opp.match_reasons || []),
+                opp.state || (isNational ? 'nationwide' : null),
+                opp.requires_match ? 1 : 0, opp.requires_501c3 ? 1 : 0, isNational ? 1 : 0,
+                'curated_verified',
+                opp.opportunity_type || 'grant'
+              );
+            } catch (e) { /* ignore individual errors */ }
+          }
+        });
+
+        transaction();
+        const newCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get();
+        console.info(`[startup] Seeded ${newCount.count} funding opportunities`);
+      }
+    } else {
+      console.info(`[startup] Found ${oppCount.count} existing funding opportunities`);
     }
-    
-    if (allOpportunities.length > 0) {
-      const upsert = db.prepare(`
-        INSERT INTO funding_opportunities (
-          id, source, source_id, title, sponsor, description,
-          application_url, source_url, deadline, amount_min, amount_max,
-          categories, keywords, eligibility_bullets, match_reasons,
-          state, requires_match, requires_501c3, is_active, is_national, record_origin,
-          opportunity_type, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        ON CONFLICT(id) DO NOTHING
-      `);
-      
-      const transaction = db.transaction(() => {
-        for (const opp of allOpportunities) {
-          try {
-            const id = opp.id || crypto.randomUUID();
-            const isNational = opp.is_national === true || opp.is_national === 1 || opp.state === 'nationwide';
-            upsert.run(
-              id, opp.source || 'seeded_real', opp.source_id || id,
-              opp.title || opp.program_name, opp.sponsor || opp.funder, opp.description || opp.summary,
-              opp.application_url || opp.url, opp.url || opp.source_url || opp.application_url, opp.deadline,
-              opp.amount_min || opp.award_floor, opp.amount_max || opp.award_ceiling,
-              JSON.stringify(opp.categories || []), JSON.stringify(opp.keywords || []),
-              JSON.stringify(opp.eligibility_bullets || []), JSON.stringify(opp.match_reasons || []),
-              opp.state || (isNational ? 'nationwide' : null),
-              opp.requires_match ? 1 : 0, opp.requires_501c3 ? 1 : 0, isNational ? 1 : 0,
-              'curated_verified',
-              opp.opportunity_type || 'grant'
-            );
-          } catch (e) { /* ignore individual errors */ }
-        }
-      });
-      
-      transaction();
-      const newCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get();
-      console.info(`[startup] Seeded ${newCount.count} funding opportunities`);
-    }
-  } else {
-    console.info(`[startup] Found ${oppCount.count} existing funding opportunities`);
+  } catch (error) {
+    console.warn('[startup] Error checking opportunities count:', error.message);
   }
-} catch (error) {
-  console.warn('[startup] Error checking opportunities count:', error.message);
+} else {
+  console.info('[startup] Skipping SQLite-only opportunity seeding checks (dialect != sqlite)')
 }
 
 function parseBoolEnv(value) {
@@ -475,10 +481,14 @@ try {
 
   const isProd = process.env.NODE_ENV === 'production'
   const flag = parseBoolEnv(process.env.ENABLE_MIN_NATIONAL_ENSURE)
-  const activeTotalRow = db
-    .prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1')
-    .get()
-  const activeTotal = Number(activeTotalRow?.count ?? 0)
+  // This helper is SQLite-only today (PRAGMA usage + sync calls). Skip on Postgres until refactored.
+  if (db.dialect !== 'sqlite') {
+    console.info('[startup]', JSON.stringify({ event: 'min_national_ensure', enabled_by: 'skipped_postgres', minimum: min, skipped: true }))
+  } else {
+    const activeTotalRow = db
+      .prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1')
+      .get()
+    const activeTotal = Number(activeTotalRow?.count ?? 0)
 
   let shouldEnsure = false
   let enabledBy = 'disabled'
@@ -497,8 +507,8 @@ try {
     enabledBy = 'first_boot'
   }
 
-  if (shouldEnsure) {
-    const ensured = ensureMinimumNationalOpportunities(db, min)
+    if (shouldEnsure) {
+      const ensured = ensureMinimumNationalOpportunities(db, min)
     const backfilled = (ensured.events || []).some((e) => e.type === 'backfill' || e.type === 'schema_backfill')
 
     const evt = {
@@ -518,8 +528,9 @@ try {
     if (!ensured.ok) {
       console.warn(`[startup] National minimum not met: have ${ensured.total}, need ${ensured.minimum}`)
     }
-  } else {
-    console.info('[startup]', JSON.stringify({ event: 'min_national_ensure', enabled_by: enabledBy, minimum: min, skipped: true }))
+    } else {
+      console.info('[startup]', JSON.stringify({ event: 'min_national_ensure', enabled_by: enabledBy, minimum: min, skipped: true }))
+    }
   }
 } catch (error) {
   console.warn('[startup] Failed to ensure national minimum opportunities:', error?.message || error)
@@ -528,18 +539,23 @@ try {
 // Ensure curated assistance directories are available even when the DB already has many county_crawler records.
 // This increases "real & relevant" coverage for special needs / emergency assistance matching without fabricating data.
 try {
-  const existing = db
-    .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")
-    .get()?.count
-  if ((existing ?? 0) < 250) {
-    console.info('[startup] Seeding assistance directories (state_211 + assistance_network)...')
-    const result = seedAssistanceDirectories(db)
-    const after = db
+  // This helper is SQLite-only today (sync calls + local JSON files). Skip on Postgres until refactored.
+  if (db.dialect !== 'sqlite') {
+    console.info('[startup] Skipping assistance directory seeding (dialect != sqlite)')
+  } else {
+    const existing = db
       .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")
       .get()?.count
-    console.info('[startup] Seeded assistance directories', { ...result, after })
-  } else {
-    console.info('[startup] Assistance directories already seeded', { count: existing })
+    if ((existing ?? 0) < 250) {
+      console.info('[startup] Seeding assistance directories (state_211 + assistance_network)...')
+      const result = seedAssistanceDirectories(db)
+      const after = db
+        .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")
+        .get()?.count
+      console.info('[startup] Seeded assistance directories', { ...result, after })
+    } else {
+      console.info('[startup] Assistance directories already seeded', { count: existing })
+    }
   }
 } catch (error) {
   console.warn('[startup] Failed to seed assistance directories:', error?.message || error)
