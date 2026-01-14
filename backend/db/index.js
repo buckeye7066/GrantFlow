@@ -80,6 +80,66 @@ function qmarkToDollarPlaceholders(sql) {
   return { text: out, count: idx };
 }
 
+// Convert SQLite-style named parameters (e.g. @id) to Postgres-style ($1, $2, ...).
+// Returns the ordered parameter name list to map object bindings to an array.
+function atNameToDollarPlaceholders(sql) {
+  let out = '';
+  const names = [];
+  let inSingle = false;
+  let inDouble = false;
+
+  for (let i = 0; i < sql.length; i++) {
+    const ch = sql[i];
+
+    if (ch === "'" && !inDouble) {
+      if (inSingle && sql[i + 1] === "'") {
+        out += "''";
+        i++;
+        continue;
+      }
+      inSingle = !inSingle;
+      out += ch;
+      continue;
+    }
+
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      out += ch;
+      continue;
+    }
+
+    if (ch === '@' && !inSingle && !inDouble) {
+      // Parse identifier: @foo_bar123
+      let j = i + 1;
+      let ident = '';
+      while (j < sql.length) {
+        const c = sql[j];
+        if (!/[A-Za-z0-9_]/.test(c)) break;
+        ident += c;
+        j++;
+      }
+      if (ident.length > 0) {
+        names.push(ident);
+        out += `$${names.length}`;
+        i = j - 1;
+        continue;
+      }
+    }
+
+    out += ch;
+  }
+
+  return { text: out, names };
+}
+
+function isObjectBindings(args) {
+  return args.length === 1 && args[0] && typeof args[0] === 'object' && !Array.isArray(args[0]);
+}
+
+function bindingsToValues(names, bindings) {
+  return names.map((name) => bindings[name]);
+}
+
 class SqliteDb {
   constructor(sqlitePath) {
     this.dialect = 'sqlite';
@@ -183,20 +243,21 @@ class PostgresDb {
   }
 
   prepare(sql) {
-    const converted = qmarkToDollarPlaceholders(sql);
+    const hasNamed = /@[_A-Za-z][_A-Za-z0-9]*/.test(sql);
+    const converted = hasNamed ? atNameToDollarPlaceholders(sql) : qmarkToDollarPlaceholders(sql);
     return {
       get: async (...args) => {
-        const values = toParamArray(args);
+        const values = hasNamed && isObjectBindings(args) ? bindingsToValues(converted.names, args[0]) : toParamArray(args);
         const res = await this._pool.query(converted.text, values);
         return res.rows[0];
       },
       all: async (...args) => {
-        const values = toParamArray(args);
+        const values = hasNamed && isObjectBindings(args) ? bindingsToValues(converted.names, args[0]) : toParamArray(args);
         const res = await this._pool.query(converted.text, values);
         return res.rows;
       },
       run: async (...args) => {
-        const values = toParamArray(args);
+        const values = hasNamed && isObjectBindings(args) ? bindingsToValues(converted.names, args[0]) : toParamArray(args);
         const res = await this._pool.query(converted.text, values);
         // better-sqlite3 shape compatibility (best-effort)
         return {
