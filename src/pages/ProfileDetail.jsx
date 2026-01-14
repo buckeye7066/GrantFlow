@@ -27,6 +27,7 @@ import ProfileAppliedFundingPrint from "@/components/profiles/ProfileAppliedFund
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
+import UniversityApplicationsSection from "@/components/profiles/UniversityApplicationsSection.jsx"
 
 export default function ProfileDetail() {
   const [searchParams] = useSearchParams()
@@ -333,6 +334,37 @@ export default function ProfileDetail() {
     )
   }
 
+  const isStudentProfile = ["high_school_student", "college_student", "graduate_student"].includes(
+    String(profile.primary_type || "").toLowerCase(),
+  )
+
+  const universitySectionData =
+    profile.sections?.find((section) => section.section_key === "university_applications")?.data ?? {}
+  const universityApplications = Array.isArray(universitySectionData?.applications)
+    ? universitySectionData.applications
+    : []
+
+  const handleSaveUniversityApplications = async (nextApplications) => {
+    try {
+      setSavingSectionKey("university_applications")
+      await upsertSectionMutation.mutateAsync({
+        sectionKey: "university_applications",
+        values: { applications: nextApplications },
+      })
+    } finally {
+      setSavingSectionKey(null)
+    }
+  }
+
+  const handleAskUniversityApplications = async () => {
+    setAiLoadingKey("university_applications")
+    try {
+      return await aiSuggestionMutation.mutateAsync("university_applications")
+    } finally {
+      setAiLoadingKey(null)
+    }
+  }
+
   return (
     <div className="p-6 md:p-10">
       <div className="mx-auto flex max-w-6xl flex-col gap-6">
@@ -358,7 +390,7 @@ export default function ProfileDetail() {
         </div>
 
         <Tabs defaultValue="profile" className="w-full">
-          <TabsList className="grid w-full grid-cols-9 lg:w-auto lg:inline-flex">
+          <TabsList className={`grid w-full ${isStudentProfile ? "grid-cols-10" : "grid-cols-9"} lg:w-auto lg:inline-flex`}>
             <TabsTrigger value="profile">Profile Information</TabsTrigger>
             <TabsTrigger value="pipeline">Pipeline</TabsTrigger>
             <TabsTrigger value="item-funding">Item Funding</TabsTrigger>
@@ -368,6 +400,7 @@ export default function ProfileDetail() {
             <TabsTrigger value="documents">Documents</TabsTrigger>
             <TabsTrigger value="billing">Billing</TabsTrigger>
             <TabsTrigger value="personalization">Personalization</TabsTrigger>
+            {isStudentProfile ? <TabsTrigger value="universities">Universities</TabsTrigger> : null}
           </TabsList>
 
           <TabsContent value="profile" className="mt-6">
@@ -611,6 +644,18 @@ export default function ProfileDetail() {
               </p>
             </div>
           </TabsContent>
+
+          {isStudentProfile ? (
+            <TabsContent value="universities" className="mt-6">
+              <UniversityApplicationsSection
+                applications={universityApplications}
+                onSave={handleSaveUniversityApplications}
+                saving={savingSectionKey === "university_applications"}
+                onAskAI={handleAskUniversityApplications}
+                aiLoading={aiLoadingKey === "university_applications"}
+              />
+            </TabsContent>
+          ) : null}
         </Tabs>
       </div>
 
