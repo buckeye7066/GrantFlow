@@ -120,15 +120,33 @@ export async function runNationalCrawlerV2({
     .slice(0, maxSources)
 
   // Persist sources into DB (evidence)
-  const insertSource = db.prepare(
-    `
-      INSERT OR REPLACE INTO crawler_sources (
-        source_id, name, jurisdiction, state, county, source_family, base_url, seed_urls, enabled, tags, configuration
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-  )
+  const insertSourceSql =
+    db?.dialect === 'postgres'
+      ? `
+          INSERT INTO crawler_sources (
+            source_id, name, jurisdiction, state, county, source_family, base_url, seed_urls, enabled, tags, configuration
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT (source_id) DO UPDATE SET
+            name = excluded.name,
+            jurisdiction = excluded.jurisdiction,
+            state = excluded.state,
+            county = excluded.county,
+            source_family = excluded.source_family,
+            base_url = excluded.base_url,
+            seed_urls = excluded.seed_urls,
+            enabled = excluded.enabled,
+            tags = excluded.tags,
+            configuration = excluded.configuration
+        `
+      : `
+          INSERT OR REPLACE INTO crawler_sources (
+            source_id, name, jurisdiction, state, county, source_family, base_url, seed_urls, enabled, tags, configuration
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `
+
+  const insertSource = db.prepare(insertSourceSql)
   for (const s of selectedSources) {
-    insertSource.run(
+    await insertSource.run(
       s.source_id,
       s.name,
       s.jurisdiction,
@@ -137,13 +155,13 @@ export async function runNationalCrawlerV2({
       s.source_family,
       s.base_url,
       JSON.stringify(s.seed_urls || []),
-      s.enabled ? 1 : 0,
+      Boolean(s.enabled),
       JSON.stringify(s.tags || []),
       JSON.stringify(s.configuration || {}),
     )
   }
 
-  db.prepare(
+  await db.prepare(
     `
       INSERT INTO crawl_runs (
         crawl_run_id, started_at, status, mode, scope,
@@ -198,8 +216,8 @@ export async function runNationalCrawlerV2({
     `,
   )
 
-  const updateRun = (finalStatus) => {
-    db.prepare(
+  const updateRun = async (finalStatus) => {
+    await db.prepare(
       `
         UPDATE crawl_runs
         SET completed_at = ?,
@@ -234,7 +252,7 @@ export async function runNationalCrawlerV2({
 
     for (const source of selectedSources) {
       counts.sources_attempted += 1
-      insertEvent.run(runId, source.source_id, null, 'source_start', 'Starting source', JSON.stringify({ source }))
+      await insertEvent.run(runId, source.source_id, null, 'source_start', 'Starting source', JSON.stringify({ source }))
       await logs.crawl(`[run=${runId}] source_start ${source.source_id} ${source.name}`)
 
       try {
@@ -242,7 +260,7 @@ export async function runNationalCrawlerV2({
         let anySuccess = false
 
         for (const url of urls) {
-          insertEvent.run(runId, source.source_id, url, 'fetch_start', 'Fetching', JSON.stringify({ url }))
+          await insertEvent.run(runId, source.source_id, url, 'fetch_start', 'Fetching', JSON.stringify({ url }))
           await logs.crawl(`[run=${runId}] fetch_start ${source.source_id} url=${url}`)
 
           let fetchResult
@@ -289,7 +307,7 @@ export async function runNationalCrawlerV2({
               }
             }
 
-            insertEvent.run(runId, source.source_id, url, 'fetch_success', 'Fetched', JSON.stringify({ httpStatus, contentType }))
+            await insertEvent.run(runId, source.source_id, url, 'fetch_success', 'Fetched', JSON.stringify({ httpStatus, contentType }))
             await logs.crawl(`[run=${runId}] fetch_success ${source.source_id} status=${httpStatus} ct=${contentType || 'n/a'} url=${url}`)
 
             const { parser_name, extracted_text, doc } = await parseContent({
@@ -299,7 +317,7 @@ export async function runNationalCrawlerV2({
               sourceFamily: source.source_family,
             })
 
-            insertEvent.run(runId, source.source_id, url, 'parse_success', 'Parsed', JSON.stringify({ parser_name }))
+            await insertEvent.run(runId, source.source_id, url, 'parse_success', 'Parsed', JSON.stringify({ parser_name }))
             await logs.parse(`[run=${runId}] parse_success ${source.source_id} parser=${parser_name} url=${url}`)
 
             counts.programs_extracted += 1
@@ -317,7 +335,7 @@ export async function runNationalCrawlerV2({
               parserName: parser_name,
             })
 
-            insertEvent.run(runId, source.source_id, url, 'normalize_success', 'Normalized', JSON.stringify({ tracks: normalizedByTrack.map((n) => n.funding_track) }))
+            await insertEvent.run(runId, source.source_id, url, 'normalize_success', 'Normalized', JSON.stringify({ tracks: normalizedByTrack.map((n) => n.funding_track) }))
             await logs.normalize(`[run=${runId}] normalize_success ${source.source_id} tracks=${normalizedByTrack.map((n) => n.funding_track).join(',')} url=${url}`)
 
             for (const normalized of normalizedByTrack) {
@@ -352,8 +370,8 @@ export async function runNationalCrawlerV2({
                 : 'parse_error'
             counts.failures.push({ url, failure_type: failureType, message, stack, parser_name: null, retry_count: 0, source_id: source.source_id })
 
-            insertEvent.run(runId, source.source_id, url, 'parse_failure', 'Failed', JSON.stringify({ message }))
-            insertFailure.run(
+            await insertEvent.run(runId, source.source_id, url, 'parse_failure', 'Failed', JSON.stringify({ message }))
+            await insertFailure.run(
               runId,
               source.source_id,
               url,
@@ -371,30 +389,30 @@ export async function runNationalCrawlerV2({
 
         if (anySuccess) {
           counts.sources_succeeded += 1
-          insertEvent.run(runId, source.source_id, null, 'source_success', 'Source completed', JSON.stringify({}))
+          await insertEvent.run(runId, source.source_id, null, 'source_success', 'Source completed', JSON.stringify({}))
           await logs.crawl(`[run=${runId}] source_success ${source.source_id}`)
         } else {
           counts.sources_failed += 1
-          insertEvent.run(runId, source.source_id, null, 'source_failure', 'Source failed', JSON.stringify({}))
+          await insertEvent.run(runId, source.source_id, null, 'source_failure', 'Source failed', JSON.stringify({}))
           await logs.crawl(`[run=${runId}] source_failure ${source.source_id}`)
         }
       } catch (error) {
         counts.sources_failed += 1
         const message = error instanceof Error ? error.message : String(error)
-        insertEvent.run(runId, source.source_id, null, 'source_failure', message, JSON.stringify({}))
+        await insertEvent.run(runId, source.source_id, null, 'source_failure', message, JSON.stringify({}))
         await logs.crawl(`[run=${runId}] source_failure ${source.source_id} error=${message}`)
       }
     }
 
-    updateRun('completed')
+    await updateRun('completed')
 
     const failuresPath = path.join(dir, 'failures.json')
     const samplePath = path.join(dir, 'sample_output.json')
     const failuresRunPath = path.join(dir, `failures.${runId}.json`)
     const sampleRunPath = path.join(dir, `sample_output.${runId}.json`)
 
-    const sampleA = db.prepare('SELECT * FROM nf_programs_a ORDER BY last_verified DESC LIMIT 5').all()
-    const sampleB = db.prepare('SELECT * FROM nf_programs_b ORDER BY last_verified DESC LIMIT 5').all()
+    const sampleA = await db.prepare('SELECT * FROM nf_programs_a ORDER BY last_verified DESC LIMIT 5').all()
+    const sampleB = await db.prepare('SELECT * FROM nf_programs_b ORDER BY last_verified DESC LIMIT 5').all()
 
     const failuresJson = JSON.stringify(counts.failures, null, 2)
     const sampleJson = JSON.stringify(
@@ -428,7 +446,7 @@ export async function runNationalCrawlerV2({
     }
   } catch (error) {
     await logs.crawl(`[run=${runId}] fatal error=${error instanceof Error ? error.message : String(error)}`)
-    updateRun('failed')
+    await updateRun('failed')
     throw error
   }
 }
