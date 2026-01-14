@@ -26,6 +26,38 @@ const DEFAULT_PREFERENCES = {
   custom_preferences: {},
 }
 
+function hexToHsl(hex) {
+  const raw = String(hex || '').trim()
+  const cleaned = raw.startsWith('#') ? raw.slice(1) : raw
+  if (!/^[0-9a-fA-F]{6}$/.test(cleaned)) return null
+
+  const r = parseInt(cleaned.slice(0, 2), 16) / 255
+  const g = parseInt(cleaned.slice(2, 4), 16) / 255
+  const b = parseInt(cleaned.slice(4, 6), 16) / 255
+
+  const max = Math.max(r, g, b)
+  const min = Math.min(r, g, b)
+  const delta = max - min
+
+  let h = 0
+  if (delta !== 0) {
+    if (max === r) h = ((g - b) / delta) % 6
+    else if (max === g) h = (b - r) / delta + 2
+    else h = (r - g) / delta + 4
+    h = Math.round(h * 60)
+    if (h < 0) h += 360
+  }
+
+  const l = (max + min) / 2
+  const s = delta === 0 ? 0 : delta / (1 - Math.abs(2 * l - 1))
+
+  const sPct = Math.round(s * 100)
+  const lPct = Math.round(l * 100)
+
+  // Format expected by shadcn/tailwind CSS variables: "H S% L%"
+  return `${h} ${sPct}% ${lPct}%`
+}
+
 export const useSettingsStore = create((set, get) => ({
   preferences: DEFAULT_PREFERENCES,
   isLoading: false,
@@ -129,7 +161,17 @@ export const useSettingsStore = create((set, get) => ({
       amber: '#f59e0b',
       pink: '#ec4899',
     }
-    root.style.setProperty('--accent-color', colorMap[accent_color] || colorMap.blue)
+    const accentHex = colorMap[accent_color] || colorMap.blue
+    root.style.setProperty('--accent-color', accentHex)
+
+    // Also drive shadcn/tailwind tokens (these are defined as `hsl(var(--primary))` etc).
+    // This makes accent color changes visible across buttons, rings, etc.
+    const accentHsl = hexToHsl(accentHex)
+    if (accentHsl) {
+      root.style.setProperty('--primary', accentHsl)
+      root.style.setProperty('--ring', accentHsl)
+      root.style.setProperty('--sidebar-ring', accentHsl)
+    }
 
     // Apply font size
     const fontSizeMap = {

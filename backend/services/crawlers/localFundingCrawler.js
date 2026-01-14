@@ -184,14 +184,6 @@ function isLoanOrMatchingFund(opportunity) {
 }
 
 async function getZipCoordinates(zip) {
-  // Production: No mock fallbacks - must have real axios
-  if (!axios) {
-    throw new Error(
-      'axios is required for ZIP code geocoding. ' +
-      'Mock fallbacks are disabled in production.'
-    )
-  }
-  
   try {
     // Prefer local dataset to avoid network flakiness and "skipped" ZIP handling.
     const local = zipcodes.lookup(zip)
@@ -215,8 +207,10 @@ async function getZipCoordinates(zip) {
       }
     }
   } catch (error) {
-    console.error('[LocalFundingCrawler] Geocoding error:', error.message)
-    throw new Error(`Failed to geocode ZIP ${zip}: ${error.message}`)
+    // Previously this threw and surfaced as a 500 at `/api/real-crawlers/run`.
+    // Fail gracefully: return null so the caller can stop this crawler without crashing the whole run.
+    console.warn('[LocalFundingCrawler] Geocoding failed; returning 0 local results for this run:', error.message)
+    return null
   }
   return null
 }

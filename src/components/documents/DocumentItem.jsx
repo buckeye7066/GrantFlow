@@ -183,6 +183,11 @@ export default function DocumentItem({ document, onDelete }) {
       </CardHeader>
       <CardContent className="flex-grow space-y-2">
         <p className="text-xs text-slate-500">Uploaded on {uploadedLabel}</p>
+        {processingStatus === 'failed' && document.processing_error ? (
+          <p className="text-xs text-red-700 bg-red-50 border border-red-100 rounded-md p-2">
+            {document.processing_error}
+          </p>
+        ) : null}
         {document.ai_summary ? (
           <p className="text-xs text-slate-600 line-clamp-3">
             {document.ai_summary}

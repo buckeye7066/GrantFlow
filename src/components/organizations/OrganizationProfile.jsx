@@ -20,6 +20,10 @@ import AutoTimeTracker from '../billing/AutoTimeTracker';
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/use-toast";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 
 const capitalize = (s) => s && s.charAt(0).toUpperCase() + s.slice(1);
@@ -43,6 +47,10 @@ export default function OrganizationProfile({
   const [imgError, setImgError] = React.useState(false);
   const [manualRetryCount, setManualRetryCount] = React.useState(0);
   const [showEditForm, setShowEditForm] = React.useState(false);
+  const [editCoreOpen, setEditCoreOpen] = React.useState(false);
+  const [editDisplayName, setEditDisplayName] = React.useState('');
+  const [editPrimaryType, setEditPrimaryType] = React.useState('organization');
+  const [editTags, setEditTags] = React.useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false);
   const isPrint = usePrintMode();
 
@@ -133,6 +141,15 @@ export default function OrganizationProfile({
     // Reset image error state when organization's profile image URL changes
     setImgError(false);
   }, [orgData?.profile_image_url]);
+
+  useEffect(() => {
+    if (!orgData) return;
+    // Sync the edit dialog fields from the loaded profile data
+    setEditDisplayName(orgData.display_name ?? orgData.name ?? '');
+    setEditPrimaryType(orgData.primary_type ?? orgData.applicant_type ?? 'organization');
+    const tags = Array.isArray(orgData.tags) ? orgData.tags : [];
+    setEditTags(tags.join(', '));
+  }, [orgData]);
 
 
   const updateGrantMutation = useMutation({
@@ -444,7 +461,7 @@ Return a single JSON object with the key "logo_url" containing the absolute, dir
               <Button variant="ghost" onClick={handleBack} className="mb-2 -ml-3 h-auto p-2">
                 &larr; Back to list
               </Button>
-              <h1 className="text-3xl font-bold text-slate-900">{orgData.name}</h1>
+              <h1 className="text-3xl font-bold text-slate-900">{orgData.display_name ?? orgData.name}</h1>
               <p className="text-md text-slate-600 mt-1">{subtitle}</p>
               {(!orgData.profile_image_url || imgError) && (
                   <Button variant="outline" size="sm" className="mt-3" onClick={handleFindPicture} disabled={isFindingPicture || updateOrgMutation.isPending}>
@@ -462,6 +479,12 @@ Return a single JSON object with the key "logo_url" containing the absolute, dir
                <span className="text-sm text-blue-700">Saving...</span>
              </div>
            )}
+           <Button
+             variant="outline"
+             onClick={() => setEditCoreOpen(true)}
+           >
+             Edit Profile
+           </Button>
            <Link to={createPageUrl("Pricing")}>
              <Button variant="outline">
                <DollarSign className="w-4 h-4 mr-2" />
@@ -789,6 +812,90 @@ Return a single JSON object with the key "logo_url" containing the absolute, dir
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Edit Core Profile Dialog (real persisted fields) */}
+      <Dialog open={editCoreOpen} onOpenChange={setEditCoreOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit Profile</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="profile-display-name">Display name</Label>
+              <Input
+                id="profile-display-name"
+                value={editDisplayName}
+                onChange={(e) => setEditDisplayName(e.target.value)}
+                placeholder="Profile name"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Profile type</Label>
+              <Select value={editPrimaryType} onValueChange={setEditPrimaryType}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select profile type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="organization">Organization</SelectItem>
+                  <SelectItem value="nonprofit">Nonprofit</SelectItem>
+                  <SelectItem value="small_business">Small Business</SelectItem>
+                  <SelectItem value="individual_need">Individual</SelectItem>
+                  <SelectItem value="family">Family</SelectItem>
+                  <SelectItem value="medical_assistance">Medical Assistance</SelectItem>
+                  <SelectItem value="high_school_student">High School Student</SelectItem>
+                  <SelectItem value="college_student">College Student</SelectItem>
+                  <SelectItem value="graduate_student">Graduate Student</SelectItem>
+                  <SelectItem value="government">Government</SelectItem>
+                  <SelectItem value="other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="profile-tags">Tags (comma-separated)</Label>
+              <Input
+                id="profile-tags"
+                value={editTags}
+                onChange={(e) => setEditTags(e.target.value)}
+                placeholder="e.g. veteran, rural, STEM"
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="flex gap-2 justify-end">
+            <Button
+              variant="outline"
+              onClick={() => setEditCoreOpen(false)}
+              disabled={updateOrgMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                const tags = editTags
+                  .split(',')
+                  .map((t) => t.trim())
+                  .filter(Boolean);
+
+                updateOrgMutation.mutate({
+                  id: organizationId,
+                  data: {
+                    display_name: editDisplayName?.trim() || (orgData.display_name ?? orgData.name ?? ''),
+                    primary_type: editPrimaryType || (orgData.primary_type ?? orgData.applicant_type ?? null),
+                    tags,
+                  },
+                });
+              }}
+              disabled={updateOrgMutation.isPending || !editDisplayName.trim()}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              {updateOrgMutation.isPending ? 'Saving…' : 'Save'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

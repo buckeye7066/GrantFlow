@@ -1,3 +1,5 @@
+import zipcodes from 'zipcodes'
+
 function safeParseJSON(value, fallback) {
   if (!value) return fallback
   try {
@@ -60,16 +62,38 @@ export function loadProfileContext(db, profileId) {
   // Use safeParseArrayField for array fields
   const tags = safeParseArrayField(profile.tags, [])
   const interests = safeParseArrayField(profile.interests, [])
+
+  // Merge organization address fields into the profile context when available.
+  // Many workflows store ZIP/state/city on `organizations`, but matching relies on profileContext.signals.location.
+  let organization = null
+  if (profile.organization_id) {
+    try {
+      organization = db.prepare('SELECT * FROM organizations WHERE id = ? LIMIT 1').get(profile.organization_id)
+    } catch {
+      organization = null
+    }
+  }
+
+  const mergedProfile = {
+    ...profile,
+    tags,
+    interests,
+    // Provide fallbacks for location extraction
+    postal_code: profile.postal_code || organization?.zip || organization?.postal_code || null,
+    state: profile.state || organization?.state || null,
+    city: profile.city || organization?.city || null,
+  }
   
   const signals = buildProfileSignals({ 
-    profile: { ...profile, tags, interests }, 
+    profile: mergedProfile, 
     sections 
   })
 
   return { 
-    profile: { ...profile, tags, interests }, 
+    profile: mergedProfile, 
     sections, 
-    signals 
+    signals,
+    organization: organization ?? undefined,
   }
 }
 
@@ -333,6 +357,18 @@ export function buildProfileSignals({ profile, sections }) {
     zip: extractZipFromContext({ profile, sections }) || extractZipFromAddress(basic.address),
     state: extractStateFromContext({ profile, sections }) || extractStateFromAddress(basic.address),
     city: extractCityFromSections({ profile, sections }) || extractCityFromAddress(basic.address),
+  }
+
+  // If we have ZIP but not state/city, derive from local ZIP database.
+  // This is critical for matching: many opportunities are state-scoped and the scoring engine penalizes unknown state.
+  if (location.zip && !location.state) {
+    try {
+      const lookup = zipcodes.lookup(location.zip)
+      if (lookup?.state) location.state = String(lookup.state).toUpperCase()
+      if (lookup?.city && !location.city) location.city = String(lookup.city)
+    } catch {
+      // ignore
+    }
   }
 
   const academics = {

@@ -62,11 +62,109 @@ export function selectAccount(db, profileId) {
           bt.enable_item_funding AS tier_enable_item_funding,
           bt.enable_document_ai AS tier_enable_document_ai
         FROM billing_accounts ba
-        JOIN billing_tiers bt ON bt.id = ba.tier_id
+        LEFT JOIN billing_tiers bt ON bt.id = ba.tier_id
         WHERE ba.profile_id = ?
       `,
     )
     .get(profileId)
+}
+
+function seedBillingTiersIfMissing(db) {
+  // Make billing self-healing in production: if a deploy starts with an empty/misaligned DB,
+  // we seed the minimum tiers so billing endpoints don't 500.
+  // This is intentionally idempotent (INSERT OR IGNORE).
+  try {
+    const rows = db.prepare('SELECT COUNT(*) as c FROM billing_tiers').get()
+    const count = rows?.c ?? 0
+    if (count > 0) return
+  } catch {
+    // billing_tiers table might not exist yet; ignore and let schema migration handle it
+    return
+  }
+
+  try {
+    const insert = db.prepare(
+      `
+        INSERT OR IGNORE INTO billing_tiers (
+          id,
+          name,
+          description,
+          base_monthly_cents,
+          hourly_rate_cents,
+          enable_pipeline_automation,
+          enable_item_funding,
+          enable_document_ai
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    )
+
+    // Product tiers (existing UI expectations)
+    insert.run(
+      'foundation',
+      'Foundation',
+      'Baseline research support with curated grant discovery and shared AI document enrichment.',
+      0,
+      0,
+      0,
+      1,
+      1,
+    )
+    insert.run(
+      'growth',
+      'Growth',
+      'Expanded automation, itemized funding intelligence, and AI-supported document ingestion.',
+      9900,
+      15000,
+      1,
+      1,
+      1,
+    )
+    insert.run(
+      'enterprise',
+      'Enterprise',
+      'Full-service concierge with custom automation rules and dedicated analyst support.',
+      24900,
+      22500,
+      1,
+      1,
+      1,
+    )
+
+    // Client category tiers (from your service menu / payment sheet)
+    insert.run('individual', 'Individual', 'Individuals/families seeking assistance.', 0, 8500, 0, 1, 1)
+    insert.run('small_org', 'Small Org', 'Annual budget under $250,000.', 0, 8500, 0, 1, 1)
+    insert.run('mid_size', 'Mid-Size', 'Annual budget $250,000 - $2,000,000.', 0, 11500, 1, 1, 1)
+    insert.run('large_org', 'Large Org', 'Annual budget over $2,000,000.', 0, 15000, 1, 1, 1)
+  } catch {
+    // If this fails for any reason, we still want the caller to proceed with a clear error.
+  }
+}
+
+function resolveTierIdForInsert(db, requestedTierId) {
+  const tierExists = db.prepare('SELECT id FROM billing_tiers WHERE id = ?').get(requestedTierId)
+  if (tierExists) return requestedTierId
+
+  // Try seeding, then re-check.
+  seedBillingTiersIfMissing(db)
+  const tierExistsAfterSeed = db.prepare('SELECT id FROM billing_tiers WHERE id = ?').get(requestedTierId)
+  if (tierExistsAfterSeed) return requestedTierId
+
+  // Fall back to any available tier so billing account creation never writes a dangling tier_id.
+  const fallback = db
+    .prepare(
+      `
+        SELECT id
+        FROM billing_tiers
+        ORDER BY base_monthly_cents IS NULL, base_monthly_cents ASC, name ASC
+        LIMIT 1
+      `,
+    )
+    .get()
+  if (fallback?.id) return fallback.id
+
+  throw new Error(
+    `Billing tiers are missing: cannot create billing account for profile ${requestedTierId}. Run DB migrations/seed to populate billing_tiers.`,
+  )
 }
 
 export function ensureBillingAccount(db, profileId, { defaultTier = 'foundation', assignedBy = 'system' } = {}) {
@@ -75,6 +173,7 @@ export function ensureBillingAccount(db, profileId, { defaultTier = 'foundation'
     return existing
   }
 
+  const tierId = resolveTierIdForInsert(db, defaultTier)
   const accountId = crypto.randomUUID()
   db.prepare(
     `
@@ -89,12 +188,12 @@ export function ensureBillingAccount(db, profileId, { defaultTier = 'foundation'
         is_pro_bono
       ) VALUES (?, ?, ?, ?, ?, 'none', 0, 0)
     `,
-  ).run(accountId, profileId, defaultTier, assignedBy, 'Initial tier assignment')
+  ).run(accountId, profileId, tierId, assignedBy, 'Initial tier assignment')
 
   logBillingAccountEvent(db, accountId, {
     changed_by: assignedBy,
     previous_tier_id: null,
-    new_tier_id: defaultTier,
+    new_tier_id: tierId,
     previous_discount_type: null,
     new_discount_type: 'none',
     previous_discount_percent: null,

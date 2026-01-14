@@ -218,6 +218,13 @@ const latestDuration = describeDuration(latestEnrichmentJob)
       return;
     }
 
+      const maxSize = 50 * 1024 * 1024;
+      if (file.size > maxSize) {
+        setUploadFile(null);
+        setUploadError('File must be 50MB or smaller.');
+        return;
+      }
+
     const allowedTypes = [
       'application/pdf',
       'application/msword',

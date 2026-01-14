@@ -35,16 +35,28 @@ export function calculateMatchScore(profile, opportunity) {
   if (opportunity.is_national || (opportunity.state && profileState && opportunity.state === profileState)) {
     score += 20;
     reasons.push(opportunity.is_national ? 'National eligibility' : 'Geographic eligibility');
-  } else if (opportunity.state) {
-    // State mismatch - significant penalty but not disqualifying
+  } else if (opportunity.state && profileState) {
+    // Only penalize mismatches when the profile location is known.
     score -= 10;
-    reasons.push(`State mismatch (opportunity in ${opportunity.state}, profile in ${profileState || 'unknown'})`);
+    reasons.push(`State mismatch (opportunity in ${opportunity.state}, profile in ${profileState})`);
+  } else if (opportunity.state && !profileState) {
+    // Unknown location should be neutral (no penalty); otherwise sparse profiles get unfairly crushed.
+    reasons.push('Location unknown (no state provided)');
   }
   
   // Applicant type match (25 pts)
-  if (eligibilityMatchesApplicantType(opportunity, effectiveSignals ?? effectiveProfile)) {
-    score += 25;
-    reasons.push('Applicant type match');
+  const applicantTypesSet =
+    effectiveSignals?.applicantTypes && typeof effectiveSignals.applicantTypes[Symbol.iterator] === 'function'
+      ? new Set(Array.from(effectiveSignals.applicantTypes).map((v) => String(v).toLowerCase()))
+      : null
+  const profileType = effectiveProfile?.primary_type || effectiveProfile?.applicant_type || null
+  const hasApplicantTypeSignals = Boolean(profileType) || Boolean(applicantTypesSet?.size)
+
+  if (hasApplicantTypeSignals && eligibilityMatchesApplicantType(opportunity, effectiveSignals ?? effectiveProfile)) {
+    score += 25
+    reasons.push('Applicant type match')
+  } else if (!hasApplicantTypeSignals) {
+    reasons.push('Applicant type unknown (no penalty)')
   }
   
   // Keyword overlap (up to 25 pts)
@@ -76,9 +88,17 @@ export function calculateMatchScore(profile, opportunity) {
   
   // Requirements penalties
   const ein = effectiveProfile?.ein ?? effectiveProfile?.uei ?? null
-  if (opportunity.requires_501c3 && !ein) {
-    score -= 15;
-    reasons.push('Requires 501(c)(3) status');
+  const applicantTypeNormalized = String(profileType || '').toLowerCase()
+  const isOrgLike =
+    applicantTypeSetHas(applicantTypesSet, ['organization', 'nonprofit', 'small_business', 'government']) ||
+    ['organization', 'nonprofit', 'small_business', 'government'].includes(applicantTypeNormalized)
+
+  if (opportunity.requires_501c3 && isOrgLike && !ein) {
+    score -= 15
+    reasons.push('Requires 501(c)(3) status (EIN/UEI missing)')
+  } else if (opportunity.requires_501c3 && !isOrgLike) {
+    // For individuals/students, do not penalize: it likely just isn't applicable.
+    reasons.push('501(c)(3) requirement not applicable to profile type')
   }
   
   if (opportunity.requires_match) {
@@ -90,6 +110,11 @@ export function calculateMatchScore(profile, opportunity) {
     score: Math.max(0, Math.min(100, score)), 
     reasons: reasons.length > 0 ? reasons : ['No specific matches found']
   };
+}
+
+function applicantTypeSetHas(applicantTypesSet, values = []) {
+  if (!applicantTypesSet || applicantTypesSet.size === 0) return false
+  return values.some((v) => applicantTypesSet.has(String(v).toLowerCase()))
 }
 
 /**

@@ -324,12 +324,21 @@ async function searchSchoolFinancialAid(schoolName, studentInfo, profile) {
   
   const url = schoolFinAidUrls[schoolName]
   if (url) {
-    // Production: Must implement real scraping or API calls to school financial aid pages
-    throw new Error(
-      `Real school financial aid scraper required for ${schoolName}. ` +
-      `Mock school scholarship generation is disabled in production. ` +
-      `Please implement actual scraping/API calls to ${url}`
-    )
+    // Previously this threw and caused `/api/real-crawlers/run` to return 500.
+    // We can return a *real* link-only opportunity (no scraped claims) instead.
+    opportunities.push({
+      title: `${schoolName} — Financial Aid & Scholarships`,
+      sponsor: schoolName,
+      description:
+        'Financial aid and scholarship information (link only). Detailed scholarship extraction is not implemented yet.',
+      url,
+      amount_min: 0,
+      amount_max: 0,
+      deadline_type: 'rolling',
+      eligibility: 'See the linked page for eligibility details.',
+      is_national: true,
+      keywords: ['financial aid', 'scholarship', 'tuition', 'student aid'],
+    })
   }
   
   return opportunities

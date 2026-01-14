@@ -3,9 +3,12 @@
 
 // Use relative URLs in production (proxied by Vercel) to avoid CORS issues
 // In dev mode, use VITE_API_URL or default to localhost
-const API_URL = import.meta.env.DEV 
-  ? (import.meta.env.VITE_API_URL || 'http://localhost:4000')
-  : '';  // Empty string = relative URLs, proxied by Vercel
+// NOTE: Vite dev server proxies `/api` to the backend (see `vite.config.ts`),
+// so the safest default in dev is also relative URLs (empty string). If you need
+// to hit a remote backend directly, set `VITE_API_URL`.
+const API_URL = import.meta.env.DEV
+  ? (import.meta.env.VITE_API_URL || '')
+  : ''; // Empty string = relative URLs, proxied by Vercel
 const APP_BASE = import.meta.env.VITE_APP_BASE || '/grantflow';
 
 class APIClient {

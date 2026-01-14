@@ -1,5 +1,5 @@
 import express from 'express'
-import OpenAI from 'openai'
+import { createOpenAIClient } from '../utils/openaiClient.js'
 import multer from 'multer'
 import fs from 'fs'
 import { dirname, join } from 'path'
@@ -89,9 +89,13 @@ function mapProfile(row) {
     user_id: row.user_id ?? null,
     primary_type: row.primary_type,
     display_name: row.display_name,
+    // Backwards-compatible aliases for older UI components that expect "organization-like" fields.
+    name: row.display_name,
+    applicant_type: row.primary_type,
     status: row.status,
     tags: safeParseJSON(row.tags, []),
     avatar_url: row.avatar_url ?? null,
+    profile_image_url: row.avatar_url ?? null,
   }
 }
 
@@ -127,21 +131,7 @@ function enrichProfileWithSummary(db, profile) {
 }
 
 function getOpenAI() {
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey || apiKey === 'YOUR_OPENAI_API_KEY' || apiKey.includes('*')) {
-    console.log('[OpenAI] No valid API key - will use fallback responses')
-    // Return a mock object that throws errors gracefully
-    return {
-      chat: {
-        completions: {
-          create: async () => {
-            throw new Error('OpenAI API key not configured')
-          }
-        }
-      }
-    }
-  }
-  return new OpenAI({ apiKey })
+  return createOpenAIClient().openai
 }
 
 router.get('/', (req, res) => {
@@ -296,13 +286,17 @@ router.put('/:id', (req, res) => {
   const { display_name, primary_type, organization_id, status, tags } = req.body ?? {}
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
-    return res.status(403).json({ error: 'Not authorized to update this profile' })
-  }
-
   const existing = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!existing) {
     return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  // Allow: admins (including admin-email allowlist), profile-scoped tokens for the profile, or session owners (userId match)
+  const isAdminUser = isAdmin(auth)
+  const matchesProfileId = auth.profileId === id
+  const matchesUserId = auth.userId && existing.user_id && auth.userId === existing.user_id
+  if (!isAdminUser && !matchesProfileId && !matchesUserId) {
+    return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to update this profile' })
   }
 
   const updates = []
@@ -394,7 +388,17 @@ router.post('/:id/avatar', upload.single('avatar'), (req, res, next) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
+  const existing = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!existing) {
+    if (req.file) fs.unlink(join(uploadDir, req.file.filename), () => {})
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  const isAdminUser = isAdmin(auth)
+  const matchesProfileId = auth.profileId === id
+  const matchesUserId = auth.userId && existing.user_id && auth.userId === existing.user_id
+
+  if (!isAdminUser && !matchesProfileId && !matchesUserId) {
     if (req.file) fs.unlink(join(uploadDir, req.file.filename), () => {})
     return res.status(403).json({ error: 'Not authorized to update this profile' })
   }
@@ -404,18 +408,12 @@ router.post('/:id/avatar', upload.single('avatar'), (req, res, next) => {
   }
 
   try {
-    const profileRow = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
-    if (!profileRow) {
-      fs.unlink(join(uploadDir, req.file.filename), () => {})
-      return res.status(404).json({ error: 'Profile not found' })
-    }
-
     const publicPath = `/uploads/${req.file.filename}`
     req.db
       .prepare('UPDATE profiles SET avatar_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
       .run(publicPath, id)
 
-    const previousAvatar = profileRow.avatar_url
+    const previousAvatar = existing.avatar_url
     if (previousAvatar && previousAvatar.startsWith('/uploads/')) {
       const previousFilename = previousAvatar.replace('/uploads/', '')
       if (previousFilename && previousFilename !== req.file.filename) {
@@ -436,13 +434,16 @@ router.post('/:id/avatar/ai', (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
-    return res.status(403).json({ error: 'Not authorized to update this profile' })
-  }
-
   const profileRow = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!profileRow) {
     return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  const isAdminUser = isAdmin(auth)
+  const matchesProfileId = auth.profileId === id
+  const matchesUserId = auth.userId && profileRow.user_id && auth.userId === profileRow.user_id
+  if (!isAdminUser && !matchesProfileId && !matchesUserId) {
+    return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to update this profile' })
   }
 
   const parameters = {

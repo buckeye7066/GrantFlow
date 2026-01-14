@@ -132,6 +132,14 @@ export default function CrawlerSelection({
             min_match_score: minMatchScore
           })
         });
+
+        // Treat backend-reported failure as an error (even though HTTP is 200)
+        if (data && data.success === false) {
+          const message = data.message || data.error || 'Crawler failed'
+          const err = new Error(message)
+          err.response = data
+          throw err
+        }
         
         setProgress(prev => ({ ...prev, [crawlerId]: 'completed' }));
         setResults(prev => ({ ...prev, [crawlerId]: data }));
@@ -201,6 +209,9 @@ export default function CrawlerSelection({
 
   const allSelected = selectedCrawlers.size === CRAWLER_CONFIGS.length;
   const someSelected = selectedCrawlers.size > 0;
+  const anyDbFallback = Object.values(results || {}).some((r) => r && r.used_db_fallback);
+  const missingZipLikely = Object.values(results || {}).some((r) => r?.debug && r.debug.has_zip === false);
+  const lowKeywordsLikely = Object.values(results || {}).some((r) => r?.debug && (r.debug.keyword_count ?? 0) < 5);
 
   return (
     <div className="space-y-6">
@@ -215,6 +226,27 @@ export default function CrawlerSelection({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {anyDbFallback && (
+            <Alert variant="warning">
+              <AlertTriangle className="w-4 h-4" />
+              <AlertDescription>
+                Some crawlers returned <strong>DB fallback</strong> results (real opportunities from your local curated database)
+                because the live crawl returned nothing or your profile is missing key signals.
+                {missingZipLikely && (
+                  <>
+                    <br />
+                    <span className="text-sm">Tip: add a ZIP/state to get true local matches.</span>
+                  </>
+                )}
+                {lowKeywordsLikely && (
+                  <>
+                    <br />
+                    <span className="text-sm">Tip: add a few tags/keywords to improve match quality.</span>
+                  </>
+                )}
+              </AlertDescription>
+            </Alert>
+          )}
           {/* Match score threshold */}
           <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
             <div className="flex items-center justify-between">

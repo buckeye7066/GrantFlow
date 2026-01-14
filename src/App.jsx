@@ -6,12 +6,16 @@ import { Toaster } from '@/components/ui/toaster'
 import SessionExpiredDialog from '@/components/auth/SessionExpiredDialog'
 import { base44 } from '@/api/base44Client'
 import { useAuthStore } from '@/stores/authStore'
+import { useSettingsStore } from '@/stores/settingsStore'
 
 function App() {
   const [bootstrapped, setBootstrapped] = useState(false)
   const hydrateFromStorage = useAuthStore((state) => state.hydrateFromStorage)
   const setAuthenticatedUser = useAuthStore((state) => state.setAuthenticatedUser)
   const clearState = useAuthStore((state) => state.clearState)
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
+  const fetchPreferences = useSettingsStore((state) => state.fetchPreferences)
+  const isPreferencesInitialized = useSettingsStore((state) => state.isInitialized)
 
   useEffect(() => {
     hydrateFromStorage()
@@ -42,6 +46,14 @@ function App() {
         setBootstrapped(true)
       })
   }, [hydrateFromStorage, setAuthenticatedUser, clearState])
+
+  // Load persisted UI preferences once the user is authenticated so personalization
+  // (accent color, font size, etc.) applies across the app—not only on the Settings page.
+  useEffect(() => {
+    if (!isAuthenticated) return
+    if (isPreferencesInitialized) return
+    fetchPreferences()
+  }, [isAuthenticated, isPreferencesInitialized, fetchPreferences])
 
   if (!bootstrapped) {
     return (

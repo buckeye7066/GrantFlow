@@ -545,6 +545,46 @@ INSERT OR IGNORE INTO billing_tiers (
     1,
     1,
     1
+  ),
+  (
+    'individual',
+    'Individual',
+    'Individuals/families seeking assistance.',
+    0,
+    8500,
+    0,
+    1,
+    1
+  ),
+  (
+    'small_org',
+    'Small Org',
+    'Annual budget under $250,000.',
+    0,
+    8500,
+    0,
+    1,
+    1
+  ),
+  (
+    'mid_size',
+    'Mid-Size',
+    'Annual budget $250,000 - $2,000,000.',
+    0,
+    11500,
+    1,
+    1,
+    1
+  ),
+  (
+    'large_org',
+    'Large Org',
+    'Annual budget over $2,000,000.',
+    0,
+    15000,
+    1,
+    1,
+    1
   );
 
 -- Profiles (comprehensive application records)

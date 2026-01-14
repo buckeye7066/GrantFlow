@@ -283,12 +283,20 @@ router.post('/run', ensureAuth, async (req, res) => {
         errorMessage = 'Request timeout - external service is not responding'
       }
       
-      return res.status(500).json({
+      // IMPORTANT: return 200 so the frontend doesn't treat this as a network/resource failure.
+      // The UI will surface `success: false` + message for this specific crawler instead.
+      return res.status(200).json({
+        success: false,
         error: 'Crawler execution failed',
         message: errorMessage,
-        crawler: crawler_type,
+        crawler_type,
+        count: 0,
+        total_found: 0,
+        min_match_score,
+        opportunities: [],
         status: 500,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        details: errorDetails,
       })
     }
     
@@ -333,10 +341,13 @@ router.post('/run', ensureAuth, async (req, res) => {
     
   } catch (error) {
     console.error(`[RealCrawlers] Error in ${crawler_type}:`, error)
-    res.status(500).json({ 
+    // Same principle: avoid 500s that show as "Failed to load resource" in the browser.
+    res.status(200).json({ 
+      success: false,
       error: 'Crawler execution failed',
-      message: error.message,
-      crawler_type
+      message: error?.message || String(error),
+      crawler_type,
+      opportunities: [],
     })
   }
 })
