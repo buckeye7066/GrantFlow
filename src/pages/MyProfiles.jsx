@@ -194,7 +194,10 @@ export default function MyProfiles() {
             <AlertDialogHeader>
               <AlertDialogTitle>Delete Profile</AlertDialogTitle>
               <AlertDialogDescription>
-                {DELETE_CONFIRMATION_MESSAGE.replace('this profile', `the profile "${profileToDelete?.display_name}"`)}
+                {DELETE_CONFIRMATION_MESSAGE.replace(
+                  'this profile',
+                  `the profile "${profileToDelete?.display_name || profileToDelete?.organization_name || profileToDelete?.name || 'Untitled profile'}"`,
+                )}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
