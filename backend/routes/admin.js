@@ -6,8 +6,9 @@ import { promises as fsp } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import pdfParse from 'pdf-parse';
-import OpenAI from 'openai';
+import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';
 import { seedRealOpportunities } from '../utils/seedRealOpportunities.js';
+import { seedAssistanceDirectories } from '../utils/seedAssistanceDirectories.js';
 import { ensureDesignatedProfiles } from '../utils/ensureDesignatedProfiles.js';
 import { buildProfileSignals, calculateMatchScore } from '../services/profileHelpers.js';
 import { getSystemDiagnostics } from '../services/diagnosticsService.js';
@@ -163,12 +164,132 @@ async function extractTextFromPDF(filePath) {
 
 // Helper function to get OpenAI instance
 function getOpenAI() {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY environment variable is not set');
-  }
-  return new OpenAI({ apiKey });
+  return createOpenAIClient().openai;
 }
+
+// GET /api/admin/openai/verify
+// Verifies that the server-side OpenAI key is present and can successfully call the API.
+router.get('/openai/verify', async (req, res) => {
+  if (!ensureAdminRequest(req, res)) return;
+
+  try {
+    const { openai, diagnostics } = createOpenAIClient();
+    // A lightweight call that should succeed with a valid key.
+    const models = await openai.models.list();
+    const first = Array.isArray(models?.data) ? models.data[0]?.id : null;
+    res.json({
+      ok: true,
+      diagnostics,
+      sample_model: first,
+      model_count: Array.isArray(models?.data) ? models.data.length : null,
+    });
+  } catch (error) {
+    const summary = summarizeOpenAIError(error);
+    // Always return redacted diagnostics even on failure.
+    const { diagnostics } = createOpenAIClient({ allowMissing: true });
+    res.status(summary.isAuth ? 401 : 500).json({
+      ok: false,
+      error: summary.message,
+      status: summary.status ?? null,
+      diagnostics,
+      hint: summary.isAuth
+        ? 'Server-side OpenAI key failed authentication. Double-check OPENAI_API_KEY on the backend process (not the frontend), and restart the server after changing it.'
+        : 'OpenAI verification failed. Check outbound network/DNS/firewall and try again.',
+    });
+  }
+});
+
+// POST /api/admin/openai/verify-key
+// Verifies a key provided in the request body (one-off), without saving it to env or disk.
+// Body: { "apiKey": "sk-..." }
+router.post('/openai/verify-key', async (req, res) => {
+  if (!ensureAdminRequest(req, res)) return;
+
+  const apiKey = typeof req.body?.apiKey === 'string' ? req.body.apiKey.trim() : '';
+  if (!apiKey) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Missing apiKey',
+      message: 'Provide { apiKey: "sk-..." } in the JSON body',
+    });
+  }
+
+  try {
+    const { openai, diagnostics } = createOpenAIClient({ apiKeyOverride: apiKey });
+    const models = await openai.models.list();
+    const first = Array.isArray(models?.data) ? models.data[0]?.id : null;
+    res.json({
+      ok: true,
+      diagnostics,
+      sample_model: first,
+      model_count: Array.isArray(models?.data) ? models.data.length : null,
+    });
+  } catch (error) {
+    const summary = summarizeOpenAIError(error);
+    // Diagnostics for the provided key (redacted)
+    const { diagnostics } = createOpenAIClient({ allowMissing: true, apiKeyOverride: apiKey });
+    res.status(summary.isAuth ? 401 : 500).json({
+      ok: false,
+      error: summary.message,
+      status: summary.status ?? null,
+      diagnostics,
+      hint: summary.isAuth
+        ? 'Provided key failed authentication. Copy only the raw OpenAI key (no "OPENAI_API_KEY=" prefix, no extra platform text), then try again.'
+        : 'Verification failed. Check outbound network/DNS/firewall and try again.',
+    });
+  }
+});
+
+// POST /api/admin/openai/apply-key
+// Applies a provided OpenAI key to the *running process* (in-memory) and verifies immediately.
+// This avoids env-var tooling/restarts for local/dev use. It does NOT persist across restarts.
+// Body: { "apiKey": "sk-..." }
+router.post('/openai/apply-key', async (req, res) => {
+  if (!ensureAdminRequest(req, res)) return;
+
+  const apiKey = typeof req.body?.apiKey === 'string' ? req.body.apiKey.trim() : '';
+  if (!apiKey) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Missing apiKey',
+      message: 'Provide { apiKey: "sk-..." } in the JSON body',
+    });
+  }
+
+  // Apply to process env (in-memory). openaiClient normalization will strip common junk.
+  process.env.OPENAI_API_KEY = apiKey;
+
+  try {
+    const { openai, diagnostics } = createOpenAIClient();
+    const models = await openai.models.list();
+    const first = Array.isArray(models?.data) ? models.data[0]?.id : null;
+
+    res.json({
+      ok: true,
+      applied: true,
+      persisted: false,
+      diagnostics,
+      sample_model: first,
+      model_count: Array.isArray(models?.data) ? models.data.length : null,
+      note: 'Key applied to running process only (not persisted). To persist, set OPENAI_API_KEY in your host environment.',
+    });
+  } catch (error) {
+    const summary = summarizeOpenAIError(error);
+    const { diagnostics } = createOpenAIClient({ allowMissing: true });
+
+    res.status(summary.isAuth ? 401 : 500).json({
+      ok: false,
+      applied: true,
+      persisted: false,
+      error: summary.message,
+      status: summary.status ?? null,
+      diagnostics,
+      hint: summary.isAuth
+        ? 'Applied key failed authentication. Ensure you pasted the raw OpenAI key (sk-...) with no extra text.'
+        : 'Applied key verification failed. Check outbound network/DNS/firewall and try again.',
+    });
+  }
+});
 
 // AI prompt for extracting profile information from PDF text
 const PROFILE_EXTRACTION_PROMPT = `You are an AI assistant that extracts organization profile information from documents. 
@@ -728,12 +849,33 @@ router.get('/db-stats', (req, res) => {
 // POST /api/admin/seed-opportunities - Seed real funding opportunities
 router.post('/seed-opportunities', async (req, res) => {
   try {
+    if (!ensureAdminRequest(req, res)) return;
     const { totalLoaded } = seedRealOpportunities(req.db);
     const totalInDb = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get()?.count || 0;
     res.json({ success: true, message: `Seeded ${totalLoaded} opportunities`, total_in_database: totalInDb, loaded_from_files: totalLoaded });
   } catch (error) {
     console.error('[admin/seed-opportunities] Error:', error);
     res.status(500).json({ success: false, error: error.message || 'Failed to seed opportunities' });
+  }
+});
+
+// POST /api/admin/seed-assistance-directories - Seed state 211 + national assistance directories
+router.post('/seed-assistance-directories', async (req, res) => {
+  try {
+    if (!ensureAdminRequest(req, res)) return;
+    const before = req.db.prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')").get()?.count || 0;
+    const result = seedAssistanceDirectories(req.db);
+    const after = req.db.prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')").get()?.count || 0;
+    res.json({
+      success: true,
+      message: `Seeded assistance directories. Records: ${before} → ${after}.`,
+      before,
+      after,
+      ...result,
+    });
+  } catch (error) {
+    console.error('[admin/seed-assistance-directories] Error:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to seed assistance directories' });
   }
 });
 

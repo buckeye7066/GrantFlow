@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { apiFetch } from '@/api/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { createPageUrl } from '@/utils';
 import {
   Dialog,
   DialogContent,
@@ -28,6 +31,7 @@ import {
 } from 'lucide-react';
 
 export default function AdminDiagnostics() {
+  const navigate = useNavigate();
   const [diagnostics, setDiagnostics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -38,6 +42,11 @@ export default function AdminDiagnostics() {
   const [inspectLoading, setInspectLoading] = useState(false);
   const [inspectError, setInspectError] = useState(null);
   const [inspectData, setInspectData] = useState(null);
+  const [inspectMeta, setInspectMeta] = useState({ title: 'Details', description: null });
+  const [openaiKey, setOpenaiKey] = useState('');
+  const [openaiKeyLoading, setOpenaiKeyLoading] = useState(false);
+  const [openaiKeyResult, setOpenaiKeyResult] = useState(null);
+  const [openaiKeyError, setOpenaiKeyError] = useState(null);
 
   const loadDiagnostics = async () => {
     try {
@@ -101,6 +110,10 @@ export default function AdminDiagnostics() {
     setInspectOpen(true);
     setInspectError(null);
     setInspectData(null);
+    setInspectMeta({
+      title: 'Error details',
+      description: 'Inspect the underlying crawler job payload so you can fix the real root cause.',
+    });
 
     if (!entry || entry.scope !== 'crawler_job' || !entry.job_id) {
       setInspectData(entry || null);
@@ -244,6 +257,64 @@ export default function AdminDiagnostics() {
     return statusMap[status] || <Badge variant="secondary">{status}</Badge>;
   };
 
+  const handleNavigate = (url) => {
+    if (!url) return;
+    navigate(url);
+  };
+
+  const tileProps = (url) => ({
+    role: 'button',
+    tabIndex: 0,
+    onClick: () => handleNavigate(url),
+    onKeyDown: (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        handleNavigate(url);
+      }
+    },
+  });
+
+  const openInspect = ({ title, description, data }) => {
+    setInspectOpen(true);
+    setInspectLoading(false);
+    setInspectError(null);
+    setInspectData(data ?? null);
+    setInspectMeta({
+      title: title || 'Details',
+      description: description || null,
+    });
+  };
+
+  const verifyProvidedOpenAIKey = async () => {
+    try {
+      setOpenaiKeyLoading(true);
+      setOpenaiKeyError(null);
+      setOpenaiKeyResult(null);
+      const data = await apiFetch.post('/api/admin/openai/verify-key', { apiKey: openaiKey });
+      setOpenaiKeyResult({ mode: 'verify', data });
+    } catch (err) {
+      setOpenaiKeyError(err?.message || 'Failed to verify key');
+    } finally {
+      setOpenaiKeyLoading(false);
+    }
+  };
+
+  const applyProvidedOpenAIKey = async () => {
+    try {
+      setOpenaiKeyLoading(true);
+      setOpenaiKeyError(null);
+      setOpenaiKeyResult(null);
+      const data = await apiFetch.post('/api/admin/openai/apply-key', { apiKey: openaiKey });
+      setOpenaiKeyResult({ mode: 'apply', data });
+      // Refresh diagnostics snapshot so env flags reflect the new config state.
+      await loadDiagnostics();
+    } catch (err) {
+      setOpenaiKeyError(err?.message || 'Failed to apply key');
+    } finally {
+      setOpenaiKeyLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -285,11 +356,32 @@ export default function AdminDiagnostics() {
       </div>
 
       {/* System Status - Truth-based */}
-      <Card className={`border-2 ${
+      <Card
+        className={`border-2 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-300 ${
         systemStatus === 'ok' ? 'border-green-500 bg-green-50' : 
         systemStatus === 'error' ? 'border-red-500 bg-red-50' : 
         'border-amber-500 bg-amber-50'
-      }`}>
+      }`}
+        role="button"
+        tabIndex={0}
+        onClick={() =>
+          openInspect({
+            title: 'System diagnostics snapshot',
+            description: 'Raw diagnostics payload returned by /api/admin/diagnostics.',
+            data: diagnostics,
+          })
+        }
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            openInspect({
+              title: 'System diagnostics snapshot',
+              description: 'Raw diagnostics payload returned by /api/admin/diagnostics.',
+              data: diagnostics,
+            });
+          }
+        }}
+      >
         <CardHeader>
           <CardTitle className="flex items-center gap-3">
             <Server className="w-5 h-5" />
@@ -362,25 +454,41 @@ export default function AdminDiagnostics() {
         <CardContent>
           {diagnostics.db?.ok ? (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-              <div className="bg-slate-50 p-3 rounded">
+              <div
+                className="bg-slate-50 p-3 rounded cursor-pointer hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                {...tileProps(createPageUrl('FundingOpportunities'))}
+                aria-label="View funding opportunities"
+              >
                 <p className="text-xs text-slate-600">funding_opportunities</p>
                 <p className={`text-2xl font-bold ${diagnostics.db.tables.funding_opportunities === 0 ? 'text-amber-600' : 'text-slate-900'}`}>
                   {diagnostics.db.tables.funding_opportunities || 0}
                 </p>
               </div>
-              <div className="bg-slate-50 p-3 rounded">
+              <div
+                className="bg-slate-50 p-3 rounded cursor-pointer hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                {...tileProps(createPageUrl('MyProfiles'))}
+                aria-label="View profiles"
+              >
                 <p className="text-xs text-slate-600">profiles</p>
                 <p className="text-2xl font-bold text-slate-900">
                   {diagnostics.db.tables.profiles || 0}
                 </p>
               </div>
-              <div className="bg-slate-50 p-3 rounded">
+              <div
+                className="bg-slate-50 p-3 rounded cursor-pointer hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                {...tileProps(createPageUrl('Pipeline'))}
+                aria-label="View grant pipeline"
+              >
                 <p className="text-xs text-slate-600">grants</p>
                 <p className="text-2xl font-bold text-slate-900">
                   {diagnostics.db.tables.grants || 0}
                 </p>
               </div>
-              <div className="bg-slate-50 p-3 rounded">
+              <div
+                className="bg-slate-50 p-3 rounded cursor-pointer hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                {...tileProps(createPageUrl('Diagnostics'))}
+                aria-label="View crawl logs diagnostics"
+              >
                 <p className="text-xs text-slate-600">crawl_logs</p>
                 <p className="text-2xl font-bold text-slate-900">
                   {diagnostics.db.tables.crawl_logs || 0}
@@ -408,7 +516,37 @@ export default function AdminDiagnostics() {
           <CardContent>
             <div className="space-y-2">
               {Object.entries(diagnostics.db.schema_checks).map(([key, value]) => (
-                <div key={key} className="flex items-center gap-2">
+                <div
+                  key={key}
+                  className="flex items-center gap-2 rounded px-2 py-1 cursor-pointer hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() =>
+                    openInspect({
+                      title: `Schema check: ${key}`,
+                      description: 'Schema health checks verify expected tables/columns/constraints exist.',
+                      data: {
+                        key,
+                        ok: Boolean(value),
+                        all_checks: diagnostics.db.schema_checks,
+                      },
+                    })
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      openInspect({
+                        title: `Schema check: ${key}`,
+                        description: 'Schema health checks verify expected tables/columns/constraints exist.',
+                        data: {
+                          key,
+                          ok: Boolean(value),
+                          all_checks: diagnostics.db.schema_checks,
+                        },
+                      });
+                    }
+                  }}
+                >
                   {value ? (
                     <CheckCircle2 className="w-4 h-4 text-green-600 flex-shrink-0" />
                   ) : (
@@ -432,9 +570,82 @@ export default function AdminDiagnostics() {
             </CardTitle>
           </CardHeader>
           <CardContent>
+            <div className="mb-4 rounded border border-slate-200 bg-slate-50 p-3">
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">OpenAI Key Verifier</p>
+                  <p className="text-xs text-slate-600">
+                    Paste a key to verify (one-off) or apply it to the running server (no restart; not persisted).
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <Input
+                  type="password"
+                  placeholder="sk-..."
+                  value={openaiKey}
+                  onChange={(e) => setOpenaiKey(e.target.value)}
+                  autoComplete="off"
+                />
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={verifyProvidedOpenAIKey}
+                    disabled={openaiKeyLoading || !openaiKey.trim()}
+                  >
+                    {openaiKeyLoading ? 'Working…' : 'Verify key'}
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={applyProvidedOpenAIKey}
+                    disabled={openaiKeyLoading || !openaiKey.trim()}
+                  >
+                    {openaiKeyLoading ? 'Working…' : 'Apply to server (in-memory)'}
+                  </Button>
+                </div>
+
+                {openaiKeyError ? (
+                  <Alert variant="destructive" className="mt-2">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>{openaiKeyError}</AlertDescription>
+                  </Alert>
+                ) : null}
+
+                {openaiKeyResult?.data ? (
+                  <pre className="mt-2 max-h-[240px] overflow-auto rounded bg-slate-950 p-3 text-xs text-slate-100">
+                    {JSON.stringify(openaiKeyResult, null, 2)}
+                  </pre>
+                ) : null}
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
               {Object.entries(diagnostics.env_flags).map(([key, value]) => (
-                <div key={key} className="flex items-center justify-between p-3 bg-slate-50 rounded">
+                <div
+                  key={key}
+                  className="flex items-center justify-between p-3 bg-slate-50 rounded cursor-pointer hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() =>
+                    openInspect({
+                      title: `Env flag: ${key}`,
+                      description: 'These flags indicate whether key environment variables are configured (values are not exposed).',
+                      data: { key, value },
+                    })
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      openInspect({
+                        title: `Env flag: ${key}`,
+                        description: 'These flags indicate whether key environment variables are configured (values are not exposed).',
+                        data: { key, value },
+                      });
+                    }
+                  }}
+                >
                   <span className="text-sm font-medium truncate mr-2">{key}</span>
                   {typeof value === 'boolean' ? (
                     value ? (
@@ -534,7 +745,29 @@ export default function AdminDiagnostics() {
             {diagnostics.last_activity.last_10_crawl_logs.length > 0 ? (
               <div className="space-y-2">
                 {diagnostics.last_activity.last_10_crawl_logs.map((log, index) => (
-                  <div key={index} className="border-l-4 border-blue-500 pl-4 py-2 bg-slate-50 rounded">
+                  <div
+                    key={index}
+                    className="border-l-4 border-blue-500 pl-4 py-2 bg-slate-50 rounded cursor-pointer hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() =>
+                      openInspect({
+                        title: 'Crawl log',
+                        description: 'Raw crawl log row (most recent activity).',
+                        data: log,
+                      })
+                    }
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        openInspect({
+                          title: 'Crawl log',
+                          description: 'Raw crawl log row (most recent activity).',
+                          data: log,
+                        });
+                      }
+                    }}
+                  >
                     <div className="flex items-center justify-between mb-1">
                       <p className="text-sm font-medium">{log.source}</p>
                       {getStatusBadge(log.status)}
@@ -561,10 +794,10 @@ export default function AdminDiagnostics() {
       <Dialog open={inspectOpen} onOpenChange={setInspectOpen}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
-            <DialogTitle>Error details</DialogTitle>
-            <DialogDescription>
-              Inspect the underlying crawler job payload so you can fix the real root cause.
-            </DialogDescription>
+            <DialogTitle>{inspectMeta.title}</DialogTitle>
+            {inspectMeta.description ? (
+              <DialogDescription>{inspectMeta.description}</DialogDescription>
+            ) : null}
           </DialogHeader>
 
           {inspectLoading ? (

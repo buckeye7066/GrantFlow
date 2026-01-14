@@ -2,6 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
+/* User preference-driven base font size (set by settingsStore.applyTheme) */
+html {
+  font-size: var(--base-font-size, 16px);
+}
+
 
 /* :root {
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;

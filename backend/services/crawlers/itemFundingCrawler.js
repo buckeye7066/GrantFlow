@@ -223,16 +223,15 @@ async function searchItemSource(source, itemInfo, profile) {
 async function searchGeneralItemGrants(itemInfo, profile) {
   const grants = []
   
-  // Production: Must use real general equipment grant sources
-  // No mock/placeholder foundation URLs allowed
-  
-  // Note: These would need to be replaced with actual community foundation search
-  // or aggregator APIs in production. Throwing error to prevent use of placeholder data.
-  throw new Error(
-    'searchGeneralItemGrants requires real community foundation API integration. ' +
-    'Placeholder URLs (communityfoundation.org, faithfoundation.org, etc.) are not allowed in production. ' +
-    `Item type: ${itemInfo.type}, Profile: ${profile?.id || 'unknown'}`
+  // NOTE:
+  // Previously this function threw to prevent placeholder data usage, which surfaced as a 500 in
+  // `/api/real-crawlers/run` and broke the entire crawler run. We keep the "no placeholders" rule,
+  // but fail gracefully: return zero "general" item grants until real integration exists.
+  console.warn(
+    '[ItemFundingCrawler] General item grants integration not implemented yet. Returning 0 results.',
+    { itemType: itemInfo?.type, profileId: profile?.id },
   )
+  return grants
 }
 
 function calculateItemMatchScore(opportunity, itemInfo, profile) {

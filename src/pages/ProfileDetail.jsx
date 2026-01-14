@@ -24,6 +24,9 @@ import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.
 import { useSettingsStore } from "@/stores/settingsStore"
 import ProfileFilesPanel from "@/components/profiles/ProfileFilesPanel.jsx"
 import ProfileAppliedFundingPrint from "@/components/profiles/ProfileAppliedFundingPrint.jsx"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 
 export default function ProfileDetail() {
   const [searchParams] = useSearchParams()
@@ -32,7 +35,8 @@ export default function ProfileDetail() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
   const { state: dashboardPrefs, dispatch: preferencesDispatch } = useDashboardPreferences()
-  const { updatePreference } = useSettingsStore()
+  const preferences = useSettingsStore((state) => state.preferences)
+  const updatePreference = useSettingsStore((state) => state.updatePreference)
   const [appearanceOpen, setAppearanceOpen] = React.useState(false)
   const themeOptions = React.useMemo(
     () => [
@@ -354,7 +358,7 @@ export default function ProfileDetail() {
         </div>
 
         <Tabs defaultValue="profile" className="w-full">
-          <TabsList className="grid w-full grid-cols-8 lg:w-auto lg:inline-flex">
+          <TabsList className="grid w-full grid-cols-9 lg:w-auto lg:inline-flex">
             <TabsTrigger value="profile">Profile Information</TabsTrigger>
             <TabsTrigger value="pipeline">Pipeline</TabsTrigger>
             <TabsTrigger value="item-funding">Item Funding</TabsTrigger>
@@ -363,6 +367,7 @@ export default function ProfileDetail() {
             <TabsTrigger value="proposals">Proposals & Files</TabsTrigger>
             <TabsTrigger value="documents">Documents</TabsTrigger>
             <TabsTrigger value="billing">Billing</TabsTrigger>
+            <TabsTrigger value="personalization">Personalization</TabsTrigger>
           </TabsList>
 
           <TabsContent value="profile" className="mt-6">
@@ -493,6 +498,117 @@ export default function ProfileDetail() {
               ) : (
                 <p className="text-slate-600">No billing information available for this profile.</p>
               )}
+            </div>
+          </TabsContent>
+
+          <TabsContent value="personalization" className="mt-6">
+            <div className="grid gap-6 lg:grid-cols-2">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Theme & readability</CardTitle>
+                  <CardDescription>Adjust color + font size. These apply immediately across the app.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  <div className="space-y-2">
+                    <Label>Accent color</Label>
+                    <div className="grid grid-cols-4 gap-3">
+                      {[
+                        { name: "blue", hex: "#3b82f6" },
+                        { name: "purple", hex: "#a855f7" },
+                        { name: "green", hex: "#22c55e" },
+                        { name: "orange", hex: "#f97316" },
+                        { name: "rose", hex: "#f43f5e" },
+                        { name: "cyan", hex: "#06b6d4" },
+                        { name: "amber", hex: "#f59e0b" },
+                        { name: "pink", hex: "#ec4899" },
+                      ].map((color) => (
+                        <button
+                          key={color.name}
+                          type="button"
+                          onClick={() => updatePreference("accent_color", color.name)}
+                          className={`h-11 rounded-lg border-2 transition-transform hover:scale-[1.02] ${
+                            preferences.accent_color === color.name
+                              ? "border-slate-900 ring-2 ring-slate-900"
+                              : "border-slate-200"
+                          }`}
+                          style={{ backgroundColor: color.hex }}
+                          aria-label={`Select ${color.name} accent color`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Font size</Label>
+                    <Select
+                      value={preferences.font_size}
+                      onValueChange={(value) => updatePreference("font_size", value)}
+                    >
+                      <SelectTrigger className="w-48">
+                        <SelectValue placeholder="Select font size" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="small">Small</SelectItem>
+                        <SelectItem value="medium">Medium</SelectItem>
+                        <SelectItem value="large">Large</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Comfort</CardTitle>
+                  <CardDescription>Reduce motion, increase contrast, and tune density.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  <div className="space-y-2">
+                    <Label>Card density</Label>
+                    <Select
+                      value={preferences.card_density}
+                      onValueChange={(value) => updatePreference("card_density", value)}
+                    >
+                      <SelectTrigger className="w-56">
+                        <SelectValue placeholder="Select density" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="compact">Compact</SelectItem>
+                        <SelectItem value="comfortable">Comfortable</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="space-y-0.5">
+                      <Label>Reduce motion</Label>
+                      <p className="text-sm text-slate-500">Less animation and movement.</p>
+                    </div>
+                    <Switch
+                      checked={Boolean(preferences.reduce_motion)}
+                      onCheckedChange={(checked) => updatePreference("reduce_motion", checked)}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="space-y-0.5">
+                      <Label>High contrast</Label>
+                      <p className="text-sm text-slate-500">Sharper contrast for readability.</p>
+                    </div>
+                    <Switch
+                      checked={Boolean(preferences.high_contrast)}
+                      onCheckedChange={(checked) => updatePreference("high_contrast", checked)}
+                    />
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="mt-6 rounded-lg border bg-white p-4">
+              <p className="text-sm text-slate-600">
+                Tip: these settings are the same ones used on the main <strong>Settings</strong> page—this tab is just
+                a quicker place to tweak them while you’re working inside a profile.
+              </p>
             </div>
           </TabsContent>
         </Tabs>

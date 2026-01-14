@@ -1,25 +1,35 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, Link } from 'react-router-dom'
 import AuthShell from '@/components/auth/AuthShell'
 import AuthMethodTabs from '@/components/auth/AuthMethodTabs'
 import AuthErrorBoundary from '@/components/auth/AuthErrorBoundary'
 import { useAuthStore } from '@/stores/authStore'
 import { ArrowRight } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 
 const AUTH_TABS = new Set(['email'])
 
 export default function Login() {
   const navigate = useNavigate()
   const location = useLocation()
+  const [devLoading, setDevLoading] = useState(false)
   const {
     isAuthenticated,
     sessionExpired,
     closeSessionExpired,
+    loginWithTokens,
   } = useAuthStore((state) => ({
     isAuthenticated: state.isAuthenticated,
     sessionExpired: state.sessionExpired,
     closeSessionExpired: state.closeSessionExpired,
+    loginWithTokens: state.loginWithTokens,
   }))
+
+  const showDevAdminShortcut = useMemo(() => {
+    if (typeof window === 'undefined') return false
+    const host = window.location.hostname
+    return host === 'localhost' || host === '127.0.0.1'
+  }, [])
 
   useEffect(() => {
     if (sessionExpired) {
@@ -52,6 +62,23 @@ export default function Login() {
     console.log('[Login] Error boundary reset')
   }
 
+  const handleDevAdminLogin = async () => {
+    if (!showDevAdminShortcut) return
+    setDevLoading(true)
+    try {
+      // Local dev default (matches `backend/env.example`). Override if needed:
+      // set `VITE_DEV_ADMIN_TOKEN` in your `.env.local`.
+      const token = import.meta.env.VITE_DEV_ADMIN_TOKEN || 'dev-admin-token'
+      await loginWithTokens({ accessToken: token })
+      navigate(redirectTarget, { replace: true })
+    } catch (error) {
+      console.error('[Login] Dev admin login failed:', error)
+      window.alert(`Dev admin login failed: ${error?.message || error}`)
+    } finally {
+      setDevLoading(false)
+    }
+  }
+
   return (
     <AuthErrorBoundary onReset={handleErrorReset}>
       <AuthShell
@@ -68,6 +95,14 @@ export default function Login() {
             New user? Apply for grant writing services
             <ArrowRight className="h-4 w-4" />
           </Link>
+
+          {showDevAdminShortcut ? (
+            <div className="mt-4 flex justify-center">
+              <Button variant="outline" onClick={handleDevAdminLogin} disabled={devLoading}>
+                {devLoading ? 'Logging in…' : 'Dev: Login as Admin'}
+              </Button>
+            </div>
+          ) : null}
         </div>
       </AuthShell>
     </AuthErrorBoundary>

@@ -1,5 +1,7 @@
 import { buildProfileSectionPrompt } from '../prompts/profileSections.js'
 import { extractCompletionText } from '../utils/openai.js'
+import { extractTextFromFile } from './documentTextExtraction.js'
+import { summarizeOpenAIError } from '../utils/openaiClient.js'
 
 const TARGET_SECTIONS = [
   'basic_information',
@@ -118,6 +120,7 @@ export async function processDocumentIngestionJob({
   job,
   profileContext,
   getOpenAI,
+  uploadDir,
 }) {
   const params = job.parameters ?? {}
   const documentId = params.document_id
@@ -138,10 +141,31 @@ export async function processDocumentIngestionJob({
     'UPDATE documents SET processing_status = ?, processing_error = NULL WHERE id = ?',
   ).run('processing', documentId)
 
-  const openai = getOpenAI()
   const updates = []
   const profile = profileContext.profile
   const sections = profileContext.sections
+
+  // If we don't have extracted text yet, try again here (handles remote-url ingests and prior failures).
+  try {
+    if (!document.extracted_text && document.file_path && document.mime_type) {
+      const result = await extractTextFromFile({
+        filePath: document.file_path,
+        mimeType: document.mime_type,
+        fileName: document.name,
+        ocr: true,
+        ocrLanguage: 'eng',
+      })
+      if (result?.text) {
+        db.prepare('UPDATE documents SET extracted_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
+          result.text,
+          documentId,
+        )
+        document.extracted_text = result.text
+      }
+    }
+  } catch (error) {
+    // Best-effort; we'll proceed and let downstream report "text unavailable".
+  }
 
   const docExcerpt = truncateText(
     document.extracted_text ?? document.notes ?? '',
@@ -161,6 +185,61 @@ export async function processDocumentIngestionJob({
   const aiSectionsLog = {}
 
   try {
+    let openai = null
+    try {
+      openai = typeof getOpenAI === 'function' ? getOpenAI() : null
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'AI parsing unavailable (missing API key).'
+      db.prepare(
+        `
+          UPDATE documents
+          SET processing_status = 'failed',
+              processing_error = ?
+          WHERE id = ?
+        `,
+      ).run(message, documentId)
+      return {
+        inserted: 0,
+        sections_updated: [],
+        document_id: documentId,
+        summary: message,
+        result_count: 0,
+        result_meta: {
+          document_id: documentId,
+          profile_id: profile?.id ?? null,
+          error: message,
+        },
+      }
+    }
+
+    if (!docExcerpt) {
+      const message =
+        'No extractable text found for this document. If it is scanned, upload a JPG/PNG version to enable OCR.'
+      db.prepare(
+        `
+          UPDATE documents
+          SET processing_status = 'failed',
+              processing_error = ?
+          WHERE id = ?
+        `,
+      ).run(message, documentId)
+      return {
+        inserted: 0,
+        sections_updated: [],
+        document_id: documentId,
+        summary: message,
+        result_count: 0,
+        result_meta: {
+          document_id: documentId,
+          profile_id: profile?.id ?? null,
+          error: message,
+        },
+      }
+    }
+
+    let fatalOpenAIError = null
+
     for (const sectionKey of TARGET_SECTIONS) {
       const promptPayload = buildProfileSectionPrompt(sectionKey, {
         profile,
@@ -210,7 +289,38 @@ export async function processDocumentIngestionJob({
           updated: Array.from(updatedFields),
         }
       } catch (error) {
-        console.error(`Failed to enrich section ${sectionKey}`, error)
+        const summary = summarizeOpenAIError(error)
+        console.error(`Failed to enrich section ${sectionKey}`, summary)
+
+        // If the key is invalid (or access is forbidden), stop and surface the real error.
+        if (summary.isAuth) {
+          fatalOpenAIError = summary.message
+          break
+        }
+      }
+    }
+
+    if (fatalOpenAIError) {
+      const message = `AI parsing failed: ${fatalOpenAIError}`
+      db.prepare(
+        `
+          UPDATE documents
+          SET processing_status = 'failed',
+              processing_error = ?
+          WHERE id = ?
+        `,
+      ).run(message, documentId)
+      return {
+        inserted: 0,
+        sections_updated: [],
+        document_id: documentId,
+        summary: message,
+        result_count: 0,
+        result_meta: {
+          document_id: documentId,
+          profile_id: profile?.id ?? null,
+          error: message,
+        },
       }
     }
 

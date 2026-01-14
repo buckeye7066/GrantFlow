@@ -45,6 +45,7 @@ export default function AdminGeoCrawl() {
   const [counties, setCounties] = useState([])
   const [countySearch, setCountySearch] = useState("")
   const [zipSearch, setZipSearch] = useState("")
+  const [citySearch, setCitySearch] = useState("")
   const [selectedZips, setSelectedZips] = useState(new Set())
   const [selectedCounties, setSelectedCounties] = useState(new Set())
   const [minSources, setMinSources] = useState(3)
@@ -77,6 +78,12 @@ export default function AdminGeoCrawl() {
         setZips(zipRes?.zips ?? [])
         setCounties(countyRes?.counties ?? [])
         setStatus(statusRes ?? null)
+        // Reset local selection + filters when switching states to avoid mismatched selections.
+        setSelectedZips(new Set())
+        setSelectedCounties(new Set())
+        setZipSearch("")
+        setCitySearch("")
+        setCountySearch("")
       })
       .catch((err) => {
         toast({ title: "Failed to load geo data", description: err.message, variant: "destructive" })
@@ -106,6 +113,29 @@ export default function AdminGeoCrawl() {
     return zips.filter((z) => String(z.zip_code).includes(q) || String(z.city || "").toLowerCase().includes(q))
   }, [zips, zipSearch])
 
+  const cities = useMemo(() => {
+    const byCity = new Map()
+    ;(zips || []).forEach((z) => {
+      const city = String(z.city || "").trim()
+      if (!city) return
+      const key = city.toLowerCase()
+      if (!byCity.has(key)) {
+        byCity.set(key, { city, state: z.state, zipCodes: new Set() })
+      }
+      byCity.get(key).zipCodes.add(z.zip_code)
+    })
+
+    return Array.from(byCity.values())
+      .map((c) => ({ ...c, zipCodes: Array.from(c.zipCodes).sort() }))
+      .sort((a, b) => a.city.localeCompare(b.city))
+  }, [zips])
+
+  const filteredCities = useMemo(() => {
+    if (!citySearch.trim()) return cities
+    const q = citySearch.trim().toLowerCase()
+    return cities.filter((c) => c.city.toLowerCase().includes(q))
+  }, [cities, citySearch])
+
   const filteredCounties = useMemo(() => {
     if (!countySearch.trim()) return counties
     const q = countySearch.trim().toLowerCase()
@@ -126,6 +156,37 @@ export default function AdminGeoCrawl() {
       const next = new Set(prev)
       if (next.has(county)) next.delete(county)
       else next.add(county)
+      return next
+    })
+  }
+
+  const selectAllFilteredCounties = () => {
+    if (selectedZips.size > 0) return
+    setSelectedCounties((prev) => {
+      const next = new Set(prev)
+      filteredCounties.forEach((c) => {
+        if (c?.county) next.add(c.county)
+      })
+      return next
+    })
+  }
+
+  const clearAllCounties = () => {
+    setSelectedCounties(new Set())
+  }
+
+  const toggleCity = (cityObj) => {
+    if (!cityObj?.zipCodes?.length) return
+    setSelectedZips((prev) => {
+      const next = new Set(prev)
+      const allSelected = cityObj.zipCodes.every((z) => next.has(z))
+      if (allSelected) {
+        cityObj.zipCodes.forEach((z) => next.delete(z))
+      } else {
+        // Selecting any ZIPs disables county selection; clear counties to avoid mixed scope ambiguity.
+        setSelectedCounties(new Set())
+        cityObj.zipCodes.forEach((z) => next.add(z))
+      }
       return next
     })
   }
@@ -245,6 +306,29 @@ export default function AdminGeoCrawl() {
                     onChange={(e) => setCountySearch(e.target.value)}
                     disabled={!counties?.length}
                   />
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs text-slate-500">
+                      {counties?.length ? `${filteredCounties.length.toLocaleString()} match(es)` : null}
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={selectAllFilteredCounties}
+                        disabled={!counties?.length || selectedZips.size > 0 || filteredCounties.length === 0}
+                      >
+                        Select all
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={clearAllCounties}
+                        disabled={selectedCounties.size === 0}
+                      >
+                        Clear counties
+                      </Button>
+                    </div>
+                  </div>
                   <div className="max-h-72 overflow-auto border rounded-md bg-white">
                     {!counties?.length ? (
                       <div className="p-3 text-xs text-slate-600">
@@ -289,6 +373,52 @@ export default function AdminGeoCrawl() {
                     value={zipSearch}
                     onChange={(e) => setZipSearch(e.target.value)}
                   />
+
+                  <div className="space-y-2">
+                    <Label className="text-xs text-slate-600">Cities (selecting a city selects all ZIPs in that city)</Label>
+                    <Input
+                      placeholder="Search city..."
+                      value={citySearch}
+                      onChange={(e) => setCitySearch(e.target.value)}
+                      disabled={!cities.length}
+                    />
+                    <div className="max-h-40 overflow-auto border rounded-md bg-white">
+                      {!cities.length ? (
+                        <div className="p-3 text-xs text-slate-600">No city data available for this state.</div>
+                      ) : (
+                        filteredCities.slice(0, 200).map((c) => {
+                          const checked = c.zipCodes.every((z) => selectedZips.has(z))
+                          const partial = !checked && c.zipCodes.some((z) => selectedZips.has(z))
+                          return (
+                            <label
+                              key={`${c.state || selectedState}-${c.city}`}
+                              className="flex items-center justify-between px-3 py-2 text-sm border-b last:border-b-0 cursor-pointer hover:bg-slate-50"
+                            >
+                              <div className="flex items-center gap-3">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  ref={(el) => {
+                                    if (el) el.indeterminate = partial
+                                  }}
+                                  onChange={() => toggleCity(c)}
+                                />
+                                <div className="flex flex-col">
+                                  <span className="font-medium text-slate-900">{c.city}</span>
+                                  <span className="text-xs text-slate-600">{c.zipCodes.length.toLocaleString()} ZIPs</span>
+                                </div>
+                              </div>
+                              <span className="text-xs text-slate-500">{selectedState}</span>
+                            </label>
+                          )
+                        })
+                      )}
+                    </div>
+                    {filteredCities.length > 200 ? (
+                      <div className="text-xs text-slate-500">Showing first 200 cities for performance.</div>
+                    ) : null}
+                  </div>
+
                   <div className="max-h-72 overflow-auto border rounded-md bg-white">
                     {filteredZips.slice(0, 500).map((z) => {
                       const checked = selectedZips.has(z.zip_code)

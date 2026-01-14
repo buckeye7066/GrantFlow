@@ -2,23 +2,18 @@ import express from 'express';
 import crypto from 'crypto';
 import multer from 'multer';
 import fs from 'fs';
-import { promises as fsp } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import pdfParse from 'pdf-parse';
-import mammoth from 'mammoth';
 import rateLimit from 'express-rate-limit';
-import OpenAI from 'openai';
+import { createOpenAIClient } from '../utils/openaiClient.js';
 import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js';
+import fetch from 'node-fetch';
+import { extractTextFromFile } from '../services/documentTextExtraction.js';
 
 // OpenAI client helper
 function getOpenAI() {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY environment variable is not set');
-  }
-  return new OpenAI({ apiKey });
+  return createOpenAIClient().openai;
 }
 
 const router = express.Router();
@@ -40,9 +35,55 @@ const storage = multer.diskStorage({
   },
 });
 
+const ALLOWED_MIME_TYPES = new Set([
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'text/plain',
+  'application/rtf',
+  'text/rtf',
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'image/bmp',
+  'image/tiff',
+  'image/heic',
+  'image/heif',
+]);
+
+function multerFileFilter(_req, file, cb) {
+  // Allow empty mimetype if extension suggests a supported type.
+  const extension = (file?.originalname?.split('.').pop() || '').toLowerCase();
+  const allowedExt = new Set([
+    'pdf',
+    'doc',
+    'docx',
+    'txt',
+    'rtf',
+    'jpg',
+    'jpeg',
+    'png',
+    'webp',
+    'gif',
+    'bmp',
+    'tif',
+    'tiff',
+    'heic',
+    'heif',
+  ]);
+  const ok = ALLOWED_MIME_TYPES.has(file.mimetype) || allowedExt.has(extension);
+  if (!ok) {
+    return cb(new multer.MulterError('LIMIT_UNEXPECTED_FILE', file?.fieldname || 'file'));
+  }
+  return cb(null, true);
+}
+
 const upload = multer({
   storage,
-  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: multerFileFilter,
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB to match UI
 });
 
 // Rate limiter for file uploads to prevent abuse
@@ -54,34 +95,85 @@ const uploadLimiter = rateLimit({
   message: 'Too many file uploads from this IP, please try again later.',
 });
 
-async function extractTextFromFile(filePath, mimeType) {
-  if (!filePath || !mimeType) return null;
-
-  try {
-    if (mimeType === 'application/pdf') {
-      const buffer = await fsp.readFile(filePath);
-      const result = await pdfParse(buffer);
-      const text = result?.text?.trim();
-      return text && text.length > 0 ? text : null;
+function respondMulterError(res, err) {
+  if (!err) return false;
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      res.status(413).json({ error: 'File is too large. Max size is 50MB.' });
+      return true;
     }
-
-    if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-      const buffer = await fsp.readFile(filePath);
-      const { value } = await mammoth.extractRawText({ buffer });
-      const text = value?.trim();
-      return text && text.length > 0 ? text : null;
+    if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+      res.status(400).json({
+        error: 'Unsupported file type. Upload PDF, DOC/DOCX, TXT/RTF, or an image (JPG/PNG/WebP).',
+      });
+      return true;
     }
-
-    if (mimeType === 'text/plain') {
-      const buffer = await fsp.readFile(filePath, 'utf8');
-      const text = buffer?.toString()?.trim();
-      return text && text.length > 0 ? text : null;
-    }
-  } catch (error) {
-    console.warn('Document text extraction failed', { filePath, mimeType, error });
   }
+  res.status(400).json({ error: err?.message || 'Upload failed' });
+  return true;
+}
 
-  return null;
+function runUploadSingle(fieldName) {
+  const middleware = upload.single(fieldName);
+  return (req, res, next) => {
+    middleware(req, res, (err) => {
+      if (err) return respondMulterError(res, err);
+      return next();
+    });
+  };
+}
+
+async function downloadRemoteFileToUploads({ url, req }) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const resp = await fetch(url, { signal: controller.signal });
+    if (!resp.ok) {
+      throw new Error(`Unable to download file (${resp.status})`);
+    }
+    const contentType = resp.headers.get('content-type') || 'application/octet-stream';
+    const contentLength = Number(resp.headers.get('content-length') || '0');
+    if (contentLength && contentLength > 50 * 1024 * 1024) {
+      throw new Error('Remote file is too large (max 50MB).');
+    }
+
+    const fileNameFromUrl = (() => {
+      try {
+        const parsed = new URL(url);
+        const base = parsed.pathname.split('/').pop() || 'remote-upload';
+        return base;
+      } catch {
+        return 'remote-upload';
+      }
+    })();
+
+    // Use multer storage logic for filename uniqueness.
+    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    const extension = fileNameFromUrl.includes('.') ? `.${fileNameFromUrl.split('.').pop()}` : '';
+    const filename = `${unique}${extension}`;
+    const absPath = join(uploadDir, filename);
+
+    const buf = Buffer.from(await resp.arrayBuffer());
+    if (buf.length > 50 * 1024 * 1024) {
+      throw new Error('Remote file is too large (max 50MB).');
+    }
+    await fs.promises.writeFile(absPath, buf);
+
+    const publicUrl = `/uploads/${filename}`;
+    return {
+      file: {
+        path: absPath,
+        size: buf.length,
+        mimetype: contentType,
+        originalname: fileNameFromUrl,
+        filename,
+      },
+      publicUrl,
+      source: { downloaded: true, url, contentType },
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function buildAccessContext(req) {
@@ -217,7 +309,7 @@ router.get('/:id', (req, res) => {
 });
 
 // POST /api/documents/upload (Base44 Compatibility)
-router.post('/upload', upload.single('file'), (req, res) => {
+router.post('/upload', uploadLimiter, runUploadSingle('file'), (req, res) => {
   try {
     const context = buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) {
@@ -265,7 +357,7 @@ router.post('/signed-url', (req, res) => {
 });
 
 // POST /api/documents/ingest (Universal Ingest)
-router.post('/ingest', upload.single('document'), async (req, res) => {
+router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, res) => {
   try {
     const context = buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) {
@@ -291,8 +383,15 @@ router.post('/ingest', upload.single('document'), async (req, res) => {
       skip_parsing: rawSkipParsing,
     } = req.body ?? {};
 
-    const file = req.file;
-    if (!file && !rawExtractedText && !req.body?.file_url) {
+    let file = req.file;
+    let fileUrl = req.body?.file_url ?? null;
+    if (!file && fileUrl && (String(fileUrl).startsWith('http://') || String(fileUrl).startsWith('https://'))) {
+      const downloaded = await downloadRemoteFileToUploads({ url: String(fileUrl), req });
+      file = downloaded.file;
+      fileUrl = downloaded.publicUrl;
+    }
+
+    if (!file && !rawExtractedText && !fileUrl) {
       return res.status(400).json({ error: 'document file is required' });
     }
 
@@ -309,12 +408,21 @@ router.post('/ingest', upload.single('document'), async (req, res) => {
     }
 
     const docId = crypto.randomUUID();
-    const publicUrl = file ? `/uploads/${file.filename}` : req.body?.file_url ?? null;
+    const publicUrl = file ? (fileUrl || `/uploads/${file.filename}`) : fileUrl;
     const docName = (file?.originalname || rawName || 'Uploaded Document').trim();
     
     let extractedText = rawExtractedText || null;
     if (!extractedText && file) {
-      extractedText = await extractTextFromFile(file.path, file.mimetype);
+      const ocr = req.body?.ocr === 'true' || req.body?.ocr === true;
+      const ocrLanguage = req.body?.ocr_language || 'eng';
+      const result = await extractTextFromFile({
+        filePath: file.path,
+        mimeType: file.mimetype,
+        fileName: file.originalname,
+        ocr,
+        ocrLanguage,
+      });
+      extractedText = result?.text ?? null;
     }
 
     const skipParsing = rawSkipParsing === 'true' || rawSkipParsing === true;

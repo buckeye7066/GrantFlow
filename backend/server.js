@@ -1,4 +1,7 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+// Load `.env` from the current working directory. Use override so `.env` wins over any stale
+// machine-level OPENAI_API_KEY values during local development.
+dotenv.config({ override: true });
 import express from 'express';
 import cors from 'cors';
 import Database from 'better-sqlite3';
@@ -39,6 +42,7 @@ import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
 import { runStartupOperations } from './services/anyaStartupOperations.js';
 import ensureMinimumNationalOpportunities from './utils/ensureMinimumNationalOpportunities.js';
+import seedAssistanceDirectories from './utils/seedAssistanceDirectories.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { MAX_JSON_BODY_SIZE } from './config/constants.js';
 import { getSafeHealthSummary } from './services/diagnosticsService.js';
@@ -490,6 +494,26 @@ try {
   }
 } catch (error) {
   console.warn('[startup] Failed to ensure national minimum opportunities:', error?.message || error)
+}
+
+// Ensure curated assistance directories are available even when the DB already has many county_crawler records.
+// This increases "real & relevant" coverage for special needs / emergency assistance matching without fabricating data.
+try {
+  const existing = db
+    .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")
+    .get()?.count
+  if ((existing ?? 0) < 250) {
+    console.info('[startup] Seeding assistance directories (state_211 + assistance_network)...')
+    const result = seedAssistanceDirectories(db)
+    const after = db
+      .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")
+      .get()?.count
+    console.info('[startup] Seeded assistance directories', { ...result, after })
+  } else {
+    console.info('[startup] Assistance directories already seeded', { count: existing })
+  }
+} catch (error) {
+  console.warn('[startup] Failed to seed assistance directories:', error?.message || error)
 }
 
 // Auto-seed grants disabled temporarily to debug server crash
