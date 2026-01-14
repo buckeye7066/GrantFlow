@@ -34,6 +34,10 @@ function shouldUseSsl(connectionString) {
   return true
 }
 
+function redactConnString(value) {
+  return String(value || '').replace(/:(?:[^@/]+)@/, ':***@')
+}
+
 async function getPgColumns(pool, tableName) {
   const { rows } = await pool.query(
     `
@@ -101,6 +105,19 @@ function normalizePgArray(v) {
 function getSqliteColumns(sqliteDb, tableName) {
   try {
     return sqliteDb.prepare(`PRAGMA table_info(${tableName})`).all().map(r => r.name)
+  } catch {
+    return null
+  }
+}
+
+async function getPgCount(pool, tableName) {
+  const { rows } = await pool.query(`SELECT COUNT(*)::bigint AS c FROM "${tableName}"`)
+  return Number(rows?.[0]?.c || 0)
+}
+
+function getSqliteCount(sqliteDb, tableName) {
+  try {
+    return Number(sqliteDb.prepare(`SELECT COUNT(*) as c FROM ${tableName}`).get()?.c || 0)
   } catch {
     return null
   }
@@ -222,19 +239,19 @@ async function migrateTable({ sqliteDb, pool, tableName, dryRun, batchSize }) {
   const sqliteCols = getSqliteColumns(sqliteDb, tableName)
   if (!sqliteCols || sqliteCols.length === 0) {
     console.log(`- ${tableName}: skip (missing in sqlite)`)
-    return { tableName, migrated: 0, skipped: 0 }
+    return { tableName, sqliteTotal: 0, migrated: 0, skipped: 0 }
   }
 
   const pgColsMap = await getPgColumns(pool, tableName)
   if (pgColsMap.size === 0) {
     console.log(`- ${tableName}: skip (missing in postgres)`)
-    return { tableName, migrated: 0, skipped: 0 }
+    return { tableName, sqliteTotal: 0, migrated: 0, skipped: 0 }
   }
 
   const commonCols = sqliteCols.filter(c => pgColsMap.has(c))
   if (commonCols.length === 0) {
     console.log(`- ${tableName}: skip (no common columns)`)
-    return { tableName, migrated: 0, skipped: 0 }
+    return { tableName, sqliteTotal: 0, migrated: 0, skipped: 0 }
   }
 
   const conflictCols = await getBestConflictColumns(pool, tableName, commonCols)
@@ -244,7 +261,7 @@ async function migrateTable({ sqliteDb, pool, tableName, dryRun, batchSize }) {
   console.log(
     `- ${tableName}: ${total} row(s), cols=${commonCols.length}, conflict=${conflictCols.join(',') || 'n/a'}`,
   )
-  if (total === 0) return { tableName, migrated: 0, skipped: 0 }
+  if (total === 0) return { tableName, sqliteTotal: 0, migrated: 0, skipped: 0 }
 
   const selectSql = `SELECT ${commonCols.map(c => `"${c}"`).join(', ')} FROM ${tableName}`
   const iter = sqliteDb.prepare(selectSql).iterate()
@@ -285,7 +302,7 @@ async function migrateTable({ sqliteDb, pool, tableName, dryRun, batchSize }) {
   }
   await flush()
 
-  return { tableName, migrated, skipped: total - migrated }
+  return { tableName, sqliteTotal: total, migrated, skipped: total - migrated }
 }
 
 async function main() {
@@ -297,6 +314,8 @@ async function main() {
   const postgresUrl = args.postgres || process.env.DATABASE_PUBLIC_URL || process.env.DATABASE_URL
   const dryRun = Boolean(args['dry-run'])
   const batchSize = Number(args.batch || 300)
+  const verifyCounts = args['verify-counts'] !== undefined ? isTruthy(args['verify-counts']) : true
+  const assertFresh = args['assert-fresh'] !== undefined ? isTruthy(args['assert-fresh']) : true
 
   if (!postgresUrl) {
     console.error('Missing Postgres URL. Provide --postgres or set DATABASE_PUBLIC_URL.')
@@ -305,9 +324,11 @@ async function main() {
 
   console.log('=== SQLite → Postgres Migration ===')
   console.log('sqlite:', sqlitePath)
-  console.log('postgres:', postgresUrl.replace(/:(?:[^@/]+)@/, ':***@'))
+  console.log('postgres:', redactConnString(postgresUrl))
   console.log('dryRun:', dryRun)
   console.log('batchSize:', batchSize)
+  console.log('verifyCounts:', verifyCounts)
+  console.log('assertFresh:', assertFresh)
 
   const sqliteDb = new Database(sqlitePath, { readonly: true, fileMustExist: true })
 
@@ -350,9 +371,45 @@ async function main() {
     await pool.query('SET statement_timeout = 0')
     await pool.query('BEGIN')
 
+    if (assertFresh) {
+      for (const t of tablesInOrder) {
+        const c = await getPgCount(pool, t)
+        if (c !== 0) {
+          throw new Error(
+            `Target Postgres is not empty. Table "${t}" has ${c} row(s). Re-run with --assert-fresh false if intentional.`,
+          )
+        }
+      }
+      console.log('✓ Target Postgres appears fresh (all target tables empty).')
+    }
+
     for (const t of tablesInOrder) {
       const r = await migrateTable({ sqliteDb, pool, tableName: t, dryRun, batchSize })
       results.push(r)
+    }
+
+    if (verifyCounts) {
+      console.log('\n=== Verification (row counts) ===')
+      const mismatches = []
+      for (const r of results) {
+        const sqliteTotal = Number(r.sqliteTotal || 0)
+        const pgTotal = await getPgCount(pool, r.tableName)
+        const ok = sqliteTotal === pgTotal
+        console.log(
+          `- ${r.tableName}: sqlite=${sqliteTotal} postgres=${pgTotal} ${ok ? '✓' : '✗'}`,
+        )
+        if (!ok) mismatches.push({ table: r.tableName, sqlite: sqliteTotal, postgres: pgTotal })
+      }
+
+      if (mismatches.length > 0) {
+        const msg =
+          `Row count mismatches detected (${mismatches.length}). ` +
+          `This likely indicates conflicts/skips or a non-fresh target DB. ` +
+          `First mismatch: ${mismatches[0].table} sqlite=${mismatches[0].sqlite} postgres=${mismatches[0].postgres}`
+        throw new Error(msg)
+      }
+
+      console.log('✓ Verification passed (all table row counts match).')
     }
 
     if (dryRun) {
