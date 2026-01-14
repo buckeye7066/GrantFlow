@@ -88,6 +88,13 @@ class SqliteDb {
     this._db.pragma('journal_mode = WAL');
   }
 
+  // Compatibility with better-sqlite3 API used throughout the codebase.
+  // Returns a function that runs `fn` inside a transaction.
+  transaction(fn) {
+    const wrapped = this._db.transaction(fn);
+    return (...args) => wrapped(...args);
+  }
+
   prepare(sql) {
     const stmt = this._db.prepare(sql);
     return {
@@ -228,6 +235,12 @@ class PostgresDb {
     } finally {
       client.release();
     }
+  }
+
+  // Compatibility shim: many existing call sites use better-sqlite3's `db.transaction(fn)()`.
+  // Under Postgres this returns an async function (callers must `await` it when we flip DB_PROVIDER).
+  transaction(fn) {
+    return async (...args) => this.withTransaction((tx) => fn(...args, tx));
   }
 
   async close() {
