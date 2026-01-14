@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { Suspense, lazy, useState } from "react";
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import Layout from "./Layout.jsx";
 import OnboardingFlow from "@/components/onboarding/OnboardingFlow";
@@ -21,11 +21,11 @@ import GrantDeadline from "./GrantDeadline";
 
 import Budgets from "./Budgets";
 
-import Documents from "./Documents";
+const Documents = lazy(() => import("./Documents"));
 
 import Calendar from "./Calendar";
 
-import Reports from "./Reports";
+const Reports = lazy(() => import("./Reports"));
 import AdvancedAnalytics from "./AdvancedAnalytics";
 
 import Billing from "./Billing";
@@ -56,9 +56,9 @@ import SourceRegistry from "./SourceRegistry";
 import BackfillContacts from "./BackfillContacts";
 
 import Stewardship from "./Stewardship";
-import ProfileDetail from "./ProfileDetail";
+const ProfileDetail = lazy(() => import("./ProfileDetail"));
 
-import Diagnostics from "./Diagnostics";
+const Diagnostics = lazy(() => import("./Diagnostics"));
 
 import ComplianceReportDetail from "./ComplianceReportDetail";
 
@@ -66,7 +66,7 @@ import ProfileMatcher from "./ProfileMatcher";
 
 import SourceDirectory from "./SourceDirectory";
 
-import GrantMonitoring from "./GrantMonitoring";
+const GrantMonitoring = lazy(() => import("./GrantMonitoring"));
 
 import PrintableApplication from "./PrintableApplication";
 
@@ -74,13 +74,13 @@ import BillingSheet from "./BillingSheet";
 
 import OrganizationProfile from "./OrganizationProfile";
 
-import FundingOpportunities from "./FundingOpportunities";
+const FundingOpportunities = lazy(() => import("./FundingOpportunities"));
 
 import Pricing from "./Pricing";
 
 import Settings from "./Settings";
 
-import Admin from "./Admin";
+const Admin = lazy(() => import("./Admin"));
 
 import Login from "./Login";
 import AuthCallback from "./AuthCallback";
@@ -89,6 +89,14 @@ import ServiceApplication from "./ServiceApplication";
 import { Route, Routes, useLocation, Navigate } from 'react-router-dom';
 import { useAuthStore } from "@/stores/authStore";
 import RouteErrorBoundary from "@/components/shared/RouteErrorBoundary";
+
+function RouteLoading() {
+    return (
+        <div className="flex min-h-[50vh] items-center justify-center text-sm text-slate-500">
+            Loading…
+        </div>
+    )
+}
 
 function EnsureQueryClientProvider({ children }) {
     const [fallbackClient] = useState(() => new QueryClient());
@@ -213,7 +221,13 @@ function _getCurrentPage(url) {
 }
 
 function withBoundary(element, routeName) {
-    return <RouteErrorBoundary routeName={routeName}>{element}</RouteErrorBoundary>
+    return (
+        <RouteErrorBoundary routeName={routeName}>
+            <Suspense fallback={<RouteLoading />}>
+                {element}
+            </Suspense>
+        </RouteErrorBoundary>
+    )
 }
 
 // Create a wrapper component that uses useLocation inside the Router context
