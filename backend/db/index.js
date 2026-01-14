@@ -202,20 +202,30 @@ class PostgresTx {
   }
 
   prepare(sql) {
-    const converted = qmarkToDollarPlaceholders(sql);
+    const hasNamed = /@[_A-Za-z][_A-Za-z0-9]*/.test(sql);
+    const converted = hasNamed ? atNameToDollarPlaceholders(sql) : qmarkToDollarPlaceholders(sql);
     return {
       get: async (...args) => {
-        const values = toParamArray(args);
+        const values =
+          hasNamed && isObjectBindings(args)
+            ? bindingsToValues(converted.names, args[0])
+            : toParamArray(args);
         const res = await this._client.query(converted.text, values);
         return res.rows[0];
       },
       all: async (...args) => {
-        const values = toParamArray(args);
+        const values =
+          hasNamed && isObjectBindings(args)
+            ? bindingsToValues(converted.names, args[0])
+            : toParamArray(args);
         const res = await this._client.query(converted.text, values);
         return res.rows;
       },
       run: async (...args) => {
-        const values = toParamArray(args);
+        const values =
+          hasNamed && isObjectBindings(args)
+            ? bindingsToValues(converted.names, args[0])
+            : toParamArray(args);
         const res = await this._client.query(converted.text, values);
         return {
           changes: res.rowCount ?? 0,
@@ -226,7 +236,8 @@ class PostgresTx {
   }
 
   async exec(sql) {
-    await this._client.query(sql);
+    // Allow multi-statement SQL (needed for schema migrations).
+    await this._client.query({ text: sql, queryMode: 'simple' });
   }
 }
 
@@ -269,8 +280,8 @@ class PostgresDb {
   }
 
   async exec(sql) {
-    // pg can execute multiple semicolon-separated statements; result is last statement.
-    await this._pool.query(sql);
+    // Allow multi-statement SQL (needed for schema migrations).
+    await this._pool.query({ text: sql, queryMode: 'simple' });
   }
 
   async healthcheck() {
