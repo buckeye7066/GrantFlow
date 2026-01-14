@@ -670,7 +670,7 @@ registerTool({
       };
 
       try {
-        crawlerStats.lastRuns = db.prepare(`
+        const rows = await db.prepare(`
           SELECT 
             crawler_type, 
             status, 
@@ -682,13 +682,25 @@ registerTool({
           ORDER BY started_at DESC 
           LIMIT 5
         `).all();
+        crawlerStats.lastRuns = rows;
 
-        crawlerStats.totalRuns = db.prepare('SELECT COUNT(*) as count FROM crawl_logs').get()?.count || 0;
-        crawlerStats.recentFailures = db.prepare(`
-          SELECT COUNT(*) as count FROM crawl_logs 
-          WHERE status = 'failed' 
-          AND started_at >= datetime('now', '-24 hours')
-        `).get()?.count || 0;
+        crawlerStats.totalRuns = Number((await db.prepare('SELECT COUNT(*) as count FROM crawl_logs').get())?.count || 0);
+        const since24hPredicate =
+          db?.dialect === 'postgres'
+            ? `started_at >= (NOW() - INTERVAL '24 hours')`
+            : `started_at >= datetime('now', '-24 hours')`;
+        crawlerStats.recentFailures = Number(
+          (await db
+            .prepare(
+              `
+                SELECT COUNT(*) as count
+                FROM crawl_logs
+                WHERE status = 'failed'
+                  AND ${since24hPredicate}
+              `,
+            )
+            .get())?.count || 0,
+        );
       } catch (e) {
         console.warn('[system.health] Failed to get crawler stats:', e.message);
       }
@@ -702,10 +714,12 @@ registerTool({
       };
 
       try {
-        counts.opportunities = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get()?.count || 0;
-        counts.activeOpportunities = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get()?.count || 0;
-        counts.profiles = db.prepare('SELECT COUNT(*) as count FROM profiles').get()?.count || 0;
-        counts.activeProfiles = db.prepare('SELECT COUNT(*) as count FROM profiles WHERE status = ?').get('active')?.count || 0;
+        counts.opportunities = Number((await db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get())?.count || 0);
+        counts.activeOpportunities = Number(
+          (await db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = ?').get(true))?.count || 0,
+        );
+        counts.profiles = Number((await db.prepare('SELECT COUNT(*) as count FROM profiles').get())?.count || 0);
+        counts.activeProfiles = Number((await db.prepare('SELECT COUNT(*) as count FROM profiles WHERE status = ?').get('active'))?.count || 0);
       } catch (e) {
         console.warn('[system.health] Failed to get counts:', e.message);
       }
@@ -713,7 +727,7 @@ registerTool({
       // Get last error
       let lastError = null;
       try {
-        const errorRow = db.prepare(`
+        const errorRow = await db.prepare(`
           SELECT error_message, started_at, crawler_type
           FROM crawl_logs 
           WHERE error_message IS NOT NULL 
@@ -1308,7 +1322,12 @@ registerTool({
     const { db } = context
     
     // Get job statistics from the last 24 hours
-    const stats = db.prepare(`
+    const since24hPredicate =
+      db?.dialect === 'postgres'
+        ? `created_at >= (NOW() - INTERVAL '24 hours')`
+        : `created_at >= datetime('now', '-24 hours')`
+
+    const stats = await db.prepare(`
       SELECT 
         crawler_type,
         COUNT(*) as total,
@@ -1316,7 +1335,7 @@ registerTool({
         SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
         SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) as in_progress
       FROM crawler_jobs
-      WHERE created_at >= datetime('now', '-24 hours')
+      WHERE ${since24hPredicate}
       GROUP BY crawler_type
     `).all()
     
@@ -1345,11 +1364,16 @@ registerTool({
     }
     
     // Check for stuck jobs (in_progress for more than 2 hours)
-    const stuckJobs = db.prepare(`
+    const stuckPredicate =
+      db?.dialect === 'postgres'
+        ? `created_at < (NOW() - INTERVAL '2 hours')`
+        : `created_at < datetime('now', '-2 hours')`
+
+    const stuckJobs = await db.prepare(`
       SELECT id, crawler_type, created_at
       FROM crawler_jobs
       WHERE status = 'in_progress'
-        AND created_at < datetime('now', '-2 hours')
+        AND ${stuckPredicate}
     `).all()
     
     if (stuckJobs.length > 0) {

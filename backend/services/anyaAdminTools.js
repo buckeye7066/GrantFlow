@@ -949,24 +949,29 @@ export async function adminDbStats(_params, context) {
     })
 
     // Recent activity
-    const recentCrawlers = db
+    const since24hPredicate =
+      db?.dialect === 'postgres'
+        ? `created_at >= (NOW() - INTERVAL '24 hours')`
+        : `created_at >= datetime('now', '-24 hours')`
+
+    const recentCrawlers = await db
       .prepare(
         `
-      SELECT status, COUNT(*) as count
-      FROM crawler_jobs
-      WHERE created_at >= datetime('now', '-24 hours')
-      GROUP BY status
-    `,
+          SELECT status, COUNT(*) as count
+          FROM crawler_jobs
+          WHERE ${since24hPredicate}
+          GROUP BY status
+        `,
       )
       .all()
 
-    const recentSessions = db
+    const recentSessions = await db
       .prepare(
         `
-      SELECT COUNT(*) as count
-      FROM anya_sessions
-      WHERE created_at >= datetime('now', '-24 hours')
-    `,
+          SELECT COUNT(*) as count
+          FROM anya_sessions
+          WHERE ${since24hPredicate}
+        `,
       )
       .get()
 
@@ -976,7 +981,7 @@ export async function adminDbStats(_params, context) {
       table_counts: tableCounts,
       recent_activity: {
         crawler_jobs_24h: recentCrawlers,
-        anya_sessions_24h: recentSessions.count,
+        anya_sessions_24h: Number(recentSessions?.count || 0),
       },
     }
   } catch (error) {

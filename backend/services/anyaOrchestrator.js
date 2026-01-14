@@ -289,13 +289,17 @@ export function getMessages(db, user, sessionId, { limit = 50, direction = 'asc'
   const safeLimit = Math.max(1, Math.min(Number(limit) || 50, 200))
   const order = direction === 'latest' ? 'DESC' : 'ASC'
 
+  const orderBy = db?.dialect === 'postgres'
+    ? `ORDER BY created_at ${order}, id ${order}`
+    : `ORDER BY created_at ${order}, rowid ${order}`
+
   const rows = db
     .prepare(
       `
         SELECT *
         FROM anya_messages
         WHERE session_id = ?
-        ORDER BY created_at ${order}, rowid ${order}
+        ${orderBy}
         LIMIT ?
       `,
     )
@@ -309,13 +313,17 @@ export function listTasks(db, user, sessionId) {
   assertAuthenticated(user)
   const session = getSession(db, user, sessionId)
 
+  const orderBy = db?.dialect === 'postgres'
+    ? `ORDER BY created_at ASC, id ASC`
+    : `ORDER BY created_at ASC, rowid ASC`
+
   const rows = db
     .prepare(
       `
         SELECT *
         FROM anya_tasks
         WHERE session_id = ?
-        ORDER BY created_at ASC, rowid ASC
+        ${orderBy}
       `,
     )
     .all(session.id)
