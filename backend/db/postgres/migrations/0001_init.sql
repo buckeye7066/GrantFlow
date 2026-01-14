@@ -294,7 +294,7 @@ CREATE TABLE IF NOT EXISTS users (
   primary_email TEXT,
   primary_phone TEXT,
   avatar_url TEXT,
-  is_admin BOOLEAN DEFAULT 0,
+  is_admin BOOLEAN DEFAULT FALSE,
   metadata TEXT
 );
 
@@ -388,9 +388,9 @@ CREATE TABLE IF NOT EXISTS billing_tiers (
   description TEXT,
   base_monthly_cents INTEGER,
   hourly_rate_cents INTEGER,
-  enable_pipeline_automation BOOLEAN DEFAULT 0,
-  enable_item_funding BOOLEAN DEFAULT 0,
-  enable_document_ai BOOLEAN DEFAULT 0,
+  enable_pipeline_automation BOOLEAN DEFAULT FALSE,
+  enable_item_funding BOOLEAN DEFAULT FALSE,
+  enable_document_ai BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ DEFAULT now()
 );
@@ -404,7 +404,7 @@ CREATE TABLE IF NOT EXISTS grant_pipeline_events (
   suggested_status TEXT,
   applied_status TEXT,
   confidence DOUBLE PRECISION,
-  handoff_required BOOLEAN DEFAULT 0,
+  handoff_required BOOLEAN DEFAULT FALSE,
   handoff_reason TEXT,
   recommended_actions TEXT, -- JSON array
   ai_summary TEXT
@@ -650,7 +650,7 @@ CREATE TABLE IF NOT EXISTS billing_accounts (
   assigned_reason TEXT,
   discount_type TEXT CHECK(discount_type IN ('none', 'student', 'minister')),
   discount_percent DOUBLE PRECISION DEFAULT 0,
-  is_pro_bono BOOLEAN DEFAULT 0,
+  is_pro_bono BOOLEAN DEFAULT FALSE,
   pro_bono_reason TEXT,
   custom_monthly_cents INTEGER,
   custom_hourly_cents INTEGER,
