@@ -50,7 +50,27 @@ const CACHE_TTL_MS = 60 * 1000 // 1 minute
  */
 export function initializeFeatureFlags(db) {
   if (!db) return
-  
+
+  // Postgres: for now, keep feature flags in-memory only (defaults) to avoid dialect-specific
+  // table DDL during the DB migration rollout. We'll migrate these tables explicitly later.
+  if (db.dialect === 'postgres') {
+    flagCache = new Map(
+      Object.entries(DEFAULT_FLAGS).map(([key, cfg]) => [
+        key,
+        {
+          flag_key: key,
+          enabled: cfg.enabled ? 1 : 0,
+          requires_admin: cfg.requiresAdmin ? 1 : 0,
+          percentage: cfg.percentage || 100,
+          description: cfg.description || '',
+          metadata: '{}',
+        },
+      ]),
+    )
+    lastCacheRefresh = Date.now()
+    return
+  }
+
   try {
     db.exec(`
       CREATE TABLE IF NOT EXISTS feature_flags (
@@ -64,9 +84,9 @@ export function initializeFeatureFlags(db) {
         requires_admin INTEGER DEFAULT 0,
         metadata TEXT DEFAULT '{}'
       );
-      
+
       CREATE INDEX IF NOT EXISTS idx_feature_flags_key ON feature_flags(flag_key);
-      
+
       CREATE TABLE IF NOT EXISTS feature_flag_overrides (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -77,17 +97,17 @@ export function initializeFeatureFlags(db) {
         expires_at DATETIME,
         UNIQUE(flag_key, user_id, profile_id)
       );
-      
+
       CREATE INDEX IF NOT EXISTS idx_flag_overrides_key ON feature_flag_overrides(flag_key);
       CREATE INDEX IF NOT EXISTS idx_flag_overrides_user ON feature_flag_overrides(user_id);
     `)
-    
+
     // Seed default flags if they don't exist
     const insertStmt = db.prepare(`
       INSERT OR IGNORE INTO feature_flags (id, flag_key, enabled, description, percentage, requires_admin)
       VALUES (?, ?, ?, ?, ?, ?)
     `)
-    
+
     for (const [key, config] of Object.entries(DEFAULT_FLAGS)) {
       insertStmt.run(
         randomUUID(),
@@ -98,7 +118,7 @@ export function initializeFeatureFlags(db) {
         config.requiresAdmin ? 1 : 0
       )
     }
-    
+
     refreshCache(db)
   } catch (error) {
     console.error('[FeatureFlags] Failed to initialize:', error.message)
@@ -110,6 +130,7 @@ export function initializeFeatureFlags(db) {
  */
 function refreshCache(db) {
   if (!db) return
+  if (db.dialect === 'postgres') return
   
   try {
     const flags = db.prepare('SELECT * FROM feature_flags').all()
@@ -130,7 +151,7 @@ export function isFeatureEnabled(db, flagKey, { userId = null, profileId = null,
   }
   
   // Check for user/profile override first
-  if (db && (userId || profileId)) {
+  if (db && db.dialect !== 'postgres' && (userId || profileId)) {
     try {
       const override = db.prepare(`
         SELECT enabled
