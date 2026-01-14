@@ -26,7 +26,7 @@ function diffChangedFields(prev = {}, next = {}) {
   return changed
 }
 
-export function upsertProgramWithVersion({
+export async function upsertProgramWithVersion({
   db,
   track,
   normalized,
@@ -49,7 +49,7 @@ export function upsertProgramWithVersion({
     sourceUrl: normalized.source_url,
   })
 
-  const existing = db
+  const existing = await db
     .prepare(`SELECT * FROM ${table} WHERE canonical_key = ? LIMIT 1`)
     .get(canonicalKey)
 
@@ -210,10 +210,10 @@ export function upsertProgramWithVersion({
           contentHash,
         ]
 
-    db.prepare(`INSERT INTO ${table} (${cols}) VALUES (${placeholders})`).run(...values)
+    await db.prepare(`INSERT INTO ${table} (${cols}) VALUES (${placeholders})`).run(...values)
   } else if (changeType !== 'unchanged') {
     if (track === 'PROVIDER') {
-      db.prepare(
+      await db.prepare(
         `
           UPDATE ${table}
           SET program_name = ?,
@@ -269,7 +269,7 @@ export function upsertProgramWithVersion({
         programId,
       )
     } else {
-      db.prepare(
+      await db.prepare(
         `
           UPDATE ${table}
           SET program_name = ?,
@@ -325,7 +325,7 @@ export function upsertProgramWithVersion({
     }
   } else {
     // even if unchanged, keep liveness markers fresh
-    db.prepare(
+    await db.prepare(
       `
         UPDATE ${table}
         SET last_seen_at = ?,
@@ -342,15 +342,24 @@ export function upsertProgramWithVersion({
   if (changeType !== 'unchanged') {
     const normalizedPayload = JSON.stringify(nextSnapshot)
     const changedFieldsJson = JSON.stringify(changedFields)
-    const versionInsert = db.prepare(
-      `
-        INSERT OR IGNORE INTO program_versions (
-          funding_track, program_id, source_url, fetched_at, http_status, content_type,
-          content_hash, extracted_text, normalized_payload, change_type, changed_fields, change_summary
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    )
-    versionInsert.run(
+    const versionInsertSql =
+      db?.dialect === 'postgres'
+        ? `
+            INSERT INTO program_versions (
+              funding_track, program_id, source_url, fetched_at, http_status, content_type,
+              content_hash, extracted_text, normalized_payload, change_type, changed_fields, change_summary
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT DO NOTHING
+          `
+        : `
+            INSERT OR IGNORE INTO program_versions (
+              funding_track, program_id, source_url, fetched_at, http_status, content_type,
+              content_hash, extracted_text, normalized_payload, change_type, changed_fields, change_summary
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `
+
+    const versionInsert = db.prepare(versionInsertSql)
+    await versionInsert.run(
       track,
       programId,
       sourceUrl,
@@ -365,7 +374,7 @@ export function upsertProgramWithVersion({
       changedFields.length > 0 ? `Changed: ${changedFields.join(', ')}` : null,
     )
 
-    const verRow = db
+    const verRow = await db
       .prepare(
         `
           SELECT id
@@ -384,7 +393,7 @@ export function upsertProgramWithVersion({
       changeType === 'discontinued' ||
       changeType === 'reactivated'
     ) {
-      db.prepare(
+      await db.prepare(
         `
           INSERT INTO program_change_events (
             funding_track, program_id, version_id, event_type, changed_fields, summary, confidence
