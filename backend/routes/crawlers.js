@@ -1868,9 +1868,12 @@ router.get('/health', async (req, res) => {
       WHERE ${since24hPredicate}
     `).get()
 
-    // Get last success by type
+    // Get last success by type (portable aggregate: not perfect, but avoids postgres GROUP BY errors)
     const lastSuccessRows = await db.prepare(`
-      SELECT type, MAX(completed_at) as last_success, result_count
+      SELECT
+        type,
+        MAX(completed_at) as last_success,
+        MAX(result_count) as result_count
       FROM crawler_jobs
       WHERE status = 'completed'
       GROUP BY type
@@ -1884,10 +1887,12 @@ router.get('/health', async (req, res) => {
       }
     })
 
-    // Get last error by type (redacted)
+    // Get last error by type (redacted) (portable aggregate)
     const lastErrorRows = await db.prepare(`
-      SELECT type, MAX(completed_at) as last_error, 
-             SUBSTR(error, 1, 100) as error_preview
+      SELECT
+        type,
+        MAX(completed_at) as last_error,
+        SUBSTR(MAX(error), 1, 100) as error_preview
       FROM crawler_jobs
       WHERE status = 'failed'
       GROUP BY type
@@ -1902,7 +1907,7 @@ router.get('/health', async (req, res) => {
     })
 
     // Calculate queue depth (queued + running)
-    const queueDepth = (overallStats.queued || 0) + (overallStats.running || 0)
+    const queueDepth = Number(overallStats.queued || 0) + Number(overallStats.running || 0)
 
     // Determine worker status (check if there are stuck jobs)
     const stuckPredicate =
@@ -1920,8 +1925,8 @@ router.get('/health', async (req, res) => {
     const workerOnline = (stuckJobs?.count ?? 0) === 0
 
     // Calculate health status
-    const recentFailures = overallStats.failed || 0
-    const recentCompletions = overallStats.completed || 0
+    const recentFailures = Number(overallStats.failed || 0)
+    const recentCompletions = Number(overallStats.completed || 0)
     const failureRate = (recentCompletions + recentFailures) > 0 
       ? recentFailures / (recentCompletions + recentFailures) 
       : 0
