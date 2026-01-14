@@ -12,9 +12,9 @@ function requireAdminOrToken(req, res) {
   return false
 }
 
-router.get('/health', (req, res) => {
+router.get('/health', async (req, res) => {
   try {
-    const lastRun = req.db
+    const lastRun = await req.db
       .prepare(
         `
           SELECT *
@@ -25,7 +25,7 @@ router.get('/health', (req, res) => {
       )
       .get()
 
-    const running = req.db
+    const running = await req.db
       .prepare(
         `
           SELECT COUNT(*) AS count
@@ -36,35 +36,42 @@ router.get('/health', (req, res) => {
       .get()?.count
 
     const staleDays = Math.max(1, Number.parseInt(process.env.CRAWLER_STALE_DAYS || '30', 10) || 30)
-    const staleA = req.db
+    const stalePredicate =
+      req.db?.dialect === 'postgres'
+        ? `last_verified < (NOW() - ($1::int * INTERVAL '1 day'))`
+        : `DATETIME(last_verified) < DATETIME('now', ?)`
+
+    // Note: keep parameter format simple and portable for our DB wrapper.
+    const staleA = await req.db
       .prepare(
         `
           SELECT COUNT(*) AS count
           FROM nf_programs_a
           WHERE last_verified IS NOT NULL
-            AND DATETIME(last_verified) < DATETIME('now', ?)
+            AND ${req.db?.dialect === 'postgres' ? `last_verified < (NOW() - (? * INTERVAL '1 day'))` : `DATETIME(last_verified) < DATETIME('now', ?)`}
         `,
       )
-      .get(`-${staleDays} day`)?.count
-    const staleB = req.db
+      .get(req.db?.dialect === 'postgres' ? staleDays : `-${staleDays} day`)?.count
+
+    const staleB = await req.db
       .prepare(
         `
           SELECT COUNT(*) AS count
           FROM nf_programs_b
           WHERE last_verified IS NOT NULL
-            AND DATETIME(last_verified) < DATETIME('now', ?)
+            AND ${req.db?.dialect === 'postgres' ? `last_verified < (NOW() - (? * INTERVAL '1 day'))` : `DATETIME(last_verified) < DATETIME('now', ?)`}
         `,
       )
-      .get(`-${staleDays} day`)?.count
+      .get(req.db?.dialect === 'postgres' ? staleDays : `-${staleDays} day`)?.count
 
     res.json({
       status: 'ok',
-      running_runs: running ?? 0,
+      running_runs: Number(running ?? 0),
       last_run: lastRun ?? null,
       stale_days: staleDays,
       stale_programs: {
-        track_a: staleA ?? 0,
-        track_b: staleB ?? 0,
+        track_a: Number(staleA ?? 0),
+        track_b: Number(staleB ?? 0),
       },
       timestamp: new Date().toISOString(),
     })
@@ -73,11 +80,11 @@ router.get('/health', (req, res) => {
   }
 })
 
-router.get('/runs', (req, res) => {
+router.get('/runs', async (req, res) => {
   try {
     const limit = Math.min(200, Math.max(1, Number.parseInt(req.query.limit ?? 50, 10) || 50))
     const offset = Math.max(0, Number.parseInt(req.query.offset ?? 0, 10) || 0)
-    const rows = req.db
+    const rows = await req.db
       .prepare(
         `
           SELECT *
@@ -88,21 +95,21 @@ router.get('/runs', (req, res) => {
         `,
       )
       .all(limit, offset)
-    const total = req.db.prepare('SELECT COUNT(*) AS total FROM crawl_runs').get()?.total
-    res.json({ data: rows, total: total ?? rows.length, limit, offset })
+    const total = await req.db.prepare('SELECT COUNT(*) AS total FROM crawl_runs').get()
+    res.json({ data: rows, total: Number(total?.total ?? rows.length), limit, offset })
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
 })
 
-router.get('/runs/:id', (req, res) => {
+router.get('/runs/:id', async (req, res) => {
   try {
-    const run = req.db
+    const run = await req.db
       .prepare('SELECT * FROM crawl_runs WHERE crawl_run_id = ?')
       .get(req.params.id)
     if (!run) return res.status(404).json({ error: 'Run not found' })
 
-    const events = req.db
+    const events = await req.db
       .prepare(
         `
           SELECT *
@@ -114,7 +121,7 @@ router.get('/runs/:id', (req, res) => {
       )
       .all(req.params.id)
 
-    const failures = req.db
+    const failures = await req.db
       .prepare(
         `
           SELECT *

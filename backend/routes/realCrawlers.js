@@ -464,7 +464,7 @@ router.post('/run', ensureAuth, async (req, res) => {
         tokens,
         itemRequest: item_request,
       })
-      candidates = db.prepare(sql).all(...params).map(formatDbOpportunity).filter(Boolean)
+      candidates = (await db.prepare(sql).all(...params)).map(formatDbOpportunity).filter(Boolean)
     } catch (crawlerError) {
       console.error(`[RealCrawlers] Crawler ${crawler_type} failed:`, crawlerError)
       
@@ -661,7 +661,7 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
         tokens,
       })
 
-      const candidates = db.prepare(sql).all(...params).map(formatDbOpportunity).filter(Boolean)
+      const candidates = (await db.prepare(sql).all(...params)).map(formatDbOpportunity).filter(Boolean)
       const scored = candidates
         .filter((row) => isOpportunityCurrent(row))
         .map((row) => {
