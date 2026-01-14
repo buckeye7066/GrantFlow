@@ -366,6 +366,17 @@ CREATE TABLE IF NOT EXISTS oauth_states (
 CREATE INDEX IF NOT EXISTS idx_oauth_states_state ON oauth_states(state);
 CREATE INDEX IF NOT EXISTS idx_oauth_states_expires_at ON oauth_states(expires_at);
 
+-- Runtime secrets (encrypted values persisted in DB for emergency overrides)
+-- NOTE: values are encrypted server-side; the DB never stores plaintext secrets.
+CREATE TABLE IF NOT EXISTS app_runtime_secrets (
+  key TEXT PRIMARY KEY,
+  value_ciphertext TEXT NOT NULL,
+  iv TEXT NOT NULL,
+  tag TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS billing_tiers (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,

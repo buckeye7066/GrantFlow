@@ -7,6 +7,7 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import pdfParse from 'pdf-parse';
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';
+import { encryptRuntimeSecret } from '../utils/runtimeSecrets.js';
 import { seedRealOpportunities } from '../utils/seedRealOpportunities.js';
 import { seedAssistanceDirectories } from '../utils/seedAssistanceDirectories.js';
 import { ensureDesignatedProfiles } from '../utils/ensureDesignatedProfiles.js';
@@ -248,6 +249,7 @@ router.post('/openai/apply-key', async (req, res) => {
   if (!ensureAdminRequest(req, res)) return;
 
   const apiKey = typeof req.body?.apiKey === 'string' ? req.body.apiKey.trim() : '';
+  const persist = Boolean(req.body?.persist);
   if (!apiKey) {
     return res.status(400).json({
       ok: false,
@@ -259,6 +261,29 @@ router.post('/openai/apply-key', async (req, res) => {
   // Apply to process env (in-memory). openaiClient normalization will strip common junk.
   process.env.OPENAI_API_KEY = apiKey;
 
+  // Optionally persist encrypted value into DB so it can be restored on restart.
+  // This is an emergency override mechanism; do not rely on it long-term.
+  if (persist) {
+    try {
+      const encrypted = encryptRuntimeSecret(apiKey);
+      req.db
+        .prepare(
+          `
+            INSERT INTO app_runtime_secrets (key, value_ciphertext, iv, tag, updated_at)
+            VALUES ('OPENAI_API_KEY', ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET
+              value_ciphertext = excluded.value_ciphertext,
+              iv = excluded.iv,
+              tag = excluded.tag,
+              updated_at = CURRENT_TIMESTAMP
+          `,
+        )
+        .run(encrypted.value_ciphertext, encrypted.iv, encrypted.tag);
+    } catch (e) {
+      console.warn('[admin/openai/apply-key] Failed to persist runtime secret:', e?.message || e);
+    }
+  }
+
   try {
     const { openai, diagnostics } = createOpenAIClient();
     const models = await openai.models.list();
@@ -267,11 +292,13 @@ router.post('/openai/apply-key', async (req, res) => {
     res.json({
       ok: true,
       applied: true,
-      persisted: false,
+      persisted: persist,
       diagnostics,
       sample_model: first,
       model_count: Array.isArray(models?.data) ? models.data.length : null,
-      note: 'Key applied to running process only (not persisted). To persist, set OPENAI_API_KEY in your host environment.',
+      note: persist
+        ? 'Key applied and persisted to DB for emergency restart recovery. Please set OPENAI_API_KEY in your host environment for a permanent fix.'
+        : 'Key applied to running process only (not persisted). To persist, set OPENAI_API_KEY in your host environment.',
     });
   } catch (error) {
     const summary = summarizeOpenAIError(error);
@@ -280,7 +307,7 @@ router.post('/openai/apply-key', async (req, res) => {
     res.status(summary.isAuth ? 401 : 500).json({
       ok: false,
       applied: true,
-      persisted: false,
+      persisted: persist,
       error: summary.message,
       status: summary.status ?? null,
       diagnostics,
@@ -288,6 +315,33 @@ router.post('/openai/apply-key', async (req, res) => {
         ? 'Applied key failed authentication. Ensure you pasted the raw OpenAI key (sk-...) with no extra text.'
         : 'Applied key verification failed. Check outbound network/DNS/firewall and try again.',
     });
+  }
+});
+
+// GET /api/admin/openai/runtime-secret-status
+// Shows whether an encrypted runtime key is persisted in DB (never returns the key).
+router.get('/openai/runtime-secret-status', async (req, res) => {
+  if (!ensureAdminRequest(req, res)) return;
+
+  try {
+    const row = req.db
+      .prepare(
+        `
+          SELECT key, updated_at
+          FROM app_runtime_secrets
+          WHERE key = 'OPENAI_API_KEY'
+          LIMIT 1
+        `,
+      )
+      .get();
+
+    res.json({
+      ok: true,
+      persisted: Boolean(row?.key),
+      updated_at: row?.updated_at ?? null,
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message || String(error) });
   }
 });
 
