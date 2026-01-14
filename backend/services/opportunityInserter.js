@@ -6,6 +6,16 @@ function ensureArray(value) {
   return [value]
 }
 
+function stableSourceIdFromOpportunity(source, opportunity) {
+  const url = opportunity?.source_url ?? opportunity?.url ?? opportunity?.application_url ?? null
+  const title = opportunity?.title ?? ''
+  const sponsor = opportunity?.sponsor ?? ''
+  const deadline = opportunity?.deadline ?? ''
+  const raw = `${source}|${String(url || '').trim().toLowerCase()}|${String(title).trim().toLowerCase()}|${String(sponsor).trim().toLowerCase()}|${String(deadline).trim()}`
+  // Stable, deterministic source_id so repeated crawls don't create duplicates.
+  return crypto.createHash('sha256').update(raw).digest('hex').slice(0, 32)
+}
+
 function deriveIsNational(opportunity) {
   return (
     opportunity?.is_national === true ||
@@ -26,7 +36,7 @@ export function upsertFundingOpportunity(db, opportunity) {
     opportunity.source_id ??
     // Many crawler datasets ship a stable `id` field; treat that as the source_id when present.
     opportunity.id ??
-    `${source}-${crypto.randomUUID()}`
+    stableSourceIdFromOpportunity(source, opportunity)
 
   // Check if record exists and if it's verified
   const existing = db

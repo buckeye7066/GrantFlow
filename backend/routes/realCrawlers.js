@@ -8,6 +8,7 @@ import express from 'express'
 import { ensureAuth } from '../middleware/auth.js'
 import { getProfileWithLocation } from '../services/crawlers/crawlerHelpers.js'
 import { calculateMatchScore } from '../services/matchingEngine.js'
+import { bulkUpsertFundingOpportunities } from '../services/opportunityInserter.js'
 import { crawlLocalFunding } from '../services/crawlers/localFundingCrawler.js'
 import { crawlGovernmentFunding } from '../services/crawlers/governmentFundingCrawler.js'
 import { crawlStudentGrants } from '../services/crawlers/studentGrantsCrawler.js'
@@ -30,6 +31,7 @@ const CRAWLER_TYPES = [
 const LOAN_TYPES = new Set(['loan', 'loan_program', 'microloan'])
 const LIVE_CRAWL_TIMEOUT_MS = Number.parseInt(process.env.LIVE_CRAWL_TIMEOUT_MS ?? '20000', 10) || 20000
 const MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK = Number.parseInt(process.env.MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK ?? '8', 10) || 8
+const LIVE_CRAWL_PERSIST_OPPS = String(process.env.LIVE_CRAWL_PERSIST_OPPS ?? 'true').toLowerCase() !== 'false'
 
 function normalizeString(value) {
   if (typeof value !== 'string') return ''
@@ -402,6 +404,29 @@ router.post('/run', ensureAuth, async (req, res) => {
     })
 
     if (live.ok && live.opportunities.length > 0) {
+      // Persist discovered opportunities for browsing (even if user doesn't add to pipeline).
+      // This makes the Opportunities page a canonical backlog of crawler discoveries.
+      if (LIVE_CRAWL_PERSIST_OPPS) {
+        try {
+          const insertedIds = bulkUpsertFundingOpportunities(
+            db,
+            live.opportunities.map((o) => ({
+              ...o,
+              // Keep these as global opportunities (not tied to a single profile).
+              profile_id: null,
+              record_origin: 'live_crawl',
+              source: crawler_type,
+              source_id: o.source_id ?? o.id ?? o.url ?? o.application_url ?? o.source_url ?? null,
+              source_url: o.source_url ?? o.url ?? o.application_url ?? null,
+              application_url: o.application_url ?? o.url ?? o.source_url ?? null,
+            })),
+          )
+          debug.live = { ...(debug.live || {}), persisted_inserted: insertedIds.length }
+        } catch (persistError) {
+          debug.live = { ...(debug.live || {}), persist_error: persistError?.message || String(persistError) }
+        }
+      }
+
       debug.used_live = true
       debug.live = { ok: true, duration_ms: live.duration_ms, returned: live.opportunities.length }
 
