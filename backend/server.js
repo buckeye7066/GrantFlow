@@ -155,11 +155,31 @@ if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
 
-const dbPath = process.env.DATABASE_URL || join(dataDir, 'grantflow.db');
+// IMPORTANT:
+// - Railway Postgres will auto-inject DATABASE_URL (postgres://...), which is NOT a valid SQLite file path.
+// - Until we complete the Postgres migration, we must not feed a postgres connection string into better-sqlite3.
+// - Use SQLITE_DB_PATH for SQLite file location; keep DATABASE_URL reserved for Postgres.
+const rawDatabaseUrl = String(process.env.DATABASE_URL || '').trim();
+const dbDialect = String(process.env.DB_DIALECT || '').trim().toLowerCase(); // 'sqlite' | 'postgres'
+const looksLikePostgresUrl = /^postgres(ql)?:\/\//i.test(rawDatabaseUrl);
+
+const sqliteDbPath = process.env.SQLITE_DB_PATH || join(dataDir, 'grantflow.db');
+const dbPath =
+  dbDialect === 'postgres'
+    ? rawDatabaseUrl
+    : looksLikePostgresUrl
+      ? sqliteDbPath
+      : (rawDatabaseUrl || sqliteDbPath);
 
 // Validate database initialization with proper error handling
 let db;
 try {
+  if (dbDialect === 'postgres') {
+    console.error('[database] DB_DIALECT=postgres is set, but Postgres support is not yet implemented in this build.');
+    console.error('[database] Refusing to start to avoid data corruption / inconsistent behavior.');
+    process.exit(1);
+  }
+
   db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   
@@ -168,6 +188,7 @@ try {
   const testResult = db.prepare('SELECT 1 as test').get();
   if (testResult && testResult.test === 1) {
     console.info('[database] Database connection validated successfully');
+    console.info('[database] Dialect:', dbDialect || 'sqlite');
     console.info('[database] Database path:', dbPath);
   } else {
     throw new Error('Database connection test failed');
