@@ -437,10 +437,15 @@ async function saveHighMatchesToProfile(options, context) {
     
     // Get opportunities from this job (we'll need to track them somehow)
     // For now, get recent opportunities
+    const since1hPredicate =
+      db?.dialect === 'postgres'
+        ? `created_at >= (NOW() - INTERVAL '1 hour')`
+        : `created_at >= datetime('now', '-1 hour')`
+
     const opportunities = db.prepare(
       `
       SELECT * FROM funding_opportunities
-      WHERE created_at >= datetime('now', '-1 hour')
+      WHERE ${since1hPredicate}
         AND (profile_id = ? OR profile_id IS NULL)
       ORDER BY created_at DESC
       LIMIT 100

@@ -262,43 +262,81 @@ async function processZip(zip, db) {
  * Save opportunity to database
  */
 async function saveOpportunity(db, opp) {
-  const stmt = db.prepare(`
-    INSERT OR IGNORE INTO funding_opportunities (
-      title, sponsor, description, source, source_id, source_url, 
-      state, deadline, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-  `)
+  const insertSql =
+    db?.dialect === 'postgres'
+      ? `
+          INSERT INTO funding_opportunities (
+            id,
+            title, sponsor, description, source, source_id, source_url,
+            state, deadline, created_at, updated_at
+          ) VALUES (gen_random_uuid()::text, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          ON CONFLICT DO NOTHING
+        `
+      : `
+          INSERT OR IGNORE INTO funding_opportunities (
+            title, sponsor, description, source, source_id, source_url,
+            state, deadline, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        `
+
+  const stmt = db.prepare(insertSql)
   
-  stmt.run(
-    opp.title,
-    opp.sponsor,
-    opp.description,
-    opp.source,
-    opp.source_id || null,
-    opp.url,
-    opp.state || null,
-    opp.deadline || null
-  )
+  if (db?.dialect === 'postgres') {
+    await stmt.run(
+      opp.title,
+      opp.sponsor,
+      opp.description,
+      opp.source,
+      opp.source_id || null,
+      opp.url,
+      opp.state || null,
+      opp.deadline || null,
+    )
+  } else {
+    stmt.run(
+      opp.title,
+      opp.sponsor,
+      opp.description,
+      opp.source,
+      opp.source_id || null,
+      opp.url,
+      opp.state || null,
+      opp.deadline || null,
+    )
+  }
 }
 
 /**
  * Update ZIP progress in database
  */
-function updateZipProgress(db, zip, status, sources_found, error = null) {
-  const stmt = db.prepare(`
-    INSERT OR REPLACE INTO national_zip_progress 
-    (zip, last_run_at, sources_found, status, error, updated_at)
-    VALUES (?, datetime('now'), ?, ?, ?, datetime('now'))
-  `)
-  
-  stmt.run(zip, sources_found, status, error)
+async function updateZipProgress(db, zip, status, sources_found, error = null) {
+  const sql =
+    db?.dialect === 'postgres'
+      ? `
+          INSERT INTO national_zip_progress (zip, last_run_at, sources_found, status, error, updated_at)
+          VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, CURRENT_TIMESTAMP)
+          ON CONFLICT (zip) DO UPDATE SET
+            last_run_at = excluded.last_run_at,
+            sources_found = excluded.sources_found,
+            status = excluded.status,
+            error = excluded.error,
+            updated_at = CURRENT_TIMESTAMP
+        `
+      : `
+          INSERT OR REPLACE INTO national_zip_progress
+          (zip, last_run_at, sources_found, status, error, updated_at)
+          VALUES (?, datetime('now'), ?, ?, ?, datetime('now'))
+        `
+
+  const stmt = db.prepare(sql)
+  await stmt.run(zip, sources_found, status, error)
 }
 
 /**
  * Get last processed ZIP for resumability
  */
-function getLastProcessedZip(db) {
-  const row = db.prepare(`
+async function getLastProcessedZip(db) {
+  const row = await db.prepare(`
     SELECT zip FROM national_zip_progress 
     WHERE status = 'completed'
     ORDER BY updated_at DESC 
@@ -322,10 +360,12 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   console.log(`Rate limit: ${config.rate_limit_ms}ms`)
   console.log()
   
-  const db = new Database(dbPath)
+  // Prefer the shared DB wrapper when invoked from the app (Postgres-safe),
+  // keep sqlite file-path mode for local/script usage.
+  const db = typeof dbPath === 'string' ? new Database(dbPath) : dbPath
   
   // Find where to resume from
-  const lastProcessedZip = getLastProcessedZip(db)
+  const lastProcessedZip = await getLastProcessedZip(db)
   const startIndex = lastProcessedZip 
     ? US_ZIP_CODES_SAMPLE.indexOf(lastProcessedZip) + 1 
     : 0
@@ -358,7 +398,7 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
       const result = await processZip(zip, db)
       
       // Update progress in database
-      updateZipProgress(db, result.zip, result.status, result.sources_found, result.error)
+      await updateZipProgress(db, result.zip, result.status, result.sources_found, result.error)
       
       processedCount++
       totalSources += result.sources_found
@@ -394,7 +434,9 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   console.log(`Duration: ${(totalDuration / 1000 / 60).toFixed(2)} minutes`)
   console.log()
   
-  db.close()
+  if (typeof db?.close === 'function') {
+    db.close()
+  }
   
   return {
     processed: processedCount,
