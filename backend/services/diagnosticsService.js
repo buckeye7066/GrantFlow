@@ -408,6 +408,23 @@ export async function getSafeHealthSummary(db) {
   }
   
   try {
+    // Always do a lightweight connectivity check first (required for postgres stability on Railway).
+    try {
+      if (typeof db.healthcheck === 'function') {
+        await db.healthcheck();
+      } else {
+        await db.prepare('SELECT 1 as ok').get();
+      }
+    } catch (e) {
+      return {
+        timestamp,
+        status: 'error',
+        counts: { opportunities: 0, recentFailures: 0 },
+        summary: 'Database healthcheck failed',
+        dialect: db.dialect ?? null,
+      };
+    }
+
     // Get basic counts
     const opportunitiesCount = await getTableCount(db, 'funding_opportunities');
     
@@ -458,13 +475,15 @@ export async function getSafeHealthSummary(db) {
         recentFailures,
       },
       summary,
+      dialect: db.dialect ?? null,
     };
   } catch (error) {
     return {
       timestamp,
       status: 'error',
       counts: { opportunities: 0, recentFailures: 0 },
-      summary: 'Failed to retrieve health information'
+      summary: 'Failed to retrieve health information',
+      dialect: db?.dialect ?? null,
     };
   }
 }

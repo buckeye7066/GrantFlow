@@ -32,4 +32,7 @@ Thumbs.db
 backend/data/
 seed/*.db
 *.db
+seed/*.db-shm
+seed/*.db-wal
+seed/*.db-journal
 

@@ -82,10 +82,6 @@ function isIdempotentAlreadyAppliedError(err) {
   if (msg.includes('already exists')) return true; // table/index already exists
   if (msg.includes('duplicate index')) return true;
 
-  // Postgres common "already applied" signatures (only used defensively; we still expect deterministic migrations)
-  if (msg.includes('already exists')) return true;
-  if (msg.includes('duplicate key value violates unique constraint')) return true;
-
   return false;
 }
 
@@ -137,7 +133,8 @@ async function main() {
       // Bootstrap safety:
       // Existing SQLite environments may have had schema changes applied via `schema.sql` startup auto-migration,
       // but `_migrations` is empty. In that case, treat "already applied" DDL failures as success and record them.
-      if (isIdempotentAlreadyAppliedError(error)) {
+      // IMPORTANT: Postgres migrations must be strict/deterministic. Never swallow/record on error for Postgres.
+      if (db.dialect !== 'postgres' && isIdempotentAlreadyAppliedError(error)) {
         await recordAsApplied(filename, 'idempotent DDL');
         console.log('');
         continue;

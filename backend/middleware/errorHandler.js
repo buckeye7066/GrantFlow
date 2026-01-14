@@ -20,8 +20,11 @@ export function formatError(error) {
  * Express error handling middleware
  */
 export function errorHandler(err, req, res, next) {
+  const requestId = req.requestId || req.request_id || null;
+
   // Log error for debugging
   console.error('Error:', {
+    requestId,
     message: err.message,
     stack: err.stack,
     path: req.path,
@@ -32,7 +35,10 @@ export function errorHandler(err, req, res, next) {
   const statusCode = err.statusCode || err.status || 500;
   
   // Send error response
-  res.status(statusCode).json(formatError(err));
+  const body = formatError(err);
+  // Always include request_id so logs can be correlated with client errors.
+  if (requestId) body.request_id = requestId;
+  res.status(statusCode).json(body);
 }
 
 /**

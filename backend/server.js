@@ -95,11 +95,23 @@ const corsOptions = {
   origin: configuredCorsOrigins && configuredCorsOrigins.length > 0 ? configuredCorsOrigins : defaultCorsOrigins,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Token', 'X-Anya-Token'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Token', 'X-Anya-Token', 'X-Request-Id'],
 };
 
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
+
+// Request ID (correlate client errors with server logs)
+app.use((req, res, next) => {
+  const headerId = req.headers['x-request-id'];
+  const requestId =
+    (typeof headerId === 'string' && headerId.trim()) ||
+    (Array.isArray(headerId) && typeof headerId[0] === 'string' && headerId[0].trim()) ||
+    crypto.randomUUID();
+  req.requestId = requestId;
+  res.setHeader('X-Request-Id', requestId);
+  next();
+});
 
 // Request timeout middleware - prevent hanging requests from causing 502 errors
 const REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT_MS || '30000', 10); // Default 30 seconds
@@ -573,7 +585,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use((req, res, next) => {
+app.use(async (req, res, next) => {
   const authHeader = req.headers.authorization || '';
   const xAdminToken = req.headers['x-admin-token'];
   const xAnyaToken = req.headers['x-anya-token'];
@@ -624,7 +636,7 @@ app.use((req, res, next) => {
 
         // Best-effort DB session validation/enrichment (when sessions are stored locally).
         if (payload?.sid) {
-          const sessionRow = db
+          const sessionRow = await db
             .prepare(
               `
                 SELECT s.*, u.display_name, u.primary_email, u.is_admin
@@ -663,7 +675,7 @@ app.use((req, res, next) => {
 
     if (!handled && token) {
       try {
-        const profile = db
+        const profile = await db
           .prepare('SELECT id, display_name FROM profiles WHERE id = ?')
           .get(token);
         if (profile) {
@@ -687,7 +699,7 @@ app.use((req, res, next) => {
 
 // Health check with dependency checks
 // Health check endpoint (v3.0 - complete county data)
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
   const health = {
     status: 'healthy',
     timestamp: new Date().toISOString(),
@@ -700,7 +712,11 @@ app.get('/health', (req, res) => {
   
   // Check database connection
   try {
-    db.prepare('SELECT 1').get();
+    if (db.healthcheck) {
+      await db.healthcheck();
+    } else {
+      await db.prepare('SELECT 1').get();
+    }
     health.dependencies.database = 'healthy';
   } catch (error) {
     health.dependencies.database = 'unhealthy';
@@ -715,7 +731,7 @@ app.get('/health', (req, res) => {
 });
 
 // Authentication diagnostics endpoint
-app.get('/api/auth/diagnostics', (req, res) => {
+app.get('/api/auth/diagnostics', async (req, res) => {
   const diagnostics = {
     status: 'operational',
     timestamp: new Date().toISOString(),
@@ -731,7 +747,11 @@ app.get('/api/auth/diagnostics', (req, res) => {
 
   // Check database connection
   try {
-    db.prepare('SELECT COUNT(*) as count FROM users').get();
+    if (db.healthcheck) {
+      await db.healthcheck();
+    } else {
+      await db.prepare('SELECT COUNT(*) as count FROM users').get();
+    }
     diagnostics.auth.database = 'connected';
   } catch (error) {
     diagnostics.auth.database = 'error: ' + error.message;
@@ -929,9 +949,9 @@ app.use('/api/crawler-v2', crawlerV2Router);
 app.use('/api/nf-programs', nfProgramsRouter);
 
 // Pipeline stats
-app.get('/api/pipeline/stats', (req, res) => {
+app.get('/api/pipeline/stats', async (req, res) => {
   try {
-    const rows = db.prepare(`
+    const rows = await db.prepare(`
       SELECT status, COUNT(*) as count
       FROM grants
       GROUP BY status
@@ -966,7 +986,7 @@ app.get('/api/pipeline/stats', (req, res) => {
     rows.forEach((row) => {
       const normalized = statusMap[row.status] || null;
       if (!normalized || pipelineKeys[normalized] === undefined) return;
-      pipelineKeys[normalized] += row.count ?? 0;
+      pipelineKeys[normalized] += Number(row.count ?? 0);
     });
 
     res.json(pipelineKeys);
