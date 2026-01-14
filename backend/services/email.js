@@ -122,7 +122,9 @@ export async function sendVerificationEmail(email, code) {
  *
  * This NEVER includes the verification code.
  */
-export async function sendAuthAttemptNotification({ event, identifier, success, error } = {}) {
+export async function sendAuthAttemptNotification(
+  { event, identifier, success, error, context } = {},
+) {
   if (!AUTH_NOTIFY_ON_LOGIN && !AUTH_NOTIFY_EMAIL) {
     return false
   }
@@ -137,18 +139,53 @@ export async function sendAuthAttemptNotification({ event, identifier, success, 
   const safeEvent = typeof event === 'string' ? event : 'auth_event'
   const ok = Boolean(success)
   const safeError = error ? String(error).slice(0, 500) : null
+  const ctx = context && typeof context === 'object' ? context : null
+  const safeCtx = ctx
+    ? {
+        method: ctx.method ? String(ctx.method).slice(0, 64) : null,
+        user_id: ctx.userId ? String(ctx.userId).slice(0, 128) : null,
+        profile_id: ctx.profileId ? String(ctx.profileId).slice(0, 128) : null,
+        ip: ctx.ip ? String(ctx.ip).slice(0, 128) : null,
+        user_agent: ctx.userAgent ? String(ctx.userAgent).slice(0, 256) : null,
+      }
+    : null
 
   try {
+    const title =
+      safeEvent === 'sign_in'
+        ? 'User signed in'
+        : safeEvent === 'email_verify'
+          ? 'Email verification'
+          : safeEvent === 'phone_verify'
+            ? 'Phone verification'
+            : 'Auth event'
+
     await client.emails.send({
       from: FROM_EMAIL,
       to,
-      subject: `[GrantFlow] Auth ${safeEvent}: ${ok ? 'OK' : 'FAIL'} (${safeIdentifier})`,
+      subject: `[GrantFlow] ${title}: ${ok ? 'OK' : 'FAIL'} (${safeIdentifier})`,
       html: `
         <h2>GrantFlow auth event</h2>
+        <p><strong>Type:</strong> ${escapeHtml(title)}</p>
         <p><strong>Event:</strong> ${escapeHtml(safeEvent)}</p>
         <p><strong>Identifier:</strong> ${escapeHtml(safeIdentifier)}</p>
         <p><strong>Result:</strong> ${ok ? 'OK' : 'FAIL'}</p>
         ${safeError ? `<p><strong>Error:</strong> ${escapeHtml(safeError)}</p>` : ''}
+        ${
+          safeCtx
+            ? `
+          <hr />
+          <p><strong>Context</strong></p>
+          <ul>
+            ${safeCtx.method ? `<li><strong>method:</strong> ${escapeHtml(safeCtx.method)}</li>` : ''}
+            ${safeCtx.user_id ? `<li><strong>user_id:</strong> ${escapeHtml(safeCtx.user_id)}</li>` : ''}
+            ${safeCtx.profile_id ? `<li><strong>profile_id:</strong> ${escapeHtml(safeCtx.profile_id)}</li>` : ''}
+            ${safeCtx.ip ? `<li><strong>ip:</strong> ${escapeHtml(safeCtx.ip)}</li>` : ''}
+            ${safeCtx.user_agent ? `<li><strong>user_agent:</strong> ${escapeHtml(safeCtx.user_agent)}</li>` : ''}
+          </ul>
+        `
+            : ''
+        }
         <p style="color:#64748b;font-size:12px;">This message is an automated operational alert. It never includes login codes.</p>
       `,
     })
