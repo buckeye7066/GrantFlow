@@ -164,7 +164,7 @@ router.put('/logs/:id', (req, res) => {
   }
 })
 
-router.post('/check', (req, res) => {
+router.post('/check', async (req, res) => {
   if (!requireAdmin(req, res)) return
   try {
     ensureDefaults(req.db)
@@ -173,7 +173,7 @@ router.post('/check', (req, res) => {
     const orgFilter = orgId ? ' AND organization_id = ?' : ''
     const params = orgId ? [String(orgId)] : []
 
-    const grants = req.db
+    const grants = await req.db
       .prepare(
         `
           SELECT id, organization_id, title, status, deadline, match_score
@@ -195,19 +195,41 @@ router.post('/check', (req, res) => {
     )
 
     // Avoid spamming duplicate events: if the same (grant_id,event_type) exists in last 24h, skip.
+    const since1dPredicate =
+      req.db?.dialect === 'postgres'
+        ? "created_date >= (NOW() - INTERVAL '1 day')"
+        : "datetime(created_date) >= datetime('now', '-1 day')"
+
     const seenRecent = req.db.prepare(
       `
         SELECT 1
         FROM grant_monitoring_logs
         WHERE grant_id = ? AND event_type = ?
-          AND datetime(created_date) >= datetime('now', '-1 day')
+          AND ${since1dPredicate}
         LIMIT 1
       `,
     )
 
     let eventsLogged = 0
 
-    const tx = req.db.transaction(() => {
+    await req.db.withTransaction(async (tx) => {
+      const insertTx = tx.prepare(
+        `
+          INSERT INTO grant_monitoring_logs (
+            id, organization_id, grant_id, event_type, severity, event_data, acknowledged, acknowledged_at
+          ) VALUES (?, ?, ?, ?, ?, ?, 0, NULL)
+        `,
+      )
+      const seenRecentTx = tx.prepare(
+        `
+          SELECT 1
+          FROM grant_monitoring_logs
+          WHERE grant_id = ? AND event_type = ?
+            AND ${since1dPredicate}
+          LIMIT 1
+        `,
+      )
+
       for (const grant of grants) {
         if (!grant.deadline) continue
         const dl = new Date(grant.deadline)
@@ -221,9 +243,9 @@ router.post('/check', (req, res) => {
 
         if (daysUntil <= 14) {
           const eventType = 'deadline_approaching'
-          if (seenRecent.get(grant.id, eventType)) continue
+          if (await seenRecentTx.get(grant.id, eventType)) continue
           const severity = daysUntil <= 7 ? 'critical' : 'high'
-          insert.run(
+          await insertTx.run(
             crypto.randomUUID(),
             grant.organization_id,
             grant.id,
@@ -240,8 +262,6 @@ router.post('/check', (req, res) => {
         }
       }
     })
-
-    tx()
 
     res.json({
       success: true,
