@@ -234,7 +234,7 @@ CREATE TABLE IF NOT EXISTS documents (
   
   organization_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
   grant_id TEXT REFERENCES grants(id) ON DELETE SET NULL,
-  profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+  profile_id TEXT,
   
   name TEXT NOT NULL,
   type TEXT, -- 'proposal', 'budget', 'letter_of_support', 'form', 'report', etc.
@@ -346,7 +346,7 @@ CREATE TABLE IF NOT EXISTS user_sessions (
   created_at TIMESTAMPTZ DEFAULT now(),
   
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+  profile_id TEXT,
   issued_at TIMESTAMPTZ DEFAULT now(),
   access_expires_at TIMESTAMPTZ,
   refresh_expires_at TIMESTAMPTZ,
@@ -399,7 +399,7 @@ CREATE TABLE IF NOT EXISTS grant_pipeline_events (
   id TEXT PRIMARY KEY DEFAULT (gen_random_uuid()::text),
   created_at TIMESTAMPTZ DEFAULT now(),
   grant_id TEXT NOT NULL REFERENCES grants(id) ON DELETE CASCADE,
-  job_id TEXT REFERENCES crawler_jobs(id) ON DELETE SET NULL,
+  job_id TEXT,
   previous_status TEXT,
   suggested_status TEXT,
   applied_status TEXT,
@@ -1394,6 +1394,35 @@ CREATE TABLE IF NOT EXISTS service_applications (
 CREATE INDEX IF NOT EXISTS idx_service_applications_status ON service_applications(status);
 CREATE INDEX IF NOT EXISTS idx_service_applications_created ON service_applications(created_at);
 CREATE INDEX IF NOT EXISTS idx_service_applications_email ON service_applications(email);
+
+-- ============================================================
+-- Postgres FK constraints that require tables to already exist
+-- (SQLite allows forward refs; Postgres does not.)
+-- ============================================================
+
+DO $$
+BEGIN
+  ALTER TABLE documents
+  ADD CONSTRAINT fk_documents_profile
+  FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE user_sessions
+  ADD CONSTRAINT fk_user_sessions_profile
+  FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE grant_pipeline_events
+  ADD CONSTRAINT fk_grant_pipeline_events_job
+  FOREIGN KEY (job_id) REFERENCES crawler_jobs(id) ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 -- ============================================================
 -- Postgres updated_at triggers (must come after all tables)
