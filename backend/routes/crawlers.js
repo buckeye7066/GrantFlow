@@ -112,12 +112,12 @@ function buildJobFilter(auth, { profileId, organizationId, type, status } = {}) 
   }
 }
 
-function fetchJobById(db, id) {
+async function fetchJobById(db, id) {
   if (!id) return null
-  return db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(id)
+  return await db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(id)
 }
 
-function buildJobLineage(db, job) {
+async function buildJobLineage(db, job) {
   if (!job?.id) return null
 
   const ancestors = []
@@ -126,7 +126,7 @@ function buildJobLineage(db, job) {
 
   for (let i = 0; currentParentId && i < MAX_LINEAGE_DEPTH; i += 1) {
     if (visited.has(currentParentId)) break
-    const parentRow = fetchJobById(db, currentParentId)
+    const parentRow = await fetchJobById(db, currentParentId)
     if (!parentRow) break
     const parentJob = mapJob(parentRow)
     ancestors.push(parentJob)
@@ -141,12 +141,21 @@ function buildJobLineage(db, job) {
   let descendantStmt = null
 
   try {
-    descendantStmt = db.prepare(`
-      SELECT *
-      FROM crawler_jobs
-      WHERE JSON_EXTRACT(parameters, '$.retried_from_job_id') = ?
-      ORDER BY created_at ASC
-    `)
+    const descendantSql =
+      db?.dialect === 'postgres'
+        ? `
+            SELECT *
+            FROM crawler_jobs
+            WHERE (parameters::jsonb ->> 'retried_from_job_id') = ?
+            ORDER BY created_at ASC
+          `
+        : `
+            SELECT *
+            FROM crawler_jobs
+            WHERE JSON_EXTRACT(parameters, '$.retried_from_job_id') = ?
+            ORDER BY created_at ASC
+          `
+    descendantStmt = db.prepare(descendantSql)
   } catch (error) {
     console.warn('[crawlers] JSON_EXTRACT unavailable; skipping retry descendant lookup', error)
   }
@@ -156,7 +165,7 @@ function buildJobLineage(db, job) {
       const currentId = queue.shift()
       let rows = []
       try {
-        rows = descendantStmt.all(currentId)
+        rows = await descendantStmt.all(currentId)
       } catch (error) {
         console.warn('[crawlers] Failed to query retry descendants', error)
         break
@@ -351,7 +360,7 @@ function deriveJobSummary(type, job) {
   }
 }
 
-router.get('/jobs', (req, res) => {
+router.get('/jobs', async (req, res) => {
   const auth = ensureAuth(req, res)
   if (!auth) return
 
@@ -377,7 +386,7 @@ router.get('/jobs', (req, res) => {
     const limitValue = Number.isFinite(limit) ? limit : 100
     const offsetValue = Number.isFinite(offset) ? offset : 0
 
-    const rows = req.db
+    const rows = await req.db
       .prepare(
         `
           SELECT *
@@ -396,7 +405,7 @@ router.get('/jobs', (req, res) => {
   }
 })
 
-router.get('/jobs/metrics', (req, res) => {
+router.get('/jobs/metrics', async (req, res) => {
   const auth = ensureAuth(req, res)
   if (!auth) return
 
@@ -412,7 +421,7 @@ router.get('/jobs/metrics', (req, res) => {
       organizationId: organizationFilter,
     })
 
-    const statusRows = req.db
+    const statusRows = await req.db
       .prepare(
         `
           SELECT type, status, COUNT(*) AS count
@@ -423,7 +432,7 @@ router.get('/jobs/metrics', (req, res) => {
       )
       .all(...params)
 
-    const latestActivity = req.db
+    const latestActivity = await req.db
       .prepare(
         `
           SELECT created_at
@@ -436,7 +445,7 @@ router.get('/jobs/metrics', (req, res) => {
       .get(...params)
 
     const completedClause = extendClause(clause, "status = 'completed'")
-    const completedRows = req.db
+    const completedRows = await req.db
       .prepare(
         `
           SELECT *
@@ -449,7 +458,7 @@ router.get('/jobs/metrics', (req, res) => {
       .all(...params)
 
     const runningClause = extendClause(clause, "status IN ('queued', 'running')")
-    const runningRows = req.db
+    const runningRows = await req.db
       .prepare(
         `
           SELECT *
@@ -462,7 +471,7 @@ router.get('/jobs/metrics', (req, res) => {
       .all(...params)
 
     const failedClause = extendClause(clause, "status = 'failed'")
-    const failedRows = req.db
+    const failedRows = await req.db
       .prepare(
         `
           SELECT *
@@ -475,7 +484,12 @@ router.get('/jobs/metrics', (req, res) => {
       .all(...params)
 
     const retryClause = extendClause(clause, 'COALESCE(retry_count, 0) > 0')
-    const retryRows = req.db
+    const recentRetryPredicate =
+      req.db?.dialect === 'postgres'
+        ? `last_retry_at >= (NOW() - INTERVAL '6 days')`
+        : `DATETIME(last_retry_at) >= DATETIME('now', '-6 day')`
+
+    const retryRows = await req.db
       .prepare(
         `
           SELECT
@@ -485,7 +499,7 @@ router.get('/jobs/metrics', (req, res) => {
             SUM(
               CASE
                 WHEN last_retry_at IS NOT NULL
-                  AND DATETIME(last_retry_at) >= DATETIME('now', '-6 day')
+                  AND ${recentRetryPredicate}
                 THEN 1
                 ELSE 0
               END
@@ -498,11 +512,13 @@ router.get('/jobs/metrics', (req, res) => {
       )
       .all(...params)
 
-    const activityClause = extendClause(
-      clause,
-      "DATE(created_at) >= DATE('now', '-6 day')",
-    )
-    const activityRows = req.db
+    const recentActivityPredicate =
+      req.db?.dialect === 'postgres'
+        ? `created_at >= (NOW() - INTERVAL '6 days')`
+        : `DATE(created_at) >= DATE('now', '-6 day')`
+
+    const activityClause = extendClause(clause, recentActivityPredicate)
+    const activityRows = await req.db
       .prepare(
         `
           SELECT
@@ -899,12 +915,12 @@ router.get('/jobs/metrics', (req, res) => {
   }
 })
 
-router.get('/jobs/:id', (req, res) => {
+router.get('/jobs/:id', async (req, res) => {
   const auth = ensureAuth(req, res)
   if (!auth) return
 
   try {
-    const job = req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(req.params.id)
+    const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(req.params.id)
     if (!job) {
       return res.status(404).json({ error: 'Job not found' })
     }
@@ -914,7 +930,7 @@ router.get('/jobs/:id', (req, res) => {
     }
 
     const mappedJob = mapJob(job)
-    const lineage = buildJobLineage(req.db, mappedJob)
+    const lineage = await buildJobLineage(req.db, mappedJob)
 
     res.json({
       ...mappedJob,
@@ -926,7 +942,7 @@ router.get('/jobs/:id', (req, res) => {
   }
 })
 
-router.post('/jobs', (req, res) => {
+router.post('/jobs', async (req, res) => {
   const auth = ensureAuth(req, res)
   if (!auth) return
 
@@ -955,7 +971,7 @@ router.post('/jobs', (req, res) => {
 
     let organizationId = null
     if (targetProfileId) {
-      const profileRow = req.db
+      const profileRow = await req.db
         .prepare('SELECT id, organization_id FROM profiles WHERE id = ?')
         .get(targetProfileId)
       if (!profileRow) {
@@ -965,18 +981,21 @@ router.post('/jobs', (req, res) => {
     }
 
     const parametersJson = JSON.stringify(parameters ?? {})
+    const jobId = crypto.randomUUID()
     const insert = req.db.prepare(`
       INSERT INTO crawler_jobs (
+        id,
         type,
         status,
         profile_id,
         organization_id,
         parameters,
         requested_by
-      ) VALUES (?, 'queued', ?, ?, ?, ?)
+      ) VALUES (?, ?, 'queued', ?, ?, ?, ?)
     `)
 
-    insert.run(
+    await insert.run(
+      jobId,
       type,
       targetProfileId,
       organizationId,
@@ -984,9 +1003,7 @@ router.post('/jobs', (req, res) => {
       auth.role === 'admin' ? 'admin' : targetProfileId,
     )
 
-    const job = req.db
-      .prepare('SELECT * FROM crawler_jobs WHERE rowid = last_insert_rowid()')
-      .get()
+    const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
 
     dispatchCrawlerJob({
       db: req.db,
@@ -1002,12 +1019,12 @@ router.post('/jobs', (req, res) => {
   }
 })
 
-router.post('/jobs/:id/retry', (req, res) => {
+router.post('/jobs/:id/retry', async (req, res) => {
   const auth = ensureAuth(req, res)
   if (!auth) return
 
   try {
-    const job = req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(req.params.id)
+    const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(req.params.id)
     if (!job) {
       return res.status(404).json({ error: 'Job not found' })
     }
@@ -1043,20 +1060,23 @@ router.post('/jobs/:id/retry', (req, res) => {
         ? job.profile_id
         : auth.profileId ?? 'system'
 
-    req.db
+    const newJobId = crypto.randomUUID()
+    await req.db
       .prepare(
         `
           INSERT INTO crawler_jobs (
+            id,
             type,
             status,
             profile_id,
             organization_id,
             parameters,
             requested_by
-          ) VALUES (?, 'queued', ?, ?, ?, ?)
+          ) VALUES (?, ?, 'queued', ?, ?, ?, ?)
         `,
       )
       .run(
+        newJobId,
         job.type,
         job.profile_id ?? null,
         job.organization_id ?? null,
@@ -1064,12 +1084,10 @@ router.post('/jobs/:id/retry', (req, res) => {
         requestedBy,
       )
 
-    const newJob = req.db
-      .prepare('SELECT * FROM crawler_jobs WHERE rowid = last_insert_rowid()')
-      .get()
+    const newJob = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(newJobId)
 
     try {
-      req.db
+      await req.db
         .prepare(
           `
             UPDATE crawler_jobs
@@ -1097,12 +1115,12 @@ router.post('/jobs/:id/retry', (req, res) => {
   }
 })
 
-router.post('/jobs/:id/cancel', (req, res) => {
+router.post('/jobs/:id/cancel', async (req, res) => {
   const auth = ensureAuth(req, res)
   if (!auth) return
 
   try {
-    const job = req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(req.params.id)
+    const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(req.params.id)
     if (!job) {
       return res.status(404).json({ error: 'Job not found' })
     }
@@ -1119,7 +1137,7 @@ router.post('/jobs/:id/cancel', (req, res) => {
       return res.status(400).json({ error: 'Only queued jobs can be cancelled' })
     }
 
-    req.db
+    await req.db
       .prepare(
         `
           UPDATE crawler_jobs
@@ -1134,7 +1152,7 @@ router.post('/jobs/:id/cancel', (req, res) => {
         job.id,
       )
 
-    const updated = req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(job.id)
+    const updated = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(job.id)
     res.json(mapJob(updated))
   } catch (error) {
     console.error('Error cancelling crawler job:', error)
@@ -1142,7 +1160,7 @@ router.post('/jobs/:id/cancel', (req, res) => {
   }
 })
 
-router.patch('/jobs/:id', (req, res) => {
+router.patch('/jobs/:id', async (req, res) => {
   const auth = ensureAuth(req, res)
   if (!auth) return
 
@@ -1152,7 +1170,7 @@ router.patch('/jobs/:id', (req, res) => {
 
   try {
     const { status, started_at, completed_at, result_count, error } = req.body ?? {}
-    const job = req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(req.params.id)
+    const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(req.params.id)
     if (!job) {
       return res.status(404).json({ error: 'Job not found' })
     }
@@ -1198,9 +1216,9 @@ router.patch('/jobs/:id', (req, res) => {
       WHERE id = ?
     `)
 
-    update.run(...values, req.params.id)
+    await update.run(...values, req.params.id)
 
-    const updated = req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(req.params.id)
+    const updated = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(req.params.id)
     res.json(mapJob(updated))
   } catch (error) {
     console.error('Error updating crawler job:', error)
@@ -1209,7 +1227,7 @@ router.patch('/jobs/:id', (req, res) => {
 })
 
 // Get auto-discovery status for a profile
-router.get('/auto-discovery-status/:profileId', (req, res) => {
+router.get('/auto-discovery-status/:profileId', async (req, res) => {
   const auth = ensureAuth(req, res)
   if (!auth) return
 
@@ -1226,7 +1244,7 @@ router.get('/auto-discovery-status/:profileId', (req, res) => {
     }
 
     // Count jobs created by auto-discovery for this profile
-    const stats = req.db.prepare(`
+    const stats = await req.db.prepare(`
       SELECT 
         COUNT(*) as total,
         SUM(CASE WHEN status = 'running' OR status = 'queued' THEN 1 ELSE 0 END) as running,
@@ -1347,7 +1365,9 @@ router.post('/crawl-all-counties', async (req, res) => {
     const { crawlAllCounties } = await import('../services/countyFundingCrawler.js')
     const result = await crawlAllCounties(req.db)
     
-    const totalCount = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get().count
+    const totalCount = Number(
+      (await req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = ?').get(true))?.count || 0,
+    )
     
     res.json({
       success: true,
@@ -1406,7 +1426,9 @@ router.get('/county-status', async (req, res) => {
     const { getCrawlerStatus } = await import('../services/countyFundingCrawler.js')
     const status = getCrawlerStatus(req.db)
     
-    const totalOpps = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get().count
+    const totalOpps = Number(
+      (await req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = ?').get(true))?.count || 0,
+    )
     
     res.json({
       ...status,
@@ -1442,27 +1464,51 @@ router.post('/seed-local-networks', async (req, res) => {
     
     for (const net of data.networks) {
       try {
-        const existing = req.db.prepare('SELECT id FROM funding_opportunities WHERE id = ?').get(net.id)
+        const existing = await req.db.prepare('SELECT id FROM funding_opportunities WHERE id = ?').get(net.id)
         const categoriesJson = JSON.stringify(net.categories || [])
         const keywordsJson = JSON.stringify([...net.categories, 'local', 'assistance', 'community'].filter(Boolean))
         
         if (existing) {
-          req.db.prepare(`
+          await req.db.prepare(`
             UPDATE funding_opportunities SET
               title = ?, sponsor = ?, description = ?, application_url = ?, source_url = ?,
               is_national = ?, state = ?, categories = ?, keywords = ?,
               updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
-          `).run(net.title, net.sponsor, net.description, net.url, net.url, net.is_national ? 1 : 0, net.state || 'nationwide', categoriesJson, keywordsJson, net.id)
+          `).run(
+            net.title,
+            net.sponsor,
+            net.description,
+            net.url,
+            net.url,
+            Boolean(net.is_national),
+            net.state || 'nationwide',
+            categoriesJson,
+            keywordsJson,
+            net.id,
+          )
           updated++
         } else {
-          req.db.prepare(`
+          await req.db.prepare(`
             INSERT INTO funding_opportunities (
               id, title, sponsor, source, source_id, source_url, description,
               application_url, is_national, state, categories, keywords,
               opportunity_type, is_active, created_at, updated_at
-            ) VALUES (?, ?, ?, 'verified_real', ?, ?, ?, ?, ?, ?, ?, ?, 'program', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-          `).run(net.id, net.title, net.sponsor, net.id, net.url, net.description, net.url, net.is_national ? 1 : 0, net.state || 'nationwide', categoriesJson, keywordsJson)
+            ) VALUES (?, ?, ?, 'verified_real', ?, ?, ?, ?, ?, ?, ?, ?, 'program', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          `).run(
+            net.id,
+            net.title,
+            net.sponsor,
+            net.id,
+            net.url,
+            net.description,
+            net.url,
+            Boolean(net.is_national),
+            net.state || 'nationwide',
+            categoriesJson,
+            keywordsJson,
+            true,
+          )
           inserted++
         }
       } catch (e) {
@@ -1471,7 +1517,9 @@ router.post('/seed-local-networks', async (req, res) => {
       }
     }
     
-    const totalCount = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get().count
+    const totalCount = Number(
+      (await req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = ?').get(true))?.count || 0,
+    )
     
     res.json({
       success: true,
@@ -1514,29 +1562,53 @@ router.post('/seed-state-assistance', async (req, res) => {
     
     for (const prog of data.programs) {
       try {
-        const existing = req.db.prepare('SELECT id FROM funding_opportunities WHERE id = ?').get(prog.id)
+        const existing = await req.db.prepare('SELECT id FROM funding_opportunities WHERE id = ?').get(prog.id)
         
-        const isNational = prog.state === 'nationwide' ? 1 : 0
+        const isNational = prog.state === 'nationwide'
         const categoriesJson = JSON.stringify(prog.categories || [])
         const keywordsJson = JSON.stringify([prog.state?.toLowerCase(), '211', 'local', 'assistance'].filter(Boolean))
         
         if (existing) {
-          req.db.prepare(`
+          await req.db.prepare(`
             UPDATE funding_opportunities SET
               title = ?, sponsor = ?, description = ?, application_url = ?, source_url = ?,
               is_national = ?, state = ?, categories = ?, keywords = ?,
               updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
-          `).run(prog.title, prog.sponsor, prog.description, prog.url, prog.url, isNational, prog.state, categoriesJson, keywordsJson, prog.id)
+          `).run(
+            prog.title,
+            prog.sponsor,
+            prog.description,
+            prog.url,
+            prog.url,
+            Boolean(isNational),
+            prog.state,
+            categoriesJson,
+            keywordsJson,
+            prog.id,
+          )
           updated++
         } else {
-          req.db.prepare(`
+          await req.db.prepare(`
             INSERT INTO funding_opportunities (
               id, title, sponsor, source, source_id, source_url, description,
               application_url, is_national, state, categories, keywords,
               opportunity_type, is_active, created_at, updated_at
-            ) VALUES (?, ?, ?, 'verified_real', ?, ?, ?, ?, ?, ?, ?, ?, 'program', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-          `).run(prog.id, prog.title, prog.sponsor, prog.id, prog.url, prog.description, prog.url, isNational, prog.state, categoriesJson, keywordsJson)
+            ) VALUES (?, ?, ?, 'verified_real', ?, ?, ?, ?, ?, ?, ?, ?, 'program', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          `).run(
+            prog.id,
+            prog.title,
+            prog.sponsor,
+            prog.id,
+            prog.url,
+            prog.description,
+            prog.url,
+            Boolean(isNational),
+            prog.state,
+            categoriesJson,
+            keywordsJson,
+            true,
+          )
           inserted++
         }
       } catch (e) {
@@ -1545,7 +1617,9 @@ router.post('/seed-state-assistance', async (req, res) => {
       }
     }
     
-    const totalCount = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get().count
+    const totalCount = Number(
+      (await req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = ?').get(true))?.count || 0,
+    )
     
     res.json({
       success: true,
@@ -1579,7 +1653,9 @@ router.post('/crawl-grants-gov', async (req, res) => {
     const maxPages = req.body?.max_pages || 5
     const result = await crawlGrantsGov(req.db, { maxPages, rowsPerPage: 100 })
     
-    const totalCount = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get().count
+    const totalCount = Number(
+      (await req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = ?').get(true))?.count || 0,
+    )
     
     res.json({
       success: true,
@@ -1610,7 +1686,7 @@ router.post('/remove-loans', async (req, res) => {
     console.log('[remove-loans] Removing loans and matching-fund opportunities...')
     
     // Delete loans
-    const loansDeleted = req.db.prepare(`
+    const loansDeleted = await req.db.prepare(`
       DELETE FROM funding_opportunities 
       WHERE opportunity_type = 'loan' 
          OR title LIKE '%Loan%' 
@@ -1619,12 +1695,14 @@ router.post('/remove-loans', async (req, res) => {
     `).run()
     
     // Delete matching-fund opportunities
-    const matchingDeleted = req.db.prepare(`
+    const matchingDeleted = await req.db.prepare(`
       DELETE FROM funding_opportunities 
-      WHERE requires_match = 1
+      WHERE requires_match = TRUE
     `).run()
     
-    const totalRemaining = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get().count
+    const totalRemaining = Number(
+      (await req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = ?').get(true))?.count || 0,
+    )
     
     res.json({
       success: true,
@@ -1770,12 +1848,16 @@ router.post('/seed-real-opportunities', async (req, res) => {
 
 // Crawler health endpoint
 // GET /api/crawlers/health
-router.get('/health', (req, res) => {
+router.get('/health', async (req, res) => {
   try {
     const db = req.db
+    const since24hPredicate =
+      db?.dialect === 'postgres'
+        ? "created_at >= (NOW() - INTERVAL '24 hours')"
+        : "created_at >= datetime('now', '-24 hours')"
 
     // Get overall job statistics
-    const overallStats = db.prepare(`
+    const overallStats = await db.prepare(`
       SELECT 
         COUNT(*) as total,
         SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) as queued,
@@ -1783,11 +1865,11 @@ router.get('/health', (req, res) => {
         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
         SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
       FROM crawler_jobs
-      WHERE created_at >= datetime('now', '-24 hours')
+      WHERE ${since24hPredicate}
     `).get()
 
     // Get last success by type
-    const lastSuccessRows = db.prepare(`
+    const lastSuccessRows = await db.prepare(`
       SELECT type, MAX(completed_at) as last_success, result_count
       FROM crawler_jobs
       WHERE status = 'completed'
@@ -1803,7 +1885,7 @@ router.get('/health', (req, res) => {
     })
 
     // Get last error by type (redacted)
-    const lastErrorRows = db.prepare(`
+    const lastErrorRows = await db.prepare(`
       SELECT type, MAX(completed_at) as last_error, 
              SUBSTR(error, 1, 100) as error_preview
       FROM crawler_jobs
@@ -1823,11 +1905,16 @@ router.get('/health', (req, res) => {
     const queueDepth = (overallStats.queued || 0) + (overallStats.running || 0)
 
     // Determine worker status (check if there are stuck jobs)
-    const stuckJobs = db.prepare(`
+    const stuckPredicate =
+      db?.dialect === 'postgres'
+        ? "started_at < (NOW() - INTERVAL '2 hours')"
+        : "started_at < datetime('now', '-2 hours')"
+
+    const stuckJobs = await db.prepare(`
       SELECT COUNT(*) as count
       FROM crawler_jobs
       WHERE status = 'running'
-        AND started_at < datetime('now', '-2 hours')
+        AND ${stuckPredicate}
     `).get()
 
     const workerOnline = (stuckJobs?.count ?? 0) === 0
