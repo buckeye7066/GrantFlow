@@ -1025,7 +1025,7 @@ router.post('/seed-opportunities', async (req, res) => {
   try {
     if (!ensureAdminRequest(req, res)) return;
     const { totalLoaded } = seedRealOpportunities(req.db);
-    const totalInDb = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get()?.count || 0;
+    const totalInDb = Number((await req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get())?.count || 0);
     res.json({ success: true, message: `Seeded ${totalLoaded} opportunities`, total_in_database: totalInDb, loaded_from_files: totalLoaded });
   } catch (error) {
     console.error('[admin/seed-opportunities] Error:', error);
@@ -1037,9 +1037,17 @@ router.post('/seed-opportunities', async (req, res) => {
 router.post('/seed-assistance-directories', async (req, res) => {
   try {
     if (!ensureAdminRequest(req, res)) return;
-    const before = req.db.prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')").get()?.count || 0;
+    const before = Number(
+      (await req.db
+        .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")
+        .get())?.count || 0,
+    );
     const result = seedAssistanceDirectories(req.db);
-    const after = req.db.prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')").get()?.count || 0;
+    const after = Number(
+      (await req.db
+        .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")
+        .get())?.count || 0,
+    );
     res.json({
       success: true,
       message: `Seeded assistance directories. Records: ${before} → ${after}.`,
@@ -1062,7 +1070,7 @@ router.post('/repair-all-profiles', async (req, res) => {
     const { supportedSectionKeys } = await import('../prompts/profileSections.js');
 
     // Get all profiles
-    const profiles = req.db.prepare('SELECT id, display_name FROM profiles').all();
+    const profiles = await req.db.prepare('SELECT id, display_name FROM profiles').all();
 
     const results = {
       profiles_processed: 0,
@@ -1139,8 +1147,8 @@ router.post('/repair-all-profiles', async (req, res) => {
 router.post('/sync-profiles', async (req, res) => {
   try {
     ensureDesignatedProfiles(req.db);
-    const profilesCount = req.db.prepare('SELECT COUNT(*) as count FROM profiles').get()?.count || 0;
-    const sectionsCount = req.db.prepare('SELECT COUNT(*) as count FROM profile_sections').get()?.count || 0;
+    const profilesCount = Number((await req.db.prepare('SELECT COUNT(*) as count FROM profiles').get())?.count || 0);
+    const sectionsCount = Number((await req.db.prepare('SELECT COUNT(*) as count FROM profile_sections').get())?.count || 0);
     res.json({ success: true, message: 'Profiles synchronized', profiles: profilesCount, total_sections: sectionsCount });
   } catch (error) {
     console.error('[admin/sync-profiles] Error:', error);

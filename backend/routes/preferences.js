@@ -66,7 +66,7 @@ function mapPreferencesRow(row) {
 }
 
 // Get user preferences (or create with defaults if not exists)
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   const auth = req.user ?? { role: 'guest' }
   
   if (auth.role === 'guest' || !auth.userId) {
@@ -74,19 +74,19 @@ router.get('/', (req, res) => {
   }
   
   try {
-    let preferences = req.db
+    let preferences = await req.db
       .prepare('SELECT * FROM user_preferences WHERE user_id = ?')
       .get(auth.userId)
     
     if (!preferences) {
       // Create default preferences for user
       const id = `pref-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-      req.db.prepare(`
+      await req.db.prepare(`
         INSERT INTO user_preferences (id, user_id, custom_preferences)
         VALUES (?, ?, ?)
       `).run(id, auth.userId, JSON.stringify({}))
       
-      preferences = req.db
+      preferences = await req.db
         .prepare('SELECT * FROM user_preferences WHERE id = ?')
         .get(id)
     }
@@ -99,7 +99,7 @@ router.get('/', (req, res) => {
 })
 
 // Update user preferences
-router.put('/', (req, res) => {
+router.put('/', async (req, res) => {
   const auth = req.user ?? { role: 'guest' }
   
   if (auth.role === 'guest' || !auth.userId) {
@@ -118,7 +118,7 @@ router.put('/', (req, res) => {
           values.push(JSON.stringify(value))
         } else if (typeof value === 'boolean') {
           updates.push(`${key} = ?`)
-          values.push(value ? 1 : 0)
+          values.push(Boolean(value))
         } else {
           updates.push(`${key} = ?`)
           values.push(value)
@@ -132,13 +132,13 @@ router.put('/', (req, res) => {
     
     values.push(auth.userId)
     
-    req.db.prepare(`
+    await req.db.prepare(`
       UPDATE user_preferences 
       SET ${updates.join(', ')} 
       WHERE user_id = ?
     `).run(...values)
     
-    const updated = req.db
+    const updated = await req.db
       .prepare('SELECT * FROM user_preferences WHERE user_id = ?')
       .get(auth.userId)
     
@@ -150,7 +150,7 @@ router.put('/', (req, res) => {
 })
 
 // Reset preferences to defaults
-router.post('/reset', (req, res) => {
+router.post('/reset', async (req, res) => {
   const auth = req.user ?? { role: 'guest' }
   
   if (auth.role === 'guest' || !auth.userId) {
@@ -158,15 +158,15 @@ router.post('/reset', (req, res) => {
   }
   
   try {
-    req.db.prepare('DELETE FROM user_preferences WHERE user_id = ?').run(auth.userId)
+    await req.db.prepare('DELETE FROM user_preferences WHERE user_id = ?').run(auth.userId)
     
     const id = `pref-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-    req.db.prepare(`
+    await req.db.prepare(`
       INSERT INTO user_preferences (id, user_id, custom_preferences)
       VALUES (?, ?, ?)
     `).run(id, auth.userId, JSON.stringify({}))
     
-    const preferences = req.db
+    const preferences = await req.db
       .prepare('SELECT * FROM user_preferences WHERE id = ?')
       .get(id)
     
