@@ -17,6 +17,13 @@ import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js';
 import { logAuditEvent, queryAuditLogs, getAuditSummary, cleanupAuditLogs, AUDIT_CATEGORIES, SEVERITY } from '../services/auditService.js';
 import { initializeFeatureFlags, isFeatureEnabled, getAllFlags, updateFlag, createFlagOverride, removeFlagOverride, getFlagOverrides, cleanupExpiredOverrides } from '../services/featureFlagService.js';
+import { getProfileWithLocation } from '../services/crawlers/crawlerHelpers.js';
+import { crawlLocalFunding } from '../services/crawlers/localFundingCrawler.js';
+import { crawlGovernmentFunding } from '../services/crawlers/governmentFundingCrawler.js';
+import { crawlStudentGrants } from '../services/crawlers/studentGrantsCrawler.js';
+import { crawlSpecialNeeds } from '../services/crawlers/specialNeedsCrawler.js';
+import { crawlItemFunding } from '../services/crawlers/itemFundingCrawler.js';
+import { crawlECFBenefits } from '../services/crawlers/ecfBenefitsCrawler.js';
 
 const router = express.Router();
 
@@ -34,6 +41,35 @@ const countiesByStatePath = join(repoRootDir, 'county_batch1.json');
 let zipCoordinatesCache = null;
 let zipStateIndexCache = null;
 let countiesByStateCache = null;
+
+const CRAWLER_AUDIT_TYPES = [
+  'local_funding',
+  'government_funding',
+  'student_grants',
+  'special_needs',
+  'item_matching',
+  'ecf_benefits',
+];
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+async function withTimeout(promise, ms, label) {
+  let timeoutId = null;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      const err = new Error(`${label} timed out after ${ms}ms`);
+      err.code = 'TIMEOUT';
+      reject(err);
+    }, ms);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
 
 function ensureAdminRequest(req, res) {
   const user = req.user ?? {};
@@ -2018,6 +2054,190 @@ router.post('/feature-flags/cleanup', async (req, res) => {
   } catch (error) {
     console.error('[admin/feature-flags/cleanup] Error:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/crawlers/audit-live
+ * Admin-only: run each specialized crawler against each selected profile and report "why 0 results".
+ *
+ * Body:
+ *  - profile_ids?: string[]
+ *  - crawler_types?: string[] (defaults to all)
+ *  - min_match_score?: number (defaults 50)
+ *  - timeout_ms?: number (defaults 20000)
+ *  - limit_profiles?: number (defaults 25 when profile_ids not provided)
+ *  - item_request?: string (used for item_matching)
+ */
+router.post('/crawlers/audit-live', async (req, res) => {
+  try {
+    if (!ensureAdminRequest(req, res)) return;
+
+    const {
+      profile_ids,
+      crawler_types,
+      min_match_score = 50,
+      timeout_ms = 20000,
+      limit_profiles = 25,
+      item_request = null,
+    } = req.body ?? {};
+
+    const types = Array.isArray(crawler_types) && crawler_types.length
+      ? crawler_types.filter((t) => CRAWLER_AUDIT_TYPES.includes(t))
+      : [...CRAWLER_AUDIT_TYPES];
+
+    let profiles = [];
+    if (Array.isArray(profile_ids) && profile_ids.length) {
+      profiles = req.db
+        .prepare(`SELECT id, display_name, primary_type, status FROM profiles WHERE id IN (${profile_ids.map(() => '?').join(',')})`)
+        .all(...profile_ids);
+    } else {
+      const lim = Math.max(1, Math.min(Number(limit_profiles) || 25, 200));
+      profiles = req.db
+        .prepare(`SELECT id, display_name, primary_type, status FROM profiles WHERE status = 'active' ORDER BY updated_at DESC LIMIT ?`)
+        .all(lim);
+    }
+
+    const auditStartedAt = Date.now();
+    const results = [];
+
+    for (const p of profiles) {
+      const profileId = p.id;
+      let profile = null;
+      let profileContextError = null;
+      try {
+        profile = getProfileWithLocation(req.db, profileId);
+      } catch (error) {
+        profileContextError = error?.message || String(error);
+      }
+
+      const signals = profile?.signals ?? null;
+      const location = signals?.location ?? {};
+      const keywordCount = signals?.keywordSet?.size ?? 0;
+      const coverage = signals?.coverage ?? null;
+
+      const profileRow = {
+        profile_id: profileId,
+        display_name: p.display_name,
+        primary_type: p.primary_type,
+        status: p.status,
+        coverage,
+        signals_summary: {
+          has_zip: Boolean(location?.zip),
+          has_state: Boolean(location?.state),
+          keyword_count: keywordCount,
+        },
+        error: profileContextError,
+        crawlers: [],
+      };
+
+      for (const crawlerType of types) {
+        const startedAt = Date.now();
+        let ok = true;
+        let errorMessage = null;
+        let opportunities = [];
+
+        // Pre-flight "why would this be 0" hints (fast, high-signal).
+        const hints = [];
+        if (!profile) {
+          hints.push('profile_context_failed');
+        } else {
+          if (crawlerType === 'local_funding' && !location?.zip) hints.push('missing_zip');
+          if (crawlerType === 'item_matching' && !item_request) hints.push('missing_item_request');
+          if (crawlerType === 'student_grants') {
+            const t = String(p.primary_type || '').toLowerCase();
+            const isStudent = ['high_school_student', 'college_student', 'graduate_student', 'student'].includes(t);
+            if (!isStudent) hints.push('not_student_profile');
+          }
+        }
+
+        try {
+          if (!profile) {
+            ok = false;
+            errorMessage = profileContextError || 'Profile context unavailable';
+          } else {
+            const opts = { min_match_score: Number(min_match_score) || 50 };
+            const promise = (() => {
+              switch (crawlerType) {
+                case 'local_funding':
+                  return crawlLocalFunding(profile, opts);
+                case 'government_funding':
+                  return crawlGovernmentFunding(profile, opts);
+                case 'student_grants':
+                  return crawlStudentGrants(profile, opts);
+                case 'special_needs':
+                  return crawlSpecialNeeds(profile, opts);
+                case 'item_matching':
+                  return crawlItemFunding(profile, { item_request });
+                case 'ecf_benefits':
+                  return crawlECFBenefits(profile, opts);
+                default:
+                  return Promise.resolve([]);
+              }
+            })();
+
+            const raw = await withTimeout(promise, Math.max(1000, Number(timeout_ms) || 20000), `audit:${crawlerType}`);
+            opportunities = Array.isArray(raw) ? raw : [];
+          }
+        } catch (error) {
+          ok = false;
+          errorMessage = error?.message || String(error);
+        }
+
+        const durationMs = Date.now() - startedAt;
+        const count = opportunities.length;
+        const sample = opportunities.slice(0, 3).map((o) => ({
+          title: o?.title ?? null,
+          url: o?.url ?? o?.application_url ?? o?.source_url ?? null,
+          source: o?.source ?? null,
+        }));
+
+        profileRow.crawlers.push({
+          crawler_type: crawlerType,
+          ok,
+          duration_ms: durationMs,
+          count,
+          hints,
+          error: errorMessage,
+          sample,
+        });
+      }
+
+      results.push(profileRow);
+    }
+
+    const durationMs = Date.now() - auditStartedAt;
+
+    // Also write a lightweight audit event (no PII/code leakage).
+    try {
+      logAuditEvent(req.db, {
+        category: AUDIT_CATEGORIES.CRAWLER,
+        severity: SEVERITY.INFO,
+        message: 'Admin crawler live audit executed',
+        details: {
+          profiles: results.length,
+          crawler_types: types,
+          duration_ms: durationMs,
+          at: nowIso(),
+        },
+        actor: req.user?.userId || req.user?.profileId || 'admin',
+      });
+    } catch {
+      // ignore audit logging failures
+    }
+
+    return res.json({
+      success: true,
+      profiles: results.length,
+      crawler_types: types,
+      min_match_score,
+      timeout_ms,
+      duration_ms: durationMs,
+      results,
+    });
+  } catch (error) {
+    console.error('[admin/crawlers/audit-live] Error:', error);
+    return res.status(500).json({ success: false, error: error?.message || String(error) });
   }
 });
 
