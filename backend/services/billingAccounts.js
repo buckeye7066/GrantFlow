@@ -48,8 +48,8 @@ export function mapAccountRow(row) {
   }
 }
 
-export function selectAccount(db, profileId) {
-  return db
+export async function selectAccount(db, profileId) {
+  return await db
     .prepare(
       `
         SELECT
@@ -69,12 +69,12 @@ export function selectAccount(db, profileId) {
     .get(profileId)
 }
 
-function seedBillingTiersIfMissing(db) {
+async function seedBillingTiersIfMissing(db) {
   // Make billing self-healing in production: if a deploy starts with an empty/misaligned DB,
   // we seed the minimum tiers so billing endpoints don't 500.
-  // This is intentionally idempotent (INSERT OR IGNORE).
+  // This is intentionally idempotent.
   try {
-    const rows = db.prepare('SELECT COUNT(*) as c FROM billing_tiers').get()
+    const rows = await db.prepare('SELECT COUNT(*) as c FROM billing_tiers').get()
     const count = rows?.c ?? 0
     if (count > 0) return
   } catch {
@@ -83,74 +83,89 @@ function seedBillingTiersIfMissing(db) {
   }
 
   try {
-    const insert = db.prepare(
-      `
-        INSERT OR IGNORE INTO billing_tiers (
-          id,
-          name,
-          description,
-          base_monthly_cents,
-          hourly_rate_cents,
-          enable_pipeline_automation,
-          enable_item_funding,
-          enable_document_ai
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    )
+    const insertSql =
+      db?.dialect === 'postgres'
+        ? `
+            INSERT INTO billing_tiers (
+              id,
+              name,
+              description,
+              base_monthly_cents,
+              hourly_rate_cents,
+              enable_pipeline_automation,
+              enable_item_funding,
+              enable_document_ai
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (id) DO NOTHING
+          `
+        : `
+            INSERT OR IGNORE INTO billing_tiers (
+              id,
+              name,
+              description,
+              base_monthly_cents,
+              hourly_rate_cents,
+              enable_pipeline_automation,
+              enable_item_funding,
+              enable_document_ai
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `
+
+    const insert = db.prepare(insertSql)
 
     // Product tiers (existing UI expectations)
-    insert.run(
+    await insert.run(
       'foundation',
       'Foundation',
       'Baseline research support with curated grant discovery and shared AI document enrichment.',
       0,
       0,
-      0,
-      1,
-      1,
+      false,
+      true,
+      true,
     )
-    insert.run(
+    await insert.run(
       'growth',
       'Growth',
       'Expanded automation, itemized funding intelligence, and AI-supported document ingestion.',
       9900,
       15000,
-      1,
-      1,
-      1,
+      true,
+      true,
+      true,
     )
-    insert.run(
+    await insert.run(
       'enterprise',
       'Enterprise',
       'Full-service concierge with custom automation rules and dedicated analyst support.',
       24900,
       22500,
-      1,
-      1,
-      1,
+      true,
+      true,
+      true,
     )
 
     // Client category tiers (from your service menu / payment sheet)
-    insert.run('individual', 'Individual', 'Individuals/families seeking assistance.', 0, 8500, 0, 1, 1)
-    insert.run('small_org', 'Small Org', 'Annual budget under $250,000.', 0, 8500, 0, 1, 1)
-    insert.run('mid_size', 'Mid-Size', 'Annual budget $250,000 - $2,000,000.', 0, 11500, 1, 1, 1)
-    insert.run('large_org', 'Large Org', 'Annual budget over $2,000,000.', 0, 15000, 1, 1, 1)
+    await insert.run('individual', 'Individual', 'Individuals/families seeking assistance.', 0, 8500, false, true, true)
+    await insert.run('small_org', 'Small Org', 'Annual budget under $250,000.', 0, 8500, false, true, true)
+    await insert.run('mid_size', 'Mid-Size', 'Annual budget $250,000 - $2,000,000.', 0, 11500, true, true, true)
+    await insert.run('large_org', 'Large Org', 'Annual budget over $2,000,000.', 0, 15000, true, true, true)
   } catch {
     // If this fails for any reason, we still want the caller to proceed with a clear error.
   }
 }
 
-function resolveTierIdForInsert(db, requestedTierId) {
-  const tierExists = db.prepare('SELECT id FROM billing_tiers WHERE id = ?').get(requestedTierId)
+async function resolveTierIdForInsert(db, requestedTierId) {
+  const tierExists = await db.prepare('SELECT id FROM billing_tiers WHERE id = ?').get(requestedTierId)
   if (tierExists) return requestedTierId
 
   // Try seeding, then re-check.
-  seedBillingTiersIfMissing(db)
-  const tierExistsAfterSeed = db.prepare('SELECT id FROM billing_tiers WHERE id = ?').get(requestedTierId)
+  await seedBillingTiersIfMissing(db)
+  const tierExistsAfterSeed = await db.prepare('SELECT id FROM billing_tiers WHERE id = ?').get(requestedTierId)
   if (tierExistsAfterSeed) return requestedTierId
 
   // Fall back to any available tier so billing account creation never writes a dangling tier_id.
-  const fallback = db
+  const fallback = await db
     .prepare(
       `
         SELECT id
@@ -167,15 +182,15 @@ function resolveTierIdForInsert(db, requestedTierId) {
   )
 }
 
-export function ensureBillingAccount(db, profileId, { defaultTier = 'foundation', assignedBy = 'system' } = {}) {
-  const existing = selectAccount(db, profileId)
+export async function ensureBillingAccount(db, profileId, { defaultTier = 'foundation', assignedBy = 'system' } = {}) {
+  const existing = await selectAccount(db, profileId)
   if (existing) {
     return existing
   }
 
-  const tierId = resolveTierIdForInsert(db, defaultTier)
+  const tierId = await resolveTierIdForInsert(db, defaultTier)
   const accountId = crypto.randomUUID()
-  db.prepare(
+  await db.prepare(
     `
       INSERT INTO billing_accounts (
         id,
@@ -186,11 +201,11 @@ export function ensureBillingAccount(db, profileId, { defaultTier = 'foundation'
         discount_type,
         discount_percent,
         is_pro_bono
-      ) VALUES (?, ?, ?, ?, ?, 'none', 0, 0)
+      ) VALUES (?, ?, ?, ?, ?, 'none', 0, FALSE)
     `,
   ).run(accountId, profileId, tierId, assignedBy, 'Initial tier assignment')
 
-  logBillingAccountEvent(db, accountId, {
+  await logBillingAccountEvent(db, accountId, {
     changed_by: assignedBy,
     previous_tier_id: null,
     new_tier_id: tierId,
@@ -199,14 +214,14 @@ export function ensureBillingAccount(db, profileId, { defaultTier = 'foundation'
     previous_discount_percent: null,
     new_discount_percent: 0,
     previous_pro_bono: null,
-    new_pro_bono: 0,
+    new_pro_bono: false,
     notes: 'Account created',
   })
 
-  return selectAccount(db, profileId)
+  return await selectAccount(db, profileId)
 }
 
-export function logBillingAccountEvent(
+export async function logBillingAccountEvent(
   db,
   accountId,
   {
@@ -222,7 +237,7 @@ export function logBillingAccountEvent(
     notes = null,
   },
 ) {
-  db.prepare(
+  await db.prepare(
     `
       INSERT INTO billing_account_events (
         id,
@@ -255,8 +270,8 @@ export function logBillingAccountEvent(
   )
 }
 
-export function fetchAccountEvents(db, accountId, limit = 25) {
-  return db
+export async function fetchAccountEvents(db, accountId, limit = 25) {
+  return await db
     .prepare(
       `
         SELECT *

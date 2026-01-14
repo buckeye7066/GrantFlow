@@ -1,4 +1,5 @@
 import express from 'express'
+import crypto from 'crypto'
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
 import multer from 'multer'
 import fs from 'fs'
@@ -99,19 +100,19 @@ function mapProfile(row) {
   }
 }
 
-function enrichProfileWithSummary(db, profile) {
+async function enrichProfileWithSummary(db, profile) {
   // Get billing account info
-  const billingAccount = ensureBillingAccount(db, profile.id)
+  const billingAccount = await ensureBillingAccount(db, profile.id)
   profile.billing = mapAccountRow(billingAccount)
   
   // Get section completion stats
-  const sections = db
+  const sections = await db
     .prepare('SELECT COUNT(*) as total FROM profile_sections WHERE profile_id = ?')
     .get(profile.id)
   profile.sections_complete = sections?.total ?? 0
   
   // Get pipeline funds total
-  const pipelineFunds = db
+  const pipelineFunds = await db
     .prepare(`
       SELECT COALESCE(SUM(g.amount_requested), 0) as total
       FROM grants g
@@ -122,7 +123,7 @@ function enrichProfileWithSummary(db, profile) {
   profile.pipeline_funds_total = pipelineFunds?.total ?? 0
   
   // Get document count
-  const docs = db
+  const docs = await db
     .prepare('SELECT COUNT(*) as total FROM profile_documents WHERE profile_id = ?')
     .get(profile.id)
   profile.document_count = docs?.total ?? 0
@@ -134,7 +135,7 @@ function getOpenAI() {
   return createOpenAIClient().openai
 }
 
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   const user = req.user
   const includeSummary = req.query.summary === 'true'
   
@@ -157,29 +158,33 @@ router.get('/', (req, res) => {
     }
 
     // Get all profiles linked to this user (with pagination)
-    const rows = req.db.prepare(
+    const rows = await req.db.prepare(
       `${profileSelect} WHERE p.user_id = ? ORDER BY p.created_at ASC LIMIT ? OFFSET ?`
     ).all(user.id, limit, offset)
     
     const profiles = rows.map(mapProfile)
     if (includeSummary) {
-      profiles.forEach(profile => enrichProfileWithSummary(req.db, profile))
+      for (const profile of profiles) {
+        await enrichProfileWithSummary(req.db, profile)
+      }
     }
     return res.json(profiles)
   }
 
   // Admin: return ALL profiles with pagination
   const stmt = req.db.prepare(`${profileSelect} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`)
-  const profiles = stmt.all(limit, offset).map(mapProfile)
+  const profiles = (await stmt.all(limit, offset)).map(mapProfile)
   
   if (includeSummary) {
-    profiles.forEach(profile => enrichProfileWithSummary(req.db, profile))
+    for (const profile of profiles) {
+      await enrichProfileWithSummary(req.db, profile)
+    }
   }
   
   res.json(profiles)
 })
 
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   const user = req.user
   const { display_name, primary_type, organization_id, user_id, created_by, status = 'active', tags = [] } = req.body ?? {}
 
@@ -201,14 +206,14 @@ router.post('/', (req, res) => {
     }
   } else {
     // Admin can create for anyone
-    if (user_id && !req.db.prepare('SELECT id FROM users WHERE id = ?').get(user_id)) {
+    if (user_id && !(await req.db.prepare('SELECT id FROM users WHERE id = ?').get(user_id))) {
       return res.status(400).json({ error: 'Invalid user_id: user does not exist' })
     }
   }
 
   // Validate organization_id if provided
   if (organization_id) {
-    const org = req.db.prepare('SELECT id FROM organizations WHERE id = ?').get(organization_id)
+    const org = await req.db.prepare('SELECT id FROM organizations WHERE id = ?').get(organization_id)
     if (!org) {
       return res.status(400).json({ error: 'Invalid organization_id: organization does not exist' })
     }
@@ -217,33 +222,32 @@ router.post('/', (req, res) => {
   // Determine user_id for the new profile
   const profileUserId = isAdmin(user) ? (user_id || user?.id) : user.id
 
+  const profileId = crypto.randomUUID()
   const insert = req.db.prepare(`
-    INSERT INTO profiles (display_name, primary_type, organization_id, user_id, created_by, status, tags)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO profiles (id, display_name, primary_type, organization_id, user_id, created_by, status, tags)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `)
 
-  const info = insert.run(
+  await insert.run(
+    profileId,
     display_name,
     primary_type ?? null,
     organization_id ?? null,
     profileUserId ?? null,
     created_by ?? user?.id ?? null,
     status,
-    JSON.stringify(tags)
+    JSON.stringify(tags),
   )
 
-  const row = req.db.prepare(`${profileSelect} WHERE p.rowid = ?`).get(info.lastInsertRowid)
-  if (row?.id) {
-    linkProfileToAdmin(req.db, row.id)
-  }
-  const refreshed = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(row.id)
+  await linkProfileToAdmin(req.db, profileId)
+  const refreshed = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(profileId)
   res.status(201).json(mapProfile(refreshed))
 })
 
-router.get('/:id', (req, res) => {
+router.get('/:id', async (req, res) => {
   const { id } = req.params
   const user = req.user
-  const row = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  const row = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!row) {
     return res.status(404).json({ error: 'Profile not found' })
   }
@@ -257,7 +261,7 @@ router.get('/:id', (req, res) => {
   }
 
   // Return profile with sections
-  const sections = req.db
+  const sections = (await req.db
     .prepare(
       `
       SELECT section_key, data, updated_at, updated_by
@@ -266,7 +270,7 @@ router.get('/:id', (req, res) => {
       ORDER BY section_key
     `,
     )
-    .all(id)
+    .all(id))
     .map((section) => ({
       section_key: section.section_key,
       data: safeParseJSON(section.data, {}),
@@ -277,16 +281,16 @@ router.get('/:id', (req, res) => {
   res.json({
     ...mapProfile(row),
     sections,
-    billing: mapAccountRow(ensureBillingAccount(req.db, id)),
+    billing: mapAccountRow(await ensureBillingAccount(req.db, id)),
   })
 })
 
-router.put('/:id', (req, res) => {
+router.put('/:id', async (req, res) => {
   const { id } = req.params
   const { display_name, primary_type, organization_id, status, tags } = req.body ?? {}
   const auth = req.user ?? { role: 'guest' }
 
-  const existing = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!existing) {
     return res.status(404).json({ error: 'Profile not found' })
   }
@@ -318,7 +322,7 @@ router.put('/:id', (req, res) => {
   if (organization_id !== undefined) {
     // Validate organization_id if provided and not null
     if (organization_id) {
-      const org = req.db.prepare('SELECT id FROM organizations WHERE id = ?').get(organization_id)
+      const org = await req.db.prepare('SELECT id FROM organizations WHERE id = ?').get(organization_id)
       if (!org) {
         return res.status(400).json({ error: 'Invalid organization_id: organization does not exist' })
       }
@@ -342,18 +346,18 @@ router.put('/:id', (req, res) => {
   }
 
   const stmt = req.db.prepare(`UPDATE profiles SET ${updates.join(', ')} WHERE id = ?`)
-  stmt.run(...values, id)
+  await stmt.run(...values, id)
 
-  const updated = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  const updated = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   res.json(mapProfile(updated))
 })
 
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
   // Check authorization - user must be admin or the profile must belong to them
-  const existing = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!existing) {
     return res.status(404).json({ error: 'Profile not found' })
   }
@@ -368,7 +372,7 @@ router.delete('/:id', (req, res) => {
 
   // Delete the profile (CASCADE will handle related records)
   const stmt = req.db.prepare('DELETE FROM profiles WHERE id = ?')
-  stmt.run(id)
+  await stmt.run(id)
 
   // Clean up avatar file if it exists
   if (existing.avatar_url && existing.avatar_url.startsWith('/uploads/')) {
@@ -384,11 +388,11 @@ router.delete('/:id', (req, res) => {
   res.status(204).send()
 })
 
-router.post('/:id/avatar', upload.single('avatar'), (req, res, next) => {
+router.post('/:id/avatar', upload.single('avatar'), async (req, res, next) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  const existing = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!existing) {
     if (req.file) fs.unlink(join(uploadDir, req.file.filename), () => {})
     return res.status(404).json({ error: 'Profile not found' })
@@ -409,7 +413,7 @@ router.post('/:id/avatar', upload.single('avatar'), (req, res, next) => {
 
   try {
     const publicPath = `/uploads/${req.file.filename}`
-    req.db
+    await req.db
       .prepare('UPDATE profiles SET avatar_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
       .run(publicPath, id)
 
@@ -422,7 +426,7 @@ router.post('/:id/avatar', upload.single('avatar'), (req, res, next) => {
       }
     }
 
-    const updated = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+    const updated = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
     res.json(mapProfile(updated))
   } catch (error) {
     if (req.file) fs.unlink(join(uploadDir, req.file.filename), () => {})
@@ -430,11 +434,11 @@ router.post('/:id/avatar', upload.single('avatar'), (req, res, next) => {
   }
 })
 
-router.post('/:id/avatar/ai', (req, res) => {
+router.post('/:id/avatar/ai', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  const profileRow = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  const profileRow = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!profileRow) {
     return res.status(404).json({ error: 'Profile not found' })
   }
@@ -451,27 +455,28 @@ router.post('/:id/avatar/ai', (req, res) => {
     primary_type: profileRow.primary_type,
   }
 
+  const jobId = crypto.randomUUID()
   const stmt = req.db.prepare(`
     INSERT INTO crawler_jobs (
+      id,
       type,
       status,
       profile_id,
       organization_id,
       parameters,
       requested_by
-    ) VALUES ('avatar_lookup', 'queued', ?, ?, ?, ?)
+    ) VALUES (?, 'avatar_lookup', 'queued', ?, ?, ?, ?)
   `)
 
-  stmt.run(
+  await stmt.run(
+    jobId,
     profileRow.id,
     profileRow.organization_id ?? null,
     JSON.stringify(parameters),
     auth.role === 'admin' ? 'admin' : profileRow.id,
   )
 
-  const job = req.db
-    .prepare('SELECT * FROM crawler_jobs WHERE rowid = last_insert_rowid()')
-    .get()
+  const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
 
   dispatchCrawlerJob({
     db: req.db,
@@ -488,7 +493,7 @@ router.post('/:id/avatar/ai', (req, res) => {
   })
 })
 
-router.get('/:id/sections', (req, res) => {
+router.get('/:id/sections', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
@@ -496,12 +501,12 @@ router.get('/:id/sections', (req, res) => {
     return res.status(403).json({ error: 'Not authorized to access this profile' })
   }
 
-  const profile = req.db.prepare(`SELECT id FROM profiles WHERE id = ?`).get(id)
+  const profile = await req.db.prepare(`SELECT id FROM profiles WHERE id = ?`).get(id)
   if (!profile) {
     return res.status(404).json({ error: 'Profile not found' })
   }
 
-  const sections = req.db
+  const sections = (await req.db
     .prepare(
       `
       SELECT section_key, data, updated_at, updated_by
@@ -510,7 +515,7 @@ router.get('/:id/sections', (req, res) => {
       ORDER BY section_key
     `,
     )
-    .all(id)
+    .all(id))
     .map((section) => ({
       section_key: section.section_key,
       data: safeParseJSON(section.data, {}),
@@ -521,7 +526,7 @@ router.get('/:id/sections', (req, res) => {
   res.json(sections)
 })
 
-router.get('/:id/sections/:sectionKey', (req, res) => {
+router.get('/:id/sections/:sectionKey', async (req, res) => {
   const { id, sectionKey } = req.params
   const auth = req.user ?? { role: 'guest' }
 
@@ -529,7 +534,7 @@ router.get('/:id/sections/:sectionKey', (req, res) => {
     return res.status(403).json({ error: 'Not authorized to access this profile' })
   }
 
-  const section = req.db
+  const section = await req.db
     .prepare(
       `
       SELECT section_key, data, updated_at, updated_by
@@ -551,7 +556,7 @@ router.get('/:id/sections/:sectionKey', (req, res) => {
   })
 })
 
-router.put('/:id/sections/:sectionKey', (req, res) => {
+router.put('/:id/sections/:sectionKey', async (req, res) => {
   const { id, sectionKey } = req.params
   const { data, updated_by } = req.body ?? {}
   const auth = req.user ?? { role: 'guest' }
@@ -560,7 +565,7 @@ router.put('/:id/sections/:sectionKey', (req, res) => {
     return res.status(403).json({ error: 'Not authorized to update this profile' })
   }
 
-  const profile = req.db.prepare(`SELECT id FROM profiles WHERE id = ?`).get(id)
+  const profile = await req.db.prepare(`SELECT id FROM profiles WHERE id = ?`).get(id)
   if (!profile) {
     return res.status(404).json({ error: 'Profile not found' })
   }
@@ -580,9 +585,9 @@ router.put('/:id/sections/:sectionKey', (req, res) => {
   `,
   )
 
-  upsert.run(id, sectionKey, JSON.stringify(data), updated_by ?? null)
+  await upsert.run(id, sectionKey, JSON.stringify(data), updated_by ?? null)
 
-  const section = req.db
+  const section = await req.db
     .prepare(
       `
       SELECT section_key, data, updated_at, updated_by
@@ -600,7 +605,7 @@ router.put('/:id/sections/:sectionKey', (req, res) => {
   })
 })
 
-router.delete('/:id/sections/:sectionKey', (req, res) => {
+router.delete('/:id/sections/:sectionKey', async (req, res) => {
   const { id, sectionKey } = req.params
   const auth = req.user ?? { role: 'guest' }
 
@@ -609,7 +614,7 @@ router.delete('/:id/sections/:sectionKey', (req, res) => {
   }
 
   const stmt = req.db.prepare(`DELETE FROM profile_sections WHERE profile_id = ? AND section_key = ?`)
-  const result = stmt.run(id, sectionKey)
+  const result = await stmt.run(id, sectionKey)
   if (result.changes === 0) {
     return res.status(404).json({ error: 'Section not found' })
   }
@@ -629,12 +634,12 @@ router.post('/:id/sections/:sectionKey/ai', async (req, res) => {
       return res.status(400).json({ error: `Section "${sectionKey}" is not yet AI-enabled.` })
     }
 
-    const profileRow = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+    const profileRow = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
     if (!profileRow) {
       return res.status(404).json({ error: 'Profile not found' })
     }
 
-    const sectionRows = req.db
+    const sectionRows = await req.db
       .prepare(
         `
         SELECT section_key, data
@@ -783,7 +788,7 @@ Return ONLY the field value content, no JSON wrapper or explanations.`
 
 // Profile completeness check
 // GET /api/profiles/:id/completeness
-router.get('/:id/completeness', (req, res) => {
+router.get('/:id/completeness', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
@@ -792,13 +797,13 @@ router.get('/:id/completeness', (req, res) => {
   }
 
   try {
-    const profile = req.db.prepare('SELECT id, display_name FROM profiles WHERE id = ?').get(id)
+    const profile = await req.db.prepare('SELECT id, display_name FROM profiles WHERE id = ?').get(id)
     if (!profile) {
       return res.status(404).json({ error: 'Profile not found' })
     }
 
     // Get existing sections for this profile
-    const existingSections = req.db
+    const existingSections = await req.db
       .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
       .all(id)
     
@@ -872,7 +877,7 @@ router.get('/:id/completeness', (req, res) => {
 
 // Profile repair - create missing sections with empty JSON
 // POST /api/profiles/:id/repair
-router.post('/:id/repair', (req, res) => {
+router.post('/:id/repair', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
@@ -881,13 +886,13 @@ router.post('/:id/repair', (req, res) => {
   }
 
   try {
-    const profile = req.db.prepare('SELECT id, display_name FROM profiles WHERE id = ?').get(id)
+    const profile = await req.db.prepare('SELECT id, display_name FROM profiles WHERE id = ?').get(id)
     if (!profile) {
       return res.status(404).json({ error: 'Profile not found' })
     }
 
     // Get existing sections
-    const existingSections = req.db
+    const existingSections = await req.db
       .prepare('SELECT section_key FROM profile_sections WHERE profile_id = ?')
       .all(id)
     
@@ -901,12 +906,12 @@ router.post('/:id/repair', (req, res) => {
     `)
 
     const createdSections = []
-    supportedSectionKeys.forEach(sectionKey => {
+    for (const sectionKey of supportedSectionKeys) {
       if (!existingKeys.has(sectionKey)) {
-        upsert.run(id, sectionKey)
+        await upsert.run(id, sectionKey)
         createdSections.push(sectionKey)
       }
-    })
+    }
 
     res.json({
       success: true,
@@ -926,7 +931,7 @@ router.post('/:id/repair', (req, res) => {
 
 // Export profile as JSON
 // GET /api/profiles/:id/export
-router.get('/:id/export', (req, res) => {
+router.get('/:id/export', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
@@ -935,7 +940,7 @@ router.get('/:id/export', (req, res) => {
   }
 
   try {
-    const profileRow = req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+    const profileRow = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
     if (!profileRow) {
       return res.status(404).json({ error: 'Profile not found' })
     }
@@ -943,9 +948,9 @@ router.get('/:id/export', (req, res) => {
     const profile = mapProfile(profileRow)
 
     // Get all sections
-    const sections = req.db
+    const sections = (await req.db
       .prepare('SELECT section_key, data, updated_at FROM profile_sections WHERE profile_id = ?')
-      .all(id)
+      .all(id))
       .reduce((acc, row) => {
         acc[row.section_key] = {
           data: safeParseJSON(row.data, {}),
@@ -981,7 +986,7 @@ router.get('/:id/export', (req, res) => {
 
 // Import profile from JSON
 // POST /api/profiles/:id/import
-router.post('/:id/import', (req, res) => {
+router.post('/:id/import', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
@@ -996,53 +1001,52 @@ router.post('/:id/import', (req, res) => {
       return res.status(400).json({ error: 'sections object required in request body' })
     }
 
-    const profile = req.db.prepare('SELECT id, display_name FROM profiles WHERE id = ?').get(id)
+    const profile = await req.db.prepare('SELECT id, display_name FROM profiles WHERE id = ?').get(id)
     if (!profile) {
       return res.status(404).json({ error: 'Profile not found' })
     }
 
-    const upsert = req.db.prepare(`
-      INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
-      VALUES (?, ?, ?, 'import')
-      ON CONFLICT(profile_id, section_key) DO UPDATE SET
-        data = excluded.data,
-        updated_by = excluded.updated_by,
-        updated_at = CURRENT_TIMESTAMP
-    `)
-
     const importedSections = []
-    const transaction = req.db.transaction(() => {
-      Object.entries(sections).forEach(([sectionKey, sectionValue]) => {
+
+    await req.db.withTransaction(async (tx) => {
+      const upsert = tx.prepare(`
+        INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+        VALUES (?, ?, ?, 'import')
+        ON CONFLICT(profile_id, section_key) DO UPDATE SET
+          data = excluded.data,
+          updated_by = excluded.updated_by,
+          updated_at = CURRENT_TIMESTAMP
+      `)
+
+      for (const [sectionKey, sectionValue] of Object.entries(sections)) {
         if (!supportedSectionKeys.includes(sectionKey)) {
           console.warn(`Skipping unknown section key: ${sectionKey}`)
-          return
+          continue
         }
 
         const data = sectionValue?.data ?? sectionValue
         if (typeof data !== 'object' || data === null) {
           console.warn(`Skipping invalid section data for: ${sectionKey}`)
-          return
+          continue
         }
 
         if (merge) {
           // Merge with existing data
-          const existing = req.db
+          const existing = await tx
             .prepare('SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = ?')
             .get(id, sectionKey)
           
           const existingData = existing ? safeParseJSON(existing.data, {}) : {}
           const mergedData = { ...existingData, ...data }
-          upsert.run(id, sectionKey, JSON.stringify(mergedData))
+          await upsert.run(id, sectionKey, JSON.stringify(mergedData))
         } else {
           // Replace existing data
-          upsert.run(id, sectionKey, JSON.stringify(data))
+          await upsert.run(id, sectionKey, JSON.stringify(data))
         }
 
         importedSections.push(sectionKey)
-      })
+      }
     })
-
-    transaction()
 
     res.json({
       success: true,

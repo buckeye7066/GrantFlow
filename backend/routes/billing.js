@@ -35,7 +35,7 @@ function canAccessProfile(req, profileRow) {
 
 router.use(requireAuth)
 
-router.get('/tiers', (req, res) => {
+router.get('/tiers', async (req, res) => {
   try {
     const tiers = req.db
       .prepare(
@@ -53,7 +53,7 @@ router.get('/tiers', (req, res) => {
   }
 })
 
-router.post('/tiers', requireAdmin, (req, res) => {
+router.post('/tiers', requireAdmin, async (req, res) => {
   try {
     const {
       id,
@@ -72,7 +72,7 @@ router.post('/tiers', requireAdmin, (req, res) => {
 
     const tierId = id?.trim() || name.toLowerCase().replace(/[^a-z0-9]+/g, '_')
 
-    req.db
+    await req.db
       .prepare(
         `
           INSERT INTO billing_tiers (
@@ -93,22 +93,22 @@ router.post('/tiers', requireAdmin, (req, res) => {
         description ?? null,
         Number.isFinite(base_monthly_cents) ? base_monthly_cents : null,
         Number.isFinite(hourly_rate_cents) ? hourly_rate_cents : null,
-        enable_pipeline_automation ? 1 : 0,
-        enable_item_funding ? 1 : 0,
-        enable_document_ai ? 1 : 0,
+        Boolean(enable_pipeline_automation),
+        Boolean(enable_item_funding),
+        Boolean(enable_document_ai),
       )
 
-    const tier = req.db.prepare('SELECT * FROM billing_tiers WHERE id = ?').get(tierId)
+    const tier = await req.db.prepare('SELECT * FROM billing_tiers WHERE id = ?').get(tierId)
     res.status(201).json(mapTierRow(tier))
   } catch (error) {
     res.status(500).json(formatError(error))
   }
 })
 
-router.put('/tiers/:id', requireAdmin, (req, res) => {
+router.put('/tiers/:id', requireAdmin, async (req, res) => {
   try {
     const tierId = req.params.id
-    const existing = req.db.prepare('SELECT * FROM billing_tiers WHERE id = ?').get(tierId)
+    const existing = await req.db.prepare('SELECT * FROM billing_tiers WHERE id = ?').get(tierId)
     if (!existing) {
       return res.status(404).json({ error: 'Tier not found' })
     }
@@ -123,7 +123,7 @@ router.put('/tiers/:id', requireAdmin, (req, res) => {
       enable_document_ai = Boolean(existing.enable_document_ai),
     } = req.body ?? {}
 
-    req.db
+    await req.db
       .prepare(
         `
           UPDATE billing_tiers
@@ -143,22 +143,27 @@ router.put('/tiers/:id', requireAdmin, (req, res) => {
         description ?? null,
         Number.isFinite(base_monthly_cents) ? base_monthly_cents : null,
         Number.isFinite(hourly_rate_cents) ? hourly_rate_cents : null,
-        enable_pipeline_automation ? 1 : 0,
-        enable_item_funding ? 1 : 0,
-        enable_document_ai ? 1 : 0,
+        Boolean(enable_pipeline_automation),
+        Boolean(enable_item_funding),
+        Boolean(enable_document_ai),
         tierId,
       )
 
-    const tier = req.db.prepare('SELECT * FROM billing_tiers WHERE id = ?').get(tierId)
+    const tier = await req.db.prepare('SELECT * FROM billing_tiers WHERE id = ?').get(tierId)
     res.json(mapTierRow(tier))
   } catch (error) {
     res.status(500).json(formatError(error))
   }
 })
 
-router.get('/accounts', requireAdmin, (req, res) => {
+router.get('/accounts', requireAdmin, async (req, res) => {
   try {
-    const rows = req.db
+    const orderBy =
+      req.db?.dialect === 'postgres'
+        ? 'ORDER BY p.display_name ASC'
+        : 'ORDER BY p.display_name COLLATE NOCASE ASC'
+
+    const rows = await req.db
       .prepare(
         `
           SELECT
@@ -175,7 +180,7 @@ router.get('/accounts', requireAdmin, (req, res) => {
           FROM billing_accounts ba
           JOIN billing_tiers bt ON bt.id = ba.tier_id
           JOIN profiles p ON p.id = ba.profile_id
-          ORDER BY p.display_name COLLATE NOCASE ASC
+          ${orderBy}
         `,
       )
       .all()
@@ -191,10 +196,10 @@ router.get('/accounts', requireAdmin, (req, res) => {
   }
 })
 
-router.get('/accounts/:profileId', (req, res) => {
+router.get('/accounts/:profileId', async (req, res) => {
   try {
     const profileId = req.params.profileId
-    const profile = req.db
+    const profile = await req.db
       .prepare(
         `
           SELECT id, user_id, display_name
@@ -212,8 +217,8 @@ router.get('/accounts/:profileId', (req, res) => {
       return res.status(403).json({ error: 'Forbidden' })
     }
 
-    const accountRow = ensureBillingAccount(req.db, profileId)
-    const events = fetchAccountEvents(req.db, accountRow.id)
+    const accountRow = await ensureBillingAccount(req.db, profileId)
+    const events = await fetchAccountEvents(req.db, accountRow.id)
 
     res.json({
       account: mapAccountRow(accountRow),
@@ -224,10 +229,10 @@ router.get('/accounts/:profileId', (req, res) => {
   }
 })
 
-router.put('/accounts/:profileId', requireAdmin, (req, res) => {
+router.put('/accounts/:profileId', requireAdmin, async (req, res) => {
   try {
     const profileId = req.params.profileId
-    const profile = req.db
+    const profile = await req.db
       .prepare(
         `
           SELECT id, display_name
@@ -246,12 +251,12 @@ router.put('/accounts/:profileId', requireAdmin, (req, res) => {
       return res.status(400).json({ error: 'tier_id is required' })
     }
 
-    const tier = req.db.prepare('SELECT * FROM billing_tiers WHERE id = ?').get(tierId)
+    const tier = await req.db.prepare('SELECT * FROM billing_tiers WHERE id = ?').get(tierId)
     if (!tier) {
       return res.status(400).json({ error: 'Specified tier does not exist' })
     }
 
-    const accountRow = ensureBillingAccount(req.db, profileId)
+    const accountRow = await ensureBillingAccount(req.db, profileId)
     const previous = { ...accountRow }
 
     const {
@@ -274,7 +279,7 @@ router.put('/accounts/:profileId', requireAdmin, (req, res) => {
     const sanitizedMetadata =
       metadata && typeof metadata === 'object' ? JSON.stringify(metadata) : accountRow.metadata ?? null
 
-    req.db
+    await req.db
       .prepare(
         `
           UPDATE billing_accounts
@@ -298,7 +303,7 @@ router.put('/accounts/:profileId', requireAdmin, (req, res) => {
         assigned_reason ?? null,
         discount_type,
         sanitizedDiscountPercent,
-        is_pro_bono ? 1 : 0,
+        Boolean(is_pro_bono),
         pro_bono_reason ?? null,
         Number.isFinite(req.body?.custom_monthly_cents) ? req.body.custom_monthly_cents : custom_monthly_cents,
         Number.isFinite(req.body?.custom_hourly_cents) ? req.body.custom_hourly_cents : custom_hourly_cents,
@@ -306,9 +311,9 @@ router.put('/accounts/:profileId', requireAdmin, (req, res) => {
         accountRow.id,
       )
 
-    const updated = selectAccount(req.db, profileId)
+    const updated = await selectAccount(req.db, profileId)
 
-    logBillingAccountEvent(req.db, updated.id, {
+    await logBillingAccountEvent(req.db, updated.id, {
       changed_by: req.user.userId ?? req.user.email ?? req.user.full_name ?? 'admin',
       previous_tier_id: previous.tier_id,
       new_tier_id: updated.tier_id,
@@ -316,12 +321,12 @@ router.put('/accounts/:profileId', requireAdmin, (req, res) => {
       new_discount_type: updated.discount_type ?? 'none',
       previous_discount_percent: previous.discount_percent ?? 0,
       new_discount_percent: updated.discount_percent ?? 0,
-      previous_pro_bono: previous.is_pro_bono ? 1 : 0,
-      new_pro_bono: updated.is_pro_bono ? 1 : 0,
+      previous_pro_bono: Boolean(previous.is_pro_bono),
+      new_pro_bono: Boolean(updated.is_pro_bono),
       notes: req.body?.notes ?? null,
     })
 
-    const events = fetchAccountEvents(req.db, updated.id)
+    const events = await fetchAccountEvents(req.db, updated.id)
 
     res.json({
       account: mapAccountRow(updated),
