@@ -183,6 +183,14 @@ function normalizeEmail(email = '') {
   return email.trim().toLowerCase()
 }
 
+function normalizeSixDigitCode(value) {
+  if (value === null || value === undefined) return null
+  // Accept string OR number payloads; strip non-digits to tolerate copy/paste formatting.
+  const digits = String(value).trim().replace(/[^\d]/g, '')
+  if (!/^\d{6}$/.test(digits)) return null
+  return digits
+}
+
 function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
 }
@@ -1268,17 +1276,15 @@ router.post('/email/verify', (req, res) => {
   const codeRaw = req.body?.code
   const requestedProfileId = req.body?.profile_id ?? null
 
-  if (typeof emailRaw !== 'string' || typeof codeRaw !== 'string') {
+  if (typeof emailRaw !== 'string' || (typeof codeRaw !== 'string' && typeof codeRaw !== 'number')) {
     return res.status(400).json({ error: 'email and code are required' })
   }
   const email = normalizeEmail(emailRaw)
   if (!isValidEmail(email)) {
     return res.status(400).json({ error: 'Invalid email address' })
   }
-  const code = codeRaw.trim()
-  if (!/^\d{6}$/.test(code)) {
-    return res.status(400).json({ error: 'Code must be a 6-digit number' })
-  }
+  const code = normalizeSixDigitCode(codeRaw)
+  if (!code) return res.status(400).json({ error: 'Code must be a 6-digit number' })
 
   const credential = req.db
     .prepare(
@@ -1300,6 +1306,46 @@ router.post('/email/verify', (req, res) => {
   const codeRow = findMatchingActiveVerificationCode(req.db, credential.id, incomingHash)
 
   if (!codeRow) {
+    // Provide a more accurate error (expired vs already used vs invalid) without exposing the code.
+    const matchedAny = req.db
+      .prepare(
+        `
+          SELECT id, expires_at, consumed_at
+          FROM user_verification_codes
+          WHERE credential_id = ?
+            AND code_hash = ?
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+      )
+      .get(credential.id, incomingHash)
+
+    if (matchedAny?.consumed_at) {
+      sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'code_consumed' }).catch(() => {})
+      return res.status(400).json({ error: 'Verification code already used. Request a new code.' })
+    }
+    if (matchedAny?.expires_at && matchedAny.expires_at < nowISOString()) {
+      sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'code_expired' }).catch(() => {})
+      return res.status(400).json({ error: 'Verification code expired. Request a new code.' })
+    }
+
+    const hasAnyActive = req.db
+      .prepare(
+        `
+          SELECT COUNT(*) as c
+          FROM user_verification_codes
+          WHERE credential_id = ?
+            AND consumed_at IS NULL
+            AND (expires_at IS NULL OR expires_at >= ?)
+        `,
+      )
+      .get(credential.id, nowISOString())?.c
+
+    if (!hasAnyActive) {
+      sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'no_active_codes' }).catch(() => {})
+      return res.status(400).json({ error: 'Verification code expired. Request a new code.' })
+    }
+
     // Increment attempt count on the latest active code (if any) to support abuse monitoring.
     const latest = req.db
       .prepare(
@@ -1493,7 +1539,7 @@ router.post('/phone/verify', (req, res) => {
   const codeRaw = req.body?.code
   const requestedProfileId = req.body?.profile_id ?? null
 
-  if (typeof phoneRaw !== 'string' || typeof codeRaw !== 'string') {
+  if (typeof phoneRaw !== 'string' || (typeof codeRaw !== 'string' && typeof codeRaw !== 'number')) {
     return res.status(400).json({ error: 'phone and code are required' })
   }
 
@@ -1502,10 +1548,8 @@ router.post('/phone/verify', (req, res) => {
     return res.status(400).json({ error: 'Phone number must be in E.164 format (e.g. +1234567890)' })
   }
 
-  const code = codeRaw.trim()
-  if (!/^\d{6}$/.test(code)) {
-    return res.status(400).json({ error: 'Code must be a 6-digit number' })
-  }
+  const code = normalizeSixDigitCode(codeRaw)
+  if (!code) return res.status(400).json({ error: 'Code must be a 6-digit number' })
 
   const credential = req.db
     .prepare(
