@@ -199,6 +199,34 @@ function hashValue(value) {
   return crypto.createHash('sha256').update(value).digest('hex')
 }
 
+function signOtpToken({ kind, identifier, codeHash, ttlSeconds }) {
+  const jti = crypto.randomUUID()
+  return jwt.sign(
+    {
+      typ: 'otp',
+      kind,
+      identifier,
+      code_hash: codeHash,
+      jti,
+    },
+    JWT_SECRET,
+    { expiresIn: Math.max(30, Number(ttlSeconds) || 600) },
+  )
+}
+
+function verifyOtpToken(token) {
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET)
+    if (!decoded || typeof decoded !== 'object') return null
+    if (decoded.typ !== 'otp') return null
+    if (decoded.kind !== 'email') return null
+    if (typeof decoded.identifier !== 'string' || typeof decoded.code_hash !== 'string') return null
+    return decoded
+  } catch {
+    return null
+  }
+}
+
 function findMatchingActiveVerificationCode(db, credentialId, incomingHash) {
   const now = nowISOString()
   const rows = db
@@ -1172,6 +1200,12 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
     const code = generateSixDigitCode()
     const codeHash = hashValue(`${email}:${code}`)
     const expiresAt = new Date(now.getTime() + EMAIL_CODE_TTL * 1000).toISOString()
+    const verificationToken = signOtpToken({
+      kind: 'email',
+      identifier: email,
+      codeHash,
+      ttlSeconds: EMAIL_CODE_TTL,
+    })
     
     try {
       insertVerificationCode(req.db, credential.id, codeHash, expiresAt)
@@ -1225,6 +1259,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
         ? 'Verification code sent to your email' 
         : 'Verification code generated (email service unavailable)',
       email_sent: emailSent,
+      verification_token: verificationToken,
       user_hint: {
         id: user.id,
         display_name: user.display_name,
@@ -1274,6 +1309,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
 router.post('/email/verify', (req, res) => {
   const emailRaw = req.body?.email
   const codeRaw = req.body?.code
+  const verificationTokenRaw = req.body?.verification_token ?? req.body?.verificationToken ?? null
   const requestedProfileId = req.body?.profile_id ?? null
 
   if (typeof emailRaw !== 'string' || (typeof codeRaw !== 'string' && typeof codeRaw !== 'number')) {
@@ -1286,24 +1322,28 @@ router.post('/email/verify', (req, res) => {
   const code = normalizeSixDigitCode(codeRaw)
   if (!code) return res.status(400).json({ error: 'Code must be a 6-digit number' })
 
-  const credential = req.db
-    .prepare(
-      `
-        SELECT *
-        FROM user_credentials
-        WHERE type = 'email_otp'
-          AND identifier = ?
-      `,
-    )
-    .get(email)
+  // Always compute the incoming hash.
+  const incomingHash = hashValue(`${email}:${code}`)
 
-  if (!credential) {
-    sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'credential_missing' }).catch(() => {})
-    return res.status(400).json({ error: 'Verification code not requested for this email' })
+  // Prefer stateless verification token (survives multi-instance / non-shared sqlite deployments).
+  const tokenDecoded = typeof verificationTokenRaw === 'string' ? verifyOtpToken(verificationTokenRaw) : null
+  const tokenOk =
+    tokenDecoded &&
+    normalizeEmail(tokenDecoded.identifier) === email &&
+    tokenDecoded.code_hash === incomingHash
+
+  // Ensure a credential exists (create if needed). This avoids "code not requested" across instances.
+  let user = null
+  let credential = null
+  try {
+    const ensured = ensureEmailCredential(req.db, email)
+    user = ensured.user
+    credential = ensured.credential
+  } catch (dbError) {
+    return res.status(500).json({ error: 'Database error occurred. Please try again.' })
   }
 
-  const incomingHash = hashValue(`${email}:${code}`)
-  const codeRow = findMatchingActiveVerificationCode(req.db, credential.id, incomingHash)
+  const codeRow = tokenOk ? { id: null } : findMatchingActiveVerificationCode(req.db, credential.id, incomingHash)
 
   if (!codeRow) {
     // Provide a more accurate error (expired vs already used vs invalid) without exposing the code.
@@ -1386,15 +1426,18 @@ router.post('/email/verify', (req, res) => {
     return res.status(400).json({ error: 'Invalid verification code' })
   }
 
-  req.db
-    .prepare(
-      `
-        UPDATE user_verification_codes
-        SET consumed_at = ?
-        WHERE id = ?
-      `,
-    )
-    .run(nowISOString(), codeRow.id)
+  // Best-effort consume in DB (may be absent in stateless flow on a different instance).
+  if (codeRow.id) {
+    req.db
+      .prepare(
+        `
+          UPDATE user_verification_codes
+          SET consumed_at = ?
+          WHERE id = ?
+        `,
+      )
+      .run(nowISOString(), codeRow.id)
+  }
 
   req.db
     .prepare(
@@ -1407,10 +1450,11 @@ router.post('/email/verify', (req, res) => {
     )
     .run(nowISOString(), credential.id)
 
-  const user = getUserById(req.db, credential.user_id)
+  // Reload user if needed.
   if (!user) {
-    return res.status(500).json({ error: 'User record missing for credential' })
+    user = getUserById(req.db, credential.user_id)
   }
+  if (!user) return res.status(500).json({ error: 'User record missing for credential' })
 
   let activeProfileId = null
   try {

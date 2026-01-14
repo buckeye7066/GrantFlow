@@ -350,10 +350,10 @@ export const useAuthStore = create((set, get) => ({
     return startEmailSignIn(email)
   },
 
-  verifyEmailCode: async ({ email, code, profileId }) => {
+  verifyEmailCode: async ({ email, code, profileId, verificationToken }) => {
     set({ isLoading: true, error: null })
     try {
-      const result = await verifyEmailCode({ email, code, profileId })
+      const result = await verifyEmailCode({ email, code, profileId, verificationToken })
       if (result?.accessToken) {
         base44.setToken(result.accessToken)
         set({ accessToken: result.accessToken })

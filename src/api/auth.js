@@ -10,12 +10,13 @@ export async function startEmailSignIn(email) {
   return response
 }
 
-export async function verifyEmailCode({ email, code, profileId }) {
+export async function verifyEmailCode({ email, code, profileId, verificationToken }) {
   return apiFetch('/api/auth/email/verify', {
     method: 'POST',
     body: JSON.stringify({
       email,
       code,
+      ...(verificationToken ? { verification_token: verificationToken } : {}),
       ...(profileId ? { profile_id: profileId } : {}),
     }),
   })
