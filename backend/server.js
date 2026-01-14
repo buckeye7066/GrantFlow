@@ -115,6 +115,37 @@ app.use((req, res, next) => {
   next();
 });
 
+// Standardize error envelope for JSON OBJECT responses (backward compatible):
+// - Success responses are NOT modified (avoid changing public success shapes)
+// - Error responses (HTTP >= 400) get `{ ok: false, request_id, ... }` if missing
+app.use((req, res, next) => {
+  const originalJson = res.json.bind(res);
+  res.json = (body) => {
+    const isObject = body && typeof body === 'object' && !Array.isArray(body);
+    if (!isObject) {
+      return originalJson(body);
+    }
+
+    const status = res.statusCode || 200;
+    if (status < 400) {
+      return originalJson(body);
+    }
+
+    const requestId = req.requestId || null;
+
+    const normalized = Object.prototype.hasOwnProperty.call(body, 'ok')
+      ? body
+      : { ok: false, ...body };
+
+    if (requestId && !Object.prototype.hasOwnProperty.call(normalized, 'request_id')) {
+      normalized.request_id = requestId;
+    }
+
+    return originalJson(normalized);
+  };
+  next();
+});
+
 // Request timeout middleware - prevent hanging requests from causing 502 errors
 const REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT_MS || '30000', 10); // Default 30 seconds
 app.use((req, res, next) => {
@@ -123,6 +154,8 @@ app.use((req, res, next) => {
     console.error('[timeout] Request timeout:', req.method, req.url);
     if (!res.headersSent) {
       res.status(504).json({ 
+        ok: false,
+        request_id: req.requestId || null,
         error: 'Request timeout',
         error_type: 'timeout',
         message: 'The request took too long to process'
@@ -135,6 +168,8 @@ app.use((req, res, next) => {
     console.error('[timeout] Response timeout:', req.method, req.url);
     if (!res.headersSent) {
       res.status(504).json({ 
+        ok: false,
+        request_id: req.requestId || null,
         error: 'Response timeout',
         error_type: 'timeout',
         message: 'The server took too long to respond'
