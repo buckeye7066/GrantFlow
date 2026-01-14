@@ -972,8 +972,8 @@ function buildRedirectUrl(baseRedirect, params = {}) {
   return url.toString()
 }
 
-function ensurePhoneCredential(db, phone) {
-  const existingCredential = db
+async function ensurePhoneCredential(db, phone) {
+  const existingCredential = await db
     .prepare(
       `
         SELECT uc.*, u.display_name AS user_display_name, u.primary_phone, u.primary_email
@@ -986,11 +986,11 @@ function ensurePhoneCredential(db, phone) {
     .get(phone)
 
   if (existingCredential) {
-    const user = getUserById(db, existingCredential.user_id)
+    const user = await getUserById(db, existingCredential.user_id)
     return { user, credential: existingCredential }
   }
 
-  let user = db
+  let user = await db
     .prepare(
       `
         SELECT *
@@ -1003,7 +1003,7 @@ function ensurePhoneCredential(db, phone) {
   if (!user) {
     const userId = crypto.randomUUID()
     const displayName = `User ${phone.slice(-4)}`
-    db.prepare(
+    await db.prepare(
       `
         INSERT INTO users (id, display_name, primary_phone)
         VALUES (?, ?, ?)
@@ -1011,20 +1011,20 @@ function ensurePhoneCredential(db, phone) {
     ).run(userId, displayName, phone)
     
     // Assign profile to user (phone auth doesn't have email, so only first available)
-    assignProfileToUser(db, userId, null)
+    await assignProfileToUser(db, userId, null)
     
-    user = getUserById(db, userId)
+    user = await getUserById(db, userId)
   }
 
   const credentialId = crypto.randomUUID()
-  db.prepare(
+  await db.prepare(
     `
       INSERT INTO user_credentials (id, user_id, type, identifier, attempt_count)
       VALUES (?, ?, 'phone_otp', ?, 0)
     `,
   ).run(credentialId, user.id, phone)
 
-  const credential = db.prepare('SELECT * FROM user_credentials where id = ?').get(credentialId)
+  const credential = await db.prepare('SELECT * FROM user_credentials where id = ?').get(credentialId)
   return { user, credential }
 }
 
@@ -1543,7 +1543,7 @@ router.post('/email/verify', async (req, res) => {
   return res.json(response)
 })
 
-router.post('/phone/start', phoneStartLimiter, (req, res) => {
+router.post('/phone/start', phoneStartLimiter, async (req, res) => {
   const phoneRaw = req.body?.phone
   if (typeof phoneRaw !== 'string') {
     return res.status(400).json({ error: 'phone is required' })
@@ -1553,7 +1553,7 @@ router.post('/phone/start', phoneStartLimiter, (req, res) => {
     return res.status(400).json({ error: 'Phone number must be in E.164 format (e.g. +1234567890)' })
   }
 
-  const { user, credential } = ensurePhoneCredential(req.db, normalized)
+  const { user, credential } = await ensurePhoneCredential(req.db, normalized)
   const now = new Date()
 
   if (credential.last_sent_at) {
@@ -1596,7 +1596,7 @@ router.post('/phone/start', phoneStartLimiter, (req, res) => {
   })
 })
 
-router.post('/phone/verify', (req, res) => {
+router.post('/phone/verify', async (req, res) => {
   const phoneRaw = req.body?.phone
   const codeRaw = req.body?.code
   const requestedProfileId = req.body?.profile_id ?? null
@@ -1613,7 +1613,7 @@ router.post('/phone/verify', (req, res) => {
   const code = normalizeSixDigitCode(codeRaw)
   if (!code) return res.status(400).json({ error: 'Code must be a 6-digit number' })
 
-  const credential = req.db
+  const credential = await req.db
     .prepare(
       `
         SELECT *
@@ -1629,10 +1629,10 @@ router.post('/phone/verify', (req, res) => {
   }
 
   const incomingHash = hashValue(`${normalized}:${code}`)
-  const codeRow = findMatchingActiveVerificationCode(req.db, credential.id, incomingHash)
+  const codeRow = await findMatchingActiveVerificationCode(req.db, credential.id, incomingHash)
 
   if (!codeRow) {
-    const latest = req.db
+    const latest = await req.db
       .prepare(
         `
           SELECT id
@@ -1646,7 +1646,7 @@ router.post('/phone/verify', (req, res) => {
       .get(credential.id)
 
     if (latest?.id) {
-      req.db
+      await req.db
         .prepare(
           `
             UPDATE user_verification_codes
@@ -1657,7 +1657,7 @@ router.post('/phone/verify', (req, res) => {
         .run(latest.id)
     }
 
-    req.db
+    await req.db
       .prepare(
         `
           UPDATE user_credentials
@@ -1670,7 +1670,7 @@ router.post('/phone/verify', (req, res) => {
     return res.status(400).json({ error: 'Invalid verification code' })
   }
 
-  req.db
+  await req.db
     .prepare(
       `
         UPDATE user_verification_codes
@@ -1680,7 +1680,7 @@ router.post('/phone/verify', (req, res) => {
     )
     .run(nowISOString(), codeRow.id)
 
-  req.db
+  await req.db
     .prepare(
       `
         UPDATE user_credentials
@@ -1691,13 +1691,13 @@ router.post('/phone/verify', (req, res) => {
     )
     .run(nowISOString(), credential.id)
 
-  const user = getUserById(req.db, credential.user_id)
+  const user = await getUserById(req.db, credential.user_id)
   if (!user) {
     return res.status(500).json({ error: 'User record missing for credential' })
   }
 
   if (user.primary_phone !== normalized) {
-    req.db
+    await req.db
       .prepare(
         `
           UPDATE users
@@ -1711,18 +1711,18 @@ router.post('/phone/verify', (req, res) => {
   let activeProfileId = null
   try {
     if (requestedProfileId) {
-      activeProfileId = attachProfileToUser(req.db, user.id, requestedProfileId)
+      activeProfileId = await attachProfileToUser(req.db, user.id, requestedProfileId)
     }
   } catch (error) {
     return res.status(error.status ?? 400).json({ error: error.message })
   }
 
-  const profiles = getUserProfiles(req.db, user.id)
+  const profiles = await getUserProfiles(req.db, user.id)
   if (!activeProfileId && profiles.length > 0) {
     activeProfileId = profiles[0].id
   }
 
-  const session = createSessionAndTokens(req.db, {
+  const session = await createSessionAndTokens(req.db, {
     user,
     profileId: activeProfileId,
     userAgent: req.headers['user-agent'],
@@ -1732,14 +1732,17 @@ router.post('/phone/verify', (req, res) => {
   // Initialize Anya for admin users on login
   let anyaInfo = null
   try {
-    anyaInfo = initializeAnyaForAdmin(req.db, user, activeProfileId, { uploadDir, getOpenAI })
+    // Postgres rollout: Anya DB call sites are not yet fully async-safe.
+    if (req.db?.dialect !== 'postgres') {
+      anyaInfo = initializeAnyaForAdmin(req.db, user, activeProfileId, { uploadDir, getOpenAI })
+    }
   } catch (error) {
     console.error('[auth] Failed to initialize Anya:', error)
     // Don't fail the login if Anya initialization fails
   }
 
   // Auto-trigger discovery crawlers on phone login (fire and forget)
-  if (activeProfileId) {
+  if (activeProfileId && req.db?.dialect !== 'postgres') {
     triggerAutoDiscoveryCrawlers(req.db, activeProfileId, { uploadDir, getOpenAI }).catch(err => {
       console.error('[auth/phone] Failed to queue auto-discovery crawlers:', err)
     })
