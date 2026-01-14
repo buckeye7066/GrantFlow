@@ -371,9 +371,9 @@ function ensureCrawlerJobsSupportsAllTypes() {
 }
 
 ensureCrawlerJobsSupportsAllTypes()
-ensureDesignatedProfiles(db)
+await ensureDesignatedProfiles(db)
 linkAllProfilesToAdmin(db)
-ensureUserPreferencesTable(db)
+await ensureUserPreferencesTable(db)
 
 // Check funding opportunities count and provide guidance
 try {

@@ -1,4 +1,10 @@
-export default function ensureUserPreferencesTable(db) {
+export default async function ensureUserPreferencesTable(db) {
+  // Postgres environments should be migrated deterministically via SQL migrations.
+  // This SQLite-specific self-healing utility is a no-op on Postgres.
+  if (db?.dialect === 'postgres') {
+    return
+  }
+
   const columns = db.prepare(`PRAGMA table_info(user_preferences)`).all()
   const expectedColumns = [
     'id',
@@ -37,8 +43,8 @@ export default function ensureUserPreferencesTable(db) {
 
   const legacyRows = columns.length > 0 ? db.prepare(`SELECT * FROM user_preferences`).all() : []
 
-  const rebuild = db.transaction((rows) => {
-    db.exec(`
+  const rebuild = async (rows) => {
+    await db.exec(`
       CREATE TABLE IF NOT EXISTS user_preferences_new (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -133,9 +139,9 @@ export default function ensureUserPreferencesTable(db) {
       })
     }
 
-    db.exec(`DROP TABLE IF EXISTS user_preferences`)
-    db.exec(`ALTER TABLE user_preferences_new RENAME TO user_preferences`)
-  })
+    await db.exec(`DROP TABLE IF EXISTS user_preferences`)
+    await db.exec(`ALTER TABLE user_preferences_new RENAME TO user_preferences`)
+  }
 
-  rebuild(legacyRows)
+  await db.withTransaction(() => rebuild(legacyRows))
 }
