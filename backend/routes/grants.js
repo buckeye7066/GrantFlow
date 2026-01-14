@@ -16,14 +16,14 @@ const ALLOWED_GRANT_COLUMNS = new Set([
   'application_steps', 'contact_name', 'contact_email', 'contact_phone'
 ]);
 
-function ensureGrantAccess(req, res, grantId) {
+async function ensureGrantAccess(req, res, grantId) {
   const auth = req.user ?? { role: 'guest' }
   if (auth.role === 'guest') {
     res.status(401).json({ error: 'Authentication required' })
     return null
   }
 
-  const grant = req.db.prepare('SELECT * FROM grants WHERE id = ?').get(grantId)
+  const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(grantId)
   if (!grant) {
     res.status(404).json({ error: 'Grant not found' })
     return null
@@ -38,7 +38,7 @@ function ensureGrantAccess(req, res, grantId) {
     return null
   }
 
-  const profile = req.db
+  const profile = await req.db
     .prepare('SELECT id FROM profiles WHERE id = ? AND organization_id = ?')
     .get(auth.profileId, grant.organization_id)
 
@@ -71,7 +71,7 @@ function mapAutomationEvent(row) {
 }
 
 // List all grants
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const { organization_id, status } = req.query;
     const { limit, offset } = validatePagination(req.query);
@@ -103,7 +103,7 @@ router.get('/', (req, res) => {
     query += ' ORDER BY g.created_at DESC LIMIT ? OFFSET ?';
     params.push(limit, offset);
     
-    const grants = req.db.prepare(query).all(...params);
+    const grants = await req.db.prepare(query).all(...params);
     
     // Parse JSON fields safely
     const parsed = grants.map(grant => ({
@@ -119,7 +119,7 @@ router.get('/', (req, res) => {
 });
 
 // Get grants grouped by status (for pipeline view)
-router.get('/pipeline', (req, res) => {
+router.get('/pipeline', async (req, res) => {
   try {
     const { organization_id } = req.query;
     
@@ -137,7 +137,7 @@ router.get('/pipeline', (req, res) => {
     
     query += ' ORDER BY g.deadline ASC NULLS LAST, g.created_at DESC';
     
-    const grants = req.db.prepare(query).all(...params);
+    const grants = await req.db.prepare(query).all(...params);
     
     // Group by status
     const pipeline = {
@@ -169,7 +169,7 @@ router.get('/pipeline', (req, res) => {
   }
 });
 
-router.get('/automation/summary', (req, res) => {
+router.get('/automation/summary', async (req, res) => {
   const auth = req.user ?? { role: 'guest' }
   if (auth.role === 'guest') {
     return res.status(401).json({ error: 'Authentication required' })
@@ -184,7 +184,7 @@ router.get('/automation/summary', (req, res) => {
     if (!auth.profileId) {
       return res.status(403).json({ error: 'Not authorized' })
     }
-    const profile = req.db
+    const profile = await req.db
       .prepare('SELECT id FROM profiles WHERE id = ? AND organization_id = ?')
       .get(auth.profileId, organizationId)
     if (!profile) {
@@ -193,7 +193,7 @@ router.get('/automation/summary', (req, res) => {
   }
 
   try {
-    const rows = req.db
+    const rows = await req.db
       .prepare(
         `
           WITH latest AS (
@@ -246,13 +246,13 @@ router.get('/automation/summary', (req, res) => {
   }
 });
 
-router.get('/:id/automation/events', (req, res) => {
-  const grant = ensureGrantAccess(req, res, req.params.id)
+router.get('/:id/automation/events', async (req, res) => {
+  const grant = await ensureGrantAccess(req, res, req.params.id)
   if (!grant) return
 
   try {
     const limit = Number.parseInt(req.query.limit ?? 25, 10)
-    const events = req.db
+    const events = await req.db
       .prepare(
         `
           SELECT *
@@ -271,12 +271,12 @@ router.get('/:id/automation/events', (req, res) => {
   }
 });
 
-router.get('/:id/automation/latest', (req, res) => {
-  const grant = ensureGrantAccess(req, res, req.params.id)
+router.get('/:id/automation/latest', async (req, res) => {
+  const grant = await ensureGrantAccess(req, res, req.params.id)
   if (!grant) return
 
   try {
-    const row = req.db
+    const row = await req.db
       .prepare(
         `
           SELECT *
@@ -296,9 +296,9 @@ router.get('/:id/automation/latest', (req, res) => {
 });
 
 // Get single grant
-router.get('/:id', (req, res) => {
+router.get('/:id', async (req, res) => {
   try {
-    const grant = req.db.prepare(`
+    const grant = await req.db.prepare(`
       SELECT g.*, o.name as organization_name 
       FROM grants g
       LEFT JOIN organizations o ON g.organization_id = o.id
@@ -316,10 +316,10 @@ router.get('/:id', (req, res) => {
     };
     
     // Get related data
-    const milestones = req.db.prepare('SELECT * FROM milestones WHERE grant_id = ? ORDER BY due_date ASC').all(req.params.id);
-    const documents = req.db.prepare('SELECT * FROM documents WHERE grant_id = ? ORDER BY created_at DESC').all(req.params.id);
-    const expenses = req.db.prepare('SELECT * FROM expenses WHERE grant_id = ? ORDER BY date DESC').all(req.params.id);
-    const drafts = req.db.prepare('SELECT * FROM application_drafts WHERE grant_id = ? ORDER BY section_order ASC').all(req.params.id);
+    const milestones = await req.db.prepare('SELECT * FROM milestones WHERE grant_id = ? ORDER BY due_date ASC').all(req.params.id);
+    const documents = await req.db.prepare('SELECT * FROM documents WHERE grant_id = ? ORDER BY created_at DESC').all(req.params.id);
+    const expenses = await req.db.prepare('SELECT * FROM expenses WHERE grant_id = ? ORDER BY date DESC').all(req.params.id);
+    const drafts = await req.db.prepare('SELECT * FROM application_drafts WHERE grant_id = ? ORDER BY section_order ASC').all(req.params.id);
     
     res.json({
       ...parsed,
@@ -335,7 +335,7 @@ router.get('/:id', (req, res) => {
 });
 
 // Create grant
-router.post('/', mutationRateLimiter, (req, res) => {
+router.post('/', mutationRateLimiter, async (req, res) => {
   try {
     const data = req.body;
     
@@ -362,12 +362,12 @@ router.post('/', mutationRateLimiter, (req, res) => {
     const placeholders = columns.map(() => '?').join(', ');
     const values = [id, ...Object.values(sanitizedData)];
     
-    req.db.prepare(`
+    await req.db.prepare(`
       INSERT INTO grants (${columns.join(', ')})
       VALUES (${placeholders})
     `).run(...values);
     
-    const grant = req.db.prepare('SELECT * FROM grants WHERE id = ?').get(id);
+    const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(id);
     res.status(201).json(grant);
   } catch (error) {
     console.error('Error creating grant:', error);
@@ -376,7 +376,7 @@ router.post('/', mutationRateLimiter, (req, res) => {
 });
 
 // Update grant
-router.put('/:id', mutationRateLimiter, (req, res) => {
+router.put('/:id', mutationRateLimiter, async (req, res) => {
   try {
     const data = req.body;
     
@@ -395,13 +395,13 @@ router.put('/:id', mutationRateLimiter, (req, res) => {
     const setClause = Object.keys(sanitizedData).map(key => `${key} = ?`).join(', ');
     const values = [...Object.values(sanitizedData), req.params.id];
     
-    req.db.prepare(`
+    await req.db.prepare(`
       UPDATE grants 
       SET ${setClause}, updated_at = CURRENT_TIMESTAMP 
       WHERE id = ?
     `).run(...values);
     
-    const grant = req.db.prepare('SELECT * FROM grants WHERE id = ?').get(req.params.id);
+    const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(req.params.id);
     res.json(grant);
   } catch (error) {
     console.error('Error updating grant:', error);
@@ -410,7 +410,7 @@ router.put('/:id', mutationRateLimiter, (req, res) => {
 });
 
 // Update grant status (quick update for drag-and-drop)
-router.patch('/:id/status', mutationRateLimiter, (req, res) => {
+router.patch('/:id/status', mutationRateLimiter, async (req, res) => {
   try {
     const { status } = req.body;
     
@@ -418,13 +418,13 @@ router.patch('/:id/status', mutationRateLimiter, (req, res) => {
       return res.status(400).json({ error: 'Invalid status' });
     }
     
-    req.db.prepare(`
+    await req.db.prepare(`
       UPDATE grants 
       SET status = ?, updated_at = CURRENT_TIMESTAMP 
       WHERE id = ?
     `).run(status, req.params.id);
     
-    const grant = req.db.prepare('SELECT * FROM grants WHERE id = ?').get(req.params.id);
+    const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(req.params.id);
     res.json(grant);
   } catch (error) {
     console.error('Error updating grant status:', error);
@@ -433,18 +433,18 @@ router.patch('/:id/status', mutationRateLimiter, (req, res) => {
 });
 
 // Delete grant
-router.delete('/:id', mutationRateLimiter, (req, res) => {
+router.delete('/:id', mutationRateLimiter, async (req, res) => {
   try {
     // Delete related records first
-    req.db.prepare('DELETE FROM milestones WHERE grant_id = ?').run(req.params.id);
-    req.db.prepare('DELETE FROM expenses WHERE grant_id = ?').run(req.params.id);
-    req.db.prepare('DELETE FROM application_drafts WHERE grant_id = ?').run(req.params.id);
+    await req.db.prepare('DELETE FROM milestones WHERE grant_id = ?').run(req.params.id);
+    await req.db.prepare('DELETE FROM expenses WHERE grant_id = ?').run(req.params.id);
+    await req.db.prepare('DELETE FROM application_drafts WHERE grant_id = ?').run(req.params.id);
     
     // Update documents to remove grant_id
-    req.db.prepare('UPDATE documents SET grant_id = NULL WHERE grant_id = ?').run(req.params.id);
+    await req.db.prepare('UPDATE documents SET grant_id = NULL WHERE grant_id = ?').run(req.params.id);
     
     // Delete the grant
-    req.db.prepare('DELETE FROM grants WHERE id = ?').run(req.params.id);
+    await req.db.prepare('DELETE FROM grants WHERE id = ?').run(req.params.id);
     
     res.json({ success: true, message: 'Grant deleted' });
   } catch (error) {
@@ -454,7 +454,7 @@ router.delete('/:id', mutationRateLimiter, (req, res) => {
 });
 
 // Add grant from opportunity (supports both database opportunities and direct data)
-router.post('/from-opportunity', (req, res) => {
+router.post('/from-opportunity', async (req, res) => {
   try {
     let { 
       opportunity_id, 
@@ -469,7 +469,7 @@ router.post('/from-opportunity', (req, res) => {
     // Try to get opportunity from database first
     let opportunity = null;
     if (opportunity_id) {
-      opportunity = req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunity_id);
+      opportunity = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunity_id);
     }
     
     // If not found in DB, use provided opportunity_data
@@ -494,7 +494,7 @@ router.post('/from-opportunity', (req, res) => {
     
     // If no organization_id but profile_id provided, auto-create organization
     if (!organization_id && profile_id) {
-      const profile = req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profile_id);
+      const profile = await req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profile_id);
       if (profile) {
         if (profile.organization_id) {
           // Profile already has an organization
@@ -502,13 +502,13 @@ router.post('/from-opportunity', (req, res) => {
         } else {
           // Create organization for this profile
           const orgId = crypto.randomUUID();
-          req.db.prepare(`
+          await req.db.prepare(`
             INSERT INTO organizations (id, name, applicant_type, created_at, updated_at)
             VALUES (?, ?, 'individual', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
           `).run(orgId, profile.display_name || 'My Organization');
           
           // Link profile to organization
-          req.db.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile_id);
+          await req.db.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile_id);
           
           organization_id = orgId;
           console.log(`[grants] Auto-created organization ${orgId} for profile ${profile_id}`);
@@ -521,7 +521,7 @@ router.post('/from-opportunity', (req, res) => {
     }
     
     // Check for duplicate grants by title for this organization
-    const existingGrant = req.db.prepare(
+    const existingGrant = await req.db.prepare(
       'SELECT id, title FROM grants WHERE organization_id = ? AND title = ?'
     ).get(organization_id, opportunity.title);
     
@@ -536,7 +536,7 @@ router.post('/from-opportunity', (req, res) => {
     
     const id = crypto.randomUUID();
     
-    req.db.prepare(`
+    await req.db.prepare(`
       INSERT INTO grants (
         id, organization_id, funding_opportunity_id, title, funder, 
         deadline, status, match_score, match_reasons, application_url,
@@ -557,7 +557,7 @@ router.post('/from-opportunity', (req, res) => {
       opportunity.description ? opportunity.description.substring(0, 500) : null
     );
     
-    const grant = req.db.prepare('SELECT * FROM grants WHERE id = ?').get(id);
+    const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(id);
     res.status(201).json({ ...grant, organization_id });
   } catch (error) {
     console.error('Error creating grant from opportunity:', error);
