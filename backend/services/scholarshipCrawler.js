@@ -288,7 +288,7 @@ export async function processScholarshipCrawlerJob({
   let savedToPipeline = 0
   const profileId = profileContext?.profile?.id
   const opportunityLogs = []
-  scored.forEach(({ opportunity, score, reasons }) => {
+  for (const { opportunity, score, reasons } of scored) {
     const matchSummary =
       reasons.length > 0 ? `Scholarship match: ${reasons.join('; ')} (score ${score})` : summarizeProfileSignals(signals)
 
@@ -326,7 +326,7 @@ export async function processScholarshipCrawlerJob({
       match_reasons: reasons,
       inserted: !!result.inserted,
     })
-  })
+  }
   
   console.log(`[scholarshipCrawler] Saved ${savedToPipeline} scholarships to profile pipeline (≥80% match)`)
 
