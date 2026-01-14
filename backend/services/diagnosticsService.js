@@ -175,9 +175,16 @@ function getEnvironmentFlags() {
     SAM_GOV_API_KEY_present: Boolean(process.env.SAM_GOV_API_KEY) || 'optional',
     OPENAI_API_KEY_present: Boolean(process.env.OPENAI_API_KEY),
     ANTHROPIC_API_KEY_present: Boolean(process.env.ANTHROPIC_API_KEY),
+    RESEND_API_KEY_present: Boolean(process.env.RESEND_API_KEY),
+    FROM_EMAIL_set: Boolean(process.env.FROM_EMAIL),
+    AUTH_NOTIFY_ON_LOGIN_enabled: String(process.env.AUTH_NOTIFY_ON_LOGIN || '').toLowerCase() === 'true',
+    AUTH_NOTIFY_EMAIL_set: Boolean(process.env.AUTH_NOTIFY_EMAIL),
     ANYA_ADMIN_TOKEN_present: Boolean(process.env.ANYA_ADMIN_TOKEN) || 'optional',
     NODE_ENV: process.env.NODE_ENV || 'development',
     DB_PATH_set: Boolean(process.env.DB_PATH),
+    AUTH_PUBLIC_URL_set: Boolean(process.env.AUTH_PUBLIC_URL || process.env.PUBLIC_URL),
+    AUTH_FRONTEND_URL_set: Boolean(process.env.AUTH_FRONTEND_URL || process.env.FRONTEND_BASE_URL),
+    TWILIO_configured: Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) || 'optional',
   };
 }
 

@@ -9,11 +9,12 @@ import { dirname, join } from 'path'
 import { initializeAnyaForAdmin } from '../services/anyaLoginTrigger.js'
 
 // Import email service (with fallback if main service fails to load)
-import { sendVerificationEmail as mainSendEmail } from '../services/email.js'
+import { sendVerificationEmail as mainSendEmail, sendAuthAttemptNotification as mainAuthNotify } from '../services/email.js'
 import { sendVerificationEmail as fallbackSendEmail } from '../services/emailFallback.js'
 
 // Use main email service if available, otherwise fallback
 const sendVerificationEmail = mainSendEmail || fallbackSendEmail
+const sendAuthAttemptNotification = typeof mainAuthNotify === 'function' ? mainAuthNotify : async () => false
 import { getDesignatedProfileForEmail } from '../config/userProfileMappings.js'
 import { ADMIN_EMAIL, isAdminEmail } from '../config/constants.js'
 import { ensureAdminUser, isAdminUserId } from '../utils/adminProfileLinks.js'
@@ -188,6 +189,26 @@ function isValidEmail(email) {
 
 function hashValue(value) {
   return crypto.createHash('sha256').update(value).digest('hex')
+}
+
+function findMatchingActiveVerificationCode(db, credentialId, incomingHash) {
+  const now = nowISOString()
+  const rows = db
+    .prepare(
+      `
+        SELECT *
+        FROM user_verification_codes
+        WHERE credential_id = ?
+          AND consumed_at IS NULL
+          AND (expires_at IS NULL OR expires_at >= ?)
+        ORDER BY created_at DESC
+        LIMIT 10
+      `,
+    )
+    .all(credentialId, now)
+
+  if (!Array.isArray(rows) || rows.length === 0) return null
+  return rows.find((row) => row && row.code_hash === incomingHash) ?? null
 }
 
 function nowISOString() {
@@ -1203,6 +1224,14 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       },
     }
 
+    // Optional ops alert (never includes the code).
+    sendAuthAttemptNotification({
+      event: 'email_start',
+      identifier: email,
+      success: true,
+      error: emailSent ? null : 'email_delivery_failed_or_unconfigured',
+    }).catch(() => {})
+
     // ALWAYS include preview code when email wasn't sent (regardless of environment)
     // This ensures users can always log in even if email service is down
     if (!emailSent) {
@@ -1220,6 +1249,12 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
   } catch (error) {
     // Catch-all for any unexpected errors
     console.error('[auth/email/start] Unexpected error:', error)
+    sendAuthAttemptNotification({
+      event: 'email_start',
+      identifier: typeof req.body?.email === 'string' ? req.body.email : 'unknown',
+      success: false,
+      error: error?.message || String(error),
+    }).catch(() => {})
     return res.status(500).json({ 
       error: 'An unexpected error occurred. Please try again.',
       error_type: 'internal_error',
@@ -1257,42 +1292,39 @@ router.post('/email/verify', (req, res) => {
     .get(email)
 
   if (!credential) {
+    sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'credential_missing' }).catch(() => {})
     return res.status(400).json({ error: 'Verification code not requested for this email' })
   }
 
-  const codeRow = req.db
-    .prepare(
-      `
-        SELECT *
-        FROM user_verification_codes
-        WHERE credential_id = ?
-          AND consumed_at IS NULL
-        ORDER BY created_at DESC
-        LIMIT 1
-      `,
-    )
-    .get(credential.id)
+  const incomingHash = hashValue(`${email}:${code}`)
+  const codeRow = findMatchingActiveVerificationCode(req.db, credential.id, incomingHash)
 
   if (!codeRow) {
-    return res.status(400).json({ error: 'No active verification code. Request a new one.' })
-  }
-
-  const now = new Date()
-  if (codeRow.expires_at && new Date(codeRow.expires_at) < now) {
-    return res.status(400).json({ error: 'Verification code has expired. Request a new one.' })
-  }
-
-  const incomingHash = hashValue(`${email}:${code}`)
-  if (incomingHash !== codeRow.code_hash) {
-    req.db
+    // Increment attempt count on the latest active code (if any) to support abuse monitoring.
+    const latest = req.db
       .prepare(
         `
-          UPDATE user_verification_codes
-          SET attempt_count = attempt_count + 1
-          WHERE id = ?
+          SELECT id
+          FROM user_verification_codes
+          WHERE credential_id = ?
+            AND consumed_at IS NULL
+          ORDER BY created_at DESC
+          LIMIT 1
         `,
       )
-      .run(codeRow.id)
+      .get(credential.id)
+
+    if (latest?.id) {
+      req.db
+        .prepare(
+          `
+            UPDATE user_verification_codes
+            SET attempt_count = attempt_count + 1
+            WHERE id = ?
+          `,
+        )
+        .run(latest.id)
+    }
 
     req.db
       .prepare(
@@ -1304,6 +1336,7 @@ router.post('/email/verify', (req, res) => {
       )
       .run(credential.id)
 
+    sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'invalid_code' }).catch(() => {})
     return res.status(400).json({ error: 'Invalid verification code' })
   }
 
@@ -1398,6 +1431,7 @@ router.post('/email/verify', (req, res) => {
     })
   }
 
+  sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: true }).catch(() => {})
   return res.json(response)
 })
 
@@ -1488,39 +1522,34 @@ router.post('/phone/verify', (req, res) => {
     return res.status(400).json({ error: 'Verification code not requested for this phone number' })
   }
 
-  const codeRow = req.db
-    .prepare(
-      `
-        SELECT *
-        FROM user_verification_codes
-        WHERE credential_id = ?
-          AND consumed_at IS NULL
-        ORDER BY created_at DESC
-        LIMIT 1
-      `,
-    )
-    .get(credential.id)
+  const incomingHash = hashValue(`${normalized}:${code}`)
+  const codeRow = findMatchingActiveVerificationCode(req.db, credential.id, incomingHash)
 
   if (!codeRow) {
-    return res.status(400).json({ error: 'No active verification code. Request a new one.' })
-  }
-
-  const now = new Date()
-  if (codeRow.expires_at && new Date(codeRow.expires_at) < now) {
-    return res.status(400).json({ error: 'Verification code has expired. Request a new one.' })
-  }
-
-  const incomingHash = hashValue(`${normalized}:${code}`)
-  if (incomingHash !== codeRow.code_hash) {
-    req.db
+    const latest = req.db
       .prepare(
         `
-          UPDATE user_verification_codes
-          SET attempt_count = attempt_count + 1
-          WHERE id = ?
+          SELECT id
+          FROM user_verification_codes
+          WHERE credential_id = ?
+            AND consumed_at IS NULL
+          ORDER BY created_at DESC
+          LIMIT 1
         `,
       )
-      .run(codeRow.id)
+      .get(credential.id)
+
+    if (latest?.id) {
+      req.db
+        .prepare(
+          `
+            UPDATE user_verification_codes
+            SET attempt_count = attempt_count + 1
+            WHERE id = ?
+          `,
+        )
+        .run(latest.id)
+    }
 
     req.db
       .prepare(
