@@ -13,7 +13,59 @@
  */
 
 import { randomUUID } from 'crypto';
-import { COMPLETE_US_COUNTIES, COUNTY_STATS } from '../data/completeCounties.js';
+import fs from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
+
+// NOTE: In some hosted environments, the complete county dataset file may not be present
+// (e.g. older deploy artifacts / missing repo data folder). We fall back to the bundled JSON.
+let COMPLETE_US_COUNTIES = [];
+let COUNTY_STATS = { totalCounties: 0, totalStates: 0, source: 'unknown' };
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const repoRootDir = join(__dirname, '..', '..');
+const fallbackCountiesPath = join(repoRootDir, 'county_batch1.json');
+
+try {
+  // Prefer the complete dataset if available.
+  // Use dynamic import so a missing file doesn't crash the whole service.
+  // eslint-disable-next-line no-await-in-loop
+  const mod = await import('../data/completeCounties.js');
+  COMPLETE_US_COUNTIES = mod.COMPLETE_US_COUNTIES || [];
+  COUNTY_STATS = mod.COUNTY_STATS || COUNTY_STATS;
+} catch (error) {
+  try {
+    const raw = fs.readFileSync(fallbackCountiesPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    // county_batch1.json format: { [state]: { [countyName]: [zip,...] } } or similar
+    const counties = [];
+    const states = Object.keys(parsed || {});
+    for (const state of states) {
+      const byCounty = parsed[state] || {};
+      for (const countyName of Object.keys(byCounty)) {
+        counties.push({ state, county: countyName });
+      }
+    }
+    COMPLETE_US_COUNTIES = counties;
+    COUNTY_STATS = {
+      totalCounties: counties.length,
+      totalStates: states.length,
+      source: 'county_batch1.json fallback',
+    };
+    console.warn('[CountyCrawler] Falling back to county_batch1.json (completeCounties.js missing)', {
+      totalCounties: COUNTY_STATS.totalCounties,
+      totalStates: COUNTY_STATS.totalStates,
+    });
+  } catch (fallbackError) {
+    console.error('[CountyCrawler] Failed to load counties dataset', {
+      error: String(error?.message || error),
+      fallbackError: String(fallbackError?.message || fallbackError),
+    });
+    COMPLETE_US_COUNTIES = [];
+    COUNTY_STATS = { totalCounties: 0, totalStates: 0, source: 'none' };
+  }
+}
 
 // Google Custom Search API (if available) or fallback to known patterns
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || null;
