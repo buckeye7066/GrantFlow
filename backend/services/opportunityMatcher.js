@@ -4,6 +4,7 @@
  * ENHANCED: Uses ALL profile data points for comprehensive matching
  */
 
+import crypto from 'crypto'
 import { buildProfileSignals, safeParseArrayField } from './profileHelpers.js'
 
 /**
@@ -193,7 +194,7 @@ function calculateMatchPercentage(opportunity, profileContext) {
 /**
  * Save opportunity to profile pipeline if match > 80%
  */
-export function saveToProfilePipeline(db, opportunity, profileId, profileContext, matchPercentage = null) {
+export async function saveToProfilePipeline(db, opportunity, profileId, profileContext, matchPercentage = null) {
   try {
     // Calculate match if not provided
     if (matchPercentage === null) {
@@ -209,7 +210,7 @@ export function saveToProfilePipeline(db, opportunity, profileId, profileContext
     }
     
     // Get organization_id for this profile
-    const profile = db.prepare(`
+    const profile = await db.prepare(`
       SELECT organization_id FROM profiles WHERE id = ?
     `).get(profileId)
     
@@ -221,7 +222,7 @@ export function saveToProfilePipeline(db, opportunity, profileId, profileContext
     }
     
     // Check if already in pipeline
-    const existing = db.prepare(`
+    const existing = await db.prepare(`
       SELECT id FROM grants
       WHERE organization_id = ? AND funding_opportunity_id = ?
     `).get(profile.organization_id, opportunity.id)
@@ -234,8 +235,10 @@ export function saveToProfilePipeline(db, opportunity, profileId, profileContext
     }
     
     // Add to pipeline
-    db.prepare(`
+    const grantId = crypto.randomUUID()
+    await db.prepare(`
       INSERT INTO grants (
+        id,
         organization_id,
         funding_opportunity_id,
         title,
@@ -243,8 +246,9 @@ export function saveToProfilePipeline(db, opportunity, profileId, profileContext
         status,
         deadline,
         notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
+      grantId,
       profile.organization_id,
       opportunity.id,
       opportunity.title,
@@ -259,7 +263,7 @@ export function saveToProfilePipeline(db, opportunity, profileId, profileContext
     return {
       saved: true,
       matchPercentage,
-      pipelineId: db.prepare('SELECT last_insert_rowid() as id').get().id
+      pipelineId: grantId
     }
   } catch (error) {
     console.error('[opportunityMatcher] Error saving to pipeline:', error)
@@ -274,7 +278,7 @@ export function saveToProfilePipeline(db, opportunity, profileId, profileContext
  * Save all opportunities globally (to the opportunities table)
  * This is already handled by upsertFundingOpportunity, but we can track it
  */
-export function trackGlobalOpportunity(db, opportunity) {
+export async function trackGlobalOpportunity(db, opportunity) {
   try {
     // Log that this opportunity was saved globally
     const trackingQuery = db.prepare(`
@@ -284,10 +288,10 @@ export function trackGlobalOpportunity(db, opportunity) {
         status,
         message,
         created_at
-      ) VALUES (?, ?, ?, ?, datetime('now'))
+      ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
     `)
     
-    trackingQuery.run(
+    await trackingQuery.run(
       opportunity.source || 'unknown',
       null, // Global, not profile-specific
       'success',
@@ -304,7 +308,7 @@ export function trackGlobalOpportunity(db, opportunity) {
 /**
  * Process crawled opportunities and save appropriately
  */
-export function processCrawledOpportunities(db, opportunities, profileId, profileContext) {
+export async function processCrawledOpportunities(db, opportunities, profileId, profileContext) {
   const results = {
     total: opportunities.length,
     savedToPipeline: 0,
@@ -312,13 +316,13 @@ export function processCrawledOpportunities(db, opportunities, profileId, profil
     matches: []
   }
   
-  opportunities.forEach(opportunity => {
+  for (const opportunity of opportunities) {
     // Calculate match percentage
     const matchPercentage = calculateMatchPercentage(opportunity, profileContext)
     
     // Save to pipeline if > 80% match
     if (matchPercentage >= 80) {
-      const pipelineResult = saveToProfilePipeline(db, opportunity, profileId, profileContext, matchPercentage)
+      const pipelineResult = await saveToProfilePipeline(db, opportunity, profileId, profileContext, matchPercentage)
       if (pipelineResult.saved) {
         results.savedToPipeline++
         results.matches.push({
@@ -331,7 +335,7 @@ export function processCrawledOpportunities(db, opportunities, profileId, profil
     
     // All opportunities are saved globally by default through upsertFundingOpportunity
     results.savedGlobally++
-  })
+  }
   
   console.log(`[opportunityMatcher] Processed ${results.total} opportunities:`)
   console.log(`  - ${results.savedToPipeline} saved to pipeline (>80% match)`)
