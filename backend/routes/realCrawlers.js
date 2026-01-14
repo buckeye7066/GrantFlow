@@ -243,7 +243,7 @@ function formatDbOpportunity(row) {
 }
 
 function buildCandidateOpportunityQuery({ crawlerType, profileContext, tokens, itemRequest }) {
-  const conditions = ['is_active = 1']
+  const conditions = [req.db?.dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1']
   const params = []
 
   // Avoid obviously non-grant programs by default.

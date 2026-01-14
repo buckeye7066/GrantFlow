@@ -14,8 +14,12 @@ router.get('/', (req, res) => {
       params.push(grant_id);
     }
     if (completed === 'true') query += ' AND m.completed = 1';
-    if (completed === 'false') query += ' AND m.completed = 0';
-    if (upcoming === 'true') query += ' AND m.due_date >= date("now") AND m.completed = 0';
+    if (completed === 'false') query += req.db?.dialect === 'postgres' ? ' AND m.completed = FALSE' : ' AND m.completed = 0';
+    if (upcoming === 'true')
+      query +=
+        req.db?.dialect === 'postgres'
+          ? ' AND m.due_date >= CURRENT_DATE AND m.completed = FALSE'
+          : ' AND m.due_date >= date(\"now\") AND m.completed = 0';
     
     query += ' ORDER BY m.due_date ASC';
     const milestones = req.db.prepare(query).all(...params);
