@@ -1,13 +1,20 @@
 import { SECTION_PROMPTS, supportedSectionKeys } from '../prompts/profileSections.js'
 import { safeParseJSON } from '../utils/safeJson.js'
 
-const insertSectionStmt = (db) =>
-  db.prepare(
-    `
-    INSERT OR IGNORE INTO profile_sections (profile_id, section_key, data, updated_by)
-    VALUES (?, ?, ?, ?)
-    `,
-  )
+const insertSectionStmt = (db) => {
+  const sql =
+    db?.dialect === 'postgres'
+      ? `
+          INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT (profile_id, section_key) DO NOTHING
+        `
+      : `
+          INSERT OR IGNORE INTO profile_sections (profile_id, section_key, data, updated_by)
+          VALUES (?, ?, ?, ?)
+        `
+  return db.prepare(sql)
+}
 
 const updateSectionStmt = (db) =>
   db.prepare(
@@ -36,10 +43,10 @@ function hasValue(value) {
   return true
 }
 
-export function ensureProfileSections(db, profileId, updatedBy = 'system') {
+export async function ensureProfileSections(db, profileId, updatedBy = 'system') {
   const insert = insertSectionStmt(db)
   for (const sectionKey of supportedSectionKeys) {
-    insert.run(profileId, sectionKey, JSON.stringify({}), updatedBy)
+    await insert.run(profileId, sectionKey, JSON.stringify({}), updatedBy)
   }
 }
 
@@ -55,12 +62,12 @@ export function normalizeSectionData(data, sectionKey) {
   return normalized
 }
 
-export function repairProfileSections(db, profileId, updatedBy = 'system-repair') {
-  const rowsBefore = selectSectionsStmt(db).all(profileId)
+export async function repairProfileSections(db, profileId, updatedBy = 'system-repair') {
+  const rowsBefore = await selectSectionsStmt(db).all(profileId)
   const existingKeys = new Set(rowsBefore.map((row) => row.section_key))
   const missingSections = supportedSectionKeys.filter((key) => !existingKeys.has(key))
-  ensureProfileSections(db, profileId, updatedBy)
-  const rows = selectSectionsStmt(db).all(profileId)
+  await ensureProfileSections(db, profileId, updatedBy)
+  const rows = await selectSectionsStmt(db).all(profileId)
   const updateStmt = updateSectionStmt(db)
   const updatedSections = []
 
@@ -69,7 +76,7 @@ export function repairProfileSections(db, profileId, updatedBy = 'system-repair'
     const normalized = normalizeSectionData(parsed, row.section_key)
     const normalizedStr = JSON.stringify(normalized)
     if (normalizedStr !== row.data) {
-      updateStmt.run(normalizedStr, updatedBy, row.id)
+      await updateStmt.run(normalizedStr, updatedBy, row.id)
       updatedSections.push(row.section_key)
     }
   }
