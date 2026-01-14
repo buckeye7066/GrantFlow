@@ -115,10 +115,9 @@ app.use((req, res, next) => {
   next();
 });
 
-// Standardize API envelope for JSON OBJECT responses (backward compatible):
-// - Arrays are left untouched (so callers expecting arrays won't break)
-// - Objects get `{ ok: true }` on success or `{ ok: false }` on error
-// - Always attach `request_id` to help correlate client failures to server logs
+// Standardize error envelope for JSON OBJECT responses (backward compatible):
+// - Success responses are NOT modified (avoid changing public success shapes)
+// - Error responses (HTTP >= 400) get `{ ok: false, request_id, ... }` if missing
 app.use((req, res, next) => {
   const originalJson = res.json.bind(res);
   res.json = (body) => {
@@ -128,11 +127,15 @@ app.use((req, res, next) => {
     }
 
     const status = res.statusCode || 200;
-    const requestId = req.requestId || null;
-    const ok = status < 400;
+    if (status < 400) {
+      return originalJson(body);
+    }
 
-    const normalized =
-      Object.prototype.hasOwnProperty.call(body, 'ok') ? body : { ok, ...body };
+    const requestId = req.requestId || null;
+
+    const normalized = Object.prototype.hasOwnProperty.call(body, 'ok')
+      ? body
+      : { ok: false, ...body };
 
     if (requestId && !Object.prototype.hasOwnProperty.call(normalized, 'request_id')) {
       normalized.request_id = requestId;
@@ -151,6 +154,8 @@ app.use((req, res, next) => {
     console.error('[timeout] Request timeout:', req.method, req.url);
     if (!res.headersSent) {
       res.status(504).json({ 
+        ok: false,
+        request_id: req.requestId || null,
         error: 'Request timeout',
         error_type: 'timeout',
         message: 'The request took too long to process'
@@ -163,6 +168,8 @@ app.use((req, res, next) => {
     console.error('[timeout] Response timeout:', req.method, req.url);
     if (!res.headersSent) {
       res.status(504).json({ 
+        ok: false,
+        request_id: req.requestId || null,
         error: 'Response timeout',
         error_type: 'timeout',
         message: 'The server took too long to respond'
