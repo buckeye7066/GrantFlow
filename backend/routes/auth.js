@@ -1893,8 +1893,34 @@ router.get('/me', (req, res) => {
     }
     
     if (!user) {
-      // User was authenticated but no longer exists in the database
-      return res.status(404).json({ error: 'User not found' })
+      // Self-heal for hosted environments where the SQLite file can reset between deploys/restarts.
+      // If the request is authenticated (signed JWT), recreate a minimal user record so sessions
+      // and admin tools don't become brittle.
+      try {
+        const userId = req.user.userId
+        const email = typeof req.user.email === 'string' ? req.user.email : null
+        const displayName = typeof req.user.full_name === 'string' ? req.user.full_name : null
+        const isAdmin = req.user.role === 'admin' || req.user.is_admin === true ? 1 : 0
+
+        req.db.prepare(
+          `
+            INSERT INTO users (id, display_name, primary_email, is_admin)
+            VALUES (?, ?, ?, ?)
+          `,
+        ).run(userId, displayName, email, isAdmin)
+
+        if (email) {
+          ensureAdminStatus(req.db, userId, normalizeEmail(email))
+        }
+
+        user = getUserById(req.db, userId)
+      } catch (repairError) {
+        console.error('[auth/me] Unable to self-heal missing user:', repairError)
+      }
+
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' })
+      }
     }
 
     try {
