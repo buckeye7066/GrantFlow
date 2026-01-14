@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { Suspense, lazy, useState } from "react";
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import Layout from "./Layout.jsx";
 import OnboardingFlow from "@/components/onboarding/OnboardingFlow";
@@ -21,11 +21,11 @@ import GrantDeadline from "./GrantDeadline";
 
 import Budgets from "./Budgets";
 
-import Documents from "./Documents";
+const Documents = lazy(() => import("./Documents"));
 
 import Calendar from "./Calendar";
 
-import Reports from "./Reports";
+const Reports = lazy(() => import("./Reports"));
 import AdvancedAnalytics from "./AdvancedAnalytics";
 
 import Billing from "./Billing";
@@ -56,9 +56,9 @@ import SourceRegistry from "./SourceRegistry";
 import BackfillContacts from "./BackfillContacts";
 
 import Stewardship from "./Stewardship";
-import ProfileDetail from "./ProfileDetail";
+const ProfileDetail = lazy(() => import("./ProfileDetail"));
 
-import Diagnostics from "./Diagnostics";
+const Diagnostics = lazy(() => import("./Diagnostics"));
 
 import ComplianceReportDetail from "./ComplianceReportDetail";
 
@@ -66,7 +66,7 @@ import ProfileMatcher from "./ProfileMatcher";
 
 import SourceDirectory from "./SourceDirectory";
 
-import GrantMonitoring from "./GrantMonitoring";
+const GrantMonitoring = lazy(() => import("./GrantMonitoring"));
 
 import PrintableApplication from "./PrintableApplication";
 
@@ -74,13 +74,13 @@ import BillingSheet from "./BillingSheet";
 
 import OrganizationProfile from "./OrganizationProfile";
 
-import FundingOpportunities from "./FundingOpportunities";
+const FundingOpportunities = lazy(() => import("./FundingOpportunities"));
 
 import Pricing from "./Pricing";
 
 import Settings from "./Settings";
 
-import Admin from "./Admin";
+const Admin = lazy(() => import("./Admin"));
 
 import Login from "./Login";
 import AuthCallback from "./AuthCallback";
@@ -88,6 +88,15 @@ import ServiceApplication from "./ServiceApplication";
 
 import { Route, Routes, useLocation, Navigate } from 'react-router-dom';
 import { useAuthStore } from "@/stores/authStore";
+import RouteErrorBoundary from "@/components/shared/RouteErrorBoundary";
+
+function RouteLoading() {
+    return (
+        <div className="flex min-h-[50vh] items-center justify-center text-sm text-slate-500">
+            Loading…
+        </div>
+    )
+}
 
 function EnsureQueryClientProvider({ children }) {
     const [fallbackClient] = useState(() => new QueryClient());
@@ -211,6 +220,16 @@ function _getCurrentPage(url) {
     return pageName || Object.keys(PAGES)[0];
 }
 
+function withBoundary(element, routeName) {
+    return (
+        <RouteErrorBoundary routeName={routeName}>
+            <Suspense fallback={<RouteLoading />}>
+                {element}
+            </Suspense>
+        </RouteErrorBoundary>
+    )
+}
+
 // Create a wrapper component that uses useLocation inside the Router context
 function LayoutRoutes() {
     const location = useLocation();
@@ -241,94 +260,94 @@ function LayoutRoutes() {
             <Layout currentPageName={currentPage}>
                 <Routes>
 
-                <Route path="/" element={<Dashboard />} />
+                <Route path="/" element={withBoundary(<Dashboard />, "Dashboard")} />
 
 
-                <Route path="/Dashboard" element={<Dashboard />} />
+                <Route path="/Dashboard" element={withBoundary(<Dashboard />, "Dashboard")} />
 
-                <Route path="/Organizations" element={<Organizations />} />
+                <Route path="/Organizations" element={withBoundary(<Organizations />, "Organizations")} />
 
-                <Route path="/MyProfiles" element={<MyProfiles />} />
+                <Route path="/MyProfiles" element={withBoundary(<MyProfiles />, "MyProfiles")} />
 
-                <Route path="/Funder" element={<Funder />} />
+                <Route path="/Funder" element={withBoundary(<Funder />, "Funder")} />
 
-                <Route path="/DiscoverGrants" element={<DiscoverGrants />} />
+                <Route path="/DiscoverGrants" element={withBoundary(<DiscoverGrants />, "DiscoverGrants")} />
 
-                <Route path="/SmartMatcher" element={<SmartMatcher />} />
+                <Route path="/SmartMatcher" element={withBoundary(<SmartMatcher />, "SmartMatcher")} />
 
-                <Route path="/ItemFunding" element={<ItemFunding />} />
+                <Route path="/ItemFunding" element={withBoundary(<ItemFunding />, "ItemFunding")} />
 
-                <Route path="/Pipeline" element={<Pipeline />} />
+                <Route path="/Pipeline" element={withBoundary(<Pipeline />, "Pipeline")} />
 
-                <Route path="/Proposals" element={<Proposals />} />
+                <Route path="/Proposals" element={withBoundary(<Proposals />, "Proposals")} />
 
-                <Route path="/Outreach" element={<Outreach />} />
+                <Route path="/Outreach" element={withBoundary(<Outreach />, "Outreach")} />
 
-                <Route path="/GrantDeadline" element={<GrantDeadline />} />
+                <Route path="/GrantDeadline" element={withBoundary(<GrantDeadline />, "GrantDeadline")} />
 
-                <Route path="/Budgets" element={<Budgets />} />
+                <Route path="/Budgets" element={withBoundary(<Budgets />, "Budgets")} />
 
-                <Route path="/Documents" element={<Documents />} />
+                <Route path="/Documents" element={withBoundary(<Documents />, "Documents")} />
 
-                <Route path="/Calendar" element={<Calendar />} />
+                <Route path="/Calendar" element={withBoundary(<Calendar />, "Calendar")} />
 
-                <Route path="/Reports" element={<Reports />} />
+                <Route path="/Reports" element={withBoundary(<Reports />, "Reports")} />
 
-                <Route path="/AdvancedAnalytics" element={<AdvancedAnalytics />} />
+                <Route path="/AdvancedAnalytics" element={withBoundary(<AdvancedAnalytics />, "AdvancedAnalytics")} />
 
-                <Route path="/Billing" element={<Billing />} />
+                <Route path="/Billing" element={withBoundary(<Billing />, "Billing")} />
 
-                <Route path="/Automation" element={<Automation />} />
+                <Route path="/Automation" element={withBoundary(<Automation />, "Automation")} />
 
-                <Route path="/NewProject" element={<NewProject />} />
+                <Route path="/NewProject" element={withBoundary(<NewProject />, "NewProject")} />
 
-                <Route path="/GrantDetail" element={<GrantDetail />} />
+                <Route path="/GrantDetail" element={withBoundary(<GrantDetail />, "GrantDetail")} />
 
-                <Route path="/InvoiceView" element={<InvoiceView />} />
+                <Route path="/InvoiceView" element={withBoundary(<InvoiceView />, "InvoiceView")} />
 
-                <Route path="/CreateInvoice" element={<CreateInvoice />} />
+                <Route path="/CreateInvoice" element={withBoundary(<CreateInvoice />, "CreateInvoice")} />
 
-                <Route path="/NOFOParser" element={<NOFOParser />} />
+                <Route path="/NOFOParser" element={withBoundary(<NOFOParser />, "NOFOParser")} />
 
-                <Route path="/AIGrantScorer" element={<AIGrantScorer />} />
+                <Route path="/AIGrantScorer" element={withBoundary(<AIGrantScorer />, "AIGrantScorer")} />
 
-                <Route path="/BudgetDetail" element={<BudgetDetail />} />
+                <Route path="/BudgetDetail" element={withBoundary(<BudgetDetail />, "BudgetDetail")} />
 
-                <Route path="/PrintPipeline" element={<PrintPipeline />} />
+                <Route path="/PrintPipeline" element={withBoundary(<PrintPipeline />, "PrintPipeline")} />
 
-                <Route path="/OneTimeFix" element={<OneTimeFix />} />
+                <Route path="/OneTimeFix" element={withBoundary(<OneTimeFix />, "OneTimeFix")} />
 
-                <Route path="/DataSources" element={<DataSources />} />
+                <Route path="/DataSources" element={withBoundary(<DataSources />, "DataSources")} />
 
-                <Route path="/SourceRegistry" element={<SourceRegistry />} />
+                <Route path="/SourceRegistry" element={withBoundary(<SourceRegistry />, "SourceRegistry")} />
 
-                <Route path="/BackfillContacts" element={<BackfillContacts />} />
+                <Route path="/BackfillContacts" element={withBoundary(<BackfillContacts />, "BackfillContacts")} />
 
-                <Route path="/Stewardship" element={<Stewardship />} />
+                <Route path="/Stewardship" element={withBoundary(<Stewardship />, "Stewardship")} />
 
-                <Route path="/Settings" element={<Settings />} />
+                <Route path="/Settings" element={withBoundary(<Settings />, "Settings")} />
 
-                <Route path="/Diagnostics" element={<Diagnostics />} />
+                <Route path="/Diagnostics" element={withBoundary(<Diagnostics />, "Diagnostics")} />
 
-                <Route path="/ComplianceReportDetail" element={<ComplianceReportDetail />} />
+                <Route path="/ComplianceReportDetail" element={withBoundary(<ComplianceReportDetail />, "ComplianceReportDetail")} />
 
-                <Route path="/ProfileMatcher" element={<ProfileMatcher />} />
+                <Route path="/ProfileMatcher" element={withBoundary(<ProfileMatcher />, "ProfileMatcher")} />
 
-                <Route path="/SourceDirectory" element={<SourceDirectory />} />
+                <Route path="/SourceDirectory" element={withBoundary(<SourceDirectory />, "SourceDirectory")} />
 
-                <Route path="/FundingOpportunities" element={<FundingOpportunities />} />
+                <Route path="/FundingOpportunities" element={withBoundary(<FundingOpportunities />, "FundingOpportunities")} />
 
-                <Route path="/GrantMonitoring" element={<GrantMonitoring />} />
+                <Route path="/GrantMonitoring" element={withBoundary(<GrantMonitoring />, "GrantMonitoring")} />
 
-                <Route path="/PrintableApplication" element={<PrintableApplication />} />
+                <Route path="/PrintableApplication" element={withBoundary(<PrintableApplication />, "PrintableApplication")} />
 
-                <Route path="/BillingSheet" element={<BillingSheet />} />
+                <Route path="/BillingSheet" element={withBoundary(<BillingSheet />, "BillingSheet")} />
 
-                <Route path="/ProfileDetail" element={<ProfileDetail />} />
+                <Route path="/ProfileDetail" element={withBoundary(<ProfileDetail />, "ProfileDetail")} />
 
-                <Route path="/OrganizationProfile" element={<OrganizationProfile />} />
+                <Route path="/OrganizationProfile" element={withBoundary(<OrganizationProfile />, "OrganizationProfile")} />
 
-                <Route path="/Admin" element={<Admin />} />
+                <Route path="/Admin" element={withBoundary(<Admin />, "Admin")} />
 
                 </Routes>
             </Layout>
@@ -340,10 +359,10 @@ function LayoutRoutes() {
 export default function Pages() {
     return (
         <Routes>
-            <Route path="/login" element={<Login />} />
-            <Route path="/ServiceApplication" element={<ServiceApplication />} />
-            <Route path="/auth/callback" element={<AuthCallback />} />
-            <Route path="/*" element={<LayoutRoutes />} />
+            <Route path="/login" element={withBoundary(<Login />, "Login")} />
+            <Route path="/ServiceApplication" element={withBoundary(<ServiceApplication />, "ServiceApplication")} />
+            <Route path="/auth/callback" element={withBoundary(<AuthCallback />, "AuthCallback")} />
+            <Route path="/*" element={withBoundary(<LayoutRoutes />, "Layout")} />
         </Routes>
     );
 }

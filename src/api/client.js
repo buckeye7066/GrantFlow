@@ -11,6 +11,18 @@ const API_URL = import.meta.env.DEV
   : ''; // Empty string = relative URLs, proxied by Vercel
 const APP_BASE = import.meta.env.VITE_APP_BASE || '/grantflow';
 
+// Frontend startup sanity (non-fatal): warn on env drift/misconfiguration.
+if (import.meta.env.DEV) {
+  const raw = import.meta.env.VITE_API_URL
+  if (raw && !/^https?:\/\//i.test(String(raw))) {
+    // eslint-disable-next-line no-console
+    console.warn('[env] VITE_API_URL should be http(s)://...; falling back to same-origin proxy. value=', raw)
+  }
+} else if (import.meta.env.VITE_API_URL) {
+  // eslint-disable-next-line no-console
+  console.warn('[env] VITE_API_URL is ignored in production (same-origin /api via Vercel rewrites).')
+}
+
 class APIClient {
   constructor() {
     this.baseUrl = API_URL;
