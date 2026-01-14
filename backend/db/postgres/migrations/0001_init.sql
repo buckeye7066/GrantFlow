@@ -522,7 +522,7 @@ CREATE TABLE IF NOT EXISTS ai_artifacts (
   feedback TEXT
 );
 
-INSERT OR IGNORE INTO billing_tiers (
+INSERT INTO billing_tiers (
   id,
   name,
   description,
@@ -601,7 +601,8 @@ INSERT OR IGNORE INTO billing_tiers (
     1,
     1,
     1
-  );
+  )
+ON CONFLICT (id) DO NOTHING;
 
 -- Profiles (comprehensive application records)
 CREATE TABLE IF NOT EXISTS profiles (
