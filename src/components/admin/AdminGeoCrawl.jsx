@@ -136,6 +136,13 @@ export default function AdminGeoCrawl() {
     return cities.filter((c) => c.city.toLowerCase().includes(q))
   }, [cities, citySearch])
 
+  const majorCities = useMemo(() => {
+    // "Major city" heuristic: cities with the most ZIP codes in this state.
+    return [...cities]
+      .sort((a, b) => (b.zipCodes?.length || 0) - (a.zipCodes?.length || 0))
+      .slice(0, 30)
+  }, [cities])
+
   const filteredCounties = useMemo(() => {
     if (!countySearch.trim()) return counties
     const q = countySearch.trim().toLowerCase()
@@ -165,6 +172,17 @@ export default function AdminGeoCrawl() {
     setSelectedCounties((prev) => {
       const next = new Set(prev)
       filteredCounties.forEach((c) => {
+        if (c?.county) next.add(c.county)
+      })
+      return next
+    })
+  }
+
+  const selectAllCountiesInState = () => {
+    if (selectedZips.size > 0) return
+    setSelectedCounties(() => {
+      const next = new Set()
+      ;(counties || []).forEach((c) => {
         if (c?.county) next.add(c.county)
       })
       return next
@@ -292,7 +310,12 @@ export default function AdminGeoCrawl() {
                     {selectedZips.size.toLocaleString()} (ZIPs override counties)
                   </p>
                 </div>
-                <Button variant="ghost" size="sm" onClick={clearSelection} disabled={selectedZips.size === 0}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={clearSelection}
+                  disabled={selectedZips.size === 0 && selectedCounties.size === 0}
+                >
                   Clear
                 </Button>
               </div>
@@ -317,7 +340,15 @@ export default function AdminGeoCrawl() {
                         onClick={selectAllFilteredCounties}
                         disabled={!counties?.length || selectedZips.size > 0 || filteredCounties.length === 0}
                       >
-                        Select all
+                        Select shown
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={selectAllCountiesInState}
+                        disabled={!counties?.length || selectedZips.size > 0}
+                      >
+                        Select all (state)
                       </Button>
                       <Button
                         variant="ghost"
@@ -352,7 +383,7 @@ export default function AdminGeoCrawl() {
                               />
                               <div className="flex flex-col">
                                 <span className="font-medium text-slate-900">{c.county}</span>
-                                <span className="text-xs text-slate-600">{(c.zip_count || 0).toLocaleString()} ZIPs</span>
+                                {/* zip_count is not currently provided by the backend; keep UI clean. */}
                               </div>
                             </div>
                             <span className="text-xs text-slate-500">{selectedState}</span>
@@ -376,6 +407,24 @@ export default function AdminGeoCrawl() {
 
                   <div className="space-y-2">
                     <Label className="text-xs text-slate-600">Cities (selecting a city selects all ZIPs in that city)</Label>
+                    <div className="flex flex-wrap gap-2">
+                      {majorCities.length ? (
+                        majorCities.slice(0, 8).map((c) => (
+                          <Button
+                            key={`major-${selectedState}-${c.city}`}
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => toggleCity(c)}
+                            disabled={!c.zipCodes?.length}
+                          >
+                            {c.city}
+                          </Button>
+                        ))
+                      ) : (
+                        <span className="text-xs text-slate-500">No major cities available for this state.</span>
+                      )}
+                    </div>
                     <Input
                       placeholder="Search city..."
                       value={citySearch}
