@@ -115,6 +115,34 @@ app.use((req, res, next) => {
   next();
 });
 
+// Standardize API envelope for JSON OBJECT responses (backward compatible):
+// - Arrays are left untouched (so callers expecting arrays won't break)
+// - Objects get `{ ok: true }` on success or `{ ok: false }` on error
+// - Always attach `request_id` to help correlate client failures to server logs
+app.use((req, res, next) => {
+  const originalJson = res.json.bind(res);
+  res.json = (body) => {
+    const isObject = body && typeof body === 'object' && !Array.isArray(body);
+    if (!isObject) {
+      return originalJson(body);
+    }
+
+    const status = res.statusCode || 200;
+    const requestId = req.requestId || null;
+    const ok = status < 400;
+
+    const normalized =
+      Object.prototype.hasOwnProperty.call(body, 'ok') ? body : { ok, ...body };
+
+    if (requestId && !Object.prototype.hasOwnProperty.call(normalized, 'request_id')) {
+      normalized.request_id = requestId;
+    }
+
+    return originalJson(normalized);
+  };
+  next();
+});
+
 // Request timeout middleware - prevent hanging requests from causing 502 errors
 const REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT_MS || '30000', 10); // Default 30 seconds
 app.use((req, res, next) => {

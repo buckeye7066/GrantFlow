@@ -11,7 +11,9 @@ export function formatError(error) {
   const isProduction = process.env.NODE_ENV === 'production';
   
   return {
+    // Keep `error` as a string for backwards compatibility with existing clients.
     error: isProduction ? 'Internal server error' : error.message,
+    error_type: error?.error_type || error?.code || null,
     ...(isProduction ? {} : { stack: error.stack })
   };
 }
@@ -36,7 +38,8 @@ export function errorHandler(err, req, res, next) {
   
   // Send error response
   const body = formatError(err);
-  // Always include request_id so logs can be correlated with client errors.
+  // request_id + ok flag are also enforced by the response envelope middleware.
+  body.ok = false;
   if (requestId) body.request_id = requestId;
   res.status(statusCode).json(body);
 }
