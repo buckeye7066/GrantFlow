@@ -1084,8 +1084,10 @@ const server = app.listen(PORT, '0.0.0.0', () => {
     // Non-critical - don't fail server startup
   }
   
-  // Start Anya autonomous operations 5 seconds after server is ready
-  if (process.env.ANYA_AUTONOMOUS_ENABLED === 'true') {
+  // Start Anya autonomous operations 5 seconds after server is ready.
+  // Postgres migration rollout: disable autonomous startup until all DB call sites are async-safe and
+  // boolean/int comparisons have been normalized for Postgres.
+  if (process.env.ANYA_AUTONOMOUS_ENABLED === 'true' && db.dialect === 'sqlite') {
     setTimeout(() => {
       if (process.env.ANYA_RUN_ON_STARTUP === 'true') {
         // Run full autonomous operations (code scan, tests, crawlers)
