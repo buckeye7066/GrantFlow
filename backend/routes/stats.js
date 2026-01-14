@@ -49,8 +49,9 @@ router.get('/dashboard', (req, res) => {
         .prepare('SELECT COUNT(*) as count FROM grants')
         .get()
       
+      const activePredicate = req.db?.dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1'
       const opportunitiesCount = req.db
-        .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1")
+        .prepare(`SELECT COUNT(*) as count FROM funding_opportunities WHERE ${activePredicate}`)
         .get()
       
       const awardedGrants = req.db

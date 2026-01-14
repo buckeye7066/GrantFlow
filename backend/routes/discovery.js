@@ -481,7 +481,10 @@ router.post('/comprehensiveMatch', async (req, res) => {
     }
     
     // Build the query
-    let query = 'SELECT * FROM funding_opportunities WHERE is_active = 1';
+    let query =
+      req.db?.dialect === 'postgres'
+        ? 'SELECT * FROM funding_opportunities WHERE is_active = TRUE'
+        : 'SELECT * FROM funding_opportunities WHERE is_active = 1';
     if (conditions.length > 0) {
       query += ' AND ' + conditions.join(' AND ');
     }

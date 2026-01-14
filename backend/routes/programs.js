@@ -23,7 +23,7 @@ function buildFilters({ search, jurisdiction, state, county, isActive }) {
 
   if (typeof isActive === 'string') {
     const v = isActive.trim().toLowerCase()
-    if (v === 'true' || v === '1') where.push('is_active = 1')
+    if (v === 'true' || v === '1') where.push(req.db?.dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1')
     if (v === 'false' || v === '0') where.push('is_active = 0')
   }
 
