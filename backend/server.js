@@ -48,6 +48,7 @@ import { MAX_JSON_BODY_SIZE } from './config/constants.js';
 import { getSafeHealthSummary } from './services/diagnosticsService.js';
 import { initializeFeatureFlags } from './services/featureFlagService.js';
 import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from './services/auditService.js';
+import { decryptRuntimeSecret } from './utils/runtimeSecrets.js';
 
 // Validate required environment variables at startup
 const requiredEnvVars = ['OPENAI_API_KEY'];
@@ -195,6 +196,42 @@ if (fs.existsSync(schemaPath)) {
       process.exit(1);
     }
   }
+}
+
+// Load persisted runtime secrets (encrypted) if missing from environment.
+// This is intended as an emergency stopgap for hosted environments where env var updates are delayed.
+try {
+  const currentKey = String(process.env.OPENAI_API_KEY || '').trim()
+  const looksMissing =
+    !currentKey ||
+    currentKey === 'YOUR_OPENAI_API_KEY' ||
+    currentKey.includes('*')
+
+  if (looksMissing) {
+    const row = db
+      .prepare(
+        `
+          SELECT value_ciphertext, iv, tag, updated_at
+          FROM app_runtime_secrets
+          WHERE key = 'OPENAI_API_KEY'
+          LIMIT 1
+        `,
+      )
+      .get()
+
+    if (row?.value_ciphertext && row?.iv && row?.tag) {
+      const restored = decryptRuntimeSecret(row)
+      if (restored && String(restored).trim()) {
+        process.env.OPENAI_API_KEY = String(restored).trim()
+        console.info('[startup] Restored OPENAI_API_KEY from app_runtime_secrets', {
+          updated_at: row.updated_at ?? null,
+          prefix: `${String(process.env.OPENAI_API_KEY).slice(0, 7)}...`,
+        })
+      }
+    }
+  }
+} catch (error) {
+  console.warn('[startup] Failed to restore runtime secrets:', error?.message || error)
 }
 
 // Schema migrations - Add columns if they don't exist
