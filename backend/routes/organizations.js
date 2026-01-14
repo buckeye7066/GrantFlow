@@ -18,7 +18,7 @@ const ALLOWED_ORGANIZATION_COLUMNS = new Set([
 ]);
 
 // List all organizations
-router.get('/', ensureAuth, (req, res) => {
+router.get('/', ensureAuth, async (req, res) => {
   try {
     const { search, state, type } = req.query;
     const { limit, offset } = validatePagination(req.query);
@@ -45,7 +45,7 @@ router.get('/', ensureAuth, (req, res) => {
     query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
     params.push(limit, offset);
     
-    const orgs = req.db.prepare(query).all(...params);
+    const orgs = await req.db.prepare(query).all(...params);
     
     // Parse JSON fields safely
     const parsed = orgs.map(org => ({
@@ -68,9 +68,9 @@ router.get('/', ensureAuth, (req, res) => {
 });
 
 // Get single organization
-router.get('/:id', ensureAuth, (req, res) => {
+router.get('/:id', ensureAuth, async (req, res) => {
   try {
-    const org = req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(req.params.id);
+    const org = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(req.params.id);
     
     if (!org) {
       return res.status(404).json({ error: 'Organization not found' });
@@ -97,7 +97,7 @@ router.get('/:id', ensureAuth, (req, res) => {
 });
 
 // Create organization
-router.post('/', ensureAuth, mutationRateLimiter, (req, res) => {
+router.post('/', ensureAuth, mutationRateLimiter, async (req, res) => {
   try {
     const data = req.body;
     
@@ -129,12 +129,12 @@ router.post('/', ensureAuth, mutationRateLimiter, (req, res) => {
     const placeholders = columns.map(() => '?').join(', ');
     const values = [id, ...Object.values(sanitizedData)];
     
-    req.db.prepare(`
+    await req.db.prepare(`
       INSERT INTO organizations (${columns.join(', ')})
       VALUES (${placeholders})
     `).run(...values);
     
-    const org = req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(id);
+    const org = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(id);
     res.status(201).json(org);
   } catch (error) {
     console.error('Error creating organization:', error);
@@ -143,7 +143,7 @@ router.post('/', ensureAuth, mutationRateLimiter, (req, res) => {
 });
 
 // Update organization
-router.put('/:id', ensureAuth, mutationRateLimiter, (req, res) => {
+router.put('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
   try {
     const data = req.body;
     
@@ -167,13 +167,13 @@ router.put('/:id', ensureAuth, mutationRateLimiter, (req, res) => {
     const setClause = Object.keys(sanitizedData).map(key => `${key} = ?`).join(', ');
     const values = [...Object.values(sanitizedData), req.params.id];
     
-    req.db.prepare(`
+    await req.db.prepare(`
       UPDATE organizations 
       SET ${setClause}, updated_at = CURRENT_TIMESTAMP 
       WHERE id = ?
     `).run(...values);
     
-    const org = req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(req.params.id);
+    const org = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(req.params.id);
     res.json(org);
   } catch (error) {
     console.error('Error updating organization:', error);
@@ -182,23 +182,16 @@ router.put('/:id', ensureAuth, mutationRateLimiter, (req, res) => {
 });
 
 // Delete organization (soft delete with deleted_at timestamp)
-router.delete('/:id', ensureAuth, mutationRateLimiter, (req, res) => {
+router.delete('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
   try {
     // Check if organization exists
-    const org = req.db.prepare('SELECT id FROM organizations WHERE id = ?').get(req.params.id);
+    const org = await req.db.prepare('SELECT id FROM organizations WHERE id = ?').get(req.params.id);
     if (!org) {
       return res.status(404).json({ error: 'Organization not found' });
     }
     
-    // Try to add deleted_at column if it doesn't exist
-    try {
-      req.db.prepare('ALTER TABLE organizations ADD COLUMN deleted_at DATETIME').run();
-    } catch (alterError) {
-      // Column already exists, which is fine
-    }
-    
-    // Soft delete by setting deleted_at
-    req.db.prepare('UPDATE organizations SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.params.id);
+    // Soft delete by setting deleted_at (schema-managed; do not attempt runtime ALTER in Postgres)
+    await req.db.prepare('UPDATE organizations SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.params.id);
     
     res.json({ success: true, message: 'Organization marked as deleted' });
   } catch (error) {
@@ -208,9 +201,9 @@ router.delete('/:id', ensureAuth, mutationRateLimiter, (req, res) => {
 });
 
 // Get organization's grants
-router.get('/:id/grants', ensureAuth, (req, res) => {
+router.get('/:id/grants', ensureAuth, async (req, res) => {
   try {
-    const grants = req.db.prepare(`
+    const grants = await req.db.prepare(`
       SELECT * FROM grants 
       WHERE organization_id = ? 
       ORDER BY created_at DESC
@@ -224,9 +217,9 @@ router.get('/:id/grants', ensureAuth, (req, res) => {
 });
 
 // Get organization's documents
-router.get('/:id/documents', ensureAuth, (req, res) => {
+router.get('/:id/documents', ensureAuth, async (req, res) => {
   try {
-    const documents = req.db.prepare(`
+    const documents = await req.db.prepare(`
       SELECT * FROM documents 
       WHERE organization_id = ? 
       ORDER BY created_at DESC
