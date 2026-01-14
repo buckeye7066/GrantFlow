@@ -5,6 +5,9 @@
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY || null
 const FROM_EMAIL = process.env.FROM_EMAIL || 'onboarding@resend.dev'
+const DEFAULT_ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@grantflow.app'
+const AUTH_NOTIFY_EMAIL = process.env.AUTH_NOTIFY_EMAIL || null
+const AUTH_NOTIFY_ON_LOGIN = String(process.env.AUTH_NOTIFY_ON_LOGIN || '').toLowerCase() === 'true'
 
 let resendClient = null
 let initPromise = null
@@ -109,6 +112,60 @@ export async function sendVerificationEmail(email, code) {
     // Return false instead of throwing, so the code can still be displayed
     return false
   }
+}
+
+/**
+ * Optional: Send an admin alert when users attempt to authenticate (start/verify).
+ * Controlled by env vars:
+ * - AUTH_NOTIFY_ON_LOGIN=true (enable)
+ * - AUTH_NOTIFY_EMAIL=ops@... (optional override destination; otherwise ADMIN_EMAIL)
+ *
+ * This NEVER includes the verification code.
+ */
+export async function sendAuthAttemptNotification({ event, identifier, success, error } = {}) {
+  if (!AUTH_NOTIFY_ON_LOGIN && !AUTH_NOTIFY_EMAIL) {
+    return false
+  }
+
+  const client = await getResendClient()
+  if (!client) {
+    return false
+  }
+
+  const to = AUTH_NOTIFY_EMAIL || DEFAULT_ADMIN_EMAIL
+  const safeIdentifier = typeof identifier === 'string' ? identifier : 'unknown'
+  const safeEvent = typeof event === 'string' ? event : 'auth_event'
+  const ok = Boolean(success)
+  const safeError = error ? String(error).slice(0, 500) : null
+
+  try {
+    await client.emails.send({
+      from: FROM_EMAIL,
+      to,
+      subject: `[GrantFlow] Auth ${safeEvent}: ${ok ? 'OK' : 'FAIL'} (${safeIdentifier})`,
+      html: `
+        <h2>GrantFlow auth event</h2>
+        <p><strong>Event:</strong> ${escapeHtml(safeEvent)}</p>
+        <p><strong>Identifier:</strong> ${escapeHtml(safeIdentifier)}</p>
+        <p><strong>Result:</strong> ${ok ? 'OK' : 'FAIL'}</p>
+        ${safeError ? `<p><strong>Error:</strong> ${escapeHtml(safeError)}</p>` : ''}
+        <p style="color:#64748b;font-size:12px;">This message is an automated operational alert. It never includes login codes.</p>
+      `,
+    })
+    return true
+  } catch (err) {
+    console.error('[email] Failed to send auth attempt notification:', err?.message || err)
+    return false
+  }
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
 }
 
 /**
