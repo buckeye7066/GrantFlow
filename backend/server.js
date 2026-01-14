@@ -593,6 +593,28 @@ app.use((req, res, next) => {
     if (token) {
       try {
         const payload = jwt.verify(token, JWT_SECRET);
+        // Stateless JWT acceptance (important for multi-instance deployments where SQLite session storage
+        // is not shared across instances). If the token is correctly signed and unexpired, trust its claims.
+        // We still try to validate against DB sessions when available, but we do not require it.
+        if (payload && typeof payload === 'object') {
+          const roles = Array.isArray(payload.roles) ? payload.roles : [];
+          const isAdmin = roles.includes('admin');
+          if (payload.sub) {
+            user = {
+              role: isAdmin ? 'admin' : 'user',
+              is_admin: isAdmin,
+              userId: payload.sub,
+              profileId: payload.profile_id ?? null,
+              sessionId: payload.sid ?? null,
+              full_name: payload.name ?? null,
+              email: payload.email ?? null,
+              roles,
+            };
+            handled = true;
+          }
+        }
+
+        // Best-effort DB session validation/enrichment (when sessions are stored locally).
         if (payload?.sid) {
           const sessionRow = db
             .prepare(
