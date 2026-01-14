@@ -5,9 +5,9 @@ function nowISOString() {
   return new Date().toISOString()
 }
 
-export function ensureAdminUser(db) {
+export async function ensureAdminUser(db) {
   const normalizedEmail = ADMIN_EMAIL.trim().toLowerCase()
-  let adminUser = db
+  let adminUser = await db
     .prepare(
       `
         SELECT *
@@ -20,14 +20,14 @@ export function ensureAdminUser(db) {
   if (!adminUser) {
     const adminId = crypto.randomUUID()
     const displayName = ADMIN_EMAIL.split('@')[0] || 'GrantFlow Admin'
-    db.prepare(
+    await db.prepare(
       `
         INSERT INTO users (id, display_name, primary_email, is_admin, created_at, updated_at)
-        VALUES (?, ?, ?, 1, ?, ?)
+        VALUES (?, ?, ?, TRUE, ?, ?)
       `,
     ).run(adminId, displayName, ADMIN_EMAIL, nowISOString(), nowISOString())
 
-    adminUser = db
+    adminUser = await db
       .prepare(
         `
           SELECT *
@@ -37,24 +37,24 @@ export function ensureAdminUser(db) {
       )
       .get(adminId)
   } else if (!adminUser.is_admin) {
-    db.prepare(
+    await db.prepare(
       `
         UPDATE users
-        SET is_admin = 1,
+        SET is_admin = TRUE,
             updated_at = ?
         WHERE id = ?
       `,
     ).run(nowISOString(), adminUser.id)
-    adminUser.is_admin = 1
+    adminUser.is_admin = true
   }
 
   return adminUser
 }
 
-export function linkProfileToAdmin(db, profileId) {
+export async function linkProfileToAdmin(db, profileId) {
   if (!profileId) return
-  const admin = ensureAdminUser(db)
-  const existing = db
+  const admin = await ensureAdminUser(db)
+  const existing = await db
     .prepare(
       `
         SELECT user_id
@@ -65,7 +65,7 @@ export function linkProfileToAdmin(db, profileId) {
     .get(profileId)
   if (!existing) return
   if (!existing.user_id) {
-    db.prepare(
+    await db.prepare(
       `
         UPDATE profiles
         SET user_id = ?, updated_at = CURRENT_TIMESTAMP
@@ -75,9 +75,9 @@ export function linkProfileToAdmin(db, profileId) {
   }
 }
 
-export function linkAllProfilesToAdmin(db) {
-  const admin = ensureAdminUser(db)
-  db.prepare(
+export async function linkAllProfilesToAdmin(db) {
+  const admin = await ensureAdminUser(db)
+  await db.prepare(
     `
       UPDATE profiles
       SET user_id = ?, updated_at = CURRENT_TIMESTAMP
@@ -86,9 +86,9 @@ export function linkAllProfilesToAdmin(db) {
   ).run(admin.id)
 }
 
-export function isAdminUserId(db, userId) {
+export async function isAdminUserId(db, userId) {
   if (!userId) return false
-  const row = db
+  const row = await db
     .prepare(
       `
         SELECT primary_email
