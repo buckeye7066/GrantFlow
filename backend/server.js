@@ -50,14 +50,16 @@ import { initializeFeatureFlags } from './services/featureFlagService.js';
 import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from './services/auditService.js';
 import { decryptRuntimeSecret } from './utils/runtimeSecrets.js';
 
-// Validate required environment variables at startup
-const requiredEnvVars = ['OPENAI_API_KEY'];
-const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+// Validate critical environment variables at startup.
+// NOTE: OpenAI is intentionally OPTIONAL for core app flows (auth/profile/opportunities).
+// The server can restore OPENAI_API_KEY from app_runtime_secrets later (hosted emergency stopgap),
+// and even without OpenAI the app should still boot and allow login.
+const requiredEnvVars = [];
+const missingEnvVars = requiredEnvVars.filter((varName) => !process.env[varName]);
 
 if (missingEnvVars.length > 0) {
   console.error('ERROR: Missing required environment variables:', missingEnvVars.join(', '));
-  console.error('Please check your .env file and ensure all required variables are set.');
-  // Don't exit in development to allow for testing without all services
+  console.error('Please check your environment variables and redeploy.');
   if (process.env.NODE_ENV === 'production') {
     process.exit(1);
   } else {
@@ -207,7 +209,7 @@ try {
     currentKey.includes('*')
 
   if (looksMissing) {
-    const row = db
+    const row = await db
       .prepare(
         `
           SELECT value_ciphertext, iv, tag, updated_at
