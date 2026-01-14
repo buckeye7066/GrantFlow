@@ -943,7 +943,7 @@ router.get('/geo/crawl/status', async (req, res) => {
   }
 });
 
-router.post('/geo/crawl/start', (req, res) => {
+router.post('/geo/crawl/start', async (req, res) => {
   try {
     if (!ensureAdminRequest(req, res)) return;
     const payload = req.body ?? {};
@@ -956,7 +956,7 @@ router.post('/geo/crawl/start', (req, res) => {
     };
 
     const jobId = crypto.randomUUID();
-    req.db
+    await req.db
       .prepare(
         `
           INSERT INTO crawler_jobs (id, type, status, profile_id, organization_id, parameters, requested_by)
@@ -989,7 +989,7 @@ router.post('/geo/crawl/start', (req, res) => {
 });
 
 // GET /api/admin/db-stats - Database statistics
-router.get('/db-stats', (req, res) => {
+router.get('/db-stats', async (req, res) => {
   try {
     const stats = {
       profiles: 0,
