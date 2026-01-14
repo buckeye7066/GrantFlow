@@ -8,6 +8,12 @@ import express from 'express'
 import { ensureAuth } from '../middleware/auth.js'
 import { getProfileWithLocation } from '../services/crawlers/crawlerHelpers.js'
 import { calculateMatchScore } from '../services/matchingEngine.js'
+import { crawlLocalFunding } from '../services/crawlers/localFundingCrawler.js'
+import { crawlGovernmentFunding } from '../services/crawlers/governmentFundingCrawler.js'
+import { crawlStudentGrants } from '../services/crawlers/studentGrantsCrawler.js'
+import { crawlSpecialNeeds } from '../services/crawlers/specialNeedsCrawler.js'
+import { crawlItemFunding } from '../services/crawlers/itemFundingCrawler.js'
+import { crawlECFBenefits } from '../services/crawlers/ecfBenefitsCrawler.js'
 
 const router = express.Router()
 
@@ -22,6 +28,8 @@ const CRAWLER_TYPES = [
 ]
 
 const LOAN_TYPES = new Set(['loan', 'loan_program', 'microloan'])
+const LIVE_CRAWL_TIMEOUT_MS = Number.parseInt(process.env.LIVE_CRAWL_TIMEOUT_MS ?? '20000', 10) || 20000
+const MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK = Number.parseInt(process.env.MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK ?? '8', 10) || 8
 
 function normalizeString(value) {
   if (typeof value !== 'string') return ''
@@ -89,6 +97,129 @@ function isOpportunityCurrent(row) {
   const now = new Date()
   // Expired deadlines are not relevant in 2026 (unless rolling/ongoing).
   return parsed >= new Date(now.getFullYear(), now.getMonth(), now.getDate())
+}
+
+function normalizeLiveOpportunity(raw, { crawlerType }) {
+  if (!raw || typeof raw !== 'object') return null
+
+  const title = raw.title ?? raw.name ?? null
+  const sponsor = raw.sponsor ?? raw.funder ?? raw.source ?? null
+  const url = raw.url ?? raw.application_url ?? raw.source_url ?? null
+
+  if (!title || typeof title !== 'string') return null
+
+  const opportunityType = normalizeString(raw.opportunity_type || raw.type || raw.grant_type || 'grant') || 'grant'
+  if (LOAN_TYPES.has(opportunityType)) return null
+
+  return {
+    id: raw.id ?? null,
+    title,
+    sponsor,
+    description: raw.description ?? null,
+    source: raw.source ?? crawlerType,
+    source_url: raw.source_url ?? url,
+    application_url: raw.application_url ?? url,
+    url,
+    amount_min: raw.amount_min ?? null,
+    amount_max: raw.amount_max ?? null,
+    amount_description: raw.amount_description ?? null,
+    deadline: raw.deadline ?? null,
+    deadline_type: raw.deadline_type ?? (raw.deadline ? 'fixed' : 'rolling'),
+    is_national: Boolean(raw.is_national ?? true),
+    state: raw.state ?? null,
+    categories: Array.isArray(raw.categories) ? raw.categories : [],
+    keywords: Array.isArray(raw.keywords) ? raw.keywords : [],
+    eligibility_bullets: Array.isArray(raw.eligibility_bullets) ? raw.eligibility_bullets : [],
+    opportunity_type: opportunityType,
+    record_origin: 'live_crawl',
+    crawler_type: crawlerType,
+  }
+}
+
+async function withTimeout(promise, ms, label) {
+  let timeoutId = null
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      const err = new Error(`${label} timed out after ${ms}ms`)
+      err.code = 'TIMEOUT'
+      reject(err)
+    }, ms)
+  })
+  try {
+    return await Promise.race([promise, timeoutPromise])
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId)
+  }
+}
+
+async function runLiveCrawler({ crawlerType, profile, itemRequest, minMatchScore }) {
+  const startedAt = Date.now()
+  const options = { min_match_score: minMatchScore }
+
+  try {
+    let rawResults = []
+    switch (crawlerType) {
+      case 'local_funding':
+        rawResults = await withTimeout(crawlLocalFunding(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'local_funding')
+        break
+      case 'government_funding':
+        rawResults = await withTimeout(crawlGovernmentFunding(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'government_funding')
+        break
+      case 'student_grants':
+        rawResults = await withTimeout(crawlStudentGrants(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'student_grants')
+        break
+      case 'special_needs':
+        rawResults = await withTimeout(crawlSpecialNeeds(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'special_needs')
+        break
+      case 'item_matching':
+        rawResults = await withTimeout(
+          crawlItemFunding(profile, { item_request: itemRequest }),
+          LIVE_CRAWL_TIMEOUT_MS,
+          'item_matching',
+        )
+        break
+      case 'ecf_benefits':
+        // NOTE: crawler currently yields mostly link-style benefit records.
+        rawResults = await withTimeout(crawlECFBenefits(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'ecf_benefits')
+        break
+      default:
+        return {
+          ok: false,
+          duration_ms: Date.now() - startedAt,
+          error: `No live crawler implementation for ${crawlerType}`,
+          opportunities: [],
+        }
+    }
+
+    const normalized = (Array.isArray(rawResults) ? rawResults : [])
+      .map((row) => normalizeLiveOpportunity(row, { crawlerType }))
+      .filter(Boolean)
+
+    // Apply deterministic scoring so the UI compares apples-to-apples with DB results.
+    const scored = normalized
+      .filter(isOpportunityCurrent)
+      .map((row) => {
+        const { score, reasons } = calculateMatchScore(profile, row)
+        return { ...row, match_score: score, match_reasons: reasons }
+      })
+      .filter((row) => typeof row.match_score === 'number' && row.match_score >= Number(minMatchScore))
+      .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+      .slice(0, 50)
+
+    return {
+      ok: true,
+      duration_ms: Date.now() - startedAt,
+      opportunities: scored,
+      error: null,
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      duration_ms: Date.now() - startedAt,
+      error: error?.message || String(error),
+      opportunities: [],
+    }
+  }
 }
 
 function formatDbOpportunity(row) {
@@ -254,8 +385,50 @@ router.post('/run', ensureAuth, async (req, res) => {
     
     console.log(`[RealCrawlers] Running ${crawler_type} for profile ${profile_id || 'custom'}`)
     
-    // Match against the live ingested opportunity database (fast, stable, always uses full profile data).
+    // 1) Try live crawler first (real web sources), then fall back to DB matching.
     const startTime = Date.now()
+    const debug = {
+      used_live: false,
+      used_db_fallback: false,
+      live: null,
+      db: null,
+    }
+
+    const live = await runLiveCrawler({
+      crawlerType: crawler_type,
+      profile,
+      itemRequest: item_request,
+      minMatchScore: Number(min_match_score),
+    })
+
+    if (live.ok && live.opportunities.length > 0) {
+      debug.used_live = true
+      debug.live = { ok: true, duration_ms: live.duration_ms, returned: live.opportunities.length }
+
+      // If live results are solid, skip fallback; otherwise optionally augment with DB.
+      const shouldSkipFallback = live.opportunities.length >= MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK
+      if (shouldSkipFallback) {
+        const duration = Date.now() - startTime
+        return res.json({
+          success: true,
+          crawler_type,
+          count: live.opportunities.length,
+          total_found: live.opportunities.length,
+          filtered_count: live.opportunities.length,
+          min_match_score,
+          duration,
+          opportunities: live.opportunities,
+          used_live: true,
+          used_db_fallback: false,
+          debug,
+        })
+      }
+    } else {
+      debug.used_live = false
+      debug.live = { ok: Boolean(live.ok), duration_ms: live.duration_ms, returned: 0, error: live.error || null }
+    }
+
+    // 2) DB matching fallback (fast, stable, always uses full profile data).
     let candidates = []
     
     try {
@@ -324,19 +497,41 @@ router.post('/run', ensureAuth, async (req, res) => {
       .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
       .slice(0, 50)
 
+    debug.used_db_fallback = true
+    debug.db = { candidates: candidates.length, returned: filteredOpportunities.length }
+
+    // If live had *some* results, merge + dedupe by URL/title so users see real results first.
+    let merged = filteredOpportunities
+    if (live.ok && Array.isArray(live.opportunities) && live.opportunities.length > 0) {
+      debug.used_live = true
+      debug.used_db_fallback = true
+      const seen = new Set()
+      const keyOf = (o) => String(o?.url || o?.application_url || o?.source_url || o?.title || '').toLowerCase()
+      merged = [...live.opportunities, ...filteredOpportunities].filter((o) => {
+        const key = keyOf(o)
+        if (!key) return true
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+      }).slice(0, 50)
+    }
+
     console.log(
-      `[RealCrawlers] ${crawler_type} evaluated ${totalFound} candidates; returning ${filteredOpportunities.length} (min_score=${min_match_score}) in ${duration}ms`,
+      `[RealCrawlers] ${crawler_type} evaluated ${totalFound} candidates; returning ${merged.length} (min_score=${min_match_score}) in ${duration}ms`,
     )
     
     res.json({
       success: true,
       crawler_type,
-      count: filteredOpportunities.length,
+      count: merged.length,
       total_found: totalFound,
-      filtered_count: filteredOpportunities.length,
+      filtered_count: merged.length,
       min_match_score,
       duration,
-      opportunities: filteredOpportunities
+      opportunities: merged,
+      used_live: Boolean(debug.used_live),
+      used_db_fallback: Boolean(debug.used_db_fallback),
+      debug,
     })
     
   } catch (error) {
