@@ -345,6 +345,71 @@ router.get('/openai/runtime-secret-status', async (req, res) => {
   }
 });
 
+// POST /api/admin/openai/persist-current
+// Persists the currently active server-side OpenAI key (process.env.OPENAI_API_KEY) into DB (encrypted),
+// so it can be restored on restart. Never returns the key.
+router.post('/openai/persist-current', async (req, res) => {
+  if (!ensureAdminRequest(req, res)) return;
+
+  const apiKey = typeof process.env.OPENAI_API_KEY === 'string' ? process.env.OPENAI_API_KEY.trim() : ''
+  if (!apiKey) {
+    return res.status(400).json({
+      ok: false,
+      error: 'OPENAI_API_KEY is not set on this backend process',
+    })
+  }
+
+  try {
+    // Ensure it's valid before persisting.
+    const { openai, diagnostics } = createOpenAIClient()
+    await openai.models.list()
+
+    const encrypted = encryptRuntimeSecret(apiKey)
+    req.db
+      .prepare(
+        `
+          INSERT INTO app_runtime_secrets (key, value_ciphertext, iv, tag, updated_at)
+          VALUES ('OPENAI_API_KEY', ?, ?, ?, CURRENT_TIMESTAMP)
+          ON CONFLICT(key) DO UPDATE SET
+            value_ciphertext = excluded.value_ciphertext,
+            iv = excluded.iv,
+            tag = excluded.tag,
+            updated_at = CURRENT_TIMESTAMP
+        `,
+      )
+      .run(encrypted.value_ciphertext, encrypted.iv, encrypted.tag)
+
+    const status = req.db
+      .prepare(
+        `
+          SELECT updated_at
+          FROM app_runtime_secrets
+          WHERE key = 'OPENAI_API_KEY'
+          LIMIT 1
+        `,
+      )
+      .get()
+
+    return res.json({
+      ok: true,
+      persisted: true,
+      updated_at: status?.updated_at ?? null,
+      diagnostics,
+      note: 'Persisted to DB for emergency restart recovery. Set OPENAI_API_KEY in Railway for the real permanent fix.',
+    })
+  } catch (error) {
+    const summary = summarizeOpenAIError(error)
+    return res.status(summary.isAuth ? 401 : 500).json({
+      ok: false,
+      error: summary.message,
+      status: summary.status ?? null,
+      hint: summary.isAuth
+        ? 'Current OPENAI_API_KEY failed authentication; not persisting.'
+        : 'Failed to persist current key. Check DB write access and try again.',
+    })
+  }
+})
+
 // AI prompt for extracting profile information from PDF text
 const PROFILE_EXTRACTION_PROMPT = `You are an AI assistant that extracts organization profile information from documents. 
 Analyze the provided text and extract the following information if available:
