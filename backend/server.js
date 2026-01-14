@@ -905,9 +905,9 @@ app.get('/api/meta/build', (_req, res) => {
 })
 
 // Public health endpoint - safe for non-admin users
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
   try {
-    const healthSummary = getSafeHealthSummary(db);
+    const healthSummary = await getSafeHealthSummary(db);
     // Treat "warning" as healthy for platform checks (Railway healthchecks, Docker HEALTHCHECK, etc.)
     // Only fail hard when the health summary indicates a real error.
     const statusCode = healthSummary.status === 'error' ? 500 : 200;

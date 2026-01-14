@@ -105,7 +105,7 @@ function getDatabaseDiagnostics(db) {
  * @param {string} tableName - Name of table
  * @returns {number} Count of records
  */
-function getTableCount(db, tableName) {
+async function getTableCount(db, tableName) {
   try {
     // Whitelist of allowed table names for additional security
     const allowedTables = [
@@ -123,8 +123,8 @@ function getTableCount(db, tableName) {
       return 0;
     }
     
-    const result = db.prepare(`SELECT COUNT(*) as count FROM ${tableName}`).get();
-    return result?.count || 0;
+    const result = await db.prepare(`SELECT COUNT(*) as count FROM ${tableName}`).get();
+    return Number(result?.count || 0);
   } catch (error) {
     return 0;
   }
@@ -381,7 +381,7 @@ export function analyzeSystemHealth(diagnostics) {
  * @param {Object} db - Database connection
  * @returns {Object} Safe health summary
  */
-export function getSafeHealthSummary(db) {
+export async function getSafeHealthSummary(db) {
   const timestamp = new Date().toISOString();
   
   if (!db) {
@@ -395,18 +395,28 @@ export function getSafeHealthSummary(db) {
   
   try {
     // Get basic counts
-    const opportunitiesCount = getTableCount(db, 'funding_opportunities');
+    const opportunitiesCount = await getTableCount(db, 'funding_opportunities');
     
     // Get recent failures count (last 24 hours)
     let recentFailures = 0;
     try {
-      const failures = db.prepare(`
-        SELECT COUNT(*) as count
-        FROM crawler_jobs
-        WHERE status = 'failed'
-          AND created_at >= datetime('now', '-24 hours')
-      `).get();
-      recentFailures = failures?.count || 0;
+      const failuresSql =
+        db?.dialect === 'postgres'
+          ? `
+              SELECT COUNT(*) as count
+              FROM crawler_jobs
+              WHERE status = 'failed'
+                AND created_at >= (NOW() - INTERVAL '24 hours')
+            `
+          : `
+              SELECT COUNT(*) as count
+              FROM crawler_jobs
+              WHERE status = 'failed'
+                AND created_at >= datetime('now', '-24 hours')
+            `;
+
+      const failures = await db.prepare(failuresSql).get();
+      recentFailures = Number(failures?.count || 0);
     } catch (e) {
       // Ignore if crawler_jobs doesn't exist
     }
