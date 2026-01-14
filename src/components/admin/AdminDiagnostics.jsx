@@ -47,6 +47,13 @@ export default function AdminDiagnostics() {
   const [openaiKeyLoading, setOpenaiKeyLoading] = useState(false);
   const [openaiKeyResult, setOpenaiKeyResult] = useState(null);
   const [openaiKeyError, setOpenaiKeyError] = useState(null);
+  const [crawlerAuditLoading, setCrawlerAuditLoading] = useState(false);
+  const [crawlerAuditError, setCrawlerAuditError] = useState(null);
+  const [crawlerAuditResult, setCrawlerAuditResult] = useState(null);
+  const [crawlerAuditLimit, setCrawlerAuditLimit] = useState(25);
+  const [crawlerAuditTimeout, setCrawlerAuditTimeout] = useState(20000);
+  const [crawlerAuditMinScore, setCrawlerAuditMinScore] = useState(50);
+  const [crawlerAuditItemRequest, setCrawlerAuditItemRequest] = useState('');
 
   const loadDiagnostics = async () => {
     try {
@@ -129,6 +136,32 @@ export default function AdminDiagnostics() {
       setInspectData({ entry });
     } finally {
       setInspectLoading(false);
+    }
+  };
+
+  const runCrawlerAudit = async () => {
+    try {
+      setCrawlerAuditLoading(true);
+      setCrawlerAuditError(null);
+      setCrawlerAuditResult(null);
+
+      const payload = {
+        limit_profiles: Number(crawlerAuditLimit) || 25,
+        timeout_ms: Number(crawlerAuditTimeout) || 20000,
+        min_match_score: Number(crawlerAuditMinScore) || 50,
+        item_request: crawlerAuditItemRequest?.trim() || null,
+      };
+
+      const data = await apiFetch('/api/admin/crawlers/audit-live', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+
+      setCrawlerAuditResult(data);
+    } catch (err) {
+      setCrawlerAuditError(err?.message || 'Crawler audit failed');
+    } finally {
+      setCrawlerAuditLoading(false);
     }
   };
 
@@ -585,6 +618,110 @@ export default function AdminDiagnostics() {
             </CardTitle>
           </CardHeader>
           <CardContent>
+            <div className="mb-4 rounded border border-slate-200 bg-slate-50 p-3">
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">Crawler Audit (live)</p>
+                  <p className="text-xs text-slate-600">
+                    Runs each crawler against recent profiles and explains why results are empty (missing ZIP, not student, timeouts, etc.).
+                  </p>
+                </div>
+                <Button size="sm" onClick={runCrawlerAudit} disabled={crawlerAuditLoading}>
+                  {crawlerAuditLoading ? 'Running…' : 'Run audit'}
+                </Button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                <div className="space-y-1">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Profiles</p>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={200}
+                    value={crawlerAuditLimit}
+                    onChange={(e) => setCrawlerAuditLimit(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Timeout (ms)</p>
+                  <Input
+                    type="number"
+                    min={1000}
+                    value={crawlerAuditTimeout}
+                    onChange={(e) => setCrawlerAuditTimeout(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Min score</p>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={crawlerAuditMinScore}
+                    onChange={(e) => setCrawlerAuditMinScore(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Item request (optional)</p>
+                  <Input
+                    placeholder="e.g., 15 passenger van"
+                    value={crawlerAuditItemRequest}
+                    onChange={(e) => setCrawlerAuditItemRequest(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {crawlerAuditError ? (
+                <Alert variant="destructive" className="mt-3">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription>{crawlerAuditError}</AlertDescription>
+                </Alert>
+              ) : null}
+
+              {crawlerAuditResult?.results ? (
+                <div className="mt-3 space-y-2">
+                  <div className="text-xs text-slate-600">
+                    Ran {crawlerAuditResult.profiles} profile(s) • {crawlerAuditResult.crawler_types?.length || 0} crawler(s) • {crawlerAuditResult.duration_ms}ms
+                  </div>
+                  <div className="max-h-[260px] overflow-auto rounded bg-white border border-slate-200">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-slate-50 border-b">
+                        <tr>
+                          <th className="text-left p-2">Profile</th>
+                          <th className="text-left p-2">Crawler</th>
+                          <th className="text-left p-2">Count</th>
+                          <th className="text-left p-2">Hints</th>
+                          <th className="text-left p-2">Error</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {crawlerAuditResult.results.flatMap((row) =>
+                          (row.crawlers || []).map((c) => (
+                            <tr key={`${row.profile_id}-${c.crawler_type}`} className="border-b last:border-b-0">
+                              <td className="p-2">
+                                <div className="font-medium text-slate-900">{row.display_name}</div>
+                                <div className="text-slate-500">{String(row.primary_type || '').replace(/_/g, ' ')}</div>
+                              </td>
+                              <td className="p-2">{c.crawler_type}</td>
+                              <td className="p-2">
+                                {c.count > 0 ? (
+                                  <Badge className="bg-green-100 text-green-800 border-green-300">{c.count}</Badge>
+                                ) : (
+                                  <Badge variant="secondary">0</Badge>
+                                )}
+                              </td>
+                              <td className="p-2 text-slate-600">{(c.hints || []).join(', ') || '—'}</td>
+                              <td className="p-2 text-slate-600">{c.error || '—'}</td>
+                            </tr>
+                          )),
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
             <div className="mb-4 rounded border border-slate-200 bg-slate-50 p-3">
               <div className="flex items-center justify-between gap-3 mb-2">
                 <div>
