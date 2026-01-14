@@ -76,6 +76,7 @@ export default function AnyaChat({ profileId }) {
   const user = useAuthStore((state) => state.user)
   const isAdmin = Boolean(user?.is_admin)
   const effectiveProfileId = profileId ?? null
+  const [isUnavailable, setIsUnavailable] = useState(false)
   
   const [sessionId, setSessionId] = useState(null)
   const [messages, setMessages] = useState([])
@@ -211,6 +212,7 @@ export default function AnyaChat({ profileId }) {
         }
       } catch (error) {
         console.error("[AnyaChat] bootstrap failed", error)
+        setIsUnavailable(true)
         toast({
           variant: "destructive",
           title: "Unable to reach Anya",
@@ -241,6 +243,7 @@ export default function AnyaChat({ profileId }) {
         }
       } catch (error) {
         console.error("[AnyaChat] load tools failed", error)
+        setIsUnavailable(true)
       } finally {
         if (isMounted) {
           setIsLoadingTools(false)
@@ -252,6 +255,22 @@ export default function AnyaChat({ profileId }) {
       isMounted = false
     }
   }, [isAdmin])
+
+  if (isUnavailable) {
+    return (
+      <div className="rounded-xl border border-slate-200 bg-white/80 p-4 text-sm text-slate-600 shadow-sm">
+        <div className="flex items-center gap-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-full overflow-hidden bg-gradient-to-br from-purple-600 to-blue-600">
+            <img src="/images/anya-avatar.svg" alt="Anya" className="h-full w-full object-cover" />
+          </div>
+          <div className="font-semibold text-slate-800">Anya is temporarily unavailable</div>
+        </div>
+        <div className="mt-2 text-xs text-slate-500">
+          The core app is still working; we’re restoring Anya’s services in the background. Refresh in a minute.
+        </div>
+      </div>
+    )
+  }
 
   // Enable input/button as soon as we have a sessionId, even if messages are still loading
   const isDisabled = !sessionId
