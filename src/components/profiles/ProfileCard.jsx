@@ -23,6 +23,12 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete }) {
   const tier = billing.tier || {};
   const detailUrl = createPageUrl("ProfileDetail", { id: profile.id });
 
+  const displayName =
+    profile.display_name ||
+    profile.organization_name ||
+    profile.name ||
+    (profile.id ? `Profile ${String(profile.id).slice(0, 6)}` : "Untitled profile");
+
   const monthlyRate = billing.custom_monthly_cents ?? tier.base_monthly_cents ?? 0;
   const hourlyRate = billing.custom_hourly_cents ?? tier.hourly_rate_cents ?? 0;
 
@@ -74,7 +80,7 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete }) {
       <div
         role="button"
         tabIndex={0}
-        aria-label={`Open profile ${profile.display_name}`}
+        aria-label={`Open profile ${displayName}`}
         onClick={handleNavigate}
         onKeyDown={handleCardKeyDown}
         className="flex flex-col rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 cursor-pointer"
@@ -96,7 +102,7 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete }) {
               {profile.avatar_url ? (
                 <img
                   src={profile.avatar_url}
-                  alt={profile.display_name}
+                  alt={displayName}
                   className="h-12 w-12 rounded-lg object-cover"
                 />
               ) : (
@@ -105,7 +111,9 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete }) {
                 </div>
               )}
               <div className="flex-1">
-                <CardTitle className="text-lg">{profile.display_name}</CardTitle>
+                <CardTitle className="text-lg font-semibold text-slate-900">
+                  {displayName}
+                </CardTitle>
                 <p className="mt-1 text-sm text-slate-600">{profile.primary_type || "No type specified"}</p>
               </div>
             </div>
@@ -204,7 +212,7 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete }) {
             variant="destructive"
             size="sm"
             className="shrink-0"
-            aria-label={`Delete profile ${profile.display_name}`}
+            aria-label={`Delete profile ${displayName}`}
             onClick={(event) => {
               event.stopPropagation();
               onDelete?.(profile);
