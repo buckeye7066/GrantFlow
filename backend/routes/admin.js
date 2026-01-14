@@ -1645,7 +1645,7 @@ router.post('/national-crawl/start', async (req, res) => {
     const dbPath = process.env.DB_PATH || join(__dirname, '..', 'data', 'grantflow.db')
     
     runNationalZipCrawl(dbPath, params)
-      .then(result => {
+      .then(async (result) => {
         nationalCrawlJob.status = 'completed'
         nationalCrawlJob.completed_at = new Date().toISOString()
         nationalCrawlJob.result = result
@@ -1660,7 +1660,7 @@ router.post('/national-crawl/start', async (req, res) => {
           WHERE id = ?
         `).run(result.sources, JSON.stringify(result), jobId)
       })
-      .catch(error => {
+      .catch(async (error) => {
         nationalCrawlJob.status = 'failed'
         nationalCrawlJob.error = error.message
         
