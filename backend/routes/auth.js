@@ -227,9 +227,9 @@ function verifyOtpToken(token) {
   }
 }
 
-function findMatchingActiveVerificationCode(db, credentialId, incomingHash) {
+async function findMatchingActiveVerificationCode(db, credentialId, incomingHash) {
   const now = nowISOString()
-  const rows = db
+  const rows = await db
     .prepare(
       `
         SELECT *
@@ -390,8 +390,8 @@ async function sendPhoneVerificationCode(phone, code) {
   }
 }
 
-function getUserById(db, userId) {
-  return db
+async function getUserById(db, userId) {
+  return await db
     .prepare(
       `
         SELECT *
@@ -402,8 +402,8 @@ function getUserById(db, userId) {
     .get(userId)
 }
 
-function getUserProfiles(db, userId) {
-  return db
+async function getUserProfiles(db, userId) {
+  return await db
     .prepare(
       `
         SELECT id, display_name, organization_id, status
@@ -428,24 +428,30 @@ function buildUserPayload(userRow, profiles, activeProfileId) {
   }
 }
 
-function assignProfileToUser(db, userId, email) {
+async function assignProfileToUser(db, userId, email) {
   if (email && isAdminEmail(email)) {
-    ensureAdminUser(db)
+    await ensureAdminUser(db)
     return null
   }
 
   if (email) {
     const designatedProfileId = getDesignatedProfileForEmail(email)
     if (designatedProfileId) {
-      const designatedProfile = db.prepare('SELECT id, user_id FROM profiles WHERE id = ?').get(designatedProfileId)
+      const designatedProfile = await db
+        .prepare('SELECT id, user_id FROM profiles WHERE id = ?')
+        .get(designatedProfileId)
       if (designatedProfile) {
         if (!designatedProfile.user_id || designatedProfile.user_id === userId) {
-          db.prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(userId, designatedProfileId)
+          await db
+            .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            .run(userId, designatedProfileId)
           // TODO: Remove debug log - console.log(`[auth] Assigned designated profile ${designatedProfileId} to user ${userId} (${email})`)
           return designatedProfileId
         }
-        if (isAdminUserId(db, designatedProfile.user_id)) {
-          db.prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(userId, designatedProfileId)
+        if (await isAdminUserId(db, designatedProfile.user_id)) {
+          await db
+            .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            .run(userId, designatedProfileId)
           // TODO: Remove debug log - console.log(`[auth] Reassigned designated profile ${designatedProfileId} from admin to user ${userId} (${email})`)
           return designatedProfileId
         }
@@ -456,9 +462,13 @@ function assignProfileToUser(db, userId, email) {
     }
   }
   
-  const firstProfile = db.prepare('SELECT id FROM profiles WHERE user_id IS NULL ORDER BY created_at ASC LIMIT 1').get()
+  const firstProfile = await db
+    .prepare('SELECT id FROM profiles WHERE user_id IS NULL ORDER BY created_at ASC LIMIT 1')
+    .get()
   if (firstProfile) {
-    db.prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(userId, firstProfile.id)
+    await db
+      .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(userId, firstProfile.id)
     // TODO: Remove debug log - console.log(`[auth] Assigned first available profile ${firstProfile.id} to user ${userId}`)
     return firstProfile.id
   }
@@ -467,17 +477,19 @@ function assignProfileToUser(db, userId, email) {
   return null
 }
 
-function ensureAdminStatus(db, userId, email) {
+async function ensureAdminStatus(db, userId, email) {
   if (isAdminEmail(email)) {
-    const result = db.prepare('UPDATE users SET is_admin = 1 WHERE id = ? AND is_admin = 0').run(userId)
+    const result = await db
+      .prepare('UPDATE users SET is_admin = TRUE WHERE id = ? AND COALESCE(is_admin, FALSE) = FALSE')
+      .run(userId)
     if (result.changes > 0) {
       // TODO: Remove debug log - console.log(`[auth] Set admin status for user ${userId} (${email})`)
     }
   }
 }
 
-function ensureEmailCredential(db, email) {
-  const existing = db
+async function ensureEmailCredential(db, email) {
+  const existing = await db
     .prepare(
       `
         SELECT uc.*, u.display_name AS user_display_name, u.primary_email, u.primary_phone, u.avatar_url, u.is_admin
@@ -490,11 +502,11 @@ function ensureEmailCredential(db, email) {
     .get(email)
 
   if (existing) {
-    const user = getUserById(db, existing.user_id)
+    const user = await getUserById(db, existing.user_id)
     // Ensure admin status is set if this is the admin email
-    ensureAdminStatus(db, existing.user_id, email)
+    await ensureAdminStatus(db, existing.user_id, email)
     // Reload user to get updated admin status
-    const updatedUser = getUserById(db, existing.user_id)
+    const updatedUser = await getUserById(db, existing.user_id)
     return {
       user: updatedUser,
       credential: existing,
@@ -503,26 +515,26 @@ function ensureEmailCredential(db, email) {
 
   const displayName = email.split('@')[0] || 'New User'
   const userId = crypto.randomUUID()
-  db.prepare('INSERT INTO users (id, display_name, primary_email, is_admin) VALUES (?, ?, ?, ?)').run(
+  await db.prepare('INSERT INTO users (id, display_name, primary_email, is_admin) VALUES (?, ?, ?, ?)').run(
     userId, 
     displayName, 
     email,
-    isAdminEmail(email) ? 1 : 0
+    isAdminEmail(email) ? true : false
   )
   
   // Assign profile to user (designated or first available)
-  assignProfileToUser(db, userId, email)
+  await assignProfileToUser(db, userId, email)
   
   const credentialId = crypto.randomUUID()
-  db.prepare(
+  await db.prepare(
     `
       INSERT INTO user_credentials (id, user_id, type, identifier, attempt_count)
       VALUES (?, ?, 'email_otp', ?, 0)
     `,
   ).run(credentialId, userId, email)
 
-  const user = getUserById(db, userId)
-  const credential = db.prepare('SELECT * FROM user_credentials WHERE id = ?').get(credentialId)
+  const user = await getUserById(db, userId)
+  const credential = await db.prepare('SELECT * FROM user_credentials WHERE id = ?').get(credentialId)
 
   return { user, credential }
 }
@@ -1016,11 +1028,11 @@ function ensurePhoneCredential(db, phone) {
   return { user, credential }
 }
 
-function attachProfileToUser(db, userId, profileId) {
+async function attachProfileToUser(db, userId, profileId) {
   if (!profileId) {
     return null
   }
-  const profile = db.prepare('SELECT id, user_id FROM profiles WHERE id = ?').get(profileId)
+  const profile = await db.prepare('SELECT id, user_id FROM profiles WHERE id = ?').get(profileId)
   if (!profile) {
     const error = new Error('Profile not found')
     error.status = 404
@@ -1032,13 +1044,15 @@ function attachProfileToUser(db, userId, profileId) {
     throw error
   }
   if (!profile.user_id) {
-    db.prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(userId, profileId)
+    await db
+      .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(userId, profileId)
   }
   return profileId
 }
 
-function insertVerificationCode(db, credentialId, codeHash, expiresAtIso) {
-  db.prepare(
+async function insertVerificationCode(db, credentialId, codeHash, expiresAtIso) {
+  await db.prepare(
     `
       INSERT INTO user_verification_codes (credential_id, code_hash, expires_at)
       VALUES (?, ?, ?)
@@ -1069,7 +1083,7 @@ function signAccessToken(user, sessionId, profileId) {
   return jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: ACCESS_TOKEN_TTL })
 }
 
-function createSessionAndTokens(db, { user, profileId, userAgent, ipAddress }) {
+async function createSessionAndTokens(db, { user, profileId, userAgent, ipAddress }) {
   const sessionId = crypto.randomUUID()
   const refreshToken = crypto.randomBytes(48).toString('hex')
   const refreshHash = hashValue(refreshToken)
@@ -1077,7 +1091,7 @@ function createSessionAndTokens(db, { user, profileId, userAgent, ipAddress }) {
   const accessExpires = new Date(Date.now() + ACCESS_TOKEN_TTL * 1000).toISOString()
   const refreshExpires = new Date(Date.now() + REFRESH_TOKEN_TTL * 1000).toISOString()
 
-  db.prepare(
+  await db.prepare(
     `
       INSERT INTO user_sessions (
         id,
@@ -1113,14 +1127,14 @@ function createSessionAndTokens(db, { user, profileId, userAgent, ipAddress }) {
   }
 }
 
-function rotateSessionTokens(db, { sessionId, user, profileId }) {
+async function rotateSessionTokens(db, { sessionId, user, profileId }) {
   const refreshToken = crypto.randomBytes(48).toString('hex')
   const refreshHash = hashValue(refreshToken)
   const accessToken = signAccessToken(user, sessionId, profileId)
   const accessExpires = new Date(Date.now() + ACCESS_TOKEN_TTL * 1000).toISOString()
   const refreshExpires = new Date(Date.now() + REFRESH_TOKEN_TTL * 1000).toISOString()
 
-  db.prepare(
+  await db.prepare(
     `
       UPDATE user_sessions
       SET refresh_token_hash = ?,
@@ -1167,7 +1181,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
     // Database operations with error handling
     let user, credential
     try {
-      const result = ensureEmailCredential(req.db, email)
+      const result = await ensureEmailCredential(req.db, email)
       user = result.user
       credential = result.credential
       console.info('[auth/email/start] User credential ensured for:', email, 'user_id:', user?.id)
@@ -1208,8 +1222,8 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
     })
     
     try {
-      insertVerificationCode(req.db, credential.id, codeHash, expiresAt)
-      req.db
+      await insertVerificationCode(req.db, credential.id, codeHash, expiresAt)
+      await req.db
         .prepare(
           `
             UPDATE user_credentials
@@ -1306,7 +1320,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
   }
 })
 
-router.post('/email/verify', (req, res) => {
+router.post('/email/verify', async (req, res) => {
   const emailRaw = req.body?.email
   const codeRaw = req.body?.code
   const verificationTokenRaw = req.body?.verification_token ?? req.body?.verificationToken ?? null
@@ -1336,18 +1350,18 @@ router.post('/email/verify', (req, res) => {
   let user = null
   let credential = null
   try {
-    const ensured = ensureEmailCredential(req.db, email)
+    const ensured = await ensureEmailCredential(req.db, email)
     user = ensured.user
     credential = ensured.credential
   } catch (dbError) {
     return res.status(500).json({ error: 'Database error occurred. Please try again.' })
   }
 
-  const codeRow = tokenOk ? { id: null } : findMatchingActiveVerificationCode(req.db, credential.id, incomingHash)
+  const codeRow = tokenOk ? { id: null } : await findMatchingActiveVerificationCode(req.db, credential.id, incomingHash)
 
   if (!codeRow) {
     // Provide a more accurate error (expired vs already used vs invalid) without exposing the code.
-    const matchedAny = req.db
+    const matchedAny = await req.db
       .prepare(
         `
           SELECT id, expires_at, consumed_at
@@ -1369,7 +1383,7 @@ router.post('/email/verify', (req, res) => {
       return res.status(400).json({ error: 'Verification code expired. Request a new code.' })
     }
 
-    const hasAnyActive = req.db
+    const hasAnyActive = await req.db
       .prepare(
         `
           SELECT COUNT(*) as c
@@ -1379,7 +1393,8 @@ router.post('/email/verify', (req, res) => {
             AND (expires_at IS NULL OR expires_at >= ?)
         `,
       )
-      .get(credential.id, nowISOString())?.c
+      .get(credential.id, nowISOString())
+      ?.c
 
     if (!hasAnyActive) {
       sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'no_active_codes' }).catch(() => {})
@@ -1387,7 +1402,7 @@ router.post('/email/verify', (req, res) => {
     }
 
     // Increment attempt count on the latest active code (if any) to support abuse monitoring.
-    const latest = req.db
+    const latest = await req.db
       .prepare(
         `
           SELECT id
@@ -1401,7 +1416,7 @@ router.post('/email/verify', (req, res) => {
       .get(credential.id)
 
     if (latest?.id) {
-      req.db
+      await req.db
         .prepare(
           `
             UPDATE user_verification_codes
@@ -1412,7 +1427,7 @@ router.post('/email/verify', (req, res) => {
         .run(latest.id)
     }
 
-    req.db
+    await req.db
       .prepare(
         `
           UPDATE user_credentials
@@ -1428,7 +1443,7 @@ router.post('/email/verify', (req, res) => {
 
   // Best-effort consume in DB (may be absent in stateless flow on a different instance).
   if (codeRow.id) {
-    req.db
+    await req.db
       .prepare(
         `
           UPDATE user_verification_codes
@@ -1439,7 +1454,7 @@ router.post('/email/verify', (req, res) => {
       .run(nowISOString(), codeRow.id)
   }
 
-  req.db
+  await req.db
     .prepare(
       `
         UPDATE user_credentials
@@ -1452,25 +1467,25 @@ router.post('/email/verify', (req, res) => {
 
   // Reload user if needed.
   if (!user) {
-    user = getUserById(req.db, credential.user_id)
+    user = await getUserById(req.db, credential.user_id)
   }
   if (!user) return res.status(500).json({ error: 'User record missing for credential' })
 
   let activeProfileId = null
   try {
     if (requestedProfileId) {
-      activeProfileId = attachProfileToUser(req.db, user.id, requestedProfileId)
+      activeProfileId = await attachProfileToUser(req.db, user.id, requestedProfileId)
     }
   } catch (error) {
     return res.status(error.status ?? 400).json({ error: error.message })
   }
 
-  const profiles = getUserProfiles(req.db, user.id)
+  const profiles = await getUserProfiles(req.db, user.id)
   if (!activeProfileId && profiles.length > 0) {
     activeProfileId = profiles[0].id
   }
 
-  const session = createSessionAndTokens(req.db, {
+  const session = await createSessionAndTokens(req.db, {
     user,
     profileId: activeProfileId,
     userAgent: req.headers['user-agent'],
@@ -1480,14 +1495,17 @@ router.post('/email/verify', (req, res) => {
   // Initialize Anya for admin users on login
   let anyaInfo = null
   try {
-    anyaInfo = initializeAnyaForAdmin(req.db, user, activeProfileId, { uploadDir, getOpenAI })
+    // Postgres rollout: Anya DB call sites are not yet fully async-safe.
+    if (req.db?.dialect !== 'postgres') {
+      anyaInfo = initializeAnyaForAdmin(req.db, user, activeProfileId, { uploadDir, getOpenAI })
+    }
   } catch (error) {
     console.error('[auth] Failed to initialize Anya:', error)
     // Don't fail the login if Anya initialization fails
   }
 
   // Auto-trigger discovery crawlers on email login (fire and forget)
-  if (activeProfileId) {
+  if (activeProfileId && req.db?.dialect !== 'postgres') {
     triggerAutoDiscoveryCrawlers(req.db, activeProfileId, { uploadDir, getOpenAI }).catch(err => {
       console.error('[auth/email] Failed to queue auto-discovery crawlers:', err)
     })
@@ -1513,7 +1531,7 @@ router.post('/email/verify', (req, res) => {
   }
   
   // Trigger Anya's autonomous operations for admin login if configured
-  if (user.role === 'admin' && process.env.ANYA_RUN_ON_ADMIN_LOGIN === 'true') {
+  if (req.db?.dialect !== 'postgres' && user.role === 'admin' && process.env.ANYA_RUN_ON_ADMIN_LOGIN === 'true') {
     import('../services/anyaAutonomousScheduler.js').then(({ runOnAdminLogin }) => {
       runOnAdminLogin(req.db, user.id).catch(err => {
         console.error('[Anya] Failed to run admin login operations:', err)
@@ -1840,10 +1858,10 @@ router.get('/:provider/callback', async (req, res) => {
       profile,
     })
 
-    const profiles = getUserProfiles(req.db, user.id)
+    const profiles = await getUserProfiles(req.db, user.id)
     const activeProfileId = profiles[0]?.id ?? null
 
-    const session = createSessionAndTokens(req.db, {
+    const session = await createSessionAndTokens(req.db, {
       user,
       profileId: activeProfileId,
       userAgent: req.headers['user-agent'],
@@ -1851,7 +1869,7 @@ router.get('/:provider/callback', async (req, res) => {
     })
 
     // Auto-trigger discovery crawlers on OAuth login (fire and forget)
-    if (activeProfileId) {
+    if (activeProfileId && req.db?.dialect !== 'postgres') {
       triggerAutoDiscoveryCrawlers(req.db, activeProfileId, { uploadDir, getOpenAI }).catch(err => {
         console.error(`[auth/${provider}] Failed to queue auto-discovery crawlers:`, err)
       })
@@ -1871,7 +1889,7 @@ router.get('/:provider/callback', async (req, res) => {
   }
 })
 
-router.get('/me', (req, res) => {
+router.get('/me', async (req, res) => {
   try {
     // Return current user information based on the JWT token
     // The server middleware populates req.user from the Authorization header
@@ -1882,7 +1900,7 @@ router.get('/me', (req, res) => {
     let user, profiles
     
     try {
-      user = getUserById(req.db, req.user.userId)
+      user = await getUserById(req.db, req.user.userId)
     } catch (dbError) {
       console.error('[auth/me] Database error fetching user:', dbError)
       return res.status(500).json({ 
@@ -1900,9 +1918,9 @@ router.get('/me', (req, res) => {
         const userId = req.user.userId
         const email = typeof req.user.email === 'string' ? req.user.email : null
         const displayName = typeof req.user.full_name === 'string' ? req.user.full_name : null
-        const isAdmin = req.user.role === 'admin' || req.user.is_admin === true ? 1 : 0
+        const isAdmin = req.user.role === 'admin' || req.user.is_admin === true
 
-        req.db.prepare(
+        await req.db.prepare(
           `
             INSERT INTO users (id, display_name, primary_email, is_admin)
             VALUES (?, ?, ?, ?)
@@ -1910,10 +1928,10 @@ router.get('/me', (req, res) => {
         ).run(userId, displayName, email, isAdmin)
 
         if (email) {
-          ensureAdminStatus(req.db, userId, normalizeEmail(email))
+          await ensureAdminStatus(req.db, userId, normalizeEmail(email))
         }
 
-        user = getUserById(req.db, userId)
+        user = await getUserById(req.db, userId)
       } catch (repairError) {
         console.error('[auth/me] Unable to self-heal missing user:', repairError)
       }
@@ -1924,7 +1942,7 @@ router.get('/me', (req, res) => {
     }
 
     try {
-      profiles = getUserProfiles(req.db, user.id)
+      profiles = await getUserProfiles(req.db, user.id)
     } catch (dbError) {
       console.error('[auth/me] Database error fetching profiles:', dbError)
       // Return user data without profiles if profiles query fails
@@ -1946,14 +1964,14 @@ router.get('/me', (req, res) => {
   }
 })
 
-router.post('/refresh', (req, res) => {
+router.post('/refresh', async (req, res) => {
   const refreshToken = req.body?.refreshToken
   if (typeof refreshToken !== 'string' || refreshToken.length < 20) {
     return res.status(400).json({ error: 'refreshToken is required' })
   }
 
   const refreshHash = hashValue(refreshToken)
-  const sessionRow = req.db
+  const sessionRow = await req.db
     .prepare(
       `
         SELECT s.*, u.display_name, u.primary_email, u.primary_phone, u.avatar_url, u.is_admin
@@ -1971,7 +1989,7 @@ router.post('/refresh', (req, res) => {
     return res.status(401).json({ error: 'Session has been revoked' })
   }
   if (sessionRow.refresh_expires_at && new Date(sessionRow.refresh_expires_at) < new Date()) {
-    req.db
+    await req.db
       .prepare(
         `
           UPDATE user_sessions
@@ -1983,13 +2001,13 @@ router.post('/refresh', (req, res) => {
     return res.status(401).json({ error: 'Refresh token has expired' })
   }
 
-  const user = getUserById(req.db, sessionRow.user_id)
+  const user = await getUserById(req.db, sessionRow.user_id)
   if (!user) {
     return res.status(401).json({ error: 'User no longer exists' })
   }
 
-  const profiles = getUserProfiles(req.db, user.id)
-  const tokens = rotateSessionTokens(req.db, {
+  const profiles = await getUserProfiles(req.db, user.id)
+  const tokens = await rotateSessionTokens(req.db, {
     sessionId: sessionRow.id,
     user,
     profileId: sessionRow.profile_id,
@@ -2002,11 +2020,11 @@ router.post('/refresh', (req, res) => {
   })
 })
 
-router.post('/logout', (req, res) => {
+router.post('/logout', async (req, res) => {
   const refreshToken = typeof req.body?.refreshToken === 'string' ? req.body.refreshToken : null
   if (refreshToken) {
     const refreshHash = hashValue(refreshToken)
-    req.db
+    await req.db
       .prepare(
         `
           UPDATE user_sessions
@@ -2019,7 +2037,7 @@ router.post('/logout', (req, res) => {
   }
 
   if (req.user?.sessionId) {
-    req.db
+    await req.db
       .prepare(
         `
           UPDATE user_sessions
