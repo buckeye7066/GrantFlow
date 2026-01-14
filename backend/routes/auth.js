@@ -1539,7 +1539,33 @@ router.post('/email/verify', async (req, res) => {
     })
   }
 
-  sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: true }).catch(() => {})
+  // Admin notice on successful sign-in (post-verify)
+  sendAuthAttemptNotification({
+    event: 'sign_in',
+    identifier: email,
+    success: true,
+    context: {
+      method: 'email',
+      userId: user.id,
+      profileId: activeProfileId,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    },
+  }).catch(() => {})
+  // Admin notice on successful sign-in (post-verify)
+  sendAuthAttemptNotification({
+    event: 'sign_in',
+    identifier: normalized,
+    success: true,
+    context: {
+      method: 'phone',
+      userId: user.id,
+      profileId: activeProfileId,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    },
+  }).catch(() => {})
+
   return res.json(response)
 })
 
@@ -1870,6 +1896,20 @@ router.get('/:provider/callback', async (req, res) => {
       userAgent: req.headers['user-agent'],
       ipAddress: req.ip,
     })
+
+    // Admin notice on successful sign-in (OAuth)
+    sendAuthAttemptNotification({
+      event: 'sign_in',
+      identifier: profile?.email ? normalizeEmail(profile.email) : `${provider}:${profile?.providerAccountId || 'unknown'}`,
+      success: true,
+      context: {
+        method: `oauth:${provider}`,
+        userId: user.id,
+        profileId: activeProfileId,
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+      },
+    }).catch(() => {})
 
     // Auto-trigger discovery crawlers on OAuth login (fire and forget)
     if (activeProfileId && req.db?.dialect !== 'postgres') {
