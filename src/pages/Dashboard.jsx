@@ -126,25 +126,37 @@ export default function Dashboard() {
 
   const { data: organizations = [], isLoading: isLoadingOrgs, error: orgsError } = useQuery({
     queryKey: ["organizations"],
-    queryFn: () => base44.entities.Organization.list(),
+    queryFn: async () => {
+      const res = await base44.entities.Organization.list()
+      return Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : []
+    },
     enabled: currentUser?.role === "admin",
   })
 
   const { data: grants = [], isLoading: isLoadingGrants, error: grantsError } = useQuery({
     queryKey: ["grants"],
-    queryFn: () => base44.entities.Grant.list("-created_date"),
+    queryFn: async () => {
+      const res = await base44.entities.Grant.list("-created_date")
+      return Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : []
+    },
     enabled: Boolean(currentUser),
   })
 
   const { data: milestones = [], isLoading: isLoadingMilestones, error: milestonesError } = useQuery({
     queryKey: ["milestones"],
-    queryFn: () => base44.entities.Milestone.list("due_date"),
+    queryFn: async () => {
+      const res = await base44.entities.Milestone.list("due_date")
+      return Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : []
+    },
     enabled: Boolean(currentUser),
   })
 
   const { data: expenses = [], isLoading: isLoadingExpenses, error: expensesError } = useQuery({
     queryKey: ["expenses"],
-    queryFn: () => base44.entities.Expense.list("-date"),
+    queryFn: async () => {
+      const res = await base44.entities.Expense.list("-date")
+      return Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : []
+    },
     enabled: Boolean(currentUser),
   })
 

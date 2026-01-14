@@ -59,7 +59,7 @@ function normalizeMilestone(row) {
   };
 }
 
-export function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD) {
+export async function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD) {
   // Compute date window boundaries in JavaScript
   const now = new Date();
   now.setHours(0, 0, 0, 0); // Start of today
@@ -71,7 +71,7 @@ export function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD) {
   const todayStr = now.toISOString().split('T')[0];
   const endDateStr = endDate.toISOString().split('T')[0];
 
-  const deadlineRows = db.prepare(
+  const deadlineRows = await db.prepare(
     `
       SELECT
         g.id,
@@ -92,28 +92,50 @@ export function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD) {
     `,
   ).all(todayStr, endDateStr);
 
-  const milestoneRows = db.prepare(
-    `
-      SELECT
-        m.id,
-        m.title,
-        m.description,
-        m.due_date,
-        m.type,
-        m.reminder_days,
-        g.title AS grant_title,
-        o.name AS organization_name
-      FROM milestones m
-      LEFT JOIN grants g ON g.id = m.grant_id
-      LEFT JOIN organizations o ON o.id = m.organization_id
-      WHERE m.completed = 0
-        AND m.due_date IS NOT NULL
-        AND m.due_date >= ?
-        AND m.due_date <= ?
-      ORDER BY m.due_date ASC
-      LIMIT 10
-    `,
-  ).all(todayStr, endDateStr);
+  const milestoneSql =
+    db?.dialect === 'postgres'
+      ? `
+          SELECT
+            m.id,
+            m.title,
+            m.description,
+            m.due_date,
+            m.type,
+            m.reminder_days,
+            g.title AS grant_title,
+            o.name AS organization_name
+          FROM milestones m
+          LEFT JOIN grants g ON g.id = m.grant_id
+          LEFT JOIN organizations o ON o.id = m.organization_id
+          WHERE m.completed = FALSE
+            AND m.due_date IS NOT NULL
+            AND m.due_date >= ?
+            AND m.due_date <= ?
+          ORDER BY m.due_date ASC
+          LIMIT 10
+        `
+      : `
+          SELECT
+            m.id,
+            m.title,
+            m.description,
+            m.due_date,
+            m.type,
+            m.reminder_days,
+            g.title AS grant_title,
+            o.name AS organization_name
+          FROM milestones m
+          LEFT JOIN grants g ON g.id = m.grant_id
+          LEFT JOIN organizations o ON o.id = m.organization_id
+          WHERE m.completed = 0
+            AND m.due_date IS NOT NULL
+            AND m.due_date >= ?
+            AND m.due_date <= ?
+          ORDER BY m.due_date ASC
+          LIMIT 10
+        `;
+
+  const milestoneRows = await db.prepare(milestoneSql).all(todayStr, endDateStr);
 
   return {
     urgentDeadlines: deadlineRows.map(normalizeDeadline).filter(Boolean),
@@ -138,7 +160,7 @@ router.get('/', async (req, res) => {
       return res.status(500).json({ error: 'Database connection not available' });
     }
     
-    const snapshot = fetchReminderSnapshot(req.db);
+    const snapshot = await fetchReminderSnapshot(req.db);
     
     res.json({
       generatedAt: new Date().toISOString(),
