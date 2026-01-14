@@ -1922,7 +1922,7 @@ router.get('/health', async (req, res) => {
         AND ${stuckPredicate}
     `).get()
 
-    const workerOnline = (stuckJobs?.count ?? 0) === 0
+    const workerOnline = Number(stuckJobs?.count || 0) === 0
 
     // Calculate health status
     const recentFailures = Number(overallStats.failed || 0)
@@ -1952,11 +1952,11 @@ router.get('/health', async (req, res) => {
       worker_online: workerOnline,
       queue_depth: queueDepth,
       last_24h: {
-        total: overallStats.total || 0,
-        queued: overallStats.queued || 0,
-        running: overallStats.running || 0,
-        completed: overallStats.completed || 0,
-        failed: overallStats.failed || 0,
+        total: Number(overallStats.total || 0),
+        queued: Number(overallStats.queued || 0),
+        running: Number(overallStats.running || 0),
+        completed: Number(overallStats.completed || 0),
+        failed: Number(overallStats.failed || 0),
         failure_rate: Math.round(failureRate * 100)
       },
       last_success_by_type: lastSuccessByType,

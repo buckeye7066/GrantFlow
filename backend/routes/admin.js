@@ -564,7 +564,7 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
     const status = 'active'; // Set as active since admin is creating it
 
     // Create profile in database
-    req.db.prepare(
+    await req.db.prepare(
       `INSERT INTO profiles (
         id,
         display_name,
@@ -579,7 +579,7 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
     const documentId = crypto.randomUUID();
     const publicUrl = `/uploads/${file.filename}`;
     
-    req.db.prepare(
+    await req.db.prepare(
       `INSERT INTO documents (
         id,
         profile_id,
@@ -609,9 +609,15 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
       'Uploaded by admin for profile creation'
     );
 
-    req.db.prepare(
-      `INSERT OR IGNORE INTO profile_documents (profile_id, document_id) VALUES (?, ?)`
-    ).run(profileId, documentId);
+    await req.db
+      .prepare(
+        `
+          INSERT INTO profile_documents (profile_id, document_id)
+          VALUES (?, ?)
+          ON CONFLICT DO NOTHING
+        `,
+      )
+      .run(profileId, documentId);
 
       // Step 5: Store extracted fields in profile_sections
       const sectionsToCreate = [];
@@ -672,17 +678,22 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
       `);
       
       for (const section of sectionsToCreate) {
-        insertSection.run(profileId, section.key, JSON.stringify(section.data), `document:${documentId}`);
+        await insertSection.run(profileId, section.key, JSON.stringify(section.data), `document:${documentId}`);
       }
 
       // Step 6: Queue and dispatch document_ingest job for deeper AI parsing
-      req.db.prepare(`
-        INSERT INTO crawler_jobs (type, status, profile_id, parameters, requested_by)
-        VALUES ('document_ingest', 'queued', ?, ?, ?)
-      `).run(profileId, JSON.stringify({ document_id: documentId, source: 'admin_upload' }), 'admin');
+      const parseJobId = crypto.randomUUID()
+      await req.db
+        .prepare(
+          `
+            INSERT INTO crawler_jobs (id, type, status, profile_id, parameters, requested_by)
+            VALUES (?, 'document_ingest', 'queued', ?, ?, ?)
+          `,
+        )
+        .run(parseJobId, profileId, JSON.stringify({ document_id: documentId, source: 'admin_upload' }), 'admin');
       
       // Get the job and dispatch it immediately
-      const parseJob = req.db.prepare('SELECT * FROM crawler_jobs WHERE rowid = last_insert_rowid()').get();
+      const parseJob = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(parseJobId);
       if (parseJob) {
         dispatchCrawlerJob({
           db: req.db,
@@ -693,7 +704,7 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
       }
 
       // Get the created profile
-      const profile = req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId);
+      const profile = await req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId);
 
       res.status(201).json({
         success: true,
@@ -736,12 +747,12 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
 });
 
 // Reattach users to profiles
-router.post('/reattach-users', (req, res) => {
+router.post('/reattach-users', async (req, res) => {
   try {
     const db = req.db;
     
     // Get admin user
-    const adminUser = db.prepare(`
+    const adminUser = await db.prepare(`
       SELECT id, display_name, primary_email
       FROM users
       WHERE is_admin = TRUE OR LOWER(primary_email) LIKE '%buckeye7066%'
@@ -770,7 +781,7 @@ router.post('/reattach-users', (req, res) => {
     
     // Process each user
     for (const mapping of userMappings) {
-      const user = db.prepare(`
+      const user = await db.prepare(`
         SELECT id, display_name, primary_email
         FROM users
         WHERE LOWER(display_name) LIKE LOWER(?) OR LOWER(primary_email) LIKE LOWER(?)
@@ -782,7 +793,7 @@ router.post('/reattach-users', (req, res) => {
         continue;
       }
       
-      const profiles = db.prepare(`
+      const profiles = await db.prepare(`
         SELECT id, display_name
         FROM profiles
         WHERE LOWER(display_name) LIKE LOWER(?)
@@ -800,7 +811,7 @@ router.post('/reattach-users', (req, res) => {
       `);
       
       for (const profile of profiles) {
-        updateStmt.run(user.id, profile.id);
+        await updateStmt.run(user.id, profile.id);
         results.linked.push({
           user: user.display_name,
           profile: profile.display_name,
@@ -815,11 +826,11 @@ router.post('/reattach-users', (req, res) => {
       SET user_id = ?, updated_at = CURRENT_TIMESTAMP
       WHERE user_id IS NULL
     `);
-    const adminResult = linkAdminStmt.run(adminUser.id);
+    const adminResult = await linkAdminStmt.run(adminUser.id);
     results.adminLinked = adminResult.changes;
     
     // Get final stats
-    const stats = db.prepare(`
+    const stats = await db.prepare(`
       SELECT 
         COUNT(*) as total,
         COUNT(user_id) as linked
@@ -839,7 +850,7 @@ router.post('/reattach-users', (req, res) => {
 });
 
 // GET /api/admin/diagnostics - System diagnostics (admin only)
-router.get('/diagnostics', (req, res) => {
+router.get('/diagnostics', async (req, res) => {
   try {
     if (!ensureAdminRequest(req, res)) return;
 
@@ -910,10 +921,10 @@ router.post('/geo/state/:state/index-counties', (req, res) => {
   }
 });
 
-router.get('/geo/crawl/status', (req, res) => {
+router.get('/geo/crawl/status', async (req, res) => {
   try {
     if (!ensureAdminRequest(req, res)) return;
-    const latest = req.db
+    const latest = await req.db
       .prepare(
         `
           SELECT id, type, status, created_at, started_at, completed_at, result_count, error
@@ -944,18 +955,19 @@ router.post('/geo/crawl/start', (req, res) => {
       mode: 'geo',
     };
 
+    const jobId = crypto.randomUUID();
     req.db
       .prepare(
         `
-          INSERT INTO crawler_jobs (type, status, profile_id, organization_id, parameters, requested_by)
-          VALUES ('comprehensive', 'queued', NULL, NULL, ?, 'admin')
+          INSERT INTO crawler_jobs (id, type, status, profile_id, organization_id, parameters, requested_by)
+          VALUES (?, 'comprehensive', 'queued', NULL, NULL, ?, 'admin')
         `,
       )
-      .run(JSON.stringify(parameters));
+      .run(jobId, JSON.stringify(parameters));
 
-    const job = req.db
-      .prepare('SELECT id, type, status, created_at, started_at, completed_at, result_count, error FROM crawler_jobs WHERE rowid = last_insert_rowid()')
-      .get();
+    const job = await req.db
+      .prepare('SELECT id, type, status, created_at, started_at, completed_at, result_count, error FROM crawler_jobs WHERE id = ?')
+      .get(jobId);
 
     // Dispatch asynchronously (don't block response).
     try {
@@ -980,19 +992,26 @@ router.post('/geo/crawl/start', (req, res) => {
 router.get('/db-stats', (req, res) => {
   try {
     const stats = {
-      profiles: req.db.prepare('SELECT COUNT(*) as count FROM profiles').get()?.count || 0,
-      profile_sections: req.db.prepare('SELECT COUNT(*) as count FROM profile_sections').get()?.count || 0,
-      funding_opportunities: req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get()?.count || 0,
-      grants: req.db.prepare('SELECT COUNT(*) as count FROM grants').get()?.count || 0,
-      organizations: req.db.prepare('SELECT COUNT(*) as count FROM organizations').get()?.count || 0,
+      profiles: 0,
+      profile_sections: 0,
+      funding_opportunities: 0,
+      grants: 0,
+      organizations: 0,
     };
 
-    const sampleOpps = req.db.prepare(`
+    // NOTE: keep this endpoint sync-safe by using awaits (works for both sqlite + postgres wrapper).
+    stats.profiles = Number((await req.db.prepare('SELECT COUNT(*) as count FROM profiles').get())?.count || 0);
+    stats.profile_sections = Number((await req.db.prepare('SELECT COUNT(*) as count FROM profile_sections').get())?.count || 0);
+    stats.funding_opportunities = Number((await req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get())?.count || 0);
+    stats.grants = Number((await req.db.prepare('SELECT COUNT(*) as count FROM grants').get())?.count || 0);
+    stats.organizations = Number((await req.db.prepare('SELECT COUNT(*) as count FROM organizations').get())?.count || 0);
+
+    const sampleOpps = await req.db.prepare(`
       SELECT title, keywords, categories 
       FROM funding_opportunities 
-      WHERE is_active = 1 
+      WHERE is_active = ? 
       LIMIT 5
-    `).all();
+    `).all(true);
 
     res.json({ success: true, stats, sample_opportunities: sampleOpps });
   } catch (error) {
@@ -1151,107 +1170,108 @@ router.post('/seed-baseline-profiles', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Seed file missing profiles/sections arrays' });
     }
 
-    const before = req.db.prepare('SELECT COUNT(*) as count FROM profiles').get()?.count || 0;
+    const before = Number((await req.db.prepare('SELECT COUNT(*) as count FROM profiles').get())?.count || 0);
 
-    const upsertProfile = req.db.prepare(`
-      INSERT INTO profiles (id, primary_type, display_name, status, tags, avatar_url, organization_id, updated_at)
-      VALUES (@id, @primary_type, @display_name, @status, @tags, @avatar_url, @organization_id, CURRENT_TIMESTAMP)
-      ON CONFLICT(id) DO UPDATE SET
-        primary_type = excluded.primary_type,
-        display_name = excluded.display_name,
-        status = excluded.status,
-        tags = excluded.tags,
-        avatar_url = excluded.avatar_url,
-        organization_id = excluded.organization_id,
-        updated_at = CURRENT_TIMESTAMP
-    `);
+    await req.db.withTransaction(async (tx) => {
+      const upsertProfile = tx.prepare(`
+        INSERT INTO profiles (id, primary_type, display_name, status, tags, avatar_url, organization_id, updated_at)
+        VALUES (@id, @primary_type, @display_name, @status, @tags, @avatar_url, @organization_id, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO UPDATE SET
+          primary_type = excluded.primary_type,
+          display_name = excluded.display_name,
+          status = excluded.status,
+          tags = excluded.tags,
+          avatar_url = excluded.avatar_url,
+          organization_id = excluded.organization_id,
+          updated_at = CURRENT_TIMESTAMP
+      `);
 
-    const upsertSection = req.db.prepare(`
-      INSERT INTO profile_sections (profile_id, section_key, data, updated_by, updated_at)
-      VALUES (@profile_id, @section_key, @data, 'system-seed', CURRENT_TIMESTAMP)
-      ON CONFLICT(profile_id, section_key) DO UPDATE SET
-        data = excluded.data,
-        updated_by = excluded.updated_by,
-        updated_at = CURRENT_TIMESTAMP
-    `);
+      const upsertSection = tx.prepare(`
+        INSERT INTO profile_sections (profile_id, section_key, data, updated_by, updated_at)
+        VALUES (@profile_id, @section_key, @data, 'system-seed', CURRENT_TIMESTAMP)
+        ON CONFLICT(profile_id, section_key) DO UPDATE SET
+          data = excluded.data,
+          updated_by = excluded.updated_by,
+          updated_at = CURRENT_TIMESTAMP
+      `);
 
-    // Prepare organization upsert if organizations exist in payload
-    // Note: only insert core fields that exist in schema
-    const upsertOrg = req.db.prepare(`
-      INSERT INTO organizations (id, name, email, phone, applicant_type, created_at, updated_at)
-      VALUES (@id, @name, @email, @phone, @applicant_type, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      ON CONFLICT(id) DO UPDATE SET
-        name = excluded.name,
-        email = excluded.email,
-        phone = excluded.phone,
-        applicant_type = excluded.applicant_type,
-        updated_at = CURRENT_TIMESTAMP
-    `);
+      // Prepare organization upsert if organizations exist in payload
+      // Note: only insert core fields that exist in schema
+      const upsertOrg = tx.prepare(`
+        INSERT INTO organizations (id, name, email, phone, applicant_type, created_at, updated_at)
+        VALUES (@id, @name, @email, @phone, @applicant_type, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO UPDATE SET
+          name = excluded.name,
+          email = excluded.email,
+          phone = excluded.phone,
+          applicant_type = excluded.applicant_type,
+          updated_at = CURRENT_TIMESTAMP
+      `);
 
-    const upsertProfileOrg = req.db.prepare(`
-      INSERT OR IGNORE INTO profile_organizations (profile_id, organization_id)
-      VALUES (?, ?)
-    `);
+      const upsertProfileOrg = tx.prepare(`
+        INSERT INTO profile_organizations (profile_id, organization_id)
+        VALUES (?, ?)
+        ON CONFLICT DO NOTHING
+      `);
 
-    // Prepare funding opportunities upsert
-    const upsertOpp = req.db.prepare(`
-      INSERT INTO funding_opportunities (
-        id, title, sponsor, description, source, source_id, source_url, 
-        application_url, deadline, amount_min, amount_max, amount_description,
-        type, categories, keywords, state, is_national, requires_501c3, is_active
-      ) VALUES (
-        @id, @title, @sponsor, @description, @source, @source_id, @source_url,
-        @application_url, @deadline, @amount_min, @amount_max, @amount_description,
-        @type, @categories, @keywords, @state, @is_national, @requires_501c3, @is_active
-      ) ON CONFLICT(id) DO UPDATE SET
-        title = excluded.title,
-        sponsor = excluded.sponsor,
-        description = excluded.description,
-        is_active = excluded.is_active,
-        updated_at = CURRENT_TIMESTAMP
-    `);
+      // Prepare funding opportunities upsert
+      const upsertOpp = tx.prepare(`
+        INSERT INTO funding_opportunities (
+          id, title, sponsor, description, source, source_id, source_url,
+          application_url, deadline, amount_min, amount_max, amount_description,
+          type, categories, keywords, state, is_national, requires_501c3, is_active
+        ) VALUES (
+          @id, @title, @sponsor, @description, @source, @source_id, @source_url,
+          @application_url, @deadline, @amount_min, @amount_max, @amount_description,
+          @type, @categories, @keywords, @state, @is_national, @requires_501c3, @is_active
+        ) ON CONFLICT(id) DO UPDATE SET
+          title = excluded.title,
+          sponsor = excluded.sponsor,
+          description = excluded.description,
+          is_active = excluded.is_active,
+          updated_at = CURRENT_TIMESTAMP
+      `);
 
-    // Prepare grants upsert
-    const upsertGrant = req.db.prepare(`
-      INSERT INTO grants (
-        id, organization_id, funding_opportunity_id, title, funder,
-        status, match_score, match_reasons, deadline, amount_requested
-      ) VALUES (
-        @id, @organization_id, @funding_opportunity_id, @title, @funder,
-        @status, @match_score, @match_reasons, @deadline, @amount_requested
-      ) ON CONFLICT(id) DO UPDATE SET
-        title = excluded.title,
-        status = excluded.status,
-        match_score = excluded.match_score,
-        updated_at = CURRENT_TIMESTAMP
-    `);
+      // Prepare grants upsert
+      const upsertGrant = tx.prepare(`
+        INSERT INTO grants (
+          id, organization_id, funding_opportunity_id, title, funder,
+          status, match_score, match_reasons, deadline, amount_requested
+        ) VALUES (
+          @id, @organization_id, @funding_opportunity_id, @title, @funder,
+          @status, @match_score, @match_reasons, @deadline, @amount_requested
+        ) ON CONFLICT(id) DO UPDATE SET
+          title = excluded.title,
+          status = excluded.status,
+          match_score = excluded.match_score,
+          updated_at = CURRENT_TIMESTAMP
+      `);
 
-    const tx = req.db.transaction(() => {
       // 1. Seed organizations first (if present)
       // Allowed applicant_types per production schema CHECK constraint
       const validApplicantTypes = ['individual_need', 'family', 'organization', 'nonprofit', 'small_business', 'student', 'college_student', 'high_school_student', 'medical_assistance', 'government', 'other'];
       
       if (Array.isArray(payload.organizations)) {
-        payload.organizations.forEach((org) => {
+        for (const org of payload.organizations) {
           // Map 'individual' to 'individual_need' for production schema compatibility
           let applicantType = org.applicant_type ?? 'individual_need';
           if (!validApplicantTypes.includes(applicantType)) {
             applicantType = 'individual_need';
           }
-          upsertOrg.run({
+          await upsertOrg.run({
             id: org.id,
             name: org.name,
             email: org.email ?? null,
             phone: org.phone ?? null,
             applicant_type: applicantType,
           });
-        });
+        }
       }
 
       // 2. Seed funding opportunities (if present)
       if (Array.isArray(payload.funding_opportunities)) {
-        payload.funding_opportunities.forEach((opp) => {
-          upsertOpp.run({
+        for (const opp of payload.funding_opportunities) {
+          await upsertOpp.run({
             id: opp.id,
             title: opp.title,
             sponsor: opp.sponsor ?? null,
@@ -1268,16 +1288,16 @@ router.post('/seed-baseline-profiles', async (req, res) => {
             categories: typeof opp.categories === 'string' ? opp.categories : JSON.stringify(opp.categories ?? []),
             keywords: typeof opp.keywords === 'string' ? opp.keywords : JSON.stringify(opp.keywords ?? []),
             state: opp.state ?? null,
-            is_national: opp.is_national ? 1 : 0,
-            requires_501c3: opp.requires_501c3 ? 1 : 0,
-            is_active: opp.is_active !== false ? 1 : 0,
+            is_national: Boolean(opp.is_national),
+            requires_501c3: Boolean(opp.requires_501c3),
+            is_active: opp.is_active !== false,
           });
-        });
+        }
       }
 
       // 3. Seed profiles
-      payload.profiles.forEach((profile) => {
-        upsertProfile.run({
+      for (const profile of payload.profiles) {
+        await upsertProfile.run({
           id: profile.id,
           primary_type: profile.primary_type ?? null,
           display_name: profile.display_name,
@@ -1286,31 +1306,31 @@ router.post('/seed-baseline-profiles', async (req, res) => {
           avatar_url: profile.avatar_url ?? null,
           organization_id: profile.organization_id ?? null,
         });
-        linkProfileToAdmin(req.db, profile.id);
-      });
+        await linkProfileToAdmin(req.db, profile.id);
+      }
 
       // 4. Seed sections
-      payload.sections.forEach((section) => {
-        if (!section?.profile_id || !section?.section_key) return;
+      for (const section of payload.sections) {
+        if (!section?.profile_id || !section?.section_key) continue;
         const dataStr = typeof section.data === 'string' ? section.data : JSON.stringify(section.data ?? {});
-        upsertSection.run({
+        await upsertSection.run({
           profile_id: section.profile_id,
           section_key: section.section_key,
           data: dataStr,
         });
-      });
+      }
 
       // 5. Seed profile-organization links
       if (Array.isArray(payload.profile_organizations)) {
-        payload.profile_organizations.forEach((link) => {
-          upsertProfileOrg.run(link.profile_id, link.organization_id);
-        });
+        for (const link of payload.profile_organizations) {
+          await upsertProfileOrg.run(link.profile_id, link.organization_id);
+        }
       }
 
       // 6. Seed grants
       if (Array.isArray(payload.grants)) {
-        payload.grants.forEach((grant) => {
-          upsertGrant.run({
+        for (const grant of payload.grants) {
+          await upsertGrant.run({
             id: grant.id,
             organization_id: grant.organization_id,
             funding_opportunity_id: grant.funding_opportunity_id,
@@ -1322,12 +1342,12 @@ router.post('/seed-baseline-profiles', async (req, res) => {
             deadline: grant.deadline ?? null,
             amount_requested: grant.amount_requested ?? null,
           });
-        });
+        }
       }
 
       // 7. Seed documents (if present)
       if (Array.isArray(payload.documents)) {
-        const upsertDoc = req.db.prepare(`
+        const upsertDoc = tx.prepare(`
           INSERT INTO documents (id, profile_id, name, type, file_url, mime_type, extracted_text, processing_status, status, notes)
           VALUES (@id, @profile_id, @name, @type, @file_url, @mime_type, @extracted_text, @processing_status, @status, @notes)
           ON CONFLICT(id) DO UPDATE SET
@@ -1338,8 +1358,8 @@ router.post('/seed-baseline-profiles', async (req, res) => {
             updated_at = CURRENT_TIMESTAMP
         `);
         
-        payload.documents.forEach((doc) => {
-          upsertDoc.run({
+        for (const doc of payload.documents) {
+          await upsertDoc.run({
             id: doc.id,
             profile_id: doc.profile_id,
             name: doc.name,
@@ -1351,31 +1371,30 @@ router.post('/seed-baseline-profiles', async (req, res) => {
             status: doc.status ?? 'active',
             notes: doc.notes ?? null,
           });
-        });
+        }
       }
 
       // 8. Seed profile-document links (if present)
       if (Array.isArray(payload.profile_documents)) {
-        const upsertProfileDoc = req.db.prepare(`
-          INSERT OR IGNORE INTO profile_documents (profile_id, document_id)
+        const upsertProfileDoc = tx.prepare(`
+          INSERT INTO profile_documents (profile_id, document_id)
           VALUES (?, ?)
+          ON CONFLICT DO NOTHING
         `);
-        
-        payload.profile_documents.forEach((link) => {
-          upsertProfileDoc.run(link.profile_id, link.document_id);
-        });
+
+        for (const link of payload.profile_documents) {
+          await upsertProfileDoc.run(link.profile_id, link.document_id);
+        }
       }
     });
 
-    tx();
-
-    const after = req.db.prepare('SELECT COUNT(*) as count FROM profiles').get()?.count || 0;
-    const sectionsCount = req.db.prepare('SELECT COUNT(*) as count FROM profile_sections').get()?.count || 0;
-    const orgsCount = req.db.prepare('SELECT COUNT(*) as count FROM organizations').get()?.count || 0;
-    const grantsCount = req.db.prepare('SELECT COUNT(*) as count FROM grants').get()?.count || 0;
-    const oppsCount = req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get()?.count || 0;
-    const docsCount = req.db.prepare('SELECT COUNT(*) as count FROM documents').get()?.count || 0;
-    const profileDocsCount = req.db.prepare('SELECT COUNT(*) as count FROM profile_documents').get()?.count || 0;
+    const after = Number((await req.db.prepare('SELECT COUNT(*) as count FROM profiles').get())?.count || 0);
+    const sectionsCount = Number((await req.db.prepare('SELECT COUNT(*) as count FROM profile_sections').get())?.count || 0);
+    const orgsCount = Number((await req.db.prepare('SELECT COUNT(*) as count FROM organizations').get())?.count || 0);
+    const grantsCount = Number((await req.db.prepare('SELECT COUNT(*) as count FROM grants').get())?.count || 0);
+    const oppsCount = Number((await req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get())?.count || 0);
+    const docsCount = Number((await req.db.prepare('SELECT COUNT(*) as count FROM documents').get())?.count || 0);
+    const profileDocsCount = Number((await req.db.prepare('SELECT COUNT(*) as count FROM profile_documents').get())?.count || 0);
 
     res.json({
       success: true,
@@ -1407,13 +1426,13 @@ router.post('/seed-baseline-profiles', async (req, res) => {
 router.post('/seed-profile-grants', async (req, res) => {
   try {
     const { excludeProfiles = [] } = req.body || {};
-    const profiles = req.db.prepare('SELECT * FROM profiles WHERE status = ?').all('active');
-    const opportunities = req.db.prepare(`
+    const profiles = await req.db.prepare('SELECT * FROM profiles WHERE status = ?').all('active');
+    const opportunities = await req.db.prepare(`
       SELECT * FROM funding_opportunities 
-      WHERE is_active = 1 
-      AND (requires_match = 0 OR requires_match IS NULL)
+      WHERE is_active = ?
+      AND (requires_match = FALSE OR requires_match IS NULL)
       LIMIT 500
-    `).all();
+    `).all(true);
 
     let totalGrantsAdded = 0;
     const results = [];
@@ -1426,7 +1445,9 @@ router.post('/seed-profile-grants', async (req, res) => {
       }
 
       const sections = {};
-      const sectionRows = req.db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profile.id);
+      const sectionRows = await req.db
+        .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
+        .all(profile.id);
       sectionRows.forEach(row => {
         try { sections[row.section_key] = JSON.parse(row.data || '{}'); } catch (e) { sections[row.section_key] = {}; }
       });
@@ -1444,16 +1465,22 @@ router.post('/seed-profile-grants', async (req, res) => {
       let orgId = profile.organization_id;
       if (!orgId) {
         orgId = crypto.randomUUID();
-        req.db.prepare(`INSERT INTO organizations (id, name, applicant_type, created_at, updated_at) VALUES (?, ?, 'individual_need', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).run(orgId, profile.display_name || 'My Organization');
-        req.db.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile.id);
+        await req.db
+          .prepare(
+            `INSERT INTO organizations (id, name, applicant_type, created_at, updated_at) VALUES (?, ?, 'individual_need', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+          )
+          .run(orgId, profile.display_name || 'My Organization');
+        await req.db.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile.id);
       }
 
       let added = 0;
       for (const { opp, score, matchedFields } of topMatches) {
-        const existing = req.db.prepare('SELECT id FROM grants WHERE organization_id = ? AND (funding_opportunity_id = ? OR title = ?)').get(orgId, opp.id, opp.title);
+        const existing = await req.db
+          .prepare('SELECT id FROM grants WHERE organization_id = ? AND (funding_opportunity_id = ? OR title = ?)')
+          .get(orgId, opp.id, opp.title);
         if (!existing) {
           try {
-            req.db.prepare(`
+            await req.db.prepare(`
               INSERT INTO grants (id, organization_id, funding_opportunity_id, title, funder, deadline, status, match_score, match_reasons, application_url, created_at, updated_at)
               VALUES (?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             `).run(crypto.randomUUID(), orgId, opp.id, opp.title, opp.sponsor, opp.deadline, score, JSON.stringify((matchedFields || []).slice(0, 10)), opp.application_url);
@@ -1596,10 +1623,10 @@ router.post('/national-crawl/start', async (req, res) => {
       min_sources_per_zip: min_sources_per_zip || 3
     }
     
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO crawler_jobs (
         id, type, status, parameters, requested_by, created_at
-      ) VALUES (?, ?, ?, ?, ?, datetime('now'))
+      ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `).run(
       jobId,
       'national_zip_scan',
@@ -1624,10 +1651,10 @@ router.post('/national-crawl/start', async (req, res) => {
         nationalCrawlJob.result = result
         
         // Update job record
-        db.prepare(`
+        await db.prepare(`
           UPDATE crawler_jobs 
           SET status = 'completed', 
-              completed_at = datetime('now'),
+              completed_at = CURRENT_TIMESTAMP,
               result_count = ?,
               result_meta = ?
           WHERE id = ?
@@ -1638,10 +1665,10 @@ router.post('/national-crawl/start', async (req, res) => {
         nationalCrawlJob.error = error.message
         
         // Update job record
-        db.prepare(`
+        await db.prepare(`
           UPDATE crawler_jobs 
           SET status = 'failed', 
-              completed_at = datetime('now'),
+              completed_at = CURRENT_TIMESTAMP,
               error = ?
           WHERE id = ?
         `).run(error.message, jobId)
@@ -1676,10 +1703,10 @@ router.post('/national-crawl/stop', async (req, res) => {
     nationalCrawlJob.cancelled_at = new Date().toISOString()
     
     // Update job record
-    req.db.prepare(`
+    await req.db.prepare(`
       UPDATE crawler_jobs 
       SET status = 'cancelled', 
-          completed_at = datetime('now')
+          completed_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(nationalCrawlJob.id)
     
@@ -1705,7 +1732,7 @@ router.get('/national-crawl/status', async (req, res) => {
     // Get current job status if running
     if (nationalCrawlJob) {
       // Get progress from database
-      const progress = db.prepare(`
+      const progress = await db.prepare(`
         SELECT 
           COUNT(*) as total_zips,
           SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_zips,
