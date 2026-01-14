@@ -128,9 +128,9 @@ router.get('/status', adminAuth, async (_req, res) => {
   })
 })
 
-router.get('/sessions', (req, res) => {
+router.get('/sessions', async (req, res) => {
   try {
-    const sessions = listSessions(req.db, req.user, {
+    const sessions = await listSessions(req.db, req.user, {
       limit: req.query.limit,
     })
     res.json({ sessions })
@@ -139,9 +139,9 @@ router.get('/sessions', (req, res) => {
   }
 })
 
-router.post('/sessions', (req, res) => {
+router.post('/sessions', async (req, res) => {
   try {
-    const session = createSession(req.db, req.user, {
+    const session = await createSession(req.db, req.user, {
       profileId: req.body?.profile_id,
       title: req.body?.title,
       metadata: req.body?.metadata,
@@ -152,9 +152,9 @@ router.post('/sessions', (req, res) => {
   }
 })
 
-router.get('/sessions/:sessionId', (req, res) => {
+router.get('/sessions/:sessionId', async (req, res) => {
   try {
-    const session = getSession(req.db, req.user, req.params.sessionId)
+    const session = await getSession(req.db, req.user, req.params.sessionId)
     res.json(session)
   } catch (error) {
     handleError(res, error)

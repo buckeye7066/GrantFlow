@@ -161,13 +161,13 @@ function normalizeDate(value) {
   throw error
 }
 
-export function createSession(db, user, { profileId, title, metadata } = {}) {
+export async function createSession(db, user, { profileId, title, metadata } = {}) {
   assertAuthenticated(user)
   const normalizedProfileId = coerceProfileId(profileId ?? user.profileId ?? null)
   assertProfileAccess(user, normalizedProfileId)
 
   const id = randomUUID()
-  const info = db
+  const info = await db
     .prepare(
       `
         INSERT INTO anya_sessions (id, user_id, profile_id, status, title, metadata)
@@ -186,12 +186,12 @@ export function createSession(db, user, { profileId, title, metadata } = {}) {
     throw new Error('Unable to create session')
   }
 
-  return getSession(db, user, id)
+  return await getSession(db, user, id)
 }
 
-export function getSession(db, user, sessionId) {
+export async function getSession(db, user, sessionId) {
   assertAuthenticated(user)
-  const row = db
+  const row = await db
     .prepare(
       `
         SELECT *
@@ -205,13 +205,13 @@ export function getSession(db, user, sessionId) {
   return mapSession(row)
 }
 
-export function listSessions(db, user, { limit = 20 } = {}) {
+export async function listSessions(db, user, { limit = 20 } = {}) {
   assertAuthenticated(user)
   const safeLimit = Math.max(1, Math.min(Number(limit) || 20, 100))
 
   let rows = []
   if (user.role === 'admin') {
-    rows = db
+    rows = await db
       .prepare(
         `
           SELECT *
@@ -222,7 +222,7 @@ export function listSessions(db, user, { limit = 20 } = {}) {
       )
       .all(safeLimit)
   } else if (user.userId) {
-    rows = db
+    rows = await db
       .prepare(
         `
           SELECT *
@@ -235,7 +235,7 @@ export function listSessions(db, user, { limit = 20 } = {}) {
       )
       .all(user.userId, user.profileId ?? null, safeLimit)
   } else {
-    rows = db
+    rows = await db
       .prepare(
         `
           SELECT *
