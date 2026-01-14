@@ -27,7 +27,7 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete }) {
     profile.display_name ||
     profile.organization_name ||
     profile.name ||
-    (profile.id ? `Profile ${String(profile.id).slice(0, 6)}` : "Untitled profile");
+    "Unnamed profile";
 
   const monthlyRate = billing.custom_monthly_cents ?? tier.base_monthly_cents ?? 0;
   const hourlyRate = billing.custom_hourly_cents ?? tier.hourly_rate_cents ?? 0;

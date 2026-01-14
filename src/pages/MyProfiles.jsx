@@ -196,7 +196,7 @@ export default function MyProfiles() {
               <AlertDialogDescription>
                 {DELETE_CONFIRMATION_MESSAGE.replace(
                   'this profile',
-                  `the profile "${profileToDelete?.display_name || profileToDelete?.organization_name || profileToDelete?.name || 'Untitled profile'}"`,
+                  `the profile "${profileToDelete?.display_name || profileToDelete?.organization_name || profileToDelete?.name || 'Unnamed profile'}"`,
                 )}
               </AlertDialogDescription>
             </AlertDialogHeader>
