@@ -32,6 +32,7 @@ export default function EmailSignInForm({ onComplete }) {
   const [step, setStep] = useState('email')
   const [email, setEmail] = useState('')
   const [status, setStatus] = useState({ type: 'idle', message: null, previewCode: null, notice: null })
+  const [verificationToken, setVerificationToken] = useState(null)
   const [resendCountdown, setResendCountdown] = useState(0)
   const [isLoading, setIsLoading] = useState(false)
   const [copyFeedback, setCopyFeedback] = useState(null)
@@ -58,6 +59,7 @@ export default function EmailSignInForm({ onComplete }) {
       setStatus({ type: 'idle', message: null, previewCode: null, notice: null })
       const response = await authStore.startEmailSignIn(values.email)
       setEmail(values.email)
+      setVerificationToken(response?.verification_token ?? null)
       setStep('code')
       setResendCountdown(45)
       setCopyFeedback(null)
@@ -105,7 +107,7 @@ export default function EmailSignInForm({ onComplete }) {
     try {
       setIsLoading(true)
       setStatus({ type: 'idle', message: null })
-      const response = await authStore.verifyEmailCode({ email, code: values.code })
+      const response = await authStore.verifyEmailCode({ email, code: values.code, verificationToken })
       if (typeof onComplete === 'function') {
         onComplete(response)
       }
