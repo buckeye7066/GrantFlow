@@ -1,5 +1,5 @@
 import express from 'express'
-import { createOpenAIClient } from '../utils/openaiClient.js'
+import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
 import multer from 'multer'
 import fs from 'fs'
 import { dirname, join } from 'path'
@@ -753,28 +753,27 @@ Return ONLY the field value content, no JSON wrapper or explanations.`
     
     try {
       const completion = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3,
         max_tokens: 400,
       })
       suggestion = extractCompletionText(completion).trim()
     } catch (error) {
-      // Use mock response if OpenAI fails
-      console.log('[Field AI] Using mock response due to:', error.message)
-      const mockResponses = {
-        mission: 'To empower underserved communities through comprehensive support services.',
-        funding_amount_needed: '$50,000 for program expansion and operational support',
-        timeline: '12-month implementation period with quarterly milestones',
-        default: `Sample content for ${fieldLabel}. This would be customized based on your profile.`
-      }
-      suggestion = mockResponses[fieldName] || mockResponses.default
+      const summary = summarizeOpenAIError(error)
+      console.warn('[Field AI] OpenAI request failed:', summary?.error || error?.message || error)
+      return res.status(summary?.status ? Number(summary.status) : 503).json({
+        error: 'AI unavailable',
+        message: summary?.error || 'OpenAI request failed',
+        status: summary?.status || 503,
+        hint: 'Verify OPENAI_API_KEY (or runtime secret) and model access, then retry.',
+      })
     }
     
     res.json({
       field: fieldName,
       suggestion,
-      usage: null // No usage data for mock responses
+      usage: null
     })
   } catch (error) {
     console.error('Field AI suggestion error:', error)
