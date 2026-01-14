@@ -315,6 +315,21 @@ export default function AdminDiagnostics() {
     }
   };
 
+  const persistCurrentOpenAIKey = async () => {
+    try {
+      setOpenaiKeyLoading(true);
+      setOpenaiKeyError(null);
+      setOpenaiKeyResult(null);
+      const data = await apiFetch.post('/api/admin/openai/persist-current', {});
+      setOpenaiKeyResult({ mode: 'persist-current', data });
+      await loadDiagnostics();
+    } catch (err) {
+      setOpenaiKeyError(err?.message || 'Failed to persist key');
+    } finally {
+      setOpenaiKeyLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -603,6 +618,14 @@ export default function AdminDiagnostics() {
                     disabled={openaiKeyLoading || !openaiKey.trim()}
                   >
                     {openaiKeyLoading ? 'Working…' : 'Apply to server (in-memory)'}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={persistCurrentOpenAIKey}
+                    disabled={openaiKeyLoading}
+                  >
+                    {openaiKeyLoading ? 'Working…' : 'Persist current key (tonight)'}
                   </Button>
                 </div>
 
