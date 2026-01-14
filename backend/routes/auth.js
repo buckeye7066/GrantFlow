@@ -1570,19 +1570,6 @@ router.post('/email/verify', async (req, res) => {
       userAgent: req.headers['user-agent'],
     },
   }).catch(() => {})
-  // Admin notice on successful sign-in (post-verify)
-  sendAuthAttemptNotification({
-    event: 'sign_in',
-    identifier: normalized,
-    success: true,
-    context: {
-      method: 'phone',
-      userId: user.id,
-      profileId: activeProfileId,
-      ip: req.ip,
-      userAgent: req.headers['user-agent'],
-    },
-  }).catch(() => {})
 
   return res.json(response)
 })
