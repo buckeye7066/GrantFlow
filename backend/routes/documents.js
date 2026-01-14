@@ -176,7 +176,7 @@ async function downloadRemoteFileToUploads({ url, req }) {
   }
 }
 
-function buildAccessContext(req) {
+async function buildAccessContext(req) {
   const user = req.user ?? { role: 'guest' };
   const isAdmin = user.role === 'admin';
   const accessibleProfiles = new Set();
@@ -186,7 +186,7 @@ function buildAccessContext(req) {
       accessibleProfiles.add(user.profileId);
     }
     if (user.userId) {
-      const rows = req.db
+      const rows = await req.db
         .prepare('SELECT id FROM profiles WHERE user_id = ?')
         .all(user.userId);
       rows.forEach((row) => accessibleProfiles.add(row.id));
@@ -242,9 +242,9 @@ function ensureProfileAccess(res, context, profileId) {
 }
 
 // GET /api/documents
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
-    const context = buildAccessContext(req);
+    const context = await buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) return;
 
     const {
@@ -287,19 +287,19 @@ router.get('/', (req, res) => {
     if (filters.length > 0) query += ` WHERE ${filters.join(' AND ')}`;
     query += ' ORDER BY created_at DESC';
 
-    res.json(req.db.prepare(query).all(...params));
+    res.json(await req.db.prepare(query).all(...params));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
 // GET /api/documents/:id
-router.get('/:id', (req, res) => {
+router.get('/:id', async (req, res) => {
   try {
-    const context = buildAccessContext(req);
+    const context = await buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) return;
 
-    const doc = req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
+    const doc = await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
     if (!ensureDocumentAccess(res, context, doc)) return;
     
     res.json(doc);
@@ -309,9 +309,9 @@ router.get('/:id', (req, res) => {
 });
 
 // POST /api/documents/upload (Base44 Compatibility)
-router.post('/upload', uploadLimiter, runUploadSingle('file'), (req, res) => {
+router.post('/upload', uploadLimiter, runUploadSingle('file'), async (req, res) => {
   try {
-    const context = buildAccessContext(req);
+    const context = await buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) {
       if (req.file) {
         try {
@@ -359,7 +359,7 @@ router.post('/signed-url', (req, res) => {
 // POST /api/documents/ingest (Universal Ingest)
 router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, res) => {
   try {
-    const context = buildAccessContext(req);
+    const context = await buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) {
       if (req.file) {
         try {
@@ -399,7 +399,7 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
     let resolvedOrganizationId = rawOrganizationId ?? null;
 
     if (profileId) {
-      const profile = req.db.prepare('SELECT id, organization_id FROM profiles WHERE id = ?').get(profileId);
+      const profile = await req.db.prepare('SELECT id, organization_id FROM profiles WHERE id = ?').get(profileId);
       if (!profile) return res.status(404).json({ error: 'Profile not found' });
       if (!context.isAdmin && !context.accessibleProfiles.has(profile.id)) {
         return res.status(403).json({ error: 'Not authorized for this profile' });
@@ -429,7 +429,7 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
     const processingStatus = skipParsing || extractedText ? 'completed' : 'pending';
 
     // Fixed SQL parameters
-    req.db.prepare(`
+    await req.db.prepare(`
       INSERT INTO documents (
         id, organization_id, grant_id, profile_id, name, type,
         file_url, file_path, file_size, mime_type, 
@@ -452,19 +452,30 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
     );
 
     if (profileId) {
-      req.db.prepare('INSERT OR IGNORE INTO profile_documents (profile_id, document_id) VALUES (?, ?)').run(profileId, docId);
-      linkProfileToAdmin(req.db, profileId);
+      await req.db
+        .prepare(
+          `
+            INSERT INTO profile_documents (profile_id, document_id)
+            VALUES (?, ?)
+            ON CONFLICT DO NOTHING
+          `,
+        )
+        .run(profileId, docId);
+      await linkProfileToAdmin(req.db, profileId);
     }
 
     if (!skipParsing) {
       const requestedBy = context.user?.profileId ?? context.user?.userId ?? 'system';
-      req.db.prepare(`
-        INSERT INTO crawler_jobs (type, status, profile_id, organization_id, parameters, requested_by)
-        VALUES ('document_ingest', 'queued', ?, ?, ?, ?)
-      `).run(profileId, resolvedOrganizationId, JSON.stringify({ document_id: docId, source }), requestedBy);
+      const jobId = crypto.randomUUID();
+      await req.db
+        .prepare(`
+          INSERT INTO crawler_jobs (id, type, status, profile_id, organization_id, parameters, requested_by)
+          VALUES (?, 'document_ingest', 'queued', ?, ?, ?, ?)
+        `)
+        .run(jobId, profileId, resolvedOrganizationId, JSON.stringify({ document_id: docId, source }), requestedBy);
       
       // Dispatch the job immediately
-      const parseJob = req.db.prepare('SELECT * FROM crawler_jobs WHERE rowid = last_insert_rowid()').get();
+      const parseJob = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId);
       if (parseJob) {
         dispatchCrawlerJob({
           db: req.db,
@@ -495,12 +506,12 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
 });
 
 // PUT /api/documents/:id
-router.put('/:id', (req, res) => {
+router.put('/:id', async (req, res) => {
   try {
-    const context = buildAccessContext(req);
+    const context = await buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) return;
 
-    const existing = req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
+    const existing = await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
     if (!ensureDocumentAccess(res, context, existing)) return;
 
     const fields = Object.keys(req.body ?? {});
@@ -508,24 +519,24 @@ router.put('/:id', (req, res) => {
 
     const values = Object.values(req.body);
     const setClause = fields.map(f => `${f} = ?`).join(', ');
-    req.db.prepare(`UPDATE documents SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...values, req.params.id);
-    res.json(req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id));
+    await req.db.prepare(`UPDATE documents SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...values, req.params.id);
+    res.json(await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
 // DELETE /api/documents/:id
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   try {
-    const context = buildAccessContext(req);
+    const context = await buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) return;
 
-    const existing = req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
+    const existing = await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
     if (!ensureDocumentAccess(res, context, existing)) return;
 
-    req.db.prepare('DELETE FROM profile_documents WHERE document_id = ?').run(req.params.id);
-    req.db.prepare('DELETE FROM documents WHERE id = ?').run(req.params.id);
+    await req.db.prepare('DELETE FROM profile_documents WHERE document_id = ?').run(req.params.id);
+    await req.db.prepare('DELETE FROM documents WHERE id = ?').run(req.params.id);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -534,19 +545,19 @@ router.delete('/:id', (req, res) => {
 
 // POST /api/documents/:id/parse
 // Queue AI parsing for a single document (creates a document_ingest crawler job).
-router.post('/:id/parse', (req, res) => {
+router.post('/:id/parse', async (req, res) => {
   try {
-    const context = buildAccessContext(req);
+    const context = await buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) return;
 
-    const document = req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
+    const document = await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
     if (!ensureDocumentAccess(res, context, document)) return;
 
     const profileId = normalizeProfileId(document.profile_id);
     const requestedBy = context.user?.profileId ?? context.user?.userId ?? 'system';
 
     // De-dupe: if there's already a queued/running ingest job for this document, don't create another.
-    const existing = req.db
+    const existing = await req.db
       .prepare(
         `
           SELECT id, status
@@ -561,14 +572,16 @@ router.post('/:id/parse', (req, res) => {
       .get(`%"document_id":"${document.id}"%`);
 
     if (!existing) {
-      req.db
+      const jobId = crypto.randomUUID();
+      await req.db
         .prepare(
           `
-            INSERT INTO crawler_jobs (type, status, profile_id, organization_id, parameters, requested_by)
-            VALUES ('document_ingest', 'queued', ?, ?, ?, ?)
+            INSERT INTO crawler_jobs (id, type, status, profile_id, organization_id, parameters, requested_by)
+            VALUES (?, 'document_ingest', 'queued', ?, ?, ?, ?)
           `,
         )
         .run(
+          jobId,
           profileId,
           document.organization_id ?? null,
           JSON.stringify({ document_id: document.id, source: 'manual_parse' }),
@@ -576,7 +589,7 @@ router.post('/:id/parse', (req, res) => {
         );
 
       // Dispatch the job immediately
-      const parseJob = req.db.prepare('SELECT * FROM crawler_jobs WHERE rowid = last_insert_rowid()').get();
+      const parseJob = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId);
       if (parseJob) {
         dispatchCrawlerJob({
           db: req.db,
@@ -587,7 +600,7 @@ router.post('/:id/parse', (req, res) => {
       }
 
       // Mark document as pending/processing to surface UI state change immediately.
-      req.db
+      await req.db
         .prepare(
           `
             UPDATE documents
@@ -609,9 +622,9 @@ router.post('/:id/parse', (req, res) => {
 
 // POST /api/documents/parse-all
 // Queue parsing for recent documents on a profile.
-router.post('/parse-all', (req, res) => {
+router.post('/parse-all', async (req, res) => {
   try {
-    const context = buildAccessContext(req);
+    const context = await buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) return;
 
     const profileId = normalizeProfileId(req.body?.profile_id);
@@ -619,7 +632,7 @@ router.post('/parse-all', (req, res) => {
 
     const requestedBy = context.user?.profileId ?? context.user?.userId ?? 'system';
 
-    const docs = req.db
+    const docs = await req.db
       .prepare(
         `
           SELECT d.*
@@ -635,15 +648,15 @@ router.post('/parse-all', (req, res) => {
 
     const insertJob = req.db.prepare(
       `
-        INSERT INTO crawler_jobs (type, status, profile_id, organization_id, parameters, requested_by)
-        VALUES ('document_ingest', 'queued', ?, ?, ?, ?)
+        INSERT INTO crawler_jobs (id, type, status, profile_id, organization_id, parameters, requested_by)
+        VALUES (?, 'document_ingest', 'queued', ?, ?, ?, ?)
       `,
     );
 
     const jobsToDispatch = [];
     
     for (const doc of docs) {
-      const already = req.db
+      const already = await req.db
         .prepare(
           `
             SELECT 1
@@ -658,18 +671,16 @@ router.post('/parse-all', (req, res) => {
 
       if (already) continue;
 
-      insertJob.run(
+      const jobId = crypto.randomUUID();
+      await insertJob.run(
+        jobId,
         profileId,
         doc.organization_id ?? null,
         JSON.stringify({ document_id: doc.id, source: 'parse_all' }),
         requestedBy,
       );
       
-      // Get the newly created job
-      const newJob = req.db.prepare('SELECT * FROM crawler_jobs WHERE rowid = last_insert_rowid()').get();
-      if (newJob) {
-        jobsToDispatch.push(newJob.id);
-      }
+      jobsToDispatch.push(jobId);
       queued += 1;
     }
     

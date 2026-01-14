@@ -57,9 +57,9 @@ function validateFundingTerms(payload = {}) {
   );
 
   if (requiresMatch === null) {
-    result.requires_match = matchPercentage && matchPercentage > 0 ? 1 : 0;
+    result.requires_match = Boolean(matchPercentage && matchPercentage > 0);
   } else {
-    result.requires_match = requiresMatch ? 1 : 0;
+    result.requires_match = Boolean(requiresMatch);
   }
 
   if (matchPercentage !== null) {
@@ -68,11 +68,11 @@ function validateFundingTerms(payload = {}) {
     result.match_percentage = null;
   }
 
-  if (result.requires_match === 1 && result.match_percentage === null) {
+  if (result.requires_match === true && result.match_percentage === null) {
     throw new Error('Match percentage is required when "requires_match" is true');
   }
 
-  if (result.requires_match === 0 && result.match_percentage !== null && result.match_percentage > 0) {
+  if (result.requires_match === false && result.match_percentage !== null && result.match_percentage > 0) {
     throw new Error('Match percentage must be zero when "requires_match" is false');
   }
 
@@ -84,7 +84,7 @@ function deriveCompliance(opportunity) {
   const type = typeof opportunity.opportunity_type === 'string'
     ? opportunity.opportunity_type.trim().toLowerCase()
     : '';
-  const requiresMatch = Number(opportunity.requires_match) === 1;
+  const requiresMatch = normalizeBoolean(opportunity.requires_match) === true;
   const matchPercentage = coercePercentage(opportunity.match_percentage);
 
   if (type && LOAN_TYPES.includes(type)) {
@@ -120,13 +120,8 @@ function decorateOpportunity(row) {
   parsed.match_reasons = safeParseJSON(parsed.match_reasons, []);
 
   const requiresMatch = normalizeBoolean(parsed.requires_match);
-  if (requiresMatch !== null) {
-    parsed.requires_match = requiresMatch ? 1 : 0;
-  } else if (parsed.requires_match !== undefined && parsed.requires_match !== null) {
-    parsed.requires_match = Number(parsed.requires_match) === 1 ? 1 : 0;
-  } else {
-    parsed.requires_match = 0;
-  }
+  if (requiresMatch !== null) parsed.requires_match = requiresMatch;
+  else parsed.requires_match = false;
 
   const matchPercentage = coercePercentage(parsed.match_percentage);
   parsed.match_percentage = matchPercentage;
@@ -143,15 +138,28 @@ function applyComplianceFilters(compliance, conditions, params) {
   if (normalized === 'grant_only') {
     conditions.push('(opportunity_type IS NULL OR LOWER(opportunity_type) NOT IN (?, ?, ?))');
     params.push(...LOAN_TYPES);
-    // Explicitly allow NULL, 0, '0', false, 'false'
-    conditions.push("(requires_match IS NULL OR requires_match = 0 OR requires_match = '0' OR requires_match = 'false')");
-    conditions.push("(match_percentage IS NULL OR match_percentage = 0 OR match_percentage = '0')");
+
+    if (params.__dialect === 'postgres') {
+      conditions.push('(requires_match IS NULL OR requires_match = FALSE)');
+    } else {
+      // Explicitly allow NULL, 0, '0', false, 'false'
+      conditions.push("(requires_match IS NULL OR requires_match = 0 OR requires_match = '0' OR requires_match = 'false')");
+    }
+    if (params.__dialect === 'postgres') {
+      conditions.push('(match_percentage IS NULL OR match_percentage = 0)');
+    } else {
+      conditions.push("(match_percentage IS NULL OR match_percentage = 0 OR match_percentage = '0')");
+    }
   }
   return normalized;
 }
 
+function likeOperatorForDb(db) {
+  return db?.dialect === 'postgres' ? 'ILIKE' : 'LIKE';
+}
+
 // Search/list funding opportunities
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const {
       search,
@@ -169,21 +177,25 @@ router.get('/', (req, res) => {
     const parsedLimit = Number.parseInt(limit, 10) || 10000;
     const parsedOffset = Math.max(Number.parseInt(offset, 10) || 0, 0);
 
-    const baseConditions = ['is_active = 1'];
-    const baseParams = [];
+    const baseConditions = ['is_active = ?'];
+    const baseParams = [true];
 
+    // Pass dialect through params for applyComplianceFilters.
+    baseParams.__dialect = req.db?.dialect;
     applyComplianceFilters(compliance, baseConditions, baseParams);
 
     if (search) {
       const searchTerm = `%${search}%`;
-      baseConditions.push('(title LIKE ? OR sponsor LIKE ? OR description LIKE ?)');
+      const likeOp = likeOperatorForDb(req.db);
+      baseConditions.push(`(title ${likeOp} ? OR sponsor ${likeOp} ? OR description ${likeOp} ?)`);
       baseParams.push(searchTerm, searchTerm, searchTerm);
     }
 
     const normalizedState = state ? String(state).toUpperCase() : null;
 
     if (isNational === 'true') {
-      baseConditions.push('is_national = 1');
+      baseConditions.push('is_national = ?');
+      baseParams.push(true);
     }
 
     if (source) {
@@ -206,17 +218,26 @@ router.get('/', (req, res) => {
 
     if (normalizedState) {
       // Default behavior includes both state + national.
-      conditions.push('(state = ? OR is_national = 1)');
+      conditions.push('(state = ? OR is_national = ?)');
       filterParams.push(normalizedState);
+      filterParams.push(true);
     }
 
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    const orderClause = `
-      ORDER BY
-        CASE WHEN deadline IS NULL OR deadline = '' THEN 1 ELSE 0 END,
-        deadline ASC,
-        created_at DESC
-    `;
+    const orderClause =
+      req.db?.dialect === 'postgres'
+        ? `
+            ORDER BY
+              CASE WHEN deadline IS NULL THEN 1 ELSE 0 END,
+              deadline ASC,
+              created_at DESC
+          `
+        : `
+            ORDER BY
+              CASE WHEN deadline IS NULL OR deadline = '' THEN 1 ELSE 0 END,
+              deadline ASC,
+              created_at DESC
+          `;
 
     // If state-scoped and first page, guarantee >=3 national opportunities are included
     // (without changing total counts or hiding crawler failures).
@@ -235,12 +256,12 @@ router.get('/', (req, res) => {
             SELECT *
             FROM funding_opportunities
             ${commonWhere}
-              AND is_national = 1
+              AND is_national = ?
             ${orderClause}
             LIMIT ?
           `,
         )
-        .all(...baseParams, minNationalVisible);
+        .all(...baseParams, true, minNationalVisible);
 
       const remaining = Math.max(parsedLimit - nationals.length, 0);
       const locals = remaining > 0
@@ -251,18 +272,18 @@ router.get('/', (req, res) => {
                 FROM funding_opportunities
                 ${commonWhere}
                   AND state = ?
-                  AND (is_national IS NULL OR is_national = 0)
+                  AND (is_national IS NULL OR is_national = ?)
                 ${orderClause}
                 LIMIT ?
               `,
             )
-            .all(...baseParams, normalizedState, remaining)
+            .all(...baseParams, normalizedState, false, remaining)
         : [];
 
       // Return locals first, then nationals to guarantee visibility in the response.
       opportunities = [...locals, ...nationals];
     } else {
-      opportunities = req.db
+      opportunities = await req.db
         .prepare(
           `
             SELECT *
@@ -278,7 +299,7 @@ router.get('/', (req, res) => {
 
     const parsed = opportunities.map((opp) => decorateOpportunity(opp));
 
-    const countRow = req.db
+    const countRow = await req.db
       .prepare(
         `
           SELECT COUNT(*) AS total
@@ -301,9 +322,9 @@ router.get('/', (req, res) => {
 });
 
 // Get single opportunity
-router.get('/:id', (req, res) => {
+router.get('/:id', async (req, res) => {
   try {
-    const opp = req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(req.params.id);
+    const opp = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(req.params.id);
 
     if (!opp) {
       return res.status(404).json({ error: 'Opportunity not found' });
@@ -317,7 +338,7 @@ router.get('/:id', (req, res) => {
 });
 
 // Create opportunity (for manual entry or crawlers)
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   try {
     const id = crypto.randomUUID();
     let data = validateFundingTerms(req.body || {});
@@ -338,12 +359,12 @@ router.post('/', (req, res) => {
     const placeholders = columns.map(() => '?').join(', ');
     const values = [id, ...Object.values(normalizedData)];
 
-    req.db.prepare(`
+    await req.db.prepare(`
       INSERT INTO funding_opportunities (${columns.join(', ')})
       VALUES (${placeholders})
     `).run(...values);
 
-    const opp = req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(id);
+    const opp = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(id);
     res.status(201).json(decorateOpportunity(opp));
   } catch (error) {
     console.error('Error creating opportunity:', error);
@@ -353,7 +374,7 @@ router.post('/', (req, res) => {
 });
 
 // Bulk import opportunities
-router.post('/bulk', (req, res) => {
+router.post('/bulk', async (req, res) => {
   try {
     const { opportunities } = req.body;
 
@@ -361,18 +382,39 @@ router.post('/bulk', (req, res) => {
       return res.status(400).json({ error: 'opportunities must be an array' });
     }
 
-    const insertStmt = req.db.prepare(`
-      INSERT OR REPLACE INTO funding_opportunities (
-        id, title, sponsor, source, source_id, description, 
-        eligibility_bullets, amount_min, amount_max, deadline, 
-        deadline_type, application_url, is_national, state, 
-        categories, keywords, is_active
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-    `);
+    const upsertSql = `
+      INSERT INTO funding_opportunities (
+        id, title, sponsor, source, source_id, description,
+        eligibility_bullets, amount_min, amount_max, deadline,
+        deadline_type, application_url, is_national, state,
+        categories, keywords, is_active, requires_match, match_percentage
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (id) DO UPDATE SET
+        title = EXCLUDED.title,
+        sponsor = EXCLUDED.sponsor,
+        source = EXCLUDED.source,
+        source_id = EXCLUDED.source_id,
+        description = EXCLUDED.description,
+        eligibility_bullets = EXCLUDED.eligibility_bullets,
+        amount_min = EXCLUDED.amount_min,
+        amount_max = EXCLUDED.amount_max,
+        deadline = EXCLUDED.deadline,
+        deadline_type = EXCLUDED.deadline_type,
+        application_url = EXCLUDED.application_url,
+        is_national = EXCLUDED.is_national,
+        state = EXCLUDED.state,
+        categories = EXCLUDED.categories,
+        keywords = EXCLUDED.keywords,
+        is_active = EXCLUDED.is_active,
+        requires_match = EXCLUDED.requires_match,
+        match_percentage = EXCLUDED.match_percentage,
+        updated_at = CURRENT_TIMESTAMP
+    `;
 
-    const insertMany = req.db.transaction((opps) => {
+    const imported = await req.db.withTransaction(async (tx) => {
+      const insertStmt = tx.prepare(upsertSql);
       let count = 0;
-      for (const opp of opps) {
+      for (const opp of opportunities) {
         const newOpp = { ...opp };
         if (newOpp.requires_match !== undefined || newOpp.match_percentage !== undefined) {
           try {
@@ -384,7 +426,7 @@ router.post('/bulk', (req, res) => {
           }
         }
         const id = newOpp.id || crypto.randomUUID();
-        insertStmt.run(
+        await insertStmt.run(
           id,
           newOpp.title,
           newOpp.sponsor || null,
@@ -397,17 +439,18 @@ router.post('/bulk', (req, res) => {
           newOpp.deadline || null,
           newOpp.deadline_type || 'unknown',
           newOpp.application_url || null,
-          newOpp.is_national ? 1 : 0,
+          Boolean(newOpp.is_national),
           newOpp.state || null,
           JSON.stringify(newOpp.categories || []),
-          JSON.stringify(newOpp.keywords || [])
+          JSON.stringify(newOpp.keywords || []),
+          true,
+          newOpp.requires_match === undefined ? false : Boolean(newOpp.requires_match),
+          newOpp.match_percentage ?? null,
         );
         count += 1;
       }
       return count;
     });
-
-    const imported = insertMany(opportunities);
 
     res.json({
       success: true,
@@ -421,7 +464,7 @@ router.post('/bulk', (req, res) => {
 });
 
 // Update opportunity
-router.put('/:id', (req, res) => {
+router.put('/:id', async (req, res) => {
   try {
     let data = validateFundingTerms(req.body || {});
     const normalizedData = Object.fromEntries(
@@ -440,13 +483,13 @@ router.put('/:id', (req, res) => {
     const setClause = Object.keys(normalizedData).map((key) => `${key} = ?`).join(', ');
     const values = [...Object.values(normalizedData), req.params.id];
 
-    req.db.prepare(`
+    await req.db.prepare(`
       UPDATE funding_opportunities 
       SET ${setClause}, updated_at = CURRENT_TIMESTAMP 
       WHERE id = ?
     `).run(...values);
 
-    const opp = req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(req.params.id);
+    const opp = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(req.params.id);
     res.json(decorateOpportunity(opp));
   } catch (error) {
     console.error('Error updating opportunity:', error);
@@ -456,9 +499,9 @@ router.put('/:id', (req, res) => {
 });
 
 // Delete opportunity (soft delete)
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   try {
-    req.db.prepare('UPDATE funding_opportunities SET is_active = 0 WHERE id = ?').run(req.params.id);
+    await req.db.prepare('UPDATE funding_opportunities SET is_active = ? WHERE id = ?').run(false, req.params.id);
     res.json({ success: true, message: 'Opportunity deactivated' });
   } catch (error) {
     console.error('Error deleting opportunity:', error);
@@ -479,14 +522,16 @@ router.get('/meta/ingestion', async (req, res) => {
 });
 
 // Get distinct sources for filtering
-router.get('/meta/sources', (req, res) => {
+router.get('/meta/sources', async (req, res) => {
   try {
-    const conditions = ['source IS NOT NULL', 'is_active = 1'];
+    const conditions = ['source IS NOT NULL', 'is_active = ?'];
     const params = [];
+    params.push(true);
+    params.__dialect = req.db?.dialect;
     applyComplianceFilters(req.query.compliance, conditions, params);
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
-    const sources = req.db.prepare(`
+    const sources = await req.db.prepare(`
       SELECT source, COUNT(*) as count 
       FROM funding_opportunities 
       ${whereClause}
@@ -502,14 +547,16 @@ router.get('/meta/sources', (req, res) => {
 });
 
 // Get distinct states for filtering
-router.get('/meta/states', (req, res) => {
+router.get('/meta/states', async (req, res) => {
   try {
-    const conditions = ['state IS NOT NULL', 'is_active = 1'];
+    const conditions = ['state IS NOT NULL', 'is_active = ?'];
     const params = [];
+    params.push(true);
+    params.__dialect = req.db?.dialect;
     applyComplianceFilters(req.query.compliance, conditions, params);
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
-    const states = req.db.prepare(`
+    const states = await req.db.prepare(`
       SELECT state, COUNT(*) as count 
       FROM funding_opportunities 
       ${whereClause}
