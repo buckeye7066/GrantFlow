@@ -45,6 +45,12 @@ export function logAuditEvent(db, {
     console.warn('[Audit] No database connection, skipping audit log')
     return null
   }
+
+  // Postgres migration rollout: audit table DDL and sync inserts are SQLite-specific today.
+  // Avoid crashing the server due to dialect mismatches; we'll migrate audit_logs via SQL migrations next.
+  if (db.dialect === 'postgres') {
+    return null
+  }
   
   try {
     // Ensure audit_logs table exists
