@@ -236,22 +236,27 @@ const allowedMigrations = [
 const validTables = new Set(['profiles', 'crawler_jobs', 'users', 'organizations', 'grants', 'funding_opportunities']);
 const validColumnPattern = /^[a-z_]+$/;
 
-allowedMigrations.forEach(({ table, column, type }) => {
-  // Validate table and column names to prevent SQL injection
-  if (!validTables.has(table) || !validColumnPattern.test(column)) {
-    console.error(`Migration error: Invalid table "${table}" or column "${column}"`);
-    return;
-  }
-  
-  try {
-    db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`).run();
-  } catch (error) {
-    // Column already exists or other error - log only if not duplicate column error
-    if (!error.message.includes('duplicate column')) {
-      console.warn(`Migration warning for ${table}.${column}:`, error.message);
+// This legacy auto-migration is SQLite-only. Postgres must be migrated deterministically via SQL migrations.
+if (db.dialect === 'sqlite') {
+  allowedMigrations.forEach(({ table, column, type }) => {
+    // Validate table and column names to prevent SQL injection
+    if (!validTables.has(table) || !validColumnPattern.test(column)) {
+      console.error(`Migration error: Invalid table "${table}" or column "${column}"`);
+      return;
     }
-  }
-});
+
+    try {
+      db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`).run();
+    } catch (error) {
+      // Column already exists or other error - log only if not duplicate column error
+      if (!error.message.includes('duplicate column')) {
+        console.warn(`Migration warning for ${table}.${column}:`, error.message);
+      }
+    }
+  });
+} else {
+  console.info('[database] Skipping legacy column auto-migrations (dialect != sqlite)');
+}
 
 function ensureCrawlerJobsSupportsAllTypes() {
   const testTypes = ['profile_enrichment', 'national']
