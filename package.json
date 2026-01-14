@@ -37,7 +37,8 @@
     "crawler:run": "node ./scripts/crawler-run.mjs",
     "crawler:doctor": "node ./scripts/crawler-doctor.mjs",
     "opps:check-national-minimum": "node ./scripts/opportunities-national-minimum.mjs check",
-    "opps:ensure-national-minimum": "node ./scripts/opportunities-national-minimum.mjs ensure"
+    "opps:ensure-national-minimum": "node ./scripts/opportunities-national-minimum.mjs ensure",
+    "migrate:data": "node backend/scripts/migrate-sqlite-to-postgres.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.1",
