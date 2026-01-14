@@ -472,9 +472,27 @@ async function assignProfileToUser(db, userId, email) {
     // TODO: Remove debug log - console.log(`[auth] Assigned first available profile ${firstProfile.id} to user ${userId}`)
     return firstProfile.id
   }
-  
-  // TODO: Remove debug log - console.log(`[auth] No available profiles to assign to user ${userId}`)
-  return null
+
+  // No pre-created profiles available (common on fresh Postgres). Create a personal profile for the user.
+  try {
+    const profileId = crypto.randomUUID()
+    const displayName =
+      (email && email.split('@')[0]) ? email.split('@')[0] : `User ${String(userId).slice(0, 6)}`
+
+    await db
+      .prepare(
+        `
+          INSERT INTO profiles (id, user_id, display_name, primary_type, status, tags, created_at, updated_at)
+          VALUES (?, ?, ?, ?, 'active', '[]', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `,
+      )
+      .run(profileId, userId, displayName, 'individual_need')
+
+    return profileId
+  } catch (e) {
+    console.warn('[auth] Failed to create fallback profile for user:', e?.message || e)
+    return null
+  }
 }
 
 async function ensureAdminStatus(db, userId, email) {

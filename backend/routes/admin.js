@@ -744,7 +744,7 @@ router.post('/reattach-users', (req, res) => {
     const adminUser = db.prepare(`
       SELECT id, display_name, primary_email
       FROM users
-      WHERE is_admin = 1 OR LOWER(primary_email) LIKE '%buckeye7066%'
+      WHERE is_admin = TRUE OR LOWER(primary_email) LIKE '%buckeye7066%'
       LIMIT 1
     `).get();
     
@@ -1535,19 +1535,23 @@ router.post('/ingest', async (req, res) => {
 // POST /api/admin/link-admin-to-organizations - Link admin to all organizations
 router.post('/link-admin-to-organizations', async (req, res) => {
   try {
-    const adminUser = req.db.prepare('SELECT id FROM users WHERE is_admin = 1 LIMIT 1').get();
+    const adminUser = await req.db.prepare('SELECT id FROM users WHERE is_admin = TRUE LIMIT 1').get();
     if (!adminUser) {
       return res.status(404).json({ success: false, error: 'Admin user not found' });
     }
 
-    const organizations = req.db.prepare('SELECT id FROM organizations').all();
+    const organizations = await req.db.prepare('SELECT id FROM organizations').all();
     let linkedCount = 0;
 
     for (const org of organizations) {
       try {
-        const existingLink = req.db.prepare('SELECT 1 FROM user_organizations WHERE user_id = ? AND organization_id = ?').get(adminUser.id, org.id);
+        const existingLink = await req.db
+          .prepare('SELECT 1 FROM user_organizations WHERE user_id = ? AND organization_id = ?')
+          .get(adminUser.id, org.id);
         if (!existingLink) {
-          req.db.prepare('INSERT INTO user_organizations (user_id, organization_id) VALUES (?, ?)').run(adminUser.id, org.id);
+          await req.db
+            .prepare('INSERT INTO user_organizations (user_id, organization_id) VALUES (?, ?)')
+            .run(adminUser.id, org.id);
           linkedCount++;
         }
       } catch (e) { /* ignore */ }
