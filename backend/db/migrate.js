@@ -1,0 +1,156 @@
+/**
+ * Unified DB migration runner (sqlite + postgres)
+ *
+ * - sqlite migrations live in:   backend/db/migrations/*.sql
+ * - postgres migrations live in: backend/db/postgres/migrations/*.sql
+ *
+ * This runner intentionally does NOT create/update schema during normal server startup in production.
+ * Run: `npm run migrate`
+ */
+
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { getDb } from './index.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const db = getDb();
+
+const migrationsDir =
+  db.dialect === 'postgres'
+    ? path.join(__dirname, 'postgres', 'migrations')
+    : path.join(__dirname, 'migrations');
+
+function ensureDirExists(dir) {
+  if (!fs.existsSync(dir)) return false;
+  return fs.statSync(dir).isDirectory();
+}
+
+function listSqlMigrations(dir) {
+  return fs
+    .readdirSync(dir)
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+}
+
+async function ensureMigrationsTable() {
+  if (db.dialect === 'postgres') {
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS _migrations (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        applied_at TIMESTAMPTZ DEFAULT now()
+      );
+    `);
+    return;
+  }
+
+  // sqlite
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS _migrations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+}
+
+async function getAppliedSet() {
+  const rows = await db.prepare('SELECT name FROM _migrations ORDER BY id').all();
+  return new Set((rows || []).map((r) => r.name));
+}
+
+async function applyMigration(filename) {
+  const fullPath = path.join(migrationsDir, filename);
+  const sql = fs.readFileSync(fullPath, 'utf8');
+
+  console.log(`Applying: ${filename}`);
+
+  await db.withTransaction(async (tx) => {
+    await tx.exec(sql);
+    await tx.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename);
+  });
+}
+
+function isIdempotentAlreadyAppliedError(err) {
+  const msg = String(err?.message || err || '').toLowerCase();
+
+  // SQLite common "already applied" signatures
+  if (msg.includes('duplicate column name')) return true;
+  if (msg.includes('already exists')) return true; // table/index already exists
+  if (msg.includes('duplicate index')) return true;
+
+  // Postgres common "already applied" signatures (only used defensively; we still expect deterministic migrations)
+  if (msg.includes('already exists')) return true;
+  if (msg.includes('duplicate key value violates unique constraint')) return true;
+
+  return false;
+}
+
+async function recordAsApplied(filename, note) {
+  try {
+    await db.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename);
+    console.log(`  ↪ Recorded as applied (${note})`);
+  } catch (e) {
+    // If it was recorded concurrently, treat as success.
+    const msg = String(e?.message || e || '').toLowerCase();
+    if (msg.includes('unique') || msg.includes('duplicate')) {
+      console.log(`  ↪ Already recorded (${note})`);
+      return;
+    }
+    throw e;
+  }
+}
+
+async function main() {
+  console.log('=== DB Migration Runner ===');
+  console.log('Dialect:', db.dialect);
+  console.log('Migrations dir:', migrationsDir);
+
+  if (!ensureDirExists(migrationsDir)) {
+    console.error('ERROR: migrations directory not found:', migrationsDir);
+    process.exit(1);
+  }
+
+  await ensureMigrationsTable();
+
+  const applied = await getAppliedSet();
+  const files = listSqlMigrations(migrationsDir);
+  const pending = files.filter((f) => !applied.has(f));
+
+  console.log(`Applied migrations: ${applied.size}`);
+  console.log(`Available migrations: ${files.length}`);
+  console.log(`Pending migrations: ${pending.length}`);
+
+  if (pending.length === 0) {
+    console.log('✓ Database is up to date. No migrations to apply.');
+    process.exit(0);
+  }
+
+  for (const filename of pending) {
+    try {
+      await applyMigration(filename);
+      console.log('  ✓ Success\n');
+    } catch (error) {
+      // Bootstrap safety:
+      // Existing SQLite environments may have had schema changes applied via `schema.sql` startup auto-migration,
+      // but `_migrations` is empty. In that case, treat "already applied" DDL failures as success and record them.
+      if (isIdempotentAlreadyAppliedError(error)) {
+        await recordAsApplied(filename, 'idempotent DDL');
+        console.log('');
+        continue;
+      }
+
+      console.error(`  ✗ Failed: ${error?.message || error}\n`);
+      process.exit(1);
+    }
+  }
+
+  console.log('✓ All migrations applied successfully');
+  process.exit(0);
+}
+
+main();
+
