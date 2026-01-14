@@ -876,68 +876,8 @@ CREATE INDEX IF NOT EXISTS idx_crawler_schedules_profile ON crawler_schedules(pr
 CREATE INDEX IF NOT EXISTS idx_crawler_schedules_enabled ON crawler_schedules(enabled);
 
 -- Triggers to auto-update updated_at
--- NOTE: SQLite uses BEGIN/END trigger blocks; Postgres requires a trigger function.
-CREATE OR REPLACE FUNCTION grantflow_set_updated_at()
-RETURNS trigger AS $$
-BEGIN
-  NEW.updated_at = now();
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS update_anya_sessions_timestamp ON anya_sessions;
-CREATE TRIGGER update_anya_sessions_timestamp
-BEFORE UPDATE ON anya_sessions
-FOR EACH ROW
-EXECUTE FUNCTION grantflow_set_updated_at();
-
-DROP TRIGGER IF EXISTS update_anya_tasks_timestamp ON anya_tasks;
-CREATE TRIGGER update_anya_tasks_timestamp
-BEFORE UPDATE ON anya_tasks
-FOR EACH ROW
-EXECUTE FUNCTION grantflow_set_updated_at();
-
-DROP TRIGGER IF EXISTS update_organizations_timestamp ON organizations;
-CREATE TRIGGER update_organizations_timestamp
-BEFORE UPDATE ON organizations
-FOR EACH ROW
-EXECUTE FUNCTION grantflow_set_updated_at();
-
-DROP TRIGGER IF EXISTS update_grants_timestamp ON grants;
-CREATE TRIGGER update_grants_timestamp
-BEFORE UPDATE ON grants
-FOR EACH ROW
-EXECUTE FUNCTION grantflow_set_updated_at();
-
-DROP TRIGGER IF EXISTS update_funding_opportunities_timestamp ON funding_opportunities;
-CREATE TRIGGER update_funding_opportunities_timestamp
-BEFORE UPDATE ON funding_opportunities
-FOR EACH ROW
-EXECUTE FUNCTION grantflow_set_updated_at();
-
-DROP TRIGGER IF EXISTS update_profiles_timestamp ON profiles;
-CREATE TRIGGER update_profiles_timestamp
-BEFORE UPDATE ON profiles
-FOR EACH ROW
-EXECUTE FUNCTION grantflow_set_updated_at();
-
-DROP TRIGGER IF EXISTS update_profile_sections_timestamp ON profile_sections;
-CREATE TRIGGER update_profile_sections_timestamp
-BEFORE UPDATE ON profile_sections
-FOR EACH ROW
-EXECUTE FUNCTION grantflow_set_updated_at();
-
-DROP TRIGGER IF EXISTS update_user_preferences_timestamp ON user_preferences;
-CREATE TRIGGER update_user_preferences_timestamp
-BEFORE UPDATE ON user_preferences
-FOR EACH ROW
-EXECUTE FUNCTION grantflow_set_updated_at();
-
-DROP TRIGGER IF EXISTS update_crawler_schedules_timestamp ON crawler_schedules;
-CREATE TRIGGER update_crawler_schedules_timestamp
-BEFORE UPDATE ON crawler_schedules
-FOR EACH ROW
-EXECUTE FUNCTION grantflow_set_updated_at();
+-- NOTE: Postgres triggers must be created AFTER the target tables exist.
+-- Trigger function + triggers are appended at the end of this migration.
 
 -- ============================================================
 -- National Funding & Benefits Programs (TRACKED DATASETS)
@@ -1097,17 +1037,7 @@ CREATE INDEX IF NOT EXISTS idx_program_versions_fetched ON program_versions(fetc
 CREATE INDEX IF NOT EXISTS idx_program_change_events_created ON program_change_events(created_at);
 CREATE INDEX IF NOT EXISTS idx_program_change_events_program ON program_change_events(funding_track, program_id);
 
-DROP TRIGGER IF EXISTS update_program_crawl_targets_timestamp ON program_crawl_targets;
-CREATE TRIGGER update_program_crawl_targets_timestamp
-BEFORE UPDATE ON program_crawl_targets
-FOR EACH ROW
-EXECUTE FUNCTION grantflow_set_updated_at();
-
-DROP TRIGGER IF EXISTS update_program_crosslinks_timestamp ON program_crosslinks;
-CREATE TRIGGER update_program_crosslinks_timestamp
-BEFORE UPDATE ON program_crosslinks
-FOR EACH ROW
-EXECUTE FUNCTION grantflow_set_updated_at();
+-- Postgres updated_at triggers are appended at end of migration.
 
 -- ============================================================
 -- NATIONAL FUNDING & BENEFITS CRAWLER (V2) - STRICT SCHEMA
@@ -1331,17 +1261,7 @@ CREATE TABLE IF NOT EXISTS nf_crosslinks (
 CREATE INDEX IF NOT EXISTS idx_nf_crosslinks_a ON nf_crosslinks(program_id_a);
 CREATE INDEX IF NOT EXISTS idx_nf_crosslinks_b ON nf_crosslinks(program_id_b);
 
-DROP TRIGGER IF EXISTS update_crawler_sources_timestamp ON crawler_sources;
-CREATE TRIGGER update_crawler_sources_timestamp
-BEFORE UPDATE ON crawler_sources
-FOR EACH ROW
-EXECUTE FUNCTION grantflow_set_updated_at();
-
-DROP TRIGGER IF EXISTS update_nf_crosslinks_timestamp ON nf_crosslinks;
-CREATE TRIGGER update_nf_crosslinks_timestamp
-BEFORE UPDATE ON nf_crosslinks
-FOR EACH ROW
-EXECUTE FUNCTION grantflow_set_updated_at();
+-- Postgres updated_at triggers are appended at end of migration.
 
 -- ============================================================================
 -- Anya Brain (Persistent State)
@@ -1434,11 +1354,7 @@ CREATE TABLE IF NOT EXISTS anya_context (
 
 CREATE INDEX IF NOT EXISTS idx_anya_context_session ON anya_context(session_id);
 
-DROP TRIGGER IF EXISTS update_anya_brain_timestamp ON anya_brain_memory;
-CREATE TRIGGER update_anya_brain_timestamp
-BEFORE UPDATE ON anya_brain_memory
-FOR EACH ROW
-EXECUTE FUNCTION grantflow_set_updated_at();
+-- Postgres updated_at triggers are appended at end of migration.
 
 -- Service Applications (from website contact/apply forms)
 CREATE TABLE IF NOT EXISTS service_applications (
@@ -1478,3 +1394,102 @@ CREATE TABLE IF NOT EXISTS service_applications (
 CREATE INDEX IF NOT EXISTS idx_service_applications_status ON service_applications(status);
 CREATE INDEX IF NOT EXISTS idx_service_applications_created ON service_applications(created_at);
 CREATE INDEX IF NOT EXISTS idx_service_applications_email ON service_applications(email);
+
+-- ============================================================
+-- Postgres updated_at triggers (must come after all tables)
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION grantflow_set_updated_at()
+RETURNS trigger AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Core tables
+DROP TRIGGER IF EXISTS update_organizations_timestamp ON organizations;
+CREATE TRIGGER update_organizations_timestamp
+BEFORE UPDATE ON organizations
+FOR EACH ROW
+EXECUTE FUNCTION grantflow_set_updated_at();
+
+DROP TRIGGER IF EXISTS update_grants_timestamp ON grants;
+CREATE TRIGGER update_grants_timestamp
+BEFORE UPDATE ON grants
+FOR EACH ROW
+EXECUTE FUNCTION grantflow_set_updated_at();
+
+DROP TRIGGER IF EXISTS update_funding_opportunities_timestamp ON funding_opportunities;
+CREATE TRIGGER update_funding_opportunities_timestamp
+BEFORE UPDATE ON funding_opportunities
+FOR EACH ROW
+EXECUTE FUNCTION grantflow_set_updated_at();
+
+DROP TRIGGER IF EXISTS update_profiles_timestamp ON profiles;
+CREATE TRIGGER update_profiles_timestamp
+BEFORE UPDATE ON profiles
+FOR EACH ROW
+EXECUTE FUNCTION grantflow_set_updated_at();
+
+DROP TRIGGER IF EXISTS update_profile_sections_timestamp ON profile_sections;
+CREATE TRIGGER update_profile_sections_timestamp
+BEFORE UPDATE ON profile_sections
+FOR EACH ROW
+EXECUTE FUNCTION grantflow_set_updated_at();
+
+DROP TRIGGER IF EXISTS update_user_preferences_timestamp ON user_preferences;
+CREATE TRIGGER update_user_preferences_timestamp
+BEFORE UPDATE ON user_preferences
+FOR EACH ROW
+EXECUTE FUNCTION grantflow_set_updated_at();
+
+DROP TRIGGER IF EXISTS update_crawler_schedules_timestamp ON crawler_schedules;
+CREATE TRIGGER update_crawler_schedules_timestamp
+BEFORE UPDATE ON crawler_schedules
+FOR EACH ROW
+EXECUTE FUNCTION grantflow_set_updated_at();
+
+-- Program datasets
+DROP TRIGGER IF EXISTS update_program_crawl_targets_timestamp ON program_crawl_targets;
+CREATE TRIGGER update_program_crawl_targets_timestamp
+BEFORE UPDATE ON program_crawl_targets
+FOR EACH ROW
+EXECUTE FUNCTION grantflow_set_updated_at();
+
+DROP TRIGGER IF EXISTS update_program_crosslinks_timestamp ON program_crosslinks;
+CREATE TRIGGER update_program_crosslinks_timestamp
+BEFORE UPDATE ON program_crosslinks
+FOR EACH ROW
+EXECUTE FUNCTION grantflow_set_updated_at();
+
+DROP TRIGGER IF EXISTS update_crawler_sources_timestamp ON crawler_sources;
+CREATE TRIGGER update_crawler_sources_timestamp
+BEFORE UPDATE ON crawler_sources
+FOR EACH ROW
+EXECUTE FUNCTION grantflow_set_updated_at();
+
+DROP TRIGGER IF EXISTS update_nf_crosslinks_timestamp ON nf_crosslinks;
+CREATE TRIGGER update_nf_crosslinks_timestamp
+BEFORE UPDATE ON nf_crosslinks
+FOR EACH ROW
+EXECUTE FUNCTION grantflow_set_updated_at();
+
+-- Anya
+DROP TRIGGER IF EXISTS update_anya_sessions_timestamp ON anya_sessions;
+CREATE TRIGGER update_anya_sessions_timestamp
+BEFORE UPDATE ON anya_sessions
+FOR EACH ROW
+EXECUTE FUNCTION grantflow_set_updated_at();
+
+DROP TRIGGER IF EXISTS update_anya_tasks_timestamp ON anya_tasks;
+CREATE TRIGGER update_anya_tasks_timestamp
+BEFORE UPDATE ON anya_tasks
+FOR EACH ROW
+EXECUTE FUNCTION grantflow_set_updated_at();
+
+DROP TRIGGER IF EXISTS update_anya_brain_timestamp ON anya_brain_memory;
+CREATE TRIGGER update_anya_brain_timestamp
+BEFORE UPDATE ON anya_brain_memory
+FOR EACH ROW
+EXECUTE FUNCTION grantflow_set_updated_at();
