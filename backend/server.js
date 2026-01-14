@@ -4,12 +4,12 @@ import dotenv from 'dotenv';
 dotenv.config({ override: true });
 import express from 'express';
 import cors from 'cors';
-import Database from 'better-sqlite3';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
 import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
+import { db } from './db/index.js';
 
 // Routes
 import organizationsRouter from './routes/organizations.js';
@@ -149,72 +149,38 @@ if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
   app.use(APP_BASE_PATH, express.static(distPath));
 }
 
-// Initialize database
-const dataDir = join(__dirname, 'data');
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
-}
-
-// IMPORTANT:
-// - Railway Postgres will auto-inject DATABASE_URL (postgres://...), which is NOT a valid SQLite file path.
-// - Until we complete the Postgres migration, we must not feed a postgres connection string into better-sqlite3.
-// - Use SQLITE_DB_PATH for SQLite file location; keep DATABASE_URL reserved for Postgres.
-const rawDatabaseUrl = String(process.env.DATABASE_URL || '').trim();
-const dbDialect = String(process.env.DB_DIALECT || '').trim().toLowerCase(); // 'sqlite' | 'postgres'
-const looksLikePostgresUrl = /^postgres(ql)?:\/\//i.test(rawDatabaseUrl);
-
-const sqliteDbPath = process.env.SQLITE_DB_PATH || join(dataDir, 'grantflow.db');
-const dbPath =
-  dbDialect === 'postgres'
-    ? rawDatabaseUrl
-    : looksLikePostgresUrl
-      ? sqliteDbPath
-      : (rawDatabaseUrl || sqliteDbPath);
-
-// Validate database initialization with proper error handling
-let db;
+// Validate database connection on startup (works for both sqlite and postgres)
 try {
-  if (dbDialect === 'postgres') {
-    console.error('[database] DB_DIALECT=postgres is set, but Postgres support is not yet implemented in this build.');
-    console.error('[database] Refusing to start to avoid data corruption / inconsistent behavior.');
-    process.exit(1);
-  }
-
-  db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  
-  // Validate database connection on startup
   console.info('[database] Validating database connection...');
-  const testResult = db.prepare('SELECT 1 as test').get();
-  if (testResult && testResult.test === 1) {
-    console.info('[database] Database connection validated successfully');
-    console.info('[database] Dialect:', dbDialect || 'sqlite');
-    console.info('[database] Database path:', dbPath);
-  } else {
-    throw new Error('Database connection test failed');
-  }
+  await db.healthcheck();
+  console.info('[database] Database connection validated successfully', {
+    dialect: db.dialect,
+    path: db.path ?? null,
+  });
 } catch (dbError) {
   console.error('[database] CRITICAL: Failed to initialize database:', dbError);
-  console.error('[database] Database path:', dbPath);
-  
-  // Always exit on database errors - don't mask with mock DB
   console.error('[database] Cannot start server without database connection');
   process.exit(1);
 }
 
-export { db };
+// NOTE: Schema/migrations should be applied via `npm run migrate` in production.
+// We keep the legacy "apply schema on startup" behavior only for sqlite local dev.
+const shouldAutoMigrate =
+  String(process.env.DB_AUTO_MIGRATE || '').toLowerCase() === 'true' ||
+  (db.dialect === 'sqlite' && process.env.NODE_ENV !== 'production');
 
-// Run schema migration
-const schemaPath = join(__dirname, 'db', 'schema.sql');
-if (fs.existsSync(schemaPath)) {
-  try {
-    const schema = fs.readFileSync(schemaPath, 'utf8');
-    db.exec(schema);
-    console.info('[database] Schema migrations completed');
-  } catch (schemaError) {
-    console.error('[database] Error running schema migrations:', schemaError);
-    if (process.env.NODE_ENV === 'production') {
-      process.exit(1);
+if (shouldAutoMigrate) {
+  const schemaPath = join(__dirname, 'db', 'schema.sql');
+  if (fs.existsSync(schemaPath)) {
+    try {
+      const schema = fs.readFileSync(schemaPath, 'utf8');
+      await db.exec(schema);
+      console.info('[database] Schema applied (auto-migrate enabled)', { dialect: db.dialect });
+    } catch (schemaError) {
+      console.error('[database] Error running schema migrations:', schemaError);
+      if (process.env.NODE_ENV === 'production') {
+        process.exit(1);
+      }
     }
   }
 }
