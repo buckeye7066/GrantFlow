@@ -17,12 +17,26 @@ export function getProfileWithLocation(db, profileId) {
   // IMPORTANT: Do not fabricate fallback location data; missing location should be treated as missing data.
   const context = loadProfileContext(db, profileId)
 
-  const organization =
-    context?.profile?.organization_id
-      ? db
-          .prepare('SELECT id, name, type, city, state, zip FROM organizations WHERE id = ?')
-          .get(context.profile.organization_id)
-      : null
+  let organization = null
+  if (context?.profile?.organization_id) {
+    const orgId = context.profile.organization_id
+    // Backwards-compatible org lookup: some DBs have `type`, some have `organization_type`, some have neither.
+    try {
+      organization = db
+        .prepare('SELECT id, name, type, city, state, zip FROM organizations WHERE id = ?')
+        .get(orgId)
+    } catch (error) {
+      try {
+        organization = db
+          .prepare('SELECT id, name, organization_type AS type, city, state, zip FROM organizations WHERE id = ?')
+          .get(orgId)
+      } catch {
+        organization = db
+          .prepare('SELECT id, name, city, state, zip FROM organizations WHERE id = ?')
+          .get(orgId)
+      }
+    }
+  }
 
   const derivedLocation = {
     state: extractStateFromContext({ profile: context.profile, sections: context.sections }),
