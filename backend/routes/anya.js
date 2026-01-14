@@ -161,9 +161,9 @@ router.get('/sessions/:sessionId', async (req, res) => {
   }
 })
 
-router.get('/sessions/:sessionId/messages', (req, res) => {
+router.get('/sessions/:sessionId/messages', async (req, res) => {
   try {
-    const messages = getMessages(req.db, req.user, req.params.sessionId, {
+    const messages = await getMessages(req.db, req.user, req.params.sessionId, {
       limit: req.query.limit,
       direction: req.query.direction === 'latest' ? 'latest' : 'asc',
     })
@@ -180,7 +180,7 @@ router.post('/sessions/:sessionId/messages', async (req, res) => {
       return res.status(400).json({ error: 'Message content is required' })
     }
 
-    const userMessage = addMessage(req.db, req.user, req.params.sessionId, {
+    const userMessage = await addMessage(req.db, req.user, req.params.sessionId, {
       role: 'user',
       content,
     })
@@ -196,7 +196,7 @@ router.post('/sessions/:sessionId/messages', async (req, res) => {
         "I hit a snag while reaching the AI service. Try again in a moment or share more details so I can help manually."
     }
 
-    const assistantMessage = addMessage(req.db, req.user, req.params.sessionId, {
+    const assistantMessage = await addMessage(req.db, req.user, req.params.sessionId, {
       role: 'assistant',
       content: assistantText,
     })
@@ -210,18 +210,18 @@ router.post('/sessions/:sessionId/messages', async (req, res) => {
   }
 })
 
-router.get('/sessions/:sessionId/tasks', (req, res) => {
+router.get('/sessions/:sessionId/tasks', async (req, res) => {
   try {
-    const tasks = listTasks(req.db, req.user, req.params.sessionId)
+    const tasks = await listTasks(req.db, req.user, req.params.sessionId)
     res.json({ tasks })
   } catch (error) {
     handleError(res, error)
   }
 })
 
-router.post('/sessions/:sessionId/tasks', (req, res) => {
+router.post('/sessions/:sessionId/tasks', async (req, res) => {
   try {
-    const task = createTask(req.db, req.user, req.params.sessionId, {
+    const task = await createTask(req.db, req.user, req.params.sessionId, {
       title: req.body?.title,
       notes: req.body?.notes,
       status: req.body?.status,
@@ -237,7 +237,7 @@ router.post('/sessions/:sessionId/tasks', (req, res) => {
         task.priority && task.priority !== 'normal' ? `priority ${task.priority}` : null,
       ].filter(Boolean)
       if (summaryParts.length > 0) {
-        addMessage(req.db, req.user, req.params.sessionId, {
+        await addMessage(req.db, req.user, req.params.sessionId, {
           role: 'assistant',
           content: summaryParts.join(' · '),
         })
@@ -269,7 +269,7 @@ router.patch('/sessions/:sessionId/tasks/:taskId', (req, res) => {
   }
 })
 
-router.get('/profiles/:profileId/tasks', (req, res) => {
+router.get('/profiles/:profileId/tasks', async (req, res) => {
   try {
     const requestedProfileId = req.params.profileId?.toLowerCase()
     const resolvedProfileId =
@@ -282,7 +282,7 @@ router.get('/profiles/:profileId/tasks', (req, res) => {
         ? req.query.status.trim()
         : 'active'
 
-    const tasks = listProfileTasks(req.db, req.user, resolvedProfileId, { status })
+    const tasks = await listProfileTasks(req.db, req.user, resolvedProfileId, { status })
     res.json({ tasks })
   } catch (error) {
     handleError(res, error)
