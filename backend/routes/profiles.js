@@ -69,7 +69,7 @@ const profileSelect = `
     p.organization_id,
     p.user_id,
     p.primary_type,
-    p.display_name,
+    COALESCE(NULLIF(TRIM(p.display_name), ''), o.name) AS display_name,
     p.status,
     p.tags,
     p.avatar_url,
