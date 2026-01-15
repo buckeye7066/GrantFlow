@@ -23,6 +23,52 @@ const migrationsDir =
     ? path.join(__dirname, 'postgres', 'migrations')
     : path.join(__dirname, 'migrations');
 
+const sqliteSchemaPath = path.join(__dirname, 'schema.sql')
+
+async function sqliteHasTable(tableName) {
+  if (db.dialect !== 'sqlite') return true
+  try {
+    const row = await db
+      .prepare(
+        `
+          SELECT name
+          FROM sqlite_master
+          WHERE type = 'table' AND name = ?
+          LIMIT 1
+        `,
+      )
+      .get(tableName)
+    return Boolean(row?.name)
+  } catch {
+    return false
+  }
+}
+
+async function ensureSqliteBaseSchema() {
+  if (db.dialect !== 'sqlite') return
+
+  // Fresh SQLite DB: bootstrap from schema.sql before applying incremental migrations.
+  const hasCore = await sqliteHasTable('funding_opportunities')
+  if (hasCore) return
+
+  if (!fs.existsSync(sqliteSchemaPath)) {
+    console.error('ERROR: sqlite schema.sql not found:', sqliteSchemaPath)
+    process.exit(1)
+  }
+
+  console.log('Bootstrapping sqlite base schema from schema.sql')
+  const sql = fs.readFileSync(sqliteSchemaPath, 'utf8')
+  try {
+    await db.withTransaction(async (tx) => {
+      await tx.exec(sql)
+    })
+    console.log('  ✓ Base schema applied')
+  } catch (error) {
+    console.error('  ✗ Failed to apply base schema:', error?.message || error)
+    process.exit(1)
+  }
+}
+
 function ensureDirExists(dir) {
   if (!fs.existsSync(dir)) return false;
   return fs.statSync(dir).isDirectory();
@@ -111,6 +157,7 @@ async function main() {
   }
 
   await ensureMigrationsTable();
+  await ensureSqliteBaseSchema();
 
   const applied = await getAppliedSet();
   const files = listSqlMigrations(migrationsDir);

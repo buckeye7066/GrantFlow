@@ -50,6 +50,7 @@ import { initializeFeatureFlags } from './services/featureFlagService.js';
 import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from './services/auditService.js';
 import { decryptRuntimeSecret } from './utils/runtimeSecrets.js';
 import { validateRuntimeEnv } from './config/env.js';
+import { startCrawlerScheduler } from './services/crawlerScheduler.js';
 
 // Validate runtime environment variables (fail-fast in production for P0 config)
 const envReport = validateRuntimeEnv()
@@ -1191,6 +1192,16 @@ const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(
       '[NationalPrograms] Continuous crawler disabled (set NATIONAL_PROGRAMS_CRAWLER_ENABLED=true to enable)',
     )
+  }
+
+  // Optional: schedule-based crawler runner (cron expressions in crawler_schedules)
+  if (process.env.CRAWLER_SCHEDULER_ENABLED === 'true') {
+    startCrawlerScheduler(db, {
+      intervalMs: Number(process.env.CRAWLER_SCHEDULER_INTERVAL_MS || 60_000),
+    })
+    console.log('[CrawlerScheduler] Enabled')
+  } else {
+    console.log('[CrawlerScheduler] Disabled (set CRAWLER_SCHEDULER_ENABLED=true to enable)')
   }
 });
 

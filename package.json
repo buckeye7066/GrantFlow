@@ -83,6 +83,7 @@
     "cmdk": "^1.0.0",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
+    "cron-parser": "^5.4.0",
     "date-fns": "^3.6.0",
     "dotenv": "^16.4.5",
     "embla-carousel-react": "^8.5.2",
