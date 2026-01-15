@@ -46,9 +46,11 @@ Railway (Express API)
 
 ### Crawlers / job runner
 - **Job table**: `crawler_jobs` (queued/running/completed/failed)
+- **Idempotency**: `crawler_jobs.idempotency_key` is unique (prevents duplicate scheduled enqueues)
 - **Schedules table**: `crawler_schedules` (cron strings per profile + crawler_type)
 - **Dispatch**: `dispatchCrawlerJob()` runs jobs asynchronously after creation
 - **National continuous crawler**: gated by `NATIONAL_PROGRAMS_CRAWLER_ENABLED`
+- **Schedule runner**: gated by `CRAWLER_SCHEDULER_ENABLED` (enqueues due jobs from `crawler_schedules`)
 
 ### Anya
 - **API**: `/api/anya/*`
