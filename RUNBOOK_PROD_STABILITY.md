@@ -71,6 +71,14 @@ npm run migrate
    - Deep link refresh works at `/grantflow/*` routes
    - Canonical domain: `www.axiombiolabs.org/grantflow` serves the SPA after DNS cutover
 
+### DNS (GoDaddy) — make `www.axiombiolabs.org/grantflow` work
+
+If `https://axiombiolabs.org/grantflow/*` shows a GoDaddy 404, the apex is not serving the SPA.
+GrantFlow should be served from Vercel via `www`:
+
+- GoDaddy DNS: set **`CNAME`** `www` → **`cname.vercel-dns.com`**
+- Keep `app` CNAME pointing at Vercel (already configured)
+
 ---
 
 ## 3) Verification Checklist (production-grade quick pass)
