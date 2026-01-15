@@ -14,12 +14,6 @@
       "source": "/grantlfow/:path*",
       "destination": "/grantflow/:path*",
       "permanent": true
-    },
-    {
-      "source": "/grantflow/:path*",
-      "has": [{ "type": "host", "value": "app.axiombiolabs.org" }],
-      "destination": "https://www.axiombiolabs.org/grantflow/:path*",
-      "permanent": true
     }
   ],
   "rewrites": [

@@ -242,8 +242,9 @@ function formatDbOpportunity(row) {
   }
 }
 
-function buildCandidateOpportunityQuery({ crawlerType, profileContext, tokens, itemRequest }) {
-  const conditions = [req.db?.dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1']
+function buildCandidateOpportunityQuery({ crawlerType, profileContext, tokens, itemRequest, dialect }) {
+  const isPostgres = dialect === 'postgres'
+  const conditions = [isPostgres ? 'is_active = TRUE' : 'is_active = 1']
   const params = []
 
   // Avoid obviously non-grant programs by default.
@@ -252,12 +253,16 @@ function buildCandidateOpportunityQuery({ crawlerType, profileContext, tokens, i
   conditions.push("(opportunity_type IS NULL OR LOWER(opportunity_type) NOT IN ('loan','loan_program','microloan'))")
 
   // Exclude expired deadlines by default (rolling/ongoing/NULL are allowed).
-  conditions.push('(deadline_type IN ("rolling","ongoing") OR deadline IS NULL OR deadline >= date("now"))')
+  conditions.push(
+    isPostgres
+      ? "(deadline_type IN ('rolling','ongoing') OR deadline IS NULL OR deadline >= CURRENT_DATE)"
+      : '(deadline_type IN ("rolling","ongoing") OR deadline IS NULL OR deadline >= date("now"))',
+  )
 
   // Geography: state + national.
   const state = profileContext?.signals?.location?.state ?? profileContext?.profile?.state ?? null
   if (state && typeof state === 'string' && state.trim().length === 2) {
-    conditions.push('(state = ? OR is_national = 1 OR state IS NULL)')
+    conditions.push(isPostgres ? '(state = ? OR is_national = TRUE OR state IS NULL)' : '(state = ? OR is_national = 1 OR state IS NULL)')
     params.push(state.trim().toUpperCase())
   }
 
@@ -463,6 +468,7 @@ router.post('/run', ensureAuth, async (req, res) => {
         profileContext,
         tokens,
         itemRequest: item_request,
+        dialect: db?.dialect,
       })
       candidates = (await db.prepare(sql).all(...params)).map(formatDbOpportunity).filter(Boolean)
     } catch (crawlerError) {
@@ -659,6 +665,7 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
         crawlerType,
         profileContext,
         tokens,
+        dialect: db?.dialect,
       })
 
       const candidates = (await db.prepare(sql).all(...params)).map(formatDbOpportunity).filter(Boolean)
