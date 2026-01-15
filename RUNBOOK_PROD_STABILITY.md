@@ -28,9 +28,15 @@ This runbook is focused on **deployment sanity**, **database safety**, and **fas
 1. **Set variables**
    - `DB_PROVIDER=postgres`
    - `DATABASE_URL=...` (Railway Postgres internal URL)
-   - `AUTH_JWT_SECRET=...`
+   - `AUTH_JWT_SECRET=...` (**required**; must NOT be `grantflow-dev-secret`)
    - `CORS_ORIGIN=...`
-   - Optional: `OPENAI_API_KEY`, `RESEND_API_KEY`, `TWILIO_*`
+   - `RESEND_API_KEY=...` (**required** for email OTP)
+   - `FROM_EMAIL=...` (**required** for email OTP)
+   - `OPENAI_API_KEY=...` (**required** for Anya + AI enrichment; core app still boots without it but AI is degraded)
+   - Recommended: `OPENAI_TIMEOUT_MS=20000`, `OPENAI_MAX_RETRIES=2`
+   - Optional: `TWILIO_*` (only required for SMS OTP)
+   - Optional: `CRAWLER_SCHEDULER_ENABLED=true` (runs cron schedules from `crawler_schedules`)
+   - Optional: `CRAWLER_SCHEDULER_INTERVAL_MS=60000`
 
 2. **Run migrations (strict for Postgres)**
 
@@ -46,6 +52,8 @@ npm run migrate
    - Response indicates Postgres dialect (and no DB error details)
    - Login works (email OTP start + verify)
    - Create/update profile works
+   - Admin diagnostics works: `GET /api/admin/diagnostics` (admin only)
+   - Build metadata is correct: `GET /api/meta/build` includes git sha
 
 ### Frontend (Vercel)
 
@@ -60,6 +68,8 @@ npm run migrate
    - App loads (no blank screen)
    - Navigation works across heavy routes (Admin/Diagnostics/etc.)
    - API calls succeed (no CORS errors)
+   - Deep link refresh works at `/grantflow/*` routes
+   - Canonical domain: `www.axiombiolabs.org/grantflow` serves the SPA after DNS cutover
 
 ---
 

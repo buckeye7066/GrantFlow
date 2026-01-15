@@ -26,6 +26,14 @@ This document is the **single source of truth** for environment variables requir
   - Used **only in development** to hit a remote backend directly.
   - In production, the frontend should use same-origin `/api` (via rewrites/proxy) and typically does **not** need this.
 
+- **`VITE_CANONICAL_HOST`** (prod)
+  - Example: `www.axiombiolabs.org`
+  - Canonical host to enforce (only if strict mode is enabled).
+
+- **`VITE_CANONICAL_HOST_STRICT`** (prod)
+  - Example: `true`
+  - When `true`, the frontend redirects to `VITE_CANONICAL_HOST` if accessed via another host.
+
 - **`VITE_API_PROXY_TARGET`** (dev-only)
   - Example: `http://localhost:8080`
   - Used by Vite dev server to proxy `/api/*` calls to the backend.
@@ -86,6 +94,7 @@ This document is the **single source of truth** for environment variables requir
 - **OpenAI**
   - **`OPENAI_API_KEY`**
   - Used by AI routes and some enrichment features. Core flows (login, profiles, pipeline) must still work without it.
+  - Recommended: **`OPENAI_TIMEOUT_MS`** (default `20000`) and **`OPENAI_MAX_RETRIES`** (default `2`).
 
 - **Anthropic (Anya)**
   - **`ANTHROPIC_API_KEY`**
@@ -94,6 +103,16 @@ This document is the **single source of truth** for environment variables requir
 - **Email (Resend)**
   - **`RESEND_API_KEY`**
   - **`FROM_EMAIL`**
+
+### Optional crawlers / scheduling
+
+- **`CRAWLER_SCHEDULER_ENABLED`**
+  - Example: `true`
+  - When enabled, the backend periodically checks `crawler_schedules` and enqueues due jobs into `crawler_jobs` with a unique `idempotency_key`.
+
+- **`CRAWLER_SCHEDULER_INTERVAL_MS`**
+  - Example: `60000`
+  - Scheduler polling interval (milliseconds).
 
 - **SMS (Twilio)**
   - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_MESSAGING_SERVICE_SID` (or `TWILIO_FROM_NUMBER`)

@@ -17,6 +17,10 @@ This runbook covers provisioning, migrating, verifying, and rolling back the Gra
 - **`DB_PROVIDER`**: `postgres`
 - **`DATABASE_URL`**: Railway Postgres internal URL (works from Railway runtime)
 - **`DATABASE_PUBLIC_URL`**: Public URL (useful for running migrations from your laptop/CI)
+- **`AUTH_JWT_SECRET`**: strong random value (**required in production**)
+- **`RESEND_API_KEY`** + **`FROM_EMAIL`**: required for email OTP delivery
+- **`OPENAI_API_KEY`**: required for Anya/AI features (strongly recommended for production)
+- Recommended: `OPENAI_TIMEOUT_MS=20000`, `OPENAI_MAX_RETRIES=2`
 
 ### SQLite variables (only for rollback / local)
 
