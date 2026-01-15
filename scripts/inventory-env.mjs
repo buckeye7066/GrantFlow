@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import os from 'node:os'
 
 const ROOT = path.resolve(process.cwd())
 
@@ -187,7 +188,15 @@ function main() {
 
   const outPath = path.join(ROOT, 'docs', 'ENV_VARS.md')
   fs.mkdirSync(path.dirname(outPath), { recursive: true })
-  fs.writeFileSync(outPath, lines.join('\n'), 'utf8')
+  // Preserve Windows CRLF if the file already exists with CRLF to avoid dirty working trees after generation.
+  let eol = os.EOL
+  try {
+    if (fs.existsSync(outPath)) {
+      const prev = fs.readFileSync(outPath, 'utf8')
+      eol = prev.includes('\r\n') ? '\r\n' : '\n'
+    }
+  } catch {}
+  fs.writeFileSync(outPath, lines.join(eol), 'utf8')
   console.log(`Wrote ${path.relative(ROOT, outPath)}`)
 }
 

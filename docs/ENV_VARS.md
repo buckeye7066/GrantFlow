@@ -196,7 +196,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/routes/anya.js:L19` (process.env)
   - `backend/server.js:L70–L779` (process.env)
   - `scripts/diagnose-anya.mjs:L20` (process.env)
-  - `scripts/doctor.mjs:L70` (process.env)
+  - `scripts/doctor.mjs:L77` (process.env)
   - `scripts/run-all-real-crawlers.mjs:L5` (process.env)
 
 ### `ALLOW_MOCK_AI`
@@ -573,7 +573,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/env.example:23` = `http://localhost:5173,http://127.0.0.1:5173`
 - **Code references**:
   - `backend/server.js:L92–L93` (process.env)
-  - `scripts/doctor.mjs:L71` (process.env)
+  - `scripts/doctor.mjs:L78` (process.env)
 
 ### `CRAWLER_MAX_SOURCES`
 
@@ -1041,13 +1041,13 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `scripts/doctor.mjs:L172` (process.env)
+  - `scripts/doctor.mjs:L179` (process.env)
 
 ### `SMOKE_BASE_PATH`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `scripts/doctor.mjs:L170` (process.env)
+  - `scripts/doctor.mjs:L177` (process.env)
   - `scripts/smoke-auth-callback.mjs:L49` (process.env)
   - `scripts/smoke-auth-refresh.mjs:L51` (process.env)
   - `scripts/smoke-login.mjs:L29` (process.env)
@@ -1075,19 +1075,19 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `scripts/doctor.mjs:L176` (process.env)
+  - `scripts/doctor.mjs:L183` (process.env)
 
 ### `SMOKE_MAX_PER_SELECTOR`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `scripts/doctor.mjs:L177` (process.env)
+  - `scripts/doctor.mjs:L184` (process.env)
 
 ### `SMOKE_MAX_ROUTES`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `scripts/doctor.mjs:L175` (process.env)
+  - `scripts/doctor.mjs:L182` (process.env)
 
 ### `SMOKE_TARGET_PATH`
 
@@ -1177,7 +1177,7 @@ It enumerates environment variables referenced in code and/or present in example
 - **Code references**:
   - `backend/routes/auth.js:L126` (process.env)
   - `backend/server.js:L196` (process.env)
-  - `scripts/doctor.mjs:L72–L170` (process.env)
+  - `scripts/doctor.mjs:L79–L177` (process.env)
   - `src/App.jsx:L73` (import.meta.env)
   - `src/api/client.js:L12` (import.meta.env)
   - `src/components/auth/SessionExpiredDialog.jsx:L10` (import.meta.env)
@@ -1188,7 +1188,7 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `scripts/doctor.mjs:L159` (process.env)
+  - `scripts/doctor.mjs:L166` (process.env)
 
 ### `VITE_CANONICAL_HOST`
 
