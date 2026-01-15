@@ -12,7 +12,7 @@
     "lint": "eslint \"src/**/*.{js,jsx}\" \"backend/**/*.js\"",
     "typecheck": "tsc -p tsconfig.node.json --noEmit",
     "unit": "node --test \"tests/unit/**/*.test.mjs\"",
-    "smoke": "playwright test -c tests/smoke/playwright.config.mjs",
+    "smoke": "node ./node_modules/playwright/cli.js test -c tests/smoke/playwright.config.mjs",
     "doctor": "node scripts/doctor.mjs",
     "test": "npm run lint && npm run typecheck && npm run unit && npm run build",
     "preview": "vite preview",
@@ -140,3 +140,5 @@
     "vite": "^7.2.4"
   }
 }
+
+
