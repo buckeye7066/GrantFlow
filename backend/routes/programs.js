@@ -17,13 +17,13 @@ function tableForTrack(track) {
   return track === 'PROVIDER' ? 'programs_provider' : 'programs_client'
 }
 
-function buildFilters({ search, jurisdiction, state, county, isActive }) {
+function buildFilters({ search, jurisdiction, state, county, isActive, dialect }) {
   const where = []
   const params = []
 
   if (typeof isActive === 'string') {
     const v = isActive.trim().toLowerCase()
-    if (v === 'true' || v === '1') where.push(req.db?.dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1')
+    if (v === 'true' || v === '1') where.push(dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1')
     if (v === 'false' || v === '0') where.push('is_active = 0')
   }
 
@@ -69,7 +69,7 @@ router.get('/', (req, res) => {
 
     const fetchTrack = (t) => {
       const table = tableForTrack(t)
-      const { clause, params } = buildFilters({ search, jurisdiction, state, county, isActive })
+      const { clause, params } = buildFilters({ search, jurisdiction, state, county, isActive, dialect: req.db?.dialect })
       const rows = req.db
         .prepare(
           `

@@ -19,7 +19,7 @@ router.get('/', (req, res) => {
       query +=
         req.db?.dialect === 'postgres'
           ? ' AND m.due_date >= CURRENT_DATE AND m.completed = FALSE'
-          : ' AND m.due_date >= date(\"now\") AND m.completed = 0';
+          : " AND m.due_date >= date('now') AND m.completed = 0";
     
     query += ' ORDER BY m.due_date ASC';
     const milestones = req.db.prepare(query).all(...params);
