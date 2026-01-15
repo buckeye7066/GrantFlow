@@ -49,22 +49,17 @@ import { getSafeHealthSummary } from './services/diagnosticsService.js';
 import { initializeFeatureFlags } from './services/featureFlagService.js';
 import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from './services/auditService.js';
 import { decryptRuntimeSecret } from './utils/runtimeSecrets.js';
+import { validateRuntimeEnv } from './config/env.js';
 
-// Validate critical environment variables at startup.
-// NOTE: OpenAI is intentionally OPTIONAL for core app flows (auth/profile/opportunities).
-// The server can restore OPENAI_API_KEY from app_runtime_secrets later (hosted emergency stopgap),
-// and even without OpenAI the app should still boot and allow login.
-const requiredEnvVars = [];
-const missingEnvVars = requiredEnvVars.filter((varName) => !process.env[varName]);
-
-if (missingEnvVars.length > 0) {
-  console.error('ERROR: Missing required environment variables:', missingEnvVars.join(', '));
-  console.error('Please check your environment variables and redeploy.');
-  if (process.env.NODE_ENV === 'production') {
-    process.exit(1);
-  } else {
-    console.warn('WARNING: Running in non-production mode without all required environment variables.');
+// Validate runtime environment variables (fail-fast in production for P0 config)
+const envReport = validateRuntimeEnv()
+if (!envReport.ok) {
+  console.error('[env] Missing/invalid production configuration:', envReport.errors)
+  if (envReport.is_prod) {
+    process.exit(1)
   }
+} else if (envReport.warnings.length > 0) {
+  console.warn('[env] Warnings:', envReport.warnings)
 }
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null;

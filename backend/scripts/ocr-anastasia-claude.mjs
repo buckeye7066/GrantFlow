@@ -3,8 +3,17 @@ import path from 'path';
 import Database from 'better-sqlite3';
 import Anthropic from '@anthropic-ai/sdk';
 
-const CLAUDE_API_KEY = "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";
-const PDF_PATH = "G:\\Apps\\grantflow\\GrantFlowb44\\Anastasia profile.pdf";
+const CLAUDE_API_KEY = process.env.ANTHROPIC_API_KEY || null
+const PDF_PATH = process.env.PDF_PATH || process.argv[2] || null
+
+if (!CLAUDE_API_KEY) {
+  console.error('[ocr-anastasia-claude] ANTHROPIC_API_KEY is required.')
+  process.exit(1)
+}
+if (!PDF_PATH) {
+  console.error('[ocr-anastasia-claude] PDF_PATH is required. Provide via env PDF_PATH or first CLI argument.')
+  process.exit(1)
+}
 
 const db = new Database('./data/grantflow.db');
 

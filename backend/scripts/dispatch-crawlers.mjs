@@ -5,13 +5,15 @@ import path from 'path';
 const db = new Database('./data/grantflow.db');
 const uploadDir = path.join(process.cwd(), 'uploads');
 
-// Mock getOpenAI function
-const getOpenAI = () => {
-  const OpenAI = (await import('openai')).default;
-  return new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY || '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'
-  });
-};
+// Mock getOpenAI function (never embed secrets)
+const getOpenAI = async () => {
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY is required to dispatch crawler jobs that use AI.')
+  }
+  const OpenAI = (await import('openai')).default
+  return new OpenAI({ apiKey })
+}
 
 console.log('=== DISPATCHING QUEUED CRAWLER JOBS ===\n');
 

@@ -28,6 +28,9 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Cursor
+.cursor/
+
 # Databases / runtime data (local only)
 backend/data/
 seed/*.db

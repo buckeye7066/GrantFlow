@@ -62,7 +62,17 @@ export function createOpenAIClient({ allowMissing = false, apiKeyOverride = null
     )
   }
 
-  return { openai: new OpenAI({ apiKey }), diagnostics }
+  const timeout = Number(process.env.OPENAI_TIMEOUT_MS || 20000)
+  const maxRetries = Number(process.env.OPENAI_MAX_RETRIES || 2)
+
+  return {
+    openai: new OpenAI({
+      apiKey,
+      timeout: Number.isFinite(timeout) && timeout > 0 ? timeout : 20000,
+      maxRetries: Number.isFinite(maxRetries) && maxRetries >= 0 ? maxRetries : 2,
+    }),
+    diagnostics,
+  }
 }
 
 export function summarizeOpenAIError(error) {

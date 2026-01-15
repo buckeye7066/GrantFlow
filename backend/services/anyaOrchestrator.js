@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto'
-import OpenAI from 'openai'
 import { listToolMetadata, invokeTool as invokeRegisteredTool } from './anyaToolRegistry.js'
+import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
 
 const TASK_STATUSES = new Set(['open', 'in_progress', 'completed', 'cancelled'])
 const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent'])
@@ -14,21 +14,11 @@ let cachedOpenAI = null
 
 function getOpenAIClient() {
   if (cachedOpenAI) return cachedOpenAI
-  
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) {
-    const error = new Error('OPENAI_API_KEY environment variable is not set')
-    error.code = 'MISSING_API_KEY'
-    throw error
-  }
-  
-  try {
-    cachedOpenAI = new OpenAI({ apiKey })
-    return cachedOpenAI
-  } catch (error) {
-    console.error('[Anya] Failed to initialize OpenAI client:', error.message)
-    throw error
-  }
+
+  // Use centralized client (timeout + retry config). Throw if missing for Anya usage.
+  const { openai } = createOpenAIClient()
+  cachedOpenAI = openai
+  return cachedOpenAI
 }
 
 const DEFAULT_ASSISTANT_MODEL = process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini'
@@ -846,7 +836,13 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
       return reply
     }
   } catch (error) {
-    console.error('[Anya] OpenAI API Error:', error.message)
+    const summary = summarizeOpenAIError(error)
+    console.error('[Anya] OpenAI API Error:', {
+      status: summary.status ?? null,
+      message: summary.message,
+      isAuth: summary.isAuth,
+      isRateLimit: summary.isRateLimit,
+    })
   }
 
   return "I'm having trouble reaching the AI service right now. Please try again in a moment."

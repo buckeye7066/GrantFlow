@@ -6,9 +6,12 @@ import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js';
 const db = new Database('./data/grantflow.db');
 const uploadDir = path.join(process.cwd(), 'uploads');
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || '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'
-});
+const apiKey = process.env.OPENAI_API_KEY
+if (!apiKey) {
+  console.error('[process-all-jobs] OPENAI_API_KEY is required to process crawler jobs that use AI.')
+  process.exit(1)
+}
+const openai = new OpenAI({ apiKey })
 
 const getOpenAI = () => openai;
 

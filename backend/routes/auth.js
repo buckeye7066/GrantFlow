@@ -35,7 +35,17 @@ function getOpenAI() {
   return new OpenAI({ apiKey })
 }
 
-const JWT_SECRET = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret'
+const JWT_SECRET =
+  process.env.AUTH_JWT_SECRET ||
+  process.env.JWT_SECRET ||
+  (process.env.NODE_ENV === 'production' ? null : 'grantflow-dev-secret')
+
+if (!JWT_SECRET) {
+  throw new Error('AUTH_JWT_SECRET is required in production (set a strong random value).')
+}
+if (process.env.NODE_ENV === 'production' && JWT_SECRET === 'grantflow-dev-secret') {
+  throw new Error('AUTH_JWT_SECRET is insecure (grantflow-dev-secret). Set a strong random value for production.')
+}
 
 function parseSeconds(value, fallback) {
   if (value === undefined || value === null) {
