@@ -35,11 +35,17 @@ function startProcess(command, args, { cwd, env, logFile, label }) {
   })
 
   if (logFile) {
-    ensureDir(path.dirname(logFile))
-    const stream = fs.createWriteStream(logFile, { flags: 'a' })
-    stream.write(`\n\n===== ${label ?? command} =====\n`)
-    child.stdout.pipe(stream)
-    child.stderr.pipe(stream)
+    try {
+      ensureDir(path.dirname(logFile))
+      const stream = fs.createWriteStream(logFile, { flags: 'a' })
+      stream.write(`\n\n===== ${label ?? command} =====\n`)
+      // Don't let one stream end close the file for the other.
+      child.stdout.pipe(stream, { end: false })
+      child.stderr.pipe(stream, { end: false })
+    } catch (e) {
+      // Logging should never prevent the doctor run from proceeding.
+      console.warn('[doctor] Failed to open log file:', logFile, e?.message ?? e)
+    }
   }
 
   return child
@@ -58,7 +64,8 @@ function isPortAvailable(port, host = '0.0.0.0') {
 }
 
 async function startBackend(root, { outDir, logFile }) {
-  const candidatePorts = [8080, 8081, 8082]
+  // Scan a wider range to avoid flaky failures when local ports are already in use.
+  const candidatePorts = Array.from({ length: 15 }, (_, i) => 8080 + i) // 8080-8094
   for (const port of candidatePorts) {
     const available = await isPortAvailable(port)
     if (!available) continue
@@ -88,7 +95,7 @@ async function startBackend(root, { outDir, logFile }) {
     try { proc.kill('SIGTERM') } catch {}
   }
 
-  throw new Error('Backend did not become healthy on any candidate port (8080/8081/8082)')
+  throw new Error('Backend did not become healthy on any candidate port (8080-8094)')
 }
 
 async function main() {
