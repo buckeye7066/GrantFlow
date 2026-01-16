@@ -1,5 +1,5 @@
 // Data Import Script
-// Run this once to import data from Base44 export
+// Run this once to import data from a Base44 reference export (optional seeding dataset)
 
 import Database from 'better-sqlite3';
 import fs from 'fs';

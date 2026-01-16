@@ -62,4 +62,4 @@ To fully complete the live â€œError Ledgerâ€ phase we need:
 
 - Vercel logs (prod) for `www.axiombiolabs.org` requests and rewrite behavior
 - Railway logs for `/api/*` around the same times
-- Base44 export diffs for missing flows/config
+- Base44 **reference** export diffs for missing flows/config (optional; Base44 is not the runtime system)
