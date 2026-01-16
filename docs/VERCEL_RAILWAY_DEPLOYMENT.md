@@ -1,6 +1,6 @@
 ## GrantFlow Cloud Deployment (Vercel + Railway)
 
-This playbook captures everything needed to ship the `resolve-merge-conflicts` branch to production at `https://www.axiombiolabs.org/grantflow`, using **Vercel** for the SPA and **Railway** for the API.
+This playbook captures everything needed to ship GrantFlow to production at `https://www.axiombiolabs.org/grantflow`, using **Vercel** for the SPA and **Railway** for the API.
 
 ---
 
@@ -8,7 +8,7 @@ This playbook captures everything needed to ship the `resolve-merge-conflicts` b
 
 1. Check out the deployment branch and pull latest.
    ```bash
-   git checkout resolve-merge-conflicts
+   git checkout stabilization/doctor-gate
    git pull
    ```
 2. Make sure nothing is uncommitted.
@@ -17,27 +17,24 @@ This playbook captures everything needed to ship the `resolve-merge-conflicts` b
    ```
 3. Run the standard quality gates.
    ```bash
-   npm install
-   npm run lint
-   npm run build
-   npm run preview -- --host 127.0.0.1 --port 4176 &
-   SMOKE_BASE_URL=http://127.0.0.1:4176 SMOKE_BASE_PATH=/grantflow SMOKE_TARGET_PATH= npm run smoke:login
+   npm run doctor
    ```
-   Stop the preview server once the smoke test passes.
+   If `npm run doctor` passes, you have a consistent build + backend + smoke baseline.
 
 ---
 
 ### 2. Frontend Deployment (Vercel)
 
 1. **Create or select** the Vercel project for GrantFlow.
-2. **Repository:** connect to the GitHub repo and choose the `resolve-merge-conflicts` branch (switch to `main` once merged).
+2. **Repository:** connect to the GitHub repo and choose the branch you deploy from (recommended: `main` after stabilization merges).
 3. **Framework preset:** `Vite`.
 4. **Build & output settings:**
    - Install command: `npm install`
    - Build command: `npm run build`
    - Output directory: `dist`
 5. **Environment variables** (Project Settings → Environment Variables):
-   - `VITE_API_URL=https://grantflow-production.up.railway.app` (or your final backend URL)
+   - `VITE_APP_BASE=/grantflow`
+   - (optional, dev-only) `VITE_API_URL=https://grantflow-production.up.railway.app`
 6. **Routing:** we already ship `vercel.json` with:
    ```json
    {
@@ -54,34 +51,34 @@ This playbook captures everything needed to ship the `resolve-merge-conflicts` b
    ```
    This ensures the SPA works from `/grantflow/*` and API calls proxy cleanly when needed.
 7. Trigger a deploy. Vercel will build and host the static bundle automatically.
+8. **Domains:** ensure **both** `app.axiombiolabs.org` and `www.axiombiolabs.org` (if you expect them to work) are attached to this Vercel project.
+   - If `app.*` works but `www.*` 404s on deep links, see **E-001** in `docs/ERROR_LEDGER.md`.
 
 ---
 
 ### 3. Backend Deployment (Railway)
 
-1. **Project setup:** create a Railway service from the repo root or from the `backend` folder.
+1. **Project setup:** this repo ships `railway.json` and a root `Dockerfile`. Railway should build from the repo root.
 2. **Environment variables** (Railway → Variables):
-   | Key              | Value (example)                               |
-   | ---------------- | --------------------------------------------- |
-   | `PORT`           | `8080`                                        |
-   | `DATABASE_URL`   | `./data/grantflow.db`                         |
-   | `ADMIN_TOKEN`    | Secure random value (`openssl rand -hex 32`)  |
-   | `CORS_ORIGIN`    | `https://your-vercel-app.vercel.app`          |
-   | `OPENAI_API_KEY` | *(optional – required for AI features)*       |
+   See `docs/ENVIRONMENT.md` (backend section). At minimum:
+   - `DB_PROVIDER` + (`DATABASE_URL` for Postgres **or** `SQLITE_DB_PATH` for SQLite)
+   - `AUTH_JWT_SECRET`
+   - `CORS_ORIGIN`
+   - `ADMIN_TOKEN`
 3. **Seed the database** (pick one):
    - _Pre-built_: unzip `grantflow-migration.zip` into `backend/data/` before the container starts.
    - _JSON import_: copy your Base44 export into `backend/`, then run `node backend/import-data.js data-export.json`.
-4. **Start command:** `node backend/server.js`.
-5. **Check logs:** confirm `GrantFlow API server running on port 8080` appears with no stack traces.
+4. **Start command:** Railway uses `railway.json` → `npm start` (which runs `node backend/server.js`).
+5. **Check logs:** confirm `/api/health` returns `200` and logs show a healthy DB connection.
 
 ---
 
 ### 4. Merge & Release
 
-1. Open a PR (`resolve-merge-conflicts` ➝ `main`) using the template in `PR_DESCRIPTION.md`.
-2. Once approved, merge to `main`. Vercel auto-builds the production deployment.
+1. Open a PR into `main` (recommended) once the stabilization branch is verified.
+2. Once approved, merge to `main`. Vercel/Railway will auto-build if configured.
 3. In Vercel, promote the new build to production (`Production Deployments → Promote`).
-4. DNS for `www.axiombiolabs.org` is managed by Vercel. Ensure your domain is properly configured in the Vercel project settings.
+4. DNS: ensure `www.axiombiolabs.org` points to Vercel (not GoDaddy default hosting). See E-001.
 
 ---
 

@@ -1,9 +1,17 @@
 # GrantFlow Release Runbook
 
 ## Production Environment
-- **Frontend**: Vercel (`www.axiombiolabs.org/grantflow`)
-- **Backend**: Railway (`grantflow-production.up.railway.app`)
-- **Database**: SQLite (Railway persistent volume)
+- **Frontend**: Vercel (served from `/grantflow`)
+- **Backend**: Railway (Dockerfile build + `npm start`)
+- **Database**: Postgres *or* SQLite depending on `DB_PROVIDER` (see `docs/ENVIRONMENT.md`)
+
+## Phase 5 Notes (Deploy sanity + rollback)
+
+- **Single-source config**:
+  - **Vercel** routing is defined in `vercel.json` (SPA fallback + `/api` rewrites).
+  - **Railway** build/start is defined in `railway.json` + `Dockerfile`.
+- **Known incident**:
+  - If `app.axiombiolabs.org/grantflow/*` works but `www.axiombiolabs.org/grantflow/login` 404s, you have **domain routing drift** (see **E-001** in `docs/ERROR_LEDGER.md`).
 
 ## Core Operations
 
@@ -43,7 +51,24 @@
   - Anya will continue to provide gap analysis and recent matches using deterministic logic.
 
 ## Deployment Procedure
-1. Ensure all tests pass: `npm run lint && npm run build`.
-2. Push to `main` branch (Vercel and Railway will auto-deploy).
-3. Verify `/api/crawlers/health` returns `worker_online: true`.
-4. Run a smoke test login and profile creation.
+1. Ensure baseline gate passes: `npm run doctor`.
+2. Merge to the deploy branch (recommended: `main`) and let Vercel/Railway build.
+3. Verify routing:
+   - `/<base>/` loads (base is `/grantflow`)
+   - `/<base>/login` loads (deep refresh)
+   - `/<base>/api/health` returns 200 (same-origin rewrite)
+4. Verify backend health:
+   - `GET https://<railway-service>/api/health` returns 200 (or 200 + `"status":"warning"` is acceptable)
+   - Use `X-Request-Id` to correlate any failures in Railway logs
+
+## Rollback (Fast)
+
+### Frontend (Vercel)
+- Promote the previous known-good **Production Deployment** in Vercel.
+- If the break is domain-related, verify domain assignment and redeploy; rollback won’t fix DNS.
+
+### Backend (Railway)
+- Redeploy the previous successful Railway deployment.
+- If DB issues are involved:
+  - Postgres: do **not** attempt to roll back migrations in prod during an incident; roll forward with a fix or restore from backup.
+  - SQLite rollback is only viable if you have a persistent volume + known-good DB file.
