@@ -2,7 +2,7 @@
 /**
  * Phase 7 helper: inventory Base44 compatibility surface area used by the UI.
  *
- * Scans `src/**/*.{js,jsx}` for:
+ * Scans the `src/` tree for:
  * - base44.entities.<EntityName>
  * - base44.functions.invoke('<functionName>')
  * - base44.integrations.Core.<MethodName>
