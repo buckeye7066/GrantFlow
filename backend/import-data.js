@@ -237,6 +237,7 @@ const counts = {
 };
 
 Object.entries(counts).forEach(([table, count]) => {
+  console.log(`[import] ${table}: ${count}`);
 });
 
 db.close();
