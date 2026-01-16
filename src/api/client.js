@@ -1,3 +1,5 @@
+import { env } from '@/config/env.js'
+
 // API Client - Replaces Base44 SDK
 // This file provides the same interface as base44Client but uses your own backend
 
@@ -6,10 +8,8 @@
 // NOTE: Vite dev server proxies `/api` to the backend (see `vite.config.ts`),
 // so the safest default in dev is also relative URLs (empty string). If you need
 // to hit a remote backend directly, set `VITE_API_URL`.
-const API_URL = import.meta.env.DEV
-  ? (import.meta.env.VITE_API_URL || '')
-  : ''; // Empty string = relative URLs, proxied by Vercel
-const APP_BASE = import.meta.env.VITE_APP_BASE || '/grantflow';
+const API_URL = env.isDev ? env.apiUrl : '' // Empty string = relative URLs, proxied by Vercel
+const APP_BASE = env.appBase || '/grantflow'
 
 // Frontend startup sanity (non-fatal): warn on env drift/misconfiguration.
 if (import.meta.env.DEV) {

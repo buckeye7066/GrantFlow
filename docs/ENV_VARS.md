@@ -539,7 +539,7 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**: (not present)
 - **Code references**:
   - `scripts/run-all-real-crawlers.mjs:L4` (process.env)
-  - `src/App.jsx:L73` (import.meta.env)
+  - `src/config/env.js:L25` (import.meta.env)
 
 ### `BUILD_TIMESTAMP`
 
@@ -693,7 +693,8 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `src/api/client.js:L9–L15` (import.meta.env)
+  - `src/api/client.js:L15` (import.meta.env)
+  - `src/config/env.js:L23` (import.meta.env)
 
 ### `ENABLE_MIN_NATIONAL_ENSURE`
 
@@ -887,6 +888,7 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**:
   - `backend/env.example:5` = `development`
 - **Code references**:
+  - `backend/config/env.js:L57–L130` (process.env)
   - `backend/middleware/errorHandler.js:L11` (process.env)
   - `backend/routes/anya.js:L121` (process.env)
   - `backend/routes/auth.js:L1211–L2010` (process.env)
@@ -958,6 +960,7 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
+  - `src/config/env.js:L24` (import.meta.env)
   - `src/utils/enforceCanonicalHost.js:L4` (import.meta.env)
 
 ### `PUBLIC_URL`
@@ -1167,8 +1170,9 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**:
   - `env.example:4` = `http://localhost:8080`
 - **Code references**:
-  - `src/api/client.js:L10–L21` (import.meta.env)
+  - `src/api/client.js:L16–L21` (import.meta.env)
   - `src/components/auth/SocialSignInButtons.jsx:L35–L63` (import.meta.env)
+  - `src/config/env.js:L27` (import.meta.env)
 
 ### `VITE_APP_BASE`
 
@@ -1178,10 +1182,9 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/routes/auth.js:L126` (process.env)
   - `backend/server.js:L196` (process.env)
   - `scripts/doctor.mjs:L79–L177` (process.env)
-  - `src/App.jsx:L73` (import.meta.env)
-  - `src/api/client.js:L12` (import.meta.env)
   - `src/components/auth/SessionExpiredDialog.jsx:L10` (import.meta.env)
   - `src/components/auth/SocialSignInButtons.jsx:L24` (import.meta.env)
+  - `src/config/env.js:L26` (import.meta.env)
   - `tests/smoke/playwright.config.mjs:L5` (process.env)
 
 ### `VITE_ASSET_BASE`
@@ -1194,12 +1197,14 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
+  - `src/config/env.js:L28` (import.meta.env)
   - `src/utils/enforceCanonicalHost.js:L6` (import.meta.env)
 
 ### `VITE_CANONICAL_HOST_STRICT`
 
 - **Templates**: (not present)
 - **Code references**:
+  - `src/config/env.js:L29` (import.meta.env)
   - `src/utils/enforceCanonicalHost.js:L11` (import.meta.env)
 
 ### `VITE_DEV_ADMIN_TOKEN`
