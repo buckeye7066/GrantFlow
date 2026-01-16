@@ -67,7 +67,7 @@ This playbook captures everything needed to ship GrantFlow to production at `htt
    - `ADMIN_TOKEN`
 3. **Seed the database** (pick one):
    - _Pre-built_: unzip `grantflow-migration.zip` into `backend/data/` before the container starts.
-   - _JSON import_: copy your Base44 export into `backend/`, then run `node backend/import-data.js data-export.json`.
+   - _JSON import (optional)_: if you have a **Base44 reference export** (dataset), copy it into `backend/`, then run `node backend/import-data.js data-export.json`.
 4. **Start command:** Railway uses `railway.json` → `npm start` (which runs `node backend/server.js`).
 5. **Check logs:** confirm `/api/health` returns `200` and logs show a healthy DB connection.
 

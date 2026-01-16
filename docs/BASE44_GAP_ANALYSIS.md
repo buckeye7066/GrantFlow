@@ -2,7 +2,7 @@
 
 _Last updated: 2026-01-16_
 
-The Base44 workspace (`grant-flow-736bafec.base44.app`) is our reference implementation. This document captures the current gaps between that experience and the Vercel/Railway codebase in `buckeye7066/grantflow`, and outlines the work required to close them.
+The Base44 workspace (`grant-flow-736bafec.base44.app`) is our **reference implementation only**. GrantFlow will ship/run from this repo (Vercel/Railway); Base44 is used purely to compare UX/data patterns and (optionally) to export reference datasets for seeding.
 
 ---
 
