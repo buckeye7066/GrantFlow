@@ -16,3 +16,14 @@ test('app basePath loads (no blank screen)', async ({ page }) => {
   expect(html.length).toBeGreaterThan(500)
   await expect(page.locator('body')).toBeVisible()
 })
+
+test('app deep route loads under basePath (refresh safe)', async ({ page }) => {
+  // This catches misconfigured Vite/Vercel base-path + SPA fallback issues.
+  const target = `${basePath.replace(/\/$/, '')}/login`
+  await page.goto(target, { waitUntil: 'domcontentloaded' })
+
+  // Should not be a static 404 or blank screen.
+  const html = await page.content()
+  expect(html.toLowerCase()).not.toContain('file not found')
+  await expect(page.locator('body')).toBeVisible()
+})
