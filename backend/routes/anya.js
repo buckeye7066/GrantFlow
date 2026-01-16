@@ -48,23 +48,22 @@ router.get('/status', adminAuth, async (_req, res) => {
   let anthropicError = null
   let modelInfo = null
   
-  console.log('[Anya Status] Checking Anthropic API key configuration...')
-  console.log('[Anya Status] ANTHROPIC_API_KEY exists:', !!process.env.ANTHROPIC_API_KEY)
-  console.log('[Anya Status] OPENAI_API_KEY exists:', !!process.env.OPENAI_API_KEY)
+  // Avoid logging secrets (even prefixes) in production logs.
+  console.log('[Anya Status] Checking AI key configuration...')
   
   try {
     const apiKey = process.env.ANTHROPIC_API_KEY
     if (!apiKey) {
-      console.log('[Anya Status] ANTHROPIC_API_KEY is MISSING')
       anthropicStatus = 'missing_key'
     } else {
-      console.log('[Anya Status] ANTHROPIC_API_KEY found, prefix:', apiKey.substring(0, 10))
-      console.log('[Anya Status] Key starts with sk-ant-:', apiKey.startsWith('sk-ant-'))
-      
       // Try to import and test Anthropic
       const Anthropic = (await import('@anthropic-ai/sdk')).default
-      const client = new Anthropic({ apiKey })
-      console.log('[Anya Status] Anthropic client created, testing API...')
+      const client = new Anthropic({
+        apiKey,
+        // keep the health check bounded
+        timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 15_000),
+        maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
+      })
       
       // Make a minimal test request
       const testResponse = await client.messages.create({
@@ -72,25 +71,20 @@ router.get('/status', adminAuth, async (_req, res) => {
         max_tokens: 10,
         messages: [{ role: 'user', content: 'Say "ok"' }],
       })
-      
-      console.log('[Anya Status] API test response received:', !!testResponse)
-      
+            
       if (testResponse?.content?.[0]?.text) {
         anthropicStatus = 'connected'
         modelInfo = {
           model: 'claude-3-haiku-20240307',
           test_response: testResponse.content[0].text,
         }
-        console.log('[Anya Status] API test SUCCESSFUL:', testResponse.content[0].text)
       } else {
         anthropicStatus = 'invalid_response'
-        console.log('[Anya Status] API test returned invalid response')
       }
     }
   } catch (error) {
     anthropicStatus = 'error'
-    console.error('[Anya Status] API test FAILED:', error.constructor.name, error.message)
-    console.error('[Anya Status] Error status:', error.status)
+    console.error('[Anya Status] API test FAILED:', error.constructor?.name, error.message, error.status)
     anthropicError = {
       type: error.constructor.name,
       message: error.message,
@@ -107,22 +101,13 @@ router.get('/status', adminAuth, async (_req, res) => {
     anthropic: {
       status: anthropicStatus,
       api_key_configured: !!process.env.ANTHROPIC_API_KEY,
-      api_key_prefix: process.env.ANTHROPIC_API_KEY ? 
-        process.env.ANTHROPIC_API_KEY.substring(0, 10) + '...' : null,
       error: anthropicError,
       model: modelInfo,
     },
     openai: {
       api_key_configured: !!process.env.OPENAI_API_KEY,
-      api_key_prefix: process.env.OPENAI_API_KEY ? 
-        process.env.OPENAI_API_KEY.substring(0, 7) + '...' : null,
     },
-    environment: {
-      node_env: process.env.NODE_ENV,
-      all_env_keys: Object.keys(process.env).filter(k => 
-        k.includes('API') || k.includes('ANTHROPIC') || k.includes('OPENAI')
-      ),
-    },
+    environment: { node_env: process.env.NODE_ENV },
     last_action_at: null,
     active_sessions: null,
   })

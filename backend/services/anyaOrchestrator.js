@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto'
-import OpenAI from 'openai'
 import { listToolMetadata, invokeTool as invokeRegisteredTool } from './anyaToolRegistry.js'
+import { createCircuitBreaker } from '../utils/circuitBreaker.js'
+import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
 
 const TASK_STATUSES = new Set(['open', 'in_progress', 'completed', 'cancelled'])
 const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent'])
@@ -11,24 +12,17 @@ const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent'])
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@grantflow.app'
 
 let cachedOpenAI = null
+const openAIBreaker = createCircuitBreaker({
+  name: 'anya-openai',
+  failureThreshold: Number(process.env.ANYA_OPENAI_FAILURE_THRESHOLD || 3),
+  cooldownMs: Number(process.env.ANYA_OPENAI_COOLDOWN_MS || 30_000),
+})
 
 function getOpenAIClient() {
   if (cachedOpenAI) return cachedOpenAI
-  
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) {
-    const error = new Error('OPENAI_API_KEY environment variable is not set')
-    error.code = 'MISSING_API_KEY'
-    throw error
-  }
-  
-  try {
-    cachedOpenAI = new OpenAI({ apiKey })
-    return cachedOpenAI
-  } catch (error) {
-    console.error('[Anya] Failed to initialize OpenAI client:', error.message)
-    throw error
-  }
+  const { openai } = createOpenAIClient()
+  cachedOpenAI = openai
+  return cachedOpenAI
 }
 
 const DEFAULT_ASSISTANT_MODEL = process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini'
@@ -729,8 +723,8 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
   let historyMessages = null
   try {
     // Ensure the caller has access and load recent history for context.
-    getSession(db, user, sessionId)
-    historyMessages = getMessages(db, user, sessionId, { limit: 20, direction: 'asc' })
+    await getSession(db, user, sessionId)
+    historyMessages = await getMessages(db, user, sessionId, { limit: 20, direction: 'asc' })
   } catch (historyError) {
     console.warn('[anya] Unable to load session history; continuing with minimal context:', historyError)
     historyMessages = []
@@ -830,15 +824,23 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
 
   try {
     console.log('[Anya] Calling OpenAI API with model:', DEFAULT_ASSISTANT_MODEL)
-    const response = await openai.chat.completions.create({
-      model: DEFAULT_ASSISTANT_MODEL,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        ...conversationMessages
-      ],
-      temperature: 0.3,
-      max_tokens: 1000,
-    })
+    const response = await openAIBreaker.exec(
+      async () =>
+        await openai.chat.completions.create({
+          model: DEFAULT_ASSISTANT_MODEL,
+          messages: [{ role: 'system', content: systemPrompt }, ...conversationMessages],
+          temperature: 0.3,
+          max_tokens: 1000,
+        }),
+      {
+        shouldTrip: (err) => {
+          const summary = summarizeOpenAIError(err)
+          if (summary.isAuth || summary.isRateLimit) return true
+          const status = summary.status
+          return status == null || status >= 500
+        },
+      },
+    )
 
     const reply = response.choices[0]?.message?.content?.trim()
     if (reply) {
@@ -846,7 +848,22 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
       return reply
     }
   } catch (error) {
-    console.error('[Anya] OpenAI API Error:', error.message)
+    const summary = summarizeOpenAIError(error)
+    console.error('[Anya] OpenAI API Error:', {
+      status: summary.status,
+      message: summary.message,
+      breaker: openAIBreaker.snapshot(),
+    })
+
+    if (error?.code === 'CIRCUIT_OPEN') {
+      return "The AI service is temporarily overloaded. Give me 30 seconds and try again."
+    }
+    if (summary.isAuth) {
+      return "AI is not configured correctly (missing/invalid API key). An admin needs to set OPENAI_API_KEY."
+    }
+    if (summary.isRateLimit) {
+      return "The AI service is rate-limiting us right now. Please try again shortly."
+    }
   }
 
   return "I'm having trouble reaching the AI service right now. Please try again in a moment."

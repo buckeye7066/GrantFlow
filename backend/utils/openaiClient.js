@@ -46,7 +46,12 @@ export function getOpenAIKeyDiagnostics() {
   return getOpenAIKeyDiagnosticsFromKey(process.env.OPENAI_API_KEY ?? '')
 }
 
-export function createOpenAIClient({ allowMissing = false, apiKeyOverride = null } = {}) {
+export function createOpenAIClient({
+  allowMissing = false,
+  apiKeyOverride = null,
+  timeoutMs = null,
+  maxRetries = null,
+} = {}) {
   const apiKeyRaw = apiKeyOverride ?? (process.env.OPENAI_API_KEY ?? '')
   const apiKey = normalizeOpenAIKey(apiKeyRaw)
   const diagnostics = getOpenAIKeyDiagnosticsFromKey(apiKeyRaw)
@@ -62,7 +67,24 @@ export function createOpenAIClient({ allowMissing = false, apiKeyOverride = null
     )
   }
 
-  return { openai: new OpenAI({ apiKey }), diagnostics }
+  const effectiveTimeoutMs =
+    timeoutMs != null
+      ? Number(timeoutMs)
+      : Number(process.env.OPENAI_TIMEOUT_MS || process.env.ANYA_OPENAI_TIMEOUT_MS || 30_000)
+
+  const effectiveMaxRetries =
+    maxRetries != null
+      ? Number(maxRetries)
+      : Number(process.env.OPENAI_MAX_RETRIES || process.env.ANYA_OPENAI_MAX_RETRIES || 2)
+
+  return {
+    openai: new OpenAI({
+      apiKey,
+      timeout: Number.isFinite(effectiveTimeoutMs) ? effectiveTimeoutMs : 30_000,
+      maxRetries: Number.isFinite(effectiveMaxRetries) ? effectiveMaxRetries : 2,
+    }),
+    diagnostics,
+  }
 }
 
 export function summarizeOpenAIError(error) {
