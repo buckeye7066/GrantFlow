@@ -46,6 +46,17 @@ class APIClient {
     this.entities = {};
   }
 
+  getRequestId() {
+    try {
+      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+      }
+    } catch {
+      // fall through to fallback request id
+    }
+    return `req_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+  }
+
   setAuthFailureHandler(handler) {
     this.onAuthFailure = handler;
   }
@@ -206,6 +217,7 @@ class APIClient {
     
     // Track if this is a retry attempt to prevent infinite loops
     const isRetry = options._isRetry || false;
+    const requestId = this.getRequestId();
 
     const headers = {
       ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
@@ -219,6 +231,8 @@ class APIClient {
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
+
+    headers['X-Request-Id'] = headers['X-Request-Id'] || requestId;
 
     // Add timeout to prevent hanging requests
     const controller = new AbortController();
@@ -251,8 +265,13 @@ class APIClient {
       }
 
       if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: response.statusText }));
-        throw new Error(error.error || error.message || 'Request failed');
+        const errorBody = await response.json().catch(() => ({ error: response.statusText }));
+        const err = new Error(errorBody.error || errorBody.message || 'Request failed');
+        err.status = response.status;
+        err.requestId = errorBody.request_id || headers['X-Request-Id'] || null;
+        err.errorType = errorBody.error_type || null;
+        err.details = errorBody;
+        throw err;
       }
 
       if (response.status === 204) {
@@ -271,10 +290,16 @@ class APIClient {
       // Handle timeout errors specifically
       if (error.name === 'AbortError') {
         console.error(`[APIClient] Request timeout for ${endpoint}`);
-        throw new Error('Request timed out. Please check your connection and try again.');
+        const timeoutErr = new Error('Request timed out. Please check your connection and try again.');
+        timeoutErr.status = 504;
+        timeoutErr.requestId = headers['X-Request-Id'] || null;
+        throw timeoutErr;
       }
       
       // Re-throw other errors
+      if (error && typeof error === 'object' && !error.requestId) {
+        error.requestId = headers['X-Request-Id'] || null;
+      }
       throw error;
     }
   }
