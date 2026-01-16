@@ -5,8 +5,8 @@ It enumerates environment variables referenced in code and/or present in example
 
 ## Summary
 
-- Total vars: **147**
-- Vars referenced in code: **138**
+- Total vars: **155**
+- Vars referenced in code: **146**
 - Vars present in env templates: **55**
 
 ## Inventory
@@ -21,6 +21,8 @@ It enumerates environment variables referenced in code and/or present in example
 | `ANALYTICS_WRITE_KEY` | No | Yes |  |
 | `ANTHROPIC_API_KEY` | Yes | Yes | Backend/Node |
 | `ANYA_ADMIN_TOKEN` | Yes | Yes | Backend/Node |
+| `ANYA_ANTHROPIC_MAX_RETRIES` | Yes | No | Backend/Node |
+| `ANYA_ANTHROPIC_TIMEOUT_MS` | Yes | No | Backend/Node |
 | `ANYA_API_KEY` | Yes | No | Backend/Node |
 | `ANYA_AUTONOMOUS_ENABLED` | Yes | Yes | Backend/Node |
 | `ANYA_CODE_CRAWL` | Yes | Yes | Backend/Node |
@@ -32,7 +34,11 @@ It enumerates environment variables referenced in code and/or present in example
 | `ANYA_FUNCTION_TESTS` | Yes | Yes | Backend/Node |
 | `ANYA_MATCH_THRESHOLD` | Yes | Yes | Backend/Node |
 | `ANYA_MAX_FILE_CHANGES` | Yes | Yes | Backend/Node |
+| `ANYA_OPENAI_COOLDOWN_MS` | Yes | No | Backend/Node |
+| `ANYA_OPENAI_FAILURE_THRESHOLD` | Yes | No | Backend/Node |
+| `ANYA_OPENAI_MAX_RETRIES` | Yes | No | Backend/Node |
 | `ANYA_OPENAI_MODEL` | Yes | No | Backend/Node |
+| `ANYA_OPENAI_TIMEOUT_MS` | Yes | No | Backend/Node |
 | `ANYA_RUN_ON_ADMIN_LOGIN` | Yes | Yes | Backend/Node |
 | `ANYA_RUN_ON_SCHEDULE` | Yes | Yes | Backend/Node |
 | `ANYA_RUN_ON_STARTUP` | Yes | Yes | Backend/Node |
@@ -118,7 +124,9 @@ It enumerates environment variables referenced in code and/or present in example
 | `NATIONAL_PROGRAMS_MAX_URLS` | Yes | No | Backend/Node |
 | `NODE_ENV` | Yes | Yes | Backend/Node |
 | `OPENAI_API_KEY` | Yes | Yes | Backend/Node |
+| `OPENAI_MAX_RETRIES` | Yes | No | Backend/Node |
 | `OPENAI_MODEL` | Yes | No | Backend/Node |
+| `OPENAI_TIMEOUT_MS` | Yes | No | Backend/Node |
 | `PG_POOL_CONN_TIMEOUT_MS` | Yes | No | Backend/Node |
 | `PG_POOL_IDLE_MS` | Yes | No | Backend/Node |
 | `PG_POOL_MAX` | Yes | No | Backend/Node |
@@ -170,7 +178,7 @@ It enumerates environment variables referenced in code and/or present in example
 - **Code references**:
   - `backend/config/constants.js:L8` (process.env)
   - `backend/server.js:L72` (process.env)
-  - `backend/services/anyaOrchestrator.js:L11` (process.env)
+  - `backend/services/anyaOrchestrator.js:L12` (process.env)
   - `backend/services/email.js:L8` (process.env)
   - `scripts/ensure-admin-user.mjs:L19` (process.env)
 
@@ -216,7 +224,7 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**:
   - `backend/env.example:51` = `sk-ant-your-anthropic-key`
 - **Code references**:
-  - `backend/routes/anya.js:L52–L111` (process.env)
+  - `backend/routes/anya.js:L55–L103` (process.env)
   - `backend/services/diagnosticsService.js:L186` (process.env)
   - `scripts/diagnose-anya.mjs:L26–L40` (process.env)
 
@@ -229,6 +237,18 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/server.js:L70–L779` (process.env)
   - `backend/services/diagnosticsService.js:L191` (process.env)
   - `scripts/diagnose-anya.mjs:L20` (process.env)
+
+### `ANYA_ANTHROPIC_MAX_RETRIES`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `backend/routes/anya.js:L65` (process.env)
+
+### `ANYA_ANTHROPIC_TIMEOUT_MS`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `backend/routes/anya.js:L64` (process.env)
 
 ### `ANYA_API_KEY`
 
@@ -308,11 +328,35 @@ It enumerates environment variables referenced in code and/or present in example
 - **Code references**:
   - `backend/services/anyaAutonomousScheduler.js:L37` (process.env)
 
+### `ANYA_OPENAI_COOLDOWN_MS`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `backend/services/anyaOrchestrator.js:L18` (process.env)
+
+### `ANYA_OPENAI_FAILURE_THRESHOLD`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `backend/services/anyaOrchestrator.js:L17` (process.env)
+
+### `ANYA_OPENAI_MAX_RETRIES`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `backend/utils/openaiClient.js:L78` (process.env)
+
 ### `ANYA_OPENAI_MODEL`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/services/anyaOrchestrator.js:L34` (process.env)
+  - `backend/services/anyaOrchestrator.js:L28` (process.env)
+
+### `ANYA_OPENAI_TIMEOUT_MS`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `backend/utils/openaiClient.js:L73` (process.env)
 
 ### `ANYA_RUN_ON_ADMIN_LOGIN`
 
@@ -890,7 +934,7 @@ It enumerates environment variables referenced in code and/or present in example
 - **Code references**:
   - `backend/config/env.js:L57–L130` (process.env)
   - `backend/middleware/errorHandler.js:L11` (process.env)
-  - `backend/routes/anya.js:L121` (process.env)
+  - `backend/routes/anya.js:L110` (process.env)
   - `backend/routes/auth.js:L1211–L2010` (process.env)
   - `backend/routes/reminders.js:L157–L176` (process.env)
   - `backend/server.js:L63–L1136` (process.env)
@@ -908,7 +952,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/env.example:48` = `sk-your-openai-key`
 - **Code references**:
   - `backend/routes/admin.js:L298–L390` (process.env)
-  - `backend/routes/anya.js:L53–L118` (process.env)
+  - `backend/routes/anya.js:L108` (process.env)
   - `backend/routes/auth.js:L30` (process.env)
   - `backend/routes/crawlers.js:L38` (process.env)
   - `backend/scripts/create-profile-from-pdf.mjs:L74` (process.env)
@@ -917,11 +961,16 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/scripts/process-all-jobs.mjs:L10` (process.env)
   - `backend/scripts/process-queue.mjs:L11` (process.env)
   - `backend/server.js:L240–L764` (process.env)
-  - `backend/services/anyaOrchestrator.js:L18` (process.env)
   - `backend/services/anyaToolRegistry.js:L752` (process.env)
   - `backend/services/diagnosticsService.js:L185` (process.env)
-  - `backend/utils/openaiClient.js:L29–L50` (process.env)
+  - `backend/utils/openaiClient.js:L29–L55` (process.env)
   - `scripts/fix-api-errors.mjs:L25–L27` (process.env)
+
+### `OPENAI_MAX_RETRIES`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `backend/utils/openaiClient.js:L78` (process.env)
 
 ### `OPENAI_MODEL`
 
@@ -930,6 +979,12 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/config/constants.js:L34` (process.env)
   - `backend/routes/admin.js:L32` (process.env)
   - `backend/routes/profiles.js:L761` (process.env)
+
+### `OPENAI_TIMEOUT_MS`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `backend/utils/openaiClient.js:L73` (process.env)
 
 ### `PG_POOL_CONN_TIMEOUT_MS`
 
