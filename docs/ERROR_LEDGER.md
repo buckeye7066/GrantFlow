@@ -6,7 +6,8 @@ This ledger captures **production failures** (user-visible or log-visible) with 
 
 | ID | When (UTC) | Surface | Symptom | Signature | Hypothesis | Status | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| E-001 | 2026-01-15 | `www.axiombiolabs.org` | Deep links under `/grantflow/*` return a static "File not found (404 error)" page (example: `/grantflow/login`). `/grantflow/api/health` also 404s. | GoDaddy-style "File not found (404 error)" for `/grantflow/*` subpaths on `axiombiolabs.org`, while `app.axiombiolabs.org/grantflow/*` works. | `www.axiombiolabs.org` is not being served by the Vercel SPA project (or missing rewrites), so only the root `/grantflow` entrypoint happens to resolve while subpaths and `/api` do not. | Open | Verify DNS + hosting: confirm `www.axiombiolabs.org` is mapped to the same Vercel project as `app.axiombiolabs.org`, and that Vercel rewrites include `/grantflow/:path* -> /index.html` and `/grantflow/api/:path* -> Railway`. |
+| E-001 | 2026-01-15 | `axiombiolabs.org` / `www.axiombiolabs.org` | `www` redirects to apex. Apex serves `/grantflow/` but **deep links** (`/grantflow/login`) and `/grantflow/api/*` return 404 HTML (not the SPA / API). | `www.axiombiolabs.org/grantflow/login` → `301 Location: https://axiombiolabs.org/grantflow/login`; `axiombiolabs.org/grantflow/login` → `404` HTML; `axiombiolabs.org/grantflow/api/health` → `404` HTML. `Server: DPS/2.0.0-beta+sha-42b7380` on apex responses. | Apex/`www` are not routed to the Vercel SPA project + API proxy (likely still on GoDaddy/DPS). Only a static `/grantflow/` page is being served at apex, with **no SPA fallback rewrite** and **no API proxy**. | Open | Fix DNS/hosting so apex/`www` map to the same Vercel project that serves the SPA. If apex must remain on DPS, it needs SPA fallback rewrites for `/grantflow/*` and a reverse proxy for `/grantflow/api/*` → Railway. |
+| E-002 | 2026-01-16 | `app.axiombiolabs.org` | `/grantflow/` (trailing slash) returns Vercel `NOT_FOUND`, while `/grantflow/login` works and `/grantflow/api/health` works. | `GET https://app.axiombiolabs.org/grantflow/` → `404` `text/plain` `"The page could not be found NOT_FOUND ..."`, `Server: Vercel`. `GET /grantflow/login` → `200` HTML. `GET /grantflow/api/health` → `200` JSON with `X-Request-Id`. | Vercel routing misses the **trailing-slash variant**. `vercel.json` rewrites include `/grantflow` and `/grantflow/:path*`, but not `/grantflow/` (empty `:path*`), so the root-with-slash falls through to 404. | Open | Add `redirect` (or rewrite) for `/grantflow/` → `/grantflow` so root loads reliably. (Patch landed in `vercel.json`.) |
 
 ## Evidence (screenshots)
 
@@ -16,8 +17,29 @@ Screenshots captured during investigation:
 - `health-www-grantflow-404.png`: `axiombiolabs.org/grantflow/api/health` returns a static 404 page
 - `www-grantflow-login-404.png`: `axiombiolabs.org/grantflow/login` returns a static 404 page
 
+Command-line evidence (captured 2026-01-16):
+
+- Run: `node scripts/capture-prod-signatures.mjs`
+- Key lines:
+  - `https://app.axiombiolabs.org/grantflow/` → `404` (`Server: Vercel`, `NOT_FOUND`)
+  - `https://app.axiombiolabs.org/grantflow/login` → `200` (HTML)
+  - `https://app.axiombiolabs.org/grantflow/api/health` → `200` (JSON, includes `X-Request-Id`)
+  - `https://www.axiombiolabs.org/grantflow/*` → `301` to `https://axiombiolabs.org/grantflow/*`
+  - `https://axiombiolabs.org/grantflow/login` → `404` (HTML, `Server: DPS/2.0.0-beta+sha-42b7380`)
+  - `https://axiombiolabs.org/grantflow/api/health` → `404` (HTML, `Server: DPS/2.0.0-beta+sha-42b7380`)
+
 ## Notes / Access Needed
 
 - Vercel logs (production) for the `www.axiombiolabs.org` domain + rewrites config.
 - Railway logs around the same timestamps (to confirm whether requests ever reached the backend).
 - Base44 export verification failures (if any) to correlate missing config vs missing code.
+
+### Log access requests (copy/paste)
+
+- **Vercel**:
+  - Confirm which Vercel project owns `app.axiombiolabs.org` vs `axiombiolabs.org` and whether `vercel.json` is being applied.
+  - Export request logs for `GET /grantflow/` and `GET /grantflow/login` around `2026-01-16T04:40Z` (UTC).
+- **GoDaddy/DPS (if apex is still there)**:
+  - Confirm rewrite capability for `/grantflow/*` (SPA fallback) and proxy support for `/grantflow/api/*`.
+- **Railway**:
+  - Tail logs for the request id observed on `/grantflow/api/health` (example: `a3873fd0-1d10-4c11-82a6-70ae1d689fc7`) to confirm end-to-end routing.
