@@ -35,7 +35,35 @@ function getOpenAI() {
   return new OpenAI({ apiKey })
 }
 
-const JWT_SECRET = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret'
+function resolveJwtSecret() {
+  const raw = String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || '').trim()
+  const isProd = process.env.NODE_ENV === 'production'
+
+  if (!raw) {
+    if (isProd) {
+      console.error(
+        'ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET). Refusing to start in production.\n' +
+          'Set a strong random secret (recommended: 32+ bytes). Example:\n' +
+          '  AUTH_JWT_SECRET="..."',
+      )
+      process.exit(1)
+    }
+    console.warn('[auth] AUTH_JWT_SECRET not set; using insecure development default (DO NOT use in production).')
+    return 'grantflow-dev-secret'
+  }
+
+  if (isProd && raw === 'grantflow-dev-secret') {
+    console.error(
+      'ERROR: AUTH_JWT_SECRET is set to the insecure development default. Refusing to start in production.\n' +
+        'Generate a strong random secret and redeploy.',
+    )
+    process.exit(1)
+  }
+
+  return raw
+}
+
+const JWT_SECRET = resolveJwtSecret()
 
 function parseSeconds(value, fallback) {
   if (value === undefined || value === null) {

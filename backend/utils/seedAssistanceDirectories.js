@@ -11,10 +11,15 @@ function loadJSON(path) {
   try {
     return JSON.parse(readFileSync(path, 'utf8'))
   } catch (error) {
-    console.warn(`[seedAssistanceDirectories] Could not load ${path}:`, error.message)
+    // Missing seed files are expected in many environments (e.g. production images, fresh clones).
+    // Only warn on non-ENOENT failures (e.g. invalid JSON).
+    if (error?.code !== 'ENOENT') {
+      console.warn('[seedAssistanceDirectories] Could not load ' + path + ':', error?.message || String(error))
+    }
     return null
   }
 }
+
 
 function stableIdFromUrl(url) {
   return crypto.createHash('sha256').update(String(url)).digest('hex')
