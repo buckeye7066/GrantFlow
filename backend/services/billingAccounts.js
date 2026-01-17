@@ -16,6 +16,120 @@ export function mapTierRow(row) {
   }
 }
 
+export async function ensureBillingSchema(db) {
+  // Billing needs to be resilient across environments where the DB exists but migrations were not run yet.
+  // We keep this scoped to billing tables only (no general auto-migration for Postgres).
+  const isPostgres = db?.dialect === 'postgres'
+
+  if (isPostgres) {
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS billing_tiers (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        base_monthly_cents INTEGER,
+        hourly_rate_cents INTEGER,
+        enable_pipeline_automation BOOLEAN DEFAULT FALSE,
+        enable_item_funding BOOLEAN DEFAULT FALSE,
+        enable_document_ai BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMPTZ DEFAULT now(),
+        updated_at TIMESTAMPTZ DEFAULT now()
+      );
+
+      CREATE TABLE IF NOT EXISTS billing_accounts (
+        -- IDs are provided by app code (crypto.randomUUID). Avoid requiring pgcrypto permissions here.
+        id TEXT PRIMARY KEY,
+        created_at TIMESTAMPTZ DEFAULT now(),
+        updated_at TIMESTAMPTZ DEFAULT now(),
+        profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+        tier_id TEXT NOT NULL REFERENCES billing_tiers(id),
+        assigned_by TEXT,
+        assigned_reason TEXT,
+        discount_type TEXT CHECK(discount_type IN ('none', 'student', 'minister', 'hardship', 'custom')),
+        discount_percent DOUBLE PRECISION DEFAULT 0,
+        is_pro_bono BOOLEAN DEFAULT FALSE,
+        pro_bono_reason TEXT,
+        custom_monthly_cents INTEGER,
+        custom_hourly_cents INTEGER,
+        metadata TEXT
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_accounts_profile ON billing_accounts(profile_id);
+      CREATE INDEX IF NOT EXISTS idx_billing_accounts_tier ON billing_accounts(tier_id);
+
+      CREATE TABLE IF NOT EXISTS billing_account_events (
+        -- IDs are provided by app code (crypto.randomUUID). Avoid requiring pgcrypto permissions here.
+        id TEXT PRIMARY KEY,
+        created_at TIMESTAMPTZ DEFAULT now(),
+        account_id TEXT NOT NULL REFERENCES billing_accounts(id) ON DELETE CASCADE,
+        changed_by TEXT,
+        previous_tier_id TEXT,
+        new_tier_id TEXT,
+        previous_discount_type TEXT,
+        new_discount_type TEXT,
+        previous_discount_percent DOUBLE PRECISION,
+        new_discount_percent DOUBLE PRECISION,
+        previous_pro_bono BOOLEAN,
+        new_pro_bono BOOLEAN,
+        notes TEXT
+      );
+    `)
+  } else {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS billing_tiers (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        base_monthly_cents INTEGER,
+        hourly_rate_cents INTEGER,
+        enable_pipeline_automation BOOLEAN DEFAULT 0,
+        enable_item_funding BOOLEAN DEFAULT 0,
+        enable_document_ai BOOLEAN DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS billing_accounts (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+        tier_id TEXT NOT NULL REFERENCES billing_tiers(id),
+        assigned_by TEXT,
+        assigned_reason TEXT,
+        discount_type TEXT CHECK(discount_type IN ('none', 'student', 'minister', 'hardship', 'custom')),
+        discount_percent REAL DEFAULT 0,
+        is_pro_bono BOOLEAN DEFAULT 0,
+        pro_bono_reason TEXT,
+        custom_monthly_cents INTEGER,
+        custom_hourly_cents INTEGER,
+        metadata TEXT
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_accounts_profile ON billing_accounts(profile_id);
+      CREATE INDEX IF NOT EXISTS idx_billing_accounts_tier ON billing_accounts(tier_id);
+
+      CREATE TABLE IF NOT EXISTS billing_account_events (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        account_id TEXT NOT NULL REFERENCES billing_accounts(id) ON DELETE CASCADE,
+        changed_by TEXT,
+        previous_tier_id TEXT,
+        new_tier_id TEXT,
+        previous_discount_type TEXT,
+        new_discount_type TEXT,
+        previous_discount_percent REAL,
+        new_discount_percent REAL,
+        previous_pro_bono BOOLEAN,
+        new_pro_bono BOOLEAN,
+        notes TEXT
+      );
+    `)
+  }
+
+  await seedBillingTiersIfMissing(db)
+}
+
 export function mapAccountRow(row) {
   if (!row) return null
   return {
@@ -70,8 +184,7 @@ export async function selectAccount(db, profileId) {
 }
 
 async function seedBillingTiersIfMissing(db) {
-  // Make billing self-healing in production: if a deploy starts with an empty/misaligned DB,
-  // we seed the minimum tiers so billing endpoints don't 500.
+  // Seed the minimum tiers so billing endpoints don't 500.
   // This is intentionally idempotent.
   try {
     const rows = await db.prepare('SELECT COUNT(*) as c FROM billing_tiers').get()
@@ -183,6 +296,7 @@ async function resolveTierIdForInsert(db, requestedTierId) {
 }
 
 export async function ensureBillingAccount(db, profileId, { defaultTier = 'foundation', assignedBy = 'system' } = {}) {
+  await ensureBillingSchema(db)
   const existing = await selectAccount(db, profileId)
   if (existing) {
     return existing

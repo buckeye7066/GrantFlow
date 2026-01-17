@@ -38,6 +38,8 @@ seed/*.db-journal
 
 # Backup files and temporary artifacts
 *.bak
+
+# User uploads / local artifacts
 backend/temp_images/
 backend/uploads/
 public/*.mp4
