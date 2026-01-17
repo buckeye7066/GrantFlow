@@ -399,4 +399,157 @@ export const DESIGNATED_PROFILES = [
       },
     },
   },
+  {
+    id: 'profile-paul-jason-dasher',
+    display_name: 'Paul Jason Dasher',
+    primary_type: 'individual',
+    status: 'active',
+    tags: ['baseline', 'designated'],
+    sections: {
+      basic_information: {
+        full_name: 'Paul Jason Dasher',
+        email: 'Pjandcrdasher@att.net',
+        phone: '',
+        address: '',
+      },
+    },
+  },
+  {
+    id: 'profile-angelika-ptak',
+    display_name: 'Angelika Ptak',
+    primary_type: 'individual',
+    status: 'active',
+    tags: ['baseline', 'designated'],
+    sections: {
+      basic_information: {
+        full_name: 'Angelika Ptak',
+        email: 'angelikaps.rn@gmail.com',
+        phone: '',
+        address: '',
+      },
+    },
+  },
+  {
+    id: 'profile-rachel-miller',
+    display_name: 'Rachel Miller',
+    primary_type: 'individual',
+    status: 'active',
+    tags: ['baseline', 'designated'],
+    sections: {
+      basic_information: {
+        full_name: 'Rachel Miller',
+        email: 'rdashermiller@gmail.com',
+        phone: '',
+        address: '',
+      },
+    },
+  },
+  {
+    id: 'profile-anastasia-white',
+    display_name: 'Anastasia Nicole White',
+    primary_type: 'high_school_student',
+    status: 'active',
+    tags: ['baseline', 'designated', 'student'],
+    sections: {
+      basic_information: {
+        full_name: 'Anastasia Nicole White',
+        email: '',
+        phone: '',
+        address: 'Cleveland, TN',
+        notes:
+          'Currently in high school and taking college-level classes at Cleveland State Community College.',
+      },
+    },
+  },
+  {
+    id: 'profile-kathy-daniel',
+    display_name: 'Kathy Marie Daniel',
+    primary_type: 'individual',
+    status: 'active',
+    tags: ['baseline', 'designated'],
+    sections: {
+      basic_information: {
+        full_name: 'Kathy Marie Daniel',
+        email: 'kathydaniel1975@gmail.com',
+        phone: '4236611020',
+        address: '',
+      },
+    },
+  },
+  {
+    id: 'profile-kimberly-botts',
+    display_name: 'Kimberly Botts',
+    primary_type: 'individual',
+    status: 'active',
+    tags: ['baseline', 'designated'],
+    sections: {
+      basic_information: {
+        full_name: 'Kimberly Botts',
+        email: '',
+        phone: '',
+        address: 'Cleveland, TN',
+      },
+    },
+  },
+  {
+    id: 'profile-luibov-samoylenko',
+    display_name: 'Luibov S Samoylenko',
+    primary_type: 'individual',
+    status: 'active',
+    tags: ['baseline', 'designated'],
+    sections: {
+      basic_information: {
+        full_name: 'Luibov S Samoylenko',
+        email: '',
+        phone: '',
+        address: 'Cleveland, TN',
+        notes: 'Baseline profile imported from Base44 export.',
+      },
+    },
+  },
+  {
+    id: 'profile-robert-white',
+    display_name: 'Robert White',
+    primary_type: 'college_student',
+    status: 'active',
+    tags: ['baseline', 'designated', 'student'],
+    sections: {
+      basic_information: {
+        full_name: 'Robert White',
+        email: '',
+        phone: '',
+        address: 'Cleveland, TN 37312',
+      },
+    },
+  },
+  {
+    id: 'profile-axiom-biolabs',
+    display_name: 'Axiom Biolabs',
+    primary_type: 'organization',
+    status: 'active',
+    tags: ['baseline', 'designated', 'organization'],
+    sections: {
+      basic_information: {
+        full_name: 'Axiom Biolabs',
+        email: '',
+        phone: '',
+        address: '',
+      },
+    },
+  },
+  {
+    id: 'profile-josh-dasher',
+    display_name: 'Josh Dasher',
+    primary_type: 'individual',
+    status: 'active',
+    tags: ['baseline', 'designated'],
+    sections: {
+      basic_information: {
+        full_name: 'Josh Dasher',
+        email: 'joshua.dasher@gmail.com',
+        phone: '',
+        address: '',
+      },
+    },
+  },
 ]
