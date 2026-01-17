@@ -5,7 +5,24 @@
  */
 
 // Admin Configuration
-export const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'buckeye7066@gmail.com'
+// Keep a stable default so production doesn't lock out the operator when ADMIN_EMAIL
+// is misconfigured. Additional admins can be added via ADMIN_EMAILS (comma-separated).
+const DEFAULT_ADMIN_EMAIL = 'buckeye7066@gmail.com'
+export const ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || DEFAULT_ADMIN_EMAIL)
+export const ADMIN_EMAILS = Object.freeze(
+  Array.from(
+    new Set(
+      [
+        ADMIN_EMAIL,
+        DEFAULT_ADMIN_EMAIL,
+        ...(String(process.env.ADMIN_EMAILS || '')
+          .split(',')
+          .map((v) => v.trim())
+          .filter(Boolean)),
+      ].map((v) => String(v).trim().toLowerCase()).filter(Boolean),
+    ),
+  ),
+)
 
 /**
  * Check if an email belongs to an admin user
@@ -16,7 +33,8 @@ export function isAdminEmail(email) {
   if (!email || typeof email !== 'string') {
     return false
   }
-  return email.trim().toLowerCase() === ADMIN_EMAIL.toLowerCase()
+  const normalized = email.trim().toLowerCase()
+  return ADMIN_EMAILS.includes(normalized)
 }
 
 // Pagination defaults

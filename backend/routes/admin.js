@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import multer from 'multer';
 import fs from 'fs';
 import { promises as fsp } from 'fs';
-import { dirname, join } from 'path';
+import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import pdfParse from 'pdf-parse';
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';
@@ -11,6 +11,7 @@ import { encryptRuntimeSecret } from '../utils/runtimeSecrets.js';
 import { seedRealOpportunities } from '../utils/seedRealOpportunities.js';
 import { seedAssistanceDirectories } from '../utils/seedAssistanceDirectories.js';
 import { ensureDesignatedProfiles } from '../utils/ensureDesignatedProfiles.js';
+import { seedBaselineFromRepo } from '../utils/seedBaselineFromRepo.js';
 import { buildProfileSignals, calculateMatchScore } from '../services/profileHelpers.js';
 import { getSystemDiagnostics } from '../services/diagnosticsService.js';
 import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
@@ -24,6 +25,7 @@ import { crawlStudentGrants } from '../services/crawlers/studentGrantsCrawler.js
 import { crawlSpecialNeeds } from '../services/crawlers/specialNeedsCrawler.js';
 import { crawlItemFunding } from '../services/crawlers/itemFundingCrawler.js';
 import { crawlECFBenefits } from '../services/crawlers/ecfBenefitsCrawler.js';
+import zipcodes from 'zipcodes';
 
 const router = express.Router();
 
@@ -33,14 +35,43 @@ const AI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini'; // Configurable AI m
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const uploadDir = join(__dirname, '..', 'uploads');
 const repoRootDir = join(__dirname, '..', '..');
-const zipCoordinatesPath = join(repoRootDir, 'backend', 'data', 'crawlers', 'zip_coordinates.json');
-const countiesByStatePath = join(repoRootDir, 'county_batch1.json');
+const uploadDir = process.env.UPLOADS_DIR
+  ? resolve(process.env.UPLOADS_DIR)
+  : join(__dirname, '..', 'uploads');
+
+// Geo datasets are optional. If present, we use them to power ZIP-scoped crawls.
+// If absent, we still return a usable state list so the Geo Crawl UI can run state-wide crawls.
+const zipCoordinatesPath = process.env.GEO_ZIP_COORDINATES_PATH
+  ? resolve(process.env.GEO_ZIP_COORDINATES_PATH)
+  : join(__dirname, '..', 'data', 'crawlers', 'zip_coordinates.json');
+
+const countiesByStatePath = process.env.GEO_COUNTIES_BY_STATE_PATH
+  ? resolve(process.env.GEO_COUNTIES_BY_STATE_PATH)
+  : join(repoRootDir, 'county_batch1.json');
 
 let zipCoordinatesCache = null;
 let zipStateIndexCache = null;
 let countiesByStateCache = null;
+let zipCoordinatesMissing = false;
+
+const US_STATE_ABBREVIATIONS = [
+  'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA',
+  'HI','ID','IL','IN','IA','KS','KY','LA','ME','MD',
+  'MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ',
+  'NM','NY','NC','ND','OH','OK','OR','PA','RI','SC',
+  'SD','TN','TX','UT','VT','VA','WA','WV','WI','WY',
+  'DC',
+];
+
+const US_STATE_CODES = Object.freeze([
+  'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA',
+  'HI','ID','IL','IN','IA','KS','KY','LA','ME','MD',
+  'MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ',
+  'NM','NY','NC','ND','OH','OK','OR','PA','RI','SC',
+  'SD','TN','TX','UT','VT','VA','WA','WV','WI','WY',
+  'DC',
+]);
 
 const CRAWLER_AUDIT_TYPES = [
   'local_funding',
@@ -118,9 +149,18 @@ async function ensureAdminRequest(req, res) {
 function loadZipCoordinates() {
   if (zipCoordinatesCache) return zipCoordinatesCache;
   if (!fs.existsSync(zipCoordinatesPath)) {
-    throw new Error(`ZIP coordinate dataset missing: ${zipCoordinatesPath}`);
+    // In some production builds this dataset may not be packaged.
+    // The Geo Crawl UI should degrade gracefully (empty state list) instead of 500'ing.
+    zipCoordinatesMissing = true;
+    zipCoordinatesCache = {};
+    return zipCoordinatesCache;
   }
-  zipCoordinatesCache = JSON.parse(fs.readFileSync(zipCoordinatesPath, 'utf8'));
+  try {
+    zipCoordinatesCache = JSON.parse(fs.readFileSync(zipCoordinatesPath, 'utf8'));
+  } catch (error) {
+    zipCoordinatesMissing = true;
+    zipCoordinatesCache = {};
+  }
   return zipCoordinatesCache;
 }
 
@@ -128,6 +168,24 @@ function buildZipStateIndex() {
   if (zipStateIndexCache) return zipStateIndexCache;
   const coords = loadZipCoordinates();
   const index = new Map();
+
+  // Production-safe fallback: if `zip_coordinates.json` isn't packaged, rely on `zipcodes`.
+  if (zipCoordinatesMissing) {
+    for (const state of US_STATE_CODES) {
+      const entries = (zipcodes.lookupByState(state) || [])
+        .map((row) => ({
+          zip_code: row?.zip ?? null,
+          city: row?.city ?? null,
+          state: row?.state ?? state,
+          lat: row?.latitude ?? null,
+          lng: row?.longitude ?? null,
+        }))
+        .filter((row) => row.zip_code);
+      if (entries.length > 0) index.set(state, entries);
+    }
+    zipStateIndexCache = index;
+    return zipStateIndexCache;
+  }
 
   for (const [zip, meta] of Object.entries(coords)) {
     const state = meta?.state;
@@ -873,10 +931,21 @@ router.get('/geo/states', async (req, res) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return;
     const index = buildZipStateIndex();
-    const states = Array.from(index.keys())
-      .sort()
-      .map((state) => ({ state, zip_count: index.get(state).length }));
-    res.json({ states });
+
+    // Prefer dataset-driven states if present; otherwise fall back to a canonical US state list.
+    const stateKeys = index.size > 0 ? Array.from(index.keys()) : US_STATE_ABBREVIATIONS.slice();
+    stateKeys.sort();
+
+    const states = stateKeys.map((state) => ({
+      state,
+      zip_count: index.get(state)?.length ?? 0,
+    }));
+
+    res.json({
+      states,
+      dataset_present: index.size > 0,
+      dataset_source: zipCoordinatesMissing ? 'zipcodes' : 'zip_coordinates.json',
+    });
   } catch (error) {
     console.error('[admin/geo/states] Error:', error);
     res.status(500).json({ error: error.message });
@@ -888,7 +957,11 @@ router.get('/geo/state/:state/zips', async (req, res) => {
     if (!(await ensureAdminRequest(req, res))) return;
     const state = String(req.params.state || '').toUpperCase();
     const index = buildZipStateIndex();
-    res.json({ zips: index.get(state) ?? [] });
+    res.json({
+      zips: index.get(state) ?? [],
+      dataset_present: index.size > 0,
+      dataset_source: zipCoordinatesMissing ? 'zipcodes' : 'zip_coordinates.json',
+    });
   } catch (error) {
     console.error('[admin/geo/state/zips] Error:', error);
     res.status(500).json({ error: error.message });
@@ -1067,7 +1140,7 @@ router.post('/repair-all-profiles', async (req, res) => {
     if (!(await ensureAdminRequest(req, res))) return;
 
     // Import canonical sections
-    const { supportedSectionKeys } = await import('../prompts/profileSections.js');
+    const { canonicalSectionKeys, CANONICAL_SECTION_DEFAULTS } = await import('../prompts/profileSections.js');
 
     // Get all profiles
     const profiles = await req.db.prepare('SELECT id, display_name FROM profiles').all();
@@ -1080,7 +1153,7 @@ router.post('/repair-all-profiles', async (req, res) => {
 
     const upsert = req.db.prepare(`
       INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
-      VALUES (?, ?, '{}', 'admin-repair')
+      VALUES (?, ?, ?, 'admin-repair')
       ON CONFLICT(profile_id, section_key) DO NOTHING
     `);
 
@@ -1093,9 +1166,10 @@ router.post('/repair-all-profiles', async (req, res) => {
         const existingKeys = new Set(existingSections.map(s => s.section_key));
         const createdForProfile = [];
 
-        supportedSectionKeys.forEach(sectionKey => {
+        canonicalSectionKeys.forEach(sectionKey => {
           if (!existingKeys.has(sectionKey)) {
-            upsert.run(profile.id, sectionKey);
+            const defaults = CANONICAL_SECTION_DEFAULTS[sectionKey] ?? {}
+            upsert.run(profile.id, sectionKey, JSON.stringify(defaults));
             createdForProfile.push(sectionKey);
           }
         });
@@ -1146,6 +1220,7 @@ router.post('/repair-all-profiles', async (req, res) => {
 // POST /api/admin/sync-profiles - Sync designated profiles
 router.post('/sync-profiles', async (req, res) => {
   try {
+    if (!(await ensureAdminRequest(req, res))) return;
     await ensureDesignatedProfiles(req.db);
     const profilesCount = Number((await req.db.prepare('SELECT COUNT(*) as count FROM profiles').get())?.count || 0);
     const sectionsCount = Number((await req.db.prepare('SELECT COUNT(*) as count FROM profile_sections').get())?.count || 0);
@@ -1157,273 +1232,26 @@ router.post('/sync-profiles', async (req, res) => {
 });
 
 // POST /api/admin/seed-baseline-profiles
-// Upsert the baseline profiles, sections, organizations, and grants from seed/baseline-profiles.json (production-safe).
-// Supports seed_key header for authenticated CLI seeding without session auth.
+// Upsert baseline data from `seed/baseline-profiles.json` (production-safe, idempotent).
+// Supports X-Seed-Key header for authenticated CLI seeding without session auth (requires SEED_KEY env var).
 router.post('/seed-baseline-profiles', async (req, res) => {
   try {
-    // Allow seeding with seed_key header (for CLI/deployment automation)
     const seedKey = req.headers['x-seed-key'] || req.body?.seed_key;
-    const expectedSeedKey = process.env.SEED_KEY || 'grantflow-seed-2026';
-    const isSeedKeyValid = seedKey && seedKey === expectedSeedKey;
-    
+    const expectedSeedKey = process.env.SEED_KEY || null;
+    const isSeedKeyValid = Boolean(expectedSeedKey && seedKey && seedKey === expectedSeedKey);
+
     if (!isSeedKeyValid && !(await ensureAdminRequest(req, res))) return;
 
-    const seedPath = join(repoRootDir, 'seed', 'baseline-profiles.json');
-    if (!fs.existsSync(seedPath)) {
-      return res.status(500).json({ success: false, error: `Seed file not found at ${seedPath}` });
-    }
-
-    const payload = JSON.parse(fs.readFileSync(seedPath, 'utf8'));
-    if (!Array.isArray(payload?.profiles) || !Array.isArray(payload?.sections)) {
-      return res.status(400).json({ success: false, error: 'Seed file missing profiles/sections arrays' });
-    }
-
-    const before = Number((await req.db.prepare('SELECT COUNT(*) as count FROM profiles').get())?.count || 0);
-
-    await req.db.withTransaction(async (tx) => {
-      const upsertProfile = tx.prepare(`
-        INSERT INTO profiles (id, primary_type, display_name, status, tags, avatar_url, organization_id, updated_at)
-        VALUES (@id, @primary_type, @display_name, @status, @tags, @avatar_url, @organization_id, CURRENT_TIMESTAMP)
-        ON CONFLICT(id) DO UPDATE SET
-          primary_type = excluded.primary_type,
-          display_name = excluded.display_name,
-          status = excluded.status,
-          tags = excluded.tags,
-          avatar_url = excluded.avatar_url,
-          organization_id = excluded.organization_id,
-          updated_at = CURRENT_TIMESTAMP
-      `);
-
-      const upsertSection = tx.prepare(`
-        INSERT INTO profile_sections (profile_id, section_key, data, updated_by, updated_at)
-        VALUES (@profile_id, @section_key, @data, 'system-seed', CURRENT_TIMESTAMP)
-        ON CONFLICT(profile_id, section_key) DO UPDATE SET
-          data = excluded.data,
-          updated_by = excluded.updated_by,
-          updated_at = CURRENT_TIMESTAMP
-      `);
-
-      // Prepare organization upsert if organizations exist in payload
-      // Note: only insert core fields that exist in schema
-      const upsertOrg = tx.prepare(`
-        INSERT INTO organizations (id, name, email, phone, applicant_type, created_at, updated_at)
-        VALUES (@id, @name, @email, @phone, @applicant_type, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        ON CONFLICT(id) DO UPDATE SET
-          name = excluded.name,
-          email = excluded.email,
-          phone = excluded.phone,
-          applicant_type = excluded.applicant_type,
-          updated_at = CURRENT_TIMESTAMP
-      `);
-
-      const upsertProfileOrg = tx.prepare(`
-        INSERT INTO profile_organizations (profile_id, organization_id)
-        VALUES (?, ?)
-        ON CONFLICT DO NOTHING
-      `);
-
-      // Prepare funding opportunities upsert
-      const upsertOpp = tx.prepare(`
-        INSERT INTO funding_opportunities (
-          id, title, sponsor, description, source, source_id, source_url,
-          application_url, deadline, amount_min, amount_max, amount_description,
-          type, categories, keywords, state, is_national, requires_501c3, is_active
-        ) VALUES (
-          @id, @title, @sponsor, @description, @source, @source_id, @source_url,
-          @application_url, @deadline, @amount_min, @amount_max, @amount_description,
-          @type, @categories, @keywords, @state, @is_national, @requires_501c3, @is_active
-        ) ON CONFLICT(id) DO UPDATE SET
-          title = excluded.title,
-          sponsor = excluded.sponsor,
-          description = excluded.description,
-          is_active = excluded.is_active,
-          updated_at = CURRENT_TIMESTAMP
-      `);
-
-      // Prepare grants upsert
-      const upsertGrant = tx.prepare(`
-        INSERT INTO grants (
-          id, organization_id, funding_opportunity_id, title, funder,
-          status, match_score, match_reasons, deadline, amount_requested
-        ) VALUES (
-          @id, @organization_id, @funding_opportunity_id, @title, @funder,
-          @status, @match_score, @match_reasons, @deadline, @amount_requested
-        ) ON CONFLICT(id) DO UPDATE SET
-          title = excluded.title,
-          status = excluded.status,
-          match_score = excluded.match_score,
-          updated_at = CURRENT_TIMESTAMP
-      `);
-
-      // 1. Seed organizations first (if present)
-      // Allowed applicant_types per production schema CHECK constraint
-      const validApplicantTypes = ['individual_need', 'family', 'organization', 'nonprofit', 'small_business', 'student', 'college_student', 'high_school_student', 'medical_assistance', 'government', 'other'];
-      
-      if (Array.isArray(payload.organizations)) {
-        for (const org of payload.organizations) {
-          // Map 'individual' to 'individual_need' for production schema compatibility
-          let applicantType = org.applicant_type ?? 'individual_need';
-          if (!validApplicantTypes.includes(applicantType)) {
-            applicantType = 'individual_need';
-          }
-          await upsertOrg.run({
-            id: org.id,
-            name: org.name,
-            email: org.email ?? null,
-            phone: org.phone ?? null,
-            applicant_type: applicantType,
-          });
-        }
-      }
-
-      // 2. Seed funding opportunities (if present)
-      if (Array.isArray(payload.funding_opportunities)) {
-        for (const opp of payload.funding_opportunities) {
-          await upsertOpp.run({
-            id: opp.id,
-            title: opp.title,
-            sponsor: opp.sponsor ?? null,
-            description: opp.description ?? null,
-            source: opp.source ?? 'seeded',
-            source_id: opp.source_id ?? opp.id,
-            source_url: opp.source_url ?? null,
-            application_url: opp.application_url ?? null,
-            deadline: opp.deadline ?? null,
-            amount_min: opp.amount_min ?? null,
-            amount_max: opp.amount_max ?? null,
-            amount_description: opp.amount_description ?? null,
-            type: opp.type ?? 'grant',
-            categories: typeof opp.categories === 'string' ? opp.categories : JSON.stringify(opp.categories ?? []),
-            keywords: typeof opp.keywords === 'string' ? opp.keywords : JSON.stringify(opp.keywords ?? []),
-            state: opp.state ?? null,
-            is_national: Boolean(opp.is_national),
-            requires_501c3: Boolean(opp.requires_501c3),
-            is_active: opp.is_active !== false,
-          });
-        }
-      }
-
-      // 3. Seed profiles
-      for (const profile of payload.profiles) {
-        await upsertProfile.run({
-          id: profile.id,
-          primary_type: profile.primary_type ?? null,
-          display_name: profile.display_name,
-          status: profile.status ?? 'active',
-          tags: typeof profile.tags === 'string' ? profile.tags : JSON.stringify(profile.tags ?? []),
-          avatar_url: profile.avatar_url ?? null,
-          organization_id: profile.organization_id ?? null,
-        });
-        await linkProfileToAdmin(req.db, profile.id);
-      }
-
-      // 4. Seed sections
-      for (const section of payload.sections) {
-        if (!section?.profile_id || !section?.section_key) continue;
-        const dataStr = typeof section.data === 'string' ? section.data : JSON.stringify(section.data ?? {});
-        await upsertSection.run({
-          profile_id: section.profile_id,
-          section_key: section.section_key,
-          data: dataStr,
-        });
-      }
-
-      // 5. Seed profile-organization links
-      if (Array.isArray(payload.profile_organizations)) {
-        for (const link of payload.profile_organizations) {
-          await upsertProfileOrg.run(link.profile_id, link.organization_id);
-        }
-      }
-
-      // 6. Seed grants
-      if (Array.isArray(payload.grants)) {
-        for (const grant of payload.grants) {
-          await upsertGrant.run({
-            id: grant.id,
-            organization_id: grant.organization_id,
-            funding_opportunity_id: grant.funding_opportunity_id,
-            title: grant.title,
-            funder: grant.funder ?? null,
-            status: grant.status ?? 'discovered',
-            match_score: grant.match_score ?? null,
-            match_reasons: typeof grant.match_reasons === 'string' ? grant.match_reasons : JSON.stringify(grant.match_reasons ?? []),
-            deadline: grant.deadline ?? null,
-            amount_requested: grant.amount_requested ?? null,
-          });
-        }
-      }
-
-      // 7. Seed documents (if present)
-      if (Array.isArray(payload.documents)) {
-        const upsertDoc = tx.prepare(`
-          INSERT INTO documents (id, profile_id, name, type, file_url, mime_type, extracted_text, processing_status, status, notes)
-          VALUES (@id, @profile_id, @name, @type, @file_url, @mime_type, @extracted_text, @processing_status, @status, @notes)
-          ON CONFLICT(id) DO UPDATE SET
-            name = excluded.name,
-            extracted_text = excluded.extracted_text,
-            processing_status = excluded.processing_status,
-            status = excluded.status,
-            updated_at = CURRENT_TIMESTAMP
-        `);
-        
-        for (const doc of payload.documents) {
-          await upsertDoc.run({
-            id: doc.id,
-            profile_id: doc.profile_id,
-            name: doc.name,
-            type: doc.type ?? 'profile_document',
-            file_url: doc.file_url ?? null,
-            mime_type: doc.mime_type ?? 'application/pdf',
-            extracted_text: doc.extracted_text ?? null,
-            processing_status: doc.processing_status ?? 'completed',
-            status: doc.status ?? 'active',
-            notes: doc.notes ?? null,
-          });
-        }
-      }
-
-      // 8. Seed profile-document links (if present)
-      if (Array.isArray(payload.profile_documents)) {
-        const upsertProfileDoc = tx.prepare(`
-          INSERT INTO profile_documents (profile_id, document_id)
-          VALUES (?, ?)
-          ON CONFLICT DO NOTHING
-        `);
-
-        for (const link of payload.profile_documents) {
-          await upsertProfileDoc.run(link.profile_id, link.document_id);
-        }
-      }
-    });
-
-    const after = Number((await req.db.prepare('SELECT COUNT(*) as count FROM profiles').get())?.count || 0);
-    const sectionsCount = Number((await req.db.prepare('SELECT COUNT(*) as count FROM profile_sections').get())?.count || 0);
-    const orgsCount = Number((await req.db.prepare('SELECT COUNT(*) as count FROM organizations').get())?.count || 0);
-    const grantsCount = Number((await req.db.prepare('SELECT COUNT(*) as count FROM grants').get())?.count || 0);
-    const oppsCount = Number((await req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get())?.count || 0);
-    const docsCount = Number((await req.db.prepare('SELECT COUNT(*) as count FROM documents').get())?.count || 0);
-    const profileDocsCount = Number((await req.db.prepare('SELECT COUNT(*) as count FROM profile_documents').get())?.count || 0);
+    const mode = String(req.body?.mode || '').trim().toLowerCase() || 'force'
+    const result = await seedBaselineFromRepo(req.db, {
+      mode: mode === 'off' ? 'off' : mode === 'auto' ? 'auto' : 'force',
+    })
 
     res.json({
       success: true,
-      message: `Seeded baseline data. Profiles: ${before} → ${after}. Sections: ${sectionsCount}. Orgs: ${orgsCount}. Grants: ${grantsCount}. Docs: ${docsCount}. DocLinks: ${profileDocsCount}.`,
-      counts: { 
-        profiles_before: before, 
-        profiles_after: after, 
-        sections: sectionsCount,
-        organizations: orgsCount,
-        grants: grantsCount,
-        opportunities: oppsCount,
-        documents: docsCount,
-        profile_document_links: profileDocsCount
-      },
-      seed_profiles: payload.profiles.length,
-      seed_sections: payload.sections.length,
-      seed_organizations: payload.organizations?.length ?? 0,
-      seed_grants: payload.grants?.length ?? 0,
-      seed_documents: payload.documents?.length ?? 0,
-      seed_profile_documents: payload.profile_documents?.length ?? 0,
-    });
+      seeded: result.skipped === false,
+      ...result,
+    })
   } catch (error) {
     console.error('[admin/seed-baseline-profiles] Error:', error);
     res.status(500).json({ success: false, error: error.message || 'Failed to seed baseline profiles' });

@@ -5,6 +5,11 @@ import { validatePagination, validateRequiredFields, sanitizeColumns } from '../
 import { formatError } from '../middleware/errorHandler.js';
 import { ensureAuth } from '../middleware/auth.js';
 import { mutationRateLimiter } from '../middleware/rateLimiting.js';
+import {
+  CANONICAL_SECTION_DEFAULTS,
+  canonicalSectionKeys,
+} from '../prompts/profileSections.js'
+import { COMPREHENSIVE_APPLICATION_DEFAULTS } from '../config/comprehensiveApplicationSchema.js'
 
 const router = express.Router();
 
@@ -16,6 +21,208 @@ const ALLOWED_ORGANIZATION_COLUMNS = new Set([
   'disabilities', 'target_colleges', 'federal_registrations', 'financial_challenges',
   'veteran', 'disabled', 'first_generation', 'snap_recipient', 'ssi_recipient', 'tanf_recipient'
 ]);
+
+async function ensureProfileForOrganization(db, { organizationId, displayName, primaryType, userId, createdBy }) {
+  const existing = await db
+    .prepare(
+      `
+        SELECT id
+        FROM profiles
+        WHERE organization_id = ?
+        ORDER BY created_at ASC
+        LIMIT 1
+      `,
+    )
+    .get(organizationId)
+
+  if (existing?.id) return existing.id
+
+  const profileId = crypto.randomUUID()
+  await db
+    .prepare(
+      `
+        INSERT INTO profiles (
+          id,
+          user_id,
+          display_name,
+          primary_type,
+          status,
+          tags,
+          organization_id,
+          created_by,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, 'active', '[]', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `,
+    )
+    .run(
+      profileId,
+      userId ?? null,
+      displayName ?? 'New Profile',
+      primaryType ?? null,
+      organizationId,
+      createdBy ?? null,
+    )
+
+  return profileId
+}
+
+function normalizeEmailField(value) {
+  if (!value) return ''
+  if (Array.isArray(value)) {
+    const first = value.find((v) => typeof v === 'string' && v.trim())
+    return first ? first.trim() : ''
+  }
+  if (typeof value === 'string') return value.trim()
+  return ''
+}
+
+function normalizePhoneField(value) {
+  if (!value) return ''
+  if (Array.isArray(value)) {
+    const first = value.find((v) => typeof v === 'string' && v.trim())
+    return first ? first.trim() : ''
+  }
+  if (typeof value === 'string') return value.trim()
+  return ''
+}
+
+async function ensureCanonicalSections(db, profileId, updatedBy = 'org-sync') {
+  const sql =
+    db?.dialect === 'postgres'
+      ? `
+          INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT (profile_id, section_key) DO NOTHING
+        `
+      : `
+          INSERT OR IGNORE INTO profile_sections (profile_id, section_key, data, updated_by)
+          VALUES (?, ?, ?, ?)
+        `
+  const insert = db.prepare(sql)
+  for (const sectionKey of canonicalSectionKeys) {
+    const defaults = CANONICAL_SECTION_DEFAULTS[sectionKey] ?? {}
+    await insert.run(profileId, sectionKey, JSON.stringify(defaults), updatedBy)
+  }
+}
+
+async function upsertProfileSection(db, profileId, sectionKey, data, updatedBy = 'org-sync') {
+  const sql =
+    db?.dialect === 'postgres'
+      ? `
+          INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT (profile_id, section_key) DO UPDATE SET
+            data = excluded.data,
+            updated_by = excluded.updated_by,
+            updated_at = CURRENT_TIMESTAMP
+        `
+      : `
+          INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(profile_id, section_key) DO UPDATE SET
+            data = excluded.data,
+            updated_by = excluded.updated_by,
+            updated_at = CURRENT_TIMESTAMP
+        `
+  await db.prepare(sql).run(profileId, sectionKey, JSON.stringify(data ?? {}), updatedBy)
+}
+
+async function syncOrganizationToProfileSections(db, { organizationId, orgRow, payload, actor }) {
+  const profileId = await ensureProfileForOrganization(db, {
+    organizationId,
+    displayName: orgRow?.name ?? payload?.name ?? 'Profile',
+    primaryType: orgRow?.applicant_type ?? payload?.applicant_type ?? null,
+    userId: actor?.userId ?? null,
+    createdBy: actor?.userId ?? actor?.email ?? null,
+  })
+
+  await ensureCanonicalSections(db, profileId, 'org-sync')
+
+  const comprehensive = { ...COMPREHENSIVE_APPLICATION_DEFAULTS, ...(payload && typeof payload === 'object' ? payload : {}) }
+  await upsertProfileSection(db, profileId, 'comprehensive_application', comprehensive, 'org-sync')
+
+  // Also hydrate key canonical sections (so matchers that read them directly keep working).
+  await upsertProfileSection(
+    db,
+    profileId,
+    'basic_information',
+    {
+      ...CANONICAL_SECTION_DEFAULTS.basic_information,
+      full_name: payload?.name ?? orgRow?.name ?? '',
+      email: normalizeEmailField(payload?.email ?? orgRow?.email),
+      phone: normalizePhoneField(payload?.phone ?? orgRow?.phone),
+      website: payload?.website ?? orgRow?.website ?? '',
+      address: payload?.address ?? orgRow?.address ?? '',
+      city: payload?.city ?? orgRow?.city ?? '',
+      state: payload?.state ?? orgRow?.state ?? '',
+      zip: payload?.zip ?? orgRow?.zip ?? '',
+      date_of_birth: payload?.date_of_birth ?? '',
+      age: payload?.age ?? null,
+      notes: orgRow?.notes ?? '',
+    },
+    'org-sync',
+  )
+
+  await upsertProfileSection(
+    db,
+    profileId,
+    'organization_details',
+    {
+      ...CANONICAL_SECTION_DEFAULTS.organization_details,
+      organization_type: payload?.applicant_type === 'organization' ? 'organization' : payload?.applicant_type ?? '',
+      ein: payload?.organization_ein ?? orgRow?.ein ?? '',
+      uei: payload?.organization_uei ?? orgRow?.uei ?? '',
+      cage_code: payload?.organization_cage_code ?? orgRow?.cage_code ?? '',
+      annual_budget: payload?.annual_budget ?? orgRow?.annual_budget ?? null,
+      staff_count: payload?.staff_count ?? orgRow?.staff_count ?? null,
+      mission: payload?.mission ?? orgRow?.mission ?? '',
+      city: payload?.city ?? orgRow?.city ?? '',
+      state: payload?.state ?? orgRow?.state ?? '',
+      zip: payload?.zip ?? orgRow?.zip ?? '',
+    },
+    'org-sync',
+  )
+
+  await upsertProfileSection(
+    db,
+    profileId,
+    'financial_information',
+    {
+      ...CANONICAL_SECTION_DEFAULTS.financial_information,
+      household_income: payload?.household_income ?? orgRow?.household_income ?? null,
+      household_size: payload?.household_size ?? orgRow?.household_size ?? null,
+      financial_need_level: payload?.financial_need_level ?? '',
+      low_income: Boolean(payload?.low_income ?? false),
+      unemployed: Boolean(payload?.unemployed ?? false),
+      displaced_worker: Boolean(payload?.displaced_worker ?? false),
+    },
+    'org-sync',
+  )
+
+  await upsertProfileSection(
+    db,
+    profileId,
+    'government_assistance',
+    {
+      ...CANONICAL_SECTION_DEFAULTS.government_assistance,
+      medicaid_enrolled: Boolean(payload?.medicaid_enrolled ?? orgRow?.medicaid_enrolled ?? false),
+      medicare_recipient: Boolean(payload?.medicare_recipient ?? orgRow?.medicare_recipient ?? false),
+      ssi_recipient: Boolean(payload?.ssi_recipient ?? orgRow?.ssi_recipient ?? false),
+      ssdi_recipient: Boolean(payload?.ssdi_recipient ?? orgRow?.ssdi_recipient ?? false),
+      snap_recipient: Boolean(payload?.snap_recipient ?? orgRow?.snap_recipient ?? false),
+      tanf_recipient: Boolean(payload?.tanf_recipient ?? orgRow?.tanf_recipient ?? false),
+      section8_housing: Boolean(payload?.section8_housing ?? orgRow?.section8_housing ?? false),
+    },
+    'org-sync',
+  )
+
+  await db
+    .prepare('UPDATE profiles SET updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    .run(profileId)
+
+  return profileId
+}
 
 // List all organizations
 router.get('/', ensureAuth, async (req, res) => {
@@ -135,6 +342,19 @@ router.post('/', ensureAuth, mutationRateLimiter, async (req, res) => {
     `).run(...values);
     
     const org = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(id);
+
+    // Keep profile_sections (and matching/crawlers) in sync with comprehensive application data.
+    try {
+      await syncOrganizationToProfileSections(req.db, {
+        organizationId: id,
+        orgRow: org,
+        payload: data,
+        actor: req.user,
+      })
+    } catch (syncError) {
+      console.warn('[organizations] Failed to sync org -> profile sections:', syncError?.message || syncError)
+    }
+
     res.status(201).json(org);
   } catch (error) {
     console.error('Error creating organization:', error);
@@ -174,6 +394,19 @@ router.put('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
     `).run(...values);
     
     const org = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(req.params.id);
+
+    // Keep profile_sections (and matching/crawlers) in sync with comprehensive application data.
+    try {
+      await syncOrganizationToProfileSections(req.db, {
+        organizationId: req.params.id,
+        orgRow: org,
+        payload: data,
+        actor: req.user,
+      })
+    } catch (syncError) {
+      console.warn('[organizations] Failed to sync org -> profile sections:', syncError?.message || syncError)
+    }
+
     res.json(org);
   } catch (error) {
     console.error('Error updating organization:', error);

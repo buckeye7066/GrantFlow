@@ -1,4 +1,9 @@
-import { SECTION_PROMPTS, supportedSectionKeys } from '../prompts/profileSections.js'
+import {
+  SECTION_PROMPTS,
+  supportedSectionKeys,
+  canonicalSectionKeys,
+  CANONICAL_SECTION_DEFAULTS,
+} from '../prompts/profileSections.js'
 import { safeParseJSON } from '../utils/safeJson.js'
 
 const insertSectionStmt = (db) => {
@@ -45,27 +50,23 @@ function hasValue(value) {
 
 export async function ensureProfileSections(db, profileId, updatedBy = 'system') {
   const insert = insertSectionStmt(db)
-  for (const sectionKey of supportedSectionKeys) {
-    await insert.run(profileId, sectionKey, JSON.stringify({}), updatedBy)
+  for (const sectionKey of canonicalSectionKeys) {
+    const defaults = CANONICAL_SECTION_DEFAULTS[sectionKey] ?? {}
+    await insert.run(profileId, sectionKey, JSON.stringify(defaults), updatedBy)
   }
 }
 
 export function normalizeSectionData(data, sectionKey) {
-  const config = SECTION_PROMPTS[sectionKey]
-  if (!config) return data
-  const normalized = { ...data }
-  for (const key of config.keys) {
-    if (!Object.prototype.hasOwnProperty.call(normalized, key)) {
-      normalized[key] = null
-    }
-  }
-  return normalized
+  const defaults = CANONICAL_SECTION_DEFAULTS[sectionKey]
+  if (!defaults) return data
+  // Shallow merge is intentional: canonical defaults define the key set.
+  return { ...defaults, ...(data && typeof data === 'object' ? data : {}) }
 }
 
 export async function repairProfileSections(db, profileId, updatedBy = 'system-repair') {
   const rowsBefore = await selectSectionsStmt(db).all(profileId)
   const existingKeys = new Set(rowsBefore.map((row) => row.section_key))
-  const missingSections = supportedSectionKeys.filter((key) => !existingKeys.has(key))
+  const missingSections = canonicalSectionKeys.filter((key) => !existingKeys.has(key))
   await ensureProfileSections(db, profileId, updatedBy)
   const rows = await selectSectionsStmt(db).all(profileId)
   const updateStmt = updateSectionStmt(db)
@@ -94,7 +95,7 @@ export function calculateProfileCompleteness(db, profileId) {
     rows.map((row) => [row.section_key, safeParseJSON(row.data, {})]),
   )
 
-  const missingSections = supportedSectionKeys.filter(
+  const missingSections = canonicalSectionKeys.filter(
     (key) => !sectionMap.has(key),
   )
 
@@ -102,10 +103,9 @@ export function calculateProfileCompleteness(db, profileId) {
   let presentKeys = 0
   const missingKeys = []
 
-  for (const sectionKey of supportedSectionKeys) {
-    const config = SECTION_PROMPTS[sectionKey]
-    if (!config) continue
-    const keys = config.keys ?? []
+  for (const sectionKey of canonicalSectionKeys) {
+    const defaults = CANONICAL_SECTION_DEFAULTS[sectionKey]
+    const keys = defaults ? Object.keys(defaults) : []
     totalKeys += keys.length
     const data = sectionMap.get(sectionKey) ?? {}
     const missingForSection = []

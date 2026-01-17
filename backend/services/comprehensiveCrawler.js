@@ -84,12 +84,14 @@ function calculateOpportunityMatch(opp, signals, profileState) {
   
   // Keyword matching (up to 25 points)
   let keywordMatches = 0
-  if (signals.keywords) {
-    for (const keyword of signals.keywords) {
-      if (oppKeywords.has(keyword) || oppText.includes(keyword)) {
+  const profileKeywords = signals?.keywordSet ? Array.from(signals.keywordSet) : []
+  if (profileKeywords.length > 0) {
+    for (const keyword of profileKeywords) {
+      const normalized = String(keyword).toLowerCase()
+      if (oppKeywords.has(normalized) || oppText.includes(normalized)) {
         keywordMatches++
         if (keywordMatches <= 3) {
-          matchReasons.push(`Keyword: ${keyword}`)
+          matchReasons.push(`Keyword: ${normalized}`)
         }
       }
     }
