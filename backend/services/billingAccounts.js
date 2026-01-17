@@ -37,7 +37,8 @@ export async function ensureBillingSchema(db) {
       );
 
       CREATE TABLE IF NOT EXISTS billing_accounts (
-        id TEXT PRIMARY KEY DEFAULT (gen_random_uuid()::text),
+        -- IDs are provided by app code (crypto.randomUUID). Avoid requiring pgcrypto permissions here.
+        id TEXT PRIMARY KEY,
         created_at TIMESTAMPTZ DEFAULT now(),
         updated_at TIMESTAMPTZ DEFAULT now(),
         profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
@@ -57,7 +58,8 @@ export async function ensureBillingSchema(db) {
       CREATE INDEX IF NOT EXISTS idx_billing_accounts_tier ON billing_accounts(tier_id);
 
       CREATE TABLE IF NOT EXISTS billing_account_events (
-        id TEXT PRIMARY KEY DEFAULT (gen_random_uuid()::text),
+        -- IDs are provided by app code (crypto.randomUUID). Avoid requiring pgcrypto permissions here.
+        id TEXT PRIMARY KEY,
         created_at TIMESTAMPTZ DEFAULT now(),
         account_id TEXT NOT NULL REFERENCES billing_accounts(id) ON DELETE CASCADE,
         changed_by TEXT,
