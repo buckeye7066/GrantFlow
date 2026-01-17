@@ -10,6 +10,7 @@
 import axios from 'axios'
 import * as cheerio from 'cheerio'
 import { buildSearchKeywords, calculateMatchScore, filterByDeadline } from './crawlerHelpers.js'
+import { extractStudentCampusZip } from '../profileHelpers.js'
 
 const STUDENT_FUNDING_SOURCES = [
   {
@@ -211,7 +212,11 @@ function extractStudentInfo(profile) {
     interested_schools: interested_schools.length > 0 ? interested_schools : (profile.student_info?.schools || []),
     major: major || profile.student_info?.intended_major || profile.major,
     extracurriculars: profile.extracurriculars || [],
-    zip: signals?.location?.zip || profile.student_info?.school_zip || profile.zip,
+    zip:
+      extractStudentCampusZip({ sections, jobParameters: {} }) ||
+      signals?.location?.zip ||
+      profile.student_info?.school_zip ||
+      profile.zip,
     // Include first-generation status from signals
     first_generation: signals?.demographics?.has('first_generation') || false,
   }

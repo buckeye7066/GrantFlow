@@ -1,282 +1,141 @@
 /**
  * ECF CHOICES Benefits Crawler
- * Searches for benefits for ECF participants and support providers
- * Two branches: Individual benefits and Family Model CLS-FM support
+ * Specialist: Tennessee ECF CHOICES + CLS-FM funding/benefit sources only.
+ *
+ * NOTE: We intentionally keep this scoped (no generic SSI/SSDI/Medicaid pages here).
  */
 
-import axios from 'axios'
-import * as cheerio from 'cheerio'
+function normalizeString(value) {
+  if (value == null) return ''
+  return String(value).trim().toLowerCase()
+}
 
-const ECF_SOURCES = {
+function isTennesseeProfile(profile) {
+  const state = normalizeString(profile?.signals?.location?.state || profile?.state)
+  return state === 'tn'
+}
+
+function isProviderProfile(profile) {
+  const orgType =
+    normalizeString(profile?.organization_type) ||
+    normalizeString(profile?.sections?.organization_details?.organization_type)
+  const tags = Array.isArray(profile?.tags) ? profile.tags.map((t) => normalizeString(t)) : []
+  const keywordSet =
+    profile?.signals?.keywordSet && typeof profile.signals.keywordSet[Symbol.iterator] === 'function'
+      ? Array.from(profile.signals.keywordSet).map((t) => normalizeString(t))
+      : []
+
+  return (
+    orgType.includes('cls') ||
+    orgType.includes('family model') ||
+    tags.some((t) => t.includes('cls') || t.includes('ecf provider')) ||
+    keywordSet.some((t) => t.includes('cls') || t.includes('provider') || t.includes('family model'))
+  )
+}
+
+function isECFRelevantIndividual(profile) {
+  const tags = Array.isArray(profile?.tags) ? profile.tags.map((t) => normalizeString(t)) : []
+  const health = profile?.sections?.health_medical ?? {}
+  const assistance = profile?.sections?.government_assistance ?? {}
+  const keywordSet =
+    profile?.signals?.keywordSet && typeof profile.signals.keywordSet[Symbol.iterator] === 'function'
+      ? Array.from(profile.signals.keywordSet).map((t) => normalizeString(t))
+      : []
+
+  const mentionsEcf = tags.some((t) => t.includes('ecf')) || keywordSet.some((t) => t.includes('ecf choices'))
+  const hasDisabilitySignals =
+    Boolean(assistance?.medicaid_enrolled) ||
+    Boolean(assistance?.ssi_recipient) ||
+    Boolean(assistance?.ssdi_recipient) ||
+    Boolean(health?.wheelchair_user) ||
+    Boolean(health?.neurodivergent) ||
+    Boolean(health?.chronic_illness) ||
+    (Array.isArray(health?.disability_type) && health.disability_type.length > 0)
+
+  return mentionsEcf || hasDisabilitySignals
+}
+
+const ECF_RECORDS = {
   individual: [
     {
-      name: 'Tennessee ECF CHOICES',
-      baseUrl: 'https://www.tn.gov/tenncare/long-term-services-supports/employment-and-community-first-choices.html',
-      type: 'state_program'
+      id: 'tn-ecf-choices',
+      title: 'Employment and Community First (ECF) CHOICES',
+      sponsor: 'TennCare (State of Tennessee)',
+      description:
+        'Tennessee long-term services and supports program for people with intellectual and developmental disabilities, focusing on employment and community living supports.',
+      url: 'https://www.tn.gov/tenncare/long-term-services-supports/employment-and-community-first-choices.html',
+      source_url: 'https://www.tn.gov/tenncare/long-term-services-supports/employment-and-community-first-choices.html',
+      application_url: 'https://www.tn.gov/tenncare/long-term-services-supports/employment-and-community-first-choices.html',
+      deadline_type: 'ongoing',
+      opportunity_type: 'benefit',
+      is_national: false,
+      state: 'TN',
+      categories: ['disability', 'medicaid', 'hcbs', 'employment', 'community living'],
+      keywords: ['ecf choices', 'tenncare', 'hcbs', 'employment', 'community living', 'idd'],
+      eligibility:
+        'Tennessee residents who meet program eligibility criteria; typically involves TennCare/Medicaid eligibility and disability-related needs.',
     },
-    {
-      name: 'Disability Benefits',
-      baseUrl: 'https://www.ssa.gov/disability',
-      type: 'federal'
-    },
-    {
-      name: 'Medicaid Waivers',
-      baseUrl: 'https://www.medicaid.gov/medicaid/home-community-based-services',
-      type: 'waiver'
-    }
   ],
   family_support: [
     {
-      name: 'Family Model Residential Support',
-      baseUrl: 'https://www.tn.gov/didd/providers',
-      type: 'cls_fm'
+      id: 'tn-didd-providers',
+      title: 'Tennessee DIDD Provider Resources (CLS-FM / ECF)',
+      sponsor: 'Tennessee Department of Intellectual and Developmental Disabilities (DIDD)',
+      description:
+        'Provider-facing resources related to services for people with intellectual and developmental disabilities in Tennessee, including community living supports and family model contexts.',
+      url: 'https://www.tn.gov/didd/providers.html',
+      source_url: 'https://www.tn.gov/didd/providers.html',
+      application_url: 'https://www.tn.gov/didd/providers.html',
+      deadline_type: 'ongoing',
+      opportunity_type: 'program',
+      is_national: false,
+      state: 'TN',
+      categories: ['provider', 'idd', 'ecf choices', 'community living'],
+      keywords: ['didd', 'provider', 'cls-fm', 'family model', 'ecf choices'],
+      eligibility: 'For providers and families seeking information about services and provider requirements in Tennessee.',
     },
-    {
-      name: 'Caregiver Support Programs',
-      baseUrl: 'https://acl.gov/programs/support-caregivers',
-      type: 'caregiver'
-    }
-  ]
+  ],
 }
 
 export async function crawlECFBenefits(profile, options = {}) {
   const results = []
   
-  // Check if profile is ECF-eligible
-  const isECFEligible = checkECFEligibility(profile)
-  const isProvider = checkIfProvider(profile)
-  
-  if (!isECFEligible && !isProvider) {
-    console.log('[ECFBenefitsCrawler] Profile not ECF-eligible or provider')
+  // Specialist scope: TN only
+  if (!isTennesseeProfile(profile)) {
+    console.log('[ECFBenefitsCrawler] Skipping: not a Tennessee profile')
     return results
   }
+
+  const isProvider = isProviderProfile(profile)
+  const isIndividualRelevant = isECFRelevantIndividual(profile)
   
-  console.log(`[ECFBenefitsCrawler] Starting ECF benefits search`)
-  console.log(`[ECFBenefitsCrawler] Individual eligible: ${isECFEligible}, Provider: ${isProvider}`)
+  console.log('[ECFBenefitsCrawler] Starting ECF specialist search')
+  console.log(`[ECFBenefitsCrawler] Individual relevant: ${isIndividualRelevant}, Provider: ${isProvider}`)
   
-  // Search individual benefits if eligible
-  if (isECFEligible) {
-    for (const source of ECF_SOURCES.individual) {
-      try {
-        const benefits = await searchIndividualBenefits(source, profile)
-        
-        for (const benefit of benefits) {
-          if (isLoan(benefit)) continue
-          
-          const matchScore = calculateECFMatchScore(benefit, profile, 'individual')
-          
-          if (matchScore >= 80) {
-            results.push({
-              ...benefit,
-              match_score: matchScore,
-              crawler_type: 'ecf_benefits',
-              benefit_type: 'individual',
-              source: source.name
-            })
-          }
-        }
-      } catch (error) {
-        console.error(`[ECFBenefitsCrawler] Error searching ${source.name}:`, error.message)
-      }
+  if (isIndividualRelevant) {
+    for (const row of ECF_RECORDS.individual) {
+      results.push({
+        ...row,
+        crawler_type: 'ecf_benefits',
+        benefit_type: 'individual',
+        source: 'TennCare (ECF CHOICES)',
+      })
     }
   }
-  
-  // Search family/provider support if provider
+
   if (isProvider) {
-    for (const source of ECF_SOURCES.family_support) {
-      try {
-        const benefits = await searchFamilySupportBenefits(source, profile)
-        
-        for (const benefit of benefits) {
-          if (isLoan(benefit)) continue
-          
-          const matchScore = calculateECFMatchScore(benefit, profile, 'provider')
-          
-          if (matchScore >= 80) {
-            results.push({
-              ...benefit,
-              match_score: matchScore,
-              crawler_type: 'ecf_benefits',
-              benefit_type: 'family_support',
-              source: source.name
-            })
-          }
-        }
-      } catch (error) {
-        console.error(`[ECFBenefitsCrawler] Error searching ${source.name}:`, error.message)
-      }
+    for (const row of ECF_RECORDS.family_support) {
+      results.push({
+        ...row,
+        crawler_type: 'ecf_benefits',
+        benefit_type: 'family_support',
+        source: 'Tennessee DIDD',
+      })
     }
   }
   
-  console.log(`[ECFBenefitsCrawler] Found ${results.length} ECF benefits with 80%+ match`)
+  console.log(`[ECFBenefitsCrawler] Found ${results.length} ECF records (specialist scope)`)
   return results
-}
-
-function checkECFEligibility(profile) {
-  // Check various eligibility criteria
-  return profile.medicaid_enrolled === true ||
-         profile.ecf_participant === true ||
-         profile.disability_status === true ||
-         profile.intellectual_disability === true ||
-         profile.developmental_disability === true ||
-         (profile.tags && profile.tags.includes('ecf'))
-}
-
-function checkIfProvider(profile) {
-  return profile.is_provider === true ||
-         profile.organization_type === 'cls_fm' ||
-         profile.organization_type === 'family_model' ||
-         profile.provides_residential_support === true ||
-         (profile.services && profile.services.includes('residential'))
-}
-
-async function searchIndividualBenefits(source, profile) {
-  const benefits = []
-  
-  // Simulated benefits based on ECF CHOICES program
-  if (source.type === 'state_program') {
-    benefits.push({
-      title: 'ECF CHOICES Essential Supports',
-      sponsor: 'TennCare',
-      description: 'Employment and community living supports for individuals with intellectual disabilities',
-      url: source.baseUrl,
-      amount_min: 0,
-      amount_max: 50000,
-      deadline: 'Ongoing',
-      eligibility: 'Must have intellectual or developmental disability, be TennCare eligible',
-      benefit_categories: ['employment', 'community_living', 'daily_living']
-    })
-    
-    benefits.push({
-      title: 'ECF CHOICES Essential Family Supports',
-      sponsor: 'TennCare',
-      description: 'Support services for families caring for individuals with disabilities',
-      url: source.baseUrl,
-      amount_min: 0,
-      amount_max: 25000,
-      deadline: 'Ongoing',
-      eligibility: 'Family member with I/DD living at home',
-      benefit_categories: ['respite', 'family_support', 'training']
-    })
-  }
-  
-  if (source.type === 'federal') {
-    benefits.push({
-      title: 'Social Security Disability Insurance (SSDI)',
-      sponsor: 'Social Security Administration',
-      description: 'Monthly benefits for individuals with disabilities who have worked',
-      url: source.baseUrl,
-      amount_min: 500,
-      amount_max: 3500,
-      deadline: 'Ongoing',
-      eligibility: 'Work history required, medical disability determination',
-      benefit_categories: ['income_support']
-    })
-    
-    benefits.push({
-      title: 'Supplemental Security Income (SSI)',
-      sponsor: 'Social Security Administration',
-      description: 'Monthly benefits for individuals with disabilities with limited income',
-      url: source.baseUrl,
-      amount_min: 300,
-      amount_max: 914,
-      deadline: 'Ongoing',
-      eligibility: 'Limited income and resources, disability determination',
-      benefit_categories: ['income_support']
-    })
-  }
-  
-  return benefits
-}
-
-async function searchFamilySupportBenefits(source, profile) {
-  const benefits = []
-  
-  if (source.type === 'cls_fm') {
-    benefits.push({
-      title: 'CLS-FM Provider Reimbursement',
-      sponsor: 'Tennessee DIDD',
-      description: 'Reimbursement for Community Living Supports - Family Model providers',
-      url: source.baseUrl,
-      amount_min: 2000,
-      amount_max: 6000,
-      amount_description: 'Per individual per month',
-      deadline: 'Ongoing',
-      eligibility: 'Licensed CLS-FM provider, serve ECF CHOICES participants',
-      benefit_categories: ['provider_reimbursement', 'residential_support']
-    })
-    
-    benefits.push({
-      title: 'CLS-FM Start-up Grant',
-      sponsor: 'Tennessee DIDD',
-      description: 'Start-up funding for new Family Model homes',
-      url: source.baseUrl,
-      amount_min: 10000,
-      amount_max: 50000,
-      deadline: 'Quarterly',
-      eligibility: 'New CLS-FM provider, meet licensing requirements',
-      benefit_categories: ['startup_funding', 'home_modification']
-    })
-  }
-  
-  if (source.type === 'caregiver') {
-    benefits.push({
-      title: 'National Family Caregiver Support Program',
-      sponsor: 'Administration for Community Living',
-      description: 'Support services for family caregivers',
-      url: source.baseUrl,
-      amount_min: 0,
-      amount_max: 5000,
-      deadline: 'Ongoing',
-      eligibility: 'Family caregiver of individual with disabilities',
-      benefit_categories: ['respite', 'training', 'support_groups']
-    })
-  }
-  
-  return benefits
-}
-
-function calculateECFMatchScore(benefit, profile, type) {
-  let score = 70 // Base score for ECF benefits
-  
-  // Type-specific scoring
-  if (type === 'individual' && checkECFEligibility(profile)) {
-    score += 15
-  }
-  
-  if (type === 'provider' && checkIfProvider(profile)) {
-    score += 15
-  }
-  
-  // Category matching
-  const profileNeeds = profile.support_needs || profile.service_needs || []
-  const benefitCategories = benefit.benefit_categories || []
-  
-  const matchedCategories = profileNeeds.filter(need => 
-    benefitCategories.some(cat => cat.toLowerCase().includes(need.toLowerCase()))
-  )
-  
-  if (matchedCategories.length > 0) {
-    score += Math.min(20, matchedCategories.length * 10)
-  }
-  
-  // State match for state programs
-  if (benefit.sponsor?.includes('Tennessee') && profile.state === 'TN') {
-    score += 10
-  }
-  
-  // Disability type match
-  if (profile.disability_type && benefit.eligibility?.toLowerCase().includes(profile.disability_type.toLowerCase())) {
-    score += 10
-  }
-  
-  return Math.min(100, Math.round(score))
-}
-
-function isLoan(benefit) {
-  const loanKeywords = ['loan', 'repay', 'interest', 'borrow']
-  const text = `${benefit.title} ${benefit.description}`.toLowerCase()
-  return loanKeywords.some(keyword => text.includes(keyword))
 }
 
 export default { crawlECFBenefits }

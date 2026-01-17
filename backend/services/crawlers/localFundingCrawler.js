@@ -10,6 +10,7 @@ import axios from 'axios'
 import * as cheerio from 'cheerio'
 import zipcodes from 'zipcodes'
 import { buildSearchKeywords, calculateMatchScore, filterByDeadline } from './crawlerHelpers.js'
+import { extractStudentCampusZip } from '../profileHelpers.js'
 
 // Calculate distance between two coordinates (in miles)
 const calculateDistance = (lat1, lng1, lat2, lng2) => {
@@ -55,8 +56,21 @@ export async function crawlLocalFunding(profile, options = {}) {
     return results
   }
 
-  // Get ZIP from signals (extracted from all profile sections)
-  const targetZip = signals.location?.zip || profile.zip_code || profile.zip || profile.postal_code
+  const studentTypes = new Set(['student', 'high_school_student', 'college_student', 'graduate_student'])
+  const applicantTypes = signals?.applicantTypes ? Array.from(signals.applicantTypes) : []
+  const isStudent =
+    applicantTypes.some((t) => studentTypes.has(String(t))) ||
+    studentTypes.has(String(profile?.primary_type || ''))
+
+  // Get ZIP from signals (extracted from all profile sections),
+  // but for students prefer the campus/target school ZIP when available.
+  const campusZip = extractStudentCampusZip({ sections: profile?.sections ?? signals?.rawSections ?? {}, jobParameters: options })
+  const targetZip =
+    (isStudent && campusZip) ||
+    signals.location?.zip ||
+    profile.zip_code ||
+    profile.zip ||
+    profile.postal_code
   const profileState = signals.location?.state || profile.state
   const profileCity = signals.location?.city || profile.city
   
@@ -68,7 +82,10 @@ export async function crawlLocalFunding(profile, options = {}) {
   // Build search keywords from ALL profile signals
   const searchKeywords = buildSearchKeywords(profile, 25)
 
-  console.log(`[LocalFundingCrawler] Searching within ${SEARCH_RADIUS_MILES} miles of ${targetZip}`)
+  console.log(
+    `[LocalFundingCrawler] Searching within ${SEARCH_RADIUS_MILES} miles of ${targetZip}` +
+      (isStudent && campusZip ? ' (student campus/target ZIP)' : ''),
+  )
   console.log(`[LocalFundingCrawler] Location: ${profileCity}, ${profileState} ${targetZip}`)
   console.log(`[LocalFundingCrawler] Using ${searchKeywords.length} keywords from profile signals`)
   console.log(`[LocalFundingCrawler] Keywords: ${searchKeywords.slice(0, 10).join(', ')}...`)
@@ -174,8 +191,14 @@ async function searchLocalSource(source, coords, profile, searchKeywords) {
 }
 
 function isLoanOrMatchingFund(opportunity) {
+  const oppType = String(opportunity?.opportunity_type ?? opportunity?.type ?? '').toLowerCase()
+  if (['loan', 'loan_program', 'microloan'].includes(oppType)) return true
+  if (opportunity?.requires_match === true) return true
+  const matchPct = Number(opportunity?.match_percentage)
+  if (Number.isFinite(matchPct) && matchPct > 0) return true
+
   const loanKeywords = ['loan', 'repay', 'interest', 'apr', 'credit']
-  const matchingKeywords = ['matching funds', 'match required', '1:1 match', 'dollar for dollar']
+  const matchingKeywords = ['matching funds', 'match required', '1:1 match', 'dollar for dollar', 'cost share', 'cost-sharing', 'matching requirement']
   
   const text = `${opportunity.title} ${opportunity.description} ${opportunity.eligibility}`.toLowerCase()
   

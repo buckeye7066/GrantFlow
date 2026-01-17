@@ -259,11 +259,23 @@ function buildCandidateOpportunityQuery({ crawlerType, profileContext, tokens, i
       : '(deadline_type IN ("rolling","ongoing") OR deadline IS NULL OR deadline >= date("now"))',
   )
 
-  // Geography: state + national.
+  // Geography: default is state + national, but some crawlers are specialists.
   const state = profileContext?.signals?.location?.state ?? profileContext?.profile?.state ?? null
   if (state && typeof state === 'string' && state.trim().length === 2) {
-    conditions.push(isPostgres ? '(state = ? OR is_national = TRUE OR state IS NULL)' : '(state = ? OR is_national = 1 OR state IS NULL)')
-    params.push(state.trim().toUpperCase())
+    const normalized = state.trim().toUpperCase()
+    if (crawlerType === 'local_funding') {
+      // Local specialist: do NOT include national/unknown-state programs in DB fallback.
+      conditions.push('state = ?')
+      params.push(normalized)
+      conditions.push(isPostgres ? 'is_national = FALSE' : 'is_national = 0')
+    } else if (crawlerType === 'ecf_benefits') {
+      // ECF is Tennessee-only.
+      conditions.push('state = ?')
+      params.push('TN')
+    } else {
+      conditions.push(isPostgres ? '(state = ? OR is_national = TRUE OR state IS NULL)' : '(state = ? OR is_national = 1 OR state IS NULL)')
+      params.push(normalized)
+    }
   }
 
   // Crawler-type hints (lightweight pre-filter).
