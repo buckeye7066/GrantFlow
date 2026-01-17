@@ -72,22 +72,14 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@grantflow.app';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-<<<<<<< HEAD
-// Uploads live on disk; in production you should mount a persistent volume and
-// point UPLOADS_DIR at it (otherwise files will be lost on redeploy).
-const uploadsDir = process.env.UPLOADS_DIR
-  ? resolve(process.env.UPLOADS_DIR)
-  : join(__dirname, 'uploads');
-// Backward-compat: older builds stored uploads at repo-root `/uploads`.
-const legacyUploadsDir = join(__dirname, '..', 'uploads');
-=======
 // Uploads must live on a persistent volume in production (Railway Volume).
 // Set UPLOADS_DIR=/data/uploads (or your mount path) in Railway.
 // Default to backend/uploads for local/dev so routes and serving agree.
 const uploadsDir = process.env.UPLOADS_DIR
   ? resolve(process.env.UPLOADS_DIR)
   : join(__dirname, 'uploads');
->>>>>>> origin/main
+// Backward-compat: older builds stored uploads at repo-root `/uploads`.
+const legacyUploadsDir = join(__dirname, '..', 'uploads');
 const distPath = join(__dirname, '..', 'dist');
 
 const app = express();
@@ -202,19 +194,17 @@ try {
 } catch (error) {
   console.warn('Failed to create uploads directory:', error);
 }
-<<<<<<< HEAD
-app.use('/uploads', express.static(uploadsDir));
-// If legacy dir exists (and differs), serve it too so old URLs still work.
-try {
-  if (legacyUploadsDir !== uploadsDir && fs.existsSync(legacyUploadsDir)) {
-    app.use('/uploads', express.static(legacyUploadsDir));
-  }
-} catch {
-  // ignore legacy-dir probing failures
-=======
 // IMPORTANT: Missing uploads must return 404 (not SPA index.html).
 // Use `fallthrough: false` to stop the request pipeline when a file is missing.
 app.use('/uploads', express.static(uploadsDir, { fallthrough: false, index: false }));
+// If legacy dir exists (and differs), serve it too so old URLs still work.
+try {
+  if (legacyUploadsDir !== uploadsDir && fs.existsSync(legacyUploadsDir)) {
+    app.use('/uploads', express.static(legacyUploadsDir, { fallthrough: false, index: false }));
+  }
+} catch {
+  // ignore legacy-dir probing failures
+}
 app.use('/uploads', (err, _req, res, next) => {
   if (err && (err.status === 404 || err.statusCode === 404)) {
     return res.status(404).send('Not Found');
@@ -267,7 +257,6 @@ async function repairMissingUploadAvatars({ db, uploadsDir }) {
   } catch (error) {
     console.warn('[startup] failed to repair missing upload avatars:', error?.message || error)
   }
->>>>>>> origin/main
 }
 
 // Serve static files from Vite build
@@ -275,28 +264,25 @@ app.use(express.static(distPath));
 // Serve the SPA under the configured base path so production builds (base=/grantflow) work locally.
 const APP_BASE_PATH = process.env.AUTH_FRONTEND_APP_BASE || process.env.VITE_APP_BASE || '/grantflow';
 if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
-<<<<<<< HEAD
-  // Also expose uploads under the same base path (common when reverse proxies only route /grantflow/*).
   const normalizedBase = String(APP_BASE_PATH).replace(/\/+$/, '');
-  app.use(`${normalizedBase}/uploads`, express.static(uploadsDir));
+  // Expose uploads under the same base path (common when reverse proxies only route /grantflow/*).
+  app.use(`${normalizedBase}/uploads`, express.static(uploadsDir, { fallthrough: false, index: false }));
   try {
     if (legacyUploadsDir !== uploadsDir && fs.existsSync(legacyUploadsDir)) {
-      app.use(`${normalizedBase}/uploads`, express.static(legacyUploadsDir));
+      app.use(
+        `${normalizedBase}/uploads`,
+        express.static(legacyUploadsDir, { fallthrough: false, index: false }),
+      );
     }
   } catch {
     // ignore legacy-dir probing failures
   }
-=======
-  const normalizedBase = String(APP_BASE_PATH).replace(/\/+$/, '');
-  // Expose uploads under the same base path (common when reverse proxies only route /grantflow/*).
-  app.use(`${normalizedBase}/uploads`, express.static(uploadsDir, { fallthrough: false, index: false }));
   app.use(`${normalizedBase}/uploads`, (err, _req, res, next) => {
     if (err && (err.status === 404 || err.statusCode === 404)) {
       return res.status(404).send('Not Found');
     }
     return next(err);
   });
->>>>>>> origin/main
   app.use(APP_BASE_PATH, express.static(distPath));
 }
 
@@ -736,25 +722,6 @@ try {
   console.warn('[startup] Failed to seed assistance directories:', error?.message || error)
 }
 
-<<<<<<< HEAD
-const isProd = process.env.NODE_ENV === 'production'
-const JWT_SECRET = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || null
-if (!JWT_SECRET) {
-  const msg =
-    '[startup] Missing AUTH_JWT_SECRET (or JWT_SECRET). Set a strong secret; tokens must validate across restarts/instances.'
-  if (isProd) {
-    console.error(msg)
-    process.exit(1)
-  } else {
-    console.warn(msg + ' Using a dev-only fallback.')
-  }
-}
-const EFFECTIVE_JWT_SECRET = JWT_SECRET || 'grantflow-dev-secret'
-=======
-// Auto-seed grants disabled temporarily to debug server crash
-// TODO: Re-enable after fixing
-console.info('[startup] Grant seeding disabled for debugging');
-
 function resolveJwtSecret() {
   const raw = String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || '').trim();
   const isProd = process.env.NODE_ENV === 'production';
@@ -783,8 +750,7 @@ function resolveJwtSecret() {
   return raw;
 }
 
-const JWT_SECRET = resolveJwtSecret();
->>>>>>> origin/main
+const EFFECTIVE_JWT_SECRET = resolveJwtSecret();
 
 // Make db available to routes
 app.use((req, res, next) => {
@@ -798,22 +764,17 @@ app.use(async (req, res, next) => {
   const xAnyaToken = req.headers['x-anya-token'];
   let user = { role: 'guest', profileId: null };
   let handled = false;
+  const isProd = process.env.NODE_ENV === 'production'
 
   // 1. Check X-Admin-Token
   const expectedAdminToken = ADMIN_TOKEN;
   const expectedBulkKey = process.env.BULK_POPULATE_KEY || null;
-<<<<<<< HEAD
-
   if (
     !handled &&
     xAdminToken &&
     ((expectedAdminToken && xAdminToken === expectedAdminToken) ||
       (expectedBulkKey && xAdminToken === expectedBulkKey))
   ) {
-=======
-  
-  if (!handled && xAdminToken && ((expectedAdminToken && xAdminToken === expectedAdminToken) || (expectedBulkKey && xAdminToken === expectedBulkKey))) {
->>>>>>> origin/main
     user = { role: 'admin', is_admin: true, full_name: ADMIN_NAME, email: ADMIN_EMAIL };
     handled = true;
   }
