@@ -5,7 +5,12 @@ import multer from 'multer'
 import fs from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
-import { buildProfileSectionPrompt, supportedSectionKeys } from '../prompts/profileSections.js'
+import {
+  buildProfileSectionPrompt,
+  supportedSectionKeys,
+  canonicalSectionKeys,
+  CANONICAL_SECTION_DEFAULTS,
+} from '../prompts/profileSections.js'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
 import { ensureBillingAccount, mapAccountRow } from '../services/billingAccounts.js'
 import { extractCompletionText } from '../utils/openai.js'
@@ -13,6 +18,7 @@ import { linkProfileToAdmin } from '../utils/adminProfileLinks.js'
 import { safeParseJSON } from '../utils/safeJson.js'
 import { validatePagination } from '../utils/validation.js'
 import { formatError } from '../middleware/errorHandler.js'
+import { getComprehensiveApplicationSchema } from '../config/comprehensiveApplicationSchema.js'
 
 const router = express.Router()
 
@@ -134,6 +140,34 @@ async function enrichProfileWithSummary(db, profile) {
 function getOpenAI() {
   return createOpenAIClient().openai
 }
+
+// Canonical profile schema (safe to expose; contains no secrets).
+router.get('/schema', async (req, res) => {
+  const user = req.user ?? { role: 'guest' }
+  if (user.role === 'guest') {
+    return res.status(401).json({ error: 'Authentication required' })
+  }
+
+  const comprehensive = getComprehensiveApplicationSchema()
+
+  const sections = canonicalSectionKeys.map((sectionKey) => {
+    const defaults = CANONICAL_SECTION_DEFAULTS[sectionKey] ?? {}
+    return {
+      section_key: sectionKey,
+      keys: Object.keys(defaults),
+    }
+  })
+
+  return res.json({
+    version: '1.0',
+    generated_at: new Date().toISOString(),
+    canonical_sections: sections,
+    comprehensive_application: {
+      field_count: comprehensive.fields.length,
+      fields: comprehensive.fields,
+    },
+  })
+})
 
 router.get('/', async (req, res) => {
   const user = req.user
@@ -818,14 +852,15 @@ router.get('/:id/completeness', async (req, res) => {
     let totalKeyCount = 0
     let filledKeyCount = 0
 
-    supportedSectionKeys.forEach(sectionKey => {
+    canonicalSectionKeys.forEach(sectionKey => {
       const sectionData = existingSectionMap.get(sectionKey)
       
       if (!sectionData) {
         missingSections.push(sectionKey)
       } else {
         // Check if section has any meaningful data
-        const keys = Object.keys(sectionData).filter(k => k !== 'notes')
+        const canonicalDefaults = CANONICAL_SECTION_DEFAULTS[sectionKey] ?? {}
+        const keys = Object.keys(canonicalDefaults).filter(k => k !== 'notes')
         const filledKeys = keys.filter(k => {
           const value = sectionData[k]
           if (value === null || value === undefined || value === '') return false
@@ -856,7 +891,7 @@ router.get('/:id/completeness', async (req, res) => {
     res.json({
       profile_id: id,
       display_name: profile.display_name,
-      total_canonical_sections: supportedSectionKeys.length,
+      total_canonical_sections: canonicalSectionKeys.length,
       missing_sections: missingSections,
       empty_sections: emptySections,
       completed_sections: completedSections,
@@ -901,14 +936,15 @@ router.post('/:id/repair', async (req, res) => {
     // Create missing sections
     const upsert = req.db.prepare(`
       INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
-      VALUES (?, ?, '{}', 'system-repair')
+      VALUES (?, ?, ?, 'system-repair')
       ON CONFLICT(profile_id, section_key) DO NOTHING
     `)
 
     const createdSections = []
-    for (const sectionKey of supportedSectionKeys) {
+    for (const sectionKey of canonicalSectionKeys) {
       if (!existingKeys.has(sectionKey)) {
-        await upsert.run(id, sectionKey)
+        const defaults = CANONICAL_SECTION_DEFAULTS[sectionKey] ?? {}
+        await upsert.run(id, sectionKey, JSON.stringify(defaults))
         createdSections.push(sectionKey)
       }
     }
@@ -918,7 +954,7 @@ router.post('/:id/repair', async (req, res) => {
       profile_id: id,
       display_name: profile.display_name,
       sections_created: createdSections,
-      total_sections_after: supportedSectionKeys.length,
+      total_sections_after: canonicalSectionKeys.length,
       message: createdSections.length > 0 
         ? `Created ${createdSections.length} missing section(s)` 
         : 'Profile already has all sections'

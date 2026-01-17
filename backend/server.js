@@ -5,7 +5,7 @@ dotenv.config({ override: true });
 import express from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { dirname, join, resolve } from 'path';
 import fs from 'fs';
 import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
@@ -49,6 +49,7 @@ import { getSafeHealthSummary } from './services/diagnosticsService.js';
 import { initializeFeatureFlags } from './services/featureFlagService.js';
 import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from './services/auditService.js';
 import { decryptRuntimeSecret } from './utils/runtimeSecrets.js';
+import { seedBaselineFromRepo } from './utils/seedBaselineFromRepo.js';
 
 // Validate critical environment variables at startup.
 // NOTE: OpenAI is intentionally OPTIONAL for core app flows (auth/profile/opportunities).
@@ -73,7 +74,13 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@grantflow.app';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const uploadsDir = join(__dirname, '..', 'uploads');
+// Uploads live on disk; in production you should mount a persistent volume and
+// point UPLOADS_DIR at it (otherwise files will be lost on redeploy).
+const uploadsDir = process.env.UPLOADS_DIR
+  ? resolve(process.env.UPLOADS_DIR)
+  : join(__dirname, 'uploads');
+// Backward-compat: older builds stored uploads at repo-root `/uploads`.
+const legacyUploadsDir = join(__dirname, '..', 'uploads');
 const distPath = join(__dirname, '..', 'dist');
 
 const app = express();
@@ -189,12 +196,30 @@ try {
   console.warn('Failed to create uploads directory:', error);
 }
 app.use('/uploads', express.static(uploadsDir));
+// If legacy dir exists (and differs), serve it too so old URLs still work.
+try {
+  if (legacyUploadsDir !== uploadsDir && fs.existsSync(legacyUploadsDir)) {
+    app.use('/uploads', express.static(legacyUploadsDir));
+  }
+} catch {
+  // ignore legacy-dir probing failures
+}
 
 // Serve static files from Vite build
 app.use(express.static(distPath));
 // Serve the SPA under the configured base path so production builds (base=/grantflow) work locally.
 const APP_BASE_PATH = process.env.AUTH_FRONTEND_APP_BASE || process.env.VITE_APP_BASE || '/grantflow';
 if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
+  // Also expose uploads under the same base path (common when reverse proxies only route /grantflow/*).
+  const normalizedBase = String(APP_BASE_PATH).replace(/\/+$/, '');
+  app.use(`${normalizedBase}/uploads`, express.static(uploadsDir));
+  try {
+    if (legacyUploadsDir !== uploadsDir && fs.existsSync(legacyUploadsDir)) {
+      app.use(`${normalizedBase}/uploads`, express.static(legacyUploadsDir));
+    }
+  } catch {
+    // ignore legacy-dir probing failures
+  }
   app.use(APP_BASE_PATH, express.static(distPath));
 }
 
@@ -427,7 +452,30 @@ function ensureCrawlerJobsSupportsAllTypes() {
 if (db.dialect === 'sqlite') {
   ensureCrawlerJobsSupportsAllTypes()
 }
-await ensureDesignatedProfiles(db)
+// Restore baseline data (profiles + sections, plus other seed tables if DB appears empty).
+// This makes the app self-heal after an ephemeral DB reset, so "real profiles" reappear on next login.
+try {
+  const mode = String(process.env.BASELINE_SEED_MODE || '').trim().toLowerCase() || 'auto'
+  const result = await seedBaselineFromRepo(db, {
+    mode: mode === 'force' ? 'force' : mode === 'off' ? 'off' : 'auto',
+  })
+  console.info('[startup] baseline seed', {
+    ok: result.ok,
+    skipped: result.skipped,
+    reason: result.reason ?? null,
+    seed_path: result.seed_path ?? null,
+    exported_at: result.exported_at ?? null,
+    before: result.before ?? null,
+    after: result.after ?? null,
+    decisions: result.decisions ?? null,
+  })
+} catch (error) {
+  // Fallback to designated profiles so the server can still boot, but log loudly.
+  console.error('[startup] Failed to seed baseline from repo. Falling back to designated profiles.', {
+    error: error?.message || String(error),
+  })
+  await ensureDesignatedProfiles(db)
+}
 await linkAllProfilesToAdmin(db)
 await ensureUserPreferencesTable(db)
 
@@ -610,11 +658,19 @@ try {
   console.warn('[startup] Failed to seed assistance directories:', error?.message || error)
 }
 
-// Auto-seed grants disabled temporarily to debug server crash
-// TODO: Re-enable after fixing
-console.info('[startup] Grant seeding disabled for debugging');
-
-const JWT_SECRET = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret';
+const isProd = process.env.NODE_ENV === 'production'
+const JWT_SECRET = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || null
+if (!JWT_SECRET) {
+  const msg =
+    '[startup] Missing AUTH_JWT_SECRET (or JWT_SECRET). Set a strong secret; tokens must validate across restarts/instances.'
+  if (isProd) {
+    console.error(msg)
+    process.exit(1)
+  } else {
+    console.warn(msg + ' Using a dev-only fallback.')
+  }
+}
+const EFFECTIVE_JWT_SECRET = JWT_SECRET || 'grantflow-dev-secret'
 
 // Make db available to routes
 app.use((req, res, next) => {
@@ -631,9 +687,14 @@ app.use(async (req, res, next) => {
 
   // 1. Check X-Admin-Token
   const expectedAdminToken = ADMIN_TOKEN;
-  const expectedBulkKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026';
-  
-  if (!handled && xAdminToken && ((expectedAdminToken && xAdminToken === expectedAdminToken) || xAdminToken === expectedBulkKey)) {
+  const expectedBulkKey = process.env.BULK_POPULATE_KEY || null;
+
+  if (
+    !handled &&
+    xAdminToken &&
+    ((expectedAdminToken && xAdminToken === expectedAdminToken) ||
+      (expectedBulkKey && xAdminToken === expectedBulkKey))
+  ) {
     user = { role: 'admin', is_admin: true, full_name: ADMIN_NAME, email: ADMIN_EMAIL };
     handled = true;
   }
@@ -649,7 +710,7 @@ app.use(async (req, res, next) => {
     const token = authHeader.slice(7).trim();
     if (token) {
       try {
-        const payload = jwt.verify(token, JWT_SECRET);
+        const payload = jwt.verify(token, EFFECTIVE_JWT_SECRET);
         // Stateless JWT acceptance (important for multi-instance deployments where SQLite session storage
         // is not shared across instances). If the token is correctly signed and unexpired, trust its claims.
         // We still try to validate against DB sessions when available, but we do not require it.
@@ -710,7 +771,11 @@ app.use(async (req, res, next) => {
       handled = true;
     }
 
-    if (!handled && token) {
+    // Legacy "profile-id bearer token" is unsafe; allow only in non-prod with explicit opt-in.
+    const allowLegacyProfileToken =
+      isProd === false && String(process.env.ALLOW_LEGACY_PROFILE_TOKEN || '').trim().toLowerCase() === 'true'
+
+    if (!handled && token && allowLegacyProfileToken) {
       try {
         const profile = await db
           .prepare('SELECT id, display_name FROM profiles WHERE id = ?')
