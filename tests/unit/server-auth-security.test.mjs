@@ -102,3 +102,25 @@ test('security: legacy profile-id bearer token requires explicit opt-in', async 
   await srv.stop()
 })
 
+test('designated profiles: baseline seed creates full profile set', async () => {
+  const srv = startServer({
+    ADMIN_TOKEN: 'test-admin',
+    ANYA_ADMIN_TOKEN: '',
+    BULK_POPULATE_KEY: '',
+    ALLOW_LEGACY_PROFILE_TOKEN: '',
+  })
+
+  const { port } = await srv.ready
+  const res = await fetch(`http://127.0.0.1:${port}/api/profiles`, {
+    headers: {
+      'X-Admin-Token': 'test-admin',
+    },
+  })
+  assert.equal(res.status, 200)
+  const data = await res.json()
+  assert.ok(Array.isArray(data))
+  // The repo seed currently defines 15 baseline profiles; guard against regressions.
+  assert.ok(data.length >= 15, `expected >= 15 profiles, got ${data.length}`)
+  await srv.stop()
+})
+
