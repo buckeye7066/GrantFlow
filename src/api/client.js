@@ -42,7 +42,6 @@ class APIClient {
     this.entities = {};
   }
 
-<<<<<<< HEAD
   getRequestId() {
     try {
       if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -52,46 +51,6 @@ class APIClient {
       // fall through to fallback request id
     }
     return `req_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
-=======
-  // ---------------------------------------------------------------------------
-  // Base44 SDK compatibility helpers
-  // Legacy call sites expect base44.get/post/patch/put/delete(url, body?)
-  // ---------------------------------------------------------------------------
-
-  get(endpoint, options = {}) {
-    return this.fetch(endpoint, { ...options, method: 'GET' })
-  }
-
-  delete(endpoint, options = {}) {
-    return this.fetch(endpoint, { ...options, method: 'DELETE' })
-  }
-
-  post(endpoint, body, options = {}) {
-    const hasBody = body !== undefined
-    const resolvedBody =
-      hasBody && options.body === undefined && !(body instanceof FormData)
-        ? JSON.stringify(body)
-        : (options.body ?? body)
-    return this.fetch(endpoint, { ...options, method: 'POST', body: resolvedBody })
-  }
-
-  put(endpoint, body, options = {}) {
-    const hasBody = body !== undefined
-    const resolvedBody =
-      hasBody && options.body === undefined && !(body instanceof FormData)
-        ? JSON.stringify(body)
-        : (options.body ?? body)
-    return this.fetch(endpoint, { ...options, method: 'PUT', body: resolvedBody })
-  }
-
-  patch(endpoint, body, options = {}) {
-    const hasBody = body !== undefined
-    const resolvedBody =
-      hasBody && options.body === undefined && !(body instanceof FormData)
-        ? JSON.stringify(body)
-        : (options.body ?? body)
-    return this.fetch(endpoint, { ...options, method: 'PATCH', body: resolvedBody })
->>>>>>> origin/main
   }
 
   setAuthFailureHandler(handler) {
