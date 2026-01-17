@@ -35,6 +35,9 @@
 - **Action**:
   - Click the "Repair Profile" button on the profile overview.
   - Admin can run "Repair All Profiles" from the Admin Dashboard -> Data Integrity tab.
+  - Verify via API:
+    - `GET /api/profiles/:id/completeness` (includes `missing_keys_by_section`)
+    - `POST /api/profiles/:id/repair` (creates missing sections and backfills missing keys)
 
 ### 4. Match Quality Debugging
 - **Symptom**: Irrelevant matches or low scores for good grants.
@@ -54,12 +57,17 @@
 1. Ensure baseline gate passes: `npm run doctor`.
 2. Merge to the deploy branch (recommended: `main`) and let Vercel/Railway build.
 3. Verify routing:
-   - `/<base>/` loads (base is `/grantflow`)
+   - `/<base>` loads (base is `/grantflow`)
+   - `/<base>/` loads (trailing slash must not 404)
    - `/<base>/login` loads (deep refresh)
    - `/<base>/api/health` returns 200 (same-origin rewrite)
+   - Recommended automation:
+     - `SMOKE_BASE_URL=https://app.axiombiolabs.org SMOKE_BASE_PATH=/grantflow npm run smoke:prod`
 4. Verify backend health:
    - `GET https://<railway-service>/api/health` returns 200 (or 200 + `"status":"warning"` is acceptable)
    - Use `X-Request-Id` to correlate any failures in Railway logs
+5. Verify the canonical profile schema endpoint:
+   - `GET /api/profiles/schema` (should return full data point list + explanations)
 
 ## Rollback (Fast)
 

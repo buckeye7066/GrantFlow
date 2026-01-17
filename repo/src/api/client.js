@@ -1,5 +1,3 @@
-import { env } from '@/config/env.js'
-
 // API Client - Replaces Base44 SDK
 // This file provides the same interface as base44Client but uses your own backend
 
@@ -8,18 +6,18 @@ import { env } from '@/config/env.js'
 // NOTE: Vite dev server proxies `/api` to the backend (see `vite.config.ts`),
 // so the safest default in dev is also relative URLs (empty string). If you need
 // to hit a remote backend directly, set `VITE_API_URL`.
-const API_URL = env.isDev ? env.apiUrl : '' // Empty string = relative URLs, proxied by Vercel
-const APP_BASE = env.appBase || '/grantflow'
+const API_URL = import.meta.env.DEV
+  ? (import.meta.env.VITE_API_URL || '')
+  : ''; // Empty string = relative URLs, proxied by Vercel
+const APP_BASE = import.meta.env.VITE_APP_BASE || '/grantflow';
 
 // Frontend startup sanity (non-fatal): warn on env drift/misconfiguration.
 if (import.meta.env.DEV) {
   const raw = import.meta.env.VITE_API_URL
   if (raw && !/^https?:\/\//i.test(String(raw))) {
-    // eslint-disable-next-line no-console
     console.warn('[env] VITE_API_URL should be http(s)://...; falling back to same-origin proxy. value=', raw)
   }
 } else if (import.meta.env.VITE_API_URL) {
-  // eslint-disable-next-line no-console
   console.warn('[env] VITE_API_URL is ignored in production (same-origin /api via Vercel rewrites).')
 }
 
@@ -44,17 +42,6 @@ class APIClient {
     this.stubWarnings = new Set();
     this.isDev = import.meta.env?.DEV ?? false;
     this.entities = {};
-  }
-
-  getRequestId() {
-    try {
-      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-        return crypto.randomUUID();
-      }
-    } catch {
-      // fall through to fallback request id
-    }
-    return `req_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
   }
 
   setAuthFailureHandler(handler) {
@@ -217,7 +204,6 @@ class APIClient {
     
     // Track if this is a retry attempt to prevent infinite loops
     const isRetry = options._isRetry || false;
-    const requestId = this.getRequestId();
 
     const headers = {
       ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
@@ -231,8 +217,6 @@ class APIClient {
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
-
-    headers['X-Request-Id'] = headers['X-Request-Id'] || requestId;
 
     // Add timeout to prevent hanging requests
     const controller = new AbortController();
@@ -265,13 +249,8 @@ class APIClient {
       }
 
       if (!response.ok) {
-        const errorBody = await response.json().catch(() => ({ error: response.statusText }));
-        const err = new Error(errorBody.error || errorBody.message || 'Request failed');
-        err.status = response.status;
-        err.requestId = errorBody.request_id || headers['X-Request-Id'] || null;
-        err.errorType = errorBody.error_type || null;
-        err.details = errorBody;
-        throw err;
+        const error = await response.json().catch(() => ({ error: response.statusText }));
+        throw new Error(error.error || error.message || 'Request failed');
       }
 
       if (response.status === 204) {
@@ -290,78 +269,12 @@ class APIClient {
       // Handle timeout errors specifically
       if (error.name === 'AbortError') {
         console.error(`[APIClient] Request timeout for ${endpoint}`);
-        const timeoutErr = new Error('Request timed out. Please check your connection and try again.');
-        timeoutErr.status = 504;
-        timeoutErr.requestId = headers['X-Request-Id'] || null;
-        throw timeoutErr;
+        throw new Error('Request timed out. Please check your connection and try again.');
       }
       
       // Re-throw other errors
-      if (error && typeof error === 'object' && !error.requestId) {
-        error.requestId = headers['X-Request-Id'] || null;
-      }
       throw error;
     }
-  }
-
-  // -----------------------------
-  // Base44-style HTTP helpers
-  // -----------------------------
-  // Many older components call base44.get/patch/etc. Provide thin wrappers
-  // around `fetch()` to keep those call sites working.
-
-  get(endpoint, options = {}) {
-    return this.fetch(endpoint, { ...options, method: 'GET' })
-  }
-
-  delete(endpoint, options = {}) {
-    return this.fetch(endpoint, { ...options, method: 'DELETE' })
-  }
-
-  post(endpoint, data, options = {}) {
-    // Allow signature (endpoint, options) if caller passes only options.
-    const inferredOptions =
-      options == null &&
-      data &&
-      typeof data === 'object' &&
-      !Array.isArray(data) &&
-      (Object.prototype.hasOwnProperty.call(data, 'method') ||
-        Object.prototype.hasOwnProperty.call(data, 'headers') ||
-        Object.prototype.hasOwnProperty.call(data, 'body'))
-        ? data
-        : null
-
-    const finalOptions = inferredOptions || options || {}
-    const payload = inferredOptions ? null : data
-
-    const body =
-      payload instanceof FormData
-        ? payload
-        : payload === undefined || payload === null
-          ? undefined
-          : JSON.stringify(payload)
-
-    return this.fetch(endpoint, { ...finalOptions, method: 'POST', body })
-  }
-
-  put(endpoint, data, options = {}) {
-    const body =
-      data instanceof FormData
-        ? data
-        : data === undefined || data === null
-          ? undefined
-          : JSON.stringify(data)
-    return this.fetch(endpoint, { ...options, method: 'PUT', body })
-  }
-
-  patch(endpoint, data, options = {}) {
-    const body =
-      data instanceof FormData
-        ? data
-        : data === undefined || data === null
-          ? undefined
-          : JSON.stringify(data)
-    return this.fetch(endpoint, { ...options, method: 'PATCH', body })
   }
 
   // Entity wrapper for Base44-compatible interface
