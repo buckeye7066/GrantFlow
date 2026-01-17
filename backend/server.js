@@ -764,6 +764,7 @@ app.use(async (req, res, next) => {
   const xAnyaToken = req.headers['x-anya-token'];
   let user = { role: 'guest', profileId: null };
   let handled = false;
+  const isProd = process.env.NODE_ENV === 'production'
 
   // 1. Check X-Admin-Token
   const expectedAdminToken = ADMIN_TOKEN;

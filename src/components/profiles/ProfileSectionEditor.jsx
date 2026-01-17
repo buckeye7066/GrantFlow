@@ -158,7 +158,9 @@ const toStringList = (value) => {
       try {
         const parsed = JSON.parse(raw)
         if (Array.isArray(parsed)) return parsed.map((v) => String(v).trim()).filter(Boolean)
-      } catch {}
+      } catch {
+        // ignore malformed JSON; fall back to comma-separated parsing
+      }
     }
     return raw.split(',').map((entry) => entry.trim()).filter(Boolean)
   }
