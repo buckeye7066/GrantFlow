@@ -434,7 +434,93 @@ async function assignProfileToUser(db, userId, email) {
     return null
   }
 
+  async function findProfileRowForEmail(normalizedEmail) {
+    if (!normalizedEmail) return null
+
+    // Postgres: JSON ->> extraction is safe and fast.
+    if (db?.dialect === 'postgres') {
+      try {
+        return (
+          (await db
+            .prepare(
+              `
+                SELECT p.id, p.user_id
+                FROM profiles p
+                JOIN profile_sections ps ON ps.profile_id = p.id
+                WHERE ps.section_key = 'basic_information'
+                  AND LOWER((ps.data::jsonb ->> 'email')) = ?
+                LIMIT 1
+              `,
+            )
+            .get(normalizedEmail)) ?? null
+        )
+      } catch {
+        return null
+      }
+    }
+
+    // SQLite: prefer json_extract when available.
+    try {
+      const row = await db
+        .prepare(
+          `
+            SELECT p.id, p.user_id
+            FROM profiles p
+            JOIN profile_sections ps ON ps.profile_id = p.id
+            WHERE ps.section_key = 'basic_information'
+              AND LOWER(json_extract(ps.data, '$.email')) = ?
+            LIMIT 1
+          `,
+        )
+        .get(normalizedEmail)
+      if (row?.id) return row
+    } catch {
+      // ignore and fall back to LIKE matching
+    }
+
+    // Fallback: match in JSON string (works even if json1 isn't enabled).
+    const needle = `"email":"${normalizedEmail.replace(/"/g, '').toLowerCase()}"`
+    try {
+      return (
+        (await db
+          .prepare(
+            `
+              SELECT p.id, p.user_id
+              FROM profiles p
+              JOIN profile_sections ps ON ps.profile_id = p.id
+              WHERE ps.section_key = 'basic_information'
+                AND LOWER(ps.data) LIKE ?
+              LIMIT 1
+            `,
+          )
+          .get(`%${needle}%`)) ?? null
+      )
+    } catch {
+      return null
+    }
+  }
+
   if (email) {
+    const normalizedEmail = normalizeEmail(email)
+
+    // Prefer a profile that explicitly advertises this email in basic_information.
+    const byEmail = await findProfileRowForEmail(normalizedEmail)
+    if (byEmail?.id) {
+      if (!byEmail.user_id || byEmail.user_id === userId) {
+        await db
+          .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+          .run(userId, byEmail.id)
+        return byEmail.id
+      }
+      if (await isAdminUserId(db, byEmail.user_id)) {
+        await db
+          .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+          .run(userId, byEmail.id)
+        return byEmail.id
+      }
+      return byEmail.id
+    }
+
     const designatedProfileId = getDesignatedProfileForEmail(email)
     if (designatedProfileId) {
       const designatedProfile = await db
@@ -462,17 +548,6 @@ async function assignProfileToUser(db, userId, email) {
     }
   }
   
-  const firstProfile = await db
-    .prepare('SELECT id FROM profiles WHERE user_id IS NULL ORDER BY created_at ASC LIMIT 1')
-    .get()
-  if (firstProfile) {
-    await db
-      .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-      .run(userId, firstProfile.id)
-    // TODO: Remove debug log - console.log(`[auth] Assigned first available profile ${firstProfile.id} to user ${userId}`)
-    return firstProfile.id
-  }
-
   // No pre-created profiles available (common on fresh Postgres). Create a personal profile for the user.
   try {
     const profileId = crypto.randomUUID()
@@ -1303,19 +1378,30 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
     sendAuthAttemptNotification({
       event: 'email_start',
       identifier: email,
-      success: true,
+      success: Boolean(emailSent),
       error: emailSent ? null : 'email_delivery_failed_or_unconfigured',
     }).catch(() => {})
 
-    // ALWAYS include preview code when email wasn't sent (regardless of environment)
-    // This ensures users can always log in even if email service is down
-    if (!emailSent) {
-      responseData.previewCode = code
-      responseData.notice = 'Email service is not configured or unavailable. Use the preview code below to continue.'
-    } else if (process.env.NODE_ENV !== 'production') {
-      // Also include in development even if email was sent
-      responseData.previewCode = code
-      responseData.notice = 'Development mode: Code included for testing'
+    const allowPreviewCodeInProd =
+      String(process.env.AUTH_ALLOW_PREVIEW_CODE_IN_PROD || '').trim().toLowerCase() === 'true'
+    const allowPreviewCode = process.env.NODE_ENV !== 'production' || allowPreviewCodeInProd
+
+    // Production-grade default: do NOT leak codes in API responses.
+    if (!emailSent && process.env.NODE_ENV === 'production' && !allowPreviewCodeInProd) {
+      return res.status(503).json({
+        error: 'Email delivery is unavailable. Please contact support.',
+        error_type: 'email_unavailable',
+      })
+    }
+
+    if (allowPreviewCode) {
+      if (!emailSent) {
+        responseData.previewCode = code
+        responseData.notice = 'Email delivery is unavailable. Use the preview code below to continue.'
+      } else if (process.env.NODE_ENV !== 'production') {
+        responseData.previewCode = code
+        responseData.notice = 'Development mode: Code included for testing'
+      }
     }
 
     console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent)
@@ -1616,6 +1702,13 @@ router.post('/phone/start', phoneStartLimiter, async (req, res) => {
 
   sendPhoneVerificationCode(normalized, code)
 
+  // Optional ops alert (never includes the code).
+  sendAuthAttemptNotification({
+    event: 'phone_start',
+    identifier: normalized,
+    success: true,
+  }).catch(() => {})
+
   return res.status(202).json({
     message: 'Verification code sent',
     previewCode: process.env.NODE_ENV !== 'production' ? code : undefined,
@@ -1698,6 +1791,12 @@ router.post('/phone/verify', async (req, res) => {
       )
       .run(credential.id)
 
+    sendAuthAttemptNotification({
+      event: 'phone_verify',
+      identifier: normalized,
+      success: false,
+      error: 'invalid_code',
+    }).catch(() => {})
     return res.status(400).json({ error: 'Invalid verification code' })
   }
 
@@ -1797,6 +1896,20 @@ router.post('/phone/verify', async (req, res) => {
       profile_id: anyaInfo.profileId,
     }
   }
+
+  // Admin notice on successful sign-in (post-verify)
+  sendAuthAttemptNotification({
+    event: 'sign_in',
+    identifier: normalized,
+    success: true,
+    context: {
+      method: 'phone',
+      userId: user.id,
+      profileId: activeProfileId,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    },
+  }).catch(() => {})
 
   return res.json(response)
 })
