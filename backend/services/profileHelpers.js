@@ -241,6 +241,57 @@ function addMultipleKeywords(set, values = []) {
   values.forEach((value) => addKeyword(set, value))
 }
 
+const EMAIL_REGEX = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i
+const SSN_REGEX = /\b\d{3}-\d{2}-\d{4}\b/
+const LONG_DIGIT_REGEX = /\b\d{7,}\b/
+
+function shouldSkipFreeText(value) {
+  if (!value || typeof value !== 'string') return true
+  const s = value.trim()
+  if (!s) return true
+  if (EMAIL_REGEX.test(s)) return true
+  if (SSN_REGEX.test(s)) return true
+  // Avoid indexing long digit sequences (phone numbers, IDs).
+  if (LONG_DIGIT_REGEX.test(s) && s.replace(/[^\d]/g, '').length >= 7) return true
+  return false
+}
+
+function collectAllMatchableStrings(value, out, { maxItems = 600, maxDepth = 6 } = {}, depth = 0) {
+  if (!out || out.size >= maxItems) return
+  if (depth > maxDepth) return
+  if (value === null || value === undefined) return
+
+  if (typeof value === 'string') {
+    if (!shouldSkipFreeText(value)) {
+      const trimmed = value.trim()
+      out.add(trimmed.length > 180 ? trimmed.slice(0, 180) : trimmed)
+    }
+    return
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    out.add(String(value))
+    return
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      if (out.size >= maxItems) return
+      collectAllMatchableStrings(entry, out, { maxItems, maxDepth }, depth + 1)
+    }
+    return
+  }
+
+  if (value && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value)) {
+      if (out.size >= maxItems) return
+      // Index key names lightly (helps match filters like "nicra", "uei", etc.).
+      if (typeof k === 'string' && k.length >= 3 && k.length <= 60) out.add(k.replace(/_/g, ' '))
+      collectAllMatchableStrings(v, out, { maxItems, maxDepth }, depth + 1)
+    }
+  }
+}
+
 function collectTrueFlags(section = {}, mapping = {}) {
   const matched = []
   Object.entries(mapping).forEach(([key, labels]) => {
@@ -404,6 +455,7 @@ export function buildProfileSignals({ profile, sections }) {
   const healthSet = new Set()
   const familySet = new Set()
   const occupationSet = new Set()
+  const allDataSet = new Set()
 
   // Extract location from multiple sources including address strings
   const basic = sections?.basic_information ?? {}
@@ -464,6 +516,16 @@ export function buildProfileSignals({ profile, sections }) {
   const registerKeywords = (values = []) => {
     if (!Array.isArray(values)) return
     values.forEach((value) => registerKeyword(value))
+  }
+
+  // ============ GLOBAL PASSTHROUGH (ALL DATA POINTS) ============
+  // Add matchable tokens from *all* profile/section data, so crawlers and matchers
+  // can leverage every captured data point—even if it doesn't have dedicated logic.
+  //
+  // IMPORTANT: Avoid indexing PII (emails, SSNs, long digit strings).
+  collectAllMatchableStrings({ profile, sections }, allDataSet, { maxItems: 600, maxDepth: 6 })
+  for (const token of allDataSet) {
+    registerKeyword(token)
   }
 
   // ============ PROFILE TOP-LEVEL FIELDS ============
@@ -1122,6 +1184,8 @@ export function buildProfileSignals({ profile, sections }) {
     keywords: Array.from(keywordSet),
     phrases_list: Array.from(phraseSet),
     keywordSet,
+    // Backward-compatible iterable alias used by some crawler implementations.
+    keywords: keywordSet,
     phrases: phraseSet,
     demographics: demographicSet,
     genders: genderSet,
@@ -1136,6 +1200,7 @@ export function buildProfileSignals({ profile, sections }) {
     academics,
     financial,
     rawSections,
+    allData: allDataSet,
     coverage,
   }
 }

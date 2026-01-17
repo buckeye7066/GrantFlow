@@ -45,7 +45,7 @@ EXPOSE 8080
 
 # Health check on /health endpoint
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:' + (process.env.PORT || 8080) + '/api/health', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); }).on('error', () => process.exit(1));"
+  CMD node -e "require('http').get('http://localhost:' + (process.env.PORT || 8080) + '/readyz', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); }).on('error', () => process.exit(1));"
 
 # Start the Express server
 CMD ["npm", "start"]

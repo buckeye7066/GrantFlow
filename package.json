@@ -4,19 +4,19 @@
   "version": "0.0.0",
   "type": "module",
   "engines": {
-    "node": "20.x"
+    "node": ">=20 <23"
   },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "lint": "eslint \"src/**/*.{js,jsx}\" \"backend/**/*.js\"",
+    "lint": "eslint --max-warnings 0 \"src/**/*.{js,jsx}\" \"backend/**/*.js\"",
     "typecheck": "tsc -p tsconfig.node.json --noEmit",
     "unit": "node --test \"tests/unit/**/*.test.mjs\"",
-    "smoke": "node ./node_modules/playwright/cli.js test -c tests/smoke/playwright.config.mjs",
+    "smoke": "playwright test -c tests/smoke/playwright.config.mjs",
     "doctor": "node scripts/doctor.mjs",
     "test": "npm run lint && npm run typecheck && npm run unit && npm run build",
     "preview": "vite preview",
-    "backend": "node backend/server.js",
+    "backend": "node backend/start.js",
     "dev:full": "concurrently \"npm run backend\" \"npm run dev\"",
     "ingest": "node scripts/ingest.mjs",
     "ingest:grantsgov": "node scripts/ingest-grantsgov.mjs",
@@ -36,7 +36,7 @@
     "crawl:targeted": "node ./scripts/extended-state-crawler.mjs",
     "prepopulate:grants": "node ./scripts/prepopulate-profile-grants.mjs",
     "setup:production": "bash ./scripts/setup-production-db.sh",
-    "start": "node backend/server.js",
+    "start": "node backend/start.js",
     "crawler:smoke": "node ./scripts/crawler-smoke.mjs",
     "crawler:run": "node ./scripts/crawler-run.mjs",
     "crawler:doctor": "node ./scripts/crawler-doctor.mjs",

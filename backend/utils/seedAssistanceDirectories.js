@@ -1,5 +1,5 @@
 import crypto from 'crypto'
-import { readFileSync } from 'fs'
+import { readFileSync, existsSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
@@ -7,14 +7,30 @@ import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
+const missingOnce = new Set()
+
 function loadJSON(path) {
+  if (!existsSync(path)) {
+    if (!missingOnce.has(path)) {
+      missingOnce.add(path)
+      console.info(
+        `[seedAssistanceDirectories] Seed file not found; skipping: ${path} (expected in backend/data/)`,
+      )
+    }
+    return null
+  }
   try {
     return JSON.parse(readFileSync(path, 'utf8'))
   } catch (error) {
-    console.warn(`[seedAssistanceDirectories] Could not load ${path}:`, error.message)
+    // Missing seed files are expected in many environments (e.g. production images, fresh clones).
+    // Only warn on non-ENOENT failures (e.g. invalid JSON).
+    if (error?.code !== 'ENOENT') {
+      console.warn('[seedAssistanceDirectories] Could not load ' + path + ':', error?.message || String(error))
+    }
     return null
   }
 }
+
 
 function stableIdFromUrl(url) {
   return crypto.createHash('sha256').update(String(url)).digest('hex')
@@ -28,8 +44,11 @@ function ensureArray(value) {
 
 export function seedAssistanceDirectories(db) {
   const dataDir = join(__dirname, '..', 'data')
-  const statePrograms = loadJSON(join(dataDir, 'state_assistance_programs.json'))
-  const localNetworks = loadJSON(join(dataDir, 'local_assistance_networks.json'))
+  const stateProgramsPath = join(dataDir, 'state_assistance_programs.json')
+  const localNetworksPath = join(dataDir, 'local_assistance_networks.json')
+
+  const statePrograms = loadJSON(stateProgramsPath)
+  const localNetworks = loadJSON(localNetworksPath)
 
   const programs = ensureArray(statePrograms?.programs)
   const networks = ensureArray(localNetworks?.networks)

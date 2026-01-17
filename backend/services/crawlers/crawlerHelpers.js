@@ -74,6 +74,14 @@ export function buildSearchKeywords(profile, maxKeywords = 25) {
   }
 
   const keywords = new Set()
+  const looksUseful = (value) => {
+    if (!value) return false
+    const s = String(value).trim()
+    if (s.length < 3) return false
+    // Avoid tokens that are just numbers (IDs, etc.)
+    if (/^\d+(\.\d+)?$/.test(s)) return false
+    return true
+  }
 
   // Add from all signal sets (highest priority first)
   if (signals.interests?.size) {
@@ -81,6 +89,13 @@ export function buildSearchKeywords(profile, maxKeywords = 25) {
   }
   if (signals.applicantTypes?.size) {
     for (const type of signals.applicantTypes) keywords.add(type)
+  }
+  // Add core keyword set (broad coverage)
+  if (signals.keywordSet?.size) {
+    for (const kw of signals.keywordSet) {
+      if (looksUseful(kw)) keywords.add(kw)
+      if (keywords.size >= maxKeywords * 4) break
+    }
   }
   if (signals.demographics?.size) {
     for (const demo of signals.demographics) keywords.add(demo.replace(/_/g, ' '))
@@ -104,6 +119,13 @@ export function buildSearchKeywords(profile, maxKeywords = 25) {
   if (signals.phrases?.size) {
     const phrases = Array.from(signals.phrases).slice(0, 15)
     phrases.forEach(p => keywords.add(p))
+  }
+  // Last-resort: include passthrough “all data” tokens (PII-scrubbed in signals builder).
+  if (signals.allData?.size && keywords.size < maxKeywords * 2) {
+    for (const token of signals.allData) {
+      if (looksUseful(token)) keywords.add(token)
+      if (keywords.size >= maxKeywords * 4) break
+    }
   }
 
   return Array.from(keywords).slice(0, maxKeywords)
@@ -285,6 +307,27 @@ export function calculateMatchScore(opportunity, profile) {
     if (interestMatches > 0) {
       score += Math.min(15, interestMatches * 3)
       reasons.push(`Interest/keyword match (${interestMatches} signals)`)
+    }
+  }
+
+  // ============ GLOBAL KEYWORD MATCH (0-10 pts) ============
+  // Use the full keyword set (includes “all data” passthrough tokens) for broad matching.
+  if (signals?.keywordSet?.size) {
+    let kwMatches = 0
+    // Cap evaluation for performance/noise.
+    const sample = Array.from(signals.keywordSet).slice(0, 120)
+    for (const kw of sample) {
+      if (!kw || typeof kw !== 'string') continue
+      const token = kw.toLowerCase()
+      if (token.length < 4) continue
+      if (oppText.includes(token) || checkKeywordMatch(token, oppKeywords)) {
+        kwMatches++
+        if (kwMatches <= 5) matchedSignals.push(`kw:${token}`)
+      }
+    }
+    if (kwMatches > 0) {
+      score += Math.min(10, kwMatches * 2)
+      reasons.push(`Broad keyword overlap (${kwMatches} tokens)`)
     }
   }
 

@@ -2,37 +2,47 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { buildProfileSignals } from '../../backend/services/profileHelpers.js'
-import { CANONICAL_SECTION_DEFAULTS } from '../../backend/prompts/profileSections.js'
+import { buildSearchKeywords, calculateMatchScore } from '../../backend/services/crawlers/crawlerHelpers.js'
 
-test('profile signals: comprehensive_application data points become match keywords (PII filtered)', () => {
+test('profile signals: all-data passthrough influences crawler keyword search + scoring', () => {
   const sections = {
-    // Minimal required sections (can be empty)
-    ...Object.fromEntries(
-      Object.entries(CANONICAL_SECTION_DEFAULTS).map(([k, v]) => [k, v]),
-    ),
-    comprehensive_application: {
-      ...CANONICAL_SECTION_DEFAULTS.comprehensive_application,
-      stem_student: true,
-      extracurricular_activities: ['Volleyball', 'Community Service'],
-      advocacy_work: true,
-      tenncare_id: 'ABC123456',
-      email: ['person@example.com'],
+    basic_information: {
+      full_name: 'Test Applicant',
+      state: 'TN',
+    },
+    // Simulate a “comprehensive application” field not explicitly modeled elsewhere.
+    organization_details: {
+      nicra_rate: '10%',
+      audit_status: 'audited',
     },
   }
 
-  const signals = buildProfileSignals({
-    profile: { display_name: 'Test Profile', primary_type: 'college_student', tags: [], interests: [] },
-    sections,
-  })
+  const profile = {
+    id: 'profile-test',
+    primary_type: 'organization',
+    display_name: 'Test Org',
+    tags: [],
+    interests: [],
+  }
 
-  const keywords = signals.keywordSet
-  assert.ok(keywords.has('stem student'), 'expected boolean key name to become keyword')
-  assert.ok(keywords.has('volleyball'), 'expected array string value to become keyword')
-  assert.ok(keywords.has('community service'), 'expected array string value to become keyword')
-  assert.ok(keywords.has('advocacy work'), 'expected boolean key name to become keyword')
+  const signals = buildProfileSignals({ profile, sections })
+  const enrichedProfile = { ...profile, signals, sections, state: 'TN' }
 
-  // PII/identifier values should NOT be added as keywords.
-  assert.equal(keywords.has('abc123456'), false, 'expected tenncare_id value to be filtered')
-  assert.equal(keywords.has('person@example.com'), false, 'expected email value to be filtered')
+  const keywords = buildSearchKeywords(enrichedProfile, 60).join(' ')
+  assert.match(keywords, /\bnicra\b/i)
+
+  const opportunity = {
+    title: 'NICRA Support Program',
+    description: 'Funding for NICRA and indirect cost compliance support.',
+    categories: [],
+    keywords: [],
+    is_national: true,
+  }
+
+  const scored = calculateMatchScore(opportunity, enrichedProfile)
+  assert.ok(
+    scored.matchedSignals.some((s) => s === 'kw:nicra'),
+    `expected kw:nicra in matchedSignals; got: ${JSON.stringify(scored.matchedSignals)}`,
+  )
 })
 

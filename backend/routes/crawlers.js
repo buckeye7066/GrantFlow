@@ -1273,10 +1273,10 @@ router.post('/bulk-populate', async (req, res) => {
   // Allow admin auth OR a special bulk key for automated population
   const auth = req.user ?? { role: 'guest' }
   const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
-  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  const expectedKey = process.env.BULK_POPULATE_KEY || null
   
   const isAdmin = auth.role === 'admin'
-  const hasValidKey = bulkKey === expectedKey
+  const hasValidKey = Boolean(expectedKey) && bulkKey === expectedKey
   
   if (!isAdmin && !hasValidKey) {
     return res.status(403).json({ error: 'Admin access or valid bulk key required' })
@@ -1353,9 +1353,9 @@ router.post('/bulk-populate', async (req, res) => {
 router.post('/crawl-all-counties', async (req, res) => {
   const auth = req.user ?? { role: 'guest' }
   const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
-  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  const expectedKey = process.env.BULK_POPULATE_KEY || null
   
-  if (auth.role !== 'admin' && bulkKey !== expectedKey) {
+  if (auth.role !== 'admin' && !(expectedKey && bulkKey === expectedKey)) {
     return res.status(403).json({ error: 'Admin access or valid bulk key required' })
   }
   
@@ -1391,9 +1391,9 @@ router.post('/crawl-all-counties', async (req, res) => {
 router.post('/crawl-state-counties/:state', async (req, res) => {
   const auth = req.user ?? { role: 'guest' }
   const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
-  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  const expectedKey = process.env.BULK_POPULATE_KEY || null
   
-  if (auth.role !== 'admin' && bulkKey !== expectedKey) {
+  if (auth.role !== 'admin' && !(expectedKey && bulkKey === expectedKey)) {
     return res.status(403).json({ error: 'Admin access or valid bulk key required' })
   }
   
@@ -1443,9 +1443,9 @@ router.get('/county-status', async (req, res) => {
 router.post('/seed-local-networks', async (req, res) => {
   const auth = req.user ?? { role: 'guest' }
   const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
-  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  const expectedKey = process.env.BULK_POPULATE_KEY || null
   
-  if (auth.role !== 'admin' && bulkKey !== expectedKey) {
+  if (auth.role !== 'admin' && !(expectedKey && bulkKey === expectedKey)) {
     return res.status(403).json({ error: 'Admin access or valid bulk key required' })
   }
   
@@ -1539,9 +1539,9 @@ router.post('/seed-local-networks', async (req, res) => {
 router.post('/seed-state-assistance', async (req, res) => {
   const auth = req.user ?? { role: 'guest' }
   const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
-  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  const expectedKey = process.env.BULK_POPULATE_KEY || null
   
-  if (auth.role !== 'admin' && bulkKey !== expectedKey) {
+  if (auth.role !== 'admin' && !(expectedKey && bulkKey === expectedKey)) {
     return res.status(403).json({ error: 'Admin access or valid bulk key required' })
   }
   
@@ -1639,9 +1639,9 @@ router.post('/seed-state-assistance', async (req, res) => {
 router.post('/crawl-grants-gov', async (req, res) => {
   const auth = req.user ?? { role: 'guest' }
   const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
-  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  const expectedKey = process.env.BULK_POPULATE_KEY || null
   
-  if (auth.role !== 'admin' && bulkKey !== expectedKey) {
+  if (auth.role !== 'admin' && !(expectedKey && bulkKey === expectedKey)) {
     return res.status(403).json({ error: 'Admin access or valid bulk key required' })
   }
   
@@ -1676,9 +1676,9 @@ router.post('/crawl-grants-gov', async (req, res) => {
 router.post('/remove-loans', async (req, res) => {
   const auth = req.user ?? { role: 'guest' }
   const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
-  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  const expectedKey = process.env.BULK_POPULATE_KEY || null
   
-  if (auth.role !== 'admin' && bulkKey !== expectedKey) {
+  if (auth.role !== 'admin' && !(expectedKey && bulkKey === expectedKey)) {
     return res.status(403).json({ error: 'Admin access or valid bulk key required' })
   }
   
@@ -1721,9 +1721,9 @@ router.post('/remove-loans', async (req, res) => {
 router.post('/seed-all-real', async (req, res) => {
   const auth = req.user ?? { role: 'guest' }
   const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
-  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  const expectedKey = process.env.BULK_POPULATE_KEY || null
   
-  if (auth.role !== 'admin' && bulkKey !== expectedKey) {
+  if (auth.role !== 'admin' && !(expectedKey && bulkKey === expectedKey)) {
     return res.status(403).json({ error: 'Admin access or valid bulk key required' })
   }
   
@@ -1757,10 +1757,10 @@ router.post('/seed-all-real', async (req, res) => {
 router.post('/seed-real-opportunities', async (req, res) => {
   const auth = req.user ?? { role: 'guest' }
   const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
-  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  const expectedKey = process.env.BULK_POPULATE_KEY || null
   
   const isAdmin = auth.role === 'admin'
-  const hasValidKey = bulkKey === expectedKey
+  const hasValidKey = Boolean(expectedKey) && bulkKey === expectedKey
   
   if (!isAdmin && !hasValidKey) {
     return res.status(403).json({ error: 'Admin access or valid bulk key required' })
@@ -1978,10 +1978,10 @@ router.post('/real-crawl', async (req, res) => {
   // Allow admin auth OR bulk key for automated crawling
   const auth = req.user ?? { role: 'guest' }
   const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
-  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
+  const expectedKey = process.env.BULK_POPULATE_KEY || null
   
   const isAdmin = auth.role === 'admin'
-  const hasValidKey = bulkKey === expectedKey
+  const hasValidKey = Boolean(expectedKey) && bulkKey === expectedKey
   
   if (!isAdmin && !hasValidKey) {
     return res.status(403).json({ error: 'Admin access or valid bulk key required' })

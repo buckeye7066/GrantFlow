@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
@@ -12,15 +12,29 @@ const LOCAL_OPPS_PATH = join(__dirname, '../data/crawlers/local_opportunities.js
 const SCHOLARSHIP_OPPS_PATH = join(__dirname, '../data/crawlers/scholarship_opportunities.json');
 const ITEM_OPPS_PATH = join(__dirname, '../data/crawlers/item_funding_sources.json');
 
+const missingOnce = new Set();
+
 function loadJSON(path) {
+  if (!existsSync(path)) {
+    if (!missingOnce.has(path)) {
+      missingOnce.add(path);
+      console.info(
+        `[seedRealOpportunities] Seed file not found; skipping: ${path} (run "npm run seed:demo" or "npm run ingest" to populate opportunities)`,
+      );
+    }
+    return null;
+  }
   try {
     return JSON.parse(readFileSync(path, 'utf8'));
   } catch (error) {
-    console.warn(`[seedRealOpportunities] Could not load ${path}:`, error.message);
+    // Missing seed files are expected in many environments (e.g. production images, fresh clones).
+    // Only warn on non-ENOENT failures (e.g. invalid JSON).
+    if (error?.code !== 'ENOENT') {
+      console.warn('[seedRealOpportunities] Could not load ' + path + ':', error?.message || String(error));
+    }
     return null;
   }
 }
-
 function ensureArray(value) {
   if (!value) return [];
   if (Array.isArray(value)) return value;
@@ -28,6 +42,19 @@ function ensureArray(value) {
 }
 
 export function seedRealOpportunities(db) {
+  const anySeedFileExists =
+    existsSync(REAL_OPPS_PATH) ||
+    existsSync(LOCAL_OPPS_PATH) ||
+    existsSync(SCHOLARSHIP_OPPS_PATH) ||
+    existsSync(ITEM_OPPS_PATH);
+
+  if (!anySeedFileExists) {
+    console.info(
+      '[seedRealOpportunities] No seed files found under backend/data/crawlers; skipping (run "npm run seed:demo" or "npm run ingest")',
+    );
+    return { totalLoaded: 0, skipped: true };
+  }
+
   console.log('[seedRealOpportunities] Starting to seed real funding opportunities...');
 
   const realData = loadJSON(REAL_OPPS_PATH) || {};
@@ -82,7 +109,7 @@ export function seedRealOpportunities(db) {
   }
 
   console.log(`[seedRealOpportunities] Finished seeding ${seeded} real opportunities.`);
-  return { totalLoaded: seeded };
+  return { totalLoaded: seeded, skipped: false };
 }
 
 export default seedRealOpportunities;

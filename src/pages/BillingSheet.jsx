@@ -7,6 +7,20 @@ import { FileDown, FileText } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 
+const HOURLY_RATES = {
+  individual: 85,
+  small: 85,
+  mid: 115,
+  large: 150,
+}
+
+function firstScalar(value) {
+  if (Array.isArray(value)) return value.find((v) => v != null && String(v).trim() !== '') ?? null
+  if (value == null) return null
+  const s = String(value).trim()
+  return s ? s : null
+}
+
 const SERVICES = {
   discovery: [
     {
@@ -140,14 +154,6 @@ export default function BillingSheet() {
     enabled: !!organizationId
   });
 
-  const { data: settings } = useQuery({
-    queryKey: ['billingSettings'],
-    queryFn: async () => {
-      const results = await base44.entities.BillingSettings.list();
-      return results[0] || {};
-    },
-  });
-
   const handlePrint = () => {
     window.print();
   };
@@ -230,8 +236,7 @@ export default function BillingSheet() {
 
   const getServicePrice = (service) => {
     if (service.rate === 'hourly') {
-      const hourlyRates = settings?.hourly_rates || {};
-      const rate = hourlyRates[clientCategory] || 150; // Default if not found
+      const rate = HOURLY_RATES[clientCategory] ?? 150
       return `$${rate}/hour`;
     }
     return `$${service[clientCategory] || 0}`;
@@ -547,16 +552,16 @@ export default function BillingSheet() {
                 <p className="font-semibold">Category:</p>
                 <p className="text-gray-800">{categoryLabels[clientCategory]}</p>
               </div>
-              {organization.email && organization.email[0] && (
+              {firstScalar(organization.email) && (
                 <div>
                   <p className="font-semibold">Email:</p>
-                  <p className="text-gray-800">{organization.email[0]}</p>
+                  <p className="text-gray-800">{firstScalar(organization.email)}</p>
                 </div>
               )}
-              {organization.phone && organization.phone[0] && (
+              {firstScalar(organization.phone) && (
                 <div>
                   <p className="font-semibold">Phone:</p>
-                  <p className="text-gray-800">{organization.phone[0]}</p>
+                  <p className="text-gray-800">{firstScalar(organization.phone)}</p>
                 </div>
               )}
             </div>
@@ -809,10 +814,10 @@ export default function BillingSheet() {
                     </td>
                     {isMaster ? (
                       <>
-                        <td className="price-cell py-3">${settings?.hourly_rates?.individual_household || 85}/hr</td>
-                        <td className="price-cell py-3">${settings?.hourly_rates?.small_ministry_nonprofit || 85}/hr</td>
-                        <td className="price-cell py-3">${settings?.hourly_rates?.midsize_org || 115}/hr</td>
-                        <td className="price-cell py-3">${settings?.hourly_rates?.large_org || 150}/hr</td>
+                        <td className="price-cell py-3">${HOURLY_RATES.individual}/hr</td>
+                        <td className="price-cell py-3">${HOURLY_RATES.small}/hr</td>
+                        <td className="price-cell py-3">${HOURLY_RATES.mid}/hr</td>
+                        <td className="price-cell py-3">${HOURLY_RATES.large}/hr</td>
                       </>
                     ) : (
                       <td className="price-cell py-3">{getServicePrice(service)}</td>
