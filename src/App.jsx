@@ -7,7 +7,7 @@ import SessionExpiredDialog from '@/components/auth/SessionExpiredDialog'
 import { base44 } from '@/api/base44Client'
 import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
-
+import { env } from '@/config/env.js'
 function App() {
   const [bootstrapped, setBootstrapped] = useState(false)
   const hydrateFromStorage = useAuthStore((state) => state.hydrateFromStorage)
@@ -48,7 +48,7 @@ function App() {
   }, [hydrateFromStorage, setAuthenticatedUser, clearState])
 
   // Load persisted UI preferences once the user is authenticated so personalization
-  // (accent color, font size, etc.) applies across the app—not only on the Settings page.
+  // (accent color, font size, etc.) applies across the appâ€”not only on the Settings page.
   useEffect(() => {
     if (!isAuthenticated) return
     if (isPreferencesInitialized) return
@@ -58,7 +58,7 @@ function App() {
   if (!bootstrapped) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-500">
-        Loading your workspace…
+        Loading your workspaceâ€¦
       </div>
     )
   }
@@ -70,7 +70,7 @@ function App() {
     if (base === '/') return '/'
     return base.endsWith('/') ? base.slice(0, -1) : base
   }
-  const basename = normalizeBase(import.meta.env.VITE_APP_BASE ?? import.meta.env.BASE_URL)
+  const basename = env.appBase
 
   return (
     <Router basename={basename}>

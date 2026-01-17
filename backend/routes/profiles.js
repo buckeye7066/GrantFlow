@@ -6,6 +6,7 @@ import fs from 'fs'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { buildProfileSectionPrompt, supportedSectionKeys } from '../prompts/profileSections.js'
+import { PROFILE_SCHEMA, getDefaultSectionData } from '../config/profileSchema.js'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
 import { ensureBillingAccount, mapAccountRow } from '../services/billingAccounts.js'
 import { extractCompletionText } from '../utils/openai.js'
@@ -184,6 +185,17 @@ router.get('/', async (req, res) => {
   }
   
   res.json(profiles)
+})
+
+// Canonical profile schema (data points + explanations)
+// IMPORTANT: This must be defined before `/:id` routes to avoid being captured as a profile id.
+router.get('/schema', async (_req, res) => {
+  res.json({
+    version: '1.0',
+    generated_at: new Date().toISOString(),
+    sections: PROFILE_SCHEMA,
+    supported_section_keys: supportedSectionKeys,
+  })
 })
 
 router.post('/', async (req, res) => {
@@ -805,34 +817,47 @@ router.get('/:id/completeness', async (req, res) => {
     }
 
     // Get existing sections for this profile
-    const existingSections = await req.db
+    const existingSectionRows = await req.db
       .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
       .all(id)
     
     const existingSectionMap = new Map(
-      existingSections.map(s => [s.section_key, safeParseJSON(s.data, {})])
+      existingSectionRows.map(s => [s.section_key, safeParseJSON(s.data, {})])
     )
 
-    // Check against canonical sections
+    // Check against canonical sections + canonical keys (data points)
     const missingSections = []
     const emptySections = []
     const completedSections = []
+    const missingKeysBySection = {}
+    const presentKeysBySection = {}
     let totalKeyCount = 0
     let filledKeyCount = 0
 
     supportedSectionKeys.forEach(sectionKey => {
       const sectionData = existingSectionMap.get(sectionKey)
+      const schema = PROFILE_SCHEMA?.[sectionKey]
+      const canonicalKeys = Object.keys(schema?.fields ?? {})
       
       if (!sectionData) {
         missingSections.push(sectionKey)
+        missingKeysBySection[sectionKey] = canonicalKeys
+        presentKeysBySection[sectionKey] = []
       } else {
-        // Check if section has any meaningful data
-        const keys = Object.keys(sectionData).filter(k => k !== 'notes')
-        const filledKeys = keys.filter(k => {
+        // Canonical keys: enforce presence even if missing in saved JSON.
+        // For completion scoring, we only score canonical keys (not arbitrary extras).
+        const keys = canonicalKeys.filter((k) => k !== 'notes')
+        const presentKeys = keys.filter((k) => Object.prototype.hasOwnProperty.call(sectionData, k))
+        const missingKeys = keys.filter((k) => !Object.prototype.hasOwnProperty.call(sectionData, k))
+
+        presentKeysBySection[sectionKey] = presentKeys
+        missingKeysBySection[sectionKey] = missingKeys
+
+        const filledKeys = keys.filter((k) => {
           const value = sectionData[k]
           if (value === null || value === undefined || value === '') return false
           if (Array.isArray(value) && value.length === 0) return false
-          if (typeof value === 'object' && Object.keys(value).length === 0) return false
+          if (typeof value === 'object' && value && Object.keys(value).length === 0) return false
           return true
         })
 
@@ -845,7 +870,8 @@ router.get('/:id/completeness', async (req, res) => {
           completedSections.push({
             section_key: sectionKey,
             filled_keys: filledKeys.length,
-            total_keys: keys.length
+            total_keys: keys.length,
+            missing_keys: missingKeys.length,
           })
         }
       }
@@ -862,13 +888,16 @@ router.get('/:id/completeness', async (req, res) => {
       missing_sections: missingSections,
       empty_sections: emptySections,
       completed_sections: completedSections,
+      missing_keys_by_section: missingKeysBySection,
+      present_keys_by_section: presentKeysBySection,
       percent_complete: percentComplete,
       summary: {
         missing: missingSections.length,
         empty: emptySections.length,
         with_data: completedSections.length,
         filled_keys: filledKeyCount,
-        total_keys: totalKeyCount
+        total_keys: totalKeyCount,
+        missing_keys: Object.values(missingKeysBySection).reduce((acc, arr) => acc + (arr?.length ?? 0), 0),
       }
     })
   } catch (error) {
@@ -900,7 +929,7 @@ router.post('/:id/repair', async (req, res) => {
     
     const existingKeys = new Set(existingSections.map(s => s.section_key))
 
-    // Create missing sections
+    // Create missing sections (as empty JSON)
     const upsert = req.db.prepare(`
       INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
       VALUES (?, ?, '{}', 'system-repair')
@@ -915,11 +944,46 @@ router.post('/:id/repair', async (req, res) => {
       }
     }
 
+    // Ensure every canonical key exists in every section (data-point completeness).
+    // This is safe because profile_sections.data is JSON and adding keys is backward compatible.
+    const existingSectionRows = await req.db
+      .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
+      .all(id)
+
+    const updateStmt = req.db.prepare(`
+      UPDATE profile_sections
+      SET data = ?, updated_by = 'system-repair', updated_at = CURRENT_TIMESTAMP
+      WHERE profile_id = ? AND section_key = ?
+    `)
+
+    const repairedKeysBySection = {}
+    for (const row of existingSectionRows) {
+      const sectionKey = row.section_key
+      if (!supportedSectionKeys.includes(sectionKey)) continue
+
+      const current = safeParseJSON(row.data, {})
+      const defaults = getDefaultSectionData(sectionKey)
+      const repairedKeys = []
+
+      for (const [key, defaultValue] of Object.entries(defaults)) {
+        if (!Object.prototype.hasOwnProperty.call(current, key)) {
+          current[key] = defaultValue
+          repairedKeys.push(key)
+        }
+      }
+
+      if (repairedKeys.length > 0) {
+        repairedKeysBySection[sectionKey] = repairedKeys
+        await updateStmt.run(JSON.stringify(current), id, sectionKey)
+      }
+    }
+
     res.json({
       success: true,
       profile_id: id,
       display_name: profile.display_name,
       sections_created: createdSections,
+      keys_repaired_by_section: repairedKeysBySection,
       total_sections_after: supportedSectionKeys.length,
       message: createdSections.length > 0 
         ? `Created ${createdSections.length} missing section(s)` 

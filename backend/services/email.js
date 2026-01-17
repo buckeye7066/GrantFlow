@@ -7,7 +7,11 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || null
 const FROM_EMAIL = process.env.FROM_EMAIL || 'onboarding@resend.dev'
 const DEFAULT_ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@grantflow.app'
 const AUTH_NOTIFY_EMAIL = process.env.AUTH_NOTIFY_EMAIL || null
-const AUTH_NOTIFY_ON_LOGIN = String(process.env.AUTH_NOTIFY_ON_LOGIN || '').toLowerCase() === 'true'
+// Production defaults: enable admin notifications unless explicitly disabled.
+const AUTH_NOTIFY_ON_LOGIN =
+  process.env.AUTH_NOTIFY_ON_LOGIN != null
+    ? String(process.env.AUTH_NOTIFY_ON_LOGIN || '').toLowerCase() === 'true'
+    : process.env.NODE_ENV === 'production'
 
 let resendClient = null
 let initPromise = null

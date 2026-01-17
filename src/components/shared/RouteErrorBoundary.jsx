@@ -20,6 +20,7 @@ export default class RouteErrorBoundary extends React.Component {
     console.error("[RouteErrorBoundary] route crash", {
       route: this.props.routeName ?? null,
       message: error?.message,
+      requestId: error?.requestId ?? error?.request_id ?? null,
       stack: error?.stack,
       componentStack: info?.componentStack,
     })
@@ -29,12 +30,18 @@ export default class RouteErrorBoundary extends React.Component {
     if (!this.state.hasError) return this.props.children
 
     const routeLabel = this.props.routeName ? ` on ${this.props.routeName}` : ""
+    const requestId = this.state.error?.requestId ?? this.state.error?.request_id ?? null
 
     return (
       <div className="p-6 md:p-10">
         <Alert variant="destructive">
           <AlertDescription>
             Something went wrong{routeLabel}. You can reload the page or return to your dashboard.
+            {requestId ? (
+              <span className="mt-2 block text-xs text-slate-200/90">
+                Request ID: <span className="font-mono">{requestId}</span>
+              </span>
+            ) : null}
           </AlertDescription>
         </Alert>
         <div className="mt-4 flex flex-wrap gap-3">
