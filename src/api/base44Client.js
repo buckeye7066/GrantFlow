@@ -1,9 +1,15 @@
 // Base44 Client Compatibility Layer
 //
+<<<<<<< HEAD
 // IMPORTANT:
 // Some deployed bundles have ended up with `base44.get is not a function` despite the APIClient prototype
 // defining `get/post/patch/...`. To make this resilient across bundlers/minifiers and import styles, we
 // export a plain-object facade that *always* has the expected Base44-style methods as own-properties.
+=======
+// Some deployed bundles have ended up with `base44.get is not a function` even though the client
+// prototype defines it. To make this resilient across bundlers/minifiers/import styles, export a
+// plain-object facade with Base44-style methods as *own properties* (bound to the singleton client).
+>>>>>>> origin/main
 
 import client from './client';
 

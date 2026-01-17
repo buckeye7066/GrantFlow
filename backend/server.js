@@ -1,7 +1,5 @@
-import dotenv from 'dotenv';
 // Load `.env` from the current working directory. Use override so `.env` wins over any stale
 // machine-level OPENAI_API_KEY values during local development.
-dotenv.config({ override: true });
 import express from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
@@ -74,6 +72,7 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@grantflow.app';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+<<<<<<< HEAD
 // Uploads live on disk; in production you should mount a persistent volume and
 // point UPLOADS_DIR at it (otherwise files will be lost on redeploy).
 const uploadsDir = process.env.UPLOADS_DIR
@@ -81,6 +80,14 @@ const uploadsDir = process.env.UPLOADS_DIR
   : join(__dirname, 'uploads');
 // Backward-compat: older builds stored uploads at repo-root `/uploads`.
 const legacyUploadsDir = join(__dirname, '..', 'uploads');
+=======
+// Uploads must live on a persistent volume in production (Railway Volume).
+// Set UPLOADS_DIR=/data/uploads (or your mount path) in Railway.
+// Default to backend/uploads for local/dev so routes and serving agree.
+const uploadsDir = process.env.UPLOADS_DIR
+  ? resolve(process.env.UPLOADS_DIR)
+  : join(__dirname, 'uploads');
+>>>>>>> origin/main
 const distPath = join(__dirname, '..', 'dist');
 
 const app = express();
@@ -195,6 +202,7 @@ try {
 } catch (error) {
   console.warn('Failed to create uploads directory:', error);
 }
+<<<<<<< HEAD
 app.use('/uploads', express.static(uploadsDir));
 // If legacy dir exists (and differs), serve it too so old URLs still work.
 try {
@@ -203,6 +211,63 @@ try {
   }
 } catch {
   // ignore legacy-dir probing failures
+=======
+// IMPORTANT: Missing uploads must return 404 (not SPA index.html).
+// Use `fallthrough: false` to stop the request pipeline when a file is missing.
+app.use('/uploads', express.static(uploadsDir, { fallthrough: false, index: false }));
+app.use('/uploads', (err, _req, res, next) => {
+  if (err && (err.status === 404 || err.statusCode === 404)) {
+    return res.status(404).send('Not Found');
+  }
+  return next(err);
+});
+
+async function repairMissingUploadAvatars({ db, uploadsDir }) {
+  // If the DB references upload URLs that no longer exist on disk (common after an ephemeral volume reset),
+  // browsers will spam 404s. The correct fix is to stop referencing non-existent files.
+  try {
+    const rows = await db
+      .prepare(
+        `
+          SELECT id, avatar_url
+          FROM profiles
+          WHERE avatar_url IS NOT NULL
+            AND TRIM(avatar_url) <> ''
+        `,
+      )
+      .all()
+
+    let repaired = 0
+    for (const row of rows) {
+      const raw = String(row.avatar_url || '').trim()
+      if (!raw) continue
+
+      let pathname = raw
+      try {
+        if (/^https?:\/\//i.test(raw)) pathname = new URL(raw).pathname
+      } catch {
+        // keep raw as-is
+      }
+
+      if (!pathname.includes('/uploads/')) continue
+      const fileName = pathname.split('/').pop()
+      if (!fileName) continue
+
+      const fullPath = join(uploadsDir, fileName)
+      if (fs.existsSync(fullPath)) continue
+
+      // Remove the reference so the frontend uses its built-in non-upload fallback.
+      await db.prepare('UPDATE profiles SET avatar_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(row.id)
+      repaired += 1
+    }
+
+    if (repaired > 0) {
+      console.warn('[startup] repaired missing upload avatars', { repaired })
+    }
+  } catch (error) {
+    console.warn('[startup] failed to repair missing upload avatars:', error?.message || error)
+  }
+>>>>>>> origin/main
 }
 
 // Serve static files from Vite build
@@ -210,6 +275,7 @@ app.use(express.static(distPath));
 // Serve the SPA under the configured base path so production builds (base=/grantflow) work locally.
 const APP_BASE_PATH = process.env.AUTH_FRONTEND_APP_BASE || process.env.VITE_APP_BASE || '/grantflow';
 if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
+<<<<<<< HEAD
   // Also expose uploads under the same base path (common when reverse proxies only route /grantflow/*).
   const normalizedBase = String(APP_BASE_PATH).replace(/\/+$/, '');
   app.use(`${normalizedBase}/uploads`, express.static(uploadsDir));
@@ -220,6 +286,17 @@ if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
   } catch {
     // ignore legacy-dir probing failures
   }
+=======
+  const normalizedBase = String(APP_BASE_PATH).replace(/\/+$/, '');
+  // Expose uploads under the same base path (common when reverse proxies only route /grantflow/*).
+  app.use(`${normalizedBase}/uploads`, express.static(uploadsDir, { fallthrough: false, index: false }));
+  app.use(`${normalizedBase}/uploads`, (err, _req, res, next) => {
+    if (err && (err.status === 404 || err.statusCode === 404)) {
+      return res.status(404).send('Not Found');
+    }
+    return next(err);
+  });
+>>>>>>> origin/main
   app.use(APP_BASE_PATH, express.static(distPath));
 }
 
@@ -478,6 +555,7 @@ try {
 }
 await linkAllProfilesToAdmin(db)
 await ensureUserPreferencesTable(db)
+await repairMissingUploadAvatars({ db, uploadsDir })
 
 // Check funding opportunities count and provide guidance
 if (db.dialect === 'sqlite') {
@@ -658,6 +736,7 @@ try {
   console.warn('[startup] Failed to seed assistance directories:', error?.message || error)
 }
 
+<<<<<<< HEAD
 const isProd = process.env.NODE_ENV === 'production'
 const JWT_SECRET = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || null
 if (!JWT_SECRET) {
@@ -671,6 +750,41 @@ if (!JWT_SECRET) {
   }
 }
 const EFFECTIVE_JWT_SECRET = JWT_SECRET || 'grantflow-dev-secret'
+=======
+// Auto-seed grants disabled temporarily to debug server crash
+// TODO: Re-enable after fixing
+console.info('[startup] Grant seeding disabled for debugging');
+
+function resolveJwtSecret() {
+  const raw = String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || '').trim();
+  const isProd = process.env.NODE_ENV === 'production';
+
+  if (!raw) {
+    if (isProd) {
+      console.error(
+        'ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET). Refusing to start in production.\n' +
+          'Set a strong random secret (recommended: 32+ bytes). Example:\n' +
+          '  AUTH_JWT_SECRET="..."\n',
+      );
+      process.exit(1);
+    }
+    console.warn('[startup] AUTH_JWT_SECRET not set; using insecure development default (DO NOT use in production).');
+    return 'grantflow-dev-secret';
+  }
+
+  if (isProd && raw === 'grantflow-dev-secret') {
+    console.error(
+      'ERROR: AUTH_JWT_SECRET is set to the insecure development default. Refusing to start in production.\n' +
+        'Generate a strong random secret and redeploy.',
+    );
+    process.exit(1);
+  }
+
+  return raw;
+}
+
+const JWT_SECRET = resolveJwtSecret();
+>>>>>>> origin/main
 
 // Make db available to routes
 app.use((req, res, next) => {
@@ -688,6 +802,7 @@ app.use(async (req, res, next) => {
   // 1. Check X-Admin-Token
   const expectedAdminToken = ADMIN_TOKEN;
   const expectedBulkKey = process.env.BULK_POPULATE_KEY || null;
+<<<<<<< HEAD
 
   if (
     !handled &&
@@ -695,6 +810,10 @@ app.use(async (req, res, next) => {
     ((expectedAdminToken && xAdminToken === expectedAdminToken) ||
       (expectedBulkKey && xAdminToken === expectedBulkKey))
   ) {
+=======
+  
+  if (!handled && xAdminToken && ((expectedAdminToken && xAdminToken === expectedAdminToken) || (expectedBulkKey && xAdminToken === expectedBulkKey))) {
+>>>>>>> origin/main
     user = { role: 'admin', is_admin: true, full_name: ADMIN_NAME, email: ADMIN_EMAIL };
     handled = true;
   }
@@ -1045,6 +1164,45 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+// Platform health aliases (k8s-style)
+app.get('/healthz', async (_req, res) => {
+  try {
+    const healthSummary = await getSafeHealthSummary(db);
+    const statusCode = healthSummary.status === 'error' ? 500 : 200;
+    res.status(statusCode).json(healthSummary);
+  } catch (error) {
+    console.error('[/healthz] Error:', error);
+    res.status(500).json({ status: 'error', summary: 'Failed to retrieve health information' });
+  }
+});
+
+app.get('/readyz', async (_req, res) => {
+  try {
+    if (db.healthcheck) {
+      await db.healthcheck();
+    } else {
+      await db.prepare('SELECT 1 as ok').get();
+    }
+    // Ensure uploads dir is present and writable (production requires a volume).
+    try {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+      fs.accessSync(uploadsDir, fs.constants.R_OK | fs.constants.W_OK);
+    } catch (e) {
+      return res.status(503).json({
+        status: 'not_ready',
+        reason: 'uploads_dir_unwritable',
+        uploads_dir: uploadsDir,
+        message: e?.message || String(e),
+        timestamp: new Date().toISOString(),
+      });
+    }
+    res.status(200).json({ status: 'ready', dialect: db.dialect, timestamp: new Date().toISOString() });
+  } catch (error) {
+    console.error('[/readyz] Not ready:', error);
+    res.status(503).json({ status: 'not_ready', reason: 'database_unreachable', timestamp: new Date().toISOString() });
+  }
+});
+
 app.use('/api/admin', adminRouter);
 app.use('/api', discoveryRouter); // Discovery endpoints (comprehensiveMatch, searchOpportunities, etc.)
 app.use('/api/crawler-v2', crawlerV2Router);
@@ -1176,7 +1334,19 @@ function gracefulShutdown(signal) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-const server = app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0');
+
+server.on('error', (err) => {
+  const code = err?.code || 'UNKNOWN';
+  if (code === 'EADDRINUSE') {
+    console.error('[Server] Failed to bind port ' + PORT + ': address already in use. Stop the other process or set PORT to a free port (e.g. PORT=0 for ephemeral).');
+  } else {
+    console.error('[Server] Failed to start HTTP server:', err);
+  }
+  process.exit(1);
+});
+
+server.on('listening', () => {
   const loggedCorsOrigins = Array.isArray(corsOptions.origin) ? corsOptions.origin : [corsOptions.origin];
   console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
   const actualPort = server.address()?.port ?? PORT;

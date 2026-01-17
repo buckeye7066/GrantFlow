@@ -2,6 +2,7 @@ import express from 'express'
 import {
   mapTierRow,
   mapAccountRow,
+  ensureBillingSchema,
   ensureBillingAccount,
   selectAccount,
   fetchAccountEvents,
@@ -37,7 +38,9 @@ router.use(requireAuth)
 
 router.get('/tiers', async (req, res) => {
   try {
-    const tiers = req.db
+    await ensureBillingSchema(req.db)
+    const tiers = (
+      await req.db
       .prepare(
         `
           SELECT *
@@ -46,7 +49,7 @@ router.get('/tiers', async (req, res) => {
         `,
       )
       .all()
-      .map(mapTierRow)
+    ).map(mapTierRow)
     res.json(tiers)
   } catch (error) {
     res.status(500).json(formatError(error))
@@ -55,6 +58,7 @@ router.get('/tiers', async (req, res) => {
 
 router.post('/tiers', requireAdmin, async (req, res) => {
   try {
+    await ensureBillingSchema(req.db)
     const {
       id,
       name,
@@ -107,6 +111,7 @@ router.post('/tiers', requireAdmin, async (req, res) => {
 
 router.put('/tiers/:id', requireAdmin, async (req, res) => {
   try {
+    await ensureBillingSchema(req.db)
     const tierId = req.params.id
     const existing = await req.db.prepare('SELECT * FROM billing_tiers WHERE id = ?').get(tierId)
     if (!existing) {
@@ -158,37 +163,39 @@ router.put('/tiers/:id', requireAdmin, async (req, res) => {
 
 router.get('/accounts', requireAdmin, async (req, res) => {
   try {
+    await ensureBillingSchema(req.db)
     const orderBy =
       req.db?.dialect === 'postgres'
         ? 'ORDER BY p.display_name ASC'
         : 'ORDER BY p.display_name COLLATE NOCASE ASC'
 
-    const rows = await req.db
-      .prepare(
-        `
-          SELECT
-            ba.*,
-            bt.name AS tier_name,
-            bt.description AS tier_description,
-            bt.base_monthly_cents AS tier_monthly,
-            bt.hourly_rate_cents AS tier_hourly,
-            bt.enable_pipeline_automation AS tier_enable_pipeline_automation,
-            bt.enable_item_funding AS tier_enable_item_funding,
-            bt.enable_document_ai AS tier_enable_document_ai,
-            p.display_name AS profile_name,
-            p.primary_type AS profile_type
-          FROM billing_accounts ba
-          JOIN billing_tiers bt ON bt.id = ba.tier_id
-          JOIN profiles p ON p.id = ba.profile_id
-          ${orderBy}
-        `,
-      )
-      .all()
-      .map((row) => ({
-        ...mapAccountRow(row),
-        profile_name: row.profile_name,
-        profile_type: row.profile_type,
-      }))
+    const rows = (
+      await req.db
+        .prepare(
+          `
+            SELECT
+              ba.*,
+              bt.name AS tier_name,
+              bt.description AS tier_description,
+              bt.base_monthly_cents AS tier_monthly,
+              bt.hourly_rate_cents AS tier_hourly,
+              bt.enable_pipeline_automation AS tier_enable_pipeline_automation,
+              bt.enable_item_funding AS tier_enable_item_funding,
+              bt.enable_document_ai AS tier_enable_document_ai,
+              p.display_name AS profile_name,
+              p.primary_type AS profile_type
+            FROM billing_accounts ba
+            JOIN billing_tiers bt ON bt.id = ba.tier_id
+            JOIN profiles p ON p.id = ba.profile_id
+            ${orderBy}
+          `,
+        )
+        .all()
+    ).map((row) => ({
+      ...mapAccountRow(row),
+      profile_name: row.profile_name,
+      profile_type: row.profile_type,
+    }))
 
     res.json(rows)
   } catch (error) {
@@ -198,6 +205,7 @@ router.get('/accounts', requireAdmin, async (req, res) => {
 
 router.get('/accounts/:profileId', async (req, res) => {
   try {
+    await ensureBillingSchema(req.db)
     const profileId = req.params.profileId
     const profile = await req.db
       .prepare(
@@ -231,6 +239,7 @@ router.get('/accounts/:profileId', async (req, res) => {
 
 router.put('/accounts/:profileId', requireAdmin, async (req, res) => {
   try {
+    await ensureBillingSchema(req.db)
     const profileId = req.params.profileId
     const profile = await req.db
       .prepare(
