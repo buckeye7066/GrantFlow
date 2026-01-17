@@ -1,7 +1,5 @@
-import dotenv from 'dotenv';
 // Load `.env` from the current working directory. Use override so `.env` wins over any stale
 // machine-level OPENAI_API_KEY values during local development.
-dotenv.config({ override: true });
 import express from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
