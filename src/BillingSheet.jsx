@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
+import { listBillingTiers } from '@/api/billing';
 import { Button } from '@/components/ui/button';
 import { FileDown, FileText } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -141,12 +142,9 @@ export default function BillingSheet() {
     enabled: !!organizationId
   });
 
-  const { data: settings } = useQuery({
-    queryKey: ['billingSettings'],
-    queryFn: async () => {
-      const results = await base44.entities.BillingSettings.list();
-      return results[0] || {};
-    },
+  const { data: billingTiers } = useQuery({
+    queryKey: ['billingTiers'],
+    queryFn: listBillingTiers,
   });
 
   const handlePrint = () => {
@@ -221,6 +219,32 @@ export default function BillingSheet() {
     large: 'Large Organization (>$2M budget)'
   };
 
+  const centsToDollars = (cents) => {
+    const n = Number(cents);
+    if (!Number.isFinite(n)) return null;
+    return Math.round(n) / 100;
+  };
+
+  const tierById = new Map((billingTiers || []).map((t) => [t.id, t]));
+  const hourlyRateForCategory = (category) => {
+    // Billing tiers seeded server-side use ids:
+    // - individual, small_org, mid_size, large_org
+    const tierId =
+      category === 'individual'
+        ? 'individual'
+        : category === 'small'
+          ? 'small_org'
+          : category === 'mid'
+            ? 'mid_size'
+            : 'large_org';
+
+    const tier = tierById.get(tierId);
+    const dollars = centsToDollars(tier?.hourly_rate_cents);
+    // Fallbacks match legacy defaults in this file
+    if (dollars != null) return dollars;
+    return category === 'individual' ? 85 : category === 'small' ? 85 : category === 'mid' ? 115 : 150;
+  };
+
   // Check if service applies to this profile
   const serviceApplies = (service) => {
     if (isMaster) return true; // Master sheet shows all
@@ -231,8 +255,7 @@ export default function BillingSheet() {
 
   const getServicePrice = (service) => {
     if (service.rate === 'hourly') {
-      const hourlyRates = settings?.hourly_rates || {};
-      const rate = hourlyRates[clientCategory] || 150; // Default if not found
+      const rate = hourlyRateForCategory(clientCategory);
       return `$${rate}/hour`;
     }
     return `$${service[clientCategory] || 0}`;
@@ -618,10 +641,10 @@ export default function BillingSheet() {
                     </td>
                     {isMaster ? (
                       <>
-                        <td className="price-cell py-3">${settings?.hourly_rates?.individual_household || 85}/hr</td>
-                        <td className="price-cell py-3">${settings?.hourly_rates?.small_ministry_nonprofit || 85}/hr</td>
-                        <td className="price-cell py-3">${settings?.hourly_rates?.midsize_org || 115}/hr</td>
-                        <td className="price-cell py-3">${settings?.hourly_rates?.large_org || 150}/hr</td>
+                        <td className="price-cell py-3">${hourlyRateForCategory('individual')}/hr</td>
+                        <td className="price-cell py-3">${hourlyRateForCategory('small')}/hr</td>
+                        <td className="price-cell py-3">${hourlyRateForCategory('mid')}/hr</td>
+                        <td className="price-cell py-3">${hourlyRateForCategory('large')}/hr</td>
                       </>
                     ) : (
                       <td className="price-cell py-3">{getServicePrice(service)}</td>

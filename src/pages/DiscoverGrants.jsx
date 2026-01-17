@@ -81,10 +81,11 @@ export default function DiscoverGrants() {
   const handleCrawlerResults = async (opportunities) => {
     console.log('[DiscoverGrants] Processing crawler results:', opportunities.length);
     
-    // Add all 80%+ matches to pipeline automatically
+    // Add all 50%+ matches to pipeline automatically
     let addedCount = 0;
     for (const opp of opportunities) {
-      if (opp.match_score >= 80) {
+      const score = Number(opp.match_score ?? opp.match ?? 0);
+      if (Number.isFinite(score) && score >= 50) {
         try {
           await handleAddToPipeline(opp);
           addedCount++;
@@ -96,7 +97,7 @@ export default function DiscoverGrants() {
     
     toast({
       title: 'Crawler Complete',
-      description: `Found ${opportunities.length} opportunities, added ${addedCount} to pipeline (80%+ matches)`,
+      description: `Found ${opportunities.length} opportunities, added ${addedCount} to pipeline (50%+ matches)`,
       variant: 'success'
     });
     
