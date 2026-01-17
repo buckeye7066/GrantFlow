@@ -1,7 +1,5 @@
-import dotenv from 'dotenv';
 // Load `.env` from the current working directory. Use override so `.env` wins over any stale
 // machine-level OPENAI_API_KEY values during local development.
-dotenv.config({ override: true });
 import express from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
@@ -614,7 +612,35 @@ try {
 // TODO: Re-enable after fixing
 console.info('[startup] Grant seeding disabled for debugging');
 
-const JWT_SECRET = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret';
+function resolveJwtSecret() {
+  const raw = String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || '').trim();
+  const isProd = process.env.NODE_ENV === 'production';
+
+  if (!raw) {
+    if (isProd) {
+      console.error(
+        'ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET). Refusing to start in production.\n' +
+          'Set a strong random secret (recommended: 32+ bytes). Example:\n' +
+          '  AUTH_JWT_SECRET="..."\n',
+      );
+      process.exit(1);
+    }
+    console.warn('[startup] AUTH_JWT_SECRET not set; using insecure development default (DO NOT use in production).');
+    return 'grantflow-dev-secret';
+  }
+
+  if (isProd && raw === 'grantflow-dev-secret') {
+    console.error(
+      'ERROR: AUTH_JWT_SECRET is set to the insecure development default. Refusing to start in production.\n' +
+        'Generate a strong random secret and redeploy.',
+    );
+    process.exit(1);
+  }
+
+  return raw;
+}
+
+const JWT_SECRET = resolveJwtSecret();
 
 // Make db available to routes
 app.use((req, res, next) => {
@@ -631,9 +657,9 @@ app.use(async (req, res, next) => {
 
   // 1. Check X-Admin-Token
   const expectedAdminToken = ADMIN_TOKEN;
-  const expectedBulkKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026';
+  const expectedBulkKey = process.env.BULK_POPULATE_KEY || null;
   
-  if (!handled && xAdminToken && ((expectedAdminToken && xAdminToken === expectedAdminToken) || xAdminToken === expectedBulkKey)) {
+  if (!handled && xAdminToken && ((expectedAdminToken && xAdminToken === expectedAdminToken) || (expectedBulkKey && xAdminToken === expectedBulkKey))) {
     user = { role: 'admin', is_admin: true, full_name: ADMIN_NAME, email: ADMIN_EMAIL };
     handled = true;
   }
@@ -980,6 +1006,32 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+// Platform health aliases (k8s-style)
+app.get('/healthz', async (_req, res) => {
+  try {
+    const healthSummary = await getSafeHealthSummary(db);
+    const statusCode = healthSummary.status === 'error' ? 500 : 200;
+    res.status(statusCode).json(healthSummary);
+  } catch (error) {
+    console.error('[/healthz] Error:', error);
+    res.status(500).json({ status: 'error', summary: 'Failed to retrieve health information' });
+  }
+});
+
+app.get('/readyz', async (_req, res) => {
+  try {
+    if (db.healthcheck) {
+      await db.healthcheck();
+    } else {
+      await db.prepare('SELECT 1 as ok').get();
+    }
+    res.status(200).json({ status: 'ready', dialect: db.dialect, timestamp: new Date().toISOString() });
+  } catch (error) {
+    console.error('[/readyz] Not ready:', error);
+    res.status(503).json({ status: 'not_ready', reason: 'database_unreachable', timestamp: new Date().toISOString() });
+  }
+});
+
 app.use('/api/admin', adminRouter);
 app.use('/api', discoveryRouter); // Discovery endpoints (comprehensiveMatch, searchOpportunities, etc.)
 app.use('/api/crawler-v2', crawlerV2Router);
@@ -1111,7 +1163,19 @@ function gracefulShutdown(signal) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-const server = app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0');
+
+server.on('error', (err) => {
+  const code = err?.code || 'UNKNOWN';
+  if (code === 'EADDRINUSE') {
+    console.error('[Server] Failed to bind port ' + PORT + ': address already in use. Stop the other process or set PORT to a free port (e.g. PORT=0 for ephemeral).');
+  } else {
+    console.error('[Server] Failed to start HTTP server:', err);
+  }
+  process.exit(1);
+});
+
+server.on('listening', () => {
   const loggedCorsOrigins = Array.isArray(corsOptions.origin) ? corsOptions.origin : [corsOptions.origin];
   console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
   const actualPort = server.address()?.port ?? PORT;
