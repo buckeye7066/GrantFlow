@@ -1,7 +1,5 @@
-import dotenv from 'dotenv';
 // Load `.env` from the current working directory. Use override so `.env` wins over any stale
 // machine-level OPENAI_API_KEY values during local development.
-dotenv.config({ override: true });
 import express from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
@@ -50,23 +48,11 @@ import { initializeFeatureFlags } from './services/featureFlagService.js';
 import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from './services/auditService.js';
 import { decryptRuntimeSecret } from './utils/runtimeSecrets.js';
 import { seedBaselineFromRepo } from './utils/seedBaselineFromRepo.js';
+import { assertEnv } from './config/env.js'
+import { seedBaselineFromRepo } from './utils/seedBaselineFromRepo.js';
 
-// Validate critical environment variables at startup.
-// NOTE: OpenAI is intentionally OPTIONAL for core app flows (auth/profile/opportunities).
-// The server can restore OPENAI_API_KEY from app_runtime_secrets later (hosted emergency stopgap),
-// and even without OpenAI the app should still boot and allow login.
-const requiredEnvVars = [];
-const missingEnvVars = requiredEnvVars.filter((varName) => !process.env[varName]);
-
-if (missingEnvVars.length > 0) {
-  console.error('ERROR: Missing required environment variables:', missingEnvVars.join(', '));
-  console.error('Please check your environment variables and redeploy.');
-  if (process.env.NODE_ENV === 'production') {
-    process.exit(1);
-  } else {
-    console.warn('WARNING: Running in non-production mode without all required environment variables.');
-  }
-}
+// Validate & normalize env vars (fail-fast in production)
+const { env: validatedEnv } = assertEnv()
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null;
 const ADMIN_NAME = process.env.ADMIN_NAME || 'Admin User';
@@ -85,7 +71,17 @@ const distPath = join(__dirname, '..', 'dist');
 
 const app = express();
 app.set('trust proxy', 1);
-const PORT = process.env.PORT || 8080;
+const portRaw = validatedEnv?.PORT ?? process.env.PORT
+const PORT =
+  portRaw == null
+    ? 8080
+    : typeof portRaw === 'number'
+      ? portRaw
+      : Number.parseInt(String(portRaw), 10)
+if (!Number.isFinite(PORT) || PORT < 0 || PORT > 65535) {
+  console.error('[startup] Invalid PORT. Expected an integer 0-65535.', { PORT: process.env.PORT })
+  process.exit(1)
+}
 
 // CORS configuration
 const defaultCorsOrigins = [
@@ -154,7 +150,8 @@ app.use((req, res, next) => {
 });
 
 // Request timeout middleware - prevent hanging requests from causing 502 errors
-const REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT_MS || '30000', 10); // Default 30 seconds
+const REQUEST_TIMEOUT =
+  validatedEnv?.REQUEST_TIMEOUT_MS ?? Number.parseInt(process.env.REQUEST_TIMEOUT_MS || '30000', 10) // Default 30 seconds
 app.use((req, res, next) => {
   // Set a timeout for the request
   req.setTimeout(REQUEST_TIMEOUT, () => {
@@ -208,7 +205,7 @@ try {
 // Serve static files from Vite build
 app.use(express.static(distPath));
 // Serve the SPA under the configured base path so production builds (base=/grantflow) work locally.
-const APP_BASE_PATH = process.env.AUTH_FRONTEND_APP_BASE || process.env.VITE_APP_BASE || '/grantflow';
+const APP_BASE_PATH = validatedEnv?.appBase || process.env.AUTH_FRONTEND_APP_BASE || process.env.VITE_APP_BASE || '/grantflow';
 if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
   // Also expose uploads under the same base path (common when reverse proxies only route /grantflow/*).
   const normalizedBase = String(APP_BASE_PATH).replace(/\/+$/, '');
@@ -484,72 +481,35 @@ if (db.dialect === 'sqlite') {
   try {
     const oppCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get();
     if (oppCount && oppCount.count === 0) {
-      console.info('[startup] No funding opportunities found, auto-seeding...');
-
-      // Load opportunity files
-      const crawlersDir = join(__dirname, 'data', 'crawlers');
+      if (validatedEnv?.isProd) {
+        console.warn(
+          '[startup] No funding opportunities found in production. Refusing to auto-seed; run migrations and an explicit seed/ingest job.',
+        )
+      } else {
+      const crawlersDir = join(__dirname, 'data', 'crawlers')
       const files = [
-        { path: join(crawlersDir, 'real_funding_opportunities.json'), type: 'structured' },
-        { path: join(crawlersDir, 'scholarship_opportunities.json'), type: 'array' },
-        { path: join(crawlersDir, 'local_opportunities.json'), type: 'array' },
-        { path: join(crawlersDir, 'item_funding_sources.json'), type: 'array' },
-      ];
+        join(crawlersDir, 'real_funding_opportunities.json'),
+        join(crawlersDir, 'scholarship_opportunities.json'),
+        join(crawlersDir, 'local_opportunities.json'),
+        join(crawlersDir, 'item_funding_sources.json'),
+      ]
 
-      const allOpportunities = [];
-      for (const file of files) {
+      const hasAnySeedFile = files.some((p) => fs.existsSync(p))
+
+      if (!hasAnySeedFile) {
+        console.info(
+          `[startup] No funding opportunities found. Seed files missing under ${crawlersDir}; run "npm run seed:demo" or "npm run ingest"`,
+        )
+      } else {
+        console.info('[startup] No funding opportunities found, auto-seeding from bundled JSON...')
+        // Delegate to existing curated seeder (idempotent upserts)
         try {
-          if (fs.existsSync(file.path)) {
-            const content = fs.readFileSync(file.path, 'utf8');
-            const data = JSON.parse(content);
-            if (file.type === 'structured') {
-              Object.values(data).forEach(category => {
-                if (Array.isArray(category)) allOpportunities.push(...category);
-              });
-            } else if (Array.isArray(data)) {
-              allOpportunities.push(...data);
-            }
-          }
+          const { seedRealOpportunities } = await import('./utils/seedRealOpportunities.js')
+          seedRealOpportunities(db)
         } catch (e) {
-          console.warn(`[startup] Failed to load ${file.path}:`, e.message);
+          console.warn('[startup] Failed to auto-seed opportunities:', e?.message || e)
         }
       }
-
-      if (allOpportunities.length > 0) {
-        const upsert = db.prepare(`
-          INSERT INTO funding_opportunities (
-            id, source, source_id, title, sponsor, description,
-            application_url, source_url, deadline, amount_min, amount_max,
-            categories, keywords, eligibility_bullets, match_reasons,
-            state, requires_match, requires_501c3, is_active, is_national, record_origin,
-            opportunity_type, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-          ON CONFLICT(id) DO NOTHING
-        `);
-
-        const transaction = db.transaction(() => {
-          for (const opp of allOpportunities) {
-            try {
-              const id = opp.id || crypto.randomUUID();
-              const isNational = opp.is_national === true || opp.is_national === 1 || opp.state === 'nationwide';
-              upsert.run(
-                id, opp.source || 'seeded_real', opp.source_id || id,
-                opp.title || opp.program_name, opp.sponsor || opp.funder, opp.description || opp.summary,
-                opp.application_url || opp.url, opp.url || opp.source_url || opp.application_url, opp.deadline,
-                opp.amount_min || opp.award_floor, opp.amount_max || opp.award_ceiling,
-                JSON.stringify(opp.categories || []), JSON.stringify(opp.keywords || []),
-                JSON.stringify(opp.eligibility_bullets || []), JSON.stringify(opp.match_reasons || []),
-                opp.state || (isNational ? 'nationwide' : null),
-                opp.requires_match ? 1 : 0, opp.requires_501c3 ? 1 : 0, isNational ? 1 : 0,
-                'curated_verified',
-                opp.opportunity_type || 'grant'
-              );
-            } catch (e) { /* ignore individual errors */ }
-          }
-        });
-
-        transaction();
-        const newCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get();
-        console.info(`[startup] Seeded ${newCount.count} funding opportunities`);
       }
     } else {
       console.info(`[startup] Found ${oppCount.count} existing funding opportunities`);
@@ -576,7 +536,7 @@ try {
   const minimum = Number.parseInt(process.env.MIN_NATIONAL_OPPORTUNITIES || '3', 10)
   const min = Number.isFinite(minimum) ? minimum : 3
 
-  const isProd = process.env.NODE_ENV === 'production'
+  const isProd = validatedEnv?.isProd ?? process.env.NODE_ENV === 'production'
   const flag = parseBoolEnv(process.env.ENABLE_MIN_NATIONAL_ENSURE)
   // This helper is SQLite-only today (PRAGMA usage + sync calls). Skip on Postgres until refactored.
   if (db.dialect !== 'sqlite') {
@@ -599,9 +559,6 @@ try {
   } else if (!isProd) {
     shouldEnsure = true
     enabledBy = 'default_nonprod'
-  } else if (activeTotal === 0) {
-    shouldEnsure = true
-    enabledBy = 'first_boot'
   }
 
     if (shouldEnsure) {
@@ -640,37 +597,77 @@ try {
   if (db.dialect !== 'sqlite') {
     console.info('[startup] Skipping assistance directory seeding (dialect != sqlite)')
   } else {
-    const existing = db
-      .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")
-      .get()?.count
-    if ((existing ?? 0) < 250) {
-      console.info('[startup] Seeding assistance directories (state_211 + assistance_network)...')
-      const result = seedAssistanceDirectories(db)
-      const after = db
-        .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")
-        .get()?.count
-      console.info('[startup] Seeded assistance directories', { ...result, after })
+    const isProd = validatedEnv?.isProd ?? process.env.NODE_ENV === 'production'
+    const allowProdSeed =
+      String(process.env.ENABLE_ASSISTANCE_DIRECTORIES_SEED || '').trim().toLowerCase() === 'true'
+
+    if (isProd && !allowProdSeed) {
+      console.info('[startup] Assistance directory seeding disabled in production (set ENABLE_ASSISTANCE_DIRECTORIES_SEED=true to enable)')
     } else {
-      console.info('[startup] Assistance directories already seeded', { count: existing })
+      const dataDir = join(__dirname, 'data')
+      const hasAssistanceSeedFiles =
+        fs.existsSync(join(dataDir, 'state_assistance_programs.json')) ||
+        fs.existsSync(join(dataDir, 'local_assistance_networks.json'))
+
+      if (!hasAssistanceSeedFiles) {
+        console.info(
+          `[startup] Assistance directory seed files missing under ${dataDir}; skipping`,
+        )
+      } else {
+        const existing = db
+          .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")
+          .get()?.count
+        if ((existing ?? 0) < 250) {
+          console.info('[startup] Seeding assistance directories (state_211 + assistance_network)...')
+          const result = seedAssistanceDirectories(db)
+          const after = db
+            .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")
+            .get()?.count
+          console.info('[startup] Seeded assistance directories', { ...result, after })
+        } else {
+          console.info('[startup] Assistance directories already seeded', { count: existing })
+        }
+      }
     }
   }
 } catch (error) {
   console.warn('[startup] Failed to seed assistance directories:', error?.message || error)
 }
 
-const isProd = process.env.NODE_ENV === 'production'
-const JWT_SECRET = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || null
-if (!JWT_SECRET) {
-  const msg =
-    '[startup] Missing AUTH_JWT_SECRET (or JWT_SECRET). Set a strong secret; tokens must validate across restarts/instances.'
-  if (isProd) {
-    console.error(msg)
-    process.exit(1)
-  } else {
-    console.warn(msg + ' Using a dev-only fallback.')
+// NOTE: Automatic grant seeding is intentionally disabled.
+// Use explicit scripts (seed/ingest) instead of implicit startup side effects.
+
+function resolveJwtSecret() {
+  const raw = String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || '').trim();
+  const isProd = process.env.NODE_ENV === 'production';
+
+  if (!raw) {
+    if (isProd) {
+      console.error(
+        'ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET). Refusing to start in production.\n' +
+          'Set a strong random secret (recommended: 32+ bytes). Example:\n' +
+          '  AUTH_JWT_SECRET="..."\n',
+      );
+      process.exit(1);
+    }
+    console.warn('[startup] AUTH_JWT_SECRET not set; using insecure development default (DO NOT use in production).');
+    return 'grantflow-dev-secret';
   }
+
+  if (isProd && raw === 'grantflow-dev-secret') {
+    console.error(
+      'ERROR: AUTH_JWT_SECRET is set to the insecure development default. Refusing to start in production.\n' +
+        'Generate a strong random secret and redeploy.',
+    );
+    process.exit(1);
+  }
+
+  return raw;
 }
-const EFFECTIVE_JWT_SECRET = JWT_SECRET || 'grantflow-dev-secret'
+
+const JWT_SECRET = resolveJwtSecret();
+// Keep a compatibility alias for downstream token verification code paths.
+const EFFECTIVE_JWT_SECRET = JWT_SECRET;
 
 // Make db available to routes
 app.use((req, res, next) => {
@@ -688,7 +685,6 @@ app.use(async (req, res, next) => {
   // 1. Check X-Admin-Token
   const expectedAdminToken = ADMIN_TOKEN;
   const expectedBulkKey = process.env.BULK_POPULATE_KEY || null;
-
   if (
     !handled &&
     xAdminToken &&
@@ -771,9 +767,10 @@ app.use(async (req, res, next) => {
       handled = true;
     }
 
-    // Legacy "profile-id bearer token" is unsafe; allow only in non-prod with explicit opt-in.
     const allowLegacyProfileToken =
-      isProd === false && String(process.env.ALLOW_LEGACY_PROFILE_TOKEN || '').trim().toLowerCase() === 'true'
+      (validatedEnv?.isProd ?? process.env.NODE_ENV === 'production') === false &&
+      String(process.env.ALLOW_LEGACY_PROFILE_TOKEN || '').trim().toLowerCase() === 'true'
+    // Legacy "profile-id bearer token" is unsafe; allow only in non-prod with explicit opt-in.
 
     if (!handled && token && allowLegacyProfileToken) {
       try {
@@ -799,8 +796,38 @@ app.use(async (req, res, next) => {
   next();
 });
 
-// Health check with dependency checks
-// Health check endpoint (v3.0 - complete county data)
+// Health endpoints
+// - /healthz: liveness (process up)
+// - /readyz: readiness (critical deps reachable)
+app.get('/healthz', (_req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+  })
+})
+
+app.get('/readyz', async (_req, res) => {
+  try {
+    if (db.healthcheck) {
+      await db.healthcheck()
+    } else {
+      await db.prepare('SELECT 1').get()
+    }
+    res.status(200).json({
+      status: 'ready',
+      timestamp: new Date().toISOString(),
+    })
+  } catch (error) {
+    res.status(503).json({
+      status: 'not_ready',
+      timestamp: new Date().toISOString(),
+      error: String(error?.message || error),
+    })
+  }
+})
+
+// Legacy health check with dependency checks (kept for backward compatibility)
 app.get('/health', async (req, res) => {
   const health = {
     status: 'healthy',
@@ -1045,6 +1072,32 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+// Platform health aliases (k8s-style)
+app.get('/healthz', async (_req, res) => {
+  try {
+    const healthSummary = await getSafeHealthSummary(db);
+    const statusCode = healthSummary.status === 'error' ? 500 : 200;
+    res.status(statusCode).json(healthSummary);
+  } catch (error) {
+    console.error('[/healthz] Error:', error);
+    res.status(500).json({ status: 'error', summary: 'Failed to retrieve health information' });
+  }
+});
+
+app.get('/readyz', async (_req, res) => {
+  try {
+    if (db.healthcheck) {
+      await db.healthcheck();
+    } else {
+      await db.prepare('SELECT 1 as ok').get();
+    }
+    res.status(200).json({ status: 'ready', dialect: db.dialect, timestamp: new Date().toISOString() });
+  } catch (error) {
+    console.error('[/readyz] Not ready:', error);
+    res.status(503).json({ status: 'not_ready', reason: 'database_unreachable', timestamp: new Date().toISOString() });
+  }
+});
+
 app.use('/api/admin', adminRouter);
 app.use('/api', discoveryRouter); // Discovery endpoints (comprehensiveMatch, searchOpportunities, etc.)
 app.use('/api/crawler-v2', crawlerV2Router);
@@ -1119,45 +1172,25 @@ app.get('*', spaFallbackLimiter, (req, res, next) => {
 // Use centralized error handler middleware
 app.use(errorHandler);
 
-// Error handling for route errors
-app.use((err, req, res, next) => {
-  console.error('[server] Unhandled error:', {
-    message: err.message,
-    stack: err.stack,
-    path: req.path,
-    method: req.method,
-    body: req.body,
-    headers: {
-      'content-type': req.headers['content-type'],
-      'authorization': req.headers.authorization ? '[REDACTED]' : undefined
-    }
-  });
-  
-  const isProduction = process.env.NODE_ENV === 'production';
-  const statusCode = err.statusCode || err.status || 500;
-  
-  res.status(statusCode).json({ 
-    error: isProduction ? 'Internal server error' : err.message,
-    error_type: err.error_type || 'internal_error',
-    ...(isProduction ? {} : { stack: err.stack })
-  });
-});
-
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
 
 // Graceful shutdown handling
+let shuttingDown = false
 function gracefulShutdown(signal) {
+  if (shuttingDown) return
+  shuttingDown = true
   console.log(`\nReceived ${signal}, closing server gracefully...`);
   
   server.close(() => {
     console.log('HTTP server closed');
     
     try {
-      db.close();
-      console.log('Database connection closed');
+      Promise.resolve(db.close?.())
+        .then(() => console.log('Database connection closed'))
+        .catch((error) => console.error('Error closing database:', error))
     } catch (error) {
       console.error('Error closing database:', error);
     }
@@ -1176,7 +1209,19 @@ function gracefulShutdown(signal) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-const server = app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0');
+
+server.on('error', (err) => {
+  const code = err?.code || 'UNKNOWN';
+  if (code === 'EADDRINUSE') {
+    console.error('[Server] Failed to bind port ' + PORT + ': address already in use. Stop the other process or set PORT to a free port (e.g. PORT=0 for ephemeral).');
+  } else {
+    console.error('[Server] Failed to start HTTP server:', err);
+  }
+  process.exit(1);
+});
+
+server.on('listening', () => {
   const loggedCorsOrigins = Array.isArray(corsOptions.origin) ? corsOptions.origin : [corsOptions.origin];
   console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
   const actualPort = server.address()?.port ?? PORT;
@@ -1263,5 +1308,18 @@ const server = app.listen(PORT, '0.0.0.0', () => {
     )
   }
 });
+
+// Ensure listen errors never crash as "Unhandled 'error' event"
+server.on('error', (err) => {
+  const code = err?.code || 'UNKNOWN'
+  if (code === 'EADDRINUSE') {
+    console.error(`[server] Port ${PORT} is already in use. Set PORT to a free port and retry.`)
+  } else if (code === 'EACCES') {
+    console.error(`[server] Permission denied binding to port ${PORT}. Try a higher port (>=1024).`)
+  } else {
+    console.error('[server] Failed to start server:', err)
+  }
+  process.exit(1)
+})
 
 export default app;

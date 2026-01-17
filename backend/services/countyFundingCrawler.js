@@ -30,7 +30,6 @@ const fallbackCountiesPath = join(repoRootDir, 'county_batch1.json');
 try {
   // Prefer the complete dataset if available.
   // Use dynamic import so a missing file doesn't crash the whole service.
-  // eslint-disable-next-line no-await-in-loop
   const mod = await import('../data/completeCounties.js');
   COMPLETE_US_COUNTIES = mod.COMPLETE_US_COUNTIES || [];
   COUNTY_STATS = mod.COUNTY_STATS || COUNTY_STATS;

@@ -86,6 +86,29 @@ const profileSelect = `
 
 function mapProfile(row) {
   if (!row) return null
+  const normalizeAvatarUrl = (raw) => {
+    if (!raw) return null
+    const value = String(raw).trim()
+    if (!value) return null
+
+    // Absolute / special URLs are already safe for the browser.
+    if (/^(https?:)?\/\//i.test(value)) return value
+    if (/^data:/i.test(value)) return value
+
+    // Normalize legacy stored values so the frontend doesn't request relative paths like
+    // `/grantflow/ProfileDetail?.../file.jpg`.
+    if (value.startsWith('/uploads/')) return value
+    if (value.startsWith('uploads/')) return `/${value}`
+
+    // If we stored just a filename, assume it lives under /uploads.
+    if (/\.(png|jpe?g|webp|gif)$/i.test(value) && !value.includes('/')) {
+      return `/uploads/${value}`
+    }
+
+    // Fall back to absolute-from-origin.
+    return value.startsWith('/') ? value : `/${value}`
+  }
+
   return {
     id: row.id,
     created_at: row.created_at,
@@ -101,8 +124,8 @@ function mapProfile(row) {
     applicant_type: row.primary_type,
     status: row.status,
     tags: safeParseJSON(row.tags, []),
-    avatar_url: row.avatar_url ?? null,
-    profile_image_url: row.avatar_url ?? null,
+    avatar_url: normalizeAvatarUrl(row.avatar_url),
+    profile_image_url: normalizeAvatarUrl(row.avatar_url),
   }
 }
 
@@ -608,6 +631,32 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
     return res.status(400).json({ error: 'data payload must be an object' })
   }
 
+  function isPlainObject(value) {
+    if (!value || typeof value !== 'object') return false
+    return Object.prototype.toString.call(value) === '[object Object]'
+  }
+
+  function mergeDeep(existing, incoming) {
+    if (!isPlainObject(existing) || !isPlainObject(incoming)) return incoming
+    const out = { ...existing }
+    for (const [k, v] of Object.entries(incoming)) {
+      if (isPlainObject(v) && isPlainObject(existing[k])) {
+        out[k] = mergeDeep(existing[k], v)
+      } else {
+        out[k] = v
+      }
+    }
+    return out
+  }
+
+  // Preserve any unknown/nested keys already stored for this section.
+  // This protects “comprehensive application” data points from being dropped when the UI only edits a subset.
+  const existingRow = await req.db
+    .prepare('SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = ?')
+    .get(id, sectionKey)
+  const existingData = existingRow ? safeParseJSON(existingRow.data, {}) : {}
+  const mergedData = mergeDeep(existingData, data)
+
   const upsert = req.db.prepare(
     `
     INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
@@ -619,7 +668,7 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
   `,
   )
 
-  await upsert.run(id, sectionKey, JSON.stringify(data), updated_by ?? null)
+  await upsert.run(id, sectionKey, JSON.stringify(mergedData), updated_by ?? null)
 
   const section = await req.db
     .prepare(

@@ -15,11 +15,9 @@ const APP_BASE = env.appBase || '/grantflow'
 if (import.meta.env.DEV) {
   const raw = import.meta.env.VITE_API_URL
   if (raw && !/^https?:\/\//i.test(String(raw))) {
-    // eslint-disable-next-line no-console
     console.warn('[env] VITE_API_URL should be http(s)://...; falling back to same-origin proxy. value=', raw)
   }
 } else if (import.meta.env.VITE_API_URL) {
-  // eslint-disable-next-line no-console
   console.warn('[env] VITE_API_URL is ignored in production (same-origin /api via Vercel rewrites).')
 }
 
