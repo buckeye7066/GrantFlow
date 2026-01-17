@@ -37,7 +37,7 @@
     "crawl:targeted": "node ./scripts/extended-state-crawler.mjs",
     "prepopulate:grants": "node ./scripts/prepopulate-profile-grants.mjs",
     "setup:production": "bash ./scripts/setup-production-db.sh",
-    "start": "node backend/db/migrate.js && node backend/start.js",
+    "start": "node backend/start.js",
     "crawler:smoke": "node ./scripts/crawler-smoke.mjs",
     "crawler:run": "node ./scripts/crawler-run.mjs",
     "crawler:doctor": "node ./scripts/crawler-doctor.mjs",
