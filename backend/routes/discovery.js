@@ -464,8 +464,14 @@ router.post('/comprehensiveMatch', async (req, res) => {
     // Exclude fake/synthetic sources
     conditions.push(`(source IS NULL OR source NOT IN ('comprehensive_crawler', 'synthetic', 'template', 'fake'))`);
     
+    const isPostgres = req.db?.dialect === 'postgres'
+
     // Exclude opportunities that require matching funds
-    conditions.push(`(requires_match = 0 OR requires_match IS NULL)`);
+    conditions.push(
+      isPostgres
+        ? '(requires_match IS NULL OR requires_match = FALSE)'
+        : '(requires_match = 0 OR requires_match IS NULL)',
+    );
     
     // State filtering
     if (profileStates.length > 0) {
@@ -476,8 +482,14 @@ router.post('/comprehensiveMatch', async (req, res) => {
     
     // Freshness filter
     if (freshness_days > 0) {
-      conditions.push(`(deadline IS NULL OR deadline >= date('now', '-' || ? || ' days'))`);
-      params.push(freshness_days);
+      if (isPostgres) {
+        // Postgres: `CURRENT_DATE - (N days)`; keep it parameterized.
+        conditions.push('(deadline IS NULL OR deadline >= (CURRENT_DATE - (?::int * INTERVAL \'1 day\')))');
+        params.push(freshness_days);
+      } else {
+        conditions.push(`(deadline IS NULL OR deadline >= date('now', '-' || ? || ' days'))`);
+        params.push(freshness_days);
+      }
     }
     
     // Build the query

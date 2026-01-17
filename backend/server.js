@@ -71,7 +71,9 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@grantflow.app';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const uploadsDir = join(__dirname, '..', 'uploads');
+// Keep uploads inside backend/ so routes and static serving agree.
+// (Several routes write to backend/uploads; serving repo-root /uploads causes 404s in production.)
+const uploadsDir = join(__dirname, 'uploads');
 const distPath = join(__dirname, '..', 'dist');
 
 const app = express();
@@ -187,6 +189,30 @@ try {
   console.warn('Failed to create uploads directory:', error);
 }
 app.use('/uploads', express.static(uploadsDir));
+// If an image is missing from uploads (common for older profiles), serve a safe placeholder
+// to avoid noisy 404s and broken UI.
+const uploadsPlaceholderPath = join(__dirname, '..', 'public', 'images', 'anya-avatar.svg')
+let uploadsPlaceholderSvg = null
+try {
+  if (fs.existsSync(uploadsPlaceholderPath)) {
+    uploadsPlaceholderSvg = fs.readFileSync(uploadsPlaceholderPath, 'utf8')
+  }
+} catch {
+  uploadsPlaceholderSvg = null
+}
+app.use('/uploads', (req, res, next) => {
+  if (res.headersSent) return next()
+  if (!uploadsPlaceholderSvg) return res.status(404).end()
+  if (req.method !== 'GET' && req.method !== 'HEAD') return res.status(404).end()
+
+  const reqPath = String(req.path || '')
+  const isImage = /\.(png|jpe?g|gif|webp|svg)$/i.test(reqPath)
+  if (!isImage) return res.status(404).end()
+
+  res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8')
+  res.setHeader('Cache-Control', 'public, max-age=300')
+  return res.status(200).send(uploadsPlaceholderSvg)
+})
 
 // Serve static files from Vite build
 app.use(express.static(distPath));
