@@ -453,11 +453,16 @@ export async function getSafeHealthSummary(db) {
     }
     
     // Determine status
-    let status = 'healthy';
+    //
+    // Contract:
+    // - Public `/api/health` must return status in { ok, warning, error }
+    // - "warning" is still 200 and considered healthy for platform checks
+    // - "error" is 500
+    let status = 'ok';
     let summary = 'System is operating normally';
     
     if (opportunitiesCount === 0 && recentFailures > 0) {
-      status = 'degraded';
+      status = 'warning';
       summary = `${recentFailures} crawler failure(s) in last 24h; no opportunities ingested`;
     } else if (opportunitiesCount === 0) {
       status = 'warning';
@@ -470,6 +475,7 @@ export async function getSafeHealthSummary(db) {
     return {
       timestamp,
       status,
+      legacy_status: status === 'ok' ? 'healthy' : status,
       counts: {
         opportunities: opportunitiesCount,
         recentFailures,
