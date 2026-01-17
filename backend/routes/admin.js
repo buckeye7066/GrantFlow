@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import multer from 'multer';
 import fs from 'fs';
 import { promises as fsp } from 'fs';
-import { dirname, join } from 'path';
+import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import pdfParse from 'pdf-parse';
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';
@@ -24,6 +24,7 @@ import { crawlStudentGrants } from '../services/crawlers/studentGrantsCrawler.js
 import { crawlSpecialNeeds } from '../services/crawlers/specialNeedsCrawler.js';
 import { crawlItemFunding } from '../services/crawlers/itemFundingCrawler.js';
 import { crawlECFBenefits } from '../services/crawlers/ecfBenefitsCrawler.js';
+import zipcodes from 'zipcodes';
 
 const router = express.Router();
 
@@ -33,14 +34,32 @@ const AI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini'; // Configurable AI m
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const uploadDir = join(__dirname, '..', 'uploads');
 const repoRootDir = join(__dirname, '..', '..');
-const zipCoordinatesPath = join(repoRootDir, 'backend', 'data', 'crawlers', 'zip_coordinates.json');
-const countiesByStatePath = join(repoRootDir, 'county_batch1.json');
+const uploadDir = process.env.UPLOADS_DIR
+  ? resolve(process.env.UPLOADS_DIR)
+  : join(__dirname, '..', 'uploads');
+
+// Optional geo datasets (if present) for richer ZIP metadata.
+const zipCoordinatesPath = process.env.GEO_ZIP_COORDINATES_PATH
+  ? resolve(process.env.GEO_ZIP_COORDINATES_PATH)
+  : join(repoRootDir, 'backend', 'data', 'crawlers', 'zip_coordinates.json');
+const countiesByStatePath = process.env.GEO_COUNTIES_BY_STATE_PATH
+  ? resolve(process.env.GEO_COUNTIES_BY_STATE_PATH)
+  : join(repoRootDir, 'county_batch1.json');
 
 let zipCoordinatesCache = null;
 let zipStateIndexCache = null;
 let countiesByStateCache = null;
+let zipCoordinatesMissing = false;
+
+const US_STATE_CODES = Object.freeze([
+  'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA',
+  'HI','ID','IL','IN','IA','KS','KY','LA','ME','MD',
+  'MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ',
+  'NM','NY','NC','ND','OH','OK','OR','PA','RI','SC',
+  'SD','TN','TX','UT','VT','VA','WA','WV','WI','WY',
+  'DC',
+]);
 
 const CRAWLER_AUDIT_TYPES = [
   'local_funding',
@@ -118,9 +137,16 @@ async function ensureAdminRequest(req, res) {
 function loadZipCoordinates() {
   if (zipCoordinatesCache) return zipCoordinatesCache;
   if (!fs.existsSync(zipCoordinatesPath)) {
-    throw new Error(`ZIP coordinate dataset missing: ${zipCoordinatesPath}`);
+    zipCoordinatesMissing = true;
+    zipCoordinatesCache = {};
+    return zipCoordinatesCache;
   }
-  zipCoordinatesCache = JSON.parse(fs.readFileSync(zipCoordinatesPath, 'utf8'));
+  try {
+    zipCoordinatesCache = JSON.parse(fs.readFileSync(zipCoordinatesPath, 'utf8'));
+  } catch {
+    zipCoordinatesMissing = true;
+    zipCoordinatesCache = {};
+  }
   return zipCoordinatesCache;
 }
 
@@ -128,6 +154,24 @@ function buildZipStateIndex() {
   if (zipStateIndexCache) return zipStateIndexCache;
   const coords = loadZipCoordinates();
   const index = new Map();
+
+  // Production-safe fallback when the JSON dataset isn't packaged: use `zipcodes`.
+  if (zipCoordinatesMissing) {
+    for (const state of US_STATE_CODES) {
+      const entries = (zipcodes.lookupByState(state) || [])
+        .map((row) => ({
+          zip_code: row?.zip ?? null,
+          city: row?.city ?? null,
+          state: row?.state ?? state,
+          lat: row?.latitude ?? null,
+          lng: row?.longitude ?? null,
+        }))
+        .filter((row) => row.zip_code);
+      if (entries.length > 0) index.set(state, entries);
+    }
+    zipStateIndexCache = index;
+    return zipStateIndexCache;
+  }
 
   for (const [zip, meta] of Object.entries(coords)) {
     const state = meta?.state;
@@ -876,7 +920,10 @@ router.get('/geo/states', async (req, res) => {
     const states = Array.from(index.keys())
       .sort()
       .map((state) => ({ state, zip_count: index.get(state).length }));
-    res.json({ states });
+    res.json({
+      states,
+      dataset_source: zipCoordinatesMissing ? 'zipcodes' : 'zip_coordinates.json',
+    });
   } catch (error) {
     console.error('[admin/geo/states] Error:', error);
     res.status(500).json({ error: error.message });
@@ -888,7 +935,10 @@ router.get('/geo/state/:state/zips', async (req, res) => {
     if (!(await ensureAdminRequest(req, res))) return;
     const state = String(req.params.state || '').toUpperCase();
     const index = buildZipStateIndex();
-    res.json({ zips: index.get(state) ?? [] });
+    res.json({
+      zips: index.get(state) ?? [],
+      dataset_source: zipCoordinatesMissing ? 'zipcodes' : 'zip_coordinates.json',
+    });
   } catch (error) {
     console.error('[admin/geo/state/zips] Error:', error);
     res.status(500).json({ error: error.message });

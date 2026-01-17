@@ -47,6 +47,8 @@ This playbook captures everything needed to ship the `resolve-merge-conflicts` b
      "rewrites": [
        { "source": "/api/:path*", "destination": "https://grantflow-production.up.railway.app/api/:path*" },
        { "source": "/grantflow/api/:path*", "destination": "https://grantflow-production.up.railway.app/api/:path*" },
+       { "source": "/uploads/:path*", "destination": "https://grantflow-production.up.railway.app/uploads/:path*" },
+       { "source": "/grantflow/uploads/:path*", "destination": "https://grantflow-production.up.railway.app/uploads/:path*" },
        { "source": "/grantflow", "destination": "/index.html" },
        { "source": "/grantflow/:path*", "destination": "/index.html" }
      ]
@@ -65,9 +67,14 @@ This playbook captures everything needed to ship the `resolve-merge-conflicts` b
    | ---------------- | --------------------------------------------- |
    | `PORT`           | `8080`                                        |
    | `DATABASE_URL`   | `./data/grantflow.db`                         |
+   | `UPLOADS_DIR`    | `/data/uploads` (or your mounted volume path) |
    | `ADMIN_TOKEN`    | Secure random value (`openssl rand -hex 32`)  |
    | `CORS_ORIGIN`    | `https://your-vercel-app.vercel.app`          |
    | `OPENAI_API_KEY` | *(optional – required for AI features)*       |
+3. **Persistent uploads volume (required)**:
+   - Add a Railway **Volume** and mount it (recommended mount path: `/data`)
+   - Set `UPLOADS_DIR=/data/uploads`
+   - After first deploy, confirm `/readyz` returns 200 and includes uploads write access (it will return 503 if the mount is missing/unwritable).
 3. **Seed the database** (pick one):
    - _Pre-built_: unzip `grantflow-migration.zip` into `backend/data/` before the container starts.
    - _JSON import_: copy your Base44 export into `backend/`, then run `node backend/import-data.js data-export.json`.
