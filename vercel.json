@@ -6,6 +6,11 @@
       "permanent": false
     },
     {
+      "source": "/grantflow/",
+      "destination": "/grantflow",
+      "permanent": false
+    },
+    {
       "source": "/grantlfow",
       "destination": "/grantflow",
       "permanent": true

@@ -1,8 +1,8 @@
 ## GrantFlow UI Parity – Base44 vs. Vercel/Railway Repo
 
-_Last updated: 2025-12-31_
+_Last updated: 2026-01-16_
 
-The Base44 workspace (`grant-flow-736bafec.base44.app`) is our reference implementation. This document captures the current gaps between that experience and the Vercel/Railway codebase in `buckeye7066/grantflow`, and outlines the work required to close them.
+The Base44 workspace (`grant-flow-736bafec.base44.app`) is our **reference implementation only**. GrantFlow will ship/run from this repo (Vercel/Railway); Base44 is used purely to compare UX/data patterns and (optionally) to export reference datasets for seeding.
 
 ---
 
@@ -100,10 +100,13 @@ The Base44 workspace (`grant-flow-736bafec.base44.app`) is our reference impleme
 ### 6. Immediate Next Steps
 
 - Capture Base44 “Code” view for key pages to identify component structure and data patterns.
-- Draft UI component inventory (shared cards, tables, forms) and map to shadcn/ui + Tailwind plan.
-- Plan migrations for comprehensive profile schema and align backend routes.
-- Define AI prompt templates + Railway endpoints for section assists.
-- Align smoke test coverage with new routes and dashboards.
+- Generate a repo-side “Base44 surface area” inventory so we can reconcile Base44 → repo systematically.
+  - Run: `node scripts/base44-usage-report.mjs`
+  - Output: `artifacts/local/<today>/base44-usage-report.json`
+- If/when you have a Base44 export JSON file (entities export), summarize it:
+  - Run: `node scripts/base44-export-report.mjs path/to/data-export.json`
+  - (Optional import) `node backend/import-data.js path/to/data-export.json`
+- Reconcile: ensure every `base44.entities.*` and `base44.functions.invoke(*)` used by the UI maps to a real backend route (or is intentionally stubbed/removed with a documented decision).
 
 ---
 

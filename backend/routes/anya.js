@@ -43,86 +43,78 @@ function handleError(res, error) {
 }
 
 router.get('/status', adminAuth, async (_req, res) => {
-  // Test Anthropic connection
-  let anthropicStatus = 'not_tested'
+  const shouldTest = String(_req.query?.test || '').toLowerCase() === 'true'
+  const isProd = process.env.NODE_ENV === 'production'
+
+  // Never call external AI providers by default. Allow explicit opt-in via ?test=true.
+  let anthropicStatus = process.env.ANTHROPIC_API_KEY ? 'configured' : 'missing_key'
   let anthropicError = null
   let modelInfo = null
-  
-  console.log('[Anya Status] Checking Anthropic API key configuration...')
-  console.log('[Anya Status] ANTHROPIC_API_KEY exists:', !!process.env.ANTHROPIC_API_KEY)
-  console.log('[Anya Status] OPENAI_API_KEY exists:', !!process.env.OPENAI_API_KEY)
-  
-  try {
-    const apiKey = process.env.ANTHROPIC_API_KEY
-    if (!apiKey) {
-      console.log('[Anya Status] ANTHROPIC_API_KEY is MISSING')
+
+  if (shouldTest) {
+    if (isProd) {
+      anthropicStatus = anthropicStatus === 'missing_key' ? 'missing_key' : 'not_tested'
+      anthropicError = {
+        message: 'Live provider tests are disabled in production. Remove ?test=true or test from a non-prod environment.',
+      }
+    } else if (!process.env.ANTHROPIC_API_KEY) {
       anthropicStatus = 'missing_key'
     } else {
-      console.log('[Anya Status] ANTHROPIC_API_KEY found, prefix:', apiKey.substring(0, 10))
-      console.log('[Anya Status] Key starts with sk-ant-:', apiKey.startsWith('sk-ant-'))
-      
-      // Try to import and test Anthropic
-      const Anthropic = (await import('@anthropic-ai/sdk')).default
-      const client = new Anthropic({ apiKey })
-      console.log('[Anya Status] Anthropic client created, testing API...')
-      
-      // Make a minimal test request
-      const testResponse = await client.messages.create({
-        model: 'claude-3-haiku-20240307', // Use cheapest model for testing
-        max_tokens: 10,
-        messages: [{ role: 'user', content: 'Say "ok"' }],
-      })
-      
-      console.log('[Anya Status] API test response received:', !!testResponse)
-      
-      if (testResponse?.content?.[0]?.text) {
-        anthropicStatus = 'connected'
-        modelInfo = {
+      try {
+        const Anthropic = (await import('@anthropic-ai/sdk')).default
+        const client = new Anthropic({
+          apiKey: process.env.ANTHROPIC_API_KEY,
+          timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 15_000),
+          maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
+        })
+
+        const testResponse = await client.messages.create({
           model: 'claude-3-haiku-20240307',
-          test_response: testResponse.content[0].text,
+          max_tokens: 10,
+          messages: [{ role: 'user', content: 'Say "ok"' }],
+        })
+
+        if (testResponse?.content?.[0]?.text) {
+          anthropicStatus = 'connected'
+          modelInfo = {
+            model: 'claude-3-haiku-20240307',
+            test_response: testResponse.content[0].text,
+          }
+        } else {
+          anthropicStatus = 'invalid_response'
         }
-        console.log('[Anya Status] API test SUCCESSFUL:', testResponse.content[0].text)
-      } else {
-        anthropicStatus = 'invalid_response'
-        console.log('[Anya Status] API test returned invalid response')
+      } catch (error) {
+        anthropicStatus = 'error'
+        anthropicError = {
+          type: error?.constructor?.name ?? 'Error',
+          message: error?.message || String(error),
+          status: error?.status ?? null,
+          hint:
+            error?.status === 401
+              ? 'Invalid API key'
+              : error?.status === 429
+                ? 'Rate limited'
+                : String(error?.message || '').includes('model')
+                  ? 'Invalid model name'
+                  : 'Unknown error',
+        }
       }
     }
-  } catch (error) {
-    anthropicStatus = 'error'
-    console.error('[Anya Status] API test FAILED:', error.constructor.name, error.message)
-    console.error('[Anya Status] Error status:', error.status)
-    anthropicError = {
-      type: error.constructor.name,
-      message: error.message,
-      status: error.status,
-      hint: error.status === 401 ? 'Invalid API key' : 
-            error.status === 429 ? 'Rate limited' : 
-            error.message?.includes('model') ? 'Invalid model name' : 
-            'Unknown error'
-    }
   }
-  
+
   res.json({
     status: 'ready',
     anthropic: {
       status: anthropicStatus,
-      api_key_configured: !!process.env.ANTHROPIC_API_KEY,
-      api_key_prefix: process.env.ANTHROPIC_API_KEY ? 
-        process.env.ANTHROPIC_API_KEY.substring(0, 10) + '...' : null,
+      tested: shouldTest && !isProd,
+      api_key_configured: Boolean(process.env.ANTHROPIC_API_KEY),
       error: anthropicError,
       model: modelInfo,
     },
     openai: {
-      api_key_configured: !!process.env.OPENAI_API_KEY,
-      api_key_prefix: process.env.OPENAI_API_KEY ? 
-        process.env.OPENAI_API_KEY.substring(0, 7) + '...' : null,
+      api_key_configured: Boolean(process.env.OPENAI_API_KEY),
     },
-    environment: {
-      node_env: process.env.NODE_ENV,
-      all_env_keys: Object.keys(process.env).filter(k => 
-        k.includes('API') || k.includes('ANTHROPIC') || k.includes('OPENAI')
-      ),
-    },
+    environment: { node_env: process.env.NODE_ENV },
     last_action_at: null,
     active_sessions: null,
   })
@@ -253,20 +245,19 @@ router.post('/sessions/:sessionId/tasks', async (req, res) => {
 })
 
 router.patch('/sessions/:sessionId/tasks/:taskId', (req, res) => {
-  try {
-    const task = updateTask(req.db, req.user, req.params.sessionId, req.params.taskId, {
-      title: req.body?.title,
-      notes: req.body?.notes,
-      status: req.body?.status,
-      priority: req.body?.priority,
-      dueDate: req.body?.due_date ?? req.body?.dueDate,
-      metadata: req.body?.metadata,
+  Promise.resolve()
+    .then(async () => {
+      const task = await updateTask(req.db, req.user, req.params.sessionId, req.params.taskId, {
+        title: req.body?.title,
+        notes: req.body?.notes,
+        status: req.body?.status,
+        priority: req.body?.priority,
+        dueDate: req.body?.due_date ?? req.body?.dueDate,
+        metadata: req.body?.metadata,
+      })
+      res.json({ task })
     })
-
-    res.json({ task })
-  } catch (error) {
-    handleError(res, error)
-  }
+    .catch((error) => handleError(res, error))
 })
 
 router.get('/profiles/:profileId/tasks', async (req, res) => {

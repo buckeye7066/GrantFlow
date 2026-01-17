@@ -8,6 +8,7 @@ import {
   safeParseArrayField,
 } from './profileHelpers.js'
 import { saveToProfilePipeline } from './opportunityMatcher.js'
+import { runNationalZipCrawl } from './crawlers/nationalZipCrawler.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -79,8 +80,11 @@ function calculateOpportunityMatch(opp, signals, profileState) {
   
   // Keyword matching (up to 25 points)
   let keywordMatches = 0
-  if (signals.keywords) {
-    for (const keyword of signals.keywords) {
+  const keywordIterable = signals?.keywords || signals?.keywordSet || signals?.keyword_set || null
+  if (keywordIterable) {
+    for (const keywordRaw of keywordIterable) {
+      const keyword = String(keywordRaw ?? '').toLowerCase().trim()
+      if (!keyword) continue
       if (oppKeywords.has(keyword) || oppText.includes(keyword)) {
         keywordMatches++
         if (keywordMatches <= 3) {
@@ -149,6 +153,42 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
     db = contextOrDb.db
     profileContext = contextOrDb.profileContext || {}
     const params = contextOrDb.job?.parameters || {}
+
+    // Geo crawl mode: run a small ZIP-scoped discovery crawl to populate the opportunity catalog.
+    // This is used by the Geo Crawl admin UI. It is intentionally separate from profile matching.
+    if (String(params.mode || '').toLowerCase() === 'geo') {
+      const state = params.state ? String(params.state).toUpperCase() : null
+      const maxZips = Number(params.max_zips ?? params.maxZips ?? 50)
+      const batchSize = Number(params.batch_size ?? Math.min(50, Math.max(1, maxZips || 50)))
+      const rateLimitMs = Number(params.rate_limit_ms ?? 250)
+      const minSources = Number(params.min_sources_per_zip ?? 1)
+      const zipList = Array.isArray(params.zip_list) ? params.zip_list : null
+
+      console.log('[comprehensiveCrawler] GEO mode starting', { state, maxZips, batchSize })
+      const result = await runNationalZipCrawl(db, {
+        state: state && /^[A-Z]{2}$/.test(state) ? state : undefined,
+        zip_list: zipList || undefined,
+        max_zips: Number.isFinite(maxZips) ? maxZips : 50,
+        batch_size: Number.isFinite(batchSize) ? batchSize : 25,
+        rate_limit_ms: Number.isFinite(rateLimitMs) ? rateLimitMs : 250,
+        min_sources_per_zip: Number.isFinite(minSources) ? minSources : 1,
+        resume: false,
+      })
+
+      return {
+        success: true,
+        inserted: Number(result?.sources ?? 0),
+        evaluated: Number(result?.processed ?? 0),
+        result_meta: {
+          mode: 'geo',
+          state: state ?? null,
+          processed: result?.processed ?? 0,
+          sources: result?.sources ?? 0,
+        },
+        message: `Geo crawl completed: processed ${result?.processed ?? 0} ZIPs`,
+      }
+    }
+
     matchThreshold = params.match_threshold || 70
     maxResults = params.max_results || 50
     saveToDatabase = params.save_to_database !== false
