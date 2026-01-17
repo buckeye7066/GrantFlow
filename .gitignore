@@ -36,3 +36,7 @@ seed/*.db-shm
 seed/*.db-wal
 seed/*.db-journal
 
+# Backup files and temporary artifacts
+*.bak
+backend/temp_images/
+
