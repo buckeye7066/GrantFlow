@@ -686,11 +686,11 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
       await req.db
         .prepare(
           `
-            INSERT INTO crawler_jobs (id, type, status, profile_id, parameters, requested_by)
-            VALUES (?, 'document_ingest', 'queued', ?, ?, ?)
+            INSERT INTO crawler_jobs (id, type, status, profile_id, organization_id, parameters, requested_by)
+            VALUES (?, 'document_ingest', 'queued', ?, ?, ?, ?)
           `,
         )
-        .run(parseJobId, profileId, JSON.stringify({ document_id: documentId, source: 'admin_upload' }), 'admin');
+        .run(parseJobId, profileId, null, JSON.stringify({ document_id: documentId, source: 'admin_upload' }), 'admin');
       
       // Get the job and dispatch it immediately
       const parseJob = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(parseJobId);
