@@ -26,7 +26,6 @@ export async function processLocalCrawlerJob({ db, job, profileContext }) {
     sections: profileContext.sections,
     signals: profileContext.signals,
   }
-
   const found = await crawlLocalFunding(profile, { min_match_score: matchThreshold, ...parameters })
   const topOpps = (Array.isArray(found) ? found : [])
     .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))

@@ -2,6 +2,7 @@ import express from 'express'
 import {
   mapTierRow,
   mapAccountRow,
+  ensureBillingSchema,
   ensureBillingAccount,
   selectAccount,
   fetchAccountEvents,
@@ -37,6 +38,7 @@ router.use(requireAuth)
 
 router.get('/tiers', async (req, res) => {
   try {
+    await ensureBillingSchema(req.db)
     const tiers = req.db
       .prepare(
         `
@@ -55,6 +57,7 @@ router.get('/tiers', async (req, res) => {
 
 router.post('/tiers', requireAdmin, async (req, res) => {
   try {
+    await ensureBillingSchema(req.db)
     const {
       id,
       name,
@@ -107,6 +110,7 @@ router.post('/tiers', requireAdmin, async (req, res) => {
 
 router.put('/tiers/:id', requireAdmin, async (req, res) => {
   try {
+    await ensureBillingSchema(req.db)
     const tierId = req.params.id
     const existing = await req.db.prepare('SELECT * FROM billing_tiers WHERE id = ?').get(tierId)
     if (!existing) {
@@ -158,6 +162,7 @@ router.put('/tiers/:id', requireAdmin, async (req, res) => {
 
 router.get('/accounts', requireAdmin, async (req, res) => {
   try {
+    await ensureBillingSchema(req.db)
     const orderBy =
       req.db?.dialect === 'postgres'
         ? 'ORDER BY p.display_name ASC'
@@ -198,6 +203,7 @@ router.get('/accounts', requireAdmin, async (req, res) => {
 
 router.get('/accounts/:profileId', async (req, res) => {
   try {
+    await ensureBillingSchema(req.db)
     const profileId = req.params.profileId
     const profile = await req.db
       .prepare(
@@ -231,6 +237,7 @@ router.get('/accounts/:profileId', async (req, res) => {
 
 router.put('/accounts/:profileId', requireAdmin, async (req, res) => {
   try {
+    await ensureBillingSchema(req.db)
     const profileId = req.params.profileId
     const profile = await req.db
       .prepare(

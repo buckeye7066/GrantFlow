@@ -5,9 +5,9 @@ It enumerates environment variables referenced in code and/or present in example
 
 ## Summary
 
-- Total vars: **162**
-- Vars referenced in code: **153**
-- Vars present in env templates: **55**
+- Total vars: **163**
+- Vars referenced in code: **154**
+- Vars present in env templates: **58**
 
 ## Inventory
 
@@ -79,6 +79,7 @@ It enumerates environment variables referenced in code and/or present in example
 | `BULK_POPULATE_KEY` | Yes | No | Backend/Node |
 | `CI` | Yes | No | Backend/Node |
 | `COMMIT_SHA` | Yes | No | Backend/Node |
+| `CONFIRM` | Yes | No | Backend/Node |
 | `CORS_ORIGIN` | Yes | Yes | Backend/Node |
 | `CRAWLER_MAX_SOURCES` | Yes | No | Backend/Node |
 | `CRAWLER_MAX_URLS_PER_SOURCE` | Yes | No | Backend/Node |
@@ -102,17 +103,11 @@ It enumerates environment variables referenced in code and/or present in example
 | `FEATURE_CRAWLER_RETRIES` | Yes | No | Backend/Node |
 | `FEATURE_DETAILED_MATCHING` | Yes | No | Backend/Node |
 | `FEATURE_GEO_CRAWL` | Yes | No | Backend/Node |
-| `FIREBASE_API_KEY` | Yes | No | Backend/Node |
-| `FIREBASE_APP_ID` | Yes | No | Backend/Node |
-| `FIREBASE_AUTH_DOMAIN` | Yes | No | Backend/Node |
-| `FIREBASE_MESSAGING_SENDER_ID` | Yes | No | Backend/Node |
-| `FIREBASE_PROJECT_ID` | Yes | No | Backend/Node |
-| `FIREBASE_STORAGE_BUCKET` | Yes | No | Backend/Node |
 | `FORCE` | Yes | No | Backend/Node |
 | `FROM_EMAIL` | Yes | Yes | Backend/Node |
 | `FRONTEND_BASE_URL` | Yes | No | Backend/Node |
-| `GEO_COUNTIES_BY_STATE_PATH` | Yes | No | Backend/Node |
-| `GEO_ZIP_COORDINATES_PATH` | Yes | No | Backend/Node |
+| `GEO_COUNTIES_BY_STATE_PATH` | Yes | Yes | Backend/Node |
+| `GEO_ZIP_COORDINATES_PATH` | Yes | Yes | Backend/Node |
 | `GIT_COMMIT_SHA` | Yes | No | Backend/Node |
 | `GOOGLE_API_KEY` | Yes | No | Backend/Node |
 | `GOOGLE_SEARCH_CX` | Yes | No | Backend/Node |
@@ -165,7 +160,7 @@ It enumerates environment variables referenced in code and/or present in example
 | `TWILIO_AUTH_TOKEN` | Yes | Yes | Backend/Node |
 | `TWILIO_FROM_NUMBER` | Yes | No | Backend/Node |
 | `TWILIO_MESSAGING_SERVICE_SID` | Yes | Yes | Backend/Node |
-| `UPLOADS_DIR` | Yes | No | Backend/Node |
+| `UPLOADS_DIR` | Yes | Yes | Backend/Node |
 | `VERCEL_GIT_COMMIT_SHA` | Yes | No | Backend/Node |
 | `VERIFY_ADMIN_TOKEN` | Yes | No | Backend/Node |
 | `VERIFY_BASE_URL` | Yes | No | Backend/Node |
@@ -175,6 +170,12 @@ It enumerates environment variables referenced in code and/or present in example
 | `VITE_CANONICAL_HOST` | Yes | No | Frontend (Vite) |
 | `VITE_CANONICAL_HOST_STRICT` | Yes | No | Frontend (Vite) |
 | `VITE_DEV_ADMIN_TOKEN` | Yes | No | Frontend (Vite) |
+| `VITE_FIREBASE_API_KEY` | Yes | No | Frontend (Vite) |
+| `VITE_FIREBASE_APP_ID` | Yes | No | Frontend (Vite) |
+| `VITE_FIREBASE_AUTH_DOMAIN` | Yes | No | Frontend (Vite) |
+| `VITE_FIREBASE_MESSAGING_SENDER_ID` | Yes | No | Frontend (Vite) |
+| `VITE_FIREBASE_PROJECT_ID` | Yes | No | Frontend (Vite) |
+| `VITE_FIREBASE_STORAGE_BUCKET` | Yes | No | Frontend (Vite) |
 
 ## Usage locations (file + line ranges)
 
@@ -184,7 +185,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/env.example:21` = `admin@grantflow.local`
 - **Code references**:
   - `backend/config/constants.js:L8` (process.env)
-  - `backend/server.js:L73` (process.env)
+  - `backend/server.js:L71` (process.env)
   - `backend/services/anyaOrchestrator.js:L12` (process.env)
   - `backend/services/email.js:L8` (process.env)
   - `repo/backend/server.js:L57` (process.env)
@@ -195,7 +196,7 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**:
   - `backend/env.example:20` = `Local Admin`
 - **Code references**:
-  - `backend/server.js:L72` (process.env)
+  - `backend/server.js:L70` (process.env)
   - `repo/backend/server.js:L56` (process.env)
   - `scripts/ensure-admin-user.mjs:L21` (process.env)
 
@@ -211,7 +212,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/env.example:19` = `dev-admin-token`
 - **Code references**:
   - `backend/routes/anya.js:L19` (process.env)
-  - `backend/server.js:L71–L844` (process.env)
+  - `backend/server.js:L69–L953` (process.env)
   - `repo/backend/server.js:L55–L819` (process.env)
   - `scripts/diagnose-anya.mjs:L20` (process.env)
   - `scripts/doctor.mjs:L77` (process.env)
@@ -229,7 +230,7 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:L776` (process.env)
+  - `backend/server.js:L885` (process.env)
   - `repo/backend/server.js:L721` (process.env)
 
 ### `ALLOW_MOCK_AI`
@@ -241,13 +242,13 @@ It enumerates environment variables referenced in code and/or present in example
 ### `ANALYTICS_WRITE_KEY`
 
 - **Templates**:
-  - `backend/env.example:98` = ``
+  - `backend/env.example:112` = ``
 - **Code references**: (none)
 
 ### `ANTHROPIC_API_KEY`
 
 - **Templates**:
-  - `backend/env.example:51` = `sk-ant-your-anthropic-key`
+  - `backend/env.example:65` = `sk-ant-your-anthropic-key`
 - **Code references**:
   - `backend/routes/anya.js:L50–L110` (process.env)
   - `backend/services/diagnosticsService.js:L186` (process.env)
@@ -256,10 +257,10 @@ It enumerates environment variables referenced in code and/or present in example
 ### `ANYA_ADMIN_TOKEN`
 
 - **Templates**:
-  - `backend/env.example:24` = `anya-dev-token`
+  - `backend/env.example:29` = `anya-dev-token`
 - **Code references**:
   - `backend/routes/anya.js:L19` (process.env)
-  - `backend/server.js:L71–L844` (process.env)
+  - `backend/server.js:L69–L953` (process.env)
   - `backend/services/diagnosticsService.js:L191` (process.env)
   - `repo/backend/server.js:L55–L819` (process.env)
   - `scripts/diagnose-anya.mjs:L20` (process.env)
@@ -280,15 +281,15 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:L703–L703` (process.env)
+  - `backend/server.js:L812–L812` (process.env)
   - `repo/backend/server.js:L648–L648` (process.env)
 
 ### `ANYA_AUTONOMOUS_ENABLED`
 
 - **Templates**:
-  - `backend/env.example:60` = `false`
+  - `backend/env.example:74` = `false`
 - **Code references**:
-  - `backend/server.js:L1212` (process.env)
+  - `backend/server.js:L1372` (process.env)
   - `backend/services/anyaAutonomousScheduler.js:L15` (process.env)
   - `repo/backend/server.js:L1205` (process.env)
   - `scripts/check-anya-status.mjs:L23–L107` (process.env)
@@ -296,63 +297,63 @@ It enumerates environment variables referenced in code and/or present in example
 ### `ANYA_CODE_CRAWL`
 
 - **Templates**:
-  - `backend/env.example:69` = `true              # Scan and fix code issues`
+  - `backend/env.example:83` = `true              # Scan and fix code issues`
 - **Code references**:
   - `backend/services/anyaAutonomousScheduler.js:L24` (process.env)
 
 ### `ANYA_CRAWLERS`
 
 - **Templates**:
-  - `backend/env.example:71` = `true                # Run grant crawlers`
+  - `backend/env.example:85` = `true                # Run grant crawlers`
 - **Code references**:
   - `backend/services/anyaAutonomousScheduler.js:L26` (process.env)
 
 ### `ANYA_DRY_RUN`
 
 - **Templates**:
-  - `backend/env.example:85` = `false                # Dry run mode (no actual changes)`
+  - `backend/env.example:99` = `false                # Dry run mode (no actual changes)`
 - **Code references**:
   - `backend/services/anyaAutonomousScheduler.js:L38–L47` (process.env)
 
 ### `ANYA_FIX_CONSOLE`
 
 - **Templates**:
-  - `backend/env.example:74` = `true             # Fix console.log statements`
+  - `backend/env.example:88` = `true             # Fix console.log statements`
 - **Code references**:
   - `backend/services/anyaAutonomousScheduler.js:L35` (process.env)
 
 ### `ANYA_FIX_EMPTY_CATCH`
 
 - **Templates**:
-  - `backend/env.example:75` = `true         # Fix empty catch blocks`
+  - `backend/env.example:89` = `true         # Fix empty catch blocks`
 - **Code references**:
   - `backend/services/anyaAutonomousScheduler.js:L36` (process.env)
 
 ### `ANYA_FIX_ERRORS`
 
 - **Templates**:
-  - `backend/env.example:84` = `false             # Auto-fix found errors`
+  - `backend/env.example:98` = `false             # Auto-fix found errors`
 - **Code references**:
   - `backend/services/anyaAutonomousScheduler.js:L46` (process.env)
 
 ### `ANYA_FUNCTION_TESTS`
 
 - **Templates**:
-  - `backend/env.example:70` = `true          # Test API endpoints`
+  - `backend/env.example:84` = `true          # Test API endpoints`
 - **Code references**:
   - `backend/services/anyaAutonomousScheduler.js:L25` (process.env)
 
 ### `ANYA_MATCH_THRESHOLD`
 
 - **Templates**:
-  - `backend/env.example:79` = `80           # Min % match to save to profile (0-100)`
+  - `backend/env.example:93` = `80           # Min % match to save to profile (0-100)`
 - **Code references**:
   - `backend/services/anyaAutonomousScheduler.js:L41` (process.env)
 
 ### `ANYA_MAX_FILE_CHANGES`
 
 - **Templates**:
-  - `backend/env.example:76` = `20          # Max files to modify per run`
+  - `backend/env.example:90` = `20          # Max files to modify per run`
 - **Code references**:
   - `backend/services/anyaAutonomousScheduler.js:L37` (process.env)
 
@@ -389,24 +390,24 @@ It enumerates environment variables referenced in code and/or present in example
 ### `ANYA_RUN_ON_ADMIN_LOGIN`
 
 - **Templates**:
-  - `backend/env.example:64` = `false    # Run when admin logs in`
+  - `backend/env.example:78` = `false    # Run when admin logs in`
 - **Code references**:
-  - `backend/routes/auth.js:L1552` (process.env)
+  - `backend/routes/auth.js:L1580` (process.env)
   - `backend/services/anyaAutonomousScheduler.js:L19` (process.env)
 
 ### `ANYA_RUN_ON_SCHEDULE`
 
 - **Templates**:
-  - `backend/env.example:65` = `false       # Run on schedule (cron)`
+  - `backend/env.example:79` = `false       # Run on schedule (cron)`
 - **Code references**:
   - `backend/services/anyaAutonomousScheduler.js:L20` (process.env)
 
 ### `ANYA_RUN_ON_STARTUP`
 
 - **Templates**:
-  - `backend/env.example:63` = `false        # Run when server starts`
+  - `backend/env.example:77` = `false        # Run when server starts`
 - **Code references**:
-  - `backend/server.js:L1214` (process.env)
+  - `backend/server.js:L1374` (process.env)
   - `backend/services/anyaAutonomousScheduler.js:L18` (process.env)
   - `repo/backend/server.js:L1207` (process.env)
   - `scripts/check-anya-status.mjs:L24` (process.env)
@@ -414,21 +415,21 @@ It enumerates environment variables referenced in code and/or present in example
 ### `ANYA_SAVE_GLOBAL`
 
 - **Templates**:
-  - `backend/env.example:80` = `true             # Save all opportunities globally`
+  - `backend/env.example:94` = `true             # Save all opportunities globally`
 - **Code references**:
   - `backend/services/anyaAutonomousScheduler.js:L42` (process.env)
 
 ### `ANYA_SCHEDULE`
 
 - **Templates**:
-  - `backend/env.example:66` = `0 3 * * *           # Cron schedule (default: 3 AM daily)`
+  - `backend/env.example:80` = `0 3 * * *           # Cron schedule (default: 3 AM daily)`
 - **Code references**:
   - `backend/services/anyaAutonomousScheduler.js:L30` (process.env)
 
 ### `ANYA_WAIT_COMPLETION`
 
 - **Templates**:
-  - `backend/env.example:81` = `false        # Wait for crawlers to complete`
+  - `backend/env.example:95` = `false        # Wait for crawlers to complete`
 - **Code references**:
   - `backend/services/anyaAutonomousScheduler.js:L43` (process.env)
 
@@ -449,90 +450,90 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/routes/profiles.js:L1095` (process.env)
+  - `backend/routes/profiles.js:L1097` (process.env)
   - `repo/backend/routes/profiles.js:L1092` (process.env)
 
 ### `APP_BASE_PATH`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/routes/auth.js:L126` (process.env)
+  - `backend/routes/auth.js:L154` (process.env)
 
 ### `AUTH_ACCESS_TOKEN_TTL`
 
 - **Templates**:
-  - `backend/env.example:28` = `10800`
+  - `backend/env.example:42` = `10800`
 - **Code references**:
-  - `backend/routes/auth.js:L100` (process.env)
+  - `backend/routes/auth.js:L128` (process.env)
 
 ### `AUTH_EMAIL_CODE_TTL`
 
 - **Templates**:
-  - `backend/env.example:30` = `600`
+  - `backend/env.example:44` = `600`
 - **Code references**:
-  - `backend/routes/auth.js:L102` (process.env)
+  - `backend/routes/auth.js:L130` (process.env)
 
 ### `AUTH_EMAIL_RATE_LIMIT`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/routes/auth.js:L170` (process.env)
+  - `backend/routes/auth.js:L198` (process.env)
 
 ### `AUTH_EMAIL_RESEND_SECONDS`
 
 - **Templates**:
-  - `backend/env.example:31` = `45`
+  - `backend/env.example:45` = `45`
 - **Code references**:
-  - `backend/routes/auth.js:L103` (process.env)
+  - `backend/routes/auth.js:L131` (process.env)
 
 ### `AUTH_FACEBOOK_CLIENT_ID`
 
 - **Templates**:
-  - `backend/env.example:90` = `facebook-client-id`
+  - `backend/env.example:104` = `facebook-client-id`
 - **Code references**: (none)
 
 ### `AUTH_FACEBOOK_CLIENT_SECRET`
 
 - **Templates**:
-  - `backend/env.example:91` = `facebook-client-secret`
+  - `backend/env.example:105` = `facebook-client-secret`
 - **Code references**: (none)
 
 ### `AUTH_FRONTEND_APP_BASE`
 
 - **Templates**:
-  - `backend/env.example:38` = `/grantflow`
+  - `backend/env.example:52` = `/grantflow`
 - **Code references**:
-  - `backend/routes/auth.js:L126` (process.env)
-  - `backend/server.js:L211` (process.env)
+  - `backend/routes/auth.js:L154` (process.env)
+  - `backend/server.js:L266` (process.env)
   - `repo/backend/server.js:L192` (process.env)
 
 ### `AUTH_FRONTEND_URL`
 
 - **Templates**:
-  - `backend/env.example:37` = `http://localhost:5173`
+  - `backend/env.example:51` = `http://localhost:5173`
 - **Code references**:
-  - `backend/routes/auth.js:L124` (process.env)
+  - `backend/routes/auth.js:L152` (process.env)
   - `backend/services/diagnosticsService.js:L195` (process.env)
 
 ### `AUTH_GOOGLE_CLIENT_ID`
 
 - **Templates**:
-  - `backend/env.example:88` = `google-client-id`
+  - `backend/env.example:102` = `google-client-id`
 - **Code references**: (none)
 
 ### `AUTH_GOOGLE_CLIENT_SECRET`
 
 - **Templates**:
-  - `backend/env.example:89` = `google-client-secret`
+  - `backend/env.example:103` = `google-client-secret`
 - **Code references**: (none)
 
 ### `AUTH_JWT_SECRET`
 
 - **Templates**:
-  - `backend/env.example:27` = `dev-secret-change-me`
+  - `backend/env.example:41` = `dev-secret-change-me`
 - **Code references**:
-  - `backend/routes/auth.js:L38` (process.env)
-  - `backend/server.js:L662–L841` (process.env)
+  - `backend/routes/auth.js:L39` (process.env)
+  - `backend/server.js:L731–L950` (process.env)
   - `backend/utils/runtimeSecrets.js:L19` (process.env)
   - `repo/backend/server.js:L592–L816` (process.env)
 
@@ -553,55 +554,55 @@ It enumerates environment variables referenced in code and/or present in example
 ### `AUTH_OAUTH_STATE_TTL`
 
 - **Templates**:
-  - `backend/env.example:34` = `600`
+  - `backend/env.example:48` = `600`
 - **Code references**:
-  - `backend/routes/auth.js:L106` (process.env)
+  - `backend/routes/auth.js:L134` (process.env)
 
 ### `AUTH_PHONE_CODE_TTL`
 
 - **Templates**:
-  - `backend/env.example:32` = `600`
+  - `backend/env.example:46` = `600`
 - **Code references**:
-  - `backend/routes/auth.js:L104` (process.env)
+  - `backend/routes/auth.js:L132` (process.env)
 
 ### `AUTH_PHONE_RATE_LIMIT`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/routes/auth.js:L177` (process.env)
+  - `backend/routes/auth.js:L205` (process.env)
 
 ### `AUTH_PHONE_RESEND_SECONDS`
 
 - **Templates**:
-  - `backend/env.example:33` = `60`
+  - `backend/env.example:47` = `60`
 - **Code references**:
-  - `backend/routes/auth.js:L105` (process.env)
+  - `backend/routes/auth.js:L133` (process.env)
 
 ### `AUTH_PUBLIC_URL`
 
 - **Templates**:
-  - `backend/env.example:36` = `http://localhost:5173/grantflow`
+  - `backend/env.example:50` = `http://localhost:5173/grantflow`
 - **Code references**:
-  - `backend/routes/auth.js:L123` (process.env)
+  - `backend/routes/auth.js:L151` (process.env)
   - `backend/services/diagnosticsService.js:L194` (process.env)
 
 ### `AUTH_REFRESH_TOKEN_TTL`
 
 - **Templates**:
-  - `backend/env.example:29` = `2592000`
+  - `backend/env.example:43` = `2592000`
 - **Code references**:
-  - `backend/routes/auth.js:L101` (process.env)
+  - `backend/routes/auth.js:L129` (process.env)
 
 ### `AUTH_YAHOO_CLIENT_ID`
 
 - **Templates**:
-  - `backend/env.example:92` = `yahoo-client-id`
+  - `backend/env.example:106` = `yahoo-client-id`
 - **Code references**: (none)
 
 ### `AUTH_YAHOO_CLIENT_SECRET`
 
 - **Templates**:
-  - `backend/env.example:93` = `yahoo-client-secret`
+  - `backend/env.example:107` = `yahoo-client-secret`
 - **Code references**: (none)
 
 ### `BACKEND_BASE_URL`
@@ -614,7 +615,7 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:L458` (process.env)
+  - `backend/server.js:L525` (process.env)
 
 ### `BASE_URL`
 
@@ -628,7 +629,7 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:L1021` (process.env)
+  - `backend/server.js:L1130` (process.env)
   - `repo/backend/server.js:L996` (process.env)
 
 ### `BULK_POPULATE_KEY`
@@ -637,7 +638,7 @@ It enumerates environment variables referenced in code and/or present in example
 - **Code references**:
   - `backend/routes/crawlerV2.js:L9` (process.env)
   - `backend/routes/crawlers.js:L1276–L1981` (process.env)
-  - `backend/server.js:L690–L845` (process.env)
+  - `backend/server.js:L794–L954` (process.env)
   - `repo/backend/server.js:L636–L820` (process.env)
 
 ### `CI`
@@ -650,15 +651,21 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:L1010` (process.env)
+  - `backend/server.js:L1119` (process.env)
   - `repo/backend/server.js:L985` (process.env)
+
+### `CONFIRM`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `scripts/godaddy-set-vercel-dns.mjs:L93` (process.env)
 
 ### `CORS_ORIGIN`
 
 - **Templates**:
-  - `backend/env.example:23` = `http://localhost:5173,http://127.0.0.1:5173`
+  - `backend/env.example:28` = `http://localhost:5173,http://127.0.0.1:5173`
 - **Code references**:
-  - `backend/server.js:L99–L100` (process.env)
+  - `backend/server.js:L98–L99` (process.env)
   - `repo/backend/server.js:L87–L88` (process.env)
   - `scripts/doctor.mjs:L78` (process.env)
   - `tests/unit/anya-tasks.test.mjs:L54` (process.env)
@@ -746,7 +753,7 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**:
   - `backend/env.example:17` = `false`
 - **Code references**:
-  - `backend/server.js:L243` (process.env)
+  - `backend/server.js:L310` (process.env)
   - `repo/backend/server.js:L214` (process.env)
 
 ### `DB_DIALECT`
@@ -760,7 +767,7 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/routes/admin.js:L1480` (process.env)
+  - `backend/routes/admin.js:L1481` (process.env)
   - `backend/services/diagnosticsService.js:L63–L193` (process.env)
   - `backend/tests/crawlerMatrixTest.js:L26` (process.env)
   - `scripts/build-seed-db.mjs:L41` (process.env)
@@ -789,7 +796,10 @@ It enumerates environment variables referenced in code and/or present in example
   - `repo/src/api/client.js:L9–L15` (import.meta.env)
   - `repo/src/components/auth/AuthErrorBoundary.jsx:L84` (import.meta.env)
   - `repo/src/components/shared/ErrorBoundary.jsx:L16` (import.meta.env)
+  - `src/api/auth.js:L4–L11` (import.meta.env)
   - `src/api/client.js:L15` (import.meta.env)
+  - `src/components/auth/AuthErrorBoundary.jsx:L84` (import.meta.env)
+  - `src/components/shared/ErrorBoundary.jsx:L16` (import.meta.env)
   - `src/config/env.js:L23` (import.meta.env)
 
 ### `ENABLE_ASSISTANCE_DIRECTORIES_SEED`
@@ -802,7 +812,7 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:L580` (process.env)
+  - `backend/server.js:L648` (process.env)
   - `repo/backend/server.js:L491` (process.env)
 
 ### `FEATURE_ANYA_TOOLS`
@@ -835,42 +845,6 @@ It enumerates environment variables referenced in code and/or present in example
 - **Code references**:
   - `backend/config/features.js:L7` (process.env)
 
-### `FIREBASE_API_KEY`
-
-- **Templates**: (not present)
-- **Code references**:
-  - `src/lib/firebase.js:L5` (process.env)
-
-### `FIREBASE_APP_ID`
-
-- **Templates**: (not present)
-- **Code references**:
-  - `src/lib/firebase.js:L10` (process.env)
-
-### `FIREBASE_AUTH_DOMAIN`
-
-- **Templates**: (not present)
-- **Code references**:
-  - `src/lib/firebase.js:L6` (process.env)
-
-### `FIREBASE_MESSAGING_SENDER_ID`
-
-- **Templates**: (not present)
-- **Code references**:
-  - `src/lib/firebase.js:L9` (process.env)
-
-### `FIREBASE_PROJECT_ID`
-
-- **Templates**: (not present)
-- **Code references**:
-  - `src/lib/firebase.js:L7` (process.env)
-
-### `FIREBASE_STORAGE_BUCKET`
-
-- **Templates**: (not present)
-- **Code references**:
-  - `src/lib/firebase.js:L8` (process.env)
-
 ### `FORCE`
 
 - **Templates**: (not present)
@@ -880,7 +854,7 @@ It enumerates environment variables referenced in code and/or present in example
 ### `FROM_EMAIL`
 
 - **Templates**:
-  - `backend/env.example:55` = `noreply@yourdomain.com`
+  - `backend/env.example:69` = `noreply@yourdomain.com`
 - **Code references**:
   - `backend/services/diagnosticsService.js:L188` (process.env)
   - `backend/services/email.js:L7` (process.env)
@@ -889,18 +863,20 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/routes/auth.js:L124` (process.env)
+  - `backend/routes/auth.js:L152` (process.env)
   - `backend/services/diagnosticsService.js:L195` (process.env)
 
 ### `GEO_COUNTIES_BY_STATE_PATH`
 
-- **Templates**: (not present)
+- **Templates**:
+  - `backend/env.example:37` = ``
 - **Code references**:
-  - `backend/routes/admin.js:L49–L50` (process.env)
+  - `backend/routes/admin.js:L48–L49` (process.env)
 
 ### `GEO_ZIP_COORDINATES_PATH`
 
-- **Templates**: (not present)
+- **Templates**:
+  - `backend/env.example:36` = ``
 - **Code references**:
   - `backend/routes/admin.js:L45–L46` (process.env)
 
@@ -908,29 +884,29 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:L1009` (process.env)
+  - `backend/server.js:L1118` (process.env)
   - `repo/backend/server.js:L984` (process.env)
 
 ### `GOOGLE_API_KEY`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/services/countyFundingCrawler.js:L71` (process.env)
+  - `backend/services/countyFundingCrawler.js:L70` (process.env)
   - `repo/backend/services/countyFundingCrawler.js:L70` (process.env)
 
 ### `GOOGLE_SEARCH_CX`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/services/countyFundingCrawler.js:L72` (process.env)
+  - `backend/services/countyFundingCrawler.js:L71` (process.env)
   - `repo/backend/services/countyFundingCrawler.js:L71` (process.env)
 
 ### `JWT_SECRET`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/routes/auth.js:L38` (process.env)
-  - `backend/server.js:L662–L841` (process.env)
+  - `backend/routes/auth.js:L39` (process.env)
+  - `backend/server.js:L731–L950` (process.env)
   - `backend/utils/runtimeSecrets.js:L20` (process.env)
   - `repo/backend/server.js:L592–L816` (process.env)
 
@@ -955,7 +931,7 @@ It enumerates environment variables referenced in code and/or present in example
 ### `LOG_LEVEL`
 
 - **Templates**:
-  - `backend/env.example:96` = `debug`
+  - `backend/env.example:110` = `debug`
 - **Code references**: (none)
 
 ### `MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK`
@@ -968,7 +944,7 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:L576` (process.env)
+  - `backend/server.js:L644` (process.env)
   - `repo/backend/server.js:L487` (process.env)
   - `scripts/opportunities-national-minimum.mjs:L132` (process.env)
 
@@ -983,28 +959,28 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:L1234` (process.env)
+  - `backend/server.js:L1394` (process.env)
   - `repo/backend/server.js:L1227` (process.env)
 
 ### `NATIONAL_PROGRAMS_CRAWLER_INTERVAL_MINUTES`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:L1236` (process.env)
+  - `backend/server.js:L1396` (process.env)
   - `repo/backend/server.js:L1229` (process.env)
 
 ### `NATIONAL_PROGRAMS_MAX_DEPTH`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:L1240` (process.env)
+  - `backend/server.js:L1400` (process.env)
   - `repo/backend/server.js:L1233` (process.env)
 
 ### `NATIONAL_PROGRAMS_MAX_URLS`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:L1239` (process.env)
+  - `backend/server.js:L1399` (process.env)
   - `repo/backend/server.js:L1232` (process.env)
 
 ### `NODE_ENV`
@@ -1015,9 +991,9 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/config/env.js:L57–L130` (process.env)
   - `backend/middleware/errorHandler.js:L11` (process.env)
   - `backend/routes/anya.js:L47–L117` (process.env)
-  - `backend/routes/auth.js:L1211–L2010` (process.env)
+  - `backend/routes/auth.js:L40–L2038` (process.env)
   - `backend/routes/reminders.js:L157–L176` (process.env)
-  - `backend/server.js:L64–L1201` (process.env)
+  - `backend/server.js:L62–L1361` (process.env)
   - `backend/services/anyaTestRepair.js:L155` (process.env)
   - `backend/services/diagnosticsService.js:L30–L192` (process.env)
   - `backend/services/email.js:L14` (process.env)
@@ -1027,15 +1003,13 @@ It enumerates environment variables referenced in code and/or present in example
   - `repo/backend/server.js:L215–L1194` (process.env)
   - `scripts/build-seed-db.mjs:L15` (process.env)
   - `scripts/seed-profiles.mjs:L28` (process.env)
-  - `src/components/auth/AuthErrorBoundary.jsx:L84` (process.env)
-  - `src/components/shared/ErrorBoundary.jsx:L16` (process.env)
 
 ### `OPENAI_API_KEY`
 
 - **Templates**:
-  - `backend/env.example:48` = `sk-your-openai-key`
+  - `backend/env.example:62` = `sk-your-openai-key`
 - **Code references**:
-  - `backend/routes/admin.js:L356–L448` (process.env)
+  - `backend/routes/admin.js:L346–L438` (process.env)
   - `backend/routes/anya.js:L115` (process.env)
   - `backend/routes/auth.js:L30` (process.env)
   - `backend/routes/crawlers.js:L38` (process.env)
@@ -1044,7 +1018,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/scripts/fix-anastasia-profile.mjs:L9` (process.env)
   - `backend/scripts/process-all-jobs.mjs:L10` (process.env)
   - `backend/scripts/process-queue.mjs:L11` (process.env)
-  - `backend/server.js:L265–L829` (process.env)
+  - `backend/server.js:L332–L938` (process.env)
   - `backend/services/anyaToolRegistry.js:L752` (process.env)
   - `backend/services/diagnosticsService.js:L185` (process.env)
   - `backend/utils/openaiClient.js:L29–L55` (process.env)
@@ -1063,7 +1037,7 @@ It enumerates environment variables referenced in code and/or present in example
 - **Code references**:
   - `backend/config/constants.js:L34` (process.env)
   - `backend/routes/admin.js:L34` (process.env)
-  - `backend/routes/profiles.js:L787` (process.env)
+  - `backend/routes/profiles.js:L789` (process.env)
   - `repo/backend/routes/profiles.js:L784` (process.env)
 
 ### `OPENAI_TIMEOUT_MS`
@@ -1098,7 +1072,7 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**:
   - `backend/env.example:4` = `8080`
 - **Code references**:
-  - `backend/server.js:L88` (process.env)
+  - `backend/server.js:L87` (process.env)
   - `repo/backend/server.js:L66–L74` (process.env)
 
 ### `PROD`
@@ -1112,34 +1086,34 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/routes/auth.js:L123` (process.env)
+  - `backend/routes/auth.js:L151` (process.env)
   - `backend/services/diagnosticsService.js:L194` (process.env)
 
 ### `RAILWAY_DEPLOYMENT_START_TIME`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:L1022` (process.env)
+  - `backend/server.js:L1131` (process.env)
   - `repo/backend/server.js:L997` (process.env)
 
 ### `RAILWAY_GIT_COMMIT_SHA`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:L1008` (process.env)
+  - `backend/server.js:L1117` (process.env)
   - `repo/backend/server.js:L983` (process.env)
 
 ### `REQUEST_TIMEOUT_MS`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:L157` (process.env)
+  - `backend/server.js:L156` (process.env)
   - `repo/backend/server.js:L146` (process.env)
 
 ### `RESEND_API_KEY`
 
 - **Templates**:
-  - `backend/env.example:54` = `re_your-resend-key`
+  - `backend/env.example:68` = `re_your-resend-key`
 - **Code references**:
   - `backend/services/diagnosticsService.js:L187` (process.env)
   - `backend/services/email.js:L6` (process.env)
@@ -1162,7 +1136,7 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/routes/admin.js:L1239` (process.env)
+  - `backend/routes/admin.js:L1240` (process.env)
 
 ### `SEED_PATH`
 
@@ -1173,7 +1147,7 @@ It enumerates environment variables referenced in code and/or present in example
 ### `SENTRY_DSN`
 
 - **Templates**:
-  - `backend/env.example:97` = ``
+  - `backend/env.example:111` = ``
 - **Code references**: (none)
 
 ### `SERVICE_APPLICATION_EMAIL`
@@ -1272,44 +1246,47 @@ It enumerates environment variables referenced in code and/or present in example
 ### `TWILIO_ACCOUNT_SID`
 
 - **Templates**:
-  - `backend/env.example:41` = `ACXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX`
+  - `backend/env.example:55` = `ACXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX`
 - **Code references**:
-  - `backend/routes/auth.js:L118` (process.env)
+  - `backend/routes/auth.js:L146` (process.env)
   - `backend/services/diagnosticsService.js:L196` (process.env)
 
 ### `TWILIO_AUTH_TOKEN`
 
 - **Templates**:
-  - `backend/env.example:42` = `your-twilio-auth-token`
+  - `backend/env.example:56` = `your-twilio-auth-token`
 - **Code references**:
-  - `backend/routes/auth.js:L119` (process.env)
+  - `backend/routes/auth.js:L147` (process.env)
   - `backend/services/diagnosticsService.js:L196` (process.env)
 
 ### `TWILIO_FROM_NUMBER`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/routes/auth.js:L121` (process.env)
+  - `backend/routes/auth.js:L149` (process.env)
 
 ### `TWILIO_MESSAGING_SERVICE_SID`
 
 - **Templates**:
-  - `backend/env.example:43` = `MGXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX`
+  - `backend/env.example:57` = `MGXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX`
 - **Code references**:
-  - `backend/routes/auth.js:L120` (process.env)
+  - `backend/routes/auth.js:L148` (process.env)
 
 ### `UPLOADS_DIR`
 
-- **Templates**: (not present)
+- **Templates**:
+  - `backend/env.example:26` = ``
 - **Code references**:
   - `backend/routes/admin.js:L39–L40` (process.env)
-  - `backend/server.js:L79–L80` (process.env)
+  - `backend/routes/profiles.js:L35–L36` (process.env)
+  - `backend/server.js:L78–L79` (process.env)
+  - `tests/unit/release-hardening.test.mjs:L30–L31` (process.env)
 
 ### `VERCEL_GIT_COMMIT_SHA`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/server.js:L1011` (process.env)
+  - `backend/server.js:L1120` (process.env)
   - `repo/backend/server.js:L986` (process.env)
 
 ### `VERIFY_ADMIN_TOKEN`
@@ -1330,7 +1307,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `env.example:4` = `http://localhost:8080`
 - **Code references**:
   - `repo/src/api/client.js:L10–L20` (import.meta.env)
-  - `src/api/client.js:L16–L21` (import.meta.env)
+  - `src/api/client.js:L16` (import.meta.env)
   - `src/components/auth/SocialSignInButtons.jsx:L35–L63` (import.meta.env)
   - `src/config/env.js:L27` (import.meta.env)
 
@@ -1339,8 +1316,8 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**:
   - `env.example:5` = `/grantflow`
 - **Code references**:
-  - `backend/routes/auth.js:L126` (process.env)
-  - `backend/server.js:L211` (process.env)
+  - `backend/routes/auth.js:L154` (process.env)
+  - `backend/server.js:L266` (process.env)
   - `repo/backend/server.js:L192` (process.env)
   - `repo/src/App.jsx:L74` (import.meta.env)
   - `repo/src/api/client.js:L12` (import.meta.env)
@@ -1377,3 +1354,39 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**: (not present)
 - **Code references**:
   - `src/pages/Login.jsx:L71` (import.meta.env)
+
+### `VITE_FIREBASE_API_KEY`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `src/lib/firebase.js:L5` (import.meta.env)
+
+### `VITE_FIREBASE_APP_ID`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `src/lib/firebase.js:L10` (import.meta.env)
+
+### `VITE_FIREBASE_AUTH_DOMAIN`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `src/lib/firebase.js:L6` (import.meta.env)
+
+### `VITE_FIREBASE_MESSAGING_SENDER_ID`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `src/lib/firebase.js:L9` (import.meta.env)
+
+### `VITE_FIREBASE_PROJECT_ID`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `src/lib/firebase.js:L7` (import.meta.env)
+
+### `VITE_FIREBASE_STORAGE_BUCKET`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `src/lib/firebase.js:L8` (import.meta.env)
