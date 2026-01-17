@@ -81,7 +81,7 @@ class AuthErrorBoundary extends Component {
               </Button>
             </div>
 
-            {process.env.NODE_ENV !== 'production' && this.state.error && (
+            {import.meta.env.DEV && this.state.error && (
               <details className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-xs">
                 <summary className="cursor-pointer font-semibold text-slate-700">
                   Technical Details

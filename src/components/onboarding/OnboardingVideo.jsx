@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -17,12 +17,41 @@ const VIDEO_PATH = '/' + encodeURIComponent('Grant Flow_ Get Started. mp4')
 
 export default function OnboardingVideo({ open, onComplete, onSkip }) {
   const [videoError, setVideoError] = useState(false)
+  const videoRef = useRef(null)
+
+  // Prevent browser warning: don't allow focus to remain inside a dialog that is being aria-hidden during close.
+  useEffect(() => {
+    if (open) return
+    try {
+      videoRef.current?.pause?.()
+    } catch {
+      // ignore
+    }
+    try {
+      const active = typeof document !== 'undefined' ? document.activeElement : null
+      active?.blur?.()
+    } catch {
+      // ignore
+    }
+  }, [open])
 
   const handleComplete = () => {
+    try {
+      const active = typeof document !== 'undefined' ? document.activeElement : null
+      active?.blur?.()
+    } catch {
+      // ignore
+    }
     onComplete?.()
   }
 
   const handleSkip = () => {
+    try {
+      const active = typeof document !== 'undefined' ? document.activeElement : null
+      active?.blur?.()
+    } catch {
+      // ignore
+    }
     onSkip?.()
   }
 
@@ -31,7 +60,20 @@ export default function OnboardingVideo({ open, onComplete, onSkip }) {
   }
 
   return (
-    <Dialog open={open} onOpenChange={(isOpen) => !isOpen && handleSkip()}>
+    <Dialog
+      open={open}
+      onOpenChange={(isOpen) => {
+        if (!isOpen) {
+          try {
+            const active = typeof document !== 'undefined' ? document.activeElement : null
+            active?.blur?.()
+          } catch {
+            // ignore
+          }
+          handleSkip()
+        }
+      }}
+    >
       <DialogContent className="sm:max-w-[900px] max-h-[90vh]">
         <DialogHeader>
           <DialogTitle>Welcome to GrantFlow!</DialogTitle>
@@ -58,9 +100,11 @@ export default function OnboardingVideo({ open, onComplete, onSkip }) {
           ) : (
             <div className="relative w-full aspect-video bg-slate-900 rounded-lg overflow-hidden">
               <video
+                ref={videoRef}
                 controls
                 className="w-full h-full"
                 onError={handleVideoError}
+                tabIndex={-1}
               >
                 <source src={VIDEO_PATH} type="video/mp4" />
                 Your browser does not support the video tag.

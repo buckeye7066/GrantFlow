@@ -106,14 +106,24 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
   console.log(`[localCrawler] Loaded ${localOpps.length} local opportunities`)
   
   // Also check database for local opportunities
-  const dbOpps = await db.prepare(`
-    SELECT * FROM funding_opportunities 
-    WHERE is_active = 1 
-    AND state = ?
-    AND (requires_match = 0 OR requires_match IS NULL)
-    AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
-    LIMIT 100
-  `).all(profileState)
+  const activePredicate = db?.dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1'
+  const noMatchPredicate =
+    db?.dialect === 'postgres'
+      ? '(requires_match IS NULL OR requires_match = FALSE)'
+      : '(requires_match = 0 OR requires_match IS NULL)'
+
+  const dbOpps = await db
+    .prepare(
+      `
+        SELECT * FROM funding_opportunities 
+        WHERE ${activePredicate}
+        AND state = ?
+        AND ${noMatchPredicate}
+        AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
+        LIMIT 100
+      `,
+    )
+    .all(profileState)
   
   console.log(`[localCrawler] Found ${dbOpps.length} local opportunities in database`)
   

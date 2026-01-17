@@ -40,12 +40,19 @@ const uploadDir = process.env.UPLOADS_DIR
   ? resolve(process.env.UPLOADS_DIR)
   : join(__dirname, '..', 'uploads');
 
+<<<<<<< HEAD
 // Geo datasets are optional. If present, we use them to power ZIP-scoped crawls.
 // If absent, we still return a usable state list so the Geo Crawl UI can run state-wide crawls.
 const zipCoordinatesPath = process.env.GEO_ZIP_COORDINATES_PATH
   ? resolve(process.env.GEO_ZIP_COORDINATES_PATH)
   : join(__dirname, '..', 'data', 'crawlers', 'zip_coordinates.json');
 
+=======
+// Optional geo datasets (if present) for richer ZIP metadata.
+const zipCoordinatesPath = process.env.GEO_ZIP_COORDINATES_PATH
+  ? resolve(process.env.GEO_ZIP_COORDINATES_PATH)
+  : join(repoRootDir, 'backend', 'data', 'crawlers', 'zip_coordinates.json');
+>>>>>>> origin/main
 const countiesByStatePath = process.env.GEO_COUNTIES_BY_STATE_PATH
   ? resolve(process.env.GEO_COUNTIES_BY_STATE_PATH)
   : join(repoRootDir, 'county_batch1.json');
@@ -55,6 +62,7 @@ let zipStateIndexCache = null;
 let countiesByStateCache = null;
 let zipCoordinatesMissing = false;
 
+<<<<<<< HEAD
 const US_STATE_ABBREVIATIONS = [
   'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA',
   'HI','ID','IL','IN','IA','KS','KY','LA','ME','MD',
@@ -64,6 +72,8 @@ const US_STATE_ABBREVIATIONS = [
   'DC',
 ];
 
+=======
+>>>>>>> origin/main
 const US_STATE_CODES = Object.freeze([
   'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA',
   'HI','ID','IL','IN','IA','KS','KY','LA','ME','MD',
@@ -149,15 +159,22 @@ async function ensureAdminRequest(req, res) {
 function loadZipCoordinates() {
   if (zipCoordinatesCache) return zipCoordinatesCache;
   if (!fs.existsSync(zipCoordinatesPath)) {
+<<<<<<< HEAD
     // In some production builds this dataset may not be packaged.
     // The Geo Crawl UI should degrade gracefully (empty state list) instead of 500'ing.
+=======
+>>>>>>> origin/main
     zipCoordinatesMissing = true;
     zipCoordinatesCache = {};
     return zipCoordinatesCache;
   }
   try {
     zipCoordinatesCache = JSON.parse(fs.readFileSync(zipCoordinatesPath, 'utf8'));
+<<<<<<< HEAD
   } catch (error) {
+=======
+  } catch {
+>>>>>>> origin/main
     zipCoordinatesMissing = true;
     zipCoordinatesCache = {};
   }
@@ -169,7 +186,11 @@ function buildZipStateIndex() {
   const coords = loadZipCoordinates();
   const index = new Map();
 
+<<<<<<< HEAD
   // Production-safe fallback: if `zip_coordinates.json` isn't packaged, rely on `zipcodes`.
+=======
+  // Production-safe fallback when the JSON dataset isn't packaged: use `zipcodes`.
+>>>>>>> origin/main
   if (zipCoordinatesMissing) {
     for (const state of US_STATE_CODES) {
       const entries = (zipcodes.lookupByState(state) || [])
@@ -744,11 +765,11 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
       await req.db
         .prepare(
           `
-            INSERT INTO crawler_jobs (id, type, status, profile_id, parameters, requested_by)
-            VALUES (?, 'document_ingest', 'queued', ?, ?, ?)
+            INSERT INTO crawler_jobs (id, type, status, profile_id, organization_id, parameters, requested_by)
+            VALUES (?, 'document_ingest', 'queued', ?, ?, ?, ?)
           `,
         )
-        .run(parseJobId, profileId, JSON.stringify({ document_id: documentId, source: 'admin_upload' }), 'admin');
+        .run(parseJobId, profileId, null, JSON.stringify({ document_id: documentId, source: 'admin_upload' }), 'admin');
       
       // Get the job and dispatch it immediately
       const parseJob = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(parseJobId);
@@ -931,6 +952,7 @@ router.get('/geo/states', async (req, res) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return;
     const index = buildZipStateIndex();
+<<<<<<< HEAD
 
     // Prefer dataset-driven states if present; otherwise fall back to a canonical US state list.
     const stateKeys = index.size > 0 ? Array.from(index.keys()) : US_STATE_ABBREVIATIONS.slice();
@@ -944,6 +966,13 @@ router.get('/geo/states', async (req, res) => {
     res.json({
       states,
       dataset_present: index.size > 0,
+=======
+    const states = Array.from(index.keys())
+      .sort()
+      .map((state) => ({ state, zip_count: index.get(state).length }));
+    res.json({
+      states,
+>>>>>>> origin/main
       dataset_source: zipCoordinatesMissing ? 'zipcodes' : 'zip_coordinates.json',
     });
   } catch (error) {
@@ -959,7 +988,10 @@ router.get('/geo/state/:state/zips', async (req, res) => {
     const index = buildZipStateIndex();
     res.json({
       zips: index.get(state) ?? [],
+<<<<<<< HEAD
       dataset_present: index.size > 0,
+=======
+>>>>>>> origin/main
       dataset_source: zipCoordinatesMissing ? 'zipcodes' : 'zip_coordinates.json',
     });
   } catch (error) {

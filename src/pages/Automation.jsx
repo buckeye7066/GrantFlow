@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react"
+import React, { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   AlertTriangle,
@@ -1344,6 +1344,24 @@ export default function Automation() {
     enabled: isAdmin,
   })
 
+  // Admin UX: auto-select a real profile once available so job queueing doesn't send undefined profile_id.
+  useEffect(() => {
+    if (!isAdmin) return
+    if (selectedProfile && selectedProfile !== "none") return
+
+    const profiles = Array.isArray(profilesQuery.data) ? profilesQuery.data : []
+    if (profiles.length === 0) return
+
+    const preferred =
+      activeProfileId && profiles.some((p) => p.id === activeProfileId)
+        ? activeProfileId
+        : profiles[0].id
+
+    if (preferred) {
+      setSelectedProfile(preferred)
+    }
+  }, [isAdmin, profilesQuery.data, selectedProfile, activeProfileId])
+
   const metricsQuery = useQuery({
     queryKey: ["crawler-metrics", isAdmin ? profileFilter : activeProfileId],
     queryFn: () =>
@@ -1495,11 +1513,26 @@ export default function Automation() {
     return profilesQuery.data.find((profile) => profile.id === selectedProfile) ?? null
   }, [profilesQuery.data, selectedProfile])
 
+  const selectedAdminProfileId =
+    isAdmin && selectedProfile && selectedProfile !== "none" ? selectedProfile : null
+
   const handleQueueJob = (type, params = {}) => {
-    const profileId = !isAdmin ? activeProfileId : (selectedProfile && selectedProfile !== "none" ? selectedProfile : undefined)
+    const profileId = isAdmin ? selectedAdminProfileId : activeProfileId
+
+    const requiresProfile =
+      type !== "pipeline_automation" // pipeline automation can run org-wide; other crawlers need a profile context
+
+    if (requiresProfile && !profileId) {
+      toast({
+        variant: "destructive",
+        title: "Select a profile first",
+        description: "Choose a profile before running this automation.",
+      })
+      return
+    }
     createJobMutation.mutate({
       type,
-      profile_id: profileId,
+      profile_id: profileId ?? undefined,
       parameters: params,
     })
   }

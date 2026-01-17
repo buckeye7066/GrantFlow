@@ -36,3 +36,8 @@ seed/*.db-shm
 seed/*.db-wal
 seed/*.db-journal
 
+# User uploads / local artifacts
+backend/uploads/
+backend/temp_images/
+public/*.mp4
+

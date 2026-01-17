@@ -6,8 +6,8 @@ function requireAdminOrToken(req, res) {
   const user = req.user ?? { role: 'guest' }
   if (user.role === 'admin') return true
   const bulkKey = req.headers['x-bulk-key'] || req.headers['x-admin-token'] || null
-  const expectedKey = process.env.BULK_POPULATE_KEY || 'grantflow-bulk-2026'
-  if (bulkKey && bulkKey === expectedKey) return true
+  const expectedKey = process.env.BULK_POPULATE_KEY || null
+  if (bulkKey && expectedKey && bulkKey === expectedKey) return true
   res.status(403).json({ error: 'Admin access or valid bulk key required' })
   return false
 }
