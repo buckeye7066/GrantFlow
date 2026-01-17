@@ -49,7 +49,6 @@ import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from './services/auditServi
 import { decryptRuntimeSecret } from './utils/runtimeSecrets.js';
 import { seedBaselineFromRepo } from './utils/seedBaselineFromRepo.js';
 import { assertEnv } from './config/env.js'
-import { seedBaselineFromRepo } from './utils/seedBaselineFromRepo.js';
 
 // Validate & normalize env vars (fail-fast in production)
 const { env: validatedEnv } = assertEnv()

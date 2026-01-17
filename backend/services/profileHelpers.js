@@ -1184,8 +1184,6 @@ export function buildProfileSignals({ profile, sections }) {
     keywords: Array.from(keywordSet),
     phrases_list: Array.from(phraseSet),
     keywordSet,
-    // Backward-compatible iterable alias used by some crawler implementations.
-    keywords: keywordSet,
     phrases: phraseSet,
     demographics: demographicSet,
     genders: genderSet,
