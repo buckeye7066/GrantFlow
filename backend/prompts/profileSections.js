@@ -1,9 +1,9 @@
-const SECTION_PROMPTS = {
+export const SECTION_PROMPTS = {
   basic_information: {
     title: 'Basic Information',
     instructions: `
 Using the data below, fill out the primary contact fields for this profile. 
-Return a JSON object containing the keys: full_name, email, phone, website, address, notes.
+Return a JSON object containing the keys: full_name, email, phone, website, address, city, state, zip_code, county, date_of_birth, gender, nationality, notes.
 
 Rules:
 - Pull from existing section data when available.
@@ -11,7 +11,21 @@ Rules:
 - Never fabricate personal data; if a field is unknown return an empty string.
 - Preserve readable formatting for addresses and notes.
     `.trim(),
-    keys: ['full_name', 'email', 'phone', 'website', 'address', 'notes'],
+    keys: [
+      'full_name',
+      'email',
+      'phone',
+      'website',
+      'address',
+      'city',
+      'state',
+      'zip_code',
+      'county',
+      'date_of_birth',
+      'gender',
+      'nationality',
+      'notes',
+    ],
   },
   organization_details: {
     title: 'Organization Details',
@@ -31,16 +45,33 @@ Rules:
     title: 'Financial Information',
     instructions: `
 Analyse the data and summarise the applicant's financial situation.
-Return JSON with: household_income, household_size, financial_need_level, low_income, unemployed, displaced_worker, notes.
+Return JSON with: annual_income, household_income, household_size, financial_need_level, low_income, unemployed, displaced_worker, funding_needs, funding_purpose, receives_assistance, assistance_notes, notes.
 
 Rules:
 - household_income should be a number (USD) when known, otherwise null.
+- annual_income should be a number (USD) when known, otherwise null.
 - household_size must be an integer when known.
 - financial_need_level should be a short descriptor (e.g. "high", "moderate", "unknown").
 - low_income, unemployed, displaced_worker must be booleans.
+- receives_assistance should be an array of benefit/program labels when known, otherwise [].
+- funding_needs and funding_purpose should be short narrative strings (1-2 sentences).
+- assistance_notes should capture any nuance about benefits or barriers (<= 2 sentences).
 - Use notes for concise explanations (max 2 sentences).
     `.trim(),
-    keys: ['household_income', 'household_size', 'financial_need_level', 'low_income', 'unemployed', 'displaced_worker', 'notes'],
+    keys: [
+      'annual_income',
+      'household_income',
+      'household_size',
+      'financial_need_level',
+      'low_income',
+      'unemployed',
+      'displaced_worker',
+      'funding_needs',
+      'funding_purpose',
+      'receives_assistance',
+      'assistance_notes',
+      'notes',
+    ],
   },
   government_assistance: {
     title: 'Government Assistance',
@@ -90,11 +121,13 @@ Rules:
     title: 'Demographics',
     instructions: `
 Summarise demographic details relevant for grant eligibility.
-Return JSON with keys: african_american, hispanic_latino, asian_american, native_american, tribal_affiliation, lgbtq, immigrant_status, notes.
+Return JSON with keys: african_american, hispanic_latino, asian_american, native_american, tribal_affiliation, lgbtq, immigrant_status, ethnicity, heritage, languages, religious_affiliation, citizenship, us_citizen, disability_status, veteran_status, age_group, notes.
 
 Rules:
 - Booleans must reflect confirmed identities; do not infer from names alone.
 - immigrant_status should be one of: "us_citizen", "permanent_resident", "refugee", "undocumented", "other", or "unknown".
+- languages should be an array of strings when known, otherwise [].
+- citizenship should be a short label when known (e.g. "US", "dual", "unknown").
 - Use notes for additional context when relevant (<= 2 sentences).
     `.trim(),
     keys: [
@@ -105,6 +138,15 @@ Rules:
       'tribal_affiliation',
       'lgbtq',
       'immigrant_status',
+      'ethnicity',
+      'heritage',
+      'languages',
+      'religious_affiliation',
+      'citizenship',
+      'us_citizen',
+      'disability_status',
+      'veteran_status',
+      'age_group',
       'notes',
     ],
   },
@@ -262,6 +304,79 @@ Rules:
       'barriers_faced',
       'special_circumstances',
     ],
+  },
+  education: {
+    title: 'Education',
+    instructions: `
+Capture academic history and student qualifiers used for scholarship eligibility.
+Return JSON with: highest_level, current_institution, target_colleges, intended_major, gpa, act_score, sat_score, community_service_hours, leadership_roles, valedictorian, notes.
+
+Rules:
+- gpa should be a number when known, otherwise null.
+- act_score and sat_score should be numbers when known, otherwise null.
+- target_colleges and leadership_roles must be arrays of strings (use [] when unknown).
+- community_service_hours should be a number when known, otherwise null.
+- Do not fabricate test scores, GPAs, or institutions.
+    `.trim(),
+    keys: [
+      'highest_level',
+      'current_institution',
+      'target_colleges',
+      'intended_major',
+      'gpa',
+      'act_score',
+      'sat_score',
+      'community_service_hours',
+      'leadership_roles',
+      'valedictorian',
+      'notes',
+    ],
+  },
+  employment: {
+    title: 'Employment',
+    instructions: `
+Summarise employment status and experience to support workforce and training programs.
+Return JSON with: current_status, career_goal, experience, notes.
+
+Rules:
+- Keep fields concise; do not fabricate employers or credentials.
+    `.trim(),
+    keys: ['current_status', 'career_goal', 'experience', 'notes'],
+  },
+  housing: {
+    title: 'Housing',
+    instructions: `
+Capture housing status and related qualifiers relevant to assistance programs.
+Return JSON with: status, type, address, broadband_speed, geographic_designation, notes.
+
+Rules:
+- geographic_designation must be an array of strings (e.g. ["rural", "urban", "frontier"]) or [].
+- Do not invent addresses; leave address empty if unknown.
+    `.trim(),
+    keys: ['status', 'type', 'address', 'broadband_speed', 'geographic_designation', 'notes'],
+  },
+  family: {
+    title: 'Household Details',
+    instructions: `
+Capture household structure and support system (distinct from eligibility flags in Family & Life Situation).
+Return JSON with: household_size, responsibilities, support_system, notes.
+
+Rules:
+- household_size should be a number when known, otherwise null.
+    `.trim(),
+    keys: ['household_size', 'responsibilities', 'support_system', 'notes'],
+  },
+  programs_services: {
+    title: 'Programs & Services',
+    instructions: `
+Capture program focus areas, services, and keywords used to match funding opportunities.
+Return JSON with: focus_areas, interests, keywords, notes.
+
+Rules:
+- focus_areas, interests, and keywords must be arrays of strings (use [] when unknown).
+- Do not fabricate; prefer existing profile tags, narrative, and uploaded docs.
+    `.trim(),
+    keys: ['focus_areas', 'interests', 'keywords', 'notes'],
   },
 }
 

@@ -450,7 +450,7 @@ export async function createTask(
   return mapTask(task)
 }
 
-export function updateTask(
+export async function updateTask(
   db,
   user,
   sessionId,
@@ -458,9 +458,9 @@ export function updateTask(
   { title, notes, status, priority, dueDate, metadata } = {},
 ) {
   assertAuthenticated(user)
-  const session = getSession(db, user, sessionId)
+  const session = await getSession(db, user, sessionId)
 
-  const existing = db
+  const existing = await db
     .prepare(
       `
         SELECT *
@@ -531,7 +531,7 @@ export function updateTask(
 
   params.push(taskId, session.id)
 
-  db.prepare(
+  await db.prepare(
     `
       UPDATE anya_tasks
       SET ${updates.join(', ')},
@@ -540,7 +540,7 @@ export function updateTask(
     `,
   ).run(...params)
 
-  const updated = db
+  const updated = await db
     .prepare(
       `
         SELECT *
@@ -884,8 +884,8 @@ export async function invokeTool(db, user, toolName, params, { sessionId } = {})
 
   if (sessionId) {
     try {
-      const session = getSession(db, user, sessionId)
-      addMessage(db, user, session.id, {
+      const session = await getSession(db, user, sessionId)
+      await addMessage(db, user, session.id, {
         role: 'assistant',
         content: `Tool ${toolName} executed.`,
         toolName,
