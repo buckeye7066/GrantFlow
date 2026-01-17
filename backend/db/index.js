@@ -31,6 +31,33 @@ function detectProvider() {
   return 'sqlite';
 }
 
+function isProd() {
+  return String(process.env.NODE_ENV || '').toLowerCase() === 'production';
+}
+
+function looksLikeRailwayVolumePath(p) {
+  // Railway persistent volumes are commonly mounted at /mnt/data
+  return typeof p === 'string' && p.replace(/\\/g, '/').startsWith('/mnt/data/');
+}
+
+function resolveDefaultSqlitePath(dataDir) {
+  const explicit = process.env.SQLITE_DB_PATH;
+  if (explicit && String(explicit).trim()) return String(explicit).trim();
+
+  // Production safety: prefer Railway persistent volume if present.
+  // This prevents "lost data" on redeploy when SQLITE_DB_PATH isn't configured.
+  const railwayDir = '/mnt/data';
+  try {
+    if (fs.existsSync(railwayDir) && fs.statSync(railwayDir).isDirectory()) {
+      return join(railwayDir, 'grantflow.db');
+    }
+  } catch {
+    // ignore
+  }
+
+  return join(dataDir, 'grantflow.db');
+}
+
 function isArrayArgList(args) {
   return args.length === 1 && Array.isArray(args[0]);
 }
@@ -342,7 +369,23 @@ export function getDb() {
   const dataDir = join(__dirname, '..', 'data');
   if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
-  const sqlitePath = process.env.SQLITE_DB_PATH || join(dataDir, 'grantflow.db');
+  const sqlitePath = resolveDefaultSqlitePath(dataDir);
+
+  // Production-grade invariant: SQLite must be on a persistent volume.
+  // - If running on Railway and /mnt/data exists, we default there automatically.
+  // - If still not on /mnt/data, fail fast unless explicitly allowed.
+  if (isProd() && !looksLikeRailwayVolumePath(sqlitePath)) {
+    const allowEphemeral =
+      String(process.env.ALLOW_EPHEMERAL_SQLITE || '').trim().toLowerCase() === 'true';
+    if (!allowEphemeral) {
+      throw new Error(
+        `[db] Refusing to start with ephemeral SQLite path in production: ${sqlitePath}\n` +
+          `Set SQLITE_DB_PATH to a persistent volume path (e.g. /mnt/data/grantflow.db on Railway),\n` +
+          `or set ALLOW_EPHEMERAL_SQLITE=true to override (NOT recommended).`,
+      );
+    }
+  }
+
   singleton = new SqliteDb(sqlitePath);
   return singleton;
 }
