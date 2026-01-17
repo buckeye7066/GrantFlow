@@ -2,6 +2,7 @@ import { buildProfileSectionPrompt } from '../prompts/profileSections.js'
 import { extractCompletionText } from '../utils/openai.js'
 import { extractTextFromFile } from './documentTextExtraction.js'
 import { summarizeOpenAIError } from '../utils/openaiClient.js'
+import { promises as fsp } from 'node:fs'
 
 const TARGET_SECTIONS = [
   'basic_information',
@@ -14,6 +15,12 @@ const TARGET_SECTIONS = [
   'military_service',
   'occupation',
   'location_focus',
+  'education',
+  'employment',
+  'housing',
+  'family',
+  'programs_services',
+  'university_applications',
   'narrative',
 ]
 
@@ -21,6 +28,47 @@ function truncateText(text, limit = 4000) {
   if (!text) return ''
   if (text.length <= limit) return text
   return `${text.slice(0, limit)}…`
+}
+
+function isImageMime(mimeType) {
+  const safe = String(mimeType || '').toLowerCase().trim()
+  return safe.startsWith('image/') || safe === 'application/octet-stream'
+}
+
+async function extractTextFromImageWithVision({ openai, filePath, mimeType }) {
+  if (!openai) return null
+  if (!filePath) return null
+
+  const buffer = await fsp.readFile(filePath)
+  // Guard: avoid pushing huge base64 payloads to the model.
+  if (buffer.length > 8 * 1024 * 1024) {
+    return null
+  }
+
+  const safeMime = String(mimeType || 'image/png').trim() || 'image/png'
+  const base64 = buffer.toString('base64')
+  const url = `data:${safeMime};base64,${base64}`
+
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    temperature: 0.0,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text:
+              'Extract all readable text from this image. Preserve line breaks. Return plain text only (no markdown, no JSON). If nothing is readable, return an empty string.',
+          },
+          { type: 'image_url', image_url: { url } },
+        ],
+      },
+    ],
+  })
+
+  const text = String(extractCompletionText(completion) || '').trim()
+  return text || null
 }
 
 function normalizeValue(value) {
@@ -124,6 +172,7 @@ export async function processDocumentIngestionJob({
 }) {
   const params = job.parameters ?? {}
   const documentId = params.document_id
+  const handwriting = params.handwriting === true
 
   if (!documentId) {
     throw new Error('document_ingest job missing document_id parameter')
@@ -153,6 +202,7 @@ export async function processDocumentIngestionJob({
         mimeType: document.mime_type,
         fileName: document.name,
         ocr: true,
+        handwriting,
         ocrLanguage: 'eng',
       })
       if (result?.text) {
@@ -167,10 +217,7 @@ export async function processDocumentIngestionJob({
     // Best-effort; we'll proceed and let downstream report "text unavailable".
   }
 
-  const docExcerpt = truncateText(
-    document.extracted_text ?? document.notes ?? '',
-    5000,
-  )
+  let docExcerpt = truncateText(document.extracted_text ?? document.notes ?? '', 5000)
 
   const documentSummary = [
     {
@@ -211,6 +258,30 @@ export async function processDocumentIngestionJob({
           error: message,
         },
       }
+    }
+
+    // If this is an image (screenshots/handwriting) and OCR didn't yield text, use a vision pass as a fallback.
+    try {
+      const current = String(document.extracted_text || '').trim()
+      const shouldTryVision =
+        (!current || current.length < 40) && document.file_path && isImageMime(document.mime_type) && openai
+      if (shouldTryVision) {
+        const visionText = await extractTextFromImageWithVision({
+          openai,
+          filePath: document.file_path,
+          mimeType: document.mime_type,
+        })
+        if (visionText) {
+          db.prepare('UPDATE documents SET extracted_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
+            visionText,
+            documentId,
+          )
+          document.extracted_text = visionText
+          docExcerpt = truncateText(document.extracted_text ?? document.notes ?? '', 5000)
+        }
+      }
+    } catch {
+      // best-effort; fall through
     }
 
     if (!docExcerpt) {
