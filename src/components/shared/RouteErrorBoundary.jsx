@@ -17,7 +17,6 @@ export default class RouteErrorBoundary extends React.Component {
 
   componentDidCatch(error, info) {
     // Keep this log — it’s the primary breadcrumb when users report “blank screen”.
-    // eslint-disable-next-line no-console
     console.error("[RouteErrorBoundary] route crash", {
       route: this.props.routeName ?? null,
       message: error?.message,
