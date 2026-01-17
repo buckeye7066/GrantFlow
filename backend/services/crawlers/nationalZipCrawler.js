@@ -400,15 +400,7 @@ async function getLastProcessedZipForList(db, zipList) {
  */
 export async function runNationalZipCrawl(dbPath, options = {}) {
   const config = { ...DEFAULT_CONFIG, ...options }
-  
-  console.log('='.repeat(80))
-  console.log('National ZIP Crawl Starting')
-  console.log('='.repeat(80))
-  console.log(`Batch size: ${config.batch_size}`)
-  console.log(`Min sources per ZIP: ${config.min_sources_per_zip}`)
-  console.log(`Rate limit: ${config.rate_limit_ms}ms`)
-  console.log()
-  
+
   // Prefer the shared DB wrapper when invoked from the app (Postgres-safe),
   // keep sqlite file-path mode for local/script usage.
   const ownsDb = typeof dbPath === 'string'
@@ -424,6 +416,14 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
     // Nothing to do. Important: do NOT close shared DB connections.
     return { processed: 0, sources: 0, duration: 0 }
   }
+
+  console.log('='.repeat(80))
+  console.log('National ZIP Crawl Starting')
+  console.log('='.repeat(80))
+  console.log(`Batch size: ${config.batch_size}`)
+  console.log(`Min sources per ZIP: ${config.min_sources_per_zip}`)
+  console.log(`Rate limit: ${config.rate_limit_ms}ms`)
+  console.log()
   
   // Resumability:
   // - Full national crawl is resumable by default (resume=true)
