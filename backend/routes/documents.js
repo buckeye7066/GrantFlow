@@ -420,6 +420,7 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
         mimeType: file.mimetype,
         fileName: file.originalname,
         ocr,
+        handwriting: req.body?.handwriting === 'true' || req.body?.handwriting === true,
         ocrLanguage,
       });
       extractedText = result?.text ?? null;
@@ -472,7 +473,17 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
           INSERT INTO crawler_jobs (id, type, status, profile_id, organization_id, parameters, requested_by)
           VALUES (?, 'document_ingest', 'queued', ?, ?, ?, ?)
         `)
-        .run(jobId, profileId, resolvedOrganizationId, JSON.stringify({ document_id: docId, source }), requestedBy);
+        .run(
+          jobId,
+          profileId,
+          resolvedOrganizationId,
+          JSON.stringify({
+            document_id: docId,
+            source,
+            handwriting: req.body?.handwriting === 'true' || req.body?.handwriting === true,
+          }),
+          requestedBy,
+        );
       
       // Dispatch the job immediately
       const parseJob = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId);
@@ -584,7 +595,11 @@ router.post('/:id/parse', async (req, res) => {
           jobId,
           profileId,
           document.organization_id ?? null,
-          JSON.stringify({ document_id: document.id, source: 'manual_parse' }),
+          JSON.stringify({
+            document_id: document.id,
+            source: 'manual_parse',
+            handwriting: req.body?.handwriting === 'true' || req.body?.handwriting === true,
+          }),
           requestedBy,
         );
 
@@ -676,7 +691,11 @@ router.post('/parse-all', async (req, res) => {
         jobId,
         profileId,
         doc.organization_id ?? null,
-        JSON.stringify({ document_id: doc.id, source: 'parse_all' }),
+        JSON.stringify({
+          document_id: doc.id,
+          source: 'parse_all',
+          handwriting: req.body?.handwriting === 'true' || req.body?.handwriting === true,
+        }),
         requestedBy,
       );
       

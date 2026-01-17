@@ -35,10 +35,62 @@ function isImageMime(mimeType) {
   )
 }
 
+function isRtfMime(mimeType) {
+  const safe = String(mimeType || '').toLowerCase().trim()
+  return safe === 'application/rtf' || safe === 'text/rtf'
+}
+
+function stripRtfToText(rtf) {
+  if (!rtf) return ''
+  // Very small, pragmatic RTF → text: remove control words/groups and decode common escapes.
+  // We intentionally do not try to fully render RTF formatting.
+  return String(rtf)
+    // drop \par-like newlines into real newlines
+    .replace(/\\par[d]?/gi, '\n')
+    // unicode escapes: \uN? (optional fallback char)
+    .replace(/\\u(-?\d+)\??/g, (_m, code) => {
+      const n = Number(code)
+      if (!Number.isFinite(n)) return ''
+      try {
+        const normalized = ((n % 65536) + 65536) % 65536
+        return String.fromCharCode(normalized)
+      } catch {
+        return ''
+      }
+    })
+    // hex escapes \'hh
+    .replace(/\\'([0-9a-fA-F]{2})/g, (_m, hex) => {
+      try {
+        return String.fromCharCode(parseInt(hex, 16))
+      } catch {
+        return ''
+      }
+    })
+    // remove destinations/groups like {\*\...}
+    .replace(/\{\\\*[^{}]*\}/g, '')
+    // remove remaining RTF groups/braces
+    .replace(/[{}]/g, '')
+    // remove control words and control symbols
+    .replace(/\\[a-zA-Z]+\d* ?/g, '')
+    .replace(/\\[^a-zA-Z0-9]/g, '')
+    // normalize whitespace
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim()
+}
+
 function normalizeOcrLanguage(value) {
   const lang = String(value || 'eng').trim()
   // Tesseract expects language codes like "eng" or "eng+spa"
   return lang || 'eng'
+}
+
+function normalizeExtension(fileName) {
+  const lower = String(fileName || '').toLowerCase()
+  const parts = lower.split('.')
+  if (parts.length < 2) return ''
+  return parts.pop() || ''
 }
 
 /**
@@ -51,6 +103,7 @@ export async function extractTextFromFile({
   mimeType,
   fileName,
   ocr = false,
+  handwriting = false,
   ocrLanguage = 'eng',
   timeoutMs = 20_000,
   maxChars = 250_000,
@@ -60,10 +113,12 @@ export async function extractTextFromFile({
     return { text: null, method: null, warnings: ['Missing filePath'] }
   }
 
-  const safeMime = mimeType || ''
+  const safeMime = String(mimeType || '').trim()
+  const ext = normalizeExtension(fileName)
 
   try {
-    if (safeMime === 'application/pdf') {
+    // PDFs
+    if (safeMime === 'application/pdf' || ext === 'pdf') {
       const buffer = await withTimeout(fsp.readFile(filePath), {
         ms: timeoutMs,
         label: 'Read PDF',
@@ -75,15 +130,16 @@ export async function extractTextFromFile({
       const text = clampText(result?.text, maxChars)
       if (!text) {
         warnings.push(
-          'No text detected in PDF. If this is a scanned document, upload an image (JPG/PNG) for OCR, or export the PDF with selectable text.',
+          'No text detected in PDF. If this is a scanned document, upload a JPG/PNG (or screenshots of pages) to enable OCR, or export the PDF with selectable text.',
         )
       }
       return { text, method: 'pdf-parse', warnings }
     }
 
+    // DOCX (sometimes browsers mislabel as application/msword or octet-stream; extension is the best hint).
     if (
-      safeMime ===
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      safeMime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+      ext === 'docx'
     ) {
       const buffer = await withTimeout(fsp.readFile(filePath), {
         ms: timeoutMs,
@@ -97,13 +153,36 @@ export async function extractTextFromFile({
       return { text, method: 'mammoth', warnings }
     }
 
-    if (safeMime === 'text/plain') {
+    // RTF
+    if (isRtfMime(safeMime) || ext === 'rtf') {
+      const raw = await withTimeout(fsp.readFile(filePath, 'utf8'), {
+        ms: timeoutMs,
+        label: 'Read RTF',
+      })
+      const text = clampText(stripRtfToText(raw), maxChars)
+      if (!text) warnings.push('RTF parsed, but no readable text was detected.')
+      return { text, method: 'rtf', warnings }
+    }
+
+    // TXT
+    if (safeMime === 'text/plain' || ext === 'txt') {
       const raw = await withTimeout(fsp.readFile(filePath, 'utf8'), {
         ms: timeoutMs,
         label: 'Read TXT',
       })
       const text = clampText(raw, maxChars)
       return { text, method: 'text', warnings }
+    }
+
+    // Legacy DOC
+    if (safeMime === 'application/msword' || ext === 'doc') {
+      return {
+        text: null,
+        method: 'doc',
+        warnings: [
+          'Legacy .doc files are not supported for server-side text extraction yet. Please convert to .docx or PDF and re-upload.',
+        ],
+      }
     }
 
     // OCR path (images)
@@ -135,6 +214,17 @@ export async function extractTextFromFile({
         }
       }
       try {
+        try {
+          if (handwriting) {
+            // Best-effort: tune for sparse/handwritten-like documents. Not perfect, but helps for forms/screenshots.
+            await worker.setParameters({
+              preserve_interword_spaces: '1',
+              tessedit_pageseg_mode: '6',
+            })
+          }
+        } catch {
+          // ignore parameter errors; OCR should still run
+        }
         const res = await withTimeout(worker.recognize(filePath), {
           ms: Math.max(timeoutMs, 45_000),
           label: 'OCR',

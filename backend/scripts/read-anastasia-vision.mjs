@@ -2,8 +2,18 @@ import fs from 'fs';
 import OpenAI from 'openai';
 import { fromPath } from 'pdf2pic';
 
-const OPENAI_API_KEY = "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";
-const PDF_PATH = "G:\\Apps\\grantflow\\GrantFlowb44\\Anastasia profile.pdf";
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+const PDF_PATH = process.env.PDF_PATH || process.argv[2] || '';
+
+if (!OPENAI_API_KEY) {
+  console.error('Missing OPENAI_API_KEY. Set it in your environment to run this script.');
+  process.exit(1);
+}
+
+if (!PDF_PATH) {
+  console.error('Missing PDF_PATH. Provide it via PDF_PATH env var or as the first argument.');
+  process.exit(1);
+}
 
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
