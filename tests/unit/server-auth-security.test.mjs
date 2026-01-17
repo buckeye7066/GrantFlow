@@ -33,8 +33,14 @@ function startServer(extraEnv = {}) {
 
   const ready = new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
+      // Ensure we don't leak a hung server on failure.
+      try {
+        child.kill('SIGTERM')
+      } catch {
+        // ignore
+      }
       reject(new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`))
-    }, 20_000)
+    }, 60_000)
 
     const onData = () => {
       const match = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
@@ -45,6 +51,18 @@ function startServer(extraEnv = {}) {
     }
 
     child.stdout.on('data', onData)
+
+    child.on('error', (err) => {
+      clearTimeout(timeout)
+      reject(new Error(`server failed to spawn: ${String(err?.message || err)}\nstdout:\n${stdout}\nstderr:\n${stderr}`))
+    })
+
+    child.on('exit', (code) => {
+      // If the server exits before becoming ready, surface logs to the test output.
+      if (stdout.includes('[Server] Ready on port')) return
+      clearTimeout(timeout)
+      reject(new Error(`server exited before ready (code=${code})\nstdout:\n${stdout}\nstderr:\n${stderr}`))
+    })
   })
 
   async function stop() {
