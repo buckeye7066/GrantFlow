@@ -31,6 +31,14 @@
       "destination": "https://grantflow-production.up.railway.app/api/:path*"
     },
     {
+      "source": "/uploads/:path*",
+      "destination": "https://grantflow-production.up.railway.app/uploads/:path*"
+    },
+    {
+      "source": "/grantflow/uploads/:path*",
+      "destination": "https://grantflow-production.up.railway.app/uploads/:path*"
+    },
+    {
       "source": "/grantflow",
       "destination": "/index.html"
     },

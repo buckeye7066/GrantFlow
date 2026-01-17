@@ -80,6 +80,29 @@ const profileSelect = `
 
 function mapProfile(row) {
   if (!row) return null
+  const normalizeAvatarUrl = (raw) => {
+    if (!raw) return null
+    const value = String(raw).trim()
+    if (!value) return null
+
+    // Absolute / special URLs are already safe for the browser.
+    if (/^(https?:)?\/\//i.test(value)) return value
+    if (/^data:/i.test(value)) return value
+
+    // Normalize legacy stored values so the frontend doesn't request relative paths like
+    // `/grantflow/ProfileDetail?.../file.jpg`.
+    if (value.startsWith('/uploads/')) return value
+    if (value.startsWith('uploads/')) return `/${value}`
+
+    // If we stored just a filename, assume it lives under /uploads.
+    if (/\.(png|jpe?g|webp|gif)$/i.test(value) && !value.includes('/')) {
+      return `/uploads/${value}`
+    }
+
+    // Fall back to absolute-from-origin.
+    return value.startsWith('/') ? value : `/${value}`
+  }
+
   return {
     id: row.id,
     created_at: row.created_at,
@@ -95,8 +118,8 @@ function mapProfile(row) {
     applicant_type: row.primary_type,
     status: row.status,
     tags: safeParseJSON(row.tags, []),
-    avatar_url: row.avatar_url ?? null,
-    profile_image_url: row.avatar_url ?? null,
+    avatar_url: normalizeAvatarUrl(row.avatar_url),
+    profile_image_url: normalizeAvatarUrl(row.avatar_url),
   }
 }
 
