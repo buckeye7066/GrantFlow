@@ -1231,7 +1231,7 @@ registerTool({
       const jobId = crypto.randomUUID()
       
       const stmt = db.prepare(`
-        INSERT INTO crawler_jobs (id, profile_id, crawler_type, status, parameters)
+        INSERT INTO crawler_jobs (id, type, profile_id, status, parameters)
         VALUES (?, ?, ?, ?, ?)
       `)
       
@@ -1246,8 +1246,8 @@ registerTool({
       
       stmt.run(
         jobId,
-        profileId,
         crawlerType,
+        profileId,
         'queued',
         JSON.stringify(defaultParams[crawlerType] || {})
       )

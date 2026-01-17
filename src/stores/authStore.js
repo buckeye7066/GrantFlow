@@ -128,6 +128,15 @@ const initialState = {
   profileWizardRequested: false,
 }
 
+function normalizeId(value) {
+  if (value === null || value === undefined) return null
+  const str = String(value).trim()
+  if (!str) return null
+  if (str.toLowerCase() === 'null') return null
+  if (str.toLowerCase() === 'undefined') return null
+  return str
+}
+
 export const useAuthStore = create((set, get) => ({
   ...initialState,
 
@@ -190,8 +199,9 @@ export const useAuthStore = create((set, get) => ({
         ? payload.profiles
         : (Array.isArray(payload.user?.profiles) ? payload.user.profiles : [])
 
-      const activeProfileId =
-        payload.active_profile_id ?? payload.user?.active_profile_id ?? profiles[0]?.id ?? null
+      const activeProfileId = normalizeId(
+        payload.active_profile_id ?? payload.user?.active_profile_id ?? profiles[0]?.id ?? null,
+      )
       
       // Check if this is an admin user
       if (user.is_admin) {
@@ -272,7 +282,7 @@ export const useAuthStore = create((set, get) => ({
       set({
         user,
         profiles,
-        activeProfileId: payload.profile_id ?? null,
+        activeProfileId: normalizeId(payload.profile_id ?? null),
         isAuthenticated: true,
         error: null,
         sessionExpired: false,
@@ -523,7 +533,7 @@ export const useAuthStore = create((set, get) => ({
     }
   },
 
-  setActiveProfileId: (profileId) => set({ activeProfileId: profileId }),
+  setActiveProfileId: (profileId) => set({ activeProfileId: normalizeId(profileId) }),
 
   setPreferredAuthMethod: (method) => {
     if (!AUTH_METHODS.has(method)) return

@@ -248,8 +248,8 @@ function buildCandidateOpportunityQuery({ crawlerType, profileContext, tokens, i
   const params = []
 
   // Avoid obviously non-grant programs by default.
-  conditions.push("(requires_match IS NULL OR requires_match = 0 OR requires_match = '0' OR requires_match = 'false')")
-  conditions.push("(match_percentage IS NULL OR match_percentage = 0 OR match_percentage = '0')")
+  conditions.push(isPostgres ? '(requires_match IS NULL OR requires_match = FALSE)' : "(requires_match IS NULL OR requires_match = 0 OR requires_match = '0' OR requires_match = 'false')")
+  conditions.push(isPostgres ? '(match_percentage IS NULL OR match_percentage = 0)' : "(match_percentage IS NULL OR match_percentage = 0 OR match_percentage = '0')")
   conditions.push("(opportunity_type IS NULL OR LOWER(opportunity_type) NOT IN ('loan','loan_program','microloan'))")
 
   // Exclude expired deadlines by default (rolling/ongoing/NULL are allowed).

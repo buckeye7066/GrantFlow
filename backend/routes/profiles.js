@@ -3,7 +3,7 @@ import crypto from 'crypto'
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
 import multer from 'multer'
 import fs from 'fs'
-import { dirname, join } from 'path'
+import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import {
   buildProfileSectionPrompt,
@@ -38,7 +38,9 @@ function isAdmin(user) {
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
-const uploadDir = join(__dirname, '..', 'uploads')
+const uploadDir = process.env.UPLOADS_DIR
+  ? resolve(process.env.UPLOADS_DIR)
+  : join(__dirname, '..', 'uploads')
 
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true })
