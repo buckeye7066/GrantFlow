@@ -50,6 +50,8 @@ This playbook captures everything needed to ship GrantFlow to production at `htt
    }
    ```
    This ensures the SPA works from `/grantflow/*` and API calls proxy cleanly when needed.
+   - **Critical:** The production domain must handle both `/grantflow` **and** `/grantflow/` (trailing slash).  
+     If `/grantflow` works but `/grantflow/` returns `404 NOT_FOUND`, your Vercel deployment is **not applying this repo’s `vercel.json`** (wrong project, wrong root directory, or stale promotion).
 7. Trigger a deploy. Vercel will build and host the static bundle automatically.
 8. **Domains:** ensure **both** `app.axiombiolabs.org` and `www.axiombiolabs.org` (if you expect them to work) are attached to this Vercel project.
    - If `app.*` works but `www.*` 404s on deep links, see **E-001** in `docs/ERROR_LEDGER.md`.
@@ -93,7 +95,16 @@ This playbook captures everything needed to ship GrantFlow to production at `htt
    ```bash
    curl https://grantflow-production.up.railway.app/api/health
    ```
-4. Spot-check key flows (pipeline, documents upload, billing) to confirm the Railway backend responds as expected.
+4. Verify the **canonical profile schema** endpoint (used for completeness + matching):
+   - `GET https://<vercel-domain>/grantflow/api/profiles/schema`
+   - The read-only production smoke checker (`npm run smoke:prod`) also validates this endpoint by default.
+     - Disable with: `SMOKE_CHECK_PROFILE_SCHEMA=false`
+5. Verify profile completeness + repair endpoints on at least one real profile:
+   - `GET https://<vercel-domain>/grantflow/api/profiles/<profile_id>/completeness`
+   - `POST https://<vercel-domain>/grantflow/api/profiles/<profile_id>/repair`
+6. Verify billing tiers proxy works (BillingSheet uses these rates):
+   - `GET https://<vercel-domain>/grantflow/api/billing/tiers`
+7. Spot-check key flows (pipeline, documents upload, billing) to confirm the Railway backend responds as expected.
 
 ---
 
@@ -102,6 +113,7 @@ This playbook captures everything needed to ship GrantFlow to production at `htt
 | Symptom                               | Fix |
 |--------------------------------------|-----|
 | `/grantflow/*` returns 404            | Verify the `vercel.json` rewrites and that the deployment picked them up. |
+| `/grantflow` works but `/grantflow/` 404s | Vercel is not applying this repo’s `vercel.json`. Confirm the correct Vercel project + root directory, then redeploy/promote. |
 | API calls rejected (CORS)             | Ensure Railway `CORS_ORIGIN` includes the exact Vercel domain. |
 | Playwright smoke test fails locally   | Remember to set `SMOKE_BASE_PATH=/grantflow` or drop it entirely in production where rewrites handle the prefix. |
 | Backend can’t find DB                 | Confirm `grantflow.db` exists under `backend/data/` and `DATABASE_URL` points to it. |

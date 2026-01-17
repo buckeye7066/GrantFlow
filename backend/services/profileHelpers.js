@@ -492,6 +492,16 @@ export function buildProfileSignals({ profile, sections }) {
     assistanceSet.add('low_income')
     ASSISTANCE_SYNONYMS.low_income.forEach((label) => registerKeyword(label))
   }
+  if (financialSection.unemployed) {
+    assistanceSet.add('unemployed')
+    registerKeyword('unemployed')
+    registerKeyword('job seeker')
+  }
+  if (financialSection.displaced_worker) {
+    assistanceSet.add('displaced_worker')
+    registerKeyword('displaced worker')
+    registerKeyword('laid off')
+  }
   if (financialSection.notes) {
     collectNarrativeKeywords({ notes: financialSection.notes }, registerKeyword)
   }
@@ -536,6 +546,11 @@ export function buildProfileSignals({ profile, sections }) {
   registerKeywords(disabilityTypes)
   disabilityTypes.forEach(dt => healthSet.add(normalizeString(dt)))
 
+  if (health.dialysis_patient) { healthSet.add('dialysis'); registerKeyword('dialysis'); registerKeyword('kidney disease') }
+  if (health.organ_transplant) { healthSet.add('transplant'); registerKeyword('organ transplant'); registerKeyword('transplant recipient') }
+  if (health.hiv_aids) { healthSet.add('hiv'); registerKeyword('hiv'); registerKeyword('aids') }
+  if (health.tbi_survivor) { healthSet.add('tbi'); registerKeyword('traumatic brain injury'); registerKeyword('tbi') }
+  if (health.amputee) { healthSet.add('amputee'); registerKeyword('amputee'); registerKeyword('prosthetic') }
   if (health.wheelchair_user) { healthSet.add('wheelchair'); registerKeyword('wheelchair user'); registerKeyword('mobility impairment') }
   if (health.neurodivergent) { healthSet.add('neurodivergent'); registerKeyword('neurodivergent'); registerKeyword('autism'); registerKeyword('adhd') }
   if (health.mental_health_condition) { healthSet.add('mental_health'); registerKeyword('mental health'); registerKeyword('behavioral health') }
@@ -544,6 +559,7 @@ export function buildProfileSignals({ profile, sections }) {
   if (health.visual_impairment) { healthSet.add('visual_impairment'); registerKeyword('visual impairment'); registerKeyword('blind'); registerKeyword('low vision') }
   if (health.hearing_impairment) { healthSet.add('hearing_impairment'); registerKeyword('hearing impairment'); registerKeyword('deaf'); registerKeyword('hard of hearing') }
   if (health.cancer_survivor) { healthSet.add('cancer'); registerKeyword('cancer survivor'); registerKeyword('oncology') }
+  if (health.substance_recovery) { healthSet.add('recovery'); registerKeyword('recovery'); registerKeyword('substance recovery'); registerKeyword('sober living') }
   if (health.terminal_illness) { healthSet.add('terminal'); registerKeyword('terminal illness'); registerKeyword('hospice') }
   if (health.support_needs_level) {
     registerKeyword(health.support_needs_level + ' support needs')
@@ -573,6 +589,11 @@ export function buildProfileSignals({ profile, sections }) {
       registerKeyword('immigrant')
     }
   }
+  if (demographicsSection.tribal_affiliation && typeof demographicsSection.tribal_affiliation === 'string') {
+    registerKeyword(demographicsSection.tribal_affiliation)
+    demographicSet.add('tribal_affiliation')
+    registerKeyword('tribal affiliation')
+  }
   if (demographicsSection.ethnicity) {
     registerKeyword(demographicsSection.ethnicity)
   }
@@ -590,19 +611,25 @@ export function buildProfileSignals({ profile, sections }) {
 
   // ============ FAMILY LIFE ============
   const family = sections?.family_life ?? {}
+  // Include canonical schema keys plus a few legacy aliases that exist in older data.
   const familyFlags = [
     'single_parent',
     'foster_youth',
+    'orphan',
+    'adopted',
+    'foster_parent',
+    'caregiver',
+    'widow_widower',
+    'grandparent_raising_grandchildren',
     'first_time_parent',
+    'homeless',
     'domestic_violence_survivor',
     'trafficking_survivor',
-    'former_incarcerated',
-    'homeless',
-    'caregiver',
     'disaster_survivor',
+    'formerly_incarcerated',
+    // Legacy aliases (not in schema but seen in older records)
+    'former_incarcerated',
     'widowed',
-    'divorced',
-    'expectant_parent',
     'grandparent_caregiver',
     'kinship_care',
   ]
@@ -900,6 +927,9 @@ export function buildProfileSignals({ profile, sections }) {
   }
 
   return {
+    // Backwards/forwards compatibility: some crawlers expect `signals.keywords` (iterable).
+    // Keep the canonical Set as `keywordSet` but also expose an array for JSON/debugging.
+    keywords: Array.from(keywordSet),
     keywordSet,
     phrases: phraseSet,
     demographics: demographicSet,
