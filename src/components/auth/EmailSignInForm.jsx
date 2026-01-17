@@ -10,8 +10,13 @@ import { Loader2, MailCheck, RefreshCw, Copy } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 
+function normalizeEmail(value) {
+  if (value == null) return ''
+  return String(value).trim().toLowerCase()
+}
+
 const emailSchema = z.object({
-  email: z.string().email('Enter a valid email address'),
+  email: z.preprocess((v) => normalizeEmail(v), z.string().email('Enter a valid email address')),
 })
 
 const codeSchema = z.object({
@@ -57,8 +62,9 @@ export default function EmailSignInForm({ onComplete }) {
     try {
       setIsLoading(true)
       setStatus({ type: 'idle', message: null, previewCode: null, notice: null })
-      const response = await authStore.startEmailSignIn(values.email)
-      setEmail(values.email)
+      const cleanedEmail = normalizeEmail(values.email)
+      const response = await authStore.startEmailSignIn(cleanedEmail)
+      setEmail(cleanedEmail)
       setVerificationToken(response?.verification_token ?? null)
       setStep('code')
       setResendCountdown(45)

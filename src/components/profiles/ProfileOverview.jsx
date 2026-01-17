@@ -13,6 +13,7 @@ import {
   Home,
   MapPin,
   Medal,
+  GraduationCap,
   PenSquare,
   ShieldCheck,
   Sparkles,
@@ -41,6 +42,9 @@ const SECTION_ICONS = {
   occupation: Briefcase,
   location_focus: MapPin,
   narrative: FileText,
+  student_details: GraduationCap,
+  firearms: ShieldCheck,
+  political_civic: Users,
 }
 
 function titleCase(value = "") {

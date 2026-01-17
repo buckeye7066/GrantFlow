@@ -61,7 +61,7 @@ export default function AdminServiceApplications() {
     setLoading(true);
     try {
       const params = statusFilter !== 'all' ? `?status=${statusFilter}` : '';
-      const response = await base44.get(`/api/service-application/list${params}`);
+      const response = await base44.fetch(`/api/service-application/list${params}`, { method: 'GET' });
       if (response.success) {
         setApplications(response.applications || []);
       }
@@ -86,7 +86,11 @@ export default function AdminServiceApplications() {
       const body = { status };
       if (notes) body.notes = notes;
       
-      await base44.patch(`/api/service-application/${id}`, body);
+      await base44.fetch(`/api/service-application/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
       
       toast({
         title: 'Updated',
