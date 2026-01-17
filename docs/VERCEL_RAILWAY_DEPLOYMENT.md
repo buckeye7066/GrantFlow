@@ -52,7 +52,8 @@ This playbook captures everything needed to ship GrantFlow to production at `htt
    This ensures the SPA works from `/grantflow/*` and API calls proxy cleanly when needed.
 7. Trigger a deploy. Vercel will build and host the static bundle automatically.
 8. **Domains:** ensure **both** `app.axiombiolabs.org` and `www.axiombiolabs.org` (if you expect them to work) are attached to this Vercel project.
-   - If `app.*` works but `www.*` 404s on deep links, see **E-001** in `docs/ERROR_LEDGER.md`.
+   - If `app.*` works but `www.*` 404s on `/grantflow/login`, that usually means `www.axiombiolabs.org` is still pointing at GoDaddy default hosting (not Vercel). Fix DNS / forwarding so `www` routes to the same Vercel project as `app`.
+   - If `app.axiombiolabs.org/grantflow` works but `app.axiombiolabs.org/grantflow/` returns 404, ensure `vercel.json` includes an explicit rewrite for the trailing-slash variant (see **E-002**).
 
 ---
 
@@ -84,9 +85,9 @@ This playbook captures everything needed to ship GrantFlow to production at `htt
 
 ### 5. Post-Deployment Verification
 
-1. Run the smoke test against the production URL:
+1. Run the smoke test against the production URL (read-only, no auth required):
    ```bash
-   SMOKE_BASE_URL=https://<your-vercel-app>.vercel.app npm run smoke:login
+   SMOKE_BASE_URL=https://app.axiombiolabs.org npm run smoke:prod
    ```
 2. Visit `https://<your-vercel-app>.vercel.app/grantflow/login`, enter the admin token, and confirm the dashboard renders data.
 3. Hit the health check directly:
@@ -102,6 +103,7 @@ This playbook captures everything needed to ship GrantFlow to production at `htt
 | Symptom                               | Fix |
 |--------------------------------------|-----|
 | `/grantflow/*` returns 404            | Verify the `vercel.json` rewrites and that the deployment picked them up. |
+| `/grantflow/` (trailing slash) 404s   | Add `{ "source": "/grantflow/", "destination": "/index.html" }` to `vercel.json` rewrites (explicitly). |
 | API calls rejected (CORS)             | Ensure Railway `CORS_ORIGIN` includes the exact Vercel domain. |
 | Playwright smoke test fails locally   | Remember to set `SMOKE_BASE_PATH=/grantflow` or drop it entirely in production where rewrites handle the prefix. |
 | Backend can’t find DB                 | Confirm `grantflow.db` exists under `backend/data/` and `DATABASE_URL` points to it. |

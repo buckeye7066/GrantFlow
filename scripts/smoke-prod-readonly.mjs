@@ -60,14 +60,16 @@ async function run() {
   const baseUrl = baseUrlRaw.endsWith('/') ? baseUrlRaw : `${baseUrlRaw}/`
   const basePath = normalizeBasePath(basePathRaw)
 
-  const appRoot = joinUrl(baseUrl, `${basePath}/`)
+  const appRoot = joinUrl(baseUrl, `${basePath}`)
+  const appRootSlash = joinUrl(baseUrl, `${basePath}/`)
   const login = joinUrl(baseUrl, `${basePath}/login`)
   const apiHealth = joinUrl(baseUrl, `${basePath}/api/health`)
 
-  console.log('[prod-smoke] Checking:', { appRoot, login, apiHealth })
+  console.log('[prod-smoke] Checking:', { appRoot, appRootSlash, login, apiHealth })
 
   // HTML surfaces: should not 404.
   const rootResult = await expectOk(appRoot)
+  await expectOk(appRootSlash)
   const loginResult = await expectOk(login)
 
   // Cheap “wrong host” detector for the known incident: GoDaddy 404 page text.
