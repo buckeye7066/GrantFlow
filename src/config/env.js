@@ -31,7 +31,6 @@ export const env = (() => {
 
   const parsed = EnvSchema.safeParse(raw)
   if (!parsed.success) {
-    // eslint-disable-next-line no-console
     console.warn('[env] Frontend env validation failed:', parsed.error.issues)
   }
 

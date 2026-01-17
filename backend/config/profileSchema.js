@@ -231,76 +231,71 @@ export const PROFILE_SCHEMA = {
     },
   },
 
-  student_details: {
-    title: 'Student & Education Details',
-    description: 'Student status and academic signals used for scholarship and education program matching.',
+  education: {
+    title: 'Education',
+    description: 'Academic history and student qualifiers used for scholarship eligibility.',
     fields: {
-      student_grade_levels: {
-        type: 'array<string>',
-        default: [],
-        description: 'Grade levels that apply (e.g., high_school, undergraduate, graduate).',
-      },
-      current_college: { type: 'string', default: '', description: 'Current school/college/university name.' },
-      target_colleges: { type: 'array<string>', default: [], description: 'Target schools the student is applying to.' },
+      highest_level: { type: 'string', default: '', description: 'Highest education level attained (freeform string).' },
+      current_institution: { type: 'string', default: '', description: 'Current institution/school name.' },
+      target_colleges: { type: 'array<string>', default: [], description: 'Target colleges/universities (strings).' },
+      intended_major: { type: 'string', default: '', description: 'Intended major/program.' },
       gpa: { type: 'number|null', default: null, description: 'GPA when explicitly provided.' },
       act_score: { type: 'number|null', default: null, description: 'ACT score when explicitly provided.' },
       sat_score: { type: 'number|null', default: null, description: 'SAT score when explicitly provided.' },
-      intended_major: { type: 'string', default: '', description: 'Intended major or program of study.' },
-      first_generation: { type: 'boolean', default: false, description: 'True if first-generation college student.' },
-      stem_student: { type: 'boolean', default: false, description: 'True if STEM student (science/tech/engineering/math).' },
-      extracurricular_activities: {
+      community_service_hours: { type: 'number|null', default: null, description: 'Community service hours when known.' },
+      leadership_roles: { type: 'array<string>', default: [], description: 'Leadership roles (strings).' },
+      valedictorian: { type: 'boolean', default: false, description: 'True if valedictorian (explicitly stated).' },
+      notes: { type: 'string', default: '', description: 'Additional education context.' },
+    },
+  },
+
+  employment: {
+    title: 'Employment',
+    description: 'Employment status and experience used for workforce/training program eligibility.',
+    fields: {
+      current_status: { type: 'string', default: '', description: 'Current employment status (freeform).' },
+      career_goal: { type: 'string', default: '', description: 'Career goal (freeform).' },
+      experience: { type: 'string', default: '', description: 'Brief experience summary (freeform).' },
+      notes: { type: 'string', default: '', description: 'Additional employment context.' },
+    },
+  },
+
+  housing: {
+    title: 'Housing',
+    description: 'Housing status and qualifiers relevant to assistance programs.',
+    fields: {
+      status: { type: 'string', default: '', description: 'Housing status (e.g., stable, at-risk, homeless, unknown).' },
+      type: { type: 'string', default: '', description: 'Housing type (rent, own, shelter, transitional, etc.).' },
+      address: { type: 'string', default: '', description: 'Housing address when explicitly provided.' },
+      broadband_speed: { type: 'string', default: '', description: 'Broadband speed / connectivity details if relevant.' },
+      geographic_designation: {
         type: 'array<string>',
         default: [],
-        description: 'Extracurriculars (clubs, sports, arts, etc.).',
+        description: 'Geographic designations (e.g., rural/urban/frontier).',
       },
-      achievements: { type: 'array<string>', default: [], description: 'Awards, honors, achievements.' },
-      community_service_hours: {
-        type: 'number|null',
-        default: null,
-        description: 'Community service hours when explicitly stated.',
-      },
-      ged_graduate: { type: 'boolean', default: false, description: 'True if GED graduate.' },
-      returning_adult_student: {
-        type: 'boolean',
-        default: false,
-        description: 'True if adult returning student.',
-      },
-      recent_graduate: { type: 'boolean', default: false, description: 'True if recently graduated.' },
-      job_retraining: { type: 'boolean', default: false, description: 'True if pursuing job retraining.' },
-      minor_child: { type: 'boolean', default: false, description: 'True if applicant is a minor child.' },
-      young_adult: { type: 'boolean', default: false, description: 'True if applicant is a young adult.' },
+      notes: { type: 'string', default: '', description: 'Additional housing context.' },
     },
   },
 
-  firearms: {
-    title: 'Firearms / Second Amendment',
-    description: 'Optional firearms-related qualifiers (only when explicitly provided).',
+  family: {
+    title: 'Household Details',
+    description: 'Household structure and support system (distinct from eligibility flags).',
     fields: {
-      second_amendment_supporter: {
-        type: 'boolean',
-        default: false,
-        description: 'True if the applicant explicitly identifies as a Second Amendment supporter.',
-      },
-      gun_owner: { type: 'boolean', default: false, description: 'True if applicant is a gun owner.' },
-      concealed_carry_permit: { type: 'boolean', default: false, description: 'True if applicant has a concealed carry permit.' },
-      nra_member: { type: 'boolean', default: false, description: 'True if applicant is an NRA member.' },
-      firearm_instructor: { type: 'boolean', default: false, description: 'True if applicant is a firearms instructor.' },
-      competitive_shooter: { type: 'boolean', default: false, description: 'True if applicant is a competitive shooter.' },
-      hunting_license: { type: 'boolean', default: false, description: 'True if applicant has a hunting license.' },
+      household_size: { type: 'number|null', default: null, description: 'Household size when known.' },
+      responsibilities: { type: 'string', default: '', description: 'Primary household responsibilities/caregiving context.' },
+      support_system: { type: 'string', default: '', description: 'Support system description.' },
+      notes: { type: 'string', default: '', description: 'Additional household context.' },
     },
   },
 
-  political_civic: {
-    title: 'Political / Civic Engagement',
-    description: 'Optional civic engagement qualifiers (only when explicitly provided).',
+  programs_services: {
+    title: 'Programs & Services',
+    description: 'Program focus areas, services, and keywords used for opportunity matching.',
     fields: {
-      registered_voter: { type: 'boolean', default: false, description: 'True if registered voter.' },
-      political_party: { type: 'string', default: '', description: 'Political party if explicitly stated.' },
-      politically_active: { type: 'boolean', default: false, description: 'True if politically active (explicitly stated).' },
-      community_organizer: { type: 'boolean', default: false, description: 'True if a community organizer.' },
-      advocacy_work: { type: 'string', default: '', description: 'Advocacy work description or focus areas.' },
-      civic_volunteer: { type: 'boolean', default: false, description: 'True if civic volunteer.' },
-      election_worker: { type: 'boolean', default: false, description: 'True if election worker/poll worker.' },
+      focus_areas: { type: 'array<string>', default: [], description: 'Focus areas (strings).' },
+      interests: { type: 'array<string>', default: [], description: 'Interests (strings).' },
+      keywords: { type: 'array<string>', default: [], description: 'Keywords/tags (strings).' },
+      notes: { type: 'string', default: '', description: 'Additional program/service notes.' },
     },
   },
 

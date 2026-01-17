@@ -1,3 +1,5 @@
+import { supportedSectionKeys as schemaSectionKeys, getDefaultSectionData } from '../config/profileSchema.js'
+
 export const SECTION_PROMPTS = {
   basic_information: {
     title: 'Basic Information',
@@ -425,3 +427,9 @@ ${config.keys.map((key) => `  "${key}": value`).join(',\n')}
 }
 
 export const supportedSectionKeys = Object.keys(SECTION_PROMPTS)
+
+// Canonical schema contract used by repair/seed flows.
+export const canonicalSectionKeys = schemaSectionKeys
+export const CANONICAL_SECTION_DEFAULTS = Object.freeze(
+  Object.fromEntries(schemaSectionKeys.map((key) => [key, getDefaultSectionData(key)])),
+)
