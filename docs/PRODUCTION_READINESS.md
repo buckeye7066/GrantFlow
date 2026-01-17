@@ -33,7 +33,8 @@ Smoke the login flow (email, SMS, social) using the hosted preview or local envi
 | Variable | Sample | Notes |
 | --- | --- | --- |
 | `PORT` | `8080` | Railway assigns dynamically; use `${PORT}` in start script |
-| `DATABASE_URL` | `/mnt/data/grantflow.db` or Railway SQLite URL | Persisted SQLite path; on Railway use the built-in `DATABASE_URL` mount |
+| `DATABASE_URL` | `/mnt/data/grantflow.db` or Railway SQLite URL | Persisted DB path |
+| `UPLOADS_DIR` | `/data/uploads` | **Required for production**: mount a Railway Volume and point this at it so `/uploads/*` survives redeploys |
 | `NODE_ENV` | `production` | Enables production logging/behavior |
 | `ADMIN_TOKEN` | `openssl rand -hex 32` | Required for admin-scoped API actions (legacy compatibility) |
 | `ADMIN_NAME` | `Lindsay White` | Optional: default display for admin accounts |
@@ -64,7 +65,7 @@ Smoke the login flow (email, SMS, social) using the hosted preview or local envi
 
 **Start command on Railway**: `npm run server`
 
-The backend automatically provisions `/uploads` and `/backend/data` directories; ensure Railway file storage (persistent disk) is enabled so avatars and derived documents survive deploys.
+The backend automatically provisions the uploads directory on startup. In production, `/readyz` will return **503** if `UPLOADS_DIR` is missing/unwritable (this prevents silent “uploads disappear after redeploy” incidents).
 
 ### Frontend (Vercel)
 
@@ -85,7 +86,9 @@ If using Vercel preview deployments, remember to set `VITE_API_URL` to your stag
 ## 3. Backend Deployment (Railway)
 
 1. **Create a new Railway project** and provision a “Node.js” service.
-2. **Attach persistent storage** (SQLite lives at `backend/data` + `/uploads`).
+2. **Attach persistent storage**:
+   - Create a Railway **Volume** and mount it (recommended mount path: `/data`)
+   - Set `UPLOADS_DIR=/data/uploads`
 3. **Set environment variables** listed above.
 4. **Deploy from GitHub** (`buckeye7066/grantflow`, branch `main`) or push a Railway-specific branch.
 5. **Confirm build & start** succeed:
@@ -126,6 +129,20 @@ If using Vercel preview deployments, remember to set `VITE_API_URL` to your stag
        "destination": "https://<railway-app>.up.railway.app/api/$1"
      }
      ```
+   - Ensure `/uploads/*` is also rewritten to Railway (otherwise missing/old upload URLs will show up as Vercel NOT_FOUND).
+
+---
+
+## 4.1 Fixing `/grantlfow` 404 (domain typo)
+
+If `https://www.axiombiolabs.org/grantlfow` returns 404, that request is currently being handled by the main marketing site, not the GrantFlow Vercel app.
+
+Fix options:
+
+1. **Preferred (low blast radius)**: add a redirect rule on the marketing site host:
+   - `/grantlfow` → `https://app.axiombiolabs.org/grantflow`
+2. **Alternative (high blast radius)**: move `axiombiolabs.org` DNS to Vercel and host the entire apex domain there.
+   - This requires re-homing the marketing site and is not recommended unless you explicitly want Vercel to own the apex domain.
 
 ---
 

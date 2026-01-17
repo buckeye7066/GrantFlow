@@ -3,7 +3,7 @@
 import express from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { dirname, join, resolve } from 'path';
 import fs from 'fs';
 import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
@@ -71,9 +71,12 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@grantflow.app';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-// Keep uploads inside backend/ so routes and static serving agree.
-// (Several routes write to backend/uploads; serving repo-root /uploads causes 404s in production.)
-const uploadsDir = join(__dirname, 'uploads');
+// Uploads must live on a persistent volume in production (Railway Volume).
+// Set UPLOADS_DIR=/data/uploads (or your mount path) in Railway.
+// Default to backend/uploads for local/dev so routes and serving agree.
+const uploadsDir = process.env.UPLOADS_DIR
+  ? resolve(process.env.UPLOADS_DIR)
+  : join(__dirname, 'uploads');
 const distPath = join(__dirname, '..', 'dist');
 
 const app = express();
@@ -188,37 +191,77 @@ try {
 } catch (error) {
   console.warn('Failed to create uploads directory:', error);
 }
-app.use('/uploads', express.static(uploadsDir));
-// If an image is missing from uploads (common for older profiles), serve a safe placeholder
-// to avoid noisy 404s and broken UI.
-const uploadsPlaceholderPath = join(__dirname, '..', 'public', 'images', 'anya-avatar.svg')
-let uploadsPlaceholderSvg = null
-try {
-  if (fs.existsSync(uploadsPlaceholderPath)) {
-    uploadsPlaceholderSvg = fs.readFileSync(uploadsPlaceholderPath, 'utf8')
+// IMPORTANT: Missing uploads must return 404 (not SPA index.html).
+// Use `fallthrough: false` to stop the request pipeline when a file is missing.
+app.use('/uploads', express.static(uploadsDir, { fallthrough: false, index: false }));
+app.use('/uploads', (err, _req, res, next) => {
+  if (err && (err.status === 404 || err.statusCode === 404)) {
+    return res.status(404).send('Not Found');
   }
-} catch {
-  uploadsPlaceholderSvg = null
+  return next(err);
+});
+
+async function repairMissingUploadAvatars({ db, uploadsDir }) {
+  // If the DB references upload URLs that no longer exist on disk (common after an ephemeral volume reset),
+  // browsers will spam 404s. The correct fix is to stop referencing non-existent files.
+  try {
+    const rows = await db
+      .prepare(
+        `
+          SELECT id, avatar_url
+          FROM profiles
+          WHERE avatar_url IS NOT NULL
+            AND TRIM(avatar_url) <> ''
+        `,
+      )
+      .all()
+
+    let repaired = 0
+    for (const row of rows) {
+      const raw = String(row.avatar_url || '').trim()
+      if (!raw) continue
+
+      let pathname = raw
+      try {
+        if (/^https?:\/\//i.test(raw)) pathname = new URL(raw).pathname
+      } catch {
+        // keep raw as-is
+      }
+
+      if (!pathname.includes('/uploads/')) continue
+      const fileName = pathname.split('/').pop()
+      if (!fileName) continue
+
+      const fullPath = join(uploadsDir, fileName)
+      if (fs.existsSync(fullPath)) continue
+
+      // Remove the reference so the frontend uses its built-in non-upload fallback.
+      await db.prepare('UPDATE profiles SET avatar_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(row.id)
+      repaired += 1
+    }
+
+    if (repaired > 0) {
+      console.warn('[startup] repaired missing upload avatars', { repaired })
+    }
+  } catch (error) {
+    console.warn('[startup] failed to repair missing upload avatars:', error?.message || error)
+  }
 }
-app.use('/uploads', (req, res, next) => {
-  if (res.headersSent) return next()
-  if (!uploadsPlaceholderSvg) return res.status(404).end()
-  if (req.method !== 'GET' && req.method !== 'HEAD') return res.status(404).end()
-
-  const reqPath = String(req.path || '')
-  const isImage = /\.(png|jpe?g|gif|webp|svg)$/i.test(reqPath)
-  if (!isImage) return res.status(404).end()
-
-  res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8')
-  res.setHeader('Cache-Control', 'public, max-age=300')
-  return res.status(200).send(uploadsPlaceholderSvg)
-})
 
 // Serve static files from Vite build
 app.use(express.static(distPath));
 // Serve the SPA under the configured base path so production builds (base=/grantflow) work locally.
 const APP_BASE_PATH = process.env.AUTH_FRONTEND_APP_BASE || process.env.VITE_APP_BASE || '/grantflow';
 if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
+  const normalizedBase = String(APP_BASE_PATH).replace(/\/+$/, '');
+  // Expose uploads under the same base path (common when reverse proxies only route /grantflow/*).
+  app.use(`${normalizedBase}/uploads`, express.static(uploadsDir, { fallthrough: false, index: false }));
+  app.use(`${normalizedBase}/uploads`, (err, _req, res, next) => {
+    if (err && (err.status === 404 || err.statusCode === 404)) {
+      return res.status(404).send('Not Found');
+    }
+    return next(err);
+  });
   app.use(APP_BASE_PATH, express.static(distPath));
 }
 
@@ -454,6 +497,7 @@ if (db.dialect === 'sqlite') {
 await ensureDesignatedProfiles(db)
 await linkAllProfilesToAdmin(db)
 await ensureUserPreferencesTable(db)
+await repairMissingUploadAvatars({ db, uploadsDir })
 
 // Check funding opportunities count and provide guidance
 if (db.dialect === 'sqlite') {
@@ -1050,6 +1094,19 @@ app.get('/readyz', async (_req, res) => {
       await db.healthcheck();
     } else {
       await db.prepare('SELECT 1 as ok').get();
+    }
+    // Ensure uploads dir is present and writable (production requires a volume).
+    try {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+      fs.accessSync(uploadsDir, fs.constants.R_OK | fs.constants.W_OK);
+    } catch (e) {
+      return res.status(503).json({
+        status: 'not_ready',
+        reason: 'uploads_dir_unwritable',
+        uploads_dir: uploadsDir,
+        message: e?.message || String(e),
+        timestamp: new Date().toISOString(),
+      });
     }
     res.status(200).json({ status: 'ready', dialect: db.dialect, timestamp: new Date().toISOString() });
   } catch (error) {
