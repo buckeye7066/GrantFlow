@@ -1,4 +1,5 @@
 {
+  "trailingSlash": false,
   "redirects": [
     {
       "source": "/",
@@ -40,6 +41,10 @@
     },
     {
       "source": "/grantflow",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/grantflow/",
       "destination": "/index.html"
     },
     {
