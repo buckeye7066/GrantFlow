@@ -720,12 +720,9 @@ app.use(async (req, res, next) => {
     ((expectedAdminToken && xAdminToken === expectedAdminToken) ||
       (expectedBulkKey && xAdminToken === expectedBulkKey))
   ) {
-    // Treat admin/bulk tokens as an authenticated admin "user" so `/api/auth/me` works.
-    // This improves dev UX and keeps admin-tools flows from being brittle.
     user = {
       role: 'admin',
       is_admin: true,
-      userId: expectedBulkKey && xAdminToken === expectedBulkKey ? 'bulk-token-admin' : 'admin-token',
       profileId: null,
       full_name: ADMIN_NAME,
       email: ADMIN_EMAIL,
@@ -804,7 +801,6 @@ app.use(async (req, res, next) => {
       user = {
         role: 'admin',
         is_admin: true,
-        userId: 'admin-token',
         profileId: null,
         full_name: ADMIN_NAME,
         email: ADMIN_EMAIL,

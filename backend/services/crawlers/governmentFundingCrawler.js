@@ -8,7 +8,6 @@
 
 import axios from 'axios'
 import * as cheerio from 'cheerio'
-import axios from 'axios'
 import { buildSearchKeywords, calculateMatchScore, filterByDeadline } from './crawlerHelpers.js'
 import { getWithRetry, postWithRetry } from './httpClient.js'
 

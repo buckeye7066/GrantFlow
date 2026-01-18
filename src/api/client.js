@@ -330,66 +330,6 @@ class APIClient {
     }
   }
 
-  // -----------------------------
-  // Base44-style HTTP helpers
-  // -----------------------------
-  // Many older components call base44.get/patch/etc. Provide thin wrappers
-  // around `fetch()` to keep those call sites working.
-
-  get(endpoint, options = {}) {
-    return this.fetch(endpoint, { ...options, method: 'GET' })
-  }
-
-  delete(endpoint, options = {}) {
-    return this.fetch(endpoint, { ...options, method: 'DELETE' })
-  }
-
-  post(endpoint, data, options = {}) {
-    // Allow signature (endpoint, options) if caller passes only options.
-    const inferredOptions =
-      options == null &&
-      data &&
-      typeof data === 'object' &&
-      !Array.isArray(data) &&
-      (Object.prototype.hasOwnProperty.call(data, 'method') ||
-        Object.prototype.hasOwnProperty.call(data, 'headers') ||
-        Object.prototype.hasOwnProperty.call(data, 'body'))
-        ? data
-        : null
-
-    const finalOptions = inferredOptions || options || {}
-    const payload = inferredOptions ? null : data
-
-    const body =
-      payload instanceof FormData
-        ? payload
-        : payload === undefined || payload === null
-          ? undefined
-          : JSON.stringify(payload)
-
-    return this.fetch(endpoint, { ...finalOptions, method: 'POST', body })
-  }
-
-  put(endpoint, data, options = {}) {
-    const body =
-      data instanceof FormData
-        ? data
-        : data === undefined || data === null
-          ? undefined
-          : JSON.stringify(data)
-    return this.fetch(endpoint, { ...options, method: 'PUT', body })
-  }
-
-  patch(endpoint, data, options = {}) {
-    const body =
-      data instanceof FormData
-        ? data
-        : data === undefined || data === null
-          ? undefined
-          : JSON.stringify(data)
-    return this.fetch(endpoint, { ...options, method: 'PATCH', body })
-  }
-
   // Entity wrapper for Base44-compatible interface
   createEntityClient(resource) {
     const normalizedResource = resource.replace(/^\/+/, '');
