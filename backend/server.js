@@ -962,7 +962,7 @@ const authMeLimiter = rateLimit({
   message: { error: 'Too many requests, please try again later.' }
 });
 
-app.get('/api/auth/me', authMeLimiter, (req, res) => {
+app.get('/api/auth/me', authMeLimiter, async (req, res) => {
   try {
     const user = req.user ?? { role: 'guest' };
     if (user.role === 'guest') {
@@ -973,7 +973,7 @@ app.get('/api/auth/me', authMeLimiter, (req, res) => {
       let dbUser, profiles;
       
       try {
-        dbUser = db
+        dbUser = await req.db
           .prepare(
             `
               SELECT *
@@ -996,7 +996,7 @@ app.get('/api/auth/me', authMeLimiter, (req, res) => {
       }
 
       try {
-        profiles = db
+        profiles = await req.db
           .prepare(
             `
               SELECT id, display_name, organization_id, status
@@ -1021,7 +1021,7 @@ app.get('/api/auth/me', authMeLimiter, (req, res) => {
           avatar_url: dbUser.avatar_url,
           is_admin: Boolean(dbUser.is_admin),
         },
-        profiles,
+        profiles: Array.isArray(profiles) ? profiles : [],
         active_profile_id: user.profileId ?? profiles[0]?.id ?? null,
       });
     }
