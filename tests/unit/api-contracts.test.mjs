@@ -7,6 +7,23 @@ async function sleep(ms) {
   await new Promise((r) => setTimeout(r, ms))
 }
 
+async function waitForExit(proc, { timeoutMs = 10_000 } = {}) {
+  if (!proc) return
+  if (proc.exitCode !== null) return
+  await new Promise((resolve) => {
+    const done = () => resolve()
+    const timer = setTimeout(done, timeoutMs)
+    proc.once('exit', () => {
+      clearTimeout(timer)
+      done()
+    })
+    proc.once('error', () => {
+      clearTimeout(timer)
+      done()
+    })
+  })
+}
+
 async function isPortAvailable(port, host = '127.0.0.1') {
   return await new Promise((resolve) => {
     const server = net.createServer()
@@ -51,10 +68,9 @@ async function startBackend({ rootDir, port }) {
     AUTH_FRONTEND_APP_BASE: process.env.VITE_APP_BASE || '/grantflow',
   }
 
-  const proc = spawn('node', ['backend/server.js'], {
+  const proc = spawn(process.execPath, ['backend/server.js'], {
     cwd: rootDir,
     env,
-    shell: true,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -87,6 +103,15 @@ test('backend /api/health contract + request id header', async () => {
     assert.equal(typeof body, 'object')
     assert.ok(['ok', 'warning'].includes(body.status), `expected status ok|warning, got ${body.status}`)
   } finally {
-    try { proc.kill('SIGTERM') } catch {}
+    try {
+      proc.kill('SIGTERM')
+    } catch {}
+    await waitForExit(proc, { timeoutMs: 10_000 })
+    if (proc.exitCode === null) {
+      try {
+        proc.kill('SIGKILL')
+      } catch {}
+      await waitForExit(proc, { timeoutMs: 5_000 })
+    }
   }
 })

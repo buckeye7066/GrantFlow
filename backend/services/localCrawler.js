@@ -26,6 +26,28 @@ function loadJSON(filePath) {
   }
 }
 
+function safeJsonArray(value) {
+  if (!value) return []
+  if (Array.isArray(value)) return value
+  if (typeof value !== 'string') return []
+  const trimmed = value.trim()
+  if (!trimmed) return []
+
+  try {
+    const parsed = JSON.parse(trimmed)
+    if (Array.isArray(parsed)) return parsed
+    if (typeof parsed === 'string' && parsed.trim()) return [parsed.trim()]
+  } catch {
+    // fall through to delimited parsing
+  }
+
+  // Common legacy formats: "a,b,c" or "a; b; c"
+  return trimmed
+    .split(/[,;\n]+/)
+    .map((v) => v.trim())
+    .filter(Boolean)
+}
+
 /**
  * Calculate match score between local opportunity and profile
  */
@@ -42,10 +64,10 @@ function calculateLocalMatch(opp, profileState, signals) {
     return { score: 0, matchReasons: [] }
   }
   
-  const oppText = `${opp.title} ${opp.description}`.toLowerCase()
+  const oppText = `${opp.title || ''} ${opp.description || ''}`.toLowerCase()
   const oppKeywords = new Set([
-    ...(opp.keywords || []).map(k => k.toLowerCase()),
-    ...(opp.categories || []).map(c => c.toLowerCase())
+    ...(Array.isArray(opp.keywords) ? opp.keywords : []).map((k) => String(k || '').toLowerCase()).filter(Boolean),
+    ...(Array.isArray(opp.categories) ? opp.categories : []).map((c) => String(c || '').toLowerCase()).filter(Boolean),
   ])
   
   // Keyword matching
@@ -89,9 +111,11 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
   
   // Build profile signals
   const signals = buildProfileSignals(profileContext)
-  const profileState = profileContext?.profile?.state || 
-                       profileContext?.sections?.location_focus?.state ||
-                       parameters.state
+  const profileState =
+    profileContext?.profile?.state ||
+    signals?.location?.state ||
+    profileContext?.sections?.location_focus?.state ||
+    parameters.state
   
   if (!profileState) {
     console.warn('[localCrawler] No state specified - cannot find local opportunities')
@@ -132,20 +156,31 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
   const allOpps = []
   
   for (const opp of localOpps) {
-    if (!seenTitles.has(opp.title)) {
-      seenTitles.add(opp.title)
-      allOpps.push(opp)
+    const title = opp?.title ? String(opp.title) : ''
+    if (!title) continue
+    if (!seenTitles.has(title)) {
+      seenTitles.add(title)
+      allOpps.push({
+        ...opp,
+        title,
+        keywords: safeJsonArray(opp?.keywords),
+        categories: safeJsonArray(opp?.categories),
+        eligibility_bullets: safeJsonArray(opp?.eligibility_bullets),
+      })
     }
   }
   
   for (const opp of dbOpps) {
-    if (!seenTitles.has(opp.title)) {
-      seenTitles.add(opp.title)
+    const title = opp?.title ? String(opp.title) : ''
+    if (!title) continue
+    if (!seenTitles.has(title)) {
+      seenTitles.add(title)
       allOpps.push({
         ...opp,
-        keywords: JSON.parse(opp.keywords || '[]'),
-        categories: JSON.parse(opp.categories || '[]'),
-        eligibility_bullets: JSON.parse(opp.eligibility_bullets || '[]')
+        title,
+        keywords: safeJsonArray(opp?.keywords),
+        categories: safeJsonArray(opp?.categories),
+        eligibility_bullets: safeJsonArray(opp?.eligibility_bullets),
       })
     }
   }

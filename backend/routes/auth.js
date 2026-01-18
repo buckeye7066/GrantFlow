@@ -1526,7 +1526,22 @@ router.post('/email/verify', async (req, res) => {
     return res.status(error.status ?? 400).json({ error: error.message })
   }
 
-  const profiles = await getUserProfiles(req.db, user.id)
+  let profiles = await getUserProfiles(req.db, user.id)
+
+  // If the user has no linked profiles (common after DB restores or legacy imports),
+  // self-heal by attaching an existing baseline profile or creating a minimal one.
+  if (profiles.length === 0) {
+    try {
+      const attached = await assignProfileToUser(req.db, user.id, email)
+      profiles = await getUserProfiles(req.db, user.id)
+      if (!activeProfileId) {
+        activeProfileId = attached ?? profiles[0]?.id ?? null
+      }
+    } catch (error) {
+      console.warn('[auth/email] Failed to auto-attach profile for user:', error?.message || error)
+    }
+  }
+
   if (!activeProfileId && profiles.length > 0) {
     activeProfileId = profiles[0].id
   }
@@ -1776,7 +1791,21 @@ router.post('/phone/verify', async (req, res) => {
     return res.status(error.status ?? 400).json({ error: error.message })
   }
 
-  const profiles = await getUserProfiles(req.db, user.id)
+  let profiles = await getUserProfiles(req.db, user.id)
+
+  // Self-heal: ensure every signed-in user has at least one profile.
+  if (profiles.length === 0) {
+    try {
+      const attached = await assignProfileToUser(req.db, user.id, null)
+      profiles = await getUserProfiles(req.db, user.id)
+      if (!activeProfileId) {
+        activeProfileId = attached ?? profiles[0]?.id ?? null
+      }
+    } catch (error) {
+      console.warn('[auth/phone] Failed to auto-attach profile for user:', error?.message || error)
+    }
+  }
+
   if (!activeProfileId && profiles.length > 0) {
     activeProfileId = profiles[0].id
   }
@@ -1920,8 +1949,19 @@ router.get('/:provider/callback', async (req, res) => {
       profile,
     })
 
-    const profiles = await getUserProfiles(req.db, user.id)
-    const activeProfileId = profiles[0]?.id ?? null
+    let profiles = await getUserProfiles(req.db, user.id)
+    let activeProfileId = profiles[0]?.id ?? null
+
+    // OAuth users should also get a profile link automatically.
+    if (profiles.length === 0) {
+      try {
+        const attached = await assignProfileToUser(req.db, user.id, profile?.email ? normalizeEmail(profile.email) : null)
+        profiles = await getUserProfiles(req.db, user.id)
+        activeProfileId = attached ?? profiles[0]?.id ?? null
+      } catch (error) {
+        console.warn('[auth/oauth] Failed to auto-attach profile for user:', error?.message || error)
+      }
+    }
 
     const session = await createSessionAndTokens(req.db, {
       user,

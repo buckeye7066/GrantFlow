@@ -11,7 +11,7 @@
     "build": "vite build",
     "lint": "eslint --max-warnings 0 \"src/**/*.{js,jsx}\" \"backend/**/*.js\"",
     "typecheck": "tsc -p tsconfig.node.json --noEmit",
-    "unit": "node --test \"tests/unit/**/*.test.mjs\"",
+    "unit": "node scripts/run-unit-tests.mjs",
     "smoke": "node ./node_modules/playwright/cli.js test -c tests/smoke/playwright.config.mjs",
     "doctor": "node scripts/doctor.mjs",
     "dns:godaddy:vercel": "node ./scripts/godaddy-set-vercel-dns.mjs",
