@@ -19,10 +19,11 @@ async function fetchGrantsGovSynopsis(opportunityId) {
   if (!id) return null
   if (grantsGovDetailsCache.has(id)) return grantsGovDetailsCache.get(id)
   try {
-    const resp = await axios.post(
+    const resp = await postWithRetry(
       GRANTSGOV_FETCH_URL,
       { opportunityId: Number(id) },
-      { headers: { 'Content-Type': 'application/json' }, timeout: 15000 },
+      { headers: { 'Content-Type': 'application/json' } },
+      { timeoutMs: 15000, retries: 2 },
     )
     const synopsis = resp?.data?.data?.synopsis ?? null
     const synopsisDescRaw = synopsis?.synopsisDesc ?? null
@@ -363,7 +364,7 @@ async function searchCMSSource(source, profile, searchKeywords) {
   
   // Medicare/Medicaid specific crawling
   try {
-    const response = await axios.get(source.baseUrl, { timeout: 10000 })
+    const response = await getWithRetry(source.baseUrl, {}, { timeoutMs: 10000, retries: 2 })
     const $ = cheerio.load(response.data)
     
     $('.innovation-model, .grant-opportunity').each((i, elem) => {
@@ -390,7 +391,7 @@ async function searchStateSource(source, profile, state, searchKeywords) {
   const opportunities = []
   
   try {
-    const response = await axios.get(source.searchUrl || source.baseUrl, { timeout: 10000 })
+    const response = await getWithRetry(source.searchUrl || source.baseUrl, {}, { timeoutMs: 10000, retries: 2 })
     const $ = cheerio.load(response.data)
     
     // Ohio specific parsing

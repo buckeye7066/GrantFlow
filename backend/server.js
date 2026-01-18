@@ -531,6 +531,8 @@ try {
   })
   await ensureDesignatedProfiles(db)
 }
+// Always ensure designated profiles exist (idempotent); baseline seed may not include newer fixtures.
+await ensureDesignatedProfiles(db)
 await linkAllProfilesToAdmin(db)
 await ensureUserPreferencesTable(db)
 await repairMissingUploadAvatars({ db, uploadsDir })
