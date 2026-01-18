@@ -65,6 +65,67 @@ function normalizeEntry([key, value]) {
   return [key, value]
 }
 
+function isPlainObject(value) {
+  if (!value || typeof value !== "object") return false
+  return Object.prototype.toString.call(value) === "[object Object]"
+}
+
+function humanizeKey(key = "") {
+  const normalized = String(key).toLowerCase()
+  if (normalized === "zip" || normalized === "zip_code" || normalized === "zipcode") return "ZIP code"
+  if (normalized === "ein") return "EIN"
+  if (normalized === "uei") return "UEI"
+  return titleCase(String(key))
+}
+
+function formatAddressObject(address) {
+  if (!isPlainObject(address)) return null
+
+  const line1 = address.line1 ?? address.address1 ?? address.street ?? address.street1
+  const line2 = address.line2 ?? address.address2 ?? address.street2
+  const city = address.city
+  const state = address.state ?? address.region
+  const postal = address.zip ?? address.postal ?? address.postal_code ?? address.zip_code
+  const country = address.country
+
+  const parts = []
+  if (line1) parts.push(String(line1).trim())
+  if (line2) parts.push(String(line2).trim())
+
+  const cityState = [city, state].filter(Boolean).map((v) => String(v).trim()).join(", ")
+  const cityStatePostal = [cityState, postal].filter(Boolean).join(" ").trim()
+  if (cityStatePostal) parts.push(cityStatePostal)
+
+  if (country) parts.push(String(country).trim())
+
+  return parts.filter(Boolean).join("\n").trim() || null
+}
+
+function looksLikeAddressObject(value) {
+  if (!isPlainObject(value)) return false
+  const keys = new Set(Object.keys(value).map((k) => String(k).toLowerCase()))
+  return (
+    keys.has("street") ||
+    keys.has("street1") ||
+    keys.has("address1") ||
+    keys.has("line1") ||
+    keys.has("city") ||
+    keys.has("state") ||
+    keys.has("zip") ||
+    keys.has("zip_code") ||
+    keys.has("postal_code")
+  )
+}
+
+function renderPrimitive(value) {
+  if (typeof value === "boolean") {
+    return value ? "Yes" : "No"
+  }
+  if (value === null || value === undefined) return ""
+  if (typeof value === "number") return String(value)
+  return String(value)
+}
+
 const THEME_PRESETS = {
   blue: {
     metric: "bg-blue-50 text-blue-700 border-blue-200",
@@ -104,7 +165,7 @@ const THEME_PRESETS = {
   },
 }
 
-function renderValue(value) {
+function renderValue(fieldKey, value) {
   if (typeof value === "boolean") {
     return (
       <Badge className={value ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-600"}>
@@ -126,10 +187,42 @@ function renderValue(value) {
   }
 
   if (typeof value === "object") {
+    if (looksLikeAddressObject(value)) {
+      const formatted = formatAddressObject(value)
+      if (formatted) {
+        return (
+          <div className="max-w-[280px] rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-left text-xs text-slate-700 whitespace-pre-line">
+            {formatted}
+          </div>
+        )
+      }
+    }
+
+    if (isPlainObject(value)) {
+      const entries = Object.entries(value).map(normalizeEntry).filter(Boolean)
+      if (entries.length > 0) {
+        return (
+          <div className="max-w-[280px] rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+            <dl className="space-y-1">
+              {entries.slice(0, 6).map(([childKey, childValue]) => (
+                <div key={`${fieldKey}-${childKey}`} className="flex items-start justify-between gap-3">
+                  <dt className="min-w-[92px] text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                    {humanizeKey(childKey)}
+                  </dt>
+                  <dd className="text-right text-slate-900">{renderPrimitive(childValue)}</dd>
+                </div>
+              ))}
+              {entries.length > 6 ? (
+                <p className="pt-1 text-[11px] text-slate-400">{`+${entries.length - 6} more`}</p>
+              ) : null}
+            </dl>
+          </div>
+        )
+      }
+    }
+
     return (
-      <pre className="text-xs text-slate-600 bg-slate-50 rounded-md p-2 max-w-[280px] whitespace-pre-wrap">
-        {JSON.stringify(value, null, 2)}
-      </pre>
+      <span className="text-sm text-slate-900">{renderPrimitive(value)}</span>
     )
   }
 
@@ -203,7 +296,7 @@ function SectionPreview({ sectionKey, section, onEdit, onAskAI, isSaving, isAIPr
             {dataEntries.slice(0, 8).map(([key, value]) => (
               <div key={key} className="flex items-start justify-between gap-4">
                 <dt className="text-xs font-medium text-slate-500 uppercase tracking-wide">{titleCase(key)}</dt>
-                <dd className="flex-1 text-right">{renderValue(value)}</dd>
+                <dd className="flex-1 text-right">{renderValue(key, value)}</dd>
               </div>
             ))}
             {dataEntries.length > 8 ? (
