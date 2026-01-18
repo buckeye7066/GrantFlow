@@ -32,7 +32,7 @@ import {
   Eye
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
-import { base44 } from '@/api/base44Client';
+import { apiFetch } from '@/api/client';
 
 const STATUS_COLORS = {
   new: 'bg-blue-500',
@@ -61,10 +61,10 @@ export default function AdminServiceApplications() {
     setLoading(true);
     try {
       const params = statusFilter !== 'all' ? `?status=${statusFilter}` : '';
-      const response = await base44.fetch(`/api/service-application/list${params}`, { method: 'GET' });
-      if (response.success) {
-        setApplications(response.applications || []);
-      }
+      const response = await apiFetch(`/api/service-application/list${params}`);
+      // Backward-compatible: some responses wrap in { success, applications }.
+      const apps = response?.applications ?? response?.data?.applications ?? response;
+      setApplications(Array.isArray(apps) ? apps : []);
     } catch (error) {
       console.error('Failed to fetch applications:', error);
       toast({
@@ -86,9 +86,8 @@ export default function AdminServiceApplications() {
       const body = { status };
       if (notes) body.notes = notes;
       
-      await base44.fetch(`/api/service-application/${id}`, {
+      await apiFetch(`/api/service-application/${id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
       
