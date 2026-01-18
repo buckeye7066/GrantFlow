@@ -85,14 +85,6 @@ function isPlainObject(value) {
   return Object.prototype.toString.call(value) === "[object Object]"
 }
 
-function humanizeKey(key = "") {
-  const normalized = String(key).toLowerCase()
-  if (normalized === "zip" || normalized === "zip_code" || normalized === "zipcode") return "ZIP code"
-  if (normalized === "ein") return "EIN"
-  if (normalized === "uei") return "UEI"
-  return titleCase(String(key))
-}
-
 function formatAddressObject(address) {
   if (!isPlainObject(address)) return null
 
@@ -130,15 +122,6 @@ function looksLikeAddressObject(value) {
     keys.has("zip_code") ||
     keys.has("postal_code")
   )
-}
-
-function renderPrimitive(value) {
-  if (typeof value === "boolean") {
-    return value ? "Yes" : "No"
-  }
-  if (value === null || value === undefined) return ""
-  if (typeof value === "number") return String(value)
-  return String(value)
 }
 
 const THEME_PRESETS = {
@@ -228,18 +211,30 @@ function renderValue(fieldKey, value) {
   }
 
   if (typeof value === "object") {
+    if (looksLikeAddressObject(value)) {
+      const formatted = formatAddressObject(value)
+      if (formatted) {
+        return (
+          <div className="max-w-[280px] rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-left text-xs text-slate-700 whitespace-pre-line">
+            {formatted}
+          </div>
+        )
+      }
+    }
+
     const flattened = flattenObjectEntries(value, { maxDepth: 2 })
     if (!flattened.length) {
       return <span className="text-sm text-slate-500">—</span>
     }
     const preview = flattened.slice(0, 6)
     const remaining = flattened.length - preview.length
+
     return (
       <div className="max-w-[320px] space-y-1 text-right">
         {preview.map(([key, inline]) => (
           <div key={key} className="flex items-start justify-end gap-2">
             <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-              {titleCase(key)}
+              {titleCase(String(key).replace(/\./g, " "))}
             </span>
             <span className="min-w-0 text-xs text-slate-900 whitespace-pre-wrap break-words">{inline}</span>
           </div>
