@@ -42,12 +42,25 @@ async function waitForHttpOk(url, { timeoutMs = 45_000 } = {}) {
   }
 }
 
+async function assertOk(res, label) {
+  if (res.ok) return
+  let body = ''
+  try {
+    body = await res.text()
+  } catch {}
+  throw new Error(`${label} failed: status=${res.status} body=${body}`)
+}
+
 async function startBackend({ rootDir, port, sqlitePath }) {
   const env = {
     ...process.env,
     NODE_ENV: 'development',
     SMOKE_MODE: 'true',
     PORT: String(port),
+    // Force sqlite for unit tests even if the parent env has DATABASE_URL set.
+    DB_PROVIDER: 'sqlite',
+    DB_DIALECT: 'sqlite',
+    DATABASE_URL: '',
     DB_AUTO_MIGRATE: 'true',
     SQLITE_DB_PATH: sqlitePath,
     ADMIN_TOKEN: process.env.ADMIN_TOKEN || 'dev-admin-token',
@@ -58,10 +71,10 @@ async function startBackend({ rootDir, port, sqlitePath }) {
     NATIONAL_PROGRAMS_CRAWLER_ENABLED: 'false',
   }
 
-  const proc = spawn('node', ['backend/server.js'], {
+  // IMPORTANT: do not spawn via a shell on Windows; it can keep child processes alive and lock sqlite files.
+  const proc = spawn(process.execPath, ['backend/server.js'], {
     cwd: rootDir,
     env,
-    shell: true,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -133,7 +146,7 @@ test('Anya sessions + tasks: create and update task', async () => {
       headers,
       body: JSON.stringify({ title: 'Test session' }),
     })
-    assert.equal(createSessionRes.ok, true)
+    await assertOk(createSessionRes, 'create session')
     const session = await createSessionRes.json()
     assert.ok(session?.id, 'expected created session id')
 
@@ -142,7 +155,7 @@ test('Anya sessions + tasks: create and update task', async () => {
       headers,
       body: JSON.stringify({ title: 'Test task', status: 'open' }),
     })
-    assert.equal(createTaskRes.ok, true)
+    await assertOk(createTaskRes, 'create task')
     const createTaskBody = await createTaskRes.json()
     assert.ok(createTaskBody?.task?.id, 'expected created task id')
     assert.equal(createTaskBody.task.status, 'open')
@@ -155,7 +168,7 @@ test('Anya sessions + tasks: create and update task', async () => {
         body: JSON.stringify({ status: 'completed' }),
       },
     )
-    assert.equal(updateTaskRes.ok, true)
+    await assertOk(updateTaskRes, 'update task')
     const updateTaskBody = await updateTaskRes.json()
     assert.equal(updateTaskBody?.task?.status, 'completed')
   } finally {
@@ -163,6 +176,12 @@ test('Anya sessions + tasks: create and update task', async () => {
       proc.kill('SIGTERM')
     } catch {}
     await waitForExit(proc, { timeoutMs: 10_000 })
+    if (proc.exitCode === null) {
+      try {
+        proc.kill('SIGKILL')
+      } catch {}
+      await waitForExit(proc, { timeoutMs: 5_000 })
+    }
     await safeRm(tempDir)
   }
 })
