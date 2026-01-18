@@ -2,6 +2,9 @@ import { buildProfileSectionPrompt } from '../prompts/profileSections.js'
 import { extractCompletionText } from '../utils/openai.js'
 import { extractTextFromFile } from './documentTextExtraction.js'
 import { summarizeOpenAIError } from '../utils/openaiClient.js'
+import { promises as fsp } from 'node:fs'
+import { buildFallbackDocumentSummary, applyFallbackUniversityUpdates } from './documentFallbackParser.js'
+import { classifyUniversityApplicationForDocument, loadUniversityApplicationsForProfile } from './universityDocumentClassifier.js'
 
 const TARGET_SECTIONS = [
   'basic_information',
@@ -18,6 +21,12 @@ const TARGET_SECTIONS = [
   'occupation',
   'small_business_details',
   'location_focus',
+  'education',
+  'employment',
+  'housing',
+  'family',
+  'programs_services',
+  'university_applications',
   'narrative',
 ]
 
@@ -25,6 +34,47 @@ function truncateText(text, limit = 4000) {
   if (!text) return ''
   if (text.length <= limit) return text
   return `${text.slice(0, limit)}…`
+}
+
+function isImageMime(mimeType) {
+  const safe = String(mimeType || '').toLowerCase().trim()
+  return safe.startsWith('image/') || safe === 'application/octet-stream'
+}
+
+async function extractTextFromImageWithVision({ openai, filePath, mimeType }) {
+  if (!openai) return null
+  if (!filePath) return null
+
+  const buffer = await fsp.readFile(filePath)
+  // Guard: avoid pushing huge base64 payloads to the model.
+  if (buffer.length > 8 * 1024 * 1024) {
+    return null
+  }
+
+  const safeMime = String(mimeType || 'image/png').trim() || 'image/png'
+  const base64 = buffer.toString('base64')
+  const url = `data:${safeMime};base64,${base64}`
+
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    temperature: 0.0,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text:
+              'Extract all readable text from this image. Preserve line breaks. Return plain text only (no markdown, no JSON). If nothing is readable, return an empty string.',
+          },
+          { type: 'image_url', image_url: { url } },
+        ],
+      },
+    ],
+  })
+
+  const text = String(extractCompletionText(completion) || '').trim()
+  return text || null
 }
 
 function extractFirstMatch(text, regex) {
@@ -201,6 +251,7 @@ export async function processDocumentIngestionJob({
 }) {
   const params = job.parameters ?? {}
   const documentId = params.document_id
+  const handwriting = params.handwriting === true
 
   if (!documentId) {
     throw new Error('document_ingest job missing document_id parameter')
@@ -230,6 +281,7 @@ export async function processDocumentIngestionJob({
         mimeType: document.mime_type,
         fileName: document.name,
         ocr: true,
+        handwriting,
         ocrLanguage: 'eng',
       })
       if (result?.text) {
@@ -244,10 +296,7 @@ export async function processDocumentIngestionJob({
     // Best-effort; we'll proceed and let downstream report "text unavailable".
   }
 
-  const docExcerpt = truncateText(
-    document.extracted_text ?? document.notes ?? '',
-    5000,
-  )
+  let docExcerpt = truncateText(document.extracted_text ?? document.notes ?? '', 5000)
 
   const documentSummary = [
     {
@@ -262,14 +311,71 @@ export async function processDocumentIngestionJob({
   const aiSectionsLog = {}
 
   try {
+    // Auto-classify existing docs (in case they were uploaded without a school selection).
+    if (!document.university_application_id && profile?.id && document.extracted_text) {
+      try {
+        const apps = await loadUniversityApplicationsForProfile(db, profile.id)
+        const match = classifyUniversityApplicationForDocument({
+          applications: apps,
+          documentName: document.name,
+          extractedText: document.extracted_text,
+        })
+        if (match) {
+          await db.prepare(
+            `
+              UPDATE documents
+              SET university_application_id = ?,
+                  university_application_name = ?,
+                  updated_at = CURRENT_TIMESTAMP
+              WHERE id = ?
+            `,
+          ).run(match.id, match.name, documentId)
+          document.university_application_id = match.id
+          document.university_application_name = match.name
+        }
+      } catch {
+        // best effort
+      }
+    }
+
     let openai = null
+    let openaiUnavailableMessage = null
     try {
       openai = typeof getOpenAI === 'function' ? getOpenAI() : null
     } catch (error) {
       const message = error instanceof Error ? error.message : 'AI parsing unavailable.'
-      // Degrade gracefully: we can still do OCR + deterministic extraction and mark the document processed.
+      // Degrade gracefully: we can still do OCR + deterministic extraction.
       aiSectionsLog._openai_client_error = message
+      openaiUnavailableMessage = message
       openai = null
+    }
+
+    // If this is an image (screenshots/handwriting) and OCR didn't yield text, use a vision pass as a fallback.
+    try {
+      const current = String(document.extracted_text || '').trim()
+      const handwriting = Boolean(params?.handwriting)
+      const shouldTryVision =
+        openai &&
+        document.file_path &&
+        isImageMime(document.mime_type) &&
+        (handwriting || !current || current.length < 40)
+
+      if (shouldTryVision) {
+        const visionText = await extractTextFromImageWithVision({
+          openai,
+          filePath: document.file_path,
+          mimeType: document.mime_type,
+        })
+        if (visionText) {
+          await db
+            .prepare('UPDATE documents SET extracted_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            .run(visionText, documentId)
+          document.extracted_text = visionText
+          docExcerpt = truncateText(document.extracted_text ?? document.notes ?? '', 5000)
+        }
+      }
+    } catch {
+      // best-effort; fall through
     }
 
     if (!docExcerpt) {
@@ -278,11 +384,12 @@ export async function processDocumentIngestionJob({
       await db.prepare(
         `
           UPDATE documents
-          SET processing_status = 'failed',
+          SET processing_status = 'completed',
+              ai_summary = ?,
               processing_error = ?
           WHERE id = ?
         `,
-      ).run(message, documentId)
+      ).run(message, message, documentId)
       return {
         inserted: 0,
         sections_updated: [],
@@ -292,7 +399,9 @@ export async function processDocumentIngestionJob({
         result_meta: {
           document_id: documentId,
           profile_id: profile?.id ?? null,
-          error: message,
+          summary: message,
+          used_fallback: true,
+          openai_unavailable: Boolean(openaiUnavailableMessage),
         },
       }
     }
@@ -346,8 +455,7 @@ export async function processDocumentIngestionJob({
           messages: [
             {
               role: 'system',
-              content:
-                'You are an expert data extraction assistant. Respond with valid JSON only.',
+              content: 'You are an expert data extraction assistant. Respond with valid JSON only.',
             },
             { role: 'user', content: promptPayload.prompt },
           ],
@@ -393,18 +501,41 @@ export async function processDocumentIngestionJob({
       }
     }
 
+    // University deterministic parsing is useful even without AI (or when AI doesn't produce structured updates).
+    const shouldRunUniversityFallback = Boolean(!openai || openAIWarning || openaiUnavailableMessage || updates.length === 0)
+    if (shouldRunUniversityFallback) {
+      const fallbackUniversityUpdate = await applyFallbackUniversityUpdates({
+        db,
+        profileId: profile?.id ?? null,
+        document,
+        extractedText: document.extracted_text ?? document.notes ?? '',
+      })
+
+      if (fallbackUniversityUpdate.updated) {
+        updates.push({
+          section_key: 'university_applications',
+          updated_fields: fallbackUniversityUpdate.updated_fields,
+        })
+      }
+    }
+
+    const usedFallback = Boolean(openaiUnavailableMessage || openAIWarning)
     const status = 'completed'
-    const summary =
-      updates.length > 0
-        ? updates
-            .map(
-              (entry) =>
-                `${entry.section_key}: ${entry.updated_fields
-                  .map((field) => field.replace(/_/g, ' '))
-                  .join(', ')}`,
-            )
-            .join(' • ')
-        : 'No new structured data extracted from this document.'
+    const summary = usedFallback
+      ? buildFallbackDocumentSummary({
+          document,
+          extractedText: document.extracted_text ?? document.notes ?? '',
+        })
+      : updates.length > 0
+          ? updates
+              .map(
+                (entry) =>
+                  `${entry.section_key}: ${entry.updated_fields
+                    .map((field) => field.replace(/_/g, ' '))
+                    .join(', ')}`,
+              )
+              .join(' • ')
+          : 'No new structured data extracted from this document.'
 
     const resultMeta = {
       document_id: documentId,
@@ -412,9 +543,14 @@ export async function processDocumentIngestionJob({
       summary,
       sections_updated: updates,
       total_sections_updated: updates.length,
+      used_fallback: usedFallback,
+      openai_unavailable: Boolean(openaiUnavailableMessage),
+      openai_error: openAIWarning || openaiUnavailableMessage || null,
     }
 
-    const processingError = openAIWarning ? `AI parsing unavailable: ${openAIWarning}` : null
+    const processingError = (openAIWarning || openaiUnavailableMessage)
+      ? `AI parsing unavailable: ${openAIWarning || openaiUnavailableMessage}`
+      : null
 
     await db.prepare(
       `

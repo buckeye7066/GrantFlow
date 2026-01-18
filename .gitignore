@@ -36,9 +36,12 @@ seed/*.db-shm
 seed/*.db-wal
 seed/*.db-journal
 
+# Backup files and temporary artifacts
+*.bak
+
 # User uploads / local artifacts
-backend/uploads/
 backend/temp_images/
+backend/uploads/
 public/*.mp4
 # Some mp4 assets in this repo have a space in ". mp4" which doesn't match "*.mp4"
 public/*mp4

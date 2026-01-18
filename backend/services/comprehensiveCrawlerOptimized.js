@@ -299,7 +299,7 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
   if (saveToDatabase) {
     for (const opp of topOpps) {
       try {
-        const result = upsertFundingOpportunity(db, {
+        const result = await upsertFundingOpportunity(db, {
           title: opp.title,
           sponsor: opp.sponsor,
           description: opp.description,
@@ -307,7 +307,8 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
           amount_max: opp.amount_max,
           amount_description: opp.amount_description,
           deadline: opp.deadline,
-          application_url: opp.application_url,
+          application_url: opp.application_url ?? null,
+          source_url: opp.source_url ?? opp.application_url ?? null,
           categories: opp.categories,
           keywords: opp.keywords,
           eligibility_bullets: opp.eligibility_bullets,
@@ -316,6 +317,7 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
           state: opp.state,
           source: 'verified_real',
           source_id: opp.id || opp.source_id,
+          record_origin: 'curated_verified',
           match_reasons: opp.match_reasons
         })
         

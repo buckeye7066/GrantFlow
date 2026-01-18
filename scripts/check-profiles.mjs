@@ -3,8 +3,8 @@
  * Quick sanity check for the production SQLite database.
  *
  * Verifies:
- *   - Exactly 11 active profiles exist
- *   - Each profile has at least one entry for every expected section
+ *   - Required baseline profiles exist (by name)
+ *   - Each profile has at least one entry for every canonical section
  *   - Outputs a concise report highlighting missing data, if any
  *
  * Usage:
@@ -19,21 +19,24 @@ import Database from 'better-sqlite3'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import { supportedSectionKeys as CANONICAL_SECTIONS } from '../backend/config/profileSchema.js'
 
-const EXPECTED_PROFILE_COUNT = 11
-const EXPECTED_SECTIONS = [
-  'basic_information',
-  'organization_details',
-  'financial_information',
-  'government_assistance',
-  'health_medical',
-  'demographics',
-  'family_life',
-  'military_service',
-  'occupation',
-  'location_focus',
-  'narrative',
-  'university_applications',
+const REQUIRED_PROFILE_MATCHERS = [
+  { label: 'John', test: (name) => /john\s+white/i.test(name) },
+  { label: 'Robert', test: (name) => /robert\s+white/i.test(name) },
+  { label: 'Anastasia', test: (name) => /anastasia/i.test(name) },
+  { label: 'Luibov', test: (name) => /luibov/i.test(name) },
+  { label: 'Focus Forward', test: (name) => /focus\s+forward/i.test(name) },
+  { label: 'Axiom Biolabs', test: (name) => /axiom\s+biolabs/i.test(name) },
+  { label: 'Brian', test: (name) => /brian/i.test(name) },
+  { label: 'Hollie', test: (name) => /hollie/i.test(name) },
+  { label: 'Olivia', test: (name) => /olivia/i.test(name) },
+  { label: 'Avanell', test: (name) => /avanell/i.test(name) },
+  { label: 'Angelika', test: (name) => /angelika/i.test(name) },
+  { label: 'Rachel', test: (name) => /rachel/i.test(name) },
+  { label: 'Josh', test: (name) => /\bjosh\b/i.test(name) },
+  { label: 'Jason', test: (name) => /jason/i.test(name) },
+  { label: 'Kathy', test: (name) => /kathy/i.test(name) },
 ]
 
 function main() {
@@ -63,10 +66,15 @@ function main() {
     .all()
 
   console.log(`Found ${profiles.length} profile(s) in ${resolvedDbPath}`)
-  if (profiles.length !== EXPECTED_PROFILE_COUNT) {
-    console.warn(
-      `[profiles] Expected ${EXPECTED_PROFILE_COUNT} records. Found ${profiles.length}. Verify migration zip / seeds.`,
-    )
+  const names = profiles.map((p) => String(p.display_name || '').trim())
+  const missingRequired = REQUIRED_PROFILE_MATCHERS
+    .filter((m) => !names.some((n) => m.test(n)))
+    .map((m) => m.label)
+  if (missingRequired.length > 0) {
+    console.warn(`[profiles] Missing required baseline profile(s): ${missingRequired.join(', ')}`)
+    process.exitCode = 2
+  } else {
+    console.log('[profiles] All required baseline profiles are present.')
   }
 
   const sectionStmt = db.prepare(
@@ -80,7 +88,7 @@ function main() {
   const rows = []
   profiles.forEach((profile) => {
     const existingSections = new Set(sectionStmt.all(profile.id).map((row) => row.section_key))
-    const missing = EXPECTED_SECTIONS.filter((key) => !existingSections.has(key))
+    const missing = CANONICAL_SECTIONS.filter((key) => !existingSections.has(key))
     rows.push({
       id: profile.id,
       name: profile.display_name,

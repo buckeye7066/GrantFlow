@@ -5,6 +5,7 @@ import Pages from '@/pages/index.jsx'
 import { Toaster } from '@/components/ui/toaster'
 import SessionExpiredDialog from '@/components/auth/SessionExpiredDialog'
 import { base44 } from '@/api/base44Client'
+import RouteErrorBoundary from '@/components/shared/RouteErrorBoundary.jsx'
 import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { env } from '@/config/env.js'
@@ -74,7 +75,9 @@ function App() {
 
   return (
     <Router basename={basename}>
-      <Pages />
+      <RouteErrorBoundary routeName="app">
+        <Pages />
+      </RouteErrorBoundary>
       <Toaster />
       <SessionExpiredDialog />
     </Router>

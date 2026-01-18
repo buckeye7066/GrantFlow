@@ -342,10 +342,11 @@ function formatServiceApplicationAsHTML(data) {
         <div style="background-color: #f1f5f9; padding: 15px; border-radius: 6px; margin-top: 20px;">
           <p style="color: #475569; font-size: 13px; margin: 0;">
             <strong>Payment Terms:</strong><br>
-            • 40% due at project kickoff<br>
+            • 40% due at project kickoff (scope locked; calendar set)<br>
             • 40% due at complete draft delivery<br>
             • 20% due at submission and handoff package delivery<br>
-            • Net 15 days from invoice date
+            • Net 15 days from invoice date<br>
+            • Late fees: 1.5% monthly interest on overdue balances
           </p>
         </div>
         <p style="color: #666; font-size: 12px; text-align: center; margin-top: 30px;">

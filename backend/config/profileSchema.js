@@ -227,7 +227,6 @@ export const PROFILE_SCHEMA = {
       notes: { type: 'string', default: '', description: 'Notes about products/services, capacity, and priorities.' },
     },
   },
-
   demographics: {
     title: 'Demographics',
     description: 'Demographic identifiers that unlock targeted funds and scholarships.',
@@ -329,6 +328,74 @@ export const PROFILE_SCHEMA = {
     description: 'Student college application tracking (for scholarship targeting).',
     fields: {
       applications: { type: 'array<object>', default: [], description: 'Array of tracked college applications and details.' },
+    },
+  },
+
+  education: {
+    title: 'Education',
+    description: 'Academic history and student qualifiers used for scholarship eligibility.',
+    fields: {
+      highest_level: { type: 'string', default: '', description: 'Highest education level attained (freeform string).' },
+      current_institution: { type: 'string', default: '', description: 'Current institution/school name.' },
+      target_colleges: { type: 'array<string>', default: [], description: 'Target colleges/universities (strings).' },
+      intended_major: { type: 'string', default: '', description: 'Intended major/program.' },
+      gpa: { type: 'number|null', default: null, description: 'GPA when explicitly provided.' },
+      act_score: { type: 'number|null', default: null, description: 'ACT score when explicitly provided.' },
+      sat_score: { type: 'number|null', default: null, description: 'SAT score when explicitly provided.' },
+      community_service_hours: { type: 'number|null', default: null, description: 'Community service hours when known.' },
+      leadership_roles: { type: 'array<string>', default: [], description: 'Leadership roles (strings).' },
+      valedictorian: { type: 'boolean', default: false, description: 'True if valedictorian (explicitly stated).' },
+      notes: { type: 'string', default: '', description: 'Additional education context.' },
+    },
+  },
+
+  employment: {
+    title: 'Employment',
+    description: 'Employment status and experience used for workforce/training program eligibility.',
+    fields: {
+      current_status: { type: 'string', default: '', description: 'Current employment status (freeform).' },
+      career_goal: { type: 'string', default: '', description: 'Career goal (freeform).' },
+      experience: { type: 'string', default: '', description: 'Brief experience summary (freeform).' },
+      notes: { type: 'string', default: '', description: 'Additional employment context.' },
+    },
+  },
+
+  housing: {
+    title: 'Housing',
+    description: 'Housing status and qualifiers relevant to assistance programs.',
+    fields: {
+      status: { type: 'string', default: '', description: 'Housing status (e.g., stable, at-risk, homeless, unknown).' },
+      type: { type: 'string', default: '', description: 'Housing type (rent, own, shelter, transitional, etc.).' },
+      address: { type: 'string', default: '', description: 'Housing address when explicitly provided.' },
+      broadband_speed: { type: 'string', default: '', description: 'Broadband speed / connectivity details if relevant.' },
+      geographic_designation: {
+        type: 'array<string>',
+        default: [],
+        description: 'Geographic designations (e.g., rural/urban/frontier).',
+      },
+      notes: { type: 'string', default: '', description: 'Additional housing context.' },
+    },
+  },
+
+  family: {
+    title: 'Household Details',
+    description: 'Household structure and support system (distinct from eligibility flags).',
+    fields: {
+      household_size: { type: 'number|null', default: null, description: 'Household size when known.' },
+      responsibilities: { type: 'string', default: '', description: 'Primary household responsibilities/caregiving context.' },
+      support_system: { type: 'string', default: '', description: 'Support system description.' },
+      notes: { type: 'string', default: '', description: 'Additional household context.' },
+    },
+  },
+
+  programs_services: {
+    title: 'Programs & Services',
+    description: 'Program focus areas, services, and keywords used for opportunity matching.',
+    fields: {
+      focus_areas: { type: 'array<string>', default: [], description: 'Focus areas (strings).' },
+      interests: { type: 'array<string>', default: [], description: 'Interests (strings).' },
+      keywords: { type: 'array<string>', default: [], description: 'Keywords/tags (strings).' },
+      notes: { type: 'string', default: '', description: 'Additional program/service notes.' },
     },
   },
 
