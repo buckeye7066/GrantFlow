@@ -36,6 +36,10 @@ const SECTION_ICONS = {
   financial_information: HandCoins,
   government_assistance: ShieldCheck,
   health_medical: HeartPulse,
+  medical_insurance: ShieldCheck,
+  medical_history: HeartPulse,
+  nonprofit_compliance: ClipboardList,
+  small_business_details: Briefcase,
   demographics: Users,
   family_life: Home,
   military_service: Medal,
@@ -45,6 +49,17 @@ const SECTION_ICONS = {
   student_details: GraduationCap,
   firearms: ShieldCheck,
   political_civic: Users,
+}
+
+function isSectionApplicable(sectionKey, config, profile) {
+  if (!config) return true
+  // Optional, forward-compatible: allow SECTION_CONFIG entries to specify applies_to types.
+  const appliesTo = config.applies_to ?? config.appliesTo ?? null
+  if (!Array.isArray(appliesTo) || appliesTo.length === 0) return true
+  const primaryType = profile?.primary_type ?? profile?.primaryType ?? null
+  // If a profile doesn't have a primary type yet, do not hide sections.
+  if (!primaryType) return true
+  return appliesTo.includes(primaryType)
 }
 
 function titleCase(value = "") {
@@ -328,7 +343,11 @@ export default function ProfileOverview({
   }
   const gridColumnsClass = columnMap[dashboardPrefs.layoutColumns] ?? "md:grid-cols-2"
   const gapClass = dashboardPrefs.layoutStyle === "compact" ? "gap-4" : "gap-6"
-  const totalSections = useMemo(() => Object.keys(SECTION_CONFIG).length, [])
+  const allSectionKeys = useMemo(() => Object.keys(SECTION_CONFIG), [])
+  const applicableSectionKeys = useMemo(() => {
+    return allSectionKeys.filter((key) => isSectionApplicable(key, SECTION_CONFIG[key], profile))
+  }, [allSectionKeys, profile])
+  const totalSections = allSectionKeys.length
   const sectionsMap = useMemo(() => {
     const map = new Map()
     ;(profile.sections ?? []).forEach((section) => {
@@ -440,7 +459,12 @@ export default function ProfileOverview({
     })
   }
 
-  const orderedSectionKeys = Object.keys(SECTION_CONFIG)
+  const orderedSectionKeys = useMemo(() => {
+    const applicable = new Set(applicableSectionKeys)
+    const applicableFirst = allSectionKeys.filter((key) => applicable.has(key))
+    const rest = allSectionKeys.filter((key) => !applicable.has(key))
+    return [...applicableFirst, ...rest]
+  }, [allSectionKeys, applicableSectionKeys])
 
   return (
     <div className="space-y-10">

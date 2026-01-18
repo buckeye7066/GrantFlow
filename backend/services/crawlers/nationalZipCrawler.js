@@ -35,6 +35,41 @@ const DEFAULT_CONFIG = {
   timeout_ms: 10000
 }
 
+function normalizeZip(value) {
+  const zip = String(value ?? '').trim()
+  return /^\d{5}$/.test(zip) ? zip : null
+}
+
+function normalizeState(value) {
+  const s = String(value ?? '').trim().toUpperCase()
+  return /^[A-Z]{2}$/.test(s) ? s : null
+}
+
+function resolveZipList({ zip_list, state, max_zips } = {}) {
+  let list = []
+
+  if (Array.isArray(zip_list) && zip_list.length > 0) {
+    list = zip_list.map(normalizeZip).filter(Boolean)
+  } else {
+    const st = normalizeState(state)
+    if (st) {
+      const byState = zipcodes.lookupByState(st) || []
+      list = byState.map((row) => normalizeZip(row?.zip)).filter(Boolean)
+    } else {
+      list = US_ZIP_CODES_SAMPLE.slice()
+    }
+  }
+
+  list = Array.from(new Set(list)).sort()
+
+  const lim = Number(max_zips)
+  if (Number.isFinite(lim) && lim > 0) {
+    list = list.slice(0, Math.min(lim, list.length))
+  }
+
+  return list
+}
+
 /**
  * Generate representative US ZIP codes
  * In production, load from zipcodes library or database
@@ -54,43 +89,36 @@ async function searchGrantsGovByZip(zip, coords) {
   const opportunities = []
   
   try {
-    const searchParams = {
+    // Grants.gov "search2" public API (2026).
+    // Docs: https://api.grants.gov/v1/api/search2
+    const body = {
+      rows: 10,
+      startRecordNum: 0,
       keyword: '',
-      oppStatuses: 'Posted',
+      oppStatuses: 'posted',
       sortBy: 'openDate|desc',
-      rows: 10, // Limit to 10 per ZIP to avoid overwhelming
-      // Note: Grants.gov doesn't directly filter by ZIP, but we can filter by state
-      // after retrieval
     }
-    
-    const response = await axios.post(
-      'https://www.grants.gov/grantsws/rest/opportunities/search',
-      searchParams,
-      {
-        headers: { 'Content-Type': 'application/json' },
-        timeout: DEFAULT_CONFIG.timeout_ms
-      }
-    )
-    
-    if (response.data && response.data.opportunitySearchResult) {
-      const results = response.data.opportunitySearchResult
-      
-      for (const opp of results) {
-        // Filter to opportunities relevant to this ZIP's state
-        if (!coords || !coords.state || opp.eligibleApplicants?.includes(coords.state)) {
-          opportunities.push({
-            title: opp.oppTitle,
-            sponsor: opp.agencyName,
-            description: opp.oppDesc || '',
-            url: `https://www.grants.gov/view-opportunity.html?oppId=${opp.oppId}`,
-            opportunity_number: opp.oppNumber,
-            deadline: opp.closeDate,
-            source: 'grants.gov',
-            source_id: opp.oppId,
-            zip: zip,
-            state: coords?.state
-          })
-        }
+
+    const response = await axios.post('https://api.grants.gov/v1/api/search2', body, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: DEFAULT_CONFIG.timeout_ms,
+    })
+
+    const hits = response?.data?.data?.oppHits
+    if (Array.isArray(hits)) {
+      for (const hit of hits) {
+        opportunities.push({
+          title: hit?.title || hit?.number || 'Grant opportunity',
+          sponsor: hit?.agency || hit?.agencyCode || 'Grants.gov',
+          description: '',
+          url: hit?.id ? `https://www.grants.gov/search-results-detail/${hit.id}` : 'https://www.grants.gov',
+          opportunity_number: hit?.number || null,
+          deadline: hit?.closeDate || null,
+          source: 'grants.gov',
+          source_id: hit?.id || null,
+          zip: zip,
+          state: coords?.state,
+        })
       }
     }
   } catch (error) {
@@ -346,12 +374,49 @@ async function getLastProcessedZip(db) {
   return row?.zip || null
 }
 
+async function getLastProcessedZipForList(db, zipList) {
+  if (!Array.isArray(zipList) || zipList.length === 0) return null
+  if (zipList.length > 2000) return null
+
+  const placeholders = zipList.map(() => '?').join(', ')
+  const row = await db
+    .prepare(
+      `
+        SELECT zip
+        FROM national_zip_progress
+        WHERE status = 'completed'
+          AND zip IN (${placeholders})
+        ORDER BY updated_at DESC
+        LIMIT 1
+      `,
+    )
+    .get(...zipList)
+
+  return row?.zip || null
+}
+
 /**
  * Main national ZIP crawl function
  */
 export async function runNationalZipCrawl(dbPath, options = {}) {
   const config = { ...DEFAULT_CONFIG, ...options }
-  
+
+  // Prefer the shared DB wrapper when invoked from the app (Postgres-safe),
+  // keep sqlite file-path mode for local/script usage.
+  const ownsDb = typeof dbPath === 'string'
+  const db = ownsDb ? new Database(dbPath) : dbPath
+
+  const zipList = resolveZipList({
+    zip_list: options.zip_list,
+    state: options.state,
+    max_zips: options.max_zips,
+  })
+
+  if (zipList.length === 0) {
+    // Nothing to do. Important: do NOT close shared DB connections.
+    return { processed: 0, sources: 0, duration: 0 }
+  }
+
   console.log('='.repeat(80))
   console.log('National ZIP Crawl Starting')
   console.log('='.repeat(80))
@@ -360,15 +425,16 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   console.log(`Rate limit: ${config.rate_limit_ms}ms`)
   console.log()
   
-  // Prefer the shared DB wrapper when invoked from the app (Postgres-safe),
-  // keep sqlite file-path mode for local/script usage.
-  const db = typeof dbPath === 'string' ? new Database(dbPath) : dbPath
-  
-  // Find where to resume from
-  const lastProcessedZip = await getLastProcessedZip(db)
-  const startIndex = lastProcessedZip 
-    ? US_ZIP_CODES_SAMPLE.indexOf(lastProcessedZip) + 1 
-    : 0
+  // Resumability:
+  // - Full national crawl is resumable by default (resume=true)
+  // - State-scoped and explicit-list crawls default to resume=false to avoid surprising skips.
+  const inferredResumeDefault = !options.state && !options.zip_list
+  const allowResume = options.resume != null ? Boolean(options.resume) : inferredResumeDefault
+  const lastProcessedZip = allowResume
+    ? (await getLastProcessedZipForList(db, zipList)) ?? (await getLastProcessedZip(db))
+    : null
+
+  const startIndex = lastProcessedZip ? zipList.indexOf(lastProcessedZip) + 1 : 0
   
   if (lastProcessedZip) {
     console.log(`Resuming from ZIP ${lastProcessedZip} (index ${startIndex})`)
@@ -376,8 +442,8 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
     console.log('Starting from beginning')
   }
   
-  const totalZips = US_ZIP_CODES_SAMPLE.length
-  const remainingZips = totalZips - startIndex
+  const totalZips = zipList.length
+  const remainingZips = Math.max(0, totalZips - startIndex)
   
   console.log(`Total ZIPs: ${totalZips}`)
   console.log(`Remaining: ${remainingZips}`)
@@ -390,7 +456,7 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   // Process in batches
   for (let i = startIndex; i < totalZips; i += config.batch_size) {
     const batchEnd = Math.min(i + config.batch_size, totalZips)
-    const batch = US_ZIP_CODES_SAMPLE.slice(i, batchEnd)
+    const batch = zipList.slice(i, batchEnd)
     
     console.log(`Processing batch ${Math.floor(i / config.batch_size) + 1}: ZIPs ${i} - ${batchEnd}`)
     
@@ -404,7 +470,9 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
       totalSources += result.sources_found
       
       // Rate limiting
-      await new Promise(resolve => setTimeout(resolve, config.rate_limit_ms))
+      if (Number(config.rate_limit_ms) > 0) {
+        await new Promise(resolve => setTimeout(resolve, config.rate_limit_ms))
+      }
       
       // Memory management
       if (processedCount % 100 === 0) {
@@ -430,11 +498,11 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   console.log('='.repeat(80))
   console.log(`Total ZIPs processed: ${processedCount}`)
   console.log(`Total sources found: ${totalSources}`)
-  console.log(`Average sources per ZIP: ${(totalSources / processedCount).toFixed(2)}`)
+  console.log(`Average sources per ZIP: ${processedCount > 0 ? (totalSources / processedCount).toFixed(2) : '0.00'}`)
   console.log(`Duration: ${(totalDuration / 1000 / 60).toFixed(2)} minutes`)
   console.log()
   
-  if (typeof db?.close === 'function') {
+  if (ownsDb && typeof db?.close === 'function') {
     db.close()
   }
   
