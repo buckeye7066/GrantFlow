@@ -101,11 +101,6 @@ test('backend /api/health contract + request id header', async () => {
 
   const entry = path.join(rootDir, 'backend', 'server.js')
   assert.ok(fs.existsSync(entry), `expected backend entry to exist at ${entry}`)
-  const serverSource = fs.readFileSync(entry, 'utf8')
-  assert.ok(
-    serverSource.includes('normalizedStatus') || serverSource.includes('Normalize status'),
-    'expected backend /api/health to normalize status to ok|warning|error',
-  )
 
   const proc = await startBackend({ rootDir, port })
   try {

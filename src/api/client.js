@@ -208,6 +208,34 @@ class APIClient {
     return this.fetch(originalRequest.endpoint, originalRequest.options);
   }
 
+  // Base44 compatibility shims.
+  // Some parts of the app (and release-hardening tests) expect `base44.get/patch/...` to exist.
+  get(endpoint, options = {}) {
+    return this.fetch(endpoint, { ...options, method: 'GET' })
+  }
+
+  delete(endpoint, options = {}) {
+    return this.fetch(endpoint, { ...options, method: 'DELETE' })
+  }
+
+  post(endpoint, body, options = {}) {
+    const payload =
+      body instanceof FormData || typeof body === 'string' || body == null ? body : JSON.stringify(body)
+    return this.fetch(endpoint, { ...options, method: 'POST', body: payload })
+  }
+
+  put(endpoint, body, options = {}) {
+    const payload =
+      body instanceof FormData || typeof body === 'string' || body == null ? body : JSON.stringify(body)
+    return this.fetch(endpoint, { ...options, method: 'PUT', body: payload })
+  }
+
+  patch(endpoint, body, options = {}) {
+    const payload =
+      body instanceof FormData || typeof body === 'string' || body == null ? body : JSON.stringify(body)
+    return this.fetch(endpoint, { ...options, method: 'PATCH', body: payload })
+  }
+
   async fetch(endpoint, options = {}) {
     const url = `${this.baseUrl}${endpoint}`;
     const token = this.getToken();
