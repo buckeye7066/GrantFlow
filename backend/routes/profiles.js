@@ -31,6 +31,14 @@ function isAdmin(user) {
          user?.role === 'admin'
 }
 
+function getAuthUserId(user) {
+  return user?.userId ?? user?.id ?? user?.user_id ?? null
+}
+
+function getAuthProfileId(user) {
+  return user?.profileId ?? user?.profile_id ?? null
+}
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const uploadDir = process.env.UPLOADS_DIR
@@ -51,17 +59,43 @@ const storage = multer.diskStorage({
 })
 
 const imageFileFilter = (_req, file, cb) => {
-  if (!file.mimetype.startsWith('image/')) {
-    return cb(new Error('Only image uploads are allowed'))
+  const mime = String(file?.mimetype || '')
+  if (mime.startsWith('image/')) {
+    return cb(null, true)
   }
-  cb(null, true)
+
+  // Some clients may omit mimetype; fall back to extension check.
+  const name = String(file?.originalname || '').toLowerCase()
+  const ext = name.includes('.') ? name.split('.').pop() : ''
+  const allowedExt = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tif', 'tiff', 'heic', 'heif'])
+  if (allowedExt.has(ext)) {
+    return cb(null, true)
+  }
+
+  return cb(new Error('Only image uploads are allowed'))
 }
 
 const upload = multer({
   storage,
   fileFilter: imageFileFilter,
-  limits: { fileSize: 5 * 1024 * 1024 },
+  // Phone photos are often >5MB; keep this reasonable while still preventing abuse.
+  limits: { fileSize: 15 * 1024 * 1024 },
 })
+
+function runUploadSingle(fieldName) {
+  const middleware = upload.single(fieldName)
+  return (req, res, next) => {
+    middleware(req, res, (err) => {
+      if (!err) return next()
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(413).json({ error: 'Image is too large. Max size is 15MB.' })
+        }
+      }
+      return res.status(400).json({ error: err?.message || 'Upload failed' })
+    })
+  }
+}
 
 const profileSelect = `
   SELECT 
@@ -140,6 +174,7 @@ function getOpenAI() {
 
 router.get('/', async (req, res) => {
   const user = req.user
+  const userId = getAuthUserId(user)
   const includeSummary = req.query.summary === 'true'
   
   // Validate pagination parameters.
@@ -156,14 +191,14 @@ router.get('/', async (req, res) => {
   // Check if user is admin
   if (!isAdmin(user)) {
     // Enduser: return only profiles where profiles.user_id = user.id
-    if (!user || !user.id) {
+    if (!userId) {
       return res.status(401).json({ error: 'Authentication required' })
     }
 
     // Get all profiles linked to this user (with pagination)
     const rows = await req.db.prepare(
       `${profileSelect} WHERE p.user_id = ? ORDER BY p.created_at ASC LIMIT ? OFFSET ?`
-    ).all(user.id, limit, offset)
+    ).all(userId, limit, offset)
     
     const profiles = rows.map(mapProfile)
     if (includeSummary) {
@@ -200,6 +235,7 @@ router.get('/schema', async (_req, res) => {
 
 router.post('/', async (req, res) => {
   const user = req.user
+  const userId = getAuthUserId(user)
   const { display_name, primary_type, organization_id, user_id, created_by, status = 'active', tags = [] } = req.body ?? {}
 
   if (!display_name || typeof display_name !== 'string') {
@@ -209,11 +245,11 @@ router.post('/', async (req, res) => {
   // Check permissions
   if (!isAdmin(user)) {
     // Enduser can only create profiles for themselves
-    if (!user || !user.id) {
+    if (!userId) {
       return res.status(401).json({ error: 'Authentication required' })
     }
     
-    if (user_id && user_id !== user.id) {
+    if (user_id && user_id !== userId) {
       return res.status(403).json({ 
         error: 'Endusers can only create profiles for themselves' 
       })
@@ -234,7 +270,7 @@ router.post('/', async (req, res) => {
   }
 
   // Determine user_id for the new profile
-  const profileUserId = isAdmin(user) ? (user_id || user?.id) : user.id
+  const profileUserId = isAdmin(user) ? (user_id || userId) : userId
 
   const profileId = crypto.randomUUID()
   const insert = req.db.prepare(`
@@ -261,6 +297,7 @@ router.post('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   const { id } = req.params
   const user = req.user
+  const userId = getAuthUserId(user)
   const row = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!row) {
     return res.status(404).json({ error: 'Profile not found' })
@@ -269,7 +306,7 @@ router.get('/:id', async (req, res) => {
   // Check access permissions
   if (!isAdmin(user)) {
     // Enduser: can only access profiles where user_id matches
-    if (!user || !user.id || row.user_id !== user.id) {
+    if (!userId || row.user_id !== userId) {
       return res.status(403).json({ error: 'Access denied' })
     }
   }
@@ -303,6 +340,8 @@ router.put('/:id', async (req, res) => {
   const { id } = req.params
   const { display_name, primary_type, organization_id, status, tags } = req.body ?? {}
   const auth = req.user ?? { role: 'guest' }
+  const authUserId = getAuthUserId(auth)
+  const authProfileId = getAuthProfileId(auth)
 
   const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!existing) {
@@ -311,8 +350,8 @@ router.put('/:id', async (req, res) => {
 
   // Allow: admins (including admin-email allowlist), profile-scoped tokens for the profile, or session owners (userId match)
   const isAdminUser = isAdmin(auth)
-  const matchesProfileId = auth.profileId === id
-  const matchesUserId = auth.userId && existing.user_id && auth.userId === existing.user_id
+  const matchesProfileId = authProfileId === id
+  const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
   if (!isAdminUser && !matchesProfileId && !matchesUserId) {
     return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to update this profile' })
   }
@@ -369,6 +408,8 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
+  const authUserId = getAuthUserId(auth)
+  const authProfileId = getAuthProfileId(auth)
 
   // Check authorization - user must be admin or the profile must belong to them
   const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
@@ -377,8 +418,8 @@ router.delete('/:id', async (req, res) => {
   }
 
   if (auth.role !== 'admin') {
-    const matchesProfileId = auth.profileId === id
-    const matchesUserId = auth.userId && existing.user_id && auth.userId === existing.user_id
+    const matchesProfileId = authProfileId === id
+    const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
     if (!matchesProfileId && !matchesUserId) {
       return res.status(403).json({ error: 'Not authorized to delete this profile' })
     }
@@ -402,9 +443,11 @@ router.delete('/:id', async (req, res) => {
   res.status(204).send()
 })
 
-router.post('/:id/avatar', upload.single('avatar'), async (req, res, next) => {
+router.post('/:id/avatar', runUploadSingle('avatar'), async (req, res, next) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
+  const authUserId = getAuthUserId(auth)
+  const authProfileId = getAuthProfileId(auth)
 
   const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!existing) {
@@ -413,8 +456,8 @@ router.post('/:id/avatar', upload.single('avatar'), async (req, res, next) => {
   }
 
   const isAdminUser = isAdmin(auth)
-  const matchesProfileId = auth.profileId === id
-  const matchesUserId = auth.userId && existing.user_id && auth.userId === existing.user_id
+  const matchesProfileId = authProfileId === id
+  const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
 
   if (!isAdminUser && !matchesProfileId && !matchesUserId) {
     if (req.file) fs.unlink(join(uploadDir, req.file.filename), () => {})
@@ -451,6 +494,8 @@ router.post('/:id/avatar', upload.single('avatar'), async (req, res, next) => {
 router.post('/:id/avatar/ai', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
+  const authUserId = getAuthUserId(auth)
+  const authProfileId = getAuthProfileId(auth)
 
   const profileRow = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!profileRow) {
@@ -458,8 +503,8 @@ router.post('/:id/avatar/ai', async (req, res) => {
   }
 
   const isAdminUser = isAdmin(auth)
-  const matchesProfileId = auth.profileId === id
-  const matchesUserId = auth.userId && profileRow.user_id && auth.userId === profileRow.user_id
+  const matchesProfileId = authProfileId === id
+  const matchesUserId = authUserId && profileRow.user_id && authUserId === profileRow.user_id
   if (!isAdminUser && !matchesProfileId && !matchesUserId) {
     return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to update this profile' })
   }
@@ -511,7 +556,7 @@ router.get('/:id/sections', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
+  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
     return res.status(403).json({ error: 'Not authorized to access this profile' })
   }
 
@@ -544,7 +589,7 @@ router.get('/:id/sections/:sectionKey', async (req, res) => {
   const { id, sectionKey } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
+  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
     return res.status(403).json({ error: 'Not authorized to access this profile' })
   }
 
@@ -575,7 +620,7 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
   const { data, updated_by } = req.body ?? {}
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
+  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
     return res.status(403).json({ error: 'Not authorized to update this profile' })
   }
 
@@ -623,7 +668,7 @@ router.delete('/:id/sections/:sectionKey', async (req, res) => {
   const { id, sectionKey } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
+  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
     return res.status(403).json({ error: 'Not authorized to update this profile' })
   }
 
@@ -639,7 +684,7 @@ router.post('/:id/sections/:sectionKey/ai', async (req, res) => {
   const { id, sectionKey } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
+  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
     return res.status(403).json({ error: 'Not authorized to access this profile' })
   }
 
@@ -729,7 +774,7 @@ router.post('/:id/fields/ai', async (req, res) => {
   const { fieldName, fieldLabel, currentValue, fieldDescription, sectionKey, profileData } = req.body
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
+  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
     return res.status(403).json({ error: 'Not authorized to access this profile' })
   }
 
@@ -806,7 +851,7 @@ router.get('/:id/completeness', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
+  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
     return res.status(403).json({ error: 'Not authorized to access this profile' })
   }
 
@@ -912,7 +957,7 @@ router.post('/:id/repair', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
+  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
     return res.status(403).json({ error: 'Not authorized to repair this profile' })
   }
 
@@ -1001,7 +1046,7 @@ router.get('/:id/export', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
+  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
     return res.status(403).json({ error: 'Not authorized to export this profile' })
   }
 
@@ -1056,7 +1101,7 @@ router.post('/:id/import', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
+  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
     return res.status(403).json({ error: 'Not authorized to import to this profile' })
   }
 
