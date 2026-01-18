@@ -524,14 +524,18 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
       }
     }
 
-    // Fixed SQL parameters
-    await req.db.prepare(`
+    // IMPORTANT: Do NOT set documents.status on insert.
+    // Some deployments have legacy bad status values; status is constrained in Postgres.
+    // We'll rely on the DB default and allow later updates to set status if needed.
+    const insertDocumentSql = `
       INSERT INTO documents (
         id, organization_id, grant_id, profile_id, university_application_id, university_application_name, name, type,
-        file_url, file_path, file_size, mime_type, 
-        extracted_text, processing_status, status, notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)
-    `).run(
+        file_url, file_path, file_size, mime_type,
+        extracted_text, processing_status, notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `
+
+    const insertDocumentArgs = [
       docId,
       resolvedOrganizationId,
       rawGrantId || null,
@@ -546,8 +550,21 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
       file?.mimetype || null,
       extractedText,
       processingStatus,
-      rawNotes || null
-    );
+      rawNotes || null,
+    ]
+
+    try {
+      await req.db.prepare(insertDocumentSql).run(...insertDocumentArgs)
+    } catch (error) {
+      const msg = String(error?.message || error)
+      // Safety retry: if an old code path still attempted to set status (or the DB has a legacy constraint edge),
+      // retry the insert without status. (This statement already omits status.)
+      if (msg.includes('documents_status_check')) {
+        await req.db.prepare(insertDocumentSql).run(...insertDocumentArgs)
+      } else {
+        throw error
+      }
+    }
 
     if (profileId) {
       await req.db

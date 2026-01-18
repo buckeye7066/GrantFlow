@@ -60,7 +60,7 @@ async function withTempSqliteDb() {
       organization_id TEXT,
       name TEXT,
       type TEXT,
-      status TEXT,
+      status TEXT DEFAULT 'draft' CHECK(status IN ('draft', 'review', 'final', 'submitted')),
       notes TEXT,
       extracted_text TEXT,
       processing_status TEXT,
@@ -104,15 +104,14 @@ test('document_ingest job: updates profile sections and marks document ready for
     db.prepare('INSERT INTO profiles (id) VALUES (?)').run(profileId)
     db.prepare(
       `
-        INSERT INTO documents (id, profile_id, name, type, status, extracted_text, processing_status)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO documents (id, profile_id, name, type, extracted_text, processing_status)
+        VALUES (?, ?, ?, ?, ?, ?)
       `,
     ).run(
       documentId,
       profileId,
       'sample.pdf',
       'source_material',
-      'draft',
       'Name: Smoke User\nEmail: smoke.user@example.com\nPhone: 555-555-1212',
       'pending',
     )
