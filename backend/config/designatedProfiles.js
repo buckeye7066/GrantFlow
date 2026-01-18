@@ -1,4 +1,122 @@
 export const DESIGNATED_PROFILES = [
+  // Required roster (release-hardening checklist):
+  // John, Robert, Anastasia, Luibov, Focus Forward, Axiom Biolabs, Brian, Hollie,
+  // Olivia, Avanell, Angelika, Rachel, Josh, Jason, Kathy.
+  //
+  // Demo/test fixture profile for onboarding + smoke checks:
+  // John Doe should always exist so admins can validate flows quickly.
+  {
+    id: 'profile-john-doe',
+    display_name: 'John Doe',
+    primary_type: 'individual',
+    status: 'active',
+    tags: ['individual', 'demo'],
+    sections: {
+      basic_information: {
+        full_name: 'John Doe',
+        email: 'john.doe@example.com',
+        phone: '',
+        website: '',
+        address: '123 Main Street\nNashville, TN 37209',
+      },
+      financial_information: {
+        financial_need_level: 'Unknown',
+        notes: 'Demo profile for validating intake, documents, and crawlers.',
+      },
+      location_focus: {
+        geographic_focus: 'Nashville, Tennessee',
+        notes: 'Demo profile – update as needed.',
+      },
+      narrative: {
+        mission: 'Demo profile for testing GrantFlow end-to-end.',
+        primary_goal: 'Validate crawl + application + document ingestion flows.',
+        funding_amount_needed: '',
+      },
+    },
+  },
+  //
+  // NOTE: Some profiles below are minimal stubs (no sections yet). That's intentional:
+  // they ensure deterministic IDs exist in Postgres/SQLite so login mapping can attach,
+  // while allowing admins/users to keep editing without startup wiping data.
+  {
+    id: 'profile-axiom-biolabs',
+    display_name: 'Axiom BioLabs',
+    primary_type: 'organization',
+    status: 'active',
+    tags: ['organization'],
+    sections: {
+      basic_information: {
+        full_name: 'Axiom BioLabs',
+        email: '',
+        phone: '',
+        website: 'https://www.axiombiolabs.org',
+        address: '',
+      },
+      organization_details: {
+        organization_type: 'Biotechnology / research organization',
+        mission: '',
+      },
+    },
+  },
+  {
+    id: 'profile-robert',
+    display_name: 'Robert',
+    primary_type: 'individual',
+    status: 'active',
+    tags: ['individual'],
+  },
+  {
+    id: 'profile-anastasia',
+    display_name: 'Anastasia Nicole White',
+    primary_type: 'high_school_student',
+    status: 'active',
+    tags: ['individual', 'student'],
+    // Keep canonical profile data as data (not hardcoded in this file).
+    // `ensureDesignatedProfiles` will seed these sections only if missing.
+    data_file: 'backend/config/profile-anastasia.json',
+  },
+  {
+    id: 'profile-luibov',
+    display_name: 'Luibov',
+    primary_type: 'individual',
+    status: 'active',
+    tags: ['individual'],
+  },
+  {
+    id: 'profile-angelika-ptak',
+    display_name: 'Angelika Ptak',
+    primary_type: 'individual',
+    status: 'active',
+    tags: ['individual'],
+  },
+  {
+    id: 'profile-rachel-miller',
+    display_name: 'Rachel Miller',
+    primary_type: 'individual',
+    status: 'active',
+    tags: ['individual'],
+  },
+  {
+    id: 'profile-josh-dasher',
+    display_name: 'Josh Dasher',
+    primary_type: 'individual',
+    status: 'active',
+    tags: ['individual'],
+  },
+  {
+    id: 'profile-paul-jason-dasher',
+    display_name: 'Jason Dasher',
+    primary_type: 'individual',
+    status: 'active',
+    tags: ['individual'],
+  },
+  {
+    id: 'profile-kathy',
+    display_name: 'Kathy',
+    primary_type: 'individual',
+    status: 'active',
+    tags: ['individual'],
+  },
   {
     id: 'profile-olivia-beltran',
     display_name: 'Olivia Beltran / Hybrid Healing',

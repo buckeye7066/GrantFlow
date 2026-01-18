@@ -11,8 +11,8 @@
     "build": "vite build",
     "lint": "eslint --max-warnings 0 \"src/**/*.{js,jsx}\" \"backend/**/*.js\"",
     "typecheck": "tsc -p tsconfig.node.json --noEmit",
-    "unit": "node --test tests/unit/*.test.mjs",
-    "smoke": "playwright test -c tests/smoke/playwright.config.mjs",
+    "unit": "node scripts/run-unit-tests.mjs",
+    "smoke": "node ./node_modules/playwright/cli.js test -c tests/smoke/playwright.config.mjs",
     "doctor": "node scripts/doctor.mjs",
     "dns:godaddy:vercel": "node ./scripts/godaddy-set-vercel-dns.mjs",
     "test": "npm run lint && npm run typecheck && npm run unit && npm run build",
@@ -43,7 +43,8 @@
     "crawler:doctor": "node ./scripts/crawler-doctor.mjs",
     "opps:check-national-minimum": "node ./scripts/opportunities-national-minimum.mjs check",
     "opps:ensure-national-minimum": "node ./scripts/opportunities-national-minimum.mjs ensure",
-    "migrate:data": "node backend/scripts/migrate-sqlite-to-postgres.mjs"
+    "migrate:data": "node backend/scripts/migrate-sqlite-to-postgres.mjs",
+    "test:keys": "node backend/scripts/test-keys.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.1",

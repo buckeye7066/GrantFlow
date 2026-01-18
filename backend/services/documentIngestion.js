@@ -12,10 +12,14 @@ const TARGET_SECTIONS = [
   'financial_information',
   'government_assistance',
   'health_medical',
+  'medical_insurance',
+  'medical_history',
+  'nonprofit_compliance',
   'demographics',
   'family_life',
   'military_service',
   'occupation',
+  'small_business_details',
   'location_focus',
   'education',
   'employment',
@@ -73,6 +77,79 @@ async function extractTextFromImageWithVision({ openai, filePath, mimeType }) {
   return text || null
 }
 
+function extractFirstMatch(text, regex) {
+  if (!text) return null
+  const match = String(text).match(regex)
+  const value = match?.[1] ?? match?.[0]
+  const normalized = typeof value === 'string' ? value.trim() : null
+  return normalized || null
+}
+
+function extractLabeledValue(text, labelRegex) {
+  // e.g. /(?:EIN|Tax ID)\s*[:#-]\s*([0-9-]{9,})/i
+  if (!text) return null
+  const regex = new RegExp(`${labelRegex.source}\\s*[:#\\-]?\\s*([^\\n\\r]{2,80})`, labelRegex.flags)
+  const m = String(text).match(regex)
+  const value = m?.[1]?.trim()
+  return value || null
+}
+
+function extractBasicInformationHeuristics(text) {
+  const source = String(text || '')
+
+  const email = extractFirstMatch(source, /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)
+  const phone = extractFirstMatch(
+    source,
+    /(\+?1[\s.-]?)?(?:\(\s*\d{3}\s*\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}/,
+  )
+  const website = extractFirstMatch(
+    source,
+    /\bhttps?:\/\/[^\s)]+/i,
+  )
+
+  const fullName =
+    extractLabeledValue(source, /(?:full\s+name|name|applicant)\b/i) ||
+    extractFirstMatch(source, /^\s*([A-Z][A-Za-z'.-]+(?:\s+[A-Z][A-Za-z'.-]+){1,4})\s*$/m)
+
+  const address =
+    extractLabeledValue(source, /(?:address|mailing\s+address)\b/i) ||
+    null
+
+  return {
+    full_name: fullName || '',
+    email: email || '',
+    phone: phone || '',
+    website: website || '',
+    address: address || '',
+    notes: '',
+  }
+}
+
+function extractOrganizationDetailsHeuristics(text) {
+  const source = String(text || '')
+
+  const ein =
+    extractFirstMatch(source, /(?:\bEIN\b|\bTax\s*ID\b)[^0-9]*([0-9]{2}-[0-9]{7})/i) ||
+    extractLabeledValue(source, /\bEIN\b/i)
+
+  const uei =
+    extractFirstMatch(source, /(?:\bUEI\b|\bUnique\s+Entity\s+ID\b)[^A-Z0-9]*([A-Z0-9]{12})/i) ||
+    extractLabeledValue(source, /\bUEI\b/i)
+
+  const cage =
+    extractFirstMatch(source, /(?:\bCAGE\b|\bCAGE\s*Code\b)[^A-Z0-9]*([A-Z0-9]{5})/i) ||
+    extractLabeledValue(source, /\bCAGE(?:\s*Code)?\b/i)
+
+  return {
+    organization_type: '',
+    ein: ein || '',
+    uei: uei || '',
+    cage_code: cage || '',
+    annual_budget: null,
+    staff_count: null,
+    mission: '',
+  }
+}
 function normalizeValue(value) {
   if (typeof value === 'string') {
     return value.trim()
@@ -152,8 +229,8 @@ function mergeSectionData(existing = {}, incoming = {}) {
   return { data: merged, updatedFields }
 }
 
-function upsertProfileSection(db, profileId, sectionKey, data, documentId) {
-  db.prepare(
+async function upsertProfileSection(db, profileId, sectionKey, data, documentId) {
+  await db.prepare(
     `
       INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
       VALUES (?, ?, ?, ?)
@@ -180,7 +257,7 @@ export async function processDocumentIngestionJob({
     throw new Error('document_ingest job missing document_id parameter')
   }
 
-  const document = db
+  const document = await db
     .prepare('SELECT * FROM documents WHERE id = ?')
     .get(documentId)
 
@@ -188,7 +265,7 @@ export async function processDocumentIngestionJob({
     throw new Error(`Document ${documentId} not found`)
   }
 
-  db.prepare(
+  await db.prepare(
     'UPDATE documents SET processing_status = ?, processing_error = NULL WHERE id = ?',
   ).run('processing', documentId)
 
@@ -208,7 +285,7 @@ export async function processDocumentIngestionJob({
         ocrLanguage: 'eng',
       })
       if (result?.text) {
-        db.prepare('UPDATE documents SET extracted_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
+        await db.prepare('UPDATE documents SET extracted_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
           result.text,
           documentId,
         )
@@ -237,14 +314,14 @@ export async function processDocumentIngestionJob({
     // Auto-classify existing docs (in case they were uploaded without a school selection).
     if (!document.university_application_id && profile?.id && document.extracted_text) {
       try {
-        const apps = loadUniversityApplicationsForProfile(db, profile.id)
+        const apps = await loadUniversityApplicationsForProfile(db, profile.id)
         const match = classifyUniversityApplicationForDocument({
           applications: apps,
           documentName: document.name,
           extractedText: document.extracted_text,
         })
         if (match) {
-          db.prepare(
+          await db.prepare(
             `
               UPDATE documents
               SET university_application_id = ?,
@@ -266,15 +343,23 @@ export async function processDocumentIngestionJob({
     try {
       openai = typeof getOpenAI === 'function' ? getOpenAI() : null
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'AI parsing unavailable.'
+      // Degrade gracefully: we can still do OCR + deterministic extraction.
+      aiSectionsLog._openai_client_error = message
+      openaiUnavailableMessage = message
       openai = null
-      openaiUnavailableMessage = error instanceof Error ? error.message : String(error)
     }
 
     // If this is an image (screenshots/handwriting) and OCR didn't yield text, use a vision pass as a fallback.
     try {
       const current = String(document.extracted_text || '').trim()
+      const handwriting = Boolean(params?.handwriting)
       const shouldTryVision =
-        (!current || current.length < 40) && document.file_path && isImageMime(document.mime_type) && openai
+        openai &&
+        document.file_path &&
+        isImageMime(document.mime_type) &&
+        (handwriting || !current || current.length < 40)
+
       if (shouldTryVision) {
         const visionText = await extractTextFromImageWithVision({
           openai,
@@ -282,10 +367,9 @@ export async function processDocumentIngestionJob({
           mimeType: document.mime_type,
         })
         if (visionText) {
-          db.prepare('UPDATE documents SET extracted_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
-            visionText,
-            documentId,
-          )
+          await db
+            .prepare('UPDATE documents SET extracted_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            .run(visionText, documentId)
           document.extracted_text = visionText
           docExcerpt = truncateText(document.extracted_text ?? document.notes ?? '', 5000)
         }
@@ -297,7 +381,7 @@ export async function processDocumentIngestionJob({
     if (!docExcerpt) {
       const message =
         'No extractable text found for this document. If it is scanned, upload a JPG/PNG version to enable OCR.'
-      db.prepare(
+      await db.prepare(
         `
           UPDATE documents
           SET processing_status = 'completed',
@@ -322,86 +406,120 @@ export async function processDocumentIngestionJob({
       }
     }
 
-    let fatalOpenAIError = null
+    // Deterministic extraction (works even when the model provider is down).
+    try {
+      const heuristicBasic = extractBasicInformationHeuristics(document.extracted_text ?? document.notes ?? '')
+      const { data: mergedBasic, updatedFields: updatedBasic } = mergeSectionData(
+        sections.basic_information ?? {},
+        heuristicBasic,
+      )
+      if (updatedBasic.size > 0) {
+        await upsertProfileSection(db, profile.id, 'basic_information', mergedBasic, document.id)
+        sections.basic_information = mergedBasic
+        updates.push({ section_key: 'basic_information', updated_fields: Array.from(updatedBasic) })
+        aiSectionsLog.basic_information = { ...(aiSectionsLog.basic_information || {}), heuristic: heuristicBasic }
+      }
 
-    if (openai) {
-      for (const sectionKey of TARGET_SECTIONS) {
-        const promptPayload = buildProfileSectionPrompt(sectionKey, {
-          profile,
-          sections,
-          documents: documentSummary,
+      const heuristicOrg = extractOrganizationDetailsHeuristics(document.extracted_text ?? document.notes ?? '')
+      const { data: mergedOrg, updatedFields: updatedOrg } = mergeSectionData(
+        sections.organization_details ?? {},
+        heuristicOrg,
+      )
+      if (updatedOrg.size > 0) {
+        await upsertProfileSection(db, profile.id, 'organization_details', mergedOrg, document.id)
+        sections.organization_details = mergedOrg
+        updates.push({ section_key: 'organization_details', updated_fields: Array.from(updatedOrg) })
+        aiSectionsLog.organization_details = { ...(aiSectionsLog.organization_details || {}), heuristic: heuristicOrg }
+      }
+    } catch {
+      // best-effort
+    }
+
+    let openAIWarning = null
+
+    for (const sectionKey of TARGET_SECTIONS) {
+      if (!openai) break
+      const promptPayload = buildProfileSectionPrompt(sectionKey, {
+        profile,
+        sections,
+        documents: documentSummary,
+      })
+
+      if (!promptPayload) continue
+
+      try {
+        const completion = await openai.chat.completions.create({
+          model: 'gpt-4o-mini',
+          temperature: 0.1,
+          response_format: { type: 'json_object' },
+          messages: [
+            {
+              role: 'system',
+              content: 'You are an expert data extraction assistant. Respond with valid JSON only.',
+            },
+            { role: 'user', content: promptPayload.prompt },
+          ],
         })
 
-        if (!promptPayload) continue
-
+        const raw = extractCompletionText(completion) || '{}'
+        let suggestion = {}
         try {
-          const completion = await openai.chat.completions.create({
-            model: 'gpt-4o-mini',
-            temperature: 0.1,
-            response_format: { type: 'json_object' },
-            messages: [
-              {
-                role: 'system',
-                content:
-                  'You are an expert data extraction assistant. Respond with valid JSON only.',
-              },
-              { role: 'user', content: promptPayload.prompt },
-            ],
+          suggestion = JSON.parse(raw)
+        } catch {
+          continue
+        }
+
+        const existing = sections[sectionKey] ?? {}
+        const { data: merged, updatedFields } = mergeSectionData(existing, suggestion)
+
+        if (updatedFields.size > 0) {
+          await upsertProfileSection(db, profile.id, sectionKey, merged, document.id)
+          sections[sectionKey] = merged
+          updates.push({
+            section_key: sectionKey,
+            updated_fields: Array.from(updatedFields),
           })
+        }
 
-          const raw = extractCompletionText(completion) || '{}'
-          let suggestion = {}
-          try {
-            suggestion = JSON.parse(raw)
-          } catch {
-            continue
-          }
+        aiSectionsLog[sectionKey] = {
+          suggestion,
+          updated: Array.from(updatedFields),
+        }
+      } catch (error) {
+        const summary = summarizeOpenAIError(error)
+        console.error(`Failed to enrich section ${sectionKey}`, summary)
 
-          const existing = sections[sectionKey] ?? {}
-          const { data: merged, updatedFields } = mergeSectionData(existing, suggestion)
-
-          if (updatedFields.size > 0) {
-            upsertProfileSection(db, profile.id, sectionKey, merged, document.id)
-            sections[sectionKey] = merged
-            updates.push({
-              section_key: sectionKey,
-              updated_fields: Array.from(updatedFields),
-            })
-          }
-
-          aiSectionsLog[sectionKey] = {
-            suggestion,
-            updated: Array.from(updatedFields),
-          }
-        } catch (error) {
-          const summary = summarizeOpenAIError(error)
-          console.error(`Failed to enrich section ${sectionKey}`, summary)
-
-          // If the key is invalid (or access is forbidden), stop trying OpenAI.
-          if (summary.isAuth) {
-            fatalOpenAIError = summary.message
-            break
-          }
+        // If the key is invalid (or access is forbidden), stop AI parsing.
+        // IMPORTANT: do NOT mark the document failed — we still may have extracted useful structured
+        // fields via deterministic heuristics.
+        if (summary.isAuth) {
+          openAIWarning = summary.message
+          aiSectionsLog._openai_auth_error = summary.message
+          openai = null
+          break
         }
       }
     }
 
-    // Fallback: if OpenAI was unavailable/failed auth OR we updated nothing, try deterministic university parsing.
-    const usedFallback = Boolean(!openai || fatalOpenAIError)
-    const fallbackUniversityUpdate = applyFallbackUniversityUpdates({
-      db,
-      profileId: profile?.id ?? null,
-      document,
-      extractedText: document.extracted_text ?? document.notes ?? '',
-    })
-
-    if (fallbackUniversityUpdate.updated) {
-      updates.push({
-        section_key: 'university_applications',
-        updated_fields: fallbackUniversityUpdate.updated_fields,
+    // University deterministic parsing is useful even without AI (or when AI doesn't produce structured updates).
+    const shouldRunUniversityFallback = Boolean(!openai || openAIWarning || openaiUnavailableMessage || updates.length === 0)
+    if (shouldRunUniversityFallback) {
+      const fallbackUniversityUpdate = await applyFallbackUniversityUpdates({
+        db,
+        profileId: profile?.id ?? null,
+        document,
+        extractedText: document.extracted_text ?? document.notes ?? '',
       })
+
+      if (fallbackUniversityUpdate.updated) {
+        updates.push({
+          section_key: 'university_applications',
+          updated_fields: fallbackUniversityUpdate.updated_fields,
+        })
+      }
     }
 
+    const usedFallback = Boolean(openaiUnavailableMessage || openAIWarning)
     const status = 'completed'
     const summary = usedFallback
       ? buildFallbackDocumentSummary({
@@ -427,19 +545,23 @@ export async function processDocumentIngestionJob({
       total_sections_updated: updates.length,
       used_fallback: usedFallback,
       openai_unavailable: Boolean(openaiUnavailableMessage),
-      openai_error: fatalOpenAIError || null,
+      openai_error: openAIWarning || openaiUnavailableMessage || null,
     }
 
-    db.prepare(
+    const processingError = (openAIWarning || openaiUnavailableMessage)
+      ? `AI parsing unavailable: ${openAIWarning || openaiUnavailableMessage}`
+      : null
+
+    await db.prepare(
       `
         UPDATE documents
         SET processing_status = ?,
             ai_summary = ?,
             ai_sections = ?,
-            processing_error = NULL
+            processing_error = ?
         WHERE id = ?
       `,
-    ).run(status, summary, JSON.stringify(aiSectionsLog, null, 2), documentId)
+    ).run(status, summary, JSON.stringify(aiSectionsLog, null, 2), processingError, documentId)
 
     return {
       inserted: updates.length,
@@ -450,7 +572,7 @@ export async function processDocumentIngestionJob({
       result_meta: resultMeta,
     }
   } catch (error) {
-    db.prepare(
+    await db.prepare(
       `
         UPDATE documents
         SET processing_status = 'failed',

@@ -146,6 +146,8 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         UPDATE crawler_jobs
         SET status = 'completed',
             completed_at = CURRENT_TIMESTAMP,
+            -- IMPORTANT (Postgres): avoid untyped NULL params in "CASE WHEN $1 IS NULL".
+            -- COALESCE(?, result_count) keeps the existing value when the handler doesn't return a count.
             result_count = COALESCE(?, result_count),
             result_meta = COALESCE(?, result_meta),
             error = NULL

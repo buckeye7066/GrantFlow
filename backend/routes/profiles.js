@@ -5,12 +5,8 @@ import multer from 'multer'
 import fs from 'fs'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
-import {
-  buildProfileSectionPrompt,
-  supportedSectionKeys,
-  canonicalSectionKeys,
-  CANONICAL_SECTION_DEFAULTS,
-} from '../prompts/profileSections.js'
+import { buildProfileSectionPrompt, supportedSectionKeys } from '../prompts/profileSections.js'
+import { PROFILE_SCHEMA, getDefaultSectionData } from '../config/profileSchema.js'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
 import { ensureBillingAccount, mapAccountRow } from '../services/billingAccounts.js'
 import { extractCompletionText } from '../utils/openai.js'
@@ -18,7 +14,6 @@ import { linkProfileToAdmin } from '../utils/adminProfileLinks.js'
 import { safeParseJSON } from '../utils/safeJson.js'
 import { validatePagination } from '../utils/validation.js'
 import { formatError } from '../middleware/errorHandler.js'
-import { getComprehensiveApplicationSchema } from '../config/comprehensiveApplicationSchema.js'
 
 const router = express.Router()
 
@@ -34,6 +29,24 @@ function isAdmin(user) {
          user?.primary_email === ADMIN_EMAIL || 
          user?.email === ADMIN_EMAIL || 
          user?.role === 'admin'
+}
+
+function getAuthUserId(user) {
+  return user?.userId ?? user?.id ?? user?.user_id ?? null
+}
+
+function getAuthProfileId(user) {
+  return user?.profileId ?? user?.profile_id ?? null
+}
+
+function canAccessProfile({ auth, profileRow }) {
+  if (!profileRow) return false
+  if (isAdmin(auth)) return true
+  const authProfileId = getAuthProfileId(auth)
+  if (authProfileId && authProfileId === profileRow.id) return true
+  const authUserId = getAuthUserId(auth)
+  if (authUserId && profileRow.user_id && authUserId === profileRow.user_id) return true
+  return false
 }
 
 const __filename = fileURLToPath(import.meta.url)
@@ -56,17 +69,43 @@ const storage = multer.diskStorage({
 })
 
 const imageFileFilter = (_req, file, cb) => {
-  if (!file.mimetype.startsWith('image/')) {
-    return cb(new Error('Only image uploads are allowed'))
+  const mime = String(file?.mimetype || '')
+  if (mime.startsWith('image/')) {
+    return cb(null, true)
   }
-  cb(null, true)
+
+  // Some clients may omit mimetype; fall back to extension check.
+  const name = String(file?.originalname || '').toLowerCase()
+  const ext = name.includes('.') ? name.split('.').pop() : ''
+  const allowedExt = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tif', 'tiff', 'heic', 'heif'])
+  if (allowedExt.has(ext)) {
+    return cb(null, true)
+  }
+
+  return cb(new Error('Only image uploads are allowed'))
 }
 
 const upload = multer({
   storage,
   fileFilter: imageFileFilter,
-  limits: { fileSize: 5 * 1024 * 1024 },
+  // Phone photos are often >5MB; keep this reasonable while still preventing abuse.
+  limits: { fileSize: 15 * 1024 * 1024 },
 })
+
+function runUploadSingle(fieldName) {
+  const middleware = upload.single(fieldName)
+  return (req, res, next) => {
+    middleware(req, res, (err) => {
+      if (!err) return next()
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(413).json({ error: 'Image is too large. Max size is 15MB.' })
+        }
+      }
+      return res.status(400).json({ error: err?.message || 'Upload failed' })
+    })
+  }
+}
 
 const profileSelect = `
   SELECT 
@@ -88,29 +127,6 @@ const profileSelect = `
 
 function mapProfile(row) {
   if (!row) return null
-  const normalizeAvatarUrl = (raw) => {
-    if (!raw) return null
-    const value = String(raw).trim()
-    if (!value) return null
-
-    // Absolute / special URLs are already safe for the browser.
-    if (/^(https?:)?\/\//i.test(value)) return value
-    if (/^data:/i.test(value)) return value
-
-    // Normalize legacy stored values so the frontend doesn't request relative paths like
-    // `/grantflow/ProfileDetail?.../file.jpg`.
-    if (value.startsWith('/uploads/')) return value
-    if (value.startsWith('uploads/')) return `/${value}`
-
-    // If we stored just a filename, assume it lives under /uploads.
-    if (/\.(png|jpe?g|webp|gif)$/i.test(value) && !value.includes('/')) {
-      return `/uploads/${value}`
-    }
-
-    // Fall back to absolute-from-origin.
-    return value.startsWith('/') ? value : `/${value}`
-  }
-
   return {
     id: row.id,
     created_at: row.created_at,
@@ -126,8 +142,8 @@ function mapProfile(row) {
     applicant_type: row.primary_type,
     status: row.status,
     tags: safeParseJSON(row.tags, []),
-    avatar_url: normalizeAvatarUrl(row.avatar_url),
-    profile_image_url: normalizeAvatarUrl(row.avatar_url),
+    avatar_url: row.avatar_url ?? null,
+    profile_image_url: row.avatar_url ?? null,
   }
 }
 
@@ -166,36 +182,36 @@ function getOpenAI() {
   return createOpenAIClient().openai
 }
 
-// Canonical profile schema (safe to expose; contains no secrets).
-router.get('/schema', async (req, res) => {
-  const user = req.user ?? { role: 'guest' }
-  if (user.role === 'guest') {
-    return res.status(401).json({ error: 'Authentication required' })
-  }
+function getOpenAIOptional() {
+  return createOpenAIClient({ allowMissing: true }).openai
+}
 
-  const comprehensive = getComprehensiveApplicationSchema()
-
-  const sections = canonicalSectionKeys.map((sectionKey) => {
-    const defaults = CANONICAL_SECTION_DEFAULTS[sectionKey] ?? {}
-    return {
-      section_key: sectionKey,
-      keys: Object.keys(defaults),
-    }
+async function createAnthropicClient() {
+  if (!process.env.ANTHROPIC_API_KEY) return null
+  const Anthropic = (await import('@anthropic-ai/sdk')).default
+  return new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY,
+    timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 15_000),
+    maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
   })
+}
 
-  return res.json({
-    version: '1.0',
-    generated_at: new Date().toISOString(),
-    canonical_sections: sections,
-    comprehensive_application: {
-      field_count: comprehensive.fields.length,
-      fields: comprehensive.fields,
-    },
-  })
-})
+function extractAnthropicText(response) {
+  const parts = Array.isArray(response?.content) ? response.content : []
+  return parts
+    .map((part) => {
+      if (typeof part?.text === 'string') return part.text
+      if (typeof part === 'string') return part
+      return ''
+    })
+    .filter(Boolean)
+    .join('\n')
+    .trim()
+}
 
 router.get('/', async (req, res) => {
   const user = req.user
+  const userId = getAuthUserId(user)
   const includeSummary = req.query.summary === 'true'
   
   // Validate pagination parameters.
@@ -212,14 +228,14 @@ router.get('/', async (req, res) => {
   // Check if user is admin
   if (!isAdmin(user)) {
     // Enduser: return only profiles where profiles.user_id = user.id
-    if (!user || !user.id) {
+    if (!userId) {
       return res.status(401).json({ error: 'Authentication required' })
     }
 
     // Get all profiles linked to this user (with pagination)
     const rows = await req.db.prepare(
       `${profileSelect} WHERE p.user_id = ? ORDER BY p.created_at ASC LIMIT ? OFFSET ?`
-    ).all(user.id, limit, offset)
+    ).all(userId, limit, offset)
     
     const profiles = rows.map(mapProfile)
     if (includeSummary) {
@@ -243,8 +259,20 @@ router.get('/', async (req, res) => {
   res.json(profiles)
 })
 
+// Canonical profile schema (data points + explanations)
+// IMPORTANT: This must be defined before `/:id` routes to avoid being captured as a profile id.
+router.get('/schema', async (_req, res) => {
+  res.json({
+    version: '1.0',
+    generated_at: new Date().toISOString(),
+    sections: PROFILE_SCHEMA,
+    supported_section_keys: supportedSectionKeys,
+  })
+})
+
 router.post('/', async (req, res) => {
   const user = req.user
+  const userId = getAuthUserId(user)
   const { display_name, primary_type, organization_id, user_id, created_by, status = 'active', tags = [] } = req.body ?? {}
 
   if (!display_name || typeof display_name !== 'string') {
@@ -254,11 +282,11 @@ router.post('/', async (req, res) => {
   // Check permissions
   if (!isAdmin(user)) {
     // Enduser can only create profiles for themselves
-    if (!user || !user.id) {
+    if (!userId) {
       return res.status(401).json({ error: 'Authentication required' })
     }
     
-    if (user_id && user_id !== user.id) {
+    if (user_id && user_id !== userId) {
       return res.status(403).json({ 
         error: 'Endusers can only create profiles for themselves' 
       })
@@ -279,7 +307,7 @@ router.post('/', async (req, res) => {
   }
 
   // Determine user_id for the new profile
-  const profileUserId = isAdmin(user) ? (user_id || user?.id) : user.id
+  const profileUserId = isAdmin(user) ? (user_id || userId) : userId
 
   const profileId = crypto.randomUUID()
   const insert = req.db.prepare(`
@@ -306,6 +334,7 @@ router.post('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   const { id } = req.params
   const user = req.user
+  const userId = getAuthUserId(user)
   const row = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!row) {
     return res.status(404).json({ error: 'Profile not found' })
@@ -314,7 +343,7 @@ router.get('/:id', async (req, res) => {
   // Check access permissions
   if (!isAdmin(user)) {
     // Enduser: can only access profiles where user_id matches
-    if (!user || !user.id || row.user_id !== user.id) {
+    if (!userId || row.user_id !== userId) {
       return res.status(403).json({ error: 'Access denied' })
     }
   }
@@ -348,6 +377,8 @@ router.put('/:id', async (req, res) => {
   const { id } = req.params
   const { display_name, primary_type, organization_id, status, tags } = req.body ?? {}
   const auth = req.user ?? { role: 'guest' }
+  const authUserId = getAuthUserId(auth)
+  const authProfileId = getAuthProfileId(auth)
 
   const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!existing) {
@@ -356,8 +387,8 @@ router.put('/:id', async (req, res) => {
 
   // Allow: admins (including admin-email allowlist), profile-scoped tokens for the profile, or session owners (userId match)
   const isAdminUser = isAdmin(auth)
-  const matchesProfileId = auth.profileId === id
-  const matchesUserId = auth.userId && existing.user_id && auth.userId === existing.user_id
+  const matchesProfileId = authProfileId === id
+  const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
   if (!isAdminUser && !matchesProfileId && !matchesUserId) {
     return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to update this profile' })
   }
@@ -414,6 +445,8 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
+  const authUserId = getAuthUserId(auth)
+  const authProfileId = getAuthProfileId(auth)
 
   // Check authorization - user must be admin or the profile must belong to them
   const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
@@ -422,8 +455,8 @@ router.delete('/:id', async (req, res) => {
   }
 
   if (auth.role !== 'admin') {
-    const matchesProfileId = auth.profileId === id
-    const matchesUserId = auth.userId && existing.user_id && auth.userId === existing.user_id
+    const matchesProfileId = authProfileId === id
+    const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
     if (!matchesProfileId && !matchesUserId) {
       return res.status(403).json({ error: 'Not authorized to delete this profile' })
     }
@@ -447,9 +480,11 @@ router.delete('/:id', async (req, res) => {
   res.status(204).send()
 })
 
-router.post('/:id/avatar', upload.single('avatar'), async (req, res, next) => {
+router.post('/:id/avatar', runUploadSingle('avatar'), async (req, res, next) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
+  const authUserId = getAuthUserId(auth)
+  const authProfileId = getAuthProfileId(auth)
 
   const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!existing) {
@@ -458,8 +493,8 @@ router.post('/:id/avatar', upload.single('avatar'), async (req, res, next) => {
   }
 
   const isAdminUser = isAdmin(auth)
-  const matchesProfileId = auth.profileId === id
-  const matchesUserId = auth.userId && existing.user_id && auth.userId === existing.user_id
+  const matchesProfileId = authProfileId === id
+  const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
 
   if (!isAdminUser && !matchesProfileId && !matchesUserId) {
     if (req.file) fs.unlink(join(uploadDir, req.file.filename), () => {})
@@ -496,6 +531,8 @@ router.post('/:id/avatar', upload.single('avatar'), async (req, res, next) => {
 router.post('/:id/avatar/ai', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
+  const authUserId = getAuthUserId(auth)
+  const authProfileId = getAuthProfileId(auth)
 
   const profileRow = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!profileRow) {
@@ -503,8 +540,8 @@ router.post('/:id/avatar/ai', async (req, res) => {
   }
 
   const isAdminUser = isAdmin(auth)
-  const matchesProfileId = auth.profileId === id
-  const matchesUserId = auth.userId && profileRow.user_id && auth.userId === profileRow.user_id
+  const matchesProfileId = authProfileId === id
+  const matchesUserId = authUserId && profileRow.user_id && authUserId === profileRow.user_id
   if (!isAdminUser && !matchesProfileId && !matchesUserId) {
     return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to update this profile' })
   }
@@ -556,13 +593,13 @@ router.get('/:id/sections', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
-    return res.status(403).json({ error: 'Not authorized to access this profile' })
-  }
-
-  const profile = await req.db.prepare(`SELECT id FROM profiles WHERE id = ?`).get(id)
+  const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!profile) {
     return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!canAccessProfile({ auth, profileRow: profile })) {
+    return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to access this profile' })
   }
 
   const sections = (await req.db
@@ -589,8 +626,13 @@ router.get('/:id/sections/:sectionKey', async (req, res) => {
   const { id, sectionKey } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
-    return res.status(403).json({ error: 'Not authorized to access this profile' })
+  const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!profile) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!canAccessProfile({ auth, profileRow: profile })) {
+    return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to access this profile' })
   }
 
   const section = await req.db
@@ -620,44 +662,18 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
   const { data, updated_by } = req.body ?? {}
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
-    return res.status(403).json({ error: 'Not authorized to update this profile' })
-  }
-
-  const profile = await req.db.prepare(`SELECT id FROM profiles WHERE id = ?`).get(id)
+  const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!profile) {
     return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!canAccessProfile({ auth, profileRow: profile })) {
+    return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to update this profile' })
   }
 
   if (typeof data !== 'object' || data === null) {
     return res.status(400).json({ error: 'data payload must be an object' })
   }
-
-  function isPlainObject(value) {
-    if (!value || typeof value !== 'object') return false
-    return Object.prototype.toString.call(value) === '[object Object]'
-  }
-
-  function mergeDeep(existing, incoming) {
-    if (!isPlainObject(existing) || !isPlainObject(incoming)) return incoming
-    const out = { ...existing }
-    for (const [k, v] of Object.entries(incoming)) {
-      if (isPlainObject(v) && isPlainObject(existing[k])) {
-        out[k] = mergeDeep(existing[k], v)
-      } else {
-        out[k] = v
-      }
-    }
-    return out
-  }
-
-  // Preserve any unknown/nested keys already stored for this section.
-  // This protects “comprehensive application” data points from being dropped when the UI only edits a subset.
-  const existingRow = await req.db
-    .prepare('SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = ?')
-    .get(id, sectionKey)
-  const existingData = existingRow ? safeParseJSON(existingRow.data, {}) : {}
-  const mergedData = mergeDeep(existingData, data)
 
   const upsert = req.db.prepare(
     `
@@ -670,7 +686,7 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
   `,
   )
 
-  await upsert.run(id, sectionKey, JSON.stringify(mergedData), updated_by ?? null)
+  await upsert.run(id, sectionKey, JSON.stringify(data), updated_by ?? null)
 
   const section = await req.db
     .prepare(
@@ -694,8 +710,13 @@ router.delete('/:id/sections/:sectionKey', async (req, res) => {
   const { id, sectionKey } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
-    return res.status(403).json({ error: 'Not authorized to update this profile' })
+  const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!profile) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!canAccessProfile({ auth, profileRow: profile })) {
+    return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to update this profile' })
   }
 
   const stmt = req.db.prepare(`DELETE FROM profile_sections WHERE profile_id = ? AND section_key = ?`)
@@ -710,10 +731,6 @@ router.post('/:id/sections/:sectionKey/ai', async (req, res) => {
   const { id, sectionKey } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
-    return res.status(403).json({ error: 'Not authorized to access this profile' })
-  }
-
   try {
     if (!supportedSectionKeys.includes(sectionKey)) {
       return res.status(400).json({ error: `Section "${sectionKey}" is not yet AI-enabled.` })
@@ -722,6 +739,10 @@ router.post('/:id/sections/:sectionKey/ai', async (req, res) => {
     const profileRow = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
     if (!profileRow) {
       return res.status(404).json({ error: 'Profile not found' })
+    }
+
+    if (!canAccessProfile({ auth, profileRow })) {
+      return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to access this profile' })
     }
 
     const sectionRows = await req.db
@@ -760,55 +781,77 @@ router.post('/:id/sections/:sectionKey/ai', async (req, res) => {
       return res.status(400).json({ error: `No prompt mapping for section "${sectionKey}"` })
     }
 
-    // IMPORTANT: This endpoint is used in production UI flows. Do not 500 when OpenAI is missing.
-    const { openai, diagnostics } = createOpenAIClient({ allowMissing: true })
-    if (!openai) {
-      return res.status(503).json({
-        error: 'AI unavailable',
-        message:
-          'OpenAI is not configured on this server. Set OPENAI_API_KEY (or persist it via Admin → OpenAI tools) and retry.',
-        diagnostics,
-      })
-    }
+    const openai = getOpenAIOptional()
 
-    let completion
-    try {
-      completion = await openai.chat.completions.create({
+    // Provider order: OpenAI -> Anthropic -> deterministic empty fallback (never hard-fail the UI).
+    if (openai) {
+      const completion = await openai.chat.completions.create({
         model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
         messages: [{ role: 'user', content: promptPayload.prompt }],
         temperature: 0.2,
         max_tokens: 1200,
-        response_format: { type: 'json_object' },
       })
-    } catch (error) {
-      const summary = summarizeOpenAIError(error)
-      console.warn('[ProfileSection AI] OpenAI request failed:', summary?.message || error?.message || error)
-      return res.status(summary?.status ? Number(summary.status) : 503).json({
-        error: 'AI unavailable',
-        message: summary?.message || 'OpenAI request failed',
-        status: summary?.status || 503,
-        hint: 'Verify OPENAI_API_KEY (or runtime secret) and model access, then retry.',
-      })
-    }
 
-    const raw = extractCompletionText(completion)
-    let suggestion = {}
+      const raw = extractCompletionText(completion)
+      const jsonMatch = raw.match(/\{[\s\S]*\}/)
+      const suggestion = safeParseJSON(jsonMatch ? jsonMatch[0] : raw, null)
 
-    try {
-      suggestion = JSON.parse(String(raw || '{}'))
-    } catch (parseError) {
-      console.error('Failed to parse AI response:', parseError, raw)
-      return res.status(502).json({
-        error: 'AI response could not be parsed',
+      if (!suggestion || typeof suggestion !== 'object') {
+        return res.status(502).json({
+          error: 'AI response could not be parsed',
+          raw_response: raw,
+        })
+      }
+
+      return res.json({
+        section_key: sectionKey,
+        suggestion,
+        usage: completion.usage ?? null,
         raw_response: raw,
+        ai_provider: 'openai',
       })
     }
 
-    res.json({
+    const anthropic = await createAnthropicClient()
+    if (anthropic) {
+      try {
+        const response = await anthropic.messages.create({
+          model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+          max_tokens: 1200,
+          temperature: 0.2,
+          messages: [{ role: 'user', content: promptPayload.prompt }],
+        })
+
+        const raw = extractAnthropicText(response)
+        const jsonMatch = raw.match(/\{[\s\S]*\}/)
+        const suggestion = safeParseJSON(jsonMatch ? jsonMatch[0] : raw, null)
+
+        if (!suggestion || typeof suggestion !== 'object') {
+          return res.status(502).json({
+            error: 'AI response could not be parsed',
+            raw_response: raw,
+          })
+        }
+
+        return res.json({
+          section_key: sectionKey,
+          suggestion,
+          usage: null,
+          raw_response: raw,
+          ai_provider: 'anthropic',
+        })
+      } catch (anthropicError) {
+        console.warn('[profiles/sections/ai] Anthropic failed:', anthropicError?.message || anthropicError)
+      }
+    }
+
+    return res.json({
       section_key: sectionKey,
-      suggestion,
-      usage: completion.usage ?? null,
-      raw_response: raw,
+      suggestion: {},
+      usage: null,
+      raw_response: null,
+      ai_provider: 'fallback',
+      warning: 'No AI provider configured (OPENAI_API_KEY/ANTHROPIC_API_KEY missing).',
     })
   } catch (error) {
     console.error('Error generating profile section suggestion:', error)
@@ -822,20 +865,18 @@ router.post('/:id/fields/ai', async (req, res) => {
   const { fieldName, fieldLabel, currentValue, fieldDescription, sectionKey, profileData } = req.body
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
-    return res.status(403).json({ error: 'Not authorized to access this profile' })
-  }
-
   try {
     // Get profile for context
-    const profile = req.db.prepare(`
-      SELECT display_name, primary_type, organization_id 
-      FROM profiles WHERE id = ?
-    `).get(id)
+    const profileRow = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
     
-    if (!profile) {
+    if (!profileRow) {
       return res.status(404).json({ error: 'Profile not found' })
     }
+
+    if (!canAccessProfile({ auth, profileRow })) {
+      return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to access this profile' })
+    }
+    const profile = mapProfile(profileRow)
 
     // Create focused prompt for the specific field
     const prompt = `You are assisting with filling out a grant application field.
@@ -860,32 +901,58 @@ Requirements:
 
 Return ONLY the field value content, no JSON wrapper or explanations.`
 
-    const openai = getOpenAI()
+    const openai = getOpenAIOptional()
     let suggestion
     
-    try {
-      const completion = await openai.chat.completions.create({
-        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-        max_tokens: 400,
-      })
-      suggestion = extractCompletionText(completion).trim()
-    } catch (error) {
-      const summary = summarizeOpenAIError(error)
-      console.warn('[Field AI] OpenAI request failed:', summary?.error || error?.message || error)
-      return res.status(summary?.status ? Number(summary.status) : 503).json({
-        error: 'AI unavailable',
-        message: summary?.error || 'OpenAI request failed',
-        status: summary?.status || 503,
-        hint: 'Verify OPENAI_API_KEY (or runtime secret) and model access, then retry.',
-      })
+    if (openai) {
+      try {
+        const completion = await openai.chat.completions.create({
+          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.3,
+          max_tokens: 400,
+        })
+        suggestion = extractCompletionText(completion).trim()
+        return res.json({
+          field: fieldName,
+          suggestion,
+          usage: null,
+          ai_provider: 'openai',
+        })
+      } catch (error) {
+        const summary = summarizeOpenAIError(error)
+        console.warn('[Field AI] OpenAI request failed:', summary?.message || error?.message || error)
+        // fall through to Anthropic / fallback (do not hard-fail the UI)
+      }
+    }
+
+    const anthropic = await createAnthropicClient()
+    if (anthropic) {
+      try {
+        const response = await anthropic.messages.create({
+          model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+          max_tokens: 400,
+          temperature: 0.3,
+          messages: [{ role: 'user', content: prompt }],
+        })
+        suggestion = extractAnthropicText(response).trim()
+        return res.json({
+          field: fieldName,
+          suggestion,
+          usage: null,
+          ai_provider: 'anthropic',
+        })
+      } catch (anthropicError) {
+        console.warn('[Field AI] Anthropic request failed:', anthropicError?.message || anthropicError)
+      }
     }
     
     res.json({
       field: fieldName,
-      suggestion,
-      usage: null
+      suggestion: typeof currentValue === 'string' ? currentValue : '',
+      usage: null,
+      ai_provider: 'fallback',
+      warning: 'No AI provider configured (OPENAI_API_KEY/ANTHROPIC_API_KEY missing) or provider error.',
     })
   } catch (error) {
     console.error('Field AI suggestion error:', error)
@@ -899,7 +966,7 @@ router.get('/:id/completeness', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
+  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
     return res.status(403).json({ error: 'Not authorized to access this profile' })
   }
 
@@ -910,35 +977,47 @@ router.get('/:id/completeness', async (req, res) => {
     }
 
     // Get existing sections for this profile
-    const existingSections = await req.db
+    const existingSectionRows = await req.db
       .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
       .all(id)
     
     const existingSectionMap = new Map(
-      existingSections.map(s => [s.section_key, safeParseJSON(s.data, {})])
+      existingSectionRows.map(s => [s.section_key, safeParseJSON(s.data, {})])
     )
 
-    // Check against canonical sections
+    // Check against canonical sections + canonical keys (data points)
     const missingSections = []
     const emptySections = []
     const completedSections = []
+    const missingKeysBySection = {}
+    const presentKeysBySection = {}
     let totalKeyCount = 0
     let filledKeyCount = 0
 
-    canonicalSectionKeys.forEach(sectionKey => {
+    supportedSectionKeys.forEach(sectionKey => {
       const sectionData = existingSectionMap.get(sectionKey)
+      const schema = PROFILE_SCHEMA?.[sectionKey]
+      const canonicalKeys = Object.keys(schema?.fields ?? {})
       
       if (!sectionData) {
         missingSections.push(sectionKey)
+        missingKeysBySection[sectionKey] = canonicalKeys
+        presentKeysBySection[sectionKey] = []
       } else {
-        // Check if section has any meaningful data
-        const canonicalDefaults = CANONICAL_SECTION_DEFAULTS[sectionKey] ?? {}
-        const keys = Object.keys(canonicalDefaults).filter(k => k !== 'notes')
-        const filledKeys = keys.filter(k => {
+        // Canonical keys: enforce presence even if missing in saved JSON.
+        // For completion scoring, we only score canonical keys (not arbitrary extras).
+        const keys = canonicalKeys.filter((k) => k !== 'notes')
+        const presentKeys = keys.filter((k) => Object.prototype.hasOwnProperty.call(sectionData, k))
+        const missingKeys = keys.filter((k) => !Object.prototype.hasOwnProperty.call(sectionData, k))
+
+        presentKeysBySection[sectionKey] = presentKeys
+        missingKeysBySection[sectionKey] = missingKeys
+
+        const filledKeys = keys.filter((k) => {
           const value = sectionData[k]
           if (value === null || value === undefined || value === '') return false
           if (Array.isArray(value) && value.length === 0) return false
-          if (typeof value === 'object' && Object.keys(value).length === 0) return false
+          if (typeof value === 'object' && value && Object.keys(value).length === 0) return false
           return true
         })
 
@@ -951,7 +1030,8 @@ router.get('/:id/completeness', async (req, res) => {
           completedSections.push({
             section_key: sectionKey,
             filled_keys: filledKeys.length,
-            total_keys: keys.length
+            total_keys: keys.length,
+            missing_keys: missingKeys.length,
           })
         }
       }
@@ -964,17 +1044,20 @@ router.get('/:id/completeness', async (req, res) => {
     res.json({
       profile_id: id,
       display_name: profile.display_name,
-      total_canonical_sections: canonicalSectionKeys.length,
+      total_canonical_sections: supportedSectionKeys.length,
       missing_sections: missingSections,
       empty_sections: emptySections,
       completed_sections: completedSections,
+      missing_keys_by_section: missingKeysBySection,
+      present_keys_by_section: presentKeysBySection,
       percent_complete: percentComplete,
       summary: {
         missing: missingSections.length,
         empty: emptySections.length,
         with_data: completedSections.length,
         filled_keys: filledKeyCount,
-        total_keys: totalKeyCount
+        total_keys: totalKeyCount,
+        missing_keys: Object.values(missingKeysBySection).reduce((acc, arr) => acc + (arr?.length ?? 0), 0),
       }
     })
   } catch (error) {
@@ -989,7 +1072,7 @@ router.post('/:id/repair', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
+  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
     return res.status(403).json({ error: 'Not authorized to repair this profile' })
   }
 
@@ -1006,19 +1089,52 @@ router.post('/:id/repair', async (req, res) => {
     
     const existingKeys = new Set(existingSections.map(s => s.section_key))
 
-    // Create missing sections
+    // Create missing sections (as empty JSON)
     const upsert = req.db.prepare(`
       INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
-      VALUES (?, ?, ?, 'system-repair')
+      VALUES (?, ?, '{}', 'system-repair')
       ON CONFLICT(profile_id, section_key) DO NOTHING
     `)
 
     const createdSections = []
-    for (const sectionKey of canonicalSectionKeys) {
+    for (const sectionKey of supportedSectionKeys) {
       if (!existingKeys.has(sectionKey)) {
-        const defaults = CANONICAL_SECTION_DEFAULTS[sectionKey] ?? {}
-        await upsert.run(id, sectionKey, JSON.stringify(defaults))
+        await upsert.run(id, sectionKey)
         createdSections.push(sectionKey)
+      }
+    }
+
+    // Ensure every canonical key exists in every section (data-point completeness).
+    // This is safe because profile_sections.data is JSON and adding keys is backward compatible.
+    const existingSectionRows = await req.db
+      .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
+      .all(id)
+
+    const updateStmt = req.db.prepare(`
+      UPDATE profile_sections
+      SET data = ?, updated_by = 'system-repair', updated_at = CURRENT_TIMESTAMP
+      WHERE profile_id = ? AND section_key = ?
+    `)
+
+    const repairedKeysBySection = {}
+    for (const row of existingSectionRows) {
+      const sectionKey = row.section_key
+      if (!supportedSectionKeys.includes(sectionKey)) continue
+
+      const current = safeParseJSON(row.data, {})
+      const defaults = getDefaultSectionData(sectionKey)
+      const repairedKeys = []
+
+      for (const [key, defaultValue] of Object.entries(defaults)) {
+        if (!Object.prototype.hasOwnProperty.call(current, key)) {
+          current[key] = defaultValue
+          repairedKeys.push(key)
+        }
+      }
+
+      if (repairedKeys.length > 0) {
+        repairedKeysBySection[sectionKey] = repairedKeys
+        await updateStmt.run(JSON.stringify(current), id, sectionKey)
       }
     }
 
@@ -1027,7 +1143,8 @@ router.post('/:id/repair', async (req, res) => {
       profile_id: id,
       display_name: profile.display_name,
       sections_created: createdSections,
-      total_sections_after: canonicalSectionKeys.length,
+      keys_repaired_by_section: repairedKeysBySection,
+      total_sections_after: supportedSectionKeys.length,
       message: createdSections.length > 0 
         ? `Created ${createdSections.length} missing section(s)` 
         : 'Profile already has all sections'
@@ -1044,7 +1161,7 @@ router.get('/:id/export', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
+  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
     return res.status(403).json({ error: 'Not authorized to export this profile' })
   }
 
@@ -1099,7 +1216,7 @@ router.post('/:id/import', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && auth.profileId !== id) {
+  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
     return res.status(403).json({ error: 'Not authorized to import to this profile' })
   }
 

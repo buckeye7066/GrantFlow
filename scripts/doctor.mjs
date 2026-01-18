@@ -86,7 +86,8 @@ async function startBackend(root, { outDir, logFile }) {
       label: `backend:${port}`,
     })
 
-    const ok = await waitForHttpOk(`http://127.0.0.1:${port}/health`, { timeoutMs: 30_000 })
+    // Backend health endpoint is `/api/health` (and `/health` is a legacy alias).
+    const ok = await waitForHttpOk(`http://127.0.0.1:${port}/api/health`, { timeoutMs: 30_000 })
     if (ok) {
       writeFile(path.join(outDir, 'backend-port.txt'), `${port}\n`)
       return { proc, port, env: backendEnv }
