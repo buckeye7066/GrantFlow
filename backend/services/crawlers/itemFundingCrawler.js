@@ -60,49 +60,29 @@ export async function crawlItemFunding(profile, options = {}) {
   
   console.log(`[ItemFundingCrawler] Found ${relevantSources.length} relevant sources`)
   
+  // IMPORTANT:
+  // We do NOT fabricate opportunities here. Each returned record must map to a real, clickable URL.
+  // Deeper per-source scraping can be added incrementally without ever returning placeholders.
   for (const source of relevantSources) {
     try {
-      const opportunities = await searchItemSource(source, itemInfo, profile)
+      const opportunities = await buildItemSourceLinks(source, itemInfo, profile)
       
       for (const opp of opportunities) {
         if (isLoan(opp)) continue
         
-        const matchScore = calculateItemMatchScore(opp, itemInfo, profile)
-        
-        if (matchScore >= 80) {
-          results.push({
-            ...opp,
-            match_score: matchScore,
-            crawler_type: 'item_funding',
-            item_requested: itemRequest,
-            source: source.name
-          })
-        }
+        results.push({
+          ...opp,
+          crawler_type: 'item_funding',
+          item_requested: itemRequest,
+          source: source.name,
+        })
       }
     } catch (error) {
       console.error(`[ItemFundingCrawler] Error searching ${source.name}:`, error.message)
     }
   }
   
-  // Add general equipment/item grants
-  const generalGrants = await searchGeneralItemGrants(itemInfo, profile)
-  for (const grant of generalGrants) {
-    if (isLoan(grant)) continue
-    
-    const matchScore = calculateItemMatchScore(grant, itemInfo, profile)
-    
-    if (matchScore >= 80) {
-      results.push({
-        ...grant,
-        match_score: matchScore,
-        crawler_type: 'item_funding',
-        item_requested: itemRequest,
-        source: 'General Equipment Grants'
-      })
-    }
-  }
-  
-  console.log(`[ItemFundingCrawler] Found ${results.length} item funding opportunities with 80%+ match`)
+  console.log(`[ItemFundingCrawler] Found ${results.length} real item funding sources (links)`)
   return results
 }
 
@@ -155,83 +135,78 @@ function parseItemRequest(request) {
   return info
 }
 
-async function searchItemSource(source, itemInfo, profile) {
+async function buildItemSourceLinks(source, itemInfo, profile) {
   const opportunities = []
-  
-  if (source.type === 'vehicle_donation' && itemInfo.type === 'vehicle') {
-    opportunities.push({
-      title: 'Vehicle Donation Program',
-      sponsor: source.name,
-      description: `Vehicle donation program for qualifying nonprofits and individuals in need`,
-      url: source.baseUrl,
-      amount_min: 5000,
-      amount_max: 30000,
-      amount_description: 'Value of donated vehicle',
-      deadline: 'Ongoing',
-      eligibility: 'Must be 501(c)(3) nonprofit or demonstrate financial need',
-      item_categories: ['vehicle', 'transportation']
-    })
-    
-    if (itemInfo.specifications.includes('15-passenger')) {
+  const itemTokens = Array.isArray(itemInfo?.specifications) ? itemInfo.specifications : []
+
+  const base = {
+    sponsor: source.name,
+    url: source.baseUrl,
+    source_url: source.baseUrl,
+    application_url: source.baseUrl,
+    deadline: null,
+    deadline_type: 'rolling',
+    is_national: true,
+    state: null,
+    opportunity_type: 'program',
+  }
+
+  switch (source.type) {
+    case 'vehicle_donation': {
       opportunities.push({
-        title: '15-Passenger Van Grant',
-        sponsor: 'Transportation Foundation',
-        description: 'Grants for 15-passenger vans for nonprofits serving communities',
-        url: source.baseUrl + '/vans',
-        amount_min: 20000,
-        amount_max: 50000,
-        deadline: 'Quarterly',
-        eligibility: 'Nonprofit with transportation needs for 10+ people',
-        item_categories: ['vehicle', 'van', 'group_transportation']
+        ...base,
+        title: `${source.name} — Vehicle assistance / donation programs`,
+        description:
+          'Vehicle assistance and related programs (see website for eligibility and local coverage).',
+        keywords: ['vehicle', 'transportation', ...itemTokens],
+        categories: ['vehicle', 'transportation'],
+        eligibility: 'Varies by program and location; see source site.',
       })
+      break
+    }
+    case 'product_donation': {
+      opportunities.push({
+        ...base,
+        title: `${source.name} — Product philanthropy / donated goods`,
+        description:
+          'Donated goods and product philanthropy programs (see website for nonprofit eligibility requirements).',
+        keywords: ['equipment', 'supplies', 'donation', ...itemTokens],
+        categories: ['equipment', 'supplies'],
+        eligibility: 'Typically nonprofit-focused; see source site.',
+      })
+      break
+    }
+    case 'tech_donation': {
+      opportunities.push({
+        ...base,
+        title: `${source.name} — Discounted and donated technology`,
+        description:
+          'Discounted/donated technology and services (see website for eligibility and catalog).',
+        keywords: ['technology', 'software', 'hardware', 'computers', ...itemTokens],
+        categories: ['technology'],
+        eligibility: 'Typically nonprofit-focused; see source site.',
+      })
+      break
+    }
+    case 'equipment_grant': {
+      opportunities.push({
+        ...base,
+        title: `${source.name} — Equipment grant listings`,
+        description:
+          'Curated equipment-grant listings. Availability and access may vary; verify directly via listing links.',
+        keywords: ['equipment', 'grants', ...itemTokens],
+        categories: ['equipment', 'grants'],
+        eligibility: 'Varies by listing; verify directly.',
+      })
+      break
+    }
+    default: {
+      // Unknown source type: return nothing rather than fabricate.
+      break
     }
   }
-  
-  if (source.type === 'tech_donation' && itemInfo.type === 'technology') {
-    opportunities.push({
-      title: 'Technology Donation Program',
-      sponsor: source.name,
-      description: 'Donated and discounted technology for nonprofits',
-      url: source.baseUrl,
-      amount_min: 500,
-      amount_max: 10000,
-      amount_description: 'Value of technology products',
-      deadline: 'Ongoing',
-      eligibility: '501(c)(3) nonprofit organization',
-      item_categories: ['technology', 'computers', 'software']
-    })
-  }
-  
-  if (source.type === 'product_donation') {
-    opportunities.push({
-      title: 'Product Philanthropy Program',
-      sponsor: source.name,
-      description: `Donated goods and equipment for nonprofits`,
-      url: source.baseUrl,
-      amount_min: 1000,
-      amount_max: 25000,
-      amount_description: 'Fair market value of donated products',
-      deadline: 'Ongoing',
-      eligibility: 'Registered nonprofit with demonstrated need',
-      item_categories: ['equipment', 'supplies', 'furniture', 'general']
-    })
-  }
-  
-  return opportunities
-}
 
-async function searchGeneralItemGrants(itemInfo, profile) {
-  const grants = []
-  
-  // NOTE:
-  // Previously this function threw to prevent placeholder data usage, which surfaced as a 500 in
-  // `/api/real-crawlers/run` and broke the entire crawler run. We keep the "no placeholders" rule,
-  // but fail gracefully: return zero "general" item grants until real integration exists.
-  console.warn(
-    '[ItemFundingCrawler] General item grants integration not implemented yet. Returning 0 results.',
-    { itemType: itemInfo?.type, profileId: profile?.id },
-  )
-  return grants
+  return opportunities
 }
 
 function calculateItemMatchScore(opportunity, itemInfo, profile) {

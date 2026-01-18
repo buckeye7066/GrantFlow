@@ -11,6 +11,7 @@ import { upsertFundingOpportunity } from './opportunityInserter.js'
 import {
   buildProfileSignals,
   summarizeProfileSignals,
+  safeParseArrayField,
 } from './profileHelpers.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -155,9 +156,9 @@ export function processItemCrawlerJob({ db, job, dataDir, profileContext }) {
       seenTitles.add(opp.title)
       allOpps.push({
         ...opp,
-        keywords: JSON.parse(opp.keywords || '[]'),
-        categories: JSON.parse(opp.categories || '[]'),
-        eligibility_bullets: JSON.parse(opp.eligibility_bullets || '[]')
+        keywords: safeParseArrayField(opp.keywords, []),
+        categories: safeParseArrayField(opp.categories, []),
+        eligibility_bullets: safeParseArrayField(opp.eligibility_bullets, [])
       })
     }
   }
@@ -170,23 +171,43 @@ export function processItemCrawlerJob({ db, job, dataDir, profileContext }) {
     
     const { score, matchReasons } = calculateItemMatch(opp, itemKeywords, profileState, signals)
     
-    if (score >= matchThreshold) {
-      scoredOpps.push({
-        ...opp,
-        match_score: score,
-        match_reasons: matchReasons
-      })
-    }
+    scoredOpps.push({
+      ...opp,
+      match_score: score,
+      match_reasons: matchReasons
+    })
   }
   
   // Sort and limit
   scoredOpps.sort((a, b) => b.match_score - a.match_score)
-  const topOpps = scoredOpps.slice(0, maxResults)
+  const targetMin = Math.min(6, maxResults)
+  const requestedThreshold = Number(matchThreshold) || 0
+  const thresholdCandidates = Array.from(
+    new Set([requestedThreshold, 70, 60, 50, 40, 30, 0].filter((v) => Number.isFinite(v))),
+  ).sort((a, b) => b - a)
+
+  let thresholdUsed = requestedThreshold
+  let filteredOpps = scoredOpps.filter((opp) => (opp.match_score ?? 0) >= thresholdUsed)
+  for (const threshold of thresholdCandidates) {
+    const subset = scoredOpps.filter((opp) => (opp.match_score ?? 0) >= threshold)
+    if (subset.length >= targetMin || (threshold === 0 && subset.length > 0)) {
+      thresholdUsed = threshold
+      filteredOpps = subset
+      break
+    }
+  }
+
+  const topOpps = filteredOpps.slice(0, maxResults)
+  const thresholdFallbackApplied = thresholdUsed !== requestedThreshold
   
-  console.log(`[itemCrawler] Found ${topOpps.length} matching item funding sources`)
+  console.log(
+    `[itemCrawler] Found ${topOpps.length} matching item funding sources (requested: ${requestedThreshold}%, used: ${thresholdUsed}%)`,
+  )
   
   // Insert into database
+  let upsertedCount = 0
   let insertedCount = 0
+  let updatedCount = 0
   for (const opp of topOpps) {
     try {
       const result = upsertFundingOpportunity(db, {
@@ -208,8 +229,14 @@ export function processItemCrawlerJob({ db, job, dataDir, profileContext }) {
         match_reasons: opp.match_reasons
       })
       
+      if (result.id) {
+        upsertedCount++
+      }
       if (result.inserted) {
         insertedCount++
+      }
+      if (result.updated) {
+        updatedCount++
       }
     } catch (err) {
       console.error(`[itemCrawler] Error inserting ${opp.title}:`, err.message)
@@ -218,8 +245,16 @@ export function processItemCrawlerJob({ db, job, dataDir, profileContext }) {
   
   return {
     evaluated: allOpps.length,
-    inserted: insertedCount,
+    inserted: upsertedCount,
+    inserted_new: insertedCount,
+    updated_existing: updatedCount,
     matched: topOpps.length,
+    result_meta: {
+      total_scored: scoredOpps.length,
+      match_threshold_requested: requestedThreshold,
+      match_threshold_used: thresholdUsed,
+      match_threshold_fallback_applied: thresholdFallbackApplied,
+    },
     opportunityLogs: topOpps.map(o => ({
       title: o.title,
       sponsor: o.sponsor,
