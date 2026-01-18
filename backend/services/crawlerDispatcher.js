@@ -146,11 +146,11 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         UPDATE crawler_jobs
         SET status = 'completed',
             completed_at = CURRENT_TIMESTAMP,
-            result_count = CASE WHEN ? IS NULL THEN result_count ELSE ? END,
+            result_count = COALESCE(?, result_count),
             result_meta = COALESCE(?, result_meta),
             error = NULL
         WHERE id = ?
-      `).run(resultCountValue, resultCountValue, resultMetaJson, jobId)
+      `).run(resultCountValue, resultMetaJson, jobId)
     } catch (error) {
       const durationSeconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000))
       const finalResultMeta = {
