@@ -140,21 +140,14 @@ async function getTableCount(db, tableName) {
 async function checkFundingOpportunitiesSchema(db) {
   if (db?.dialect === 'postgres') {
     try {
-      const targetColumns = [
-        'type',
-        'evidence_url',
-        'last_verified_at',
-        'title',
-        'sponsor',
-        'deadline',
-      ]
+      const targetColumns = ['type', 'evidence_url', 'last_verified_at', 'title', 'sponsor', 'deadline']
 
       const rows = await db
         .prepare(
           `
             SELECT column_name
             FROM information_schema.columns
-            WHERE table_schema = 'public'
+            WHERE table_schema = current_schema()
               AND table_name = 'funding_opportunities'
           `,
         )
@@ -163,7 +156,7 @@ async function checkFundingOpportunitiesSchema(db) {
       const columnNames = new Set((rows || []).map((r) => String(r.column_name)))
 
       const crawlLogsExistsRow = await db
-        .prepare(`SELECT to_regclass('public.crawl_logs') AS regclass`)
+        .prepare(`SELECT to_regclass(current_schema() || '.crawl_logs') AS regclass`)
         .get()
       const crawlLogsExists = Boolean(crawlLogsExistsRow?.regclass)
 
@@ -184,6 +177,7 @@ async function checkFundingOpportunitiesSchema(db) {
       return {
         error: 'Failed to check schema (postgres)',
         message: error?.message || String(error),
+        details: { dialect: 'postgres' },
       }
     }
   }
@@ -495,7 +489,12 @@ export async function getSafeHealthSummary(db) {
       // Ignore if crawler_jobs doesn't exist
     }
     
-    // Determine status (API contract expects ok|warning|error)
+    // Determine status
+    //
+    // Contract:
+    // - Public `/api/health` must return status in { ok, warning, error }
+    // - "warning" is still 200 and considered healthy for platform checks
+    // - "error" is 500
     let status = 'ok';
     let summary = 'System is operating normally';
     
@@ -513,6 +512,7 @@ export async function getSafeHealthSummary(db) {
     return {
       timestamp,
       status,
+      legacy_status: status === 'ok' ? 'healthy' : status === 'warning' ? 'degraded' : 'unhealthy',
       counts: {
         opportunities: opportunitiesCount,
         recentFailures,

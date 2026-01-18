@@ -78,7 +78,7 @@ const __dirname = dirname(__filename);
 const uploadsDir = process.env.UPLOADS_DIR
   ? resolve(process.env.UPLOADS_DIR)
   : join(__dirname, 'uploads');
-// Backward-compat: older builds stored uploads at repo-root `/uploads`.
+// Backward-compat: some older builds stored uploads at repo-root `/uploads`.
 const legacyUploadsDir = join(__dirname, '..', 'uploads');
 const distPath = join(__dirname, '..', 'dist');
 
@@ -195,22 +195,16 @@ try {
   console.warn('Failed to create uploads directory:', error);
 }
 // IMPORTANT: Missing uploads must return 404 (not SPA index.html).
-// Use `fallthrough: false` to stop the request pipeline when a file is missing.
-app.use('/uploads', express.static(uploadsDir, { fallthrough: false, index: false }));
-// If legacy dir exists (and differs), serve it too so old URLs still work.
+// Serve both current + legacy upload locations, then terminate with a strict 404.
+app.use('/uploads', express.static(uploadsDir, { index: false }));
 try {
   if (legacyUploadsDir !== uploadsDir && fs.existsSync(legacyUploadsDir)) {
-    app.use('/uploads', express.static(legacyUploadsDir, { fallthrough: false, index: false }));
+    app.use('/uploads', express.static(legacyUploadsDir, { index: false }));
   }
 } catch {
   // ignore legacy-dir probing failures
 }
-app.use('/uploads', (err, _req, res, next) => {
-  if (err && (err.status === 404 || err.statusCode === 404)) {
-    return res.status(404).send('Not Found');
-  }
-  return next(err);
-});
+app.use('/uploads', (_req, res) => res.status(404).send('Not Found'));
 
 async function repairMissingUploadAvatars({ db, uploadsDir }) {
   // If the DB references upload URLs that no longer exist on disk (common after an ephemeral volume reset),
@@ -266,23 +260,16 @@ const APP_BASE_PATH = process.env.AUTH_FRONTEND_APP_BASE || process.env.VITE_APP
 if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
   const normalizedBase = String(APP_BASE_PATH).replace(/\/+$/, '');
   // Expose uploads under the same base path (common when reverse proxies only route /grantflow/*).
-  app.use(`${normalizedBase}/uploads`, express.static(uploadsDir, { fallthrough: false, index: false }));
+  app.use(`${normalizedBase}/uploads`, express.static(uploadsDir, { index: false }));
   try {
     if (legacyUploadsDir !== uploadsDir && fs.existsSync(legacyUploadsDir)) {
-      app.use(
-        `${normalizedBase}/uploads`,
-        express.static(legacyUploadsDir, { fallthrough: false, index: false }),
-      );
+      app.use(`${normalizedBase}/uploads`, express.static(legacyUploadsDir, { index: false }));
     }
   } catch {
     // ignore legacy-dir probing failures
   }
-  app.use(`${normalizedBase}/uploads`, (err, _req, res, next) => {
-    if (err && (err.status === 404 || err.statusCode === 404)) {
-      return res.status(404).send('Not Found');
-    }
-    return next(err);
-  });
+  app.use(`${normalizedBase}/uploads`, (_req, res) => res.status(404).send('Not Found'));
+
   app.use(APP_BASE_PATH, express.static(distPath));
 }
 
@@ -709,6 +696,7 @@ function resolveJwtSecret() {
 }
 
 const EFFECTIVE_JWT_SECRET = resolveJwtSecret();
+const isProd = process.env.NODE_ENV === 'production'
 
 // Make db available to routes
 app.use((req, res, next) => {
@@ -722,7 +710,6 @@ app.use(async (req, res, next) => {
   const xAnyaToken = req.headers['x-anya-token'];
   let user = { role: 'guest', profileId: null };
   let handled = false;
-  const isProd = process.env.NODE_ENV === 'production'
 
   // 1. Check X-Admin-Token
   const expectedAdminToken = ADMIN_TOKEN;
@@ -948,7 +935,7 @@ const authMeLimiter = rateLimit({
   message: { error: 'Too many requests, please try again later.' }
 });
 
-app.get('/api/auth/me', authMeLimiter, (req, res) => {
+app.get('/api/auth/me', authMeLimiter, async (req, res) => {
   try {
     const user = req.user ?? { role: 'guest' };
     if (user.role === 'guest') {
@@ -959,7 +946,7 @@ app.get('/api/auth/me', authMeLimiter, (req, res) => {
       let dbUser, profiles;
       
       try {
-        dbUser = db
+        dbUser = await req.db
           .prepare(
             `
               SELECT *
@@ -1013,7 +1000,7 @@ app.get('/api/auth/me', authMeLimiter, (req, res) => {
       }
 
       try {
-        profiles = db
+        profiles = await req.db
           .prepare(
             `
               SELECT id, display_name, organization_id, status
@@ -1038,7 +1025,7 @@ app.get('/api/auth/me', authMeLimiter, (req, res) => {
           avatar_url: dbUser.avatar_url,
           is_admin: Boolean(dbUser.is_admin),
         },
-        profiles,
+        profiles: Array.isArray(profiles) ? profiles : [],
         active_profile_id: user.profileId ?? profiles[0]?.id ?? null,
       });
     }
@@ -1114,11 +1101,28 @@ app.get('/api/meta/build', (_req, res) => {
 // Public health endpoint - safe for non-admin users
 app.get('/api/health', async (req, res) => {
   try {
-    const healthSummary = await getSafeHealthSummary(db);
+    const healthSummary = await getSafeHealthSummary(db)
+    // Contract: public health endpoints must use { ok, warning, error } for status.
+    // Some internal helpers may return { healthy, degraded, unhealthy } — normalize here.
+    const rawStatus = String(healthSummary?.status ?? 'error').toLowerCase()
+    const status =
+      rawStatus === 'healthy'
+        ? 'ok'
+        : rawStatus === 'degraded'
+          ? 'warning'
+          : rawStatus === 'unhealthy'
+            ? 'error'
+            : rawStatus || 'error'
+
     // Treat "warning" as healthy for platform checks (Railway healthchecks, Docker HEALTHCHECK, etc.)
-    // Only fail hard when the health summary indicates a real error.
-    const statusCode = healthSummary.status === 'error' ? 500 : 200;
-    res.status(statusCode).json(healthSummary);
+    // Only fail hard when the normalized status indicates a real error.
+    const statusCode = status === 'error' ? 500 : 200
+    const body =
+      rawStatus === status
+        ? healthSummary
+        : { ...healthSummary, status, legacy_status: rawStatus }
+
+    res.status(statusCode).json(body)
   } catch (error) {
     console.error('[/api/health] Error:', error);
     res.status(500).json({
@@ -1133,9 +1137,24 @@ app.get('/api/health', async (req, res) => {
 // Platform health aliases (k8s-style)
 app.get('/healthz', async (_req, res) => {
   try {
-    const healthSummary = await getSafeHealthSummary(db);
-    const statusCode = healthSummary.status === 'error' ? 500 : 200;
-    res.status(statusCode).json(healthSummary);
+    const healthSummary = await getSafeHealthSummary(db)
+    const rawStatus = healthSummary?.status ?? 'error'
+    const status =
+      rawStatus === 'healthy'
+        ? 'ok'
+        : rawStatus === 'degraded'
+          ? 'warning'
+          : rawStatus === 'unhealthy'
+            ? 'error'
+            : rawStatus
+
+    const statusCode = status === 'error' ? 500 : 200
+    const body =
+      rawStatus === status
+        ? healthSummary
+        : { ...healthSummary, status, legacy_status: rawStatus }
+
+    res.status(statusCode).json(body)
   } catch (error) {
     console.error('[/healthz] Error:', error);
     res.status(500).json({ status: 'error', summary: 'Failed to retrieve health information' });

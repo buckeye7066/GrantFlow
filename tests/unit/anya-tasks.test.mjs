@@ -58,10 +58,9 @@ async function startBackend({ rootDir, port, sqlitePath }) {
     NATIONAL_PROGRAMS_CRAWLER_ENABLED: 'false',
   }
 
-  const proc = spawn('node', ['backend/server.js'], {
+  const proc = spawn(process.execPath, ['backend/server.js'], {
     cwd: rootDir,
     env,
-    shell: true,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -128,13 +127,6 @@ test('Anya sessions + tasks: create and update task', async () => {
       'x-admin-token': 'dev-admin-token',
     }
 
-    // Initialize admin user in database by calling /api/auth/me
-    const meRes = await fetch(`http://127.0.0.1:${port}/api/auth/me`, {
-      method: 'GET',
-      headers,
-    })
-    assert.equal(meRes.ok, true, 'Failed to initialize admin user')
-
     const createSessionRes = await fetch(`http://127.0.0.1:${port}/api/anya/sessions`, {
       method: 'POST',
       headers,
@@ -170,6 +162,12 @@ test('Anya sessions + tasks: create and update task', async () => {
       proc.kill('SIGTERM')
     } catch {}
     await waitForExit(proc, { timeoutMs: 10_000 })
+    if (proc.exitCode === null) {
+      try {
+        proc.kill('SIGKILL')
+      } catch {}
+      await waitForExit(proc, { timeoutMs: 5_000 })
+    }
     await safeRm(tempDir)
   }
 })

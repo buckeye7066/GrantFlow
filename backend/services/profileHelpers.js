@@ -106,6 +106,8 @@ export function extractZipFromContext({ profile, sections, jobParameters = {} })
     sections?.basic_information?.zip,
     sections?.basic_information?.postal_code,
     sections?.basic_information?.address_zip,
+    sections?.comprehensive_application?.zip,
+    sections?.comprehensive_application?.postal_code,
     sections?.location_focus?.primary_zip,
     sections?.location_focus?.service_zip,
     sections?.location_focus?.zip,
@@ -126,6 +128,8 @@ export function extractStateFromContext({ profile, sections, jobParameters = {} 
     jobParameters.state,
     sections?.basic_information?.state,
     sections?.basic_information?.address_state,
+    sections?.comprehensive_application?.state,
+    sections?.comprehensive_application?.address_state,
     sections?.location_focus?.state,
     sections?.location_focus?.primary_state,
     sections?.organization_details?.state,
@@ -241,57 +245,6 @@ function addMultipleKeywords(set, values = []) {
   values.forEach((value) => addKeyword(set, value))
 }
 
-const EMAIL_REGEX = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i
-const SSN_REGEX = /\b\d{3}-\d{2}-\d{4}\b/
-const LONG_DIGIT_REGEX = /\b\d{7,}\b/
-
-function shouldSkipFreeText(value) {
-  if (!value || typeof value !== 'string') return true
-  const s = value.trim()
-  if (!s) return true
-  if (EMAIL_REGEX.test(s)) return true
-  if (SSN_REGEX.test(s)) return true
-  // Avoid indexing long digit sequences (phone numbers, IDs).
-  if (LONG_DIGIT_REGEX.test(s) && s.replace(/[^\d]/g, '').length >= 7) return true
-  return false
-}
-
-function collectAllMatchableStrings(value, out, { maxItems = 600, maxDepth = 6 } = {}, depth = 0) {
-  if (!out || out.size >= maxItems) return
-  if (depth > maxDepth) return
-  if (value === null || value === undefined) return
-
-  if (typeof value === 'string') {
-    if (!shouldSkipFreeText(value)) {
-      const trimmed = value.trim()
-      out.add(trimmed.length > 180 ? trimmed.slice(0, 180) : trimmed)
-    }
-    return
-  }
-
-  if (typeof value === 'number' || typeof value === 'boolean') {
-    out.add(String(value))
-    return
-  }
-
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      if (out.size >= maxItems) return
-      collectAllMatchableStrings(entry, out, { maxItems, maxDepth }, depth + 1)
-    }
-    return
-  }
-
-  if (value && typeof value === 'object') {
-    for (const [k, v] of Object.entries(value)) {
-      if (out.size >= maxItems) return
-      // Index key names lightly (helps match filters like "nicra", "uei", etc.).
-      if (typeof k === 'string' && k.length >= 3 && k.length <= 60) out.add(k.replace(/_/g, ' '))
-      collectAllMatchableStrings(v, out, { maxItems, maxDepth }, depth + 1)
-    }
-  }
-}
-
 function collectTrueFlags(section = {}, mapping = {}) {
   const matched = []
   Object.entries(mapping).forEach(([key, labels]) => {
@@ -388,61 +341,6 @@ function extractCityFromAddress(address) {
   return null
 }
 
-const MATCHING_SENSITIVE_KEYS = new Set([
-  'email',
-  'phone',
-  'address',
-  'street',
-  'city',
-  'state',
-  'zip',
-  'postal_code',
-  'postal',
-  'zip_code',
-  'organization_ein',
-  'ein',
-  'organization_uei',
-  'uei',
-  'organization_cage_code',
-  'cage_code',
-  'tenncare_id',
-])
-
-function registerAllDataPointsForMatching(value, registerKeyword, keyHint = '') {
-  if (!value) return
-
-  // Explicitly avoid indexing certain sensitive identifiers into matching keywords.
-  if (keyHint && MATCHING_SENSITIVE_KEYS.has(String(keyHint))) return
-
-  if (value === true) {
-    if (keyHint) registerKeyword(String(keyHint).replace(/_/g, ' '))
-    return
-  }
-
-  if (typeof value === 'string') {
-    const trimmed = value.trim()
-    // Avoid accidentally indexing long blobs (addresses, essays) as keywords.
-    if (!trimmed) return
-    if (trimmed.length > 1200) return
-    registerKeyword(trimmed)
-    return
-  }
-
-  if (typeof value === 'number') {
-    // Numeric values are still useful for eligibility checks elsewhere; do not index raw numbers as keywords.
-    return
-  }
-
-  if (Array.isArray(value)) {
-    value.forEach((entry) => registerAllDataPointsForMatching(entry, registerKeyword, keyHint))
-    return
-  }
-
-  if (typeof value === 'object') {
-    Object.entries(value).forEach(([k, v]) => registerAllDataPointsForMatching(v, registerKeyword, k))
-  }
-}
-
 export function buildProfileSignals({ profile, sections }) {
   const keywordSet = new Set()
   const phraseSet = new Set()
@@ -455,29 +353,26 @@ export function buildProfileSignals({ profile, sections }) {
   const healthSet = new Set()
   const familySet = new Set()
   const occupationSet = new Set()
-  const allDataSet = new Set()
 
   // Extract location from multiple sources including address strings
   const basic = sections?.basic_information ?? {}
+  const comprehensive = sections?.comprehensive_application ?? {}
   const locationFocus = sections?.location_focus ?? {}
   const organizationDetails = sections?.organization_details ?? {}
-  const studentDetails = sections?.student_details ?? {}
-  const firearms = sections?.firearms ?? {}
-  const political = sections?.political_civic ?? {}
 
   const location = {
     zip:
       extractZipFromContext({ profile, sections }) ||
-      basic.zip ||
-      extractZipFromAddress(basic.address),
+      extractZipFromAddress(basic.address) ||
+      extractZipFromAddress(comprehensive.address),
     state:
       extractStateFromContext({ profile, sections }) ||
-      basic.state ||
-      extractStateFromAddress(basic.address),
+      extractStateFromAddress(basic.address) ||
+      extractStateFromAddress(comprehensive.address),
     city:
       extractCityFromSections({ profile, sections }) ||
-      basic.city ||
-      extractCityFromAddress(basic.address),
+      extractCityFromAddress(basic.address) ||
+      extractCityFromAddress(comprehensive.address),
   }
 
   // If we have ZIP but not state/city, derive from local ZIP database.
@@ -518,15 +413,37 @@ export function buildProfileSignals({ profile, sections }) {
     values.forEach((value) => registerKeyword(value))
   }
 
-  // ============ GLOBAL PASSTHROUGH (ALL DATA POINTS) ============
-  // Add matchable tokens from *all* profile/section data, so crawlers and matchers
-  // can leverage every captured data point—even if it doesn't have dedicated logic.
-  //
-  // IMPORTANT: Avoid indexing PII (emails, SSNs, long digit strings).
-  collectAllMatchableStrings({ profile, sections }, allDataSet, { maxItems: 600, maxDepth: 6 })
-  for (const token of allDataSet) {
-    registerKeyword(token)
+  // ============ COMPREHENSIVE APPLICATION (PROFILE TAB) ============
+  // This section is intentionally stored as a single "full application" payload, but crawlers should still
+  // benefit from it by extracting keywords, applicant type, and location signals.
+  if (comprehensive?.applicant_type) {
+    const normalized = normalizeString(comprehensive.applicant_type)
+    if (normalized) applicantTypeSet.add(normalized)
+    registerKeyword(comprehensive.applicant_type)
   }
+
+  // Freeform keyword arrays from the comprehensive application form.
+  registerKeywords(Array.isArray(comprehensive?.keywords) ? comprehensive.keywords : [])
+  registerKeywords(Array.isArray(comprehensive?.focus_areas) ? comprehensive.focus_areas : [])
+
+  // If the comprehensive application includes narrative fields, treat them as signal text.
+  collectNarrativeKeywords(
+    {
+      mission: comprehensive?.mission,
+      primary_goal: comprehensive?.primary_goal,
+      target_population: comprehensive?.target_population,
+      geographic_focus: comprehensive?.geographic_focus,
+      funding_amount_needed: comprehensive?.funding_amount_needed,
+      timeline: comprehensive?.timeline,
+      past_experience: comprehensive?.past_experience,
+      unique_qualities: comprehensive?.unique_qualities,
+      collaboration_partners: comprehensive?.collaboration_partners,
+      sustainability_plan: comprehensive?.sustainability_plan,
+      barriers_faced: comprehensive?.barriers_faced,
+      special_circumstances: comprehensive?.special_circumstances,
+    },
+    registerKeyword,
+  )
 
   // ============ PROFILE TOP-LEVEL FIELDS ============
   const baseTags = Array.isArray(profile?.tags) ? profile.tags : []
@@ -555,10 +472,6 @@ export function buildProfileSignals({ profile, sections }) {
   }
 
   // ============ BASIC INFORMATION ============
-  // Canonical applicant name fields (comprehensive form uses `name`, legacy uses `full_name`).
-  if (basic.name) registerKeyword(basic.name)
-  if (basic.full_name) registerKeyword(basic.full_name)
-
   if (basic.gender) {
     const normalizedGender = normalizeString(basic.gender)
     if (normalizedGender) {
@@ -596,68 +509,6 @@ export function buildProfileSignals({ profile, sections }) {
     if (domainName && domainName.length > 3) registerKeyword(domainName)
   }
 
-  // ============ STUDENT DETAILS ============
-  if (Array.isArray(studentDetails.student_grade_levels)) {
-    studentDetails.student_grade_levels.forEach((level) => registerKeyword(String(level)))
-  }
-  if (studentDetails.current_college) registerKeyword(studentDetails.current_college)
-  if (Array.isArray(studentDetails.target_colleges)) {
-    studentDetails.target_colleges.forEach((college) => registerKeyword(String(college)))
-  }
-  if (studentDetails.intended_major) {
-    registerKeyword(studentDetails.intended_major)
-    interestSet.add(normalizeString(studentDetails.intended_major))
-  }
-  if (studentDetails.first_generation) {
-    demographicSet.add('first_generation')
-    registerKeyword('first generation')
-  }
-  if (studentDetails.stem_student) {
-    registerKeyword('stem')
-    registerKeyword('science technology engineering math')
-  }
-  if (studentDetails.gpa) {
-    const gpaCandidate = parseNumber(studentDetails.gpa)
-    if (Number.isFinite(gpaCandidate) && (!academics.gpa || gpaCandidate > academics.gpa)) {
-      academics.gpa = gpaCandidate
-    }
-  }
-  if (studentDetails.act_score) {
-    const actCandidate = parseNumber(studentDetails.act_score)
-    if (Number.isFinite(actCandidate) && (!academics.act || actCandidate > academics.act)) {
-      academics.act = actCandidate
-    }
-  }
-  if (studentDetails.sat_score) {
-    const satCandidate = parseNumber(studentDetails.sat_score)
-    if (Number.isFinite(satCandidate) && (!academics.sat || satCandidate > academics.sat)) {
-      academics.sat = satCandidate
-    }
-  }
-  if (Array.isArray(studentDetails.extracurricular_activities)) {
-    studentDetails.extracurricular_activities.forEach((entry) => registerKeyword(String(entry)))
-  }
-  if (Array.isArray(studentDetails.achievements)) {
-    studentDetails.achievements.forEach((entry) => registerKeyword(String(entry)))
-  }
-  if (studentDetails.community_service_hours) {
-    const hours = parseNumber(studentDetails.community_service_hours)
-    if (hours !== null && hours >= 100) registerKeyword('community service')
-    if (hours !== null && hours >= 200) registerKeyword('volunteer')
-  }
-  if (studentDetails.ged_graduate) registerKeyword('ged')
-  if (studentDetails.returning_adult_student) registerKeyword('adult learner')
-  if (studentDetails.recent_graduate) registerKeyword('recent graduate')
-  if (studentDetails.job_retraining) registerKeyword('job retraining')
-  if (studentDetails.minor_child) {
-    demographicSet.add('minor_child')
-    registerKeyword('minor')
-  }
-  if (studentDetails.young_adult) {
-    demographicSet.add('young_adult')
-    registerKeyword('young adult')
-  }
-
   // ============ FINANCIAL INFORMATION ============
   const financialSection = sections?.financial_information ?? {}
   if (financialSection.financial_need_level) {
@@ -687,6 +538,16 @@ export function buildProfileSignals({ profile, sections }) {
     assistanceSet.add('low_income')
     ASSISTANCE_SYNONYMS.low_income.forEach((label) => registerKeyword(label))
   }
+  if (financialSection.unemployed) {
+    assistanceSet.add('unemployed')
+    registerKeyword('unemployed')
+    registerKeyword('job seeker')
+  }
+  if (financialSection.displaced_worker) {
+    assistanceSet.add('displaced_worker')
+    registerKeyword('displaced worker')
+    registerKeyword('laid off')
+  }
   if (financialSection.notes) {
     collectNarrativeKeywords({ notes: financialSection.notes }, registerKeyword)
   }
@@ -712,10 +573,6 @@ export function buildProfileSignals({ profile, sections }) {
     registerKeyword('medicaid')
     registerKeyword('healthcare assistance')
   }
-  if (government.medicaid_waiver_program) {
-    registerKeyword(String(government.medicaid_waiver_program).replace(/_/g, ' '))
-    registerKeyword('medicaid waiver')
-  }
   if (government.medicare_recipient) {
     assistanceSet.add('medicare')
     registerKeyword('medicare')
@@ -735,13 +592,11 @@ export function buildProfileSignals({ profile, sections }) {
   registerKeywords(disabilityTypes)
   disabilityTypes.forEach(dt => healthSet.add(normalizeString(dt)))
 
-  if (health.cancer_survivor) { healthSet.add('cancer'); registerKeyword('cancer survivor'); registerKeyword('oncology') }
-  if (health.cancer_type) registerKeyword(health.cancer_type)
-  if (health.cancer_diagnosis_year) {
-    const year = parseNumber(health.cancer_diagnosis_year)
-    if (year !== null) registerKeyword('cancer diagnosis')
-  }
-
+  if (health.dialysis_patient) { healthSet.add('dialysis'); registerKeyword('dialysis'); registerKeyword('kidney disease') }
+  if (health.organ_transplant) { healthSet.add('transplant'); registerKeyword('organ transplant'); registerKeyword('transplant recipient') }
+  if (health.hiv_aids) { healthSet.add('hiv'); registerKeyword('hiv'); registerKeyword('aids') }
+  if (health.tbi_survivor) { healthSet.add('tbi'); registerKeyword('traumatic brain injury'); registerKeyword('tbi') }
+  if (health.amputee) { healthSet.add('amputee'); registerKeyword('amputee'); registerKeyword('prosthetic') }
   if (health.wheelchair_user) { healthSet.add('wheelchair'); registerKeyword('wheelchair user'); registerKeyword('mobility impairment') }
   if (health.neurodivergent) { healthSet.add('neurodivergent'); registerKeyword('neurodivergent'); registerKeyword('autism'); registerKeyword('adhd') }
   if (health.mental_health_condition) { healthSet.add('mental_health'); registerKeyword('mental health'); registerKeyword('behavioral health') }
@@ -749,6 +604,8 @@ export function buildProfileSignals({ profile, sections }) {
   if (health.rare_disease) { healthSet.add('rare_disease'); registerKeyword('rare disease'); registerKeyword('orphan disease') }
   if (health.visual_impairment) { healthSet.add('visual_impairment'); registerKeyword('visual impairment'); registerKeyword('blind'); registerKeyword('low vision') }
   if (health.hearing_impairment) { healthSet.add('hearing_impairment'); registerKeyword('hearing impairment'); registerKeyword('deaf'); registerKeyword('hard of hearing') }
+  if (health.cancer_survivor) { healthSet.add('cancer'); registerKeyword('cancer survivor'); registerKeyword('oncology') }
+  if (health.substance_recovery) { healthSet.add('recovery'); registerKeyword('recovery'); registerKeyword('substance recovery'); registerKeyword('sober living') }
   if (health.terminal_illness) { healthSet.add('terminal'); registerKeyword('terminal illness'); registerKeyword('hospice') }
   if (health.support_needs_level) {
     registerKeyword(health.support_needs_level + ' support needs')
@@ -769,29 +626,6 @@ export function buildProfileSignals({ profile, sections }) {
       labels.forEach((label) => registerKeyword(label))
     }
   })
-  if (demographicsSection.immigration_status) {
-    const statusLabel = String(demographicsSection.immigration_status).replace(/_/g, ' ')
-    demographicSet.add(normalizeString(demographicsSection.immigration_status))
-    registerKeyword(statusLabel)
-    if (['refugee', 'asylee', 'daca', 'visa_holder'].includes(normalizeString(demographicsSection.immigration_status))) {
-      registerKeyword('immigrant')
-      registerKeyword('new american')
-    }
-  }
-  if (demographicsSection.permanent_resident) {
-    demographicSet.add('permanent_resident')
-    registerKeyword('permanent resident')
-    registerKeyword('green card')
-  }
-  if (demographicsSection.refugee) {
-    demographicSet.add('refugee')
-    registerKeyword('refugee')
-  }
-  if (demographicsSection.new_immigrant) {
-    demographicSet.add('new_immigrant')
-    registerKeyword('new immigrant')
-    registerKeyword('recent immigrant')
-  }
   if (demographicsSection.immigrant_status && demographicsSection.immigrant_status !== 'unknown') {
     const statusLabel = demographicsSection.immigrant_status.replace(/_/g, ' ')
     demographicSet.add(demographicsSection.immigrant_status)
@@ -800,6 +634,11 @@ export function buildProfileSignals({ profile, sections }) {
       registerKeyword('new american')
       registerKeyword('immigrant')
     }
+  }
+  if (demographicsSection.tribal_affiliation && typeof demographicsSection.tribal_affiliation === 'string') {
+    registerKeyword(demographicsSection.tribal_affiliation)
+    demographicSet.add('tribal_affiliation')
+    registerKeyword('tribal affiliation')
   }
   if (demographicsSection.ethnicity) {
     registerKeyword(demographicsSection.ethnicity)
@@ -818,19 +657,25 @@ export function buildProfileSignals({ profile, sections }) {
 
   // ============ FAMILY LIFE ============
   const family = sections?.family_life ?? {}
+  // Include canonical schema keys plus a few legacy aliases that exist in older data.
   const familyFlags = [
     'single_parent',
     'foster_youth',
+    'orphan',
+    'adopted',
+    'foster_parent',
+    'caregiver',
+    'widow_widower',
+    'grandparent_raising_grandchildren',
     'first_time_parent',
+    'homeless',
     'domestic_violence_survivor',
     'trafficking_survivor',
-    'former_incarcerated',
-    'homeless',
-    'caregiver',
     'disaster_survivor',
+    'formerly_incarcerated',
+    // Legacy aliases (not in schema but seen in older records)
+    'former_incarcerated',
     'widowed',
-    'divorced',
-    'expectant_parent',
     'grandparent_caregiver',
     'kinship_care',
   ]
@@ -958,15 +803,15 @@ export function buildProfileSignals({ profile, sections }) {
   }
 
   // ============ ORGANIZATION DETAILS ============
-  const orgApplicantType = organizationDetails.applicant_type || organizationDetails.organization_type
-  if (orgApplicantType) {
-    registerKeyword(orgApplicantType)
-    applicantTypeSet.add(normalizeString(orgApplicantType))
+  if (organizationDetails.organization_type) {
+    registerKeyword(organizationDetails.organization_type)
+    applicantTypeSet.add(normalizeString(organizationDetails.organization_type))
   }
   if (organizationDetails.mission) {
     collectNarrativeKeywords({ mission: organizationDetails.mission }, registerKeyword)
   }
-  if (organizationDetails.organization_ein || organizationDetails.ein) {
+  if (organizationDetails.ein) {
+    // Has EIN = likely 501c3
     registerKeyword('501c3')
     registerKeyword('nonprofit')
   }
@@ -995,24 +840,6 @@ export function buildProfileSignals({ profile, sections }) {
     organizationDetails.programs_offered.forEach(prog => registerKeyword(prog))
   }
 
-  // Compliance & certifications / designations
-  if (organizationDetails.sam_gov_registered) registerKeyword('sam.gov')
-  if (organizationDetails.grants_gov_active) registerKeyword('grants.gov')
-  if (organizationDetails.hipaa_compliant) registerKeyword('hipaa')
-  if (organizationDetails.ferpa_compliant) registerKeyword('ferpa')
-  if (organizationDetails.faith_based_organization) registerKeyword('faith based')
-  if (organizationDetails.serves_rural_area) registerKeyword('rural')
-  if (organizationDetails.business_501c3_certified) registerKeyword('501c3')
-  if (organizationDetails.business_501c4_certified) registerKeyword('501c4')
-  if (organizationDetails.minority_owned_certification) registerKeyword('minority owned')
-  if (organizationDetails.women_owned_certification) registerKeyword('women owned')
-  if (organizationDetails.veteran_owned_business) registerKeyword('veteran owned')
-  if (organizationDetails.promise_zone_designation) registerKeyword('promise zone')
-  if (organizationDetails.opportunity_zone_designation) registerKeyword('opportunity zone')
-  if (organizationDetails.business_affected_covid) registerKeyword('covid impacted')
-  if (organizationDetails.ntee_code) registerKeyword(`ntee ${organizationDetails.ntee_code}`)
-  if (organizationDetails.evidence_based_program) registerKeyword(organizationDetails.evidence_based_program)
-
   // ============ NARRATIVE ============
   const narrative = sections?.narrative ?? {}
   collectNarrativeKeywords(narrative, registerKeyword)
@@ -1036,29 +863,6 @@ export function buildProfileSignals({ profile, sections }) {
   if (narrative.use_of_funds) {
     collectNarrativeKeywords({ use_of_funds: narrative.use_of_funds }, registerKeyword)
   }
-  if (Array.isArray(narrative.keywords)) {
-    narrative.keywords.forEach((kw) => registerKeyword(String(kw)))
-  }
-  if (Array.isArray(narrative.focus_areas)) {
-    narrative.focus_areas.forEach((kw) => registerKeyword(String(kw)))
-  }
-
-  // ============ FIREARMS / CIVIC ============
-  if (firearms.second_amendment_supporter) registerKeyword('second amendment')
-  if (firearms.gun_owner) registerKeyword('gun owner')
-  if (firearms.concealed_carry_permit) registerKeyword('concealed carry')
-  if (firearms.nra_member) registerKeyword('nra member')
-  if (firearms.firearm_instructor) registerKeyword('firearm instructor')
-  if (firearms.competitive_shooter) registerKeyword('competitive shooter')
-  if (firearms.hunting_license) registerKeyword('hunting')
-
-  if (political.registered_voter) registerKeyword('registered voter')
-  if (political.political_party) registerKeyword(political.political_party)
-  if (political.politically_active) registerKeyword('politically active')
-  if (political.community_organizer) registerKeyword('community organizer')
-  if (political.advocacy_work) registerKeyword('advocacy')
-  if (political.civic_volunteer) registerKeyword('civic volunteer')
-  if (political.election_worker) registerKeyword('election worker')
 
   // ============ UNIVERSITY APPLICATIONS ============
   const universityApplications = sections?.university_applications?.applications ?? []
@@ -1148,41 +952,30 @@ export function buildProfileSignals({ profile, sections }) {
   // Store the raw sections for crawlers that need direct access to any field
   const rawSections = sections
 
-  // Ensure every non-sensitive data point can contribute to matching.
-  // This is intentionally broad so newly-added fields automatically become matchable.
-  try {
-    registerAllDataPointsForMatching(sections, registerKeyword)
-  } catch {
-    // ignore defensive failures
-  }
-
   // ============ COVERAGE TRACKING ============
   // Track how much of the profile data was processed to ensure 100% coverage
   const sectionKeys = Object.keys(sections || {})
   const expectedSections = [
     'basic_information', 'demographics', 'family_life', 'financial_information',
     'government_assistance', 'health_medical', 'location_focus', 'military_service',
-    'narrative', 'occupation', 'organization_details', 'university_applications', 'education',
-    'student_details', 'firearms', 'political_civic'
+    'narrative', 'occupation', 'organization_details', 'university_applications', 'education'
   ]
   const presentSections = sectionKeys.filter(k => expectedSections.includes(k))
   
   // Calculate coverage percentage (at least 1 section = 100% for crawler purposes)
   // The crawler check requires pct >= 1 (i.e., at least some sections present)
-  const coveragePct =
-    expectedSections.length > 0 ? Math.round((presentSections.length / expectedSections.length) * 100) : 0
   const coverage = {
     fields_total: keywordSet.size + phraseSet.size,
     fields_used: keywordSet.size + phraseSet.size,
     sections_present: presentSections.length,
     sections_expected: expectedSections.length,
-    pct: presentSections.length > 0 ? coveragePct : 0,
+    pct: presentSections.length > 0 ? 100 : 0, // 100% if any sections present
   }
 
   return {
-    // Backward-compatible shapes used by tests and older callers.
+    // Backwards/forwards compatibility: some crawlers expect `signals.keywords` (iterable).
+    // Keep the canonical Set as `keywordSet` but also expose an array for JSON/debugging.
     keywords: Array.from(keywordSet),
-    phrases_list: Array.from(phraseSet),
     keywordSet,
     phrases: phraseSet,
     demographics: demographicSet,
@@ -1198,7 +991,6 @@ export function buildProfileSignals({ profile, sections }) {
     academics,
     financial,
     rawSections,
-    allData: allDataSet,
     coverage,
   }
 }

@@ -112,22 +112,111 @@ export async function crawlECFBenefits(profile, options = {}) {
   return results
 }
 
+function hasKeyword(signals, value) {
+  if (!signals) return false
+  const needle = String(value || '').toLowerCase().trim()
+  if (!needle) return false
+  if (signals.keywordSet && typeof signals.keywordSet.has === 'function') {
+    return signals.keywordSet.has(needle)
+  }
+  return false
+}
+
+function keywordIncludes(signals, fragment) {
+  if (!signals) return false
+  const needle = String(fragment || '').toLowerCase().trim()
+  if (!needle) return false
+  const iter = signals.keywordSet && typeof signals.keywordSet[Symbol.iterator] === 'function'
+    ? signals.keywordSet
+    : []
+  for (const kw of iter) {
+    if (String(kw || '').toLowerCase().includes(needle)) return true
+  }
+  return false
+}
+
 function checkECFEligibility(profile) {
-  // Check various eligibility criteria
-  return profile.medicaid_enrolled === true ||
-         profile.ecf_participant === true ||
-         profile.disability_status === true ||
-         profile.intellectual_disability === true ||
-         profile.developmental_disability === true ||
-         (profile.tags && profile.tags.includes('ecf'))
+  // Use full profile context (sections + signals) first; fall back to legacy top-level fields.
+  const signals = profile?.signals
+  const sections = profile?.sections ?? {}
+  const state = signals?.location?.state ?? profile?.state ?? null
+
+  // ECF CHOICES is TN-specific; don't classify profiles outside TN.
+  if (state && String(state).toUpperCase() !== 'TN') {
+    return false
+  }
+  if (!state) {
+    const tnMention = keywordIncludes(signals, 'tennessee') || hasKeyword(signals, 'tn')
+    if (!tnMention) return false
+  }
+
+  const hasMedicaid =
+    signals?.assistance?.has?.('medicaid') ||
+    sections?.government_assistance?.medicaid_enrolled === true ||
+    profile?.medicaid_enrolled === true
+
+  const disabilityTypes = Array.isArray(sections?.health_medical?.disability_type)
+    ? sections.health_medical.disability_type.map((v) => String(v || '').toLowerCase())
+    : []
+
+  const hasIdDd =
+    disabilityTypes.some((v) => v.includes('intellectual') || v.includes('developmental') || v.includes('i/dd')) ||
+    keywordIncludes(signals, 'intellectual') ||
+    keywordIncludes(signals, 'developmental') ||
+    keywordIncludes(signals, 'autism') ||
+    profile?.intellectual_disability === true ||
+    profile?.developmental_disability === true ||
+    profile?.disability_status === true
+
+  const mentionsEcf =
+    signals?.keywordSet?.has?.('ecf') ||
+    keywordIncludes(signals, 'employment and community first') ||
+    (Array.isArray(profile?.tags) ? profile.tags : []).some((t) => String(t || '').toLowerCase().includes('ecf'))
+
+  const explicitlyEligible = profile?.ecf_participant === true
+
+  return Boolean(explicitlyEligible || mentionsEcf || (hasMedicaid && hasIdDd))
 }
 
 function checkIfProvider(profile) {
-  return profile.is_provider === true ||
-         profile.organization_type === 'cls_fm' ||
-         profile.organization_type === 'family_model' ||
-         profile.provides_residential_support === true ||
-         (profile.services && profile.services.includes('residential'))
+  const signals = profile?.signals
+  const sections = profile?.sections ?? {}
+  const state = signals?.location?.state ?? profile?.state ?? null
+
+  // CLS-FM / ECF provider programs are TN-specific.
+  if (state && String(state).toUpperCase() !== 'TN') {
+    return false
+  }
+  if (!state) {
+    const tnMention = keywordIncludes(signals, 'tennessee') || hasKeyword(signals, 'tn')
+    if (!tnMention) return false
+  }
+
+  const orgType =
+    profile?.organization_type ||
+    sections?.organization_details?.organization_type ||
+    sections?.organization_details?.organization_type?.type ||
+    null
+
+  const services = Array.isArray(profile?.services) ? profile.services : []
+
+  // Be conservative: avoid false positives for individual profiles.
+  // Only treat as provider when there's a strong provider signal.
+  const strongProviderKeywords =
+    hasKeyword(signals, 'cls-fm') ||
+    keywordIncludes(signals, 'cls-fm') ||
+    keywordIncludes(signals, 'community living supports') ||
+    keywordIncludes(signals, 'family model') ||
+    keywordIncludes(signals, 'ecf provider')
+
+  return Boolean(
+    profile?.is_provider === true ||
+      orgType === 'cls_fm' ||
+      orgType === 'family_model' ||
+      profile?.provides_residential_support === true ||
+      services.some((s) => String(s || '').toLowerCase().includes('residential')) ||
+      strongProviderKeywords,
+  )
 }
 
 async function searchIndividualBenefits(source, profile) {

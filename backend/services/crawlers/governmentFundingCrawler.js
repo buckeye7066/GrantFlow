@@ -8,20 +8,60 @@
 
 import axios from 'axios'
 import * as cheerio from 'cheerio'
+import axios from 'axios'
 import { buildSearchKeywords, calculateMatchScore, filterByDeadline } from './crawlerHelpers.js'
+import { getWithRetry, postWithRetry } from './httpClient.js'
+
+const GRANTSGOV_FETCH_URL = 'https://api.grants.gov/v1/api/fetchOpportunity'
+const grantsGovDetailsCache = new Map()
+
+async function fetchGrantsGovSynopsis(opportunityId) {
+  const id = String(opportunityId || '').trim()
+  if (!id) return null
+  if (grantsGovDetailsCache.has(id)) return grantsGovDetailsCache.get(id)
+  try {
+    const resp = await axios.post(
+      GRANTSGOV_FETCH_URL,
+      { opportunityId: Number(id) },
+      { headers: { 'Content-Type': 'application/json' }, timeout: 15000 },
+    )
+    const synopsis = resp?.data?.data?.synopsis ?? null
+    const synopsisDescRaw = synopsis?.synopsisDesc ?? null
+    const synopsisText = synopsisDescRaw
+      ? cheerio.load(String(synopsisDescRaw)).text().trim()
+      : null
+    const payload = {
+      synopsisText,
+      responseDate: synopsis?.responseDateStr ?? synopsis?.responseDate ?? null,
+      agencyName: synopsis?.agencyName ?? null,
+      awardCeiling: synopsis?.awardCeiling ?? null,
+      awardFloor: synopsis?.awardFloor ?? null,
+      applicantEligibilityDesc: synopsis?.applicantEligibilityDesc ?? null,
+    }
+    grantsGovDetailsCache.set(id, payload)
+    return payload
+  } catch {
+    grantsGovDetailsCache.set(id, null)
+    return null
+  }
+}
 
 // Real government funding APIs and sources
 const GOVERNMENT_SOURCES = {
   federal: [
     {
       name: 'Grants.gov',
-      apiUrl: 'https://www.grants.gov/grantsws/rest/opportunities/search',
+      // Grants.gov public Search API (no key required)
+      // https://api.grants.gov/v1/api/search2
+      apiUrl: 'https://api.grants.gov/v1/api/search2',
       type: 'api'
     },
     {
       name: 'NIH Grants',
-      baseUrl: 'https://grants.nih.gov/grants/guide/search_results.cfm',
-      type: 'scrape'
+      // NIH Guide RSS feed for Funding Opportunity Announcements
+      // https://grants.nih.gov/grants/guide/newsfeed/fundingopps.xml
+      baseUrl: 'https://grants.nih.gov/grants/guide/newsfeed/fundingopps.xml',
+      type: 'rss'
     },
     {
       name: 'FEMA Grants',
@@ -104,11 +144,21 @@ export async function crawlGovernmentFunding(profile, options = {}) {
         
         // Use comprehensive scoring with 100% of profile signals
         const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profile)
-        
-        if (matchScore >= minMatchScore) {
+
+        // Query relevance bonus:
+        // When an opportunity is returned from a targeted query built from profile signals,
+        // it is already "pre-filtered" for relevance even if the text-based scorer is conservative.
+        let adjustedScore = matchScore
+        if (source?.name === 'Grants.gov' && searchKeywords.length > 0) {
+          const bonus = 35
+          adjustedScore = Math.min(100, matchScore + bonus)
+          reasons.push('Query relevance bonus (Grants.gov search)')
+        }
+
+        if (adjustedScore >= minMatchScore) {
           results.push({
             ...opp,
-            match_score: matchScore,
+            match_score: adjustedScore,
             match_reasons: reasons,
             matched_signals: matchedSignals,
             crawler_type: 'government_funding',
@@ -196,66 +246,113 @@ async function searchFederalSource(source, profile, searchKeywords) {
   
   if (source.type === 'api' && source.name === 'Grants.gov') {
     // Use Grants.gov API with keywords from ALL profile signals
+    // Endpoint expects POST JSON body; response shape includes data.oppHits.
     const searchParams = {
       keyword: searchKeywords.slice(0, 15).join(' '),
-      oppStatuses: 'Posted',
+      oppStatuses: 'posted',
       sortBy: 'openDate|desc',
-      rows: 100
+      rows: 50,
+      startRecordNum: 0,
     }
     
     try {
-      const response = await axios.post(source.apiUrl, searchParams, {
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 15000
-      })
+      const response = await postWithRetry(
+        source.apiUrl,
+        searchParams,
+        { headers: { 'Content-Type': 'application/json' } },
+        { timeoutMs: 15000, retries: 2 },
+      )
       
-      if (response.data && response.data.opportunitySearchResult) {
-        const searchResults = response.data.opportunitySearchResult
-        
-        for (const opp of searchResults) {
-          opportunities.push({
-            title: opp.oppTitle,
-            sponsor: opp.agencyName,
-            description: opp.oppDesc,
-            url: `https://www.grants.gov/view-opportunity.html?oppId=${opp.oppId}`,
-            opportunity_number: opp.oppNumber,
-            amount_min: 0,
-            amount_max: 0,
-            deadline: opp.closeDate,
-            deadline_type: opp.closeDate ? 'fixed' : 'rolling',
-            eligibility: opp.eligibility || '',
-            cfda_number: opp.cfdaNumber,
-            is_national: true,
-          })
-        }
+      const hits = response?.data?.data?.oppHits ?? response?.data?.oppHits ?? []
+      const rows = Array.isArray(hits) ? hits : []
+      // Fetch detailed synopsis for a small subset to improve scoring (title-only scoring is too weak).
+      const idsForDetails = rows
+        .map((hit) => hit?.id ?? hit?.oppId ?? null)
+        .filter((v) => v != null)
+        .slice(0, 12)
+      const detailsMap = new Map()
+      for (const oppId of idsForDetails) {
+        const details = await fetchGrantsGovSynopsis(oppId)
+        if (details) detailsMap.set(String(oppId), details)
+      }
+
+      for (const hit of rows) {
+        const title = hit?.title ?? hit?.oppTitle ?? null
+        if (!title) continue
+        const id = hit?.id ?? hit?.oppId ?? null
+        const number = hit?.number ?? hit?.oppNum ?? hit?.oppNumber ?? null
+        const agencyName = hit?.agencyName ?? hit?.agencyName ?? hit?.agency ?? hit?.agencyCode ?? null
+        const closeDate = hit?.closeDate ?? hit?.close_date ?? null
+        const openDate = hit?.openDate ?? hit?.open_date ?? null
+        const url =
+          id != null
+            ? `https://www.grants.gov/search-results-detail/${id}`
+            : number
+              ? `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(number))}`
+              : 'https://www.grants.gov/search-grants'
+
+        const details = id != null ? detailsMap.get(String(id)) : null
+
+        opportunities.push({
+          title,
+          sponsor: details?.agencyName ?? agencyName,
+          description: details?.synopsisText ?? null,
+          url,
+          opportunity_number: number,
+          amount_min: details?.awardFloor ?? 0,
+          amount_max: details?.awardCeiling ?? 0,
+          deadline: details?.responseDate ?? closeDate,
+          open_date: openDate,
+          deadline_type: (details?.responseDate ?? closeDate) ? 'fixed' : 'rolling',
+          eligibility: details?.applicantEligibilityDesc ?? '',
+          is_national: true,
+          source_id: id,
+        })
       }
     } catch (error) {
       console.error('[GovernmentCrawler] Grants.gov API error:', error.message)
     }
-  } else if (source.type === 'scrape') {
-    // Web scraping for other sources
+  } else if (source.type === 'rss' && source.name === 'NIH Grants') {
     try {
-      const response = await axios.get(source.baseUrl, { timeout: 10000 })
-      const $ = cheerio.load(response.data)
-      
-      // NIH specific parsing
-      if (source.name === 'NIH Grants') {
-        $('.grant-listing').each((i, elem) => {
-          const $elem = $(elem)
+      const response = await getWithRetry(
+        source.baseUrl,
+        { headers: { Accept: 'application/rss+xml, application/xml, text/xml, */*' } },
+        { timeoutMs: 15000, retries: 2 },
+      )
+      const $ = cheerio.load(response.data, { xmlMode: true })
+
+      $('item')
+        .slice(0, 75)
+        .each((_i, elem) => {
+          const title = $(elem).find('title').text().trim()
+          const link = $(elem).find('link').text().trim()
+          const description = $(elem).find('description').text().trim()
+          const pubDate = $(elem).find('pubDate').text().trim()
+          if (!title) return
+
+          // Basic relevance filter: only keep items that match at least one of our signal-derived keywords.
+          const haystack = `${title} ${description}`.toLowerCase()
+          const anyMatch = searchKeywords.some((kw) => {
+            const needle = String(kw || '').toLowerCase().trim()
+            return needle && needle.length >= 4 && haystack.includes(needle)
+          })
+          if (!anyMatch) return
+
           opportunities.push({
-            title: $elem.find('.grant-title').text().trim(),
+            title,
             sponsor: 'National Institutes of Health',
-            description: $elem.find('.grant-description').text().trim(),
-            url: 'https://grants.nih.gov' + $elem.find('a').attr('href'),
-            opportunity_number: $elem.find('.grant-number').text().trim(),
-            deadline: $elem.find('.deadline').text().trim(),
-            eligibility: $elem.find('.eligibility').text().trim(),
+            description,
+            url: link || source.baseUrl,
+            deadline: null,
+            deadline_type: 'rolling',
+            eligibility: '',
             is_national: true,
+            published_at: pubDate || null,
+            keywords: ['nih', 'federal', 'research'],
           })
         })
-      }
     } catch (error) {
-      console.error(`[GovernmentCrawler] Scrape error for ${source.name}:`, error.message)
+      console.error(`[GovernmentCrawler] NIH RSS error:`, error.message)
     }
   }
   

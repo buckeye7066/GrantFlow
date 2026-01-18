@@ -11,12 +11,14 @@ import { env } from '@/config/env.js'
 const API_URL = env.isDev ? env.apiUrl : '' // Empty string = relative URLs, proxied by Vercel
 const APP_BASE = env.appBase || '/grantflow'
 
-// Frontend startup sanity (non-fatal): warn on env drift/misconfiguration.
+// Frontend startup sanity (non-fatal): warn on env drift / misconfiguration.
 if (import.meta.env.DEV) {
   const raw = import.meta.env.VITE_API_URL
   if (raw && !/^https?:\/\//i.test(String(raw))) {
     console.warn('[env] VITE_API_URL should be http(s)://...; falling back to same-origin proxy. value=', raw)
   }
+} else if (import.meta.env.VITE_API_URL) {
+  console.warn('[env] VITE_API_URL is ignored in production (same-origin /api via Vercel rewrites).')
 }
 
 class APIClient {
@@ -204,6 +206,34 @@ class APIClient {
     // Retry the original request with new token
     console.log('[APIClient] Retrying original request after refresh');
     return this.fetch(originalRequest.endpoint, originalRequest.options);
+  }
+
+  // Base44 compatibility shims.
+  // Some parts of the app (and release-hardening tests) expect `base44.get/patch/...` to exist.
+  get(endpoint, options = {}) {
+    return this.fetch(endpoint, { ...options, method: 'GET' })
+  }
+
+  delete(endpoint, options = {}) {
+    return this.fetch(endpoint, { ...options, method: 'DELETE' })
+  }
+
+  post(endpoint, body, options = {}) {
+    const payload =
+      body instanceof FormData || typeof body === 'string' || body == null ? body : JSON.stringify(body)
+    return this.fetch(endpoint, { ...options, method: 'POST', body: payload })
+  }
+
+  put(endpoint, body, options = {}) {
+    const payload =
+      body instanceof FormData || typeof body === 'string' || body == null ? body : JSON.stringify(body)
+    return this.fetch(endpoint, { ...options, method: 'PUT', body: payload })
+  }
+
+  patch(endpoint, body, options = {}) {
+    const payload =
+      body instanceof FormData || typeof body === 'string' || body == null ? body : JSON.stringify(body)
+    return this.fetch(endpoint, { ...options, method: 'PATCH', body: payload })
   }
 
   async fetch(endpoint, options = {}) {
