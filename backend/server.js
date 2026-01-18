@@ -850,6 +850,45 @@ app.use(async (req, res, next) => {
   next();
 });
 
+// Ensure synthetic admin-token users exist so foreign keys don't explode.
+// This keeps admin-token flows (Anya, etc.) stable even on fresh DBs.
+app.use(async (req, _res, next) => {
+  const user = req.user
+  if (!user || user.role !== 'admin' || !user.userId) return next()
+
+  try {
+    const existing = await db
+      .prepare(
+        `
+          SELECT id
+          FROM users
+          WHERE id = ?
+          LIMIT 1
+        `,
+      )
+      .get(user.userId)
+
+    if (!existing?.id) {
+      await db
+        .prepare(
+          `
+            INSERT INTO users (id, display_name, primary_email, is_admin)
+            VALUES (?, ?, ?, 1)
+          `,
+        )
+        .run(
+          user.userId,
+          user.full_name || ADMIN_NAME || 'Admin User',
+          user.email || ADMIN_EMAIL || null,
+        )
+    }
+  } catch {
+    // Best-effort only: do not block requests if the users table is unavailable.
+  }
+
+  return next()
+})
+
 // Health check with dependency checks
 // Health check endpoint (v3.0 - complete county data)
 app.get('/health', async (req, res) => {

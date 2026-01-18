@@ -42,6 +42,15 @@ async function waitForHttpOk(url, { timeoutMs = 45_000 } = {}) {
   }
 }
 
+async function assertOk(res, label) {
+  if (res.ok) return
+  let body = ''
+  try {
+    body = await res.text()
+  } catch {}
+  throw new Error(`${label} failed: status=${res.status} body=${body}`)
+}
+
 async function startBackend({ rootDir, port, sqlitePath }) {
   let stdoutBuf = ''
   let stderrBuf = ''
@@ -50,6 +59,10 @@ async function startBackend({ rootDir, port, sqlitePath }) {
     NODE_ENV: 'development',
     SMOKE_MODE: 'true',
     PORT: String(port),
+    // Force sqlite for unit tests even if the parent env has DATABASE_URL set.
+    DB_PROVIDER: 'sqlite',
+    DB_DIALECT: 'sqlite',
+    DATABASE_URL: '',
     DB_AUTO_MIGRATE: 'true',
     SQLITE_DB_PATH: sqlitePath,
     // Make tests deterministic even if host env has ADMIN_TOKEN set.
@@ -159,7 +172,7 @@ test('Anya sessions + tasks: create and update task', async () => {
       headers,
       body: JSON.stringify({ title: 'Test task', status: 'open' }),
     })
-    assert.equal(createTaskRes.ok, true)
+    await assertOk(createTaskRes, 'create task')
     const createTaskBody = await createTaskRes.json()
     assert.ok(createTaskBody?.task?.id, 'expected created task id')
     assert.equal(createTaskBody.task.status, 'open')
@@ -172,7 +185,7 @@ test('Anya sessions + tasks: create and update task', async () => {
         body: JSON.stringify({ status: 'completed' }),
       },
     )
-    assert.equal(updateTaskRes.ok, true)
+    await assertOk(updateTaskRes, 'update task')
     const updateTaskBody = await updateTaskRes.json()
     assert.equal(updateTaskBody?.task?.status, 'completed')
   } finally {
