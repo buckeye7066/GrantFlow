@@ -1,0 +1,41 @@
+﻿# Cursor context/indexing exclusions
+# (Keeps large/generated/binary artifacts from being indexed and watched.)
+
+# Dependencies & build output
+node_modules/
+dist/
+build/
+coverage/
+test-results/
+artifacts/
+
+# Tool caches (if present)
+.vite/
+.cache/
+
+# Local runtime data / uploads
+backend/data/
+backend/uploads/
+backend/temp_images/
+
+# Local databases
+seed/*.db
+seed/*.db-*
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+
+# Large data files (can be huge and trigger OOM/indexer issues)
+seed/baseline-profiles.json
+
+# Large binaries
+public/*.mp4
+public/**/*.mp4
+public/**/*mp4
+public/**/*mp4*
+**/*.pdf
+**/*.zip
+**/*.7z
+**/*.tar
+**/*.gz
