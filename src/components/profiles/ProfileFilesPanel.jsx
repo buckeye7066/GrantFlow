@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
+import { Input } from "@/components/ui/input"
 import { Loader2, UploadCloud } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { listDocuments, ingestDocument, deleteDocument, parseAllProfileDocuments } from "@/api/documents"
@@ -60,6 +61,8 @@ export default function ProfileFilesPanel({ profileId, profileName }) {
   const [uploadError, setUploadError] = useState(null)
   const [parseWithAI, setParseWithAI] = useState(false)
   const [handwritingOcr, setHandwritingOcr] = useState(true)
+  const [urlToIngest, setUrlToIngest] = useState("")
+  const [urlError, setUrlError] = useState(null)
 
   const { data: documents = [], isLoading } = useQuery({
     queryKey: ["documents", profileId],
@@ -83,6 +86,7 @@ export default function ProfileFilesPanel({ profileId, profileName }) {
       formData.append("ocr", "true")
       formData.append("handwriting", handwritingOcr ? "true" : "false")
       formData.append("ocr_language", "eng")
+      formData.append("source", "upload")
 
       return ingestDocument(formData)
     },
@@ -104,6 +108,82 @@ export default function ProfileFilesPanel({ profileId, profileName }) {
         variant: "destructive",
         title: "Upload failed",
         description: message,
+      })
+    },
+  })
+
+  const urlIngestMutation = useMutation({
+    mutationFn: async ({ url }) => {
+      const body = {
+        profile_id: profileId,
+        file_url: url,
+        name: undefined,
+        type: parseWithAI ? "source_material" : "profile_file",
+        skip_parsing: parseWithAI ? false : true,
+        ocr: true,
+        handwriting: Boolean(handwritingOcr),
+        ocr_language: "eng",
+        source: "url_import",
+      }
+
+      // Best-effort derived name from URL path.
+      try {
+        const parsed = new URL(url)
+        const base = parsed.pathname.split("/").filter(Boolean).pop()
+        body.name = base || `URL import (${parsed.hostname})`
+      } catch {
+        body.name = "URL import"
+      }
+
+      return ingestDocument(body)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["documents", profileId] })
+      queryClient.invalidateQueries({ queryKey: ["profile", profileId] })
+      setUrlToIngest("")
+      setUrlError(null)
+      toast({
+        title: "URL imported",
+        description: parseWithAI ? "We’ll download and parse what we can." : "Downloaded and saved to this profile.",
+      })
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : "URL ingest failed"
+      setUrlError(message)
+      toast({
+        variant: "destructive",
+        title: "URL ingest failed",
+        description: message,
+      })
+    },
+  })
+
+  const pasteTextMutation = useMutation({
+    mutationFn: async ({ text }) => {
+      const now = new Date()
+      const name = `Pasted text ${now.toISOString().replace(/[:.]/g, "-")}.txt`
+      return ingestDocument({
+        profile_id: profileId,
+        name,
+        type: parseWithAI ? "source_material" : "profile_file",
+        extracted_text: text,
+        skip_parsing: parseWithAI ? false : true,
+        source: "paste",
+      })
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["documents", profileId] })
+      queryClient.invalidateQueries({ queryKey: ["profile", profileId] })
+      toast({
+        title: "Pasted content saved",
+        description: parseWithAI ? "Queued for parsing and section updates." : "Saved to this profile.",
+      })
+    },
+    onError: (error) => {
+      toast({
+        variant: "destructive",
+        title: "Paste failed",
+        description: error instanceof Error ? error.message : "Unable to ingest clipboard content.",
       })
     },
   })
@@ -152,6 +232,8 @@ export default function ProfileFilesPanel({ profileId, profileName }) {
   }, [documents])
 
   const isUploading = uploadMutation.isPending
+  const isIngestingUrl = urlIngestMutation.isPending
+  const isPastingText = pasteTextMutation.isPending
 
   const handleFileChange = (event) => {
     const file = event.target.files?.[0]
@@ -194,6 +276,69 @@ export default function ProfileFilesPanel({ profileId, profileName }) {
     }
 
     uploadMutation.mutate({ file: uploadFile })
+  }
+
+  const handlePaste = (event) => {
+    if (!profileId) {
+      toast({
+        variant: "destructive",
+        title: "No profile selected",
+        description: "Open a profile before pasting documents.",
+      })
+      return
+    }
+
+    const items = Array.from(event.clipboardData?.items ?? [])
+    if (items.length === 0) return
+
+    // Prefer file-like clipboard payloads (screenshots) over text.
+    const fileItem = items.find((item) => item.kind === "file")
+    if (fileItem) {
+      const file = fileItem.getAsFile()
+      if (file) {
+        event.preventDefault()
+        uploadMutation.mutate({ file })
+        return
+      }
+    }
+
+    const textItem = items.find((item) => item.kind === "string" && item.type === "text/plain")
+    if (textItem) {
+      event.preventDefault()
+      textItem.getAsString((text) => {
+        const cleaned = String(text ?? "").trim()
+        if (!cleaned) return
+        pasteTextMutation.mutate({ text: cleaned })
+      })
+    }
+  }
+
+  const handleIngestUrl = () => {
+    setUrlError(null)
+    if (!profileId) {
+      toast({
+        variant: "destructive",
+        title: "No profile selected",
+        description: "Open a profile before importing URLs.",
+      })
+      return
+    }
+    const raw = String(urlToIngest || "").trim()
+    if (!raw) {
+      setUrlError("Paste a URL to import.")
+      return
+    }
+    try {
+      const parsed = new URL(raw)
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        setUrlError("Only http(s) URLs are supported.")
+        return
+      }
+    } catch {
+      setUrlError("That doesn’t look like a valid URL.")
+      return
+    }
+    urlIngestMutation.mutate({ url: raw })
   }
 
   return (
@@ -276,6 +421,49 @@ export default function ProfileFilesPanel({ profileId, profileName }) {
               >
                 {parseAllMutation.isPending ? "Queueing…" : "Parse all"}
               </Button>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <div
+              className={`rounded-lg border border-dashed p-4 text-sm text-slate-700 bg-white ${
+                profileId ? "border-slate-200" : "border-slate-100 opacity-70"
+              }`}
+              tabIndex={0}
+              role="button"
+              onPaste={handlePaste}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.currentTarget.focus()
+                }
+              }}
+            >
+              <p className="font-medium text-slate-900">Paste (Ctrl+V)</p>
+              <p className="text-xs text-slate-600 mt-1">
+                Paste screenshots/images or copied text. We’ll save it directly to this profile (and optionally parse it).
+              </p>
+              <p className="text-xs text-slate-500 mt-2">
+                Tip: Click here first, then paste.
+                {isUploading || isPastingText ? " (working…)" : ""}
+              </p>
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-2">
+              <p className="font-medium text-slate-900 text-sm">Import from URL</p>
+              <p className="text-xs text-slate-600">
+                Paste a direct link to a file (PDF/DOCX/image). Max 50MB; download timeout ~20s.
+              </p>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <Input
+                  value={urlToIngest}
+                  onChange={(e) => setUrlToIngest(e.target.value)}
+                  placeholder="https://example.com/application.pdf"
+                  disabled={!profileId || isIngestingUrl}
+                />
+                <Button onClick={handleIngestUrl} disabled={!profileId || isIngestingUrl} className="sm:w-40">
+                  {isIngestingUrl ? "Importing…" : "Import URL"}
+                </Button>
+              </div>
+              {urlError ? <p className="text-xs text-red-600">{urlError}</p> : null}
             </div>
           </div>
           {uploadFile ? (

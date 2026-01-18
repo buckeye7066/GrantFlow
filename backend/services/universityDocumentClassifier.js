@@ -55,9 +55,9 @@ function scoreSchoolMatch({ schoolName, haystack }) {
   return { score, reason: `token_overlap:${matched}/${tokens.length}` }
 }
 
-export function loadUniversityApplicationsForProfile(db, profileId) {
+export async function loadUniversityApplicationsForProfile(db, profileId) {
   if (!profileId) return []
-  const row = db
+  const row = await db
     .prepare(
       `
         SELECT data
