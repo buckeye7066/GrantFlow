@@ -140,21 +140,14 @@ async function getTableCount(db, tableName) {
 async function checkFundingOpportunitiesSchema(db) {
   if (db?.dialect === 'postgres') {
     try {
-      const targetColumns = [
-        'type',
-        'evidence_url',
-        'last_verified_at',
-        'title',
-        'sponsor',
-        'deadline',
-      ]
+      const targetColumns = ['type', 'evidence_url', 'last_verified_at', 'title', 'sponsor', 'deadline']
 
       const rows = await db
         .prepare(
           `
             SELECT column_name
             FROM information_schema.columns
-            WHERE table_schema = 'public'
+            WHERE table_schema = current_schema()
               AND table_name = 'funding_opportunities'
           `,
         )
@@ -163,7 +156,7 @@ async function checkFundingOpportunitiesSchema(db) {
       const columnNames = new Set((rows || []).map((r) => String(r.column_name)))
 
       const crawlLogsExistsRow = await db
-        .prepare(`SELECT to_regclass('public.crawl_logs') AS regclass`)
+        .prepare(`SELECT to_regclass(current_schema() || '.crawl_logs') AS regclass`)
         .get()
       const crawlLogsExists = Boolean(crawlLogsExistsRow?.regclass)
 
@@ -184,6 +177,7 @@ async function checkFundingOpportunitiesSchema(db) {
       return {
         error: 'Failed to check schema (postgres)',
         message: error?.message || String(error),
+        details: { dialect: 'postgres' },
       }
     }
   }
