@@ -1097,27 +1097,6 @@ app.get('/api/meta/build', (_req, res) => {
 // Public health endpoint - safe for non-admin users
 app.get('/api/health', async (req, res) => {
   try {
-<<<<<<< HEAD
-    const healthSummary = await getSafeHealthSummary(db);
-    // Backward/legacy normalization: some older health check shapes use "healthy"/"degraded".
-    // Contract for /api/health is status in { ok, warning, error }.
-    const legacyStatus = String(healthSummary?.status ?? '').toLowerCase()
-    const normalizedStatus =
-      legacyStatus === 'healthy'
-        ? 'ok'
-        : legacyStatus === 'degraded' || legacyStatus === 'unhealthy'
-          ? 'warning'
-          : legacyStatus === 'ok' || legacyStatus === 'warning' || legacyStatus === 'error'
-            ? legacyStatus
-            : 'warning'
-
-    if (healthSummary && typeof healthSummary === 'object') {
-      healthSummary.status = normalizedStatus
-      if (!Object.prototype.hasOwnProperty.call(healthSummary, 'legacy_status')) {
-        healthSummary.legacy_status = legacyStatus || null
-      }
-    }
-=======
     const healthSummary = await getSafeHealthSummary(db)
     // Contract: public health endpoints must use { ok, warning, error } for status.
     // Some internal helpers may return { healthy, degraded, unhealthy } — normalize here.
@@ -1131,7 +1110,6 @@ app.get('/api/health', async (req, res) => {
             ? 'error'
             : rawStatus
 
->>>>>>> 8d54c4e (Fix: normalize health contract statuses)
     // Treat "warning" as healthy for platform checks (Railway healthchecks, Docker HEALTHCHECK, etc.)
     // Only fail hard when the normalized status indicates a real error.
     const statusCode = status === 'error' ? 500 : 200
@@ -1155,26 +1133,6 @@ app.get('/api/health', async (req, res) => {
 // Platform health aliases (k8s-style)
 app.get('/healthz', async (_req, res) => {
   try {
-<<<<<<< HEAD
-    const healthSummary = await getSafeHealthSummary(db);
-    const legacyStatus = String(healthSummary?.status ?? '').toLowerCase()
-    const normalizedStatus =
-      legacyStatus === 'healthy'
-        ? 'ok'
-        : legacyStatus === 'degraded' || legacyStatus === 'unhealthy'
-          ? 'warning'
-          : legacyStatus === 'ok' || legacyStatus === 'warning' || legacyStatus === 'error'
-            ? legacyStatus
-            : 'warning'
-    if (healthSummary && typeof healthSummary === 'object') {
-      healthSummary.status = normalizedStatus
-      if (!Object.prototype.hasOwnProperty.call(healthSummary, 'legacy_status')) {
-        healthSummary.legacy_status = legacyStatus || null
-      }
-    }
-    const statusCode = healthSummary.status === 'error' ? 500 : 200;
-    res.status(statusCode).json(healthSummary);
-=======
     const healthSummary = await getSafeHealthSummary(db)
     const rawStatus = healthSummary?.status ?? 'error'
     const status =
@@ -1193,7 +1151,6 @@ app.get('/healthz', async (_req, res) => {
         : { ...healthSummary, status, legacy_status: rawStatus }
 
     res.status(statusCode).json(body)
->>>>>>> 8d54c4e (Fix: normalize health contract statuses)
   } catch (error) {
     console.error('[/healthz] Error:', error);
     res.status(500).json({ status: 'error', summary: 'Failed to retrieve health information' });
