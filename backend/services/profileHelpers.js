@@ -807,6 +807,15 @@ export function buildProfileSignals({ profile, sections }) {
     registerKeyword(organizationDetails.organization_type)
     applicantTypeSet.add(normalizeString(organizationDetails.organization_type))
   }
+  if (organizationDetails.nicra_rate) {
+    // NICRA = Negotiated Indirect Cost Rate Agreement (common for federal compliance).
+    registerKeyword('nicra')
+    registerKeyword(organizationDetails.nicra_rate)
+    registerKeyword(`nicra ${organizationDetails.nicra_rate}`)
+  }
+  if (organizationDetails.audit_status) {
+    registerKeyword(organizationDetails.audit_status)
+  }
   if (organizationDetails.mission) {
     collectNarrativeKeywords({ mission: organizationDetails.mission }, registerKeyword)
   }

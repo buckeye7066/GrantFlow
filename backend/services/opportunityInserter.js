@@ -58,6 +58,21 @@ export function upsertFundingOpportunity(db, opportunity) {
     }
   }
 
+  const recordOrigin = deriveRecordOrigin(opportunity)
+  const sourceUrl = normalizeUrl(opportunity.source_url ?? opportunity.url ?? opportunity.application_url)
+  const applicationUrl = normalizeUrl(opportunity.application_url)
+  const evidenceUrl = normalizeUrl(opportunity.evidence_url ?? sourceUrl ?? applicationUrl)
+
+  // Live-crawled opportunities must have at least one concrete URL for traceability.
+  if (recordOrigin === 'live_crawl' && !sourceUrl && !applicationUrl && !evidenceUrl) {
+    return {
+      id: null,
+      inserted: false,
+      skipped: true,
+      reason: 'missing evidence/source/application URL',
+    }
+  }
+
   const sourceId =
     opportunity.source_id ??
     // Many crawler datasets ship a stable `id` field; treat that as the source_id when present.
@@ -71,7 +86,8 @@ export function upsertFundingOpportunity(db, opportunity) {
     )
     .get(source, sourceId)
 
-  const incomingIsBaseline = opportunity.last_verified_at == null
+  // Treat live crawl records as verified even if caller omits last_verified_at.
+  const incomingIsBaseline = recordOrigin !== 'live_crawl' && opportunity.last_verified_at == null
   const existingIsVerified = existing?.last_verified_at != null
 
   // Only block baseline/unverified incoming data from downgrading verified existing records
@@ -92,7 +108,8 @@ export function upsertFundingOpportunity(db, opportunity) {
       title,
       sponsor: normalizeNonEmptyString(opportunity.sponsor),
       description: opportunity.description ?? null,
-      source_url: normalizeUrl(opportunity.source_url ?? opportunity.url ?? opportunity.application_url),
+      source_url: sourceUrl,
+      evidence_url: evidenceUrl,
       eligibility_bullets: JSON.stringify(ensureArray(opportunity.eligibility_bullets)),
       match_reasons: JSON.stringify(ensureArray(opportunity.match_reasons)),
       amount_min: typeof opportunity.amount_min === 'number' ? opportunity.amount_min : null,
@@ -100,20 +117,21 @@ export function upsertFundingOpportunity(db, opportunity) {
       amount_description: opportunity.amount_description ?? null,
       deadline: opportunity.deadline ?? null,
       deadline_type: opportunity.deadline_type ?? null,
-      application_url: normalizeUrl(opportunity.application_url),
+      application_url: applicationUrl,
       is_national: toDbBoolean(db, isNational),
       state: opportunity.state ?? (isNational ? 'nationwide' : null),
       categories: JSON.stringify(ensureArray(opportunity.categories)),
       keywords: JSON.stringify(ensureArray(opportunity.keywords)),
       opportunity_type: opportunity.opportunity_type ?? 'grant',
       type: opportunity.type ?? 'OPPORTUNITY',
-      last_verified_at: opportunity.last_verified_at ?? null,
+      last_verified_at:
+        opportunity.last_verified_at ?? (recordOrigin === 'live_crawl' ? new Date().toISOString() : null),
       profile_id: opportunity.profile_id ?? null,
       requires_501c3: toDbBoolean(db, opportunity.requires_501c3),
       requires_match: toDbBoolean(db, opportunity.requires_match),
       match_percentage: typeof opportunity.match_percentage === 'number' ? opportunity.match_percentage : null,
       notes: opportunity.notes ?? null,
-      record_origin: deriveRecordOrigin(opportunity),
+      record_origin: recordOrigin,
     }
 
     // Conservative merge: never overwrite existing non-null values with null.
@@ -125,6 +143,7 @@ export function upsertFundingOpportunity(db, opportunity) {
         sponsor = COALESCE(?, sponsor),
         description = COALESCE(?, description),
         source_url = COALESCE(?, source_url),
+        evidence_url = COALESCE(?, evidence_url),
         record_origin = COALESCE(?, record_origin),
         eligibility_bullets = COALESCE(?, eligibility_bullets),
         amount_min = COALESCE(?, amount_min),
@@ -156,6 +175,7 @@ export function upsertFundingOpportunity(db, opportunity) {
       record.sponsor,
       record.description,
       record.source_url,
+      record.evidence_url,
       record.record_origin,
       record.eligibility_bullets,
       record.amount_min,
@@ -180,7 +200,7 @@ export function upsertFundingOpportunity(db, opportunity) {
       existing.id,
     )
 
-    return { id: existing.id, inserted: false, updated: true }
+    return { id: existing.id, inserted: false, updated: true, skipped: false }
   }
 
   // IMPORTANT:
@@ -193,7 +213,8 @@ export function upsertFundingOpportunity(db, opportunity) {
     title,
     sponsor: normalizeNonEmptyString(opportunity.sponsor),
     description: opportunity.description ?? null,
-    source_url: normalizeUrl(opportunity.source_url ?? opportunity.url ?? opportunity.application_url),
+    source_url: sourceUrl,
+    evidence_url: evidenceUrl,
     eligibility_bullets: JSON.stringify(
       ensureArray(opportunity.eligibility_bullets),
     ),
@@ -209,14 +230,15 @@ export function upsertFundingOpportunity(db, opportunity) {
     amount_description: opportunity.amount_description ?? null,
     deadline: opportunity.deadline ?? null,
     deadline_type: opportunity.deadline_type ?? null,
-    application_url: normalizeUrl(opportunity.application_url),
+    application_url: applicationUrl,
     is_national: toDbBoolean(db, isNational),
     state: opportunity.state ?? (isNational ? 'nationwide' : null),
     categories: JSON.stringify(ensureArray(opportunity.categories)),
     keywords: JSON.stringify(ensureArray(opportunity.keywords)),
     opportunity_type: opportunity.opportunity_type ?? 'grant',
     type: opportunity.type ?? 'OPPORTUNITY',
-    last_verified_at: opportunity.last_verified_at ?? null,
+    last_verified_at:
+      opportunity.last_verified_at ?? (recordOrigin === 'live_crawl' ? new Date().toISOString() : null),
     profile_id: opportunity.profile_id ?? null,
     requires_501c3: toDbBoolean(db, opportunity.requires_501c3),
     requires_match: toDbBoolean(db, opportunity.requires_match),
@@ -225,7 +247,7 @@ export function upsertFundingOpportunity(db, opportunity) {
         ? opportunity.match_percentage
         : null,
     notes: opportunity.notes ?? null,
-    record_origin: deriveRecordOrigin(opportunity),
+    record_origin: recordOrigin,
   }
 
   const insert = db.prepare(`
@@ -236,6 +258,7 @@ export function upsertFundingOpportunity(db, opportunity) {
       source,
       source_id,
       source_url,
+      evidence_url,
       record_origin,
       description,
       eligibility_bullets,
@@ -267,6 +290,7 @@ export function upsertFundingOpportunity(db, opportunity) {
       @source,
       @source_id,
       @source_url,
+      @evidence_url,
       @record_origin,
       @description,
       @eligibility_bullets,
@@ -301,6 +325,7 @@ export function upsertFundingOpportunity(db, opportunity) {
     source,
     source_id: sourceId,
     source_url: record.source_url,
+    evidence_url: record.evidence_url,
     record_origin: record.record_origin,
     description: record.description,
     eligibility_bullets: record.eligibility_bullets,
@@ -325,7 +350,7 @@ export function upsertFundingOpportunity(db, opportunity) {
     notes: record.notes,
   })
 
-  return { id, inserted: true }
+  return { id, inserted: true, skipped: false }
 }
 
 export function bulkUpsertFundingOpportunities(db, opportunities = []) {

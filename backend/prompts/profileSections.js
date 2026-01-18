@@ -365,7 +365,6 @@ ${config.keys.map((key) => `  "${key}": value`).join(',\n')}
   return { prompt, config }
 }
 
-export const supportedSectionKeys = schemaSectionKeys
 export const supportedSectionKeys = Object.keys(SECTION_PROMPTS)
 
 // Canonical schema contract used by repair/seed flows.
