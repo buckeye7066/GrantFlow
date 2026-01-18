@@ -563,7 +563,9 @@ export default function AdminDiagnostics() {
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
-              {Object.entries(diagnostics.db.schema_checks).map(([key, value]) => (
+              {Object.entries(diagnostics.db.schema_checks)
+                .filter(([, value]) => typeof value === 'boolean')
+                .map(([key, value]) => (
                 <div
                   key={key}
                   className="flex items-center gap-2 rounded px-2 py-1 cursor-pointer hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-300"
@@ -575,7 +577,7 @@ export default function AdminDiagnostics() {
                       description: 'Schema health checks verify expected tables/columns/constraints exist.',
                       data: {
                         key,
-                        ok: Boolean(value),
+                        ok: value,
                         all_checks: diagnostics.db.schema_checks,
                       },
                     })
@@ -588,7 +590,7 @@ export default function AdminDiagnostics() {
                         description: 'Schema health checks verify expected tables/columns/constraints exist.',
                         data: {
                           key,
-                          ok: Boolean(value),
+                          ok: value,
                           all_checks: diagnostics.db.schema_checks,
                         },
                       });

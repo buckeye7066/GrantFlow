@@ -139,10 +139,53 @@ async function getTableCount(db, tableName) {
  */
 async function checkFundingOpportunitiesSchema(db) {
   if (db?.dialect === 'postgres') {
-    return {
-      skipped: true,
-      reason: 'Postgres schema is managed by migrations',
-    };
+    try {
+      const targetColumns = [
+        'type',
+        'evidence_url',
+        'last_verified_at',
+        'title',
+        'sponsor',
+        'deadline',
+      ]
+
+      const rows = await db
+        .prepare(
+          `
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'funding_opportunities'
+          `,
+        )
+        .all()
+
+      const columnNames = new Set((rows || []).map((r) => String(r.column_name)))
+
+      const crawlLogsExistsRow = await db
+        .prepare(`SELECT to_regclass('public.crawl_logs') AS regclass`)
+        .get()
+      const crawlLogsExists = Boolean(crawlLogsExistsRow?.regclass)
+
+      return {
+        funding_opportunities_has_type: columnNames.has('type'),
+        funding_opportunities_has_evidence_url: columnNames.has('evidence_url'),
+        funding_opportunities_has_last_verified_at: columnNames.has('last_verified_at'),
+        funding_opportunities_has_title: columnNames.has('title'),
+        funding_opportunities_has_sponsor: columnNames.has('sponsor'),
+        funding_opportunities_has_deadline: columnNames.has('deadline'),
+        crawl_logs_exists: crawlLogsExists,
+        details: {
+          dialect: 'postgres',
+          missing_columns: targetColumns.filter((col) => !columnNames.has(col)),
+        },
+      }
+    } catch (error) {
+      return {
+        error: 'Failed to check schema (postgres)',
+        message: error?.message || String(error),
+      }
+    }
   }
 
   try {
