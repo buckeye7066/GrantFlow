@@ -26,8 +26,9 @@ export const USER_PROFILE_MAPPINGS = {
   'oliviabeltran@gmail.com': 'profile-olivia-beltran',
   'joshua.dasher@gmail.com': 'profile-josh-dasher',
   'rdashermiller@gmail.com': 'profile-rachel-miller',
-  'angelikaps.rn@gmail.com': '886debfb-aae3-4560-8a3e-69b098b2becc',
-  'pjandcrdasher@att.net': '7b7484c6-391c-4fb9-950f-c47759ba9440',
+  // Prefer stable IDs; if the DB already has a different ID, auth will match by email first.
+  'angelikaps.rn@gmail.com': 'profile-angelika-ptak',
+  'pjandcrdasher@att.net': 'profile-paul-jason-dasher',
 }
 
 /**

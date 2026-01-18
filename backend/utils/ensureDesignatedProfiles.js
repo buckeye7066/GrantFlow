@@ -15,11 +15,15 @@ export async function ensureDesignatedProfiles(db) {
         updated_at = CURRENT_TIMESTAMP
     `)
 
-    const deleteSections = tx.prepare(`DELETE FROM profile_sections WHERE profile_id = ?`)
-
-    const insertSection = tx.prepare(`
-      INSERT INTO profile_sections (id, profile_id, section_key, data, updated_by)
-      VALUES (?, ?, ?, ?, 'system-sync')
+    // CRITICAL: never wipe existing profile sections on boot.
+    // Users/admin may have edited profiles; startup seeding must be additive/idempotent.
+    const upsertSection = tx.prepare(`
+      INSERT INTO profile_sections (id, profile_id, section_key, data, updated_by, updated_at)
+      VALUES (?, ?, ?, ?, 'system-sync', CURRENT_TIMESTAMP)
+      ON CONFLICT(profile_id, section_key) DO UPDATE SET
+        data = excluded.data,
+        updated_by = 'system-sync',
+        updated_at = CURRENT_TIMESTAMP
     `)
 
     for (const profile of DESIGNATED_PROFILES) {
@@ -31,11 +35,9 @@ export async function ensureDesignatedProfiles(db) {
         tags: JSON.stringify(profile.tags ?? []),
       })
 
-      await deleteSections.run(profile.id)
-
       if (profile.sections) {
         for (const [sectionKey, sectionData] of Object.entries(profile.sections)) {
-          await insertSection.run(randomUUID(), profile.id, sectionKey, JSON.stringify(sectionData ?? {}))
+          await upsertSection.run(randomUUID(), profile.id, sectionKey, JSON.stringify(sectionData ?? {}))
         }
       }
     }
