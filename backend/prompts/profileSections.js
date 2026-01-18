@@ -71,6 +71,58 @@ Rules:
     `.trim(),
     keys: Object.keys(PROFILE_SCHEMA.health_medical.fields),
   },
+  medical_insurance: {
+    title: PROFILE_SCHEMA.medical_insurance.title,
+    instructions: `
+Extract insurance details only when explicitly present in the profile or uploaded documents (insurance cards, enrollment letters, EOBs).
+Return JSON with keys: ${Object.keys(PROFILE_SCHEMA.medical_insurance.fields).join(', ')}.
+
+Rules:
+- Do NOT invent member_id or group_id. Leave them empty if not explicitly present.
+- plan_type should be a short label (e.g., "Medicaid", "Medicare", "Marketplace", "HMO", "PPO") when known.
+- Keep notes high-level and non-speculative (avoid medical advice).
+    `.trim(),
+    keys: Object.keys(PROFILE_SCHEMA.medical_insurance.fields),
+  },
+  medical_history: {
+    title: PROFILE_SCHEMA.medical_history.title,
+    instructions: `
+Summarize the medical history and needs relevant for assistance and documentation.
+Return JSON with keys: ${Object.keys(PROFILE_SCHEMA.medical_history.fields).join(', ')}.
+
+Rules:
+- Only include conditions explicitly stated. Do not diagnose.
+- secondary_conditions and dme_needed should be arrays of distinct strings.
+- letter_support_needed should be true only when the documents mention letters, medical necessity, prior auth, disability forms, etc.
+- Keep notes concise (<= 5 sentences).
+    `.trim(),
+    keys: Object.keys(PROFILE_SCHEMA.medical_history.fields),
+  },
+  nonprofit_compliance: {
+    title: PROFILE_SCHEMA.nonprofit_compliance.title,
+    instructions: `
+Extract nonprofit compliance signals from the profile and uploaded documents (determination letters, bylaws, audits, SAM registration).
+Return JSON with keys: ${Object.keys(PROFILE_SCHEMA.nonprofit_compliance.fields).join(', ')}.
+
+Rules:
+- Only mark is_501c3 or sam_registered true when supported by explicit evidence.
+- Do not fabricate identifiers or legal statuses.
+    `.trim(),
+    keys: Object.keys(PROFILE_SCHEMA.nonprofit_compliance.fields),
+  },
+  small_business_details: {
+    title: PROFILE_SCHEMA.small_business_details.title,
+    instructions: `
+Extract small business details useful for program matching and certifications.
+Return JSON with keys: ${Object.keys(PROFILE_SCHEMA.small_business_details.fields).join(', ')}.
+
+Rules:
+- years_in_business, employee_count, annual_revenue must be numeric when known; otherwise null.
+- certifications should be an array of distinct strings.
+- Do not fabricate financials.
+    `.trim(),
+    keys: Object.keys(PROFILE_SCHEMA.small_business_details.fields),
+  },
   demographics: {
     title: PROFILE_SCHEMA.demographics.title,
     instructions: `

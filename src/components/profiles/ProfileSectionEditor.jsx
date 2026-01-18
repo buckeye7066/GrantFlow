@@ -200,6 +200,77 @@ const healthSchema = z.object({
   notes: z.string().optional().or(z.literal("")),
 })
 
+const medicalInsuranceSchema = z.object({
+  insurance_provider: z.string().optional().or(z.literal("")),
+  plan_name: z.string().optional().or(z.literal("")),
+  plan_type: z.string().optional().or(z.literal("")),
+  member_id: z.string().optional().or(z.literal("")),
+  group_id: z.string().optional().or(z.literal("")),
+  policy_holder_name: z.string().optional().or(z.literal("")),
+  effective_date: z.string().optional().or(z.literal("")),
+  phone_for_claims: z.string().optional().or(z.literal("")),
+  notes: z.string().optional().or(z.literal("")),
+})
+
+const toStringArray = (value) => {
+  if (Array.isArray(value)) return value.map((v) => String(v)).filter(Boolean)
+  if (typeof value === "string" && value.trim() !== "") {
+    return value.split(",").map((entry) => entry.trim()).filter(Boolean)
+  }
+  return []
+}
+
+const medicalHistorySchema = z.object({
+  primary_condition: z.string().optional().or(z.literal("")),
+  secondary_conditions: z.union([z.array(z.string()), z.string()]).optional().transform((v) => toStringArray(v)),
+  mobility_needs: z.string().optional().or(z.literal("")),
+  dme_needed: z.union([z.array(z.string()), z.string()]).optional().transform((v) => toStringArray(v)),
+  doctor_name: z.string().optional().or(z.literal("")),
+  clinic_name: z.string().optional().or(z.literal("")),
+  letter_support_needed: booleanField,
+  notes: z.string().optional().or(z.literal("")),
+})
+
+const nonprofitComplianceSchema = z.object({
+  is_501c3: booleanField,
+  fiscal_sponsor: booleanField,
+  fiscal_sponsor_name: z.string().optional().or(z.literal("")),
+  sam_registered: booleanField,
+  insurance_coverage: z.string().optional().or(z.literal("")),
+  compliance_notes: z.string().optional().or(z.literal("")),
+})
+
+const smallBusinessDetailsSchema = z.object({
+  business_name: z.string().optional().or(z.literal("")),
+  naics_code: z.string().optional().or(z.literal("")),
+  years_in_business: z
+    .union([z.number(), z.string()])
+    .optional()
+    .transform((value) => {
+      if (value === "" || value === undefined || value === null) return ""
+      const parsed = Number(value)
+      return Number.isFinite(parsed) ? parsed : ""
+    }),
+  employee_count: z
+    .union([z.number(), z.string()])
+    .optional()
+    .transform((value) => {
+      if (value === "" || value === undefined || value === null) return ""
+      const parsed = Number(value)
+      return Number.isFinite(parsed) ? parsed : ""
+    }),
+  annual_revenue: z
+    .union([z.number(), z.string()])
+    .optional()
+    .transform((value) => {
+      if (value === "" || value === undefined || value === null) return ""
+      const parsed = Number(value)
+      return Number.isFinite(parsed) ? parsed : ""
+    }),
+  certifications: z.union([z.array(z.string()), z.string()]).optional().transform((v) => toStringArray(v)),
+  notes: z.string().optional().or(z.literal("")),
+})
+
 const demographicsSchema = z.object({
   african_american: booleanField,
   hispanic_latino: booleanField,
@@ -419,6 +490,106 @@ export const SECTION_CONFIG = {
       { name: "substance_recovery", label: "In substance recovery", type: "boolean" },
       { name: "mental_health_condition", label: "Mental health condition", type: "boolean" },
       { name: "notes", label: "Medical notes", component: Textarea, props: { rows: 4, placeholder: "Additional context about health needs" } },
+    ],
+  },
+  medical_insurance: {
+    title: "Medical Insurance",
+    description: "Store insurance details (provider/plan). Upload insurance cards or letters in the Files panel.",
+    applies_to: ["medical_assistance", "medical_need", "individual_need", "family"],
+    schema: medicalInsuranceSchema,
+    defaults: {
+      insurance_provider: "",
+      plan_name: "",
+      plan_type: "",
+      member_id: "",
+      group_id: "",
+      policy_holder_name: "",
+      effective_date: "",
+      phone_for_claims: "",
+      notes: "",
+    },
+    fields: [
+      { name: "insurance_provider", label: "Insurance provider", component: Input },
+      { name: "plan_name", label: "Plan name", component: Input },
+      { name: "plan_type", label: "Plan type", component: Input, props: { placeholder: "Medicaid, Medicare, Marketplace, HMO, PPO…" } },
+      { name: "member_id", label: "Member ID (optional)", component: Input },
+      { name: "group_id", label: "Group ID (optional)", component: Input },
+      { name: "policy_holder_name", label: "Policy holder name", component: Input },
+      { name: "effective_date", label: "Effective date", component: Input, props: { placeholder: "YYYY-MM-DD" } },
+      { name: "phone_for_claims", label: "Member services phone", component: Input },
+      { name: "notes", label: "Notes", component: Textarea, props: { rows: 3 } },
+    ],
+  },
+  medical_history: {
+    title: "Medical History & Needs",
+    description: "Capture medical context needed for assistance resources and support letters (keep concise).",
+    applies_to: ["medical_assistance", "medical_need", "individual_need", "family"],
+    schema: medicalHistorySchema,
+    defaults: {
+      primary_condition: "",
+      secondary_conditions: [],
+      mobility_needs: "",
+      dme_needed: [],
+      doctor_name: "",
+      clinic_name: "",
+      letter_support_needed: false,
+      notes: "",
+    },
+    fields: [
+      { name: "primary_condition", label: "Primary condition", component: Input },
+      { name: "secondary_conditions", label: "Secondary conditions", component: Textarea, props: { rows: 3, placeholder: "Comma-separated" } },
+      { name: "mobility_needs", label: "Mobility needs", component: Textarea, props: { rows: 2 } },
+      { name: "dme_needed", label: "DME needed", component: Textarea, props: { rows: 3, placeholder: "Comma-separated (e.g., shower chair, walker)" } },
+      { name: "doctor_name", label: "Doctor / clinician", component: Input },
+      { name: "clinic_name", label: "Clinic / hospital", component: Input },
+      { name: "letter_support_needed", label: "Support letter needed", type: "boolean" },
+      { name: "notes", label: "Notes", component: Textarea, props: { rows: 4 } },
+    ],
+  },
+  nonprofit_compliance: {
+    title: "Nonprofit Compliance",
+    description: "Track core compliance readiness signals used by many grants.",
+    applies_to: ["nonprofit", "organization"],
+    schema: nonprofitComplianceSchema,
+    defaults: {
+      is_501c3: false,
+      fiscal_sponsor: false,
+      fiscal_sponsor_name: "",
+      sam_registered: false,
+      insurance_coverage: "",
+      compliance_notes: "",
+    },
+    fields: [
+      { name: "is_501c3", label: "501(c)(3) status confirmed", type: "boolean" },
+      { name: "fiscal_sponsor", label: "Uses a fiscal sponsor", type: "boolean" },
+      { name: "fiscal_sponsor_name", label: "Fiscal sponsor name", component: Input },
+      { name: "sam_registered", label: "SAM.gov registered", type: "boolean" },
+      { name: "insurance_coverage", label: "Insurance coverage", component: Textarea, props: { rows: 2 } },
+      { name: "compliance_notes", label: "Compliance notes", component: Textarea, props: { rows: 3 } },
+    ],
+  },
+  small_business_details: {
+    title: "Small Business Details",
+    description: "Track business details needed for small business programs and certifications.",
+    applies_to: ["small_business"],
+    schema: smallBusinessDetailsSchema,
+    defaults: {
+      business_name: "",
+      naics_code: "",
+      years_in_business: "",
+      employee_count: "",
+      annual_revenue: "",
+      certifications: [],
+      notes: "",
+    },
+    fields: [
+      { name: "business_name", label: "Business name", component: Input },
+      { name: "naics_code", label: "NAICS code", component: Input },
+      { name: "years_in_business", label: "Years in business", component: Input, props: { type: "number", min: 0 } },
+      { name: "employee_count", label: "Employee count", component: Input, props: { type: "number", min: 0 } },
+      { name: "annual_revenue", label: "Annual revenue (USD)", component: Input, props: { type: "number", min: 0 } },
+      { name: "certifications", label: "Certifications", component: Textarea, props: { rows: 2, placeholder: "Comma-separated (e.g., WOSB, HUBZone)" } },
+      { name: "notes", label: "Notes", component: Textarea, props: { rows: 3 } },
     ],
   },
   demographics: {

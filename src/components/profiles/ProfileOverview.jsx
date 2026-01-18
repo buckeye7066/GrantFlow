@@ -35,12 +35,26 @@ const SECTION_ICONS = {
   financial_information: HandCoins,
   government_assistance: ShieldCheck,
   health_medical: HeartPulse,
+  medical_insurance: ShieldCheck,
+  medical_history: HeartPulse,
+  nonprofit_compliance: ClipboardList,
+  small_business_details: Briefcase,
   demographics: Users,
   family_life: Home,
   military_service: Medal,
   occupation: Briefcase,
   location_focus: MapPin,
   narrative: FileText,
+}
+
+function isSectionApplicable(sectionKey, config, profile) {
+  if (!config) return true
+  // Optional, forward-compatible: allow SECTION_CONFIG entries to specify applies_to types.
+  const appliesTo = config.applies_to ?? config.appliesTo ?? null
+  if (!Array.isArray(appliesTo) || appliesTo.length === 0) return true
+  const primaryType = profile?.primary_type ?? profile?.primaryType ?? null
+  if (!primaryType) return false
+  return appliesTo.includes(primaryType)
 }
 
 function titleCase(value = "") {
@@ -282,7 +296,10 @@ export default function ProfileOverview({
   }
   const gridColumnsClass = columnMap[dashboardPrefs.layoutColumns] ?? "md:grid-cols-2"
   const gapClass = dashboardPrefs.layoutStyle === "compact" ? "gap-4" : "gap-6"
-  const totalSections = useMemo(() => Object.keys(SECTION_CONFIG).length, [])
+  const applicableSectionKeys = useMemo(() => {
+    return Object.keys(SECTION_CONFIG).filter((key) => isSectionApplicable(key, SECTION_CONFIG[key], profile))
+  }, [profile])
+  const totalSections = applicableSectionKeys.length
   const sectionsMap = useMemo(() => {
     const map = new Map()
     ;(profile.sections ?? []).forEach((section) => {
@@ -394,7 +411,7 @@ export default function ProfileOverview({
     })
   }
 
-  const orderedSectionKeys = Object.keys(SECTION_CONFIG)
+  const orderedSectionKeys = applicableSectionKeys
 
   return (
     <div className="space-y-10">
