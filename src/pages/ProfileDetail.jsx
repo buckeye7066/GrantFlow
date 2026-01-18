@@ -28,6 +28,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import UniversityApplicationsSection from "@/components/profiles/UniversityApplicationsSection.jsx"
+import ComprehensiveApplicationForm from "@/components/organizations/ComprehensiveApplicationForm.jsx"
 
 export default function ProfileDetail() {
   const [searchParams] = useSearchParams()
@@ -82,6 +83,33 @@ export default function ProfileDetail() {
     },
     onError: (err) => {
       const message = err instanceof Error ? err.message : "Unable to save this section right now."
+      toast({
+        title: "Save failed",
+        description: message,
+        variant: "destructive",
+      })
+    },
+  })
+
+  const comprehensiveSection = React.useMemo(() => {
+    const section = profile?.sections?.find((s) => s?.section_key === "comprehensive_application") ?? null
+    return {
+      data: section?.data && typeof section.data === "object" ? section.data : null,
+      updatedAt: section?.updated_at ?? null,
+    }
+  }, [profile])
+
+  const saveComprehensiveMutation = useMutation({
+    mutationFn: (values) => upsertProfileSection(profileId, "comprehensive_application", values),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["profile", profileId] })
+      toast({
+        title: "Comprehensive application saved",
+        description: "Saved to this profile and available for printing any time.",
+      })
+    },
+    onError: (err) => {
+      const message = err instanceof Error ? err.message : "Unable to save the comprehensive application."
       toast({
         title: "Save failed",
         description: message,
@@ -390,8 +418,9 @@ export default function ProfileDetail() {
         </div>
 
         <Tabs defaultValue="profile" className="w-full">
-          <TabsList className={`grid w-full ${isStudentProfile ? "grid-cols-10" : "grid-cols-9"} lg:w-auto lg:inline-flex`}>
+          <TabsList className={`grid w-full ${isStudentProfile ? "grid-cols-11" : "grid-cols-10"} lg:w-auto lg:inline-flex`}>
             <TabsTrigger value="profile">Profile Information</TabsTrigger>
+            <TabsTrigger value="comprehensive">Comprehensive Application</TabsTrigger>
             <TabsTrigger value="pipeline">Pipeline</TabsTrigger>
             <TabsTrigger value="item-funding">Item Funding</TabsTrigger>
             <TabsTrigger value="deadlines">Grant Deadline</TabsTrigger>
@@ -419,6 +448,18 @@ export default function ProfileDetail() {
               isUploadingDocument={uploadDocumentMutation.isPending}
               fundsTotal={profile.pipeline_funds_total ?? 0}
             />
+          </TabsContent>
+
+          <TabsContent value="comprehensive" className="mt-6">
+            <div className="rounded-lg border bg-white">
+              <ComprehensiveApplicationForm
+                key={`${profileId}:${comprehensiveSection.updatedAt ?? ""}`}
+                initialData={comprehensiveSection.data ?? undefined}
+                isSubmitting={saveComprehensiveMutation.isPending}
+                onCancel={() => {}}
+                onSubmit={(values) => saveComprehensiveMutation.mutate(values)}
+              />
+            </div>
           </TabsContent>
 
           <TabsContent value="pipeline" className="mt-6">

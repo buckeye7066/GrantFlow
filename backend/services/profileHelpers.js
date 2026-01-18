@@ -106,6 +106,8 @@ export function extractZipFromContext({ profile, sections, jobParameters = {} })
     sections?.basic_information?.zip,
     sections?.basic_information?.postal_code,
     sections?.basic_information?.address_zip,
+    sections?.comprehensive_application?.zip,
+    sections?.comprehensive_application?.postal_code,
     sections?.location_focus?.primary_zip,
     sections?.location_focus?.service_zip,
     sections?.location_focus?.zip,
@@ -126,6 +128,8 @@ export function extractStateFromContext({ profile, sections, jobParameters = {} 
     jobParameters.state,
     sections?.basic_information?.state,
     sections?.basic_information?.address_state,
+    sections?.comprehensive_application?.state,
+    sections?.comprehensive_application?.address_state,
     sections?.location_focus?.state,
     sections?.location_focus?.primary_state,
     sections?.organization_details?.state,
@@ -352,13 +356,23 @@ export function buildProfileSignals({ profile, sections }) {
 
   // Extract location from multiple sources including address strings
   const basic = sections?.basic_information ?? {}
+  const comprehensive = sections?.comprehensive_application ?? {}
   const locationFocus = sections?.location_focus ?? {}
   const organizationDetails = sections?.organization_details ?? {}
 
   const location = {
-    zip: extractZipFromContext({ profile, sections }) || extractZipFromAddress(basic.address),
-    state: extractStateFromContext({ profile, sections }) || extractStateFromAddress(basic.address),
-    city: extractCityFromSections({ profile, sections }) || extractCityFromAddress(basic.address),
+    zip:
+      extractZipFromContext({ profile, sections }) ||
+      extractZipFromAddress(basic.address) ||
+      extractZipFromAddress(comprehensive.address),
+    state:
+      extractStateFromContext({ profile, sections }) ||
+      extractStateFromAddress(basic.address) ||
+      extractStateFromAddress(comprehensive.address),
+    city:
+      extractCityFromSections({ profile, sections }) ||
+      extractCityFromAddress(basic.address) ||
+      extractCityFromAddress(comprehensive.address),
   }
 
   // If we have ZIP but not state/city, derive from local ZIP database.
@@ -398,6 +412,38 @@ export function buildProfileSignals({ profile, sections }) {
     if (!Array.isArray(values)) return
     values.forEach((value) => registerKeyword(value))
   }
+
+  // ============ COMPREHENSIVE APPLICATION (PROFILE TAB) ============
+  // This section is intentionally stored as a single "full application" payload, but crawlers should still
+  // benefit from it by extracting keywords, applicant type, and location signals.
+  if (comprehensive?.applicant_type) {
+    const normalized = normalizeString(comprehensive.applicant_type)
+    if (normalized) applicantTypeSet.add(normalized)
+    registerKeyword(comprehensive.applicant_type)
+  }
+
+  // Freeform keyword arrays from the comprehensive application form.
+  registerKeywords(Array.isArray(comprehensive?.keywords) ? comprehensive.keywords : [])
+  registerKeywords(Array.isArray(comprehensive?.focus_areas) ? comprehensive.focus_areas : [])
+
+  // If the comprehensive application includes narrative fields, treat them as signal text.
+  collectNarrativeKeywords(
+    {
+      mission: comprehensive?.mission,
+      primary_goal: comprehensive?.primary_goal,
+      target_population: comprehensive?.target_population,
+      geographic_focus: comprehensive?.geographic_focus,
+      funding_amount_needed: comprehensive?.funding_amount_needed,
+      timeline: comprehensive?.timeline,
+      past_experience: comprehensive?.past_experience,
+      unique_qualities: comprehensive?.unique_qualities,
+      collaboration_partners: comprehensive?.collaboration_partners,
+      sustainability_plan: comprehensive?.sustainability_plan,
+      barriers_faced: comprehensive?.barriers_faced,
+      special_circumstances: comprehensive?.special_circumstances,
+    },
+    registerKeyword,
+  )
 
   // ============ PROFILE TOP-LEVEL FIELDS ============
   const baseTags = Array.isArray(profile?.tags) ? profile.tags : []
