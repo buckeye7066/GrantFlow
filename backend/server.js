@@ -1100,7 +1100,7 @@ app.get('/api/health', async (req, res) => {
     const healthSummary = await getSafeHealthSummary(db)
     // Contract: public health endpoints must use { ok, warning, error } for status.
     // Some internal helpers may return { healthy, degraded, unhealthy } — normalize here.
-    const rawStatus = healthSummary?.status ?? 'error'
+    const rawStatus = String(healthSummary?.status ?? 'error').toLowerCase()
     const status =
       rawStatus === 'healthy'
         ? 'ok'
@@ -1108,7 +1108,7 @@ app.get('/api/health', async (req, res) => {
           ? 'warning'
           : rawStatus === 'unhealthy'
             ? 'error'
-            : rawStatus
+            : rawStatus || 'error'
 
     // Treat "warning" as healthy for platform checks (Railway healthchecks, Docker HEALTHCHECK, etc.)
     // Only fail hard when the normalized status indicates a real error.

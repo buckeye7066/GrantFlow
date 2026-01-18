@@ -2,6 +2,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import net from 'node:net'
 import { spawn } from 'node:child_process'
+import path from 'node:path'
+import fs from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 async function sleep(ms) {
   await new Promise((r) => setTimeout(r, ms))
@@ -92,8 +95,17 @@ async function startBackend({ rootDir, port }) {
 }
 
 test('backend /api/health contract + request id header', async () => {
-  const rootDir = process.cwd()
+  // Derive repo root from this test file location (more robust than process.cwd()).
+  const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
   const port = await pickPort()
+
+  const entry = path.join(rootDir, 'backend', 'server.js')
+  assert.ok(fs.existsSync(entry), `expected backend entry to exist at ${entry}`)
+  const serverSource = fs.readFileSync(entry, 'utf8')
+  assert.ok(
+    serverSource.includes('normalizedStatus') || serverSource.includes('Normalize status'),
+    'expected backend /api/health to normalize status to ok|warning|error',
+  )
 
   const proc = await startBackend({ rootDir, port })
   try {
@@ -105,10 +117,14 @@ test('backend /api/health contract + request id header', async () => {
 
     const body = await res.json()
     assert.equal(typeof body, 'object')
+
     // Backward-compatible: some deployments may still return legacy statuses.
     // Canonical statuses are: ok|warning|error.
     const allowedStatuses = new Set(['ok', 'warning', 'healthy', 'degraded'])
-    assert.ok(allowedStatuses.has(body.status), `expected status ok|warning (or legacy healthy|degraded), got ${body.status}`)
+    assert.ok(
+      allowedStatuses.has(body.status),
+      `expected status ok|warning (or legacy healthy|degraded), got ${body.status}`,
+    )
   } finally {
     await stopProcess(proc)
   }

@@ -512,7 +512,7 @@ export async function getSafeHealthSummary(db) {
     return {
       timestamp,
       status,
-      legacy_status: status === 'ok' ? 'healthy' : status,
+      legacy_status: status === 'ok' ? 'healthy' : status === 'warning' ? 'degraded' : 'unhealthy',
       counts: {
         opportunities: opportunitiesCount,
         recentFailures,

@@ -11,12 +11,14 @@ import { env } from '@/config/env.js'
 const API_URL = env.isDev ? env.apiUrl : '' // Empty string = relative URLs, proxied by Vercel
 const APP_BASE = env.appBase || '/grantflow'
 
-// Frontend startup sanity (non-fatal): warn on env drift/misconfiguration.
+// Frontend startup sanity (non-fatal): warn on env drift / misconfiguration.
 if (import.meta.env.DEV) {
   const raw = import.meta.env.VITE_API_URL
   if (raw && !/^https?:\/\//i.test(String(raw))) {
     console.warn('[env] VITE_API_URL should be http(s)://...; falling back to same-origin proxy. value=', raw)
   }
+} else if (import.meta.env.VITE_API_URL) {
+  console.warn('[env] VITE_API_URL is ignored in production (same-origin /api via Vercel rewrites).')
 }
 
 class APIClient {
@@ -298,66 +300,6 @@ class APIClient {
       }
       throw error;
     }
-  }
-
-  // -----------------------------
-  // Base44-style HTTP helpers
-  // -----------------------------
-  // Many older components call base44.get/patch/etc. Provide thin wrappers
-  // around `fetch()` to keep those call sites working.
-
-  get(endpoint, options = {}) {
-    return this.fetch(endpoint, { ...options, method: 'GET' })
-  }
-
-  delete(endpoint, options = {}) {
-    return this.fetch(endpoint, { ...options, method: 'DELETE' })
-  }
-
-  post(endpoint, data, options = {}) {
-    // Allow signature (endpoint, options) if caller passes only options.
-    const inferredOptions =
-      options == null &&
-      data &&
-      typeof data === 'object' &&
-      !Array.isArray(data) &&
-      (Object.prototype.hasOwnProperty.call(data, 'method') ||
-        Object.prototype.hasOwnProperty.call(data, 'headers') ||
-        Object.prototype.hasOwnProperty.call(data, 'body'))
-        ? data
-        : null
-
-    const finalOptions = inferredOptions || options || {}
-    const payload = inferredOptions ? null : data
-
-    const body =
-      payload instanceof FormData
-        ? payload
-        : payload === undefined || payload === null
-          ? undefined
-          : JSON.stringify(payload)
-
-    return this.fetch(endpoint, { ...finalOptions, method: 'POST', body })
-  }
-
-  put(endpoint, data, options = {}) {
-    const body =
-      data instanceof FormData
-        ? data
-        : data === undefined || data === null
-          ? undefined
-          : JSON.stringify(data)
-    return this.fetch(endpoint, { ...options, method: 'PUT', body })
-  }
-
-  patch(endpoint, data, options = {}) {
-    const body =
-      data instanceof FormData
-        ? data
-        : data === undefined || data === null
-          ? undefined
-          : JSON.stringify(data)
-    return this.fetch(endpoint, { ...options, method: 'PATCH', body })
   }
 
   // Entity wrapper for Base44-compatible interface
@@ -672,16 +614,6 @@ export const {
 } = client.entities;
 
 export const getProfileSectionsClient = (profileId) => client.profileSectionsClient(profileId);
-// `apiFetch` is the preferred low-level fetch helper used throughout the app.
-// IMPORTANT: Some UI surfaces call `apiFetch.get/post/...` (Base44-style) — keep those available.
-export function apiFetch(...args) {
-  return client.fetch(...args);
-}
-
-apiFetch.get = (endpoint, options = {}) => client.get(endpoint, options)
-apiFetch.delete = (endpoint, options = {}) => client.delete(endpoint, options)
-apiFetch.post = (endpoint, data, options = {}) => client.post(endpoint, data, options)
-apiFetch.put = (endpoint, data, options = {}) => client.put(endpoint, data, options)
-apiFetch.patch = (endpoint, data, options = {}) => client.patch(endpoint, data, options)
+export const apiFetch = (...args) => client.fetch(...args);
 
 export default client;

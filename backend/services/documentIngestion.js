@@ -23,6 +23,79 @@ function truncateText(text, limit = 4000) {
   return `${text.slice(0, limit)}…`
 }
 
+function extractFirstMatch(text, regex) {
+  if (!text) return null
+  const match = String(text).match(regex)
+  const value = match?.[1] ?? match?.[0]
+  const normalized = typeof value === 'string' ? value.trim() : null
+  return normalized || null
+}
+
+function extractLabeledValue(text, labelRegex) {
+  // e.g. /(?:EIN|Tax ID)\s*[:#-]\s*([0-9-]{9,})/i
+  if (!text) return null
+  const regex = new RegExp(`${labelRegex.source}\\s*[:#\\-]?\\s*([^\\n\\r]{2,80})`, labelRegex.flags)
+  const m = String(text).match(regex)
+  const value = m?.[1]?.trim()
+  return value || null
+}
+
+function extractBasicInformationHeuristics(text) {
+  const source = String(text || '')
+
+  const email = extractFirstMatch(source, /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)
+  const phone = extractFirstMatch(
+    source,
+    /(\+?1[\s.-]?)?(?:\(\s*\d{3}\s*\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}/,
+  )
+  const website = extractFirstMatch(
+    source,
+    /\bhttps?:\/\/[^\s)]+/i,
+  )
+
+  const fullName =
+    extractLabeledValue(source, /(?:full\s+name|name|applicant)\b/i) ||
+    extractFirstMatch(source, /^\s*([A-Z][A-Za-z'.-]+(?:\s+[A-Z][A-Za-z'.-]+){1,4})\s*$/m)
+
+  const address =
+    extractLabeledValue(source, /(?:address|mailing\s+address)\b/i) ||
+    null
+
+  return {
+    full_name: fullName || '',
+    email: email || '',
+    phone: phone || '',
+    website: website || '',
+    address: address || '',
+    notes: '',
+  }
+}
+
+function extractOrganizationDetailsHeuristics(text) {
+  const source = String(text || '')
+
+  const ein =
+    extractFirstMatch(source, /(?:\bEIN\b|\bTax\s*ID\b)[^0-9]*([0-9]{2}-[0-9]{7})/i) ||
+    extractLabeledValue(source, /\bEIN\b/i)
+
+  const uei =
+    extractFirstMatch(source, /(?:\bUEI\b|\bUnique\s+Entity\s+ID\b)[^A-Z0-9]*([A-Z0-9]{12})/i) ||
+    extractLabeledValue(source, /\bUEI\b/i)
+
+  const cage =
+    extractFirstMatch(source, /(?:\bCAGE\b|\bCAGE\s*Code\b)[^A-Z0-9]*([A-Z0-9]{5})/i) ||
+    extractLabeledValue(source, /\bCAGE(?:\s*Code)?\b/i)
+
+  return {
+    organization_type: '',
+    ein: ein || '',
+    uei: uei || '',
+    cage_code: cage || '',
+    annual_budget: null,
+    staff_count: null,
+    mission: '',
+  }
+}
 function normalizeValue(value) {
   if (typeof value === 'string') {
     return value.trim()
@@ -189,28 +262,10 @@ export async function processDocumentIngestionJob({
     try {
       openai = typeof getOpenAI === 'function' ? getOpenAI() : null
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'AI parsing unavailable (missing API key).'
-      db.prepare(
-        `
-          UPDATE documents
-          SET processing_status = 'failed',
-              processing_error = ?
-          WHERE id = ?
-        `,
-      ).run(message, documentId)
-      return {
-        inserted: 0,
-        sections_updated: [],
-        document_id: documentId,
-        summary: message,
-        result_count: 0,
-        result_meta: {
-          document_id: documentId,
-          profile_id: profile?.id ?? null,
-          error: message,
-        },
-      }
+      const message = error instanceof Error ? error.message : 'AI parsing unavailable.'
+      // Degrade gracefully: we can still do OCR + deterministic extraction and mark the document processed.
+      aiSectionsLog._openai_client_error = message
+      openai = null
     }
 
     if (!docExcerpt) {
@@ -238,9 +293,39 @@ export async function processDocumentIngestionJob({
       }
     }
 
+    // Deterministic extraction (works even when the model provider is down).
+    try {
+      const heuristicBasic = extractBasicInformationHeuristics(document.extracted_text ?? document.notes ?? '')
+      const { data: mergedBasic, updatedFields: updatedBasic } = mergeSectionData(
+        sections.basic_information ?? {},
+        heuristicBasic,
+      )
+      if (updatedBasic.size > 0) {
+        upsertProfileSection(db, profile.id, 'basic_information', mergedBasic, document.id)
+        sections.basic_information = mergedBasic
+        updates.push({ section_key: 'basic_information', updated_fields: Array.from(updatedBasic) })
+        aiSectionsLog.basic_information = { ...(aiSectionsLog.basic_information || {}), heuristic: heuristicBasic }
+      }
+
+      const heuristicOrg = extractOrganizationDetailsHeuristics(document.extracted_text ?? document.notes ?? '')
+      const { data: mergedOrg, updatedFields: updatedOrg } = mergeSectionData(
+        sections.organization_details ?? {},
+        heuristicOrg,
+      )
+      if (updatedOrg.size > 0) {
+        upsertProfileSection(db, profile.id, 'organization_details', mergedOrg, document.id)
+        sections.organization_details = mergedOrg
+        updates.push({ section_key: 'organization_details', updated_fields: Array.from(updatedOrg) })
+        aiSectionsLog.organization_details = { ...(aiSectionsLog.organization_details || {}), heuristic: heuristicOrg }
+      }
+    } catch {
+      // best-effort
+    }
+
     let fatalOpenAIError = null
 
     for (const sectionKey of TARGET_SECTIONS) {
+      if (!openai) break
       const promptPayload = buildProfileSectionPrompt(sectionKey, {
         profile,
         sections,
