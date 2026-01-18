@@ -423,7 +423,6 @@ export async function processDocumentIngestionJob({
             ai_summary = ?,
             ai_sections = ?,
             processing_error = ?,
-            status = 'processed'
         WHERE id = ?
       `,
     ).run(status, summary, JSON.stringify(aiSectionsLog, null, 2), processingError, documentId)
