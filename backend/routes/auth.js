@@ -463,6 +463,52 @@ async function assignProfileToUser(db, userId, email) {
   }
 
   if (email) {
+    // 1) Best-effort match to an existing profile by email captured in profile sections.
+    // This is the safest way to ensure returning users re-claim their original profile
+    // even when IDs/mappings drift across DB restores.
+    try {
+      const normalized = normalizeEmail(email)
+      const matchSql =
+        db?.dialect === 'postgres'
+          ? `
+              SELECT p.id, p.user_id
+              FROM profiles p
+              JOIN profile_sections ps ON ps.profile_id = p.id
+              WHERE ps.section_key = 'basic_information'
+                AND lower((ps.data::jsonb ->> 'email')) = ?
+              LIMIT 1
+            `
+          : `
+              SELECT p.id, p.user_id
+              FROM profiles p
+              JOIN profile_sections ps ON ps.profile_id = p.id
+              WHERE ps.section_key = 'basic_information'
+                AND lower(json_extract(ps.data, '$.email')) = ?
+              LIMIT 1
+            `
+
+      const matchedProfile = await db.prepare(matchSql).get(normalized)
+      if (matchedProfile?.id) {
+        if (!matchedProfile.user_id || matchedProfile.user_id === userId) {
+          await db
+            .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            .run(userId, matchedProfile.id)
+          return matchedProfile.id
+        }
+        if (await isAdminUserId(db, matchedProfile.user_id)) {
+          await db
+            .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            .run(userId, matchedProfile.id)
+          return matchedProfile.id
+        }
+        console.warn(`[auth] Profile email match ${matchedProfile.id} already linked to another user`)
+        return matchedProfile.id
+      }
+    } catch (error) {
+      console.warn('[auth] Email-to-profile match failed (non-fatal):', error?.message || error)
+    }
+
+    // 2) Next, apply explicit designated ID mappings (baseline profiles).
     const designatedProfileId = getDesignatedProfileForEmail(email)
     if (designatedProfileId) {
       const designatedProfile = await db
@@ -489,19 +535,8 @@ async function assignProfileToUser(db, userId, email) {
       console.warn(`[auth] Designated profile ${designatedProfileId} not found for ${email}`)
     }
   }
-  
-  const firstProfile = await db
-    .prepare('SELECT id FROM profiles WHERE user_id IS NULL ORDER BY created_at ASC LIMIT 1')
-    .get()
-  if (firstProfile) {
-    await db
-      .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-      .run(userId, firstProfile.id)
-    // TODO: Remove debug log - console.log(`[auth] Assigned first available profile ${firstProfile.id} to user ${userId}`)
-    return firstProfile.id
-  }
 
-  // No pre-created profiles available (common on fresh Postgres). Create a personal profile for the user.
+  // 3) Otherwise, create a personal profile for the user.
   try {
     const profileId = crypto.randomUUID()
     const displayName =
