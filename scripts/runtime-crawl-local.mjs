@@ -44,8 +44,6 @@ async function waitFor(url, { method = 'GET', retries = 30, intervalMs = 250 } =
 
 async function main() {
   const procs = []
-  let backendProc = null
-  let previewProc = null
   
   const cleanup = () => {
     console.log('[crawl] Cleaning up processes...')
@@ -89,11 +87,11 @@ async function main() {
 
   // Start backend + preview
   try {
-    backendProc = runCmd('npm', ['run', 'backend'])
+    const backendProc = runCmd('npm', ['run', 'backend'])
     procs.push(backendProc)
     console.log('[crawl] Started backend process')
     
-    previewProc = runCmd('npm', ['run', 'preview', '--', '--host', '127.0.0.1', '--port', '4173'])
+    const previewProc = runCmd('npm', ['run', 'preview', '--', '--host', '127.0.0.1', '--port', '4173'])
     procs.push(previewProc)
     console.log('[crawl] Started preview process')
   } catch (err) {
@@ -117,7 +115,6 @@ async function main() {
   console.log('[crawl] Preview is ready')
 
   // Browser checks (no auth)
-  let browserClosed = false
   try {
     const browser = await chromium.launch({ headless: true })
     const page = await browser.newPage()
@@ -132,7 +129,6 @@ async function main() {
       console.log('[crawl] Admin route reachable (may require token to do anything useful).')
     } finally {
       await browser.close()
-      browserClosed = true
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
