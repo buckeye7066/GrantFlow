@@ -760,20 +760,42 @@ router.post('/:id/sections/:sectionKey/ai', async (req, res) => {
       return res.status(400).json({ error: `No prompt mapping for section "${sectionKey}"` })
     }
 
-    const openai = getOpenAI()
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: promptPayload.prompt }],
-      temperature: 0.2,
-      max_tokens: 1200,
-    })
+    // IMPORTANT: This endpoint is used in production UI flows. Do not 500 when OpenAI is missing.
+    const { openai, diagnostics } = createOpenAIClient({ allowMissing: true })
+    if (!openai) {
+      return res.status(503).json({
+        error: 'AI unavailable',
+        message:
+          'OpenAI is not configured on this server. Set OPENAI_API_KEY (or persist it via Admin → OpenAI tools) and retry.',
+        diagnostics,
+      })
+    }
+
+    let completion
+    try {
+      completion = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        messages: [{ role: 'user', content: promptPayload.prompt }],
+        temperature: 0.2,
+        max_tokens: 1200,
+        response_format: { type: 'json_object' },
+      })
+    } catch (error) {
+      const summary = summarizeOpenAIError(error)
+      console.warn('[ProfileSection AI] OpenAI request failed:', summary?.message || error?.message || error)
+      return res.status(summary?.status ? Number(summary.status) : 503).json({
+        error: 'AI unavailable',
+        message: summary?.message || 'OpenAI request failed',
+        status: summary?.status || 503,
+        hint: 'Verify OPENAI_API_KEY (or runtime secret) and model access, then retry.',
+      })
+    }
 
     const raw = extractCompletionText(completion)
     let suggestion = {}
 
     try {
-      const jsonMatch = raw.match(/\{[\s\S]*\}/)
-      suggestion = JSON.parse(jsonMatch ? jsonMatch[0] : raw)
+      suggestion = JSON.parse(String(raw || '{}'))
     } catch (parseError) {
       console.error('Failed to parse AI response:', parseError, raw)
       return res.status(502).json({

@@ -160,21 +160,105 @@ export async function createSession(db, user, { profileId, title, metadata } = {
   const normalizedProfileId = coerceProfileId(profileId ?? user.profileId ?? null)
   assertProfileAccess(user, normalizedProfileId)
 
+  // Validate profile existence up-front to avoid FK explosions.
+  if (normalizedProfileId) {
+    const exists = await db
+      .prepare(
+        `
+          SELECT id
+          FROM profiles
+          WHERE id = ?
+          LIMIT 1
+        `,
+      )
+      .get(normalizedProfileId)
+    if (!exists?.id) {
+      const error = new Error('Profile not found')
+      error.status = 404
+      throw error
+    }
+  }
+
+  // Admin-token auth can supply a synthetic userId (e.g. "admin-token") that doesn't exist in `users`.
+  // The `anya_sessions.user_id` column is optional, but SQLite foreign keys will reject unknown IDs.
+  // Use a best-effort lookup and store NULL when the user record is absent.
+  let effectiveUserId = user.userId ?? null
+  if (effectiveUserId) {
+    try {
+      const row = await db
+        .prepare(
+          `
+            SELECT id
+            FROM users
+            WHERE id = ?
+            LIMIT 1
+          `,
+        )
+        .get(effectiveUserId)
+      if (!row?.id) effectiveUserId = null
+    } catch {
+      // If the DB doesn't have a users table (or it errors), avoid failing session creation.
+      effectiveUserId = null
+    }
+  }
+
   const id = randomUUID()
-  const info = await db
-    .prepare(
-      `
-        INSERT INTO anya_sessions (id, user_id, profile_id, status, title, metadata)
-        VALUES (?, ?, ?, 'open', ?, ?)
-      `,
-    )
-    .run(
+  const insertStmt = db.prepare(
+    `
+      INSERT INTO anya_sessions (id, user_id, profile_id, status, title, metadata)
+      VALUES (?, ?, ?, 'open', ?, ?)
+    `,
+  )
+
+  let info
+  try {
+    info = await insertStmt.run(
       id,
-      user.userId ?? null,
+      effectiveUserId,
       normalizedProfileId,
       title?.trim() || null,
       metadata ? JSON.stringify(metadata) : '{}',
     )
+  } catch (error) {
+    // Defensive: if we still hit a FK failure (common on fresh DBs with admin-token auth),
+    // retry with NULL user_id (it is optional on the table).
+    const message = error instanceof Error ? error.message : String(error)
+    if (!/FOREIGN KEY constraint failed/i.test(message)) throw error
+
+    // Retry without user_id (admin-token / synthetic IDs).
+    if (effectiveUserId) {
+      try {
+        info = await insertStmt.run(
+          id,
+          null,
+          normalizedProfileId,
+          title?.trim() || null,
+          metadata ? JSON.stringify(metadata) : '{}',
+        )
+        return await getSession(db, user, id)
+      } catch (retryError) {
+        const retryMsg = retryError instanceof Error ? retryError.message : String(retryError)
+        if (!/FOREIGN KEY constraint failed/i.test(retryMsg)) throw retryError
+        // Last-resort: also drop profile_id (should be prevented by the existence check above, but keep safe).
+        info = await insertStmt.run(
+          id,
+          null,
+          null,
+          title?.trim() || null,
+          metadata ? JSON.stringify(metadata) : '{}',
+        )
+      }
+    } else {
+      // Last-resort: drop profile_id too (should be prevented by existence check above).
+      info = await insertStmt.run(
+        id,
+        null,
+        null,
+        title?.trim() || null,
+        metadata ? JSON.stringify(metadata) : '{}',
+      )
+    }
+  }
 
   if (info.changes !== 1) {
     throw new Error('Unable to create session')
