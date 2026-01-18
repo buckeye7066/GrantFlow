@@ -8,7 +8,7 @@
  */
 
 import axios from 'axios';
-import { randomUUID } from 'crypto';
+import { upsertFundingOpportunity } from './opportunityInserter.js';
 
 // Grants.gov API endpoints
 const GRANTS_GOV_API = 'https://www.grants.gov/grantsws/rest/opportunities/search/';
@@ -115,56 +115,6 @@ function buildEligibility(opp) {
 }
 
 /**
- * Upsert opportunity into database
- */
-function upsertOpportunity(db, opp) {
-  try {
-    const existing = db.prepare('SELECT id FROM funding_opportunities WHERE id = ?').get(opp.id);
-    
-    const categoriesJson = JSON.stringify(opp.categories || []);
-    const keywordsJson = JSON.stringify(opp.keywords || []);
-    const eligibilityJson = JSON.stringify(opp.eligibility_bullets || []);
-
-    if (existing) {
-      db.prepare(`
-        UPDATE funding_opportunities SET
-          title = ?, sponsor = ?, description = ?, amount_min = ?, amount_max = ?,
-          deadline = ?, deadline_type = ?, application_url = ?, source_url = ?,
-          is_national = ?, state = ?, categories = ?, keywords = ?,
-          eligibility_bullets = ?, requires_match = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(
-        opp.title, opp.sponsor, opp.description, opp.amount_min, opp.amount_max,
-        opp.deadline, opp.deadline_type, opp.application_url, opp.source_url,
-        opp.is_national ? 1 : 0, opp.state, categoriesJson, keywordsJson,
-        eligibilityJson, opp.requires_match ? 1 : 0, opp.id
-      );
-      return { updated: true };
-    } else {
-      db.prepare(`
-        INSERT INTO funding_opportunities (
-          id, title, sponsor, source, source_id, source_url, description,
-          amount_min, amount_max, deadline, deadline_type, application_url,
-          is_national, state, categories, keywords, eligibility_bullets,
-          opportunity_type, requires_501c3, requires_match, is_active,
-          created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `).run(
-        opp.id, opp.title, opp.sponsor, opp.source, opp.source_id,
-        opp.source_url, opp.description, opp.amount_min, opp.amount_max,
-        opp.deadline, opp.deadline_type, opp.application_url,
-        opp.is_national ? 1 : 0, opp.state, categoriesJson, keywordsJson, eligibilityJson,
-        opp.opportunity_type, 0, opp.requires_match ? 1 : 0
-      );
-      return { inserted: true };
-    }
-  } catch (error) {
-    console.error(`[GrantsGov] DB error for ${opp.id}:`, error.message);
-    return { error: error.message };
-  }
-}
-
-/**
  * Crawl Grants.gov and populate database
  */
 export async function crawlGrantsGov(db, options = {}) {
@@ -223,7 +173,11 @@ export async function crawlGrantsGov(db, options = {}) {
         }
         
         const transformed = transformGrantsGovOpportunity(opp);
-        const result = upsertOpportunity(db, transformed);
+        const result = await upsertFundingOpportunity(db, {
+          ...transformed,
+          record_origin: 'live_crawl',
+          evidence_url: transformed.source_url ?? transformed.application_url ?? null,
+        });
         
         if (result.inserted) totalInserted++;
         else if (result.updated) totalUpdated++;

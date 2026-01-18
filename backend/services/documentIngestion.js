@@ -3,6 +3,8 @@ import { extractCompletionText } from '../utils/openai.js'
 import { extractTextFromFile } from './documentTextExtraction.js'
 import { summarizeOpenAIError } from '../utils/openaiClient.js'
 import { promises as fsp } from 'node:fs'
+import { buildFallbackDocumentSummary, applyFallbackUniversityUpdates } from './documentFallbackParser.js'
+import { classifyUniversityApplicationForDocument, loadUniversityApplicationsForProfile } from './universityDocumentClassifier.js'
 
 const TARGET_SECTIONS = [
   'basic_information',
@@ -232,32 +234,40 @@ export async function processDocumentIngestionJob({
   const aiSectionsLog = {}
 
   try {
+    // Auto-classify existing docs (in case they were uploaded without a school selection).
+    if (!document.university_application_id && profile?.id && document.extracted_text) {
+      try {
+        const apps = loadUniversityApplicationsForProfile(db, profile.id)
+        const match = classifyUniversityApplicationForDocument({
+          applications: apps,
+          documentName: document.name,
+          extractedText: document.extracted_text,
+        })
+        if (match) {
+          db.prepare(
+            `
+              UPDATE documents
+              SET university_application_id = ?,
+                  university_application_name = ?,
+                  updated_at = CURRENT_TIMESTAMP
+              WHERE id = ?
+            `,
+          ).run(match.id, match.name, documentId)
+          document.university_application_id = match.id
+          document.university_application_name = match.name
+        }
+      } catch {
+        // best effort
+      }
+    }
+
     let openai = null
+    let openaiUnavailableMessage = null
     try {
       openai = typeof getOpenAI === 'function' ? getOpenAI() : null
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'AI parsing unavailable (missing API key).'
-      db.prepare(
-        `
-          UPDATE documents
-          SET processing_status = 'failed',
-              processing_error = ?
-          WHERE id = ?
-        `,
-      ).run(message, documentId)
-      return {
-        inserted: 0,
-        sections_updated: [],
-        document_id: documentId,
-        summary: message,
-        result_count: 0,
-        result_meta: {
-          document_id: documentId,
-          profile_id: profile?.id ?? null,
-          error: message,
-        },
-      }
+      openai = null
+      openaiUnavailableMessage = error instanceof Error ? error.message : String(error)
     }
 
     // If this is an image (screenshots/handwriting) and OCR didn't yield text, use a vision pass as a fallback.
@@ -290,11 +300,12 @@ export async function processDocumentIngestionJob({
       db.prepare(
         `
           UPDATE documents
-          SET processing_status = 'failed',
+          SET processing_status = 'completed',
+              ai_summary = ?,
               processing_error = ?
           WHERE id = ?
         `,
-      ).run(message, documentId)
+      ).run(message, message, documentId)
       return {
         inserted: 0,
         sections_updated: [],
@@ -304,109 +315,109 @@ export async function processDocumentIngestionJob({
         result_meta: {
           document_id: documentId,
           profile_id: profile?.id ?? null,
-          error: message,
+          summary: message,
+          used_fallback: true,
+          openai_unavailable: Boolean(openaiUnavailableMessage),
         },
       }
     }
 
     let fatalOpenAIError = null
 
-    for (const sectionKey of TARGET_SECTIONS) {
-      const promptPayload = buildProfileSectionPrompt(sectionKey, {
-        profile,
-        sections,
-        documents: documentSummary,
-      })
-
-      if (!promptPayload) continue
-
-      try {
-        const completion = await openai.chat.completions.create({
-          model: 'gpt-4o-mini',
-          temperature: 0.1,
-          response_format: { type: 'json_object' },
-          messages: [
-            {
-              role: 'system',
-              content:
-                'You are an expert data extraction assistant. Respond with valid JSON only.',
-            },
-            { role: 'user', content: promptPayload.prompt },
-          ],
+    if (openai) {
+      for (const sectionKey of TARGET_SECTIONS) {
+        const promptPayload = buildProfileSectionPrompt(sectionKey, {
+          profile,
+          sections,
+          documents: documentSummary,
         })
 
-        const raw = extractCompletionText(completion) || '{}'
-        let suggestion = {}
+        if (!promptPayload) continue
+
         try {
-          suggestion = JSON.parse(raw)
-        } catch {
-          continue
-        }
-
-        const existing = sections[sectionKey] ?? {}
-        const { data: merged, updatedFields } = mergeSectionData(existing, suggestion)
-
-        if (updatedFields.size > 0) {
-          upsertProfileSection(db, profile.id, sectionKey, merged, document.id)
-          sections[sectionKey] = merged
-          updates.push({
-            section_key: sectionKey,
-            updated_fields: Array.from(updatedFields),
+          const completion = await openai.chat.completions.create({
+            model: 'gpt-4o-mini',
+            temperature: 0.1,
+            response_format: { type: 'json_object' },
+            messages: [
+              {
+                role: 'system',
+                content:
+                  'You are an expert data extraction assistant. Respond with valid JSON only.',
+              },
+              { role: 'user', content: promptPayload.prompt },
+            ],
           })
-        }
 
-        aiSectionsLog[sectionKey] = {
-          suggestion,
-          updated: Array.from(updatedFields),
-        }
-      } catch (error) {
-        const summary = summarizeOpenAIError(error)
-        console.error(`Failed to enrich section ${sectionKey}`, summary)
+          const raw = extractCompletionText(completion) || '{}'
+          let suggestion = {}
+          try {
+            suggestion = JSON.parse(raw)
+          } catch {
+            continue
+          }
 
-        // If the key is invalid (or access is forbidden), stop and surface the real error.
-        if (summary.isAuth) {
-          fatalOpenAIError = summary.message
-          break
+          const existing = sections[sectionKey] ?? {}
+          const { data: merged, updatedFields } = mergeSectionData(existing, suggestion)
+
+          if (updatedFields.size > 0) {
+            upsertProfileSection(db, profile.id, sectionKey, merged, document.id)
+            sections[sectionKey] = merged
+            updates.push({
+              section_key: sectionKey,
+              updated_fields: Array.from(updatedFields),
+            })
+          }
+
+          aiSectionsLog[sectionKey] = {
+            suggestion,
+            updated: Array.from(updatedFields),
+          }
+        } catch (error) {
+          const summary = summarizeOpenAIError(error)
+          console.error(`Failed to enrich section ${sectionKey}`, summary)
+
+          // If the key is invalid (or access is forbidden), stop trying OpenAI.
+          if (summary.isAuth) {
+            fatalOpenAIError = summary.message
+            break
+          }
         }
       }
     }
 
-    if (fatalOpenAIError) {
-      const message = `AI parsing failed: ${fatalOpenAIError}`
-      db.prepare(
-        `
-          UPDATE documents
-          SET processing_status = 'failed',
-              processing_error = ?
-          WHERE id = ?
-        `,
-      ).run(message, documentId)
-      return {
-        inserted: 0,
-        sections_updated: [],
-        document_id: documentId,
-        summary: message,
-        result_count: 0,
-        result_meta: {
-          document_id: documentId,
-          profile_id: profile?.id ?? null,
-          error: message,
-        },
-      }
+    // Fallback: if OpenAI was unavailable/failed auth OR we updated nothing, try deterministic university parsing.
+    const usedFallback = Boolean(!openai || fatalOpenAIError)
+    const fallbackUniversityUpdate = applyFallbackUniversityUpdates({
+      db,
+      profileId: profile?.id ?? null,
+      document,
+      extractedText: document.extracted_text ?? document.notes ?? '',
+    })
+
+    if (fallbackUniversityUpdate.updated) {
+      updates.push({
+        section_key: 'university_applications',
+        updated_fields: fallbackUniversityUpdate.updated_fields,
+      })
     }
 
     const status = 'completed'
-    const summary =
-      updates.length > 0
-        ? updates
-            .map(
-              (entry) =>
-                `${entry.section_key}: ${entry.updated_fields
-                  .map((field) => field.replace(/_/g, ' '))
-                  .join(', ')}`,
-            )
-            .join(' • ')
-        : 'No new structured data extracted from this document.'
+    const summary = usedFallback
+      ? buildFallbackDocumentSummary({
+          document,
+          extractedText: document.extracted_text ?? document.notes ?? '',
+        })
+      : updates.length > 0
+          ? updates
+              .map(
+                (entry) =>
+                  `${entry.section_key}: ${entry.updated_fields
+                    .map((field) => field.replace(/_/g, ' '))
+                    .join(', ')}`,
+              )
+              .join(' • ')
+          : 'No new structured data extracted from this document.'
 
     const resultMeta = {
       document_id: documentId,
@@ -414,6 +425,9 @@ export async function processDocumentIngestionJob({
       summary,
       sections_updated: updates,
       total_sections_updated: updates.length,
+      used_fallback: usedFallback,
+      openai_unavailable: Boolean(openaiUnavailableMessage),
+      openai_error: fatalOpenAIError || null,
     }
 
     db.prepare(
@@ -422,8 +436,7 @@ export async function processDocumentIngestionJob({
         SET processing_status = ?,
             ai_summary = ?,
             ai_sections = ?,
-            processing_error = NULL,
-            status = 'processed'
+            processing_error = NULL
         WHERE id = ?
       `,
     ).run(status, summary, JSON.stringify(aiSectionsLog, null, 2), documentId)

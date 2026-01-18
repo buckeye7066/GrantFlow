@@ -86,7 +86,7 @@ function calculateItemMatch(opp, itemKeywords, profileState, signals) {
 /**
  * Process item crawler job - finds funding for specific items/equipment
  */
-export function processItemCrawlerJob({ db, job, dataDir, profileContext }) {
+export async function processItemCrawlerJob({ db, job, dataDir, profileContext }) {
   console.log('[itemCrawler] Starting item funding search...')
   
   const parameters = job.parameters ?? {}
@@ -189,14 +189,15 @@ export function processItemCrawlerJob({ db, job, dataDir, profileContext }) {
   let insertedCount = 0
   for (const opp of topOpps) {
     try {
-      const result = upsertFundingOpportunity(db, {
+      const result = await upsertFundingOpportunity(db, {
         title: opp.title,
         sponsor: opp.sponsor,
         description: opp.description,
         amount_min: opp.amount_min,
         amount_max: opp.amount_max,
         deadline: opp.deadline,
-        application_url: opp.application_url,
+        application_url: opp.application_url ?? null,
+        source_url: opp.source_url ?? opp.application_url ?? null,
         categories: opp.categories,
         keywords: [...(opp.keywords || []), ...(opp.keywords_extra || [])],
         eligibility_bullets: opp.eligibility_bullets,
@@ -205,6 +206,7 @@ export function processItemCrawlerJob({ db, job, dataDir, profileContext }) {
         state: opp.states?.includes('ALL') ? 'nationwide' : (opp.states?.[0] || 'nationwide'),
         source: 'item_funding',
         source_id: opp.id,
+        record_origin: 'curated_verified',
         match_reasons: opp.match_reasons
       })
       

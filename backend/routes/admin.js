@@ -1086,7 +1086,7 @@ router.get('/db-stats', async (req, res) => {
 router.post('/seed-opportunities', async (req, res) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return;
-    const { totalLoaded } = seedRealOpportunities(req.db);
+    const { totalLoaded } = await seedRealOpportunities(req.db);
     const totalInDb = Number((await req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get())?.count || 0);
     res.json({ success: true, message: `Seeded ${totalLoaded} opportunities`, total_in_database: totalInDb, loaded_from_files: totalLoaded });
   } catch (error) {
@@ -1104,7 +1104,7 @@ router.post('/seed-assistance-directories', async (req, res) => {
         .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")
         .get())?.count || 0,
     );
-    const result = seedAssistanceDirectories(req.db);
+    const result = await seedAssistanceDirectories(req.db);
     const after = Number(
       (await req.db
         .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")

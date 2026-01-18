@@ -10,6 +10,7 @@ import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js';
 import fetch from 'node-fetch';
 import { extractTextFromFile } from '../services/documentTextExtraction.js';
+import { classifyUniversityApplicationForDocument, loadUniversityApplicationsForProfile } from '../services/universityDocumentClassifier.js';
 
 // OpenAI client helper
 function getOpenAI() {
@@ -251,6 +252,7 @@ router.get('/', async (req, res) => {
       organization_id,
       grant_id,
       profile_id: rawProfileId,
+      university_application_id,
       type,
       status,
       processing_status,
@@ -262,6 +264,7 @@ router.get('/', async (req, res) => {
 
     if (organization_id) { filters.push('organization_id = ?'); params.push(organization_id); }
     if (grant_id) { filters.push('grant_id = ?'); params.push(grant_id); }
+    if (university_application_id) { filters.push('university_application_id = ?'); params.push(university_application_id); }
     if (type) { filters.push('type = ?'); params.push(type); }
     if (status) { filters.push('status = ?'); params.push(status); }
     if (processing_status) { filters.push('processing_status = ?'); params.push(processing_status); }
@@ -377,6 +380,8 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
       grant_id: rawGrantId,
       name: rawName,
       type: rawType,
+      university_application_id: rawUniversityApplicationId,
+      university_application_name: rawUniversityApplicationName,
       extracted_text: rawExtractedText,
       notes: rawNotes,
       source = null,
@@ -410,6 +415,10 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
     const docId = crypto.randomUUID();
     const publicUrl = file ? (fileUrl || `/uploads/${file.filename}`) : fileUrl;
     const docName = (file?.originalname || rawName || 'Uploaded Document').trim();
+    let universityApplicationId = rawUniversityApplicationId ? String(rawUniversityApplicationId).trim() : null;
+    let universityApplicationName = rawUniversityApplicationName
+      ? String(rawUniversityApplicationName).trim()
+      : null;
     
     let extractedText = rawExtractedText || null;
     if (!extractedText && file) {
@@ -429,18 +438,38 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
     const skipParsing = rawSkipParsing === 'true' || rawSkipParsing === true;
     const processingStatus = skipParsing || extractedText ? 'completed' : 'pending';
 
+    // Auto-classify to a university application when possible (if caller didn't specify one).
+    if (profileId && !universityApplicationId && extractedText) {
+      try {
+        const applications = loadUniversityApplicationsForProfile(req.db, profileId);
+        const match = classifyUniversityApplicationForDocument({
+          applications,
+          documentName: docName,
+          extractedText,
+        });
+        if (match) {
+          universityApplicationId = match.id;
+          universityApplicationName = match.name;
+        }
+      } catch (error) {
+        // Best effort only; ignore classifier errors.
+      }
+    }
+
     // Fixed SQL parameters
     await req.db.prepare(`
       INSERT INTO documents (
-        id, organization_id, grant_id, profile_id, name, type,
+        id, organization_id, grant_id, profile_id, university_application_id, university_application_name, name, type,
         file_url, file_path, file_size, mime_type, 
         extracted_text, processing_status, status, notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)
     `).run(
       docId,
       resolvedOrganizationId,
       rawGrantId || null,
       profileId,
+      universityApplicationId,
+      universityApplicationName,
       docName,
       rawType || null,
       publicUrl,
