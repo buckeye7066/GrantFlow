@@ -258,23 +258,44 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
     
     const { score, matchReasons } = calculateOpportunityMatch(opp, signals, profileState)
     
-    if (score >= matchThreshold) {
-      scoredOpps.push({
-        ...opp,
-        match_score: score,
-        match_reasons: matchReasons
-      })
-    }
+    scoredOpps.push({
+      ...opp,
+      match_score: score,
+      match_reasons: matchReasons
+    })
   }
   
   // Sort by score and limit
   scoredOpps.sort((a, b) => b.match_score - a.match_score)
-  const topOpps = scoredOpps.slice(0, maxResults)
+  const targetMin = Math.min(10, maxResults)
+  const requestedThreshold = Number(matchThreshold) || 0
+  const thresholdCandidates = Array.from(
+    new Set([requestedThreshold, 70, 60, 50, 40, 30, 0].filter((v) => Number.isFinite(v))),
+  ).sort((a, b) => b - a)
+
+  let thresholdUsed = requestedThreshold
+  let filteredOpps = scoredOpps.filter((opp) => (opp.match_score ?? 0) >= thresholdUsed)
+
+  for (const threshold of thresholdCandidates) {
+    const subset = scoredOpps.filter((opp) => (opp.match_score ?? 0) >= threshold)
+    if (subset.length >= targetMin || (threshold === 0 && subset.length > 0)) {
+      thresholdUsed = threshold
+      filteredOpps = subset
+      break
+    }
+  }
+
+  const topOpps = filteredOpps.slice(0, maxResults)
+  const thresholdFallbackApplied = thresholdUsed !== requestedThreshold
   
-  console.log(`[comprehensiveCrawler] Found ${topOpps.length} matching opportunities (threshold: ${matchThreshold}%)`)
+  console.log(
+    `[comprehensiveCrawler] Found ${topOpps.length} matching opportunities (requested: ${requestedThreshold}%, used: ${thresholdUsed}%)`,
+  )
   
   // Save to database if requested
+  let upsertedCount = 0
   let insertedCount = 0
+  let updatedCount = 0
   if (saveToDatabase) {
     for (const opp of topOpps) {
       try {
@@ -298,8 +319,14 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
           match_reasons: opp.match_reasons
         })
         
+        if (result.id) {
+          upsertedCount++
+        }
         if (result.inserted) {
           insertedCount++
+        }
+        if (result.updated) {
+          updatedCount++
         }
       } catch (err) {
         console.error(`[comprehensiveCrawler] Error inserting ${opp.title}:`, err.message)
@@ -355,8 +382,16 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
       categories: opp.categories
     })),
     total: topOpps.length,
-    inserted: insertedCount,
+    inserted: upsertedCount,
+    inserted_new: insertedCount,
+    updated_existing: updatedCount,
     savedToProfile,
+    result_meta: {
+      total_scored: scoredOpps.length,
+      match_threshold_requested: requestedThreshold,
+      match_threshold_used: thresholdUsed,
+      match_threshold_fallback_applied: thresholdFallbackApplied,
+    },
     message: `Found ${topOpps.length} real funding opportunities matching your profile.`
   }
 }

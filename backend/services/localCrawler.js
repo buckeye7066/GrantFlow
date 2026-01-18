@@ -193,23 +193,43 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
     
     const { score, matchReasons } = calculateLocalMatch(opp, profileState, signals)
     
-    if (score >= matchThreshold) {
-      scoredOpps.push({
-        ...opp,
-        match_score: score,
-        match_reasons: matchReasons
-      })
-    }
+    scoredOpps.push({
+      ...opp,
+      match_score: score,
+      match_reasons: matchReasons
+    })
   }
   
   // Sort and limit
   scoredOpps.sort((a, b) => b.match_score - a.match_score)
-  const topOpps = scoredOpps.slice(0, maxResults)
+  const targetMin = Math.min(8, maxResults)
+  const requestedThreshold = Number(matchThreshold) || 0
+  const thresholdCandidates = Array.from(
+    new Set([requestedThreshold, 70, 60, 50, 40, 30, 0].filter((v) => Number.isFinite(v))),
+  ).sort((a, b) => b - a)
+
+  let thresholdUsed = requestedThreshold
+  let filteredOpps = scoredOpps.filter((opp) => (opp.match_score ?? 0) >= thresholdUsed)
+  for (const threshold of thresholdCandidates) {
+    const subset = scoredOpps.filter((opp) => (opp.match_score ?? 0) >= threshold)
+    if (subset.length >= targetMin || (threshold === 0 && subset.length > 0)) {
+      thresholdUsed = threshold
+      filteredOpps = subset
+      break
+    }
+  }
+
+  const topOpps = filteredOpps.slice(0, maxResults)
+  const thresholdFallbackApplied = thresholdUsed !== requestedThreshold
   
-  console.log(`[localCrawler] Found ${topOpps.length} matching local opportunities`)
+  console.log(
+    `[localCrawler] Found ${topOpps.length} matching local opportunities (requested: ${requestedThreshold}%, used: ${thresholdUsed}%)`,
+  )
   
   // Insert into database
+  let upsertedCount = 0
   let insertedCount = 0
+  let updatedCount = 0
   let savedToPipeline = 0
   const profileId = profileContext?.profile?.id
   
@@ -234,8 +254,14 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
         match_reasons: opp.match_reasons
       })
       
+      if (result.id) {
+        upsertedCount++
+      }
       if (result.inserted) {
         insertedCount++
+      }
+      if (result.updated) {
+        updatedCount++
       }
       
       // Save to profile pipeline if match >= 80%
@@ -255,9 +281,17 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
   
   return {
     evaluated: allOpps.length,
-    inserted: insertedCount,
+    inserted: upsertedCount,
+    inserted_new: insertedCount,
+    updated_existing: updatedCount,
     matched: topOpps.length,
     savedToPipeline,
+    result_meta: {
+      total_scored: scoredOpps.length,
+      match_threshold_requested: requestedThreshold,
+      match_threshold_used: thresholdUsed,
+      match_threshold_fallback_applied: thresholdFallbackApplied,
+    },
     opportunityLogs: topOpps.map(o => ({
       title: o.title,
       sponsor: o.sponsor,
