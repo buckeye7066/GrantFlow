@@ -84,14 +84,15 @@ function calculateOpportunityMatch(opp, signals, profileState) {
   
   // Keyword matching (up to 25 points)
   let keywordMatches = 0
-  const profileKeywords = signals?.keywordSet ? Array.from(signals.keywordSet) : []
-  if (profileKeywords.length > 0) {
-    for (const keyword of profileKeywords) {
-      const normalized = String(keyword).toLowerCase()
-      if (oppKeywords.has(normalized) || oppText.includes(normalized)) {
+  const keywordIterable = signals?.keywords || signals?.keywordSet || signals?.keyword_set || null
+  if (keywordIterable) {
+    for (const keywordRaw of keywordIterable) {
+      const keyword = String(keywordRaw ?? '').toLowerCase().trim()
+      if (!keyword) continue
+      if (oppKeywords.has(keyword) || oppText.includes(keyword)) {
         keywordMatches++
         if (keywordMatches <= 3) {
-          matchReasons.push(`Keyword: ${normalized}`)
+          matchReasons.push(`Keyword: ${keyword}`)
         }
       }
     }
@@ -139,7 +140,7 @@ function calculateOpportunityMatch(opp, signals, profileState) {
 /**
  * Process comprehensive crawler job using real opportunities
  */
-export async function processComprehensiveCrawlerJob({ db, job, dataDir, profileContext }) {
+export function processComprehensiveCrawlerJob({ db, job, dataDir, profileContext }) {
   console.log('[comprehensiveCrawler] Starting with real opportunities...')
   
   const parameters = job.parameters ?? {}
@@ -222,7 +223,7 @@ export async function processComprehensiveCrawlerJob({ db, job, dataDir, profile
   let insertedCount = 0
   for (const opp of topOpps) {
     try {
-      const result = await upsertFundingOpportunity(db, {
+      const result = upsertFundingOpportunity(db, {
         title: opp.title,
         sponsor: opp.sponsor,
         description: opp.description,
@@ -230,8 +231,7 @@ export async function processComprehensiveCrawlerJob({ db, job, dataDir, profile
         amount_max: opp.amount_max,
         amount_description: opp.amount_description,
         deadline: opp.deadline,
-        application_url: opp.application_url ?? null,
-        source_url: opp.source_url ?? opp.application_url ?? null,
+        application_url: opp.application_url,
         categories: opp.categories,
         keywords: opp.keywords,
         eligibility_bullets: opp.eligibility_bullets,
@@ -240,7 +240,6 @@ export async function processComprehensiveCrawlerJob({ db, job, dataDir, profile
         state: opp.state,
         source: 'verified_real',
         source_id: opp.id || opp.source_id,
-        record_origin: 'curated_verified',
         match_reasons: opp.match_reasons
       })
       

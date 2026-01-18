@@ -40,6 +40,18 @@ function assertAuthenticated(user) {
   }
 }
 
+async function resolveExistingUserId(db, user) {
+  const raw = user?.userId ?? user?.id ?? null
+  const candidate = typeof raw === 'string' ? raw.trim() : raw
+  if (!candidate) return null
+  try {
+    const row = await db.prepare('SELECT id FROM users WHERE id = ?').get(candidate)
+    return row?.id ?? null
+  } catch {
+    return null
+  }
+}
+
 function assertProfileAccess(user, profileId) {
   if (!profileId) return
   if (user.role === 'admin') return
@@ -203,61 +215,35 @@ export async function createSession(db, user, { profileId, title, metadata } = {
   }
 
   const id = randomUUID()
-  const insertStmt = db.prepare(
-    `
-      INSERT INTO anya_sessions (id, user_id, profile_id, status, title, metadata)
-      VALUES (?, ?, ?, 'open', ?, ?)
-    `,
-  )
-
+  const userIdForFk = await resolveExistingUserId(db, user)
   let info
   try {
-    info = await insertStmt.run(
-      id,
-      effectiveUserId,
-      normalizedProfileId,
-      title?.trim() || null,
-      metadata ? JSON.stringify(metadata) : '{}',
-    )
-  } catch (error) {
-    // Defensive: if we still hit a FK failure (common on fresh DBs with admin-token auth),
-    // retry with NULL user_id (it is optional on the table).
-    const message = error instanceof Error ? error.message : String(error)
-    if (!/FOREIGN KEY constraint failed/i.test(message)) throw error
-
-    // Retry without user_id (admin-token / synthetic IDs).
-    if (effectiveUserId) {
-      try {
-        info = await insertStmt.run(
-          id,
-          null,
-          normalizedProfileId,
-          title?.trim() || null,
-          metadata ? JSON.stringify(metadata) : '{}',
-        )
-        return await getSession(db, user, id)
-      } catch (retryError) {
-        const retryMsg = retryError instanceof Error ? retryError.message : String(retryError)
-        if (!/FOREIGN KEY constraint failed/i.test(retryMsg)) throw retryError
-        // Last-resort: also drop profile_id (should be prevented by the existence check above, but keep safe).
-        info = await insertStmt.run(
-          id,
-          null,
-          null,
-          title?.trim() || null,
-          metadata ? JSON.stringify(metadata) : '{}',
-        )
-      }
-    } else {
-      // Last-resort: drop profile_id too (should be prevented by existence check above).
-      info = await insertStmt.run(
+    info = await db
+      .prepare(
+        `
+          INSERT INTO anya_sessions (id, user_id, profile_id, status, title, metadata)
+          VALUES (?, ?, ?, 'open', ?, ?)
+        `,
+      )
+      .run(
         id,
-        null,
-        null,
+        userIdForFk,
+        normalizedProfileId,
         title?.trim() || null,
         metadata ? JSON.stringify(metadata) : '{}',
       )
+  } catch (error) {
+    const msg = String(error?.message || error)
+    if (msg.includes('FOREIGN KEY constraint failed')) {
+      const enriched = new Error(
+        `FOREIGN KEY constraint failed while creating session (userIdForFk=${String(
+          userIdForFk,
+        )}, normalizedProfileId=${String(normalizedProfileId)})`,
+      )
+      enriched.status = 500
+      throw enriched
     }
+    throw error
   }
 
   if (info.changes !== 1) {
@@ -492,6 +478,7 @@ export async function createTask(
   const metadataJson = metadata ? JSON.stringify(metadata) : '{}'
 
   const id = randomUUID()
+  const createdByForFk = await resolveExistingUserId(db, user)
   await db.prepare(
     `
       INSERT INTO anya_tasks (
@@ -512,7 +499,7 @@ export async function createTask(
     id,
     session.id,
     session.profile_id ?? null,
-    user.userId ?? null,
+    createdByForFk,
     normalizedTitle,
     normalizedNotes,
     normalizedStatus,

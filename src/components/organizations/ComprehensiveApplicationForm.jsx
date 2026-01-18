@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -30,11 +30,13 @@ const GRADE_LEVELS = [
   { value: 'graduate', label: 'Graduate Student' },
 ];
 
-export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSubmitting }) {
+export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSubmitting, initialData = null }) {
   const { toast } = useToast();
   const [currentStep, setCurrentStep] = useState(0);
   const [isSendingEmail, setIsSendingEmail] = useState(false);
-  const [formData, setFormData] = useState({
+  const appliedInitialDataRef = useRef(false);
+
+  const [formData, setFormData] = useState(() => ({
     // Basic Info
     name: "",
     date_of_birth: "",
@@ -239,7 +241,15 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
     special_circumstances: "",
     keywords: [],
     focus_areas: [],
-  });
+    ...(initialData && typeof initialData === "object" ? initialData : {}),
+  }));
+
+  useEffect(() => {
+    if (appliedInitialDataRef.current) return;
+    if (!initialData || typeof initialData !== "object") return;
+    setFormData((prev) => ({ ...prev, ...initialData }));
+    appliedInitialDataRef.current = true;
+  }, [initialData]);
 
   const steps = [
     { 

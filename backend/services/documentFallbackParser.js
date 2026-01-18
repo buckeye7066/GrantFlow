@@ -78,11 +78,11 @@ export function buildFallbackDocumentSummary({ document, extractedText }) {
   return `Parsed locally (AI unavailable). ${parts.join(' • ')}`
 }
 
-export function applyFallbackUniversityUpdates({ db, profileId, document, extractedText }) {
+export async function applyFallbackUniversityUpdates({ db, profileId, document, extractedText }) {
   const applicationId = document?.university_application_id
   if (!profileId || !applicationId) return { updated: false, updated_fields: [] }
 
-  const row = db
+  const row = await db
     .prepare(
       `
         SELECT data
@@ -155,7 +155,7 @@ export function applyFallbackUniversityUpdates({ db, profileId, document, extrac
   nextApps.splice(idx, 1, app)
   const nextPayload = { ...(parsed || {}), applications: nextApps }
 
-  db.prepare(
+  await db.prepare(
     `
       INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
       VALUES (?, 'university_applications', ?, ?)

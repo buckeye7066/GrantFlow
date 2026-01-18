@@ -158,6 +158,16 @@ async function runLiveCrawler({ crawlerType, profile, itemRequest, minMatchScore
   const startedAt = Date.now()
   const options = { min_match_score: minMatchScore }
 
+  // Validate profile before attempting to crawl
+  if (!profile || typeof profile !== 'object') {
+    return {
+      ok: false,
+      duration_ms: Date.now() - startedAt,
+      error: 'Invalid profile data - profile is required',
+      opportunities: [],
+    }
+  }
+
   try {
     let rawResults = []
     switch (crawlerType) {
@@ -215,10 +225,25 @@ async function runLiveCrawler({ crawlerType, profile, itemRequest, minMatchScore
       error: null,
     }
   } catch (error) {
+    const errorMsg = error?.message || String(error)
+    const errorCode = error?.code
+    
+    // Provide more specific error messages
+    let friendlyError = errorMsg
+    if (errorCode === 'TIMEOUT') {
+      friendlyError = `${crawlerType} crawler timed out after ${LIVE_CRAWL_TIMEOUT_MS}ms`
+    } else if (errorMsg.includes('ENOTFOUND') || errorMsg.includes('ETIMEDOUT')) {
+      friendlyError = `Network error: Unable to reach external data sources for ${crawlerType}`
+    } else if (errorMsg.includes('API key') || errorMsg.includes('SAM_GOV_API_KEY')) {
+      friendlyError = `API configuration missing for ${crawlerType} crawler`
+    }
+    
+    console.error(`[RealCrawlers] ${crawlerType} live crawler error:`, errorMsg)
+    
     return {
       ok: false,
       duration_ms: Date.now() - startedAt,
-      error: error?.message || String(error),
+      error: friendlyError,
       opportunities: [],
     }
   }
@@ -256,7 +281,7 @@ function buildCandidateOpportunityQuery({ crawlerType, profileContext, tokens, i
   conditions.push(
     isPostgres
       ? "(deadline_type IN ('rolling','ongoing') OR deadline IS NULL OR deadline >= CURRENT_DATE)"
-      : '(deadline_type IN ("rolling","ongoing") OR deadline IS NULL OR deadline >= date("now"))',
+      : "(deadline_type IN ('rolling','ongoing') OR deadline IS NULL OR deadline >= date('now'))",
   )
 
   // Geography: state + national.
@@ -268,16 +293,24 @@ function buildCandidateOpportunityQuery({ crawlerType, profileContext, tokens, i
 
   // Crawler-type hints (lightweight pre-filter).
   if (crawlerType === 'student_grants') {
-    conditions.push('(LOWER(opportunity_type) IN ("scholarship","grant") OR LOWER(title) LIKE "%scholar%" OR LOWER(description) LIKE "%scholar%")')
+    conditions.push(
+      "(LOWER(opportunity_type) IN ('scholarship','grant') OR LOWER(title) LIKE '%scholar%' OR LOWER(description) LIKE '%scholar%')",
+    )
   }
   if (crawlerType === 'ecf_benefits') {
-    conditions.push('(LOWER(source) = "ecf_choices_discovery" OR LOWER(title) LIKE "%ecf%" OR LOWER(description) LIKE "%ecf%")')
+    conditions.push(
+      "(LOWER(source) = 'ecf_choices_discovery' OR LOWER(title) LIKE '%ecf%' OR LOWER(description) LIKE '%ecf%')",
+    )
   }
   if (crawlerType === 'special_needs') {
-    conditions.push('(LOWER(title) LIKE "%disab%" OR LOWER(description) LIKE "%disab%" OR LOWER(title) LIKE "%cancer%" OR LOWER(description) LIKE "%cancer%")')
+    conditions.push(
+      "(LOWER(title) LIKE '%disab%' OR LOWER(description) LIKE '%disab%' OR LOWER(title) LIKE '%cancer%' OR LOWER(description) LIKE '%cancer%')",
+    )
   }
   if (crawlerType === 'government_funding') {
-    conditions.push('(LOWER(source) IN ("grants.gov","usaspending.gov","grants_gov","usa_spending","state_portal","hud_cdbg","liheap","snap_et") OR LOWER(title) LIKE "%federal%" OR LOWER(description) LIKE "%federal%")')
+    conditions.push(
+      "(LOWER(source) IN ('grants.gov','usaspending.gov','grants_gov','usa_spending','state_portal','hud_cdbg','liheap','snap_et') OR LOWER(title) LIKE '%federal%' OR LOWER(description) LIKE '%federal%')",
+    )
   }
 
   // Keyword narrowing from profile (kept small to avoid huge SQL).
@@ -363,7 +396,18 @@ router.post('/run', ensureAuth, async (req, res) => {
     // Prefer DB-backed profile_id so we always use the full 22-page profile_sections context.
     let profile = null
     if (profile_id) {
-      profile = await getProfileWithLocation(db, profile_id)
+      try {
+        profile = await getProfileWithLocation(db, profile_id)
+      } catch (profileError) {
+        console.error('[RealCrawlers] Error loading profile:', profileError)
+        return res.status(200).json({
+          success: false,
+          error: 'Profile loading failed',
+          message: `Could not load profile: ${profileError?.message || 'Unknown error'}`,
+          crawler_type,
+          opportunities: [],
+        })
+      }
     } else {
       profile = profile_data
     }
@@ -374,6 +418,11 @@ router.post('/run', ensureAuth, async (req, res) => {
         message: `Profile with ID ${profile_id} does not exist`,
       })
     }
+    
+    // Validate profile has required data
+    if (!profile.signals && !profile.sections) {
+      console.warn('[RealCrawlers] Profile missing signals and sections - results may be limited')
+    }
 
     const profileContext =
       profile && profile.sections && profile.signals
@@ -381,14 +430,24 @@ router.post('/run', ensureAuth, async (req, res) => {
         : { profile, sections: profile?.sections ?? {}, signals: profile?.signals ?? null }
 
     const coveragePct = profileContext?.signals?.coverage?.pct ?? 0
-    if (!profileContext?.sections || Object.keys(profileContext.sections).length === 0 || coveragePct < 1) {
-      return res.status(400).json({
-        error: 'Profile context incomplete',
-        message:
-          'Refusing to run: crawler requires 100% profile coverage (all sections loaded and included in signals). Please complete/save the profile sections and retry.',
-        coverage: profileContext?.signals?.coverage ?? null,
-      })
-    }
+    const sectionCount = profileContext?.sections ? Object.keys(profileContext.sections).length : 0
+    const keywordCount =
+      typeof profileContext?.signals?.keywordSet?.size === 'number'
+        ? profileContext.signals.keywordSet.size
+        : Array.isArray(profileContext?.signals?.keywords)
+        ? profileContext.signals.keywords.length
+        : 0
+    const zip =
+      profileContext?.signals?.location?.zip ??
+      profile?.zip_code ??
+      profile?.postal_code ??
+      null
+    const state =
+      profileContext?.signals?.location?.state ??
+      profile?.state ??
+      null
+
+    const profileContextIncomplete = sectionCount === 0 || coveragePct < 1
     
     console.log(`[RealCrawlers] Running ${crawler_type} for profile ${profile_id || 'custom'}`)
     
@@ -399,6 +458,12 @@ router.post('/run', ensureAuth, async (req, res) => {
       used_db_fallback: false,
       live: null,
       db: null,
+      has_zip: Boolean(zip),
+      has_state: Boolean(state),
+      keyword_count: keywordCount,
+      coverage_pct: coveragePct,
+      section_count: sectionCount,
+      profile_context_incomplete: profileContextIncomplete,
     }
 
     const live = await runLiveCrawler({

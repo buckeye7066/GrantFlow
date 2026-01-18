@@ -20,6 +20,7 @@ See [`VERCEL_RAILWAY_DEPLOYMENT.md`](VERCEL_RAILWAY_DEPLOYMENT.md) for complete 
 - [Vercel Dashboard](https://vercel.com/dashboard)
 - [Railway Dashboard](https://railway.app/dashboard)
 - [Production Readiness (Reality Report)](PROD_READINESS.md)
+- [Canonical Profile Data Points](PROFILE_DATA_POINTS.md)
 
 ---
 

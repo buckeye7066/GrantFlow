@@ -8,6 +8,7 @@ import {
   safeParseArrayField,
 } from './profileHelpers.js'
 import { saveToProfilePipeline } from './opportunityMatcher.js'
+import { runNationalZipCrawl } from './crawlers/nationalZipCrawler.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -152,6 +153,42 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
     db = contextOrDb.db
     profileContext = contextOrDb.profileContext || {}
     const params = contextOrDb.job?.parameters || {}
+
+    // Geo crawl mode: run a small ZIP-scoped discovery crawl to populate the opportunity catalog.
+    // This is used by the Geo Crawl admin UI. It is intentionally separate from profile matching.
+    if (String(params.mode || '').toLowerCase() === 'geo') {
+      const state = params.state ? String(params.state).toUpperCase() : null
+      const maxZips = Number(params.max_zips ?? params.maxZips ?? 50)
+      const batchSize = Number(params.batch_size ?? Math.min(50, Math.max(1, maxZips || 50)))
+      const rateLimitMs = Number(params.rate_limit_ms ?? 250)
+      const minSources = Number(params.min_sources_per_zip ?? 1)
+      const zipList = Array.isArray(params.zip_list) ? params.zip_list : null
+
+      console.log('[comprehensiveCrawler] GEO mode starting', { state, maxZips, batchSize })
+      const result = await runNationalZipCrawl(db, {
+        state: state && /^[A-Z]{2}$/.test(state) ? state : undefined,
+        zip_list: zipList || undefined,
+        max_zips: Number.isFinite(maxZips) ? maxZips : 50,
+        batch_size: Number.isFinite(batchSize) ? batchSize : 25,
+        rate_limit_ms: Number.isFinite(rateLimitMs) ? rateLimitMs : 250,
+        min_sources_per_zip: Number.isFinite(minSources) ? minSources : 1,
+        resume: false,
+      })
+
+      return {
+        success: true,
+        inserted: Number(result?.sources ?? 0),
+        evaluated: Number(result?.processed ?? 0),
+        result_meta: {
+          mode: 'geo',
+          state: state ?? null,
+          processed: result?.processed ?? 0,
+          sources: result?.sources ?? 0,
+        },
+        message: `Geo crawl completed: processed ${result?.processed ?? 0} ZIPs`,
+      }
+    }
+
     matchThreshold = params.match_threshold || 70
     maxResults = params.max_results || 50
     saveToDatabase = params.save_to_database !== false
@@ -221,23 +258,44 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
     
     const { score, matchReasons } = calculateOpportunityMatch(opp, signals, profileState)
     
-    if (score >= matchThreshold) {
-      scoredOpps.push({
-        ...opp,
-        match_score: score,
-        match_reasons: matchReasons
-      })
-    }
+    scoredOpps.push({
+      ...opp,
+      match_score: score,
+      match_reasons: matchReasons
+    })
   }
   
   // Sort by score and limit
   scoredOpps.sort((a, b) => b.match_score - a.match_score)
-  const topOpps = scoredOpps.slice(0, maxResults)
+  const targetMin = Math.min(10, maxResults)
+  const requestedThreshold = Number(matchThreshold) || 0
+  const thresholdCandidates = Array.from(
+    new Set([requestedThreshold, 70, 60, 50, 40, 30, 0].filter((v) => Number.isFinite(v))),
+  ).sort((a, b) => b - a)
+
+  let thresholdUsed = requestedThreshold
+  let filteredOpps = scoredOpps.filter((opp) => (opp.match_score ?? 0) >= thresholdUsed)
+
+  for (const threshold of thresholdCandidates) {
+    const subset = scoredOpps.filter((opp) => (opp.match_score ?? 0) >= threshold)
+    if (subset.length >= targetMin || (threshold === 0 && subset.length > 0)) {
+      thresholdUsed = threshold
+      filteredOpps = subset
+      break
+    }
+  }
+
+  const topOpps = filteredOpps.slice(0, maxResults)
+  const thresholdFallbackApplied = thresholdUsed !== requestedThreshold
   
-  console.log(`[comprehensiveCrawler] Found ${topOpps.length} matching opportunities (threshold: ${matchThreshold}%)`)
+  console.log(
+    `[comprehensiveCrawler] Found ${topOpps.length} matching opportunities (requested: ${requestedThreshold}%, used: ${thresholdUsed}%)`,
+  )
   
   // Save to database if requested
+  let upsertedCount = 0
   let insertedCount = 0
+  let updatedCount = 0
   if (saveToDatabase) {
     for (const opp of topOpps) {
       try {
@@ -263,8 +321,14 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
           match_reasons: opp.match_reasons
         })
         
+        if (result.id) {
+          upsertedCount++
+        }
         if (result.inserted) {
           insertedCount++
+        }
+        if (result.updated) {
+          updatedCount++
         }
       } catch (err) {
         console.error(`[comprehensiveCrawler] Error inserting ${opp.title}:`, err.message)
@@ -320,8 +384,16 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
       categories: opp.categories
     })),
     total: topOpps.length,
-    inserted: insertedCount,
+    inserted: upsertedCount,
+    inserted_new: insertedCount,
+    updated_existing: updatedCount,
     savedToProfile,
+    result_meta: {
+      total_scored: scoredOpps.length,
+      match_threshold_requested: requestedThreshold,
+      match_threshold_used: thresholdUsed,
+      match_threshold_fallback_applied: thresholdFallbackApplied,
+    },
     message: `Found ${topOpps.length} real funding opportunities matching your profile.`
   }
 }
