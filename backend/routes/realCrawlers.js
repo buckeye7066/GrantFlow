@@ -413,7 +413,7 @@ router.post('/run', ensureAuth, async (req, res) => {
       // This makes the Opportunities page a canonical backlog of crawler discoveries.
       if (LIVE_CRAWL_PERSIST_OPPS) {
         try {
-          const insertedIds = bulkUpsertFundingOpportunities(
+          const insertedIds = await bulkUpsertFundingOpportunities(
             db,
             live.opportunities.map((o) => ({
               ...o,

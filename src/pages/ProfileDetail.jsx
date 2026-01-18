@@ -28,6 +28,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import UniversityApplicationsSection from "@/components/profiles/UniversityApplicationsSection.jsx"
+import StudentPortalsCard from "@/components/profiles/StudentPortalsCard.jsx"
 
 export default function ProfileDetail() {
   const [searchParams] = useSearchParams()
@@ -334,9 +335,28 @@ export default function ProfileDetail() {
     )
   }
 
-  const isStudentProfile = ["high_school_student", "college_student", "graduate_student"].includes(
-    String(profile.primary_type || "").toLowerCase(),
-  )
+  const primaryType = String(profile.primary_type || "").toLowerCase()
+  const basicInfo =
+    profile.sections?.find((section) => section.section_key === "basic_information")?.data ?? {}
+  const profileTypeLabel = String(basicInfo?.profile_type || "").toLowerCase()
+
+  // Some legacy/baseline profiles store student classification inside `basic_information.profile_type`.
+  // Treat those as student profiles so the Universities tab + portals are always available.
+  const isStudentProfile =
+    ["high_school_student", "college_student", "graduate_student"].includes(primaryType) ||
+    profileTypeLabel.includes("student")
+
+  const studentState =
+    basicInfo?.address?.state ??
+    basicInfo?.state ??
+    profile?.state ??
+    ""
+
+  const studentGender =
+    basicInfo?.gender ??
+    basicInfo?.sex ??
+    profile?.gender ??
+    ""
 
   const universitySectionData =
     profile.sections?.find((section) => section.section_key === "university_applications")?.data ?? {}
@@ -647,13 +667,18 @@ export default function ProfileDetail() {
 
           {isStudentProfile ? (
             <TabsContent value="universities" className="mt-6">
+              <div className="space-y-6">
+                <StudentPortalsCard state={studentState} />
               <UniversityApplicationsSection
                 applications={universityApplications}
                 onSave={handleSaveUniversityApplications}
                 saving={savingSectionKey === "university_applications"}
                 onAskAI={handleAskUniversityApplications}
                 aiLoading={aiLoadingKey === "university_applications"}
+                studentGender={studentGender}
+                profileId={profileId}
               />
+              </div>
             </TabsContent>
           ) : null}
         </Tabs>
