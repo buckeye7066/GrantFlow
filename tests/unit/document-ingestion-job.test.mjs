@@ -95,7 +95,7 @@ async function withTempSqliteDb() {
   }
 }
 
-test('document_ingest job: updates profile sections and marks document processed', async () => {
+test('document_ingest job: updates profile sections and marks document ready for review', async () => {
   const { db, close } = await withTempSqliteDb()
   try {
     const profileId = 'profile-1'
@@ -129,7 +129,7 @@ test('document_ingest job: updates profile sections and marks document processed
 
     const docRow = db.prepare('SELECT processing_status, status, ai_summary, ai_sections FROM documents WHERE id = ?').get(documentId)
     assert.equal(docRow.processing_status, 'completed')
-    assert.equal(docRow.status, 'processed')
+    assert.equal(docRow.status, 'review')
     assert.ok(typeof docRow.ai_summary === 'string' && docRow.ai_summary.length > 0)
     assert.ok(typeof docRow.ai_sections === 'string' && docRow.ai_sections.length > 0)
 

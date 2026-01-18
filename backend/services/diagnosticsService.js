@@ -224,7 +224,12 @@ async function checkFundingOpportunitiesSchema(db) {
  */
 function getEnvironmentFlags() {
   return {
-    SAM_GOV_API_KEY_present: Boolean(process.env.SAM_GOV_API_KEY) || 'optional',
+    // Canonical: SAM_GOV_PUBLIC_API_KEY (keep legacy SAM_GOV_API_KEY for backward compatibility)
+    SAM_GOV_PUBLIC_API_KEY_present:
+      Boolean(process.env.SAM_GOV_PUBLIC_API_KEY || process.env.SAM_GOV_API_KEY) || 'optional',
+    GRANTS_GOV_API_KEY_present: Boolean(process.env.GRANTS_GOV_API_KEY) || 'optional',
+    SIMPLER_GRANTS_API_KEY_present: Boolean(process.env.SIMPLER_GRANTS_API_KEY) || 'optional',
+    API_DATA_GOV_KEY_present: Boolean(process.env.API_DATA_GOV_KEY) || 'optional',
     OPENAI_API_KEY_present: Boolean(process.env.OPENAI_API_KEY),
     ANTHROPIC_API_KEY_present: Boolean(process.env.ANTHROPIC_API_KEY),
     RESEND_API_KEY_present: Boolean(process.env.RESEND_API_KEY),
