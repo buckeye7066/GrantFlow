@@ -7,29 +7,22 @@ async function sleep(ms) {
   await new Promise((r) => setTimeout(r, ms))
 }
 
-async function waitForExit(proc, { timeoutMs = 10_000 } = {}) {
-  if (!proc) return
-  if (proc.exitCode !== null) return
-  await new Promise((resolve) => {
-    const done = () => resolve()
-    const timer = setTimeout(done, timeoutMs)
-    proc.once('exit', () => {
-      clearTimeout(timer)
-      done()
-    })
-    proc.once('error', () => {
-      clearTimeout(timer)
-      done()
-    })
-  })
-}
-
 async function isPortAvailable(port, host = '127.0.0.1') {
+  // Prefer connect-probing over bind-probing.
+  // On Windows, some listeners can allow a second bind probe to succeed (SO_REUSEADDR),
+  // but connect() will still succeed if a service is already bound and accepting.
   return await new Promise((resolve) => {
-    const server = net.createServer()
-    server.once('error', () => resolve(false))
-    server.once('listening', () => server.close(() => resolve(true)))
-    server.listen(port, host)
+    const socket = net.connect({ port, host })
+    socket.once('connect', () => {
+      try { socket.destroy() } catch {}
+      resolve(false)
+    })
+    socket.once('error', (err) => {
+      try { socket.destroy() } catch {}
+      if (err?.code === 'ECONNREFUSED') return resolve(true)
+      // Conservative default: treat unknown errors as "in use" so we pick another port.
+      resolve(false)
+    })
   })
 }
 
@@ -56,6 +49,16 @@ async function waitForHttpOk(url, { timeoutMs = 30_000 } = {}) {
   }
 }
 
+async function stopProcess(proc) {
+  if (!proc) return
+  try { proc.kill('SIGTERM') } catch {}
+  // Give the process a moment to exit cleanly.
+  await sleep(250)
+  if (proc.exitCode == null) {
+    try { proc.kill('SIGKILL') } catch {}
+  }
+}
+
 async function startBackend({ rootDir, port }) {
   const env = {
     ...process.env,
@@ -71,6 +74,7 @@ async function startBackend({ rootDir, port }) {
   const proc = spawn(process.execPath, ['backend/server.js'], {
     cwd: rootDir,
     env,
+    shell: false,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -80,7 +84,7 @@ async function startBackend({ rootDir, port }) {
 
   const ok = await waitForHttpOk(`http://127.0.0.1:${port}/api/health`, { timeoutMs: 30_000 })
   if (!ok) {
-    try { proc.kill('SIGTERM') } catch {}
+    await stopProcess(proc)
     throw new Error('Backend did not become healthy for contract tests')
   }
 
@@ -101,18 +105,8 @@ test('backend /api/health contract + request id header', async () => {
 
     const body = await res.json()
     assert.equal(typeof body, 'object')
-    // Backward compatible: some builds return "healthy" instead of "ok".
-    assert.ok(['ok', 'warning', 'healthy'].includes(body.status), `expected status ok|warning|healthy, got ${body.status}`)
+    assert.ok(['ok', 'warning'].includes(body.status), `expected status ok|warning, got ${body.status}`)
   } finally {
-    try {
-      proc.kill('SIGTERM')
-    } catch {}
-    await waitForExit(proc, { timeoutMs: 10_000 })
-    if (proc.exitCode === null) {
-      try {
-        proc.kill('SIGKILL')
-      } catch {}
-      await waitForExit(proc, { timeoutMs: 5_000 })
-    }
+    await stopProcess(proc)
   }
 })

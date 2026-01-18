@@ -1098,6 +1098,24 @@ app.get('/api/meta/build', (_req, res) => {
 app.get('/api/health', async (req, res) => {
   try {
     const healthSummary = await getSafeHealthSummary(db);
+    // Backward/legacy normalization: some older health check shapes use "healthy"/"degraded".
+    // Contract for /api/health is status in { ok, warning, error }.
+    const legacyStatus = String(healthSummary?.status ?? '').toLowerCase()
+    const normalizedStatus =
+      legacyStatus === 'healthy'
+        ? 'ok'
+        : legacyStatus === 'degraded' || legacyStatus === 'unhealthy'
+          ? 'warning'
+          : legacyStatus === 'ok' || legacyStatus === 'warning' || legacyStatus === 'error'
+            ? legacyStatus
+            : 'warning'
+
+    if (healthSummary && typeof healthSummary === 'object') {
+      healthSummary.status = normalizedStatus
+      if (!Object.prototype.hasOwnProperty.call(healthSummary, 'legacy_status')) {
+        healthSummary.legacy_status = legacyStatus || null
+      }
+    }
     // Treat "warning" as healthy for platform checks (Railway healthchecks, Docker HEALTHCHECK, etc.)
     // Only fail hard when the health summary indicates a real error.
     const statusCode = healthSummary.status === 'error' ? 500 : 200;
@@ -1117,6 +1135,21 @@ app.get('/api/health', async (req, res) => {
 app.get('/healthz', async (_req, res) => {
   try {
     const healthSummary = await getSafeHealthSummary(db);
+    const legacyStatus = String(healthSummary?.status ?? '').toLowerCase()
+    const normalizedStatus =
+      legacyStatus === 'healthy'
+        ? 'ok'
+        : legacyStatus === 'degraded' || legacyStatus === 'unhealthy'
+          ? 'warning'
+          : legacyStatus === 'ok' || legacyStatus === 'warning' || legacyStatus === 'error'
+            ? legacyStatus
+            : 'warning'
+    if (healthSummary && typeof healthSummary === 'object') {
+      healthSummary.status = normalizedStatus
+      if (!Object.prototype.hasOwnProperty.call(healthSummary, 'legacy_status')) {
+        healthSummary.legacy_status = legacyStatus || null
+      }
+    }
     const statusCode = healthSummary.status === 'error' ? 500 : 200;
     res.status(statusCode).json(healthSummary);
   } catch (error) {
