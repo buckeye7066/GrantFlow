@@ -140,14 +140,14 @@ function loadZipCoordinates() {
   if (zipCoordinatesCache) return zipCoordinatesCache;
   if (!fs.existsSync(zipCoordinatesPath)) {
     // In some production builds this dataset may not be packaged.
-    // The Geo Crawl UI should degrade gracefully (empty state list) instead of 500'ing.
+    // The Geo Crawl UI should degrade gracefully instead of 500'ing.
     zipCoordinatesMissing = true;
     zipCoordinatesCache = {};
     return zipCoordinatesCache;
   }
   try {
     zipCoordinatesCache = JSON.parse(fs.readFileSync(zipCoordinatesPath, 'utf8'));
-  } catch {
+  } catch (error) {
     zipCoordinatesMissing = true;
     zipCoordinatesCache = {};
   }
@@ -159,7 +159,7 @@ function buildZipStateIndex() {
   const coords = loadZipCoordinates();
   const index = new Map();
 
-  // Production-safe fallback when the JSON dataset isn't packaged: use `zipcodes`.
+  // Production-safe fallback: if `zip_coordinates.json` isn't packaged, rely on `zipcodes`.
   if (zipCoordinatesMissing) {
     for (const state of US_STATE_CODES) {
       const entries = (zipcodes.lookupByState(state) || [])
@@ -921,20 +921,21 @@ router.get('/geo/states', async (req, res) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return;
     const index = buildZipStateIndex();
+
     // Prefer dataset-driven states if present; otherwise fall back to a canonical US state list.
-    const stateKeys = index.size > 0 ? Array.from(index.keys()) : Array.from(US_STATE_CODES);
-    stateKeys.sort();
+    const stateKeys = index.size > 0 ? Array.from(index.keys()) : Array.from(US_STATE_CODES)
+    stateKeys.sort()
 
     const states = stateKeys.map((state) => ({
       state,
       zip_count: index.get(state)?.length ?? 0,
-    }));
+    }))
 
     res.json({
       states,
       dataset_present: index.size > 0,
       dataset_source: zipCoordinatesMissing ? 'zipcodes' : 'zip_coordinates.json',
-    });
+    })
   } catch (error) {
     console.error('[admin/geo/states] Error:', error);
     res.status(500).json({ error: error.message });

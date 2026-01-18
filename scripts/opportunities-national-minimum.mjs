@@ -127,7 +127,7 @@ function countZipScopedNationalReal(db, state, limit = 50) {
   return { returned: rows.length, national_real: nationalReal.length, locals: locals.length, nationals: nationals.length }
 }
 
-function main() {
+async function main() {
   const mode = (process.argv[2] || 'check').toLowerCase()
   const minimum = Number.parseInt(process.env.MIN_NATIONAL_OPPORTUNITIES || '3', 10) || 3
   const testState = (process.env.TEST_STATE || 'CA').toUpperCase()
@@ -150,7 +150,7 @@ function main() {
   const before = countRealNational(db)
   const zipScopedBefore = countZipScopedNationalReal(db, testState, 50)
   if (mode === 'ensure') {
-    const ensured = ensureMinimumNationalOpportunities(db, minimum)
+    const ensured = await ensureMinimumNationalOpportunities(db, minimum)
     const after = countRealNational(db)
     const zipScopedAfter = countZipScopedNationalReal(db, testState, 50)
     console.log('[opps:national-minimum] ensure', {

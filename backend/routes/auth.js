@@ -531,7 +531,9 @@ async function assignProfileToUser(db, userId, email) {
   if (email) {
     const normalizedEmail = normalizeEmail(email)
 
-    // Prefer a profile that explicitly advertises this email in basic_information.
+    // 1) Best-effort match to an existing profile by email captured in profile sections.
+    // This is the safest way to ensure returning users re-claim their original profile
+    // even when IDs/mappings drift across DB restores.
     const byEmail = await findProfileRowForEmail(normalizedEmail)
     if (byEmail?.id) {
       if (!byEmail.user_id || byEmail.user_id === userId) {
@@ -549,6 +551,7 @@ async function assignProfileToUser(db, userId, email) {
       return byEmail.id
     }
 
+    // 2) Next, apply explicit designated ID mappings (baseline profiles).
     const designatedProfileId = getDesignatedProfileForEmail(email)
     if (designatedProfileId) {
       const designatedProfile = await db
@@ -575,8 +578,8 @@ async function assignProfileToUser(db, userId, email) {
       console.warn(`[auth] Designated profile ${designatedProfileId} not found for ${email}`)
     }
   }
-  
-  // No pre-created profiles available (common on fresh Postgres). Create a personal profile for the user.
+
+  // 3) Otherwise, create a personal profile for the user.
   try {
     const profileId = crypto.randomUUID()
     const displayName =
@@ -1410,26 +1413,25 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       error: emailSent ? null : 'email_delivery_failed_or_unconfigured',
     }).catch(() => {})
 
-    const allowPreviewCodeInProd =
-      String(process.env.AUTH_ALLOW_PREVIEW_CODE_IN_PROD || '').trim().toLowerCase() === 'true'
-    const allowPreviewCode = process.env.NODE_ENV !== 'production' || allowPreviewCodeInProd
+    // Preview code rules:
+    // - ALWAYS include when email wasn't sent (ensures login continuity during email outages)
+    // - Include in non-production for developer ergonomics
+    // - In production, ONLY allow preview for the admin email when explicitly enabled
+    //   via AUTH_ALLOW_PREVIEW_CODE_IN_PROD=true (for emergency debugging)
+    const allowAdminPreviewInProd =
+      process.env.NODE_ENV === 'production' &&
+      process.env.AUTH_ALLOW_PREVIEW_CODE_IN_PROD === 'true' &&
+      isAdminEmail(email)
 
-    // Production-grade default: do NOT leak codes in API responses.
-    if (!emailSent && process.env.NODE_ENV === 'production' && !allowPreviewCodeInProd) {
-      return res.status(503).json({
-        error: 'Email delivery is unavailable. Please contact support.',
-        error_type: 'email_unavailable',
-      })
-    }
-
-    if (allowPreviewCode) {
-      if (!emailSent) {
-        responseData.previewCode = code
-        responseData.notice = 'Email delivery is unavailable. Use the preview code below to continue.'
-      } else if (process.env.NODE_ENV !== 'production') {
-        responseData.previewCode = code
-        responseData.notice = 'Development mode: Code included for testing'
-      }
+    if (!emailSent) {
+      responseData.previewCode = code
+      responseData.notice = 'Email service is not configured or unavailable. Use the preview code below to continue.'
+    } else if (process.env.NODE_ENV !== 'production' || allowAdminPreviewInProd) {
+      responseData.previewCode = code
+      responseData.notice =
+        process.env.NODE_ENV !== 'production'
+          ? 'Development mode: Code included for testing'
+          : 'Admin preview enabled for production debugging (disable AUTH_ALLOW_PREVIEW_CODE_IN_PROD after use).'
     }
 
     console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent)
@@ -1612,7 +1614,22 @@ router.post('/email/verify', async (req, res) => {
     return res.status(error.status ?? 400).json({ error: error.message })
   }
 
-  const profiles = await getUserProfiles(req.db, user.id)
+  let profiles = await getUserProfiles(req.db, user.id)
+
+  // If the user has no linked profiles (common after DB restores or legacy imports),
+  // self-heal by attaching an existing baseline profile or creating a minimal one.
+  if (profiles.length === 0) {
+    try {
+      const attached = await assignProfileToUser(req.db, user.id, email)
+      profiles = await getUserProfiles(req.db, user.id)
+      if (!activeProfileId) {
+        activeProfileId = attached ?? profiles[0]?.id ?? null
+      }
+    } catch (error) {
+      console.warn('[auth/email] Failed to auto-attach profile for user:', error?.message || error)
+    }
+  }
+
   if (!activeProfileId && profiles.length > 0) {
     activeProfileId = profiles[0].id
   }
@@ -1875,7 +1892,21 @@ router.post('/phone/verify', async (req, res) => {
     return res.status(error.status ?? 400).json({ error: error.message })
   }
 
-  const profiles = await getUserProfiles(req.db, user.id)
+  let profiles = await getUserProfiles(req.db, user.id)
+
+  // Self-heal: ensure every signed-in user has at least one profile.
+  if (profiles.length === 0) {
+    try {
+      const attached = await assignProfileToUser(req.db, user.id, null)
+      profiles = await getUserProfiles(req.db, user.id)
+      if (!activeProfileId) {
+        activeProfileId = attached ?? profiles[0]?.id ?? null
+      }
+    } catch (error) {
+      console.warn('[auth/phone] Failed to auto-attach profile for user:', error?.message || error)
+    }
+  }
+
   if (!activeProfileId && profiles.length > 0) {
     activeProfileId = profiles[0].id
   }
@@ -2033,8 +2064,19 @@ router.get('/:provider/callback', async (req, res) => {
       profile,
     })
 
-    const profiles = await getUserProfiles(req.db, user.id)
-    const activeProfileId = profiles[0]?.id ?? null
+    let profiles = await getUserProfiles(req.db, user.id)
+    let activeProfileId = profiles[0]?.id ?? null
+
+    // OAuth users should also get a profile link automatically.
+    if (profiles.length === 0) {
+      try {
+        const attached = await assignProfileToUser(req.db, user.id, profile?.email ? normalizeEmail(profile.email) : null)
+        profiles = await getUserProfiles(req.db, user.id)
+        activeProfileId = attached ?? profiles[0]?.id ?? null
+      } catch (error) {
+        console.warn('[auth/oauth] Failed to auto-attach profile for user:', error?.message || error)
+      }
+    }
 
     const session = await createSessionAndTokens(req.db, {
       user,

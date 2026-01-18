@@ -351,6 +351,13 @@ export async function logBillingAccountEvent(
     notes = null,
   },
 ) {
+  const toDbBool = (value) => {
+    if (value === undefined || value === null) return null
+    const b = Boolean(value)
+    // better-sqlite3 does NOT accept booleans as bound params; use 0/1.
+    return db?.dialect === 'postgres' ? b : b ? 1 : 0
+  }
+
   await db.prepare(
     `
       INSERT INTO billing_account_events (
@@ -378,8 +385,8 @@ export async function logBillingAccountEvent(
     new_discount_type,
     previous_discount_percent,
     new_discount_percent,
-    previous_pro_bono,
-    new_pro_bono,
+    toDbBool(previous_pro_bono),
+    toDbBool(new_pro_bono),
     notes,
   )
 }

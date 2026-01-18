@@ -142,8 +142,13 @@ Returns ingestion status, record counts, and any errors.
 | --- | --- | --- |
 | `DATABASE_PATH` | No | Path to SQLite database (default: `backend/data/grantflow.db`) |
 | `GRANTS_GOV_API_KEY` | No | Optional API key for Grants.gov (works without) |
+| `SIMPLER_GRANTS_API_KEY` | No* | Simpler.Grants.gov API key (required only if using Simpler API integration) |
+| `SAM_GOV_PUBLIC_API_KEY` | No* | SAM.gov Public API Key (required only if using SAM.gov APIs) |
+| `API_DATA_GOV_KEY` | No* | api.data.gov key (required only for api.data.gov-backed agency APIs you enable) |
 | `OPENAI_API_KEY` | Yes | Required for AI features |
 | `TWILIO_*` | Yes | Required for SMS auth |
+
+> **Funding API keys onboarding:** See [`docs/API_KEYS_ONBOARDING.md`](docs/API_KEYS_ONBOARDING.md) for step-by-step manual key acquisition instructions and test commands.
 
 ### Data Sources
 
@@ -838,7 +843,7 @@ GrantFlow uses **only** legitimate, publicly accessible data sources with proper
 **Note on NIH/NSF:** Currently returns baseline funding mechanism templates (type: PROGRAM, last_verified_at: null). Real FOA ingestion with verified deadlines requires parsing NIH Guide RSS feeds and NSF funding announcements.
 
 **API Keys Required:**
-- `SAM_GOV_API_KEY` - Register at https://open.gsa.gov/api/fh-public-api/
+- `SAM_GOV_PUBLIC_API_KEY` - Get from your SAM.gov Account Details (see `docs/API_KEYS_ONBOARDING.md`)
 
 ### State/Local Sources
 

@@ -55,6 +55,10 @@ const INSTITUTION_TYPES = [
   "other",
 ]
 
+const HOUSING_PREFERENCES = ["unknown", "on_campus", "off_campus", "commuter"]
+
+const CONTACT_GENDER_TARGETS = ["any", "women", "men", "coed", "unknown"]
+
 function generateId(prefix = "item") {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID()
@@ -92,11 +96,24 @@ function normaliseDepartmentContacts(entries = []) {
   return entries.map((entry) => ({
     id: entry.id ?? generateId("department"),
     area: entry.area ?? "",
+    category: entry.category ?? "",
+    gender_target: entry.gender_target ?? "any",
     name: entry.name ?? "",
     title: entry.title ?? "",
     email: entry.email ?? "",
     phone: entry.phone ?? "",
+    url: entry.url ?? "",
     notes: entry.notes ?? "",
+  }))
+}
+
+function normaliseMealPlans(plans = []) {
+  if (!Array.isArray(plans)) return []
+  return plans.map((plan) => ({
+    id: plan.id ?? generateId("mealplan"),
+    name: plan.name ?? "",
+    cost_per_semester: plan.cost_per_semester ?? "",
+    notes: plan.notes ?? "",
   }))
 }
 
@@ -146,7 +163,23 @@ const emptyValues = {
   status: "planning",
   application_type: "regular_decision",
   institution_type: "public",
+  website_url: "",
+  campus_address: "",
+  city: "",
+  state: "",
+  zip: "",
+  main_phone: "",
+  main_email: "",
+  theme: {
+    primary_color: "",
+    secondary_color: "",
+    cheer_line: "",
+    cheer_enabled: true,
+  },
   acceptance_rate: "",
+  graduation_rate: "",
+  student_teacher_ratio: "",
+  avg_class_size: "",
   avg_gpa: "",
   sat_range: "",
   tuition: "",
@@ -159,6 +192,24 @@ const emptyValues = {
   financial_aid_deadline: "",
   decision_release_date: "",
   interests_text: "",
+  portals: {
+    admissions_url: "",
+    financial_aid_url: "",
+    student_portal_url: "",
+    counseling_url: "",
+    transcripts_url: "",
+    send_scores_url: "",
+  },
+  costs: {
+    housing_preference: "unknown",
+    on_campus_total: "",
+    off_campus_total: "",
+    selected_meal_plan_id: "",
+    meal_plans: [],
+  },
+  // Optional: a per-school list of offered activities (sports/clubs/greek life/etc.)
+  // Used by the in-card "Interests" popup so the selection can be school-specific.
+  activity_catalog: [],
   actions: {
     apply_url: "",
     pay_fee_url: "",
@@ -185,6 +236,7 @@ export default function UniversityApplicationForm({
     const pipeline = normalisePipeline(initialValues.financial_aid_pipeline)
     const departmentContacts = normaliseDepartmentContacts(initialValues.department_contacts)
     const interests = Array.isArray(initialValues.interests) ? initialValues.interests : []
+    const mealPlans = normaliseMealPlans(initialValues.costs?.meal_plans)
 
     return {
       ...emptyValues,
@@ -193,6 +245,20 @@ export default function UniversityApplicationForm({
       financial_aid_pipeline: pipeline.length > 0 ? pipeline : defaultPipeline,
       department_contacts: departmentContacts,
       interests_text: interests.join(", "),
+      theme: {
+        ...emptyValues.theme,
+        ...(initialValues.theme ?? {}),
+      },
+      portals: {
+        ...emptyValues.portals,
+        ...(initialValues.portals ?? {}),
+      },
+      costs: {
+        ...emptyValues.costs,
+        ...(initialValues.costs ?? {}),
+        meal_plans: mealPlans,
+      },
+      activity_catalog: Array.isArray(initialValues.activity_catalog) ? initialValues.activity_catalog : [],
       actions: {
         apply_url: initialValues.actions?.apply_url ?? "",
         pay_fee_url: initialValues.actions?.pay_fee_url ?? "",
@@ -229,6 +295,11 @@ export default function UniversityApplicationForm({
     name: "department_contacts",
   })
 
+  const mealPlansArray = useFieldArray({
+    control,
+    name: "costs.meal_plans",
+  })
+
   useEffect(() => {
     reset(defaultValues)
   }, [defaultValues, reset])
@@ -257,6 +328,11 @@ export default function UniversityApplicationForm({
     const normalisedFee = values.application_fee
       ? Number.parseFloat(String(values.application_fee))
       : 0
+    const normalisedGradRate = values.graduation_rate ? Number.parseFloat(String(values.graduation_rate)) : null
+    const normalisedRatio = values.student_teacher_ratio
+      ? Number.parseFloat(String(values.student_teacher_ratio))
+      : null
+    const normalisedClassSize = values.avg_class_size ? Number.parseFloat(String(values.avg_class_size)) : null
     const normalisedRecs = Number.isFinite(Number(values.rec_letters_required))
       ? Number.parseInt(String(values.rec_letters_required), 10)
       : 0
@@ -276,13 +352,42 @@ export default function UniversityApplicationForm({
       id: entry.id ?? generateId("department"),
     }))
 
+    const mealPlans = (values.costs?.meal_plans ?? []).map((plan) => ({
+      ...plan,
+      id: plan.id ?? generateId("mealplan"),
+      name: plan.name?.trim?.() ?? "",
+    }))
+
+    const normalisedOnCampusTotal = values.costs?.on_campus_total
+      ? Number.parseFloat(String(values.costs.on_campus_total))
+      : null
+    const normalisedOffCampusTotal = values.costs?.off_campus_total
+      ? Number.parseFloat(String(values.costs.off_campus_total))
+      : null
+
     const payload = {
       id: values.id ?? generateId("application"),
       name: values.name.trim(),
       status: values.status,
       application_type: values.application_type,
       institution_type: values.institution_type,
+      website_url: values.website_url?.trim?.() ?? "",
+      campus_address: values.campus_address?.trim?.() ?? "",
+      city: values.city?.trim?.() ?? "",
+      state: values.state?.trim?.() ?? "",
+      zip: values.zip?.trim?.() ?? "",
+      main_phone: values.main_phone?.trim?.() ?? "",
+      main_email: values.main_email?.trim?.() ?? "",
+      theme: {
+        primary_color: values.theme?.primary_color?.trim?.() ?? "",
+        secondary_color: values.theme?.secondary_color?.trim?.() ?? "",
+        cheer_line: values.theme?.cheer_line?.trim?.() ?? "",
+        cheer_enabled: Boolean(values.theme?.cheer_enabled ?? true),
+      },
       acceptance_rate: normalisedAcceptance,
+      graduation_rate: normalisedGradRate,
+      student_teacher_ratio: normalisedRatio,
+      avg_class_size: normalisedClassSize,
       avg_gpa: normalisedGpa,
       sat_range: values.sat_range?.trim() ?? "",
       tuition: normalisedTuition,
@@ -295,6 +400,29 @@ export default function UniversityApplicationForm({
       financial_aid_deadline: values.financial_aid_deadline || null,
       decision_release_date: values.decision_release_date || null,
       interests,
+      portals: {
+        admissions_url: values.portals?.admissions_url?.trim?.() ?? "",
+        financial_aid_url: values.portals?.financial_aid_url?.trim?.() ?? "",
+        student_portal_url: values.portals?.student_portal_url?.trim?.() ?? "",
+        counseling_url: values.portals?.counseling_url?.trim?.() ?? "",
+        transcripts_url: values.portals?.transcripts_url?.trim?.() ?? "",
+        send_scores_url: values.portals?.send_scores_url?.trim?.() ?? "",
+      },
+      costs: {
+        housing_preference: HOUSING_PREFERENCES.includes(values.costs?.housing_preference)
+          ? values.costs.housing_preference
+          : "unknown",
+        on_campus_total: Number.isFinite(normalisedOnCampusTotal) ? normalisedOnCampusTotal : null,
+        off_campus_total: Number.isFinite(normalisedOffCampusTotal) ? normalisedOffCampusTotal : null,
+        selected_meal_plan_id: values.costs?.selected_meal_plan_id ?? "",
+        meal_plans: mealPlans,
+      },
+      // Preserve per-school offerings catalog when editing via the form.
+      activity_catalog: Array.isArray(values.activity_catalog)
+        ? values.activity_catalog
+        : Array.isArray(initialValues?.activity_catalog)
+          ? initialValues.activity_catalog
+          : [],
       actions: {
         apply_url: values.actions?.apply_url?.trim() ?? "",
         pay_fee_url: values.actions?.pay_fee_url?.trim() ?? "",
@@ -334,6 +462,10 @@ export default function UniversityApplicationForm({
               {errors.name && (
                 <p className="text-xs text-red-600">University name is required.</p>
               )}
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="website_url">Website</Label>
+              <Input id="website_url" placeholder="https://www.example.edu" {...register("website_url")} />
             </div>
             <div className="space-y-2">
               <Label>Status</Label>
@@ -417,9 +549,37 @@ export default function UniversityApplicationForm({
           </section>
 
           <section className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2 md:col-span-2">
+              <Label htmlFor="campus_address">Campus Address</Label>
+              <Input id="campus_address" placeholder="601 College St, Clarksville, TN" {...register("campus_address")} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="city">City</Label>
+              <Input id="city" placeholder="Clarksville" {...register("city")} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="state">State</Label>
+              <Input id="state" placeholder="TN" {...register("state")} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="zip">ZIP</Label>
+              <Input id="zip" placeholder="37040" {...register("zip")} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="main_phone">Main Phone</Label>
+              <Input id="main_phone" placeholder="(555) 123-4567" {...register("main_phone")} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="main_email">Main Email</Label>
+              <Input id="main_email" type="email" placeholder="info@example.edu" {...register("main_email")} />
+            </div>
             <div className="space-y-2">
               <Label htmlFor="acceptance_rate">Acceptance Rate (%)</Label>
               <Input id="acceptance_rate" type="number" step="0.1" min="0" max="100" {...register("acceptance_rate")} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="graduation_rate">Graduation Rate (%)</Label>
+              <Input id="graduation_rate" type="number" step="0.1" min="0" max="100" {...register("graduation_rate")} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="avg_gpa">Average GPA</Label>
@@ -432,6 +592,14 @@ export default function UniversityApplicationForm({
             <div className="space-y-2">
               <Label htmlFor="tuition">Tuition (Annual USD)</Label>
               <Input id="tuition" type="number" step="100" min="0" {...register("tuition")} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="student_teacher_ratio">Student/Teacher Ratio</Label>
+              <Input id="student_teacher_ratio" type="number" step="0.1" min="0" {...register("student_teacher_ratio")} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="avg_class_size">Average Class Size</Label>
+              <Input id="avg_class_size" type="number" step="1" min="0" {...register("avg_class_size")} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="fafsa_code">FAFSA Code</Label>
@@ -477,6 +645,93 @@ export default function UniversityApplicationForm({
             </div>
           </section>
 
+          <section className="space-y-4">
+            <div>
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">School theme</h3>
+              <p className="text-xs text-muted-foreground">
+                Optional. If set, this card can render using the school’s colors and a cheer line.
+              </p>
+            </div>
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="space-y-2">
+                <Label htmlFor="theme.primary_color">Primary color</Label>
+                <div className="flex items-center gap-2">
+                  <Input id="theme.primary_color" placeholder="#BB0000" {...register("theme.primary_color")} />
+                  <input
+                    type="color"
+                    aria-label="Primary color picker"
+                    className="h-10 w-12 rounded border border-slate-200 bg-white"
+                    onChange={(e) => form.setValue("theme.primary_color", e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="theme.secondary_color">Secondary color</Label>
+                <div className="flex items-center gap-2">
+                  <Input id="theme.secondary_color" placeholder="#666666" {...register("theme.secondary_color")} />
+                  <input
+                    type="color"
+                    aria-label="Secondary color picker"
+                    className="h-10 w-12 rounded border border-slate-200 bg-white"
+                    onChange={(e) => form.setValue("theme.secondary_color", e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="theme.cheer_line">Cheer line</Label>
+                <Input id="theme.cheer_line" placeholder="Go Buckeyes!" {...register("theme.cheer_line")} />
+              </div>
+              <div className="flex items-center justify-between space-y-0 border rounded-lg p-3 md:col-span-3">
+                <div>
+                  <Label className="text-sm font-medium">Show cheer line on card</Label>
+                  <p className="text-xs text-muted-foreground">Turn off if you want colors only.</p>
+                </div>
+                <Controller
+                  control={control}
+                  name="theme.cheer_enabled"
+                  render={({ field }) => (
+                    <Switch checked={Boolean(field.value)} onCheckedChange={field.onChange} />
+                  )}
+                />
+              </div>
+            </div>
+          </section>
+
+          <section className="space-y-4">
+            <div>
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Portals</h3>
+              <p className="text-xs text-muted-foreground">
+                Add links for admissions, financial aid, current student portals, counseling, and transcript/score sending.
+              </p>
+            </div>
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="space-y-2">
+                <Label htmlFor="portals.admissions_url">Admissions Portal</Label>
+                <Input id="portals.admissions_url" placeholder="https://..." {...register("portals.admissions_url")} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="portals.financial_aid_url">Financial Aid Portal</Label>
+                <Input id="portals.financial_aid_url" placeholder="https://..." {...register("portals.financial_aid_url")} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="portals.student_portal_url">Current Student Portal</Label>
+                <Input id="portals.student_portal_url" placeholder="https://..." {...register("portals.student_portal_url")} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="portals.counseling_url">Counseling / Advising</Label>
+                <Input id="portals.counseling_url" placeholder="https://..." {...register("portals.counseling_url")} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="portals.transcripts_url">Transcripts Request / Send</Label>
+                <Input id="portals.transcripts_url" placeholder="https://..." {...register("portals.transcripts_url")} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="portals.send_scores_url">Send Test Scores</Label>
+                <Input id="portals.send_scores_url" placeholder="https://..." {...register("portals.send_scores_url")} />
+              </div>
+            </div>
+          </section>
+
           <section className="grid gap-4 md:grid-cols-3">
             <div className="space-y-2">
               <Label htmlFor="actions.apply_url">Apply URL</Label>
@@ -490,6 +745,132 @@ export default function UniversityApplicationForm({
               <Label htmlFor="actions.visit_url">Visit URL</Label>
               <Input id="actions.visit_url" placeholder="https://..." {...register("actions.visit_url")} />
             </div>
+          </section>
+
+          <section className="space-y-4">
+            <div>
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Cost planner</h3>
+              <p className="text-xs text-muted-foreground">
+                Track estimated costs and meal plan options that affect budgeting.
+              </p>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="space-y-2">
+                <Label>Housing preference</Label>
+                <Controller
+                  control={control}
+                  name="costs.housing_preference"
+                  render={({ field }) => (
+                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select preference" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="unknown">Unknown</SelectItem>
+                        <SelectItem value="on_campus">On campus</SelectItem>
+                        <SelectItem value="off_campus">Off campus</SelectItem>
+                        <SelectItem value="commuter">Commuter</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="costs.on_campus_total">On-campus total (annual USD)</Label>
+                <Input id="costs.on_campus_total" type="number" step="100" min="0" {...register("costs.on_campus_total")} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="costs.off_campus_total">Off-campus total (annual USD)</Label>
+                <Input id="costs.off_campus_total" type="number" step="100" min="0" {...register("costs.off_campus_total")} />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-sm font-semibold text-slate-700">Meal plans</h4>
+                <p className="text-xs text-muted-foreground">Add meal plan options offered by the school.</p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  mealPlansArray.append({
+                    id: generateId("mealplan"),
+                    name: "",
+                    cost_per_semester: "",
+                    notes: "",
+                  })
+                }
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                Add meal plan
+              </Button>
+            </div>
+
+            {mealPlansArray.fields.length > 0 ? (
+              <div className="space-y-3">
+                {mealPlansArray.fields.map((field, index) => (
+                  <div key={field.id} className="grid gap-3 border rounded-lg p-3 md:grid-cols-12">
+                    <div className="md:col-span-5 space-y-2">
+                      <Label>Name</Label>
+                      <Input placeholder="Unlimited + Dining Dollars" {...register(`costs.meal_plans.${index}.name`)} />
+                    </div>
+                    <div className="md:col-span-3 space-y-2">
+                      <Label>Cost / semester (USD)</Label>
+                      <Input
+                        type="number"
+                        step="50"
+                        min="0"
+                        {...register(`costs.meal_plans.${index}.cost_per_semester`)}
+                      />
+                    </div>
+                    <div className="md:col-span-3 space-y-2">
+                      <Label>Notes</Label>
+                      <Input placeholder="Includes weekends" {...register(`costs.meal_plans.${index}.notes`)} />
+                    </div>
+                    <div className="md:col-span-1 flex items-start justify-end">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => mealPlansArray.remove(index)}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label>Selected meal plan</Label>
+                    <Controller
+                      control={control}
+                      name="costs.selected_meal_plan_id"
+                      render={({ field }) => (
+                        <Select onValueChange={field.onChange} defaultValue={field.value}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select a plan (optional)" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="">None</SelectItem>
+                            {mealPlansArray.fields.map((plan) => (
+                              <SelectItem key={plan.id} value={plan.id}>
+                                {String(plan.name || "Meal plan").trim() || "Meal plan"}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">No meal plans recorded yet.</p>
+            )}
           </section>
 
           <section className="space-y-4">
@@ -668,7 +1049,7 @@ export default function UniversityApplicationForm({
                   Department & Program Contacts
                 </h3>
                 <p className="text-xs text-muted-foreground">
-                  Capture coaches or professors for majors, band, athletics, or other interests.
+                  Capture coaches or professors for majors, band, athletics, or other interests. Use gender targeting for sports.
                 </p>
               </div>
               <Button
@@ -679,10 +1060,13 @@ export default function UniversityApplicationForm({
                   departmentsArray.append({
                     id: generateId("department"),
                     area: "",
+                    category: "",
+                    gender_target: "any",
                     name: "",
                     title: "",
                     email: "",
                     phone: "",
+                    url: "",
                     notes: "",
                   })
                 }
@@ -698,6 +1082,31 @@ export default function UniversityApplicationForm({
                   <div className="md:col-span-4 space-y-2">
                     <Label>Program / Department</Label>
                     <Input placeholder="Music - Band Program" {...register(`department_contacts.${index}.area`)} />
+                  </div>
+                  <div className="md:col-span-3 space-y-2">
+                    <Label>Category</Label>
+                    <Input placeholder="Athletics / Band / Department" {...register(`department_contacts.${index}.category`)} />
+                  </div>
+                  <div className="md:col-span-3 space-y-2">
+                    <Label>Gender target (sports)</Label>
+                    <Controller
+                      control={control}
+                      name={`department_contacts.${index}.gender_target`}
+                      render={({ field }) => (
+                        <Select onValueChange={field.onChange} defaultValue={field.value}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Any" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {CONTACT_GENDER_TARGETS.map((value) => (
+                              <SelectItem key={value} value={value}>
+                                {value}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    />
                   </div>
                   <div className="md:col-span-4 space-y-2">
                     <Label>Contact Name</Label>
@@ -726,6 +1135,10 @@ export default function UniversityApplicationForm({
                     <Input placeholder="555-987-6543" {...register(`department_contacts.${index}.phone`)} />
                   </div>
                   <div className="md:col-span-4 space-y-2">
+                    <Label>URL</Label>
+                    <Input placeholder="https://example.edu/athletics" {...register(`department_contacts.${index}.url`)} />
+                  </div>
+                  <div className="md:col-span-12 space-y-2">
                     <Label>Notes</Label>
                     <Textarea placeholder="Left voicemail on 12/15 regarding auditions." {...register(`department_contacts.${index}.notes`)} />
                   </div>

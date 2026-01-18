@@ -26,6 +26,28 @@ function loadJSON(filePath) {
   }
 }
 
+function safeJsonArray(value) {
+  if (!value) return []
+  if (Array.isArray(value)) return value
+  if (typeof value !== 'string') return []
+  const trimmed = value.trim()
+  if (!trimmed) return []
+
+  try {
+    const parsed = JSON.parse(trimmed)
+    if (Array.isArray(parsed)) return parsed
+    if (typeof parsed === 'string' && parsed.trim()) return [parsed.trim()]
+  } catch {
+    // fall through to delimited parsing
+  }
+
+  // Common legacy formats: "a,b,c" or "a; b; c"
+  return trimmed
+    .split(/[,;\n]+/)
+    .map((v) => v.trim())
+    .filter(Boolean)
+}
+
 /**
  * Calculate match score between local opportunity and profile
  */
@@ -42,10 +64,10 @@ function calculateLocalMatch(opp, profileState, signals) {
     return { score: 0, matchReasons: [] }
   }
   
-  const oppText = `${opp.title} ${opp.description}`.toLowerCase()
+  const oppText = `${opp.title || ''} ${opp.description || ''}`.toLowerCase()
   const oppKeywords = new Set([
-    ...(opp.keywords || []).map(k => k.toLowerCase()),
-    ...(opp.categories || []).map(c => c.toLowerCase())
+    ...(Array.isArray(opp.keywords) ? opp.keywords : []).map((k) => String(k || '').toLowerCase()).filter(Boolean),
+    ...(Array.isArray(opp.categories) ? opp.categories : []).map((c) => String(c || '').toLowerCase()).filter(Boolean),
   ])
   
   // Keyword matching
@@ -85,73 +107,131 @@ function calculateLocalMatch(opp, profileState, signals) {
 export async function processLocalCrawlerJob({ db, job, dataDir, profileContext }) {
   console.log('[localCrawler] Starting local opportunity search...')
 
+  // Validate required inputs
+  if (!db) {
+    throw new Error('Database connection is required for local crawler')
+  }
+  
   if (!profileContext?.profile) {
-    throw new Error('Local crawler requires a profile context')
+    throw new Error('Local crawler requires a profile context with profile data')
+  }
+  
+  if (!dataDir || typeof dataDir !== 'string') {
+    throw new Error('Data directory path is required for local crawler')
   }
   
   const parameters = job.parameters ?? {}
   const matchThreshold = parameters.match_threshold || 60
   const maxResults = parameters.max_results || 30
   
-  // Build profile signals
-  const signals = buildProfileSignals(profileContext)
-  const profileState = profileContext?.profile?.state || 
-                       profileContext?.sections?.location_focus?.state ||
-                       parameters.state
+  // Build profile signals with error handling
+  let signals
+  try {
+    signals = buildProfileSignals(profileContext)
+  } catch (error) {
+    console.error('[localCrawler] Error building profile signals:', error)
+    throw new Error(`Failed to build profile signals: ${error.message}`)
+  }
+  
+  // Extract state with multiple fallback options
+  const profileState =
+    profileContext?.profile?.state ||
+    signals?.location?.state ||
+    profileContext?.sections?.location_focus?.state ||
+    parameters.state
   
   if (!profileState) {
     console.warn('[localCrawler] No state specified - cannot find local opportunities')
-    return { evaluated: 0, inserted: 0, opportunityLogs: [] }
+    return { 
+      evaluated: 0, 
+      inserted: 0, 
+      opportunityLogs: [],
+      error: 'No state information available in profile'
+    }
+  }
+  
+  // Validate state format
+  if (typeof profileState !== 'string' || profileState.trim().length !== 2) {
+    console.warn('[localCrawler] Invalid state format:', profileState)
+    return { 
+      evaluated: 0, 
+      inserted: 0, 
+      opportunityLogs: [],
+      error: `Invalid state format: ${profileState} (expected 2-letter state code)`
+    }
   }
   
   console.log('[localCrawler] Profile state:', profileState)
   console.log('[localCrawler] Profile signals:', summarizeProfileSignals(signals))
   
   // Load local opportunities from data file
-  const localOpps = loadJSON(join(dataDir, 'local_opportunities.json'))
-  console.log(`[localCrawler] Loaded ${localOpps.length} local opportunities`)
+  let localOpps = []
+  try {
+    localOpps = loadJSON(join(dataDir, 'local_opportunities.json'))
+    console.log(`[localCrawler] Loaded ${localOpps.length} local opportunities`)
+  } catch (error) {
+    console.warn('[localCrawler] Could not load local opportunities file:', error.message)
+    // Continue with empty array - will try database next
+  }
   
   // Also check database for local opportunities
-  const activePredicate = db?.dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1'
-  const noMatchPredicate =
-    db?.dialect === 'postgres'
-      ? '(requires_match IS NULL OR requires_match = FALSE)'
-      : '(requires_match = 0 OR requires_match IS NULL)'
+  let dbOpps = []
+  try {
+    const activePredicate = db?.dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1'
+    const noMatchPredicate =
+      db?.dialect === 'postgres'
+        ? '(requires_match IS NULL OR requires_match = FALSE)'
+        : '(requires_match = 0 OR requires_match IS NULL)'
 
-  const dbOpps = await db
-    .prepare(
-      `
-        SELECT * FROM funding_opportunities 
-        WHERE ${activePredicate}
-        AND state = ?
-        AND ${noMatchPredicate}
-        AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
-        LIMIT 100
-      `,
-    )
-    .all(profileState)
-  
-  console.log(`[localCrawler] Found ${dbOpps.length} local opportunities in database`)
+    dbOpps = await db
+      .prepare(
+        `
+          SELECT * FROM funding_opportunities 
+          WHERE ${activePredicate}
+          AND state = ?
+          AND ${noMatchPredicate}
+          AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
+          LIMIT 100
+        `,
+      )
+      .all(profileState)
+    
+    console.log(`[localCrawler] Found ${dbOpps.length} local opportunities in database`)
+  } catch (error) {
+    console.error('[localCrawler] Error querying database for opportunities:', error.message)
+    // Continue with localOpps only - don't fail if DB query fails
+  }
   
   // Combine and dedupe
   const seenTitles = new Set()
   const allOpps = []
   
   for (const opp of localOpps) {
-    if (!seenTitles.has(opp.title)) {
-      seenTitles.add(opp.title)
-      allOpps.push(opp)
+    const title = opp?.title ? String(opp.title) : ''
+    if (!title) continue
+    if (!seenTitles.has(title)) {
+      seenTitles.add(title)
+      allOpps.push({
+        ...opp,
+        title,
+        keywords: safeJsonArray(opp?.keywords),
+        categories: safeJsonArray(opp?.categories),
+        eligibility_bullets: safeJsonArray(opp?.eligibility_bullets),
+      })
     }
   }
   
   for (const opp of dbOpps) {
-    if (!seenTitles.has(opp.title)) {
-      seenTitles.add(opp.title)
+    const title = opp?.title ? String(opp.title) : ''
+    if (!title) continue
+    if (!seenTitles.has(title)) {
+      seenTitles.add(title)
       allOpps.push({
         ...opp,
-        keywords: JSON.parse(opp.keywords || '[]'),
-        categories: JSON.parse(opp.categories || '[]'),
-        eligibility_bullets: JSON.parse(opp.eligibility_bullets || '[]')
+        title,
+        keywords: safeJsonArray(opp?.keywords),
+        categories: safeJsonArray(opp?.categories),
+        eligibility_bullets: safeJsonArray(opp?.eligibility_bullets),
       })
     }
   }
@@ -164,23 +244,43 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
     
     const { score, matchReasons } = calculateLocalMatch(opp, profileState, signals)
     
-    if (score >= matchThreshold) {
-      scoredOpps.push({
-        ...opp,
-        match_score: score,
-        match_reasons: matchReasons
-      })
-    }
+    scoredOpps.push({
+      ...opp,
+      match_score: score,
+      match_reasons: matchReasons
+    })
   }
   
   // Sort and limit
   scoredOpps.sort((a, b) => b.match_score - a.match_score)
-  const topOpps = scoredOpps.slice(0, maxResults)
+  const targetMin = Math.min(8, maxResults)
+  const requestedThreshold = Number(matchThreshold) || 0
+  const thresholdCandidates = Array.from(
+    new Set([requestedThreshold, 70, 60, 50, 40, 30, 0].filter((v) => Number.isFinite(v))),
+  ).sort((a, b) => b - a)
+
+  let thresholdUsed = requestedThreshold
+  let filteredOpps = scoredOpps.filter((opp) => (opp.match_score ?? 0) >= thresholdUsed)
+  for (const threshold of thresholdCandidates) {
+    const subset = scoredOpps.filter((opp) => (opp.match_score ?? 0) >= threshold)
+    if (subset.length >= targetMin || (threshold === 0 && subset.length > 0)) {
+      thresholdUsed = threshold
+      filteredOpps = subset
+      break
+    }
+  }
+
+  const topOpps = filteredOpps.slice(0, maxResults)
+  const thresholdFallbackApplied = thresholdUsed !== requestedThreshold
   
-  console.log(`[localCrawler] Found ${topOpps.length} matching local opportunities`)
+  console.log(
+    `[localCrawler] Found ${topOpps.length} matching local opportunities (requested: ${requestedThreshold}%, used: ${thresholdUsed}%)`,
+  )
   
   // Insert into database
+  let upsertedCount = 0
   let insertedCount = 0
+  let updatedCount = 0
   let savedToPipeline = 0
   const profileId = profileContext?.profile?.id
   
@@ -205,8 +305,14 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
         match_reasons: opp.match_reasons
       })
       
+      if (result.id) {
+        upsertedCount++
+      }
       if (result.inserted) {
         insertedCount++
+      }
+      if (result.updated) {
+        updatedCount++
       }
       
       // Save to profile pipeline if match >= 80%
@@ -226,9 +332,17 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
   
   return {
     evaluated: allOpps.length,
-    inserted: insertedCount,
+    inserted: upsertedCount,
+    inserted_new: insertedCount,
+    updated_existing: updatedCount,
     matched: topOpps.length,
     savedToPipeline,
+    result_meta: {
+      total_scored: scoredOpps.length,
+      match_threshold_requested: requestedThreshold,
+      match_threshold_used: thresholdUsed,
+      match_threshold_fallback_applied: thresholdFallbackApplied,
+    },
     opportunityLogs: topOpps.map(o => ({
       title: o.title,
       sponsor: o.sponsor,

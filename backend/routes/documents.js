@@ -2,7 +2,8 @@ import express from 'express';
 import crypto from 'crypto';
 import multer from 'multer';
 import fs from 'fs';
-import { dirname, join } from 'path';
+import net from 'net';
+import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import rateLimit from 'express-rate-limit';
 import { createOpenAIClient } from '../utils/openaiClient.js';
@@ -10,6 +11,7 @@ import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js';
 import fetch from 'node-fetch';
 import { extractTextFromFile } from '../services/documentTextExtraction.js';
+import { classifyUniversityApplicationForDocument, loadUniversityApplicationsForProfile } from '../services/universityDocumentClassifier.js';
 
 // OpenAI client helper
 function getOpenAI() {
@@ -20,7 +22,11 @@ const router = express.Router();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const uploadDir = join(__dirname, '..', 'uploads');
+// Uploads must live on a persistent volume in production (Railway Volume).
+// Keep this aligned with backend/server.js static `/uploads` serving.
+const uploadDir = process.env.UPLOADS_DIR
+  ? resolve(process.env.UPLOADS_DIR)
+  : join(__dirname, '..', 'uploads');
 
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
@@ -123,13 +129,76 @@ function runUploadSingle(fieldName) {
   };
 }
 
+function isPrivateIpAddress(ip) {
+  // IPv4 private ranges: 10/8, 172.16/12, 192.168/16, 127/8, 169.254/16
+  const v = net.isIP(ip);
+  if (v === 4) {
+    const parts = ip.split('.').map((n) => Number(n));
+    if (parts.length !== 4 || parts.some((n) => Number.isNaN(n))) return true;
+    const [a, b] = parts;
+    if (a === 10) return true;
+    if (a === 127) return true;
+    if (a === 0) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    return false;
+  }
+
+  // IPv6 loopback/link-local/ULA
+  if (v === 6) {
+    const lower = ip.toLowerCase();
+    if (lower === '::1') return true; // loopback
+    if (lower.startsWith('fe80:')) return true; // link-local
+    if (lower.startsWith('fc') || lower.startsWith('fd')) return true; // unique local
+    return false;
+  }
+
+  return true;
+}
+
+function assertRemoteUrlAllowed(rawUrl) {
+  let parsed;
+  try {
+    parsed = new URL(String(rawUrl));
+  } catch {
+    throw new Error('Invalid URL');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('Only http(s) URLs are supported');
+  }
+
+  const hostname = (parsed.hostname || '').toLowerCase().trim();
+  if (!hostname) throw new Error('Invalid URL host');
+  if (hostname === 'localhost' || hostname === '0.0.0.0' || hostname.endsWith('.local')) {
+    throw new Error('URL host is not allowed');
+  }
+  if (net.isIP(hostname)) {
+    if (isPrivateIpAddress(hostname)) {
+      throw new Error('URL host is not allowed');
+    }
+  }
+
+  return parsed;
+}
+
 async function downloadRemoteFileToUploads({ url, req }) {
+  // Prevent obvious SSRF targets. (We intentionally do not resolve DNS here.)
+  const initial = assertRemoteUrlAllowed(url);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20_000);
   try {
-    const resp = await fetch(url, { signal: controller.signal });
+    const resp = await fetch(initial.toString(), { signal: controller.signal });
     if (!resp.ok) {
       throw new Error(`Unable to download file (${resp.status})`);
+    }
+    // If redirects occurred, validate the final URL too.
+    try {
+      if (resp.url) {
+        assertRemoteUrlAllowed(resp.url);
+      }
+    } catch {
+      throw new Error('Final URL host is not allowed');
     }
     const contentType = resp.headers.get('content-type') || 'application/octet-stream';
     const contentLength = Number(resp.headers.get('content-length') || '0');
@@ -251,6 +320,7 @@ router.get('/', async (req, res) => {
       organization_id,
       grant_id,
       profile_id: rawProfileId,
+      university_application_id,
       type,
       status,
       processing_status,
@@ -262,6 +332,7 @@ router.get('/', async (req, res) => {
 
     if (organization_id) { filters.push('organization_id = ?'); params.push(organization_id); }
     if (grant_id) { filters.push('grant_id = ?'); params.push(grant_id); }
+    if (university_application_id) { filters.push('university_application_id = ?'); params.push(university_application_id); }
     if (type) { filters.push('type = ?'); params.push(type); }
     if (status) { filters.push('status = ?'); params.push(status); }
     if (processing_status) { filters.push('processing_status = ?'); params.push(processing_status); }
@@ -377,6 +448,8 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
       grant_id: rawGrantId,
       name: rawName,
       type: rawType,
+      university_application_id: rawUniversityApplicationId,
+      university_application_name: rawUniversityApplicationName,
       extracted_text: rawExtractedText,
       notes: rawNotes,
       source = null,
@@ -410,6 +483,10 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
     const docId = crypto.randomUUID();
     const publicUrl = file ? (fileUrl || `/uploads/${file.filename}`) : fileUrl;
     const docName = (file?.originalname || rawName || 'Uploaded Document').trim();
+    let universityApplicationId = rawUniversityApplicationId ? String(rawUniversityApplicationId).trim() : null;
+    let universityApplicationName = rawUniversityApplicationName
+      ? String(rawUniversityApplicationName).trim()
+      : null;
     
     let extractedText = rawExtractedText || null;
     if (!extractedText && file) {
@@ -429,18 +506,38 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
     const skipParsing = rawSkipParsing === 'true' || rawSkipParsing === true;
     const processingStatus = skipParsing || extractedText ? 'completed' : 'pending';
 
+    // Auto-classify to a university application when possible (if caller didn't specify one).
+    if (profileId && !universityApplicationId && extractedText) {
+      try {
+        const applications = await loadUniversityApplicationsForProfile(req.db, profileId);
+        const match = classifyUniversityApplicationForDocument({
+          applications,
+          documentName: docName,
+          extractedText,
+        });
+        if (match) {
+          universityApplicationId = match.id;
+          universityApplicationName = match.name;
+        }
+      } catch (error) {
+        // Best effort only; ignore classifier errors.
+      }
+    }
+
     // Fixed SQL parameters
     await req.db.prepare(`
       INSERT INTO documents (
-        id, organization_id, grant_id, profile_id, name, type,
+        id, organization_id, grant_id, profile_id, university_application_id, university_application_name, name, type,
         file_url, file_path, file_size, mime_type, 
         extracted_text, processing_status, status, notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)
     `).run(
       docId,
       resolvedOrganizationId,
       rawGrantId || null,
       profileId,
+      universityApplicationId,
+      universityApplicationName,
       docName,
       rawType || null,
       publicUrl,

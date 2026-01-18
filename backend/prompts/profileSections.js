@@ -1,11 +1,15 @@
-import { supportedSectionKeys as schemaSectionKeys, getDefaultSectionData } from '../config/profileSchema.js'
+import {
+  PROFILE_SCHEMA,
+  supportedSectionKeys as schemaSectionKeys,
+  getDefaultSectionData,
+} from '../config/profileSchema.js'
 
 export const SECTION_PROMPTS = {
   basic_information: {
-    title: 'Basic Information',
+    title: PROFILE_SCHEMA.basic_information.title,
     instructions: `
 Using the data below, fill out the primary contact fields for this profile. 
-Return a JSON object containing the keys: full_name, email, phone, website, address, city, state, zip_code, county, date_of_birth, gender, nationality, notes.
+Return a JSON object containing the keys: ${Object.keys(PROFILE_SCHEMA.basic_information.fields).join(', ')}.
 
 Rules:
 - Pull from existing section data when available.
@@ -13,27 +17,13 @@ Rules:
 - Never fabricate personal data; if a field is unknown return an empty string.
 - Preserve readable formatting for addresses and notes.
     `.trim(),
-    keys: [
-      'full_name',
-      'email',
-      'phone',
-      'website',
-      'address',
-      'city',
-      'state',
-      'zip_code',
-      'county',
-      'date_of_birth',
-      'gender',
-      'nationality',
-      'notes',
-    ],
+    keys: Object.keys(PROFILE_SCHEMA.basic_information.fields),
   },
   organization_details: {
-    title: 'Organization Details',
+    title: PROFILE_SCHEMA.organization_details.title,
     instructions: `
 Using the context below, complete the organization details for this profile.
-Return a JSON object with: organization_type, ein, uei, cage_code, annual_budget, staff_count, mission.
+Return a JSON object with: ${Object.keys(PROFILE_SCHEMA.organization_details.fields).join(', ')}.
 
 Rules:
 - Pull official identifiers (EIN, UEI, CAGE) from documents or existing data if present.
@@ -41,13 +31,13 @@ Rules:
 - Summarise the mission in two concise sentences when possible.
 - Never invent identifiers or financial values; leave them blank / null if unavailable.
     `.trim(),
-    keys: ['organization_type', 'ein', 'uei', 'cage_code', 'annual_budget', 'staff_count', 'mission'],
+    keys: Object.keys(PROFILE_SCHEMA.organization_details.fields),
   },
   financial_information: {
-    title: 'Financial Information',
+    title: PROFILE_SCHEMA.financial_information.title,
     instructions: `
 Analyse the data and summarise the applicant's financial situation.
-Return JSON with: annual_income, household_income, household_size, financial_need_level, low_income, unemployed, displaced_worker, funding_needs, funding_purpose, receives_assistance, assistance_notes, notes.
+Return JSON with: ${Object.keys(PROFILE_SCHEMA.financial_information.fields).join(', ')}.
 
 Rules:
 - household_income should be a number (USD) when known, otherwise null.
@@ -60,23 +50,10 @@ Rules:
 - assistance_notes should capture any nuance about benefits or barriers (<= 2 sentences).
 - Use notes for concise explanations (max 2 sentences).
     `.trim(),
-    keys: [
-      'annual_income',
-      'household_income',
-      'household_size',
-      'financial_need_level',
-      'low_income',
-      'unemployed',
-      'displaced_worker',
-      'funding_needs',
-      'funding_purpose',
-      'receives_assistance',
-      'assistance_notes',
-      'notes',
-    ],
+    keys: Object.keys(PROFILE_SCHEMA.financial_information.fields),
   },
   government_assistance: {
-    title: 'Government Assistance',
+    title: PROFILE_SCHEMA.government_assistance.title,
     instructions: `
 Determine which public benefits the applicant receives.
 Return JSON with boolean flags for: medicaid_enrolled, medicare_recipient, ssi_recipient, ssdi_recipient, snap_recipient, tanf_recipient, section8_housing, other_programs (string).
@@ -86,13 +63,13 @@ Rules:
 - When unsure, leave flags false and mention ambiguous evidence in other_programs.
 - other_programs should be a short comma-separated list or an empty string.
     `.trim(),
-    keys: ['medicaid_enrolled', 'medicare_recipient', 'ssi_recipient', 'ssdi_recipient', 'snap_recipient', 'tanf_recipient', 'section8_housing', 'other_programs'],
+    keys: Object.keys(PROFILE_SCHEMA.government_assistance.fields),
   },
   health_medical: {
-    title: 'Health & Medical',
+    title: PROFILE_SCHEMA.health_medical.title,
     instructions: `
 Review the profile and documents to capture relevant health information.
-Return JSON with keys: chronic_illness, chronic_illness_type, disability_type, support_needs_level, dialysis_patient, organ_transplant, hiv_aids, tbi_survivor, amputee, neurodivergent, visual_impairment, hearing_impairment, wheelchair_user, substance_recovery, mental_health_condition, notes.
+Return JSON with keys: ${Object.keys(PROFILE_SCHEMA.health_medical.fields).join(', ')}.
 
 Rules:
 - Flags must be booleans. If condition is not confirmed, leave false.
@@ -100,30 +77,65 @@ Rules:
 - support_needs_level should be short (e.g. "high", "moderate", "low", "unknown").
 - notes should summarise important medical context in <= 3 sentences.
     `.trim(),
-    keys: [
-      'chronic_illness',
-      'chronic_illness_type',
-      'disability_type',
-      'support_needs_level',
-      'dialysis_patient',
-      'organ_transplant',
-      'hiv_aids',
-      'tbi_survivor',
-      'amputee',
-      'neurodivergent',
-      'visual_impairment',
-      'hearing_impairment',
-      'wheelchair_user',
-      'substance_recovery',
-      'mental_health_condition',
-      'notes',
-    ],
+    keys: Object.keys(PROFILE_SCHEMA.health_medical.fields),
+  },
+  medical_insurance: {
+    title: PROFILE_SCHEMA.medical_insurance.title,
+    instructions: `
+Extract insurance details only when explicitly present in the profile or uploaded documents (insurance cards, enrollment letters, EOBs).
+Return JSON with keys: ${Object.keys(PROFILE_SCHEMA.medical_insurance.fields).join(', ')}.
+
+Rules:
+- Do NOT invent member_id or group_id. Leave them empty if not explicitly present.
+- plan_type should be a short label (e.g., "Medicaid", "Medicare", "Marketplace", "HMO", "PPO") when known.
+- Keep notes high-level and non-speculative (avoid medical advice).
+    `.trim(),
+    keys: Object.keys(PROFILE_SCHEMA.medical_insurance.fields),
+  },
+  medical_history: {
+    title: PROFILE_SCHEMA.medical_history.title,
+    instructions: `
+Summarize the medical history and needs relevant for assistance and documentation.
+Return JSON with keys: ${Object.keys(PROFILE_SCHEMA.medical_history.fields).join(', ')}.
+
+Rules:
+- Only include conditions explicitly stated. Do not diagnose.
+- secondary_conditions and dme_needed should be arrays of distinct strings.
+- letter_support_needed should be true only when the documents mention letters, medical necessity, prior auth, disability forms, etc.
+- Keep notes concise (<= 5 sentences).
+    `.trim(),
+    keys: Object.keys(PROFILE_SCHEMA.medical_history.fields),
+  },
+  nonprofit_compliance: {
+    title: PROFILE_SCHEMA.nonprofit_compliance.title,
+    instructions: `
+Extract nonprofit compliance signals from the profile and uploaded documents (determination letters, bylaws, audits, SAM registration).
+Return JSON with keys: ${Object.keys(PROFILE_SCHEMA.nonprofit_compliance.fields).join(', ')}.
+
+Rules:
+- Only mark is_501c3 or sam_registered true when supported by explicit evidence.
+- Do not fabricate identifiers or legal statuses.
+    `.trim(),
+    keys: Object.keys(PROFILE_SCHEMA.nonprofit_compliance.fields),
+  },
+  small_business_details: {
+    title: PROFILE_SCHEMA.small_business_details.title,
+    instructions: `
+Extract small business details useful for program matching and certifications.
+Return JSON with keys: ${Object.keys(PROFILE_SCHEMA.small_business_details.fields).join(', ')}.
+
+Rules:
+- years_in_business, employee_count, annual_revenue must be numeric when known; otherwise null.
+- certifications should be an array of distinct strings.
+- Do not fabricate financials.
+    `.trim(),
+    keys: Object.keys(PROFILE_SCHEMA.small_business_details.fields),
   },
   demographics: {
-    title: 'Demographics',
+    title: PROFILE_SCHEMA.demographics.title,
     instructions: `
 Summarise demographic details relevant for grant eligibility.
-Return JSON with keys: african_american, hispanic_latino, asian_american, native_american, tribal_affiliation, lgbtq, immigrant_status, ethnicity, heritage, languages, religious_affiliation, citizenship, us_citizen, disability_status, veteran_status, age_group, notes.
+Return JSON with keys: ${Object.keys(PROFILE_SCHEMA.demographics.fields).join(', ')}.
 
 Rules:
 - Booleans must reflect confirmed identities; do not infer from names alone.
@@ -132,56 +144,22 @@ Rules:
 - citizenship should be a short label when known (e.g. "US", "dual", "unknown").
 - Use notes for additional context when relevant (<= 2 sentences).
     `.trim(),
-    keys: [
-      'african_american',
-      'hispanic_latino',
-      'asian_american',
-      'native_american',
-      'tribal_affiliation',
-      'lgbtq',
-      'immigrant_status',
-      'ethnicity',
-      'heritage',
-      'languages',
-      'religious_affiliation',
-      'citizenship',
-      'us_citizen',
-      'disability_status',
-      'veteran_status',
-      'age_group',
-      'notes',
-    ],
+    keys: Object.keys(PROFILE_SCHEMA.demographics.fields),
   },
   family_life: {
-    title: 'Family & Life Situation',
+    title: PROFILE_SCHEMA.family_life.title,
     instructions: `
 Highlight family circumstances and life events that can unlock program eligibility.
-Return JSON with the following boolean keys plus a notes field: single_parent, foster_youth, orphan, adopted, foster_parent, caregiver, widow_widower, grandparent_raising_grandchildren, first_time_parent, homeless, domestic_violence_survivor, trafficking_survivor, disaster_survivor, formerly_incarcerated, notes.
+Return JSON with the following keys: ${Object.keys(PROFILE_SCHEMA.family_life.fields).join(', ')}.
 
 Rules:
 - Only mark flags true when information is explicit.
 - notes should call out time-sensitive situations (<= 2 sentences).
     `.trim(),
-    keys: [
-      'single_parent',
-      'foster_youth',
-      'orphan',
-      'adopted',
-      'foster_parent',
-      'caregiver',
-      'widow_widower',
-      'grandparent_raising_grandchildren',
-      'first_time_parent',
-      'homeless',
-      'domestic_violence_survivor',
-      'trafficking_survivor',
-      'disaster_survivor',
-      'formerly_incarcerated',
-      'notes',
-    ],
+    keys: Object.keys(PROFILE_SCHEMA.family_life.fields),
   },
   military_service: {
-    title: 'Military Status',
+    title: PROFILE_SCHEMA.military_service.title,
     instructions: `
 Determine the applicant's military affiliation.
 Return JSON with: veteran, active_duty_military, national_guard, disabled_veteran, military_spouse, military_dependent, gold_star_family, notes.
@@ -190,19 +168,10 @@ Rules:
 - Use documents (DD-214, service letters) when available.
 - notes should mention branch, service years, or disability rating when relevant.
     `.trim(),
-    keys: [
-      'veteran',
-      'active_duty_military',
-      'national_guard',
-      'disabled_veteran',
-      'military_spouse',
-      'military_dependent',
-      'gold_star_family',
-      'notes',
-    ],
+    keys: Object.keys(PROFILE_SCHEMA.military_service.fields),
   },
   occupation: {
-    title: 'Occupation',
+    title: PROFILE_SCHEMA.occupation.title,
     instructions: `
 Capture occupational indicators that influence program fit.
 Return JSON with booleans for the following keys and a notes field: healthcare_worker, healthcare_worker_type, ems_worker, educator, firefighter, law_enforcement, public_servant, clergy, missionary, nonprofit_employee, small_business_owner, minority_owned_business, women_owned_business, union_member, farmer, truck_driver, notes.
@@ -211,40 +180,22 @@ Rules:
 - For healthcare_worker_type supply a short description (e.g. "RN", "CNA") or empty string.
 - notes may list additional roles or certifications.
     `.trim(),
-    keys: [
-      'healthcare_worker',
-      'healthcare_worker_type',
-      'ems_worker',
-      'educator',
-      'firefighter',
-      'law_enforcement',
-      'public_servant',
-      'clergy',
-      'missionary',
-      'nonprofit_employee',
-      'small_business_owner',
-      'minority_owned_business',
-      'women_owned_business',
-      'union_member',
-      'farmer',
-      'truck_driver',
-      'notes',
-    ],
+    keys: Object.keys(PROFILE_SCHEMA.occupation.fields),
   },
   location_focus: {
-    title: 'Location Focus',
+    title: PROFILE_SCHEMA.location_focus.title,
     instructions: `
 Record geographic context that impacts eligibility.
-Return JSON with: rural_resident, appalachian_region, urban_underserved, geographic_focus, notes.
+Return JSON with: ${Object.keys(PROFILE_SCHEMA.location_focus.fields).join(', ')}.
 
 Rules:
 - geographic_focus should describe primary service area or hometown if known.
 - notes may include county, census tract, or other location qualifiers.
     `.trim(),
-    keys: ['rural_resident', 'appalachian_region', 'urban_underserved', 'geographic_focus', 'notes'],
+    keys: Object.keys(PROFILE_SCHEMA.location_focus.fields),
   },
   university_applications: {
-    title: 'University Applications',
+    title: PROFILE_SCHEMA.university_applications.title,
     instructions: `
 Compile a detailed list of every college/university the student is tracking.
 Return JSON with a single key "applications" containing an array of application objects.
@@ -280,10 +231,10 @@ Rules:
 - Include at least one general contact (admissions or switchboard) and financial aid contact when available.
 - Align interests and department_contacts with documented activities (e.g. band, volleyball, nursing).
     `.trim(),
-    keys: ['applications'],
+    keys: Object.keys(PROFILE_SCHEMA.university_applications.fields),
   },
   narrative: {
-    title: 'Story & Goals',
+    title: PROFILE_SCHEMA.narrative.title,
     instructions: `
 Craft a concise narrative of the applicant's goals, challenges, and impact.
 Return JSON with: mission, primary_goal, target_population, funding_amount_needed, timeline, past_experience, unique_qualities, collaboration_partners, sustainability_plan, barriers_faced, special_circumstances.
@@ -293,19 +244,7 @@ Rules:
 - funding_amount_needed should be a numeric estimate if available, otherwise descriptive text.
 - If information is unavailable, return an empty string.
     `.trim(),
-    keys: [
-      'mission',
-      'primary_goal',
-      'target_population',
-      'funding_amount_needed',
-      'timeline',
-      'past_experience',
-      'unique_qualities',
-      'collaboration_partners',
-      'sustainability_plan',
-      'barriers_faced',
-      'special_circumstances',
-    ],
+    keys: Object.keys(PROFILE_SCHEMA.narrative.fields),
   },
   education: {
     title: 'Education',

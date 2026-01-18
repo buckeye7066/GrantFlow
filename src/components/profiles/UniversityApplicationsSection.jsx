@@ -1,9 +1,14 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
   Bot,
   Building2,
@@ -21,10 +26,14 @@ import {
   Landmark,
   ShieldCheck,
   Layers,
+  ListChecks,
+  FileUp,
 } from "lucide-react"
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter } from "@/components/ui/alert-dialog"
 import { useToast } from "@/components/ui/use-toast"
 import UniversityApplicationForm from "./UniversityApplicationForm.jsx"
+import { deleteDocument, ingestDocument, listDocuments } from "@/api/documents"
+import DocumentItem from "@/components/documents/DocumentItem"
 
 const STATUS_STYLES = {
   planning: { label: "Planning", className: "bg-slate-100 text-slate-700 border-slate-200" },
@@ -45,6 +54,56 @@ const PIPELINE_STATUS_BADGES = {
 }
 
 const PIPELINE_STATUS_SEQUENCE = ["planned", "in_progress", "completed", "planned"]
+
+const DEFAULT_ACTIVITY_CATALOG = [
+  // Athletics (varsity / club / intramural varies by school; this is a starter set)
+  { id: "sport_basketball", label: "Basketball", category: "Sports" },
+  { id: "sport_soccer", label: "Soccer", category: "Sports" },
+  { id: "sport_volleyball", label: "Volleyball", category: "Sports" },
+  { id: "sport_softball", label: "Softball", category: "Sports" },
+  { id: "sport_baseball", label: "Baseball", category: "Sports" },
+  { id: "sport_tennis", label: "Tennis", category: "Sports" },
+  { id: "sport_track", label: "Track & Field", category: "Sports" },
+  { id: "sport_cross_country", label: "Cross Country", category: "Sports" },
+  { id: "sport_swimming", label: "Swimming", category: "Sports" },
+  { id: "sport_golf", label: "Golf", category: "Sports" },
+  { id: "sport_cheer", label: "Cheerleading", category: "Sports" },
+  { id: "sport_dance", label: "Dance Team", category: "Sports" },
+  { id: "sport_wrestling", label: "Wrestling", category: "Sports" },
+  { id: "sport_lacrosse", label: "Lacrosse", category: "Sports" },
+  { id: "sport_field_hockey", label: "Field Hockey", category: "Sports" },
+
+  // Arts & performance
+  { id: "arts_band", label: "Band", category: "Arts & Performance" },
+  { id: "arts_choir", label: "Choir", category: "Arts & Performance" },
+  { id: "arts_orchestra", label: "Orchestra", category: "Arts & Performance" },
+  { id: "arts_theatre", label: "Theatre", category: "Arts & Performance" },
+  { id: "arts_visual", label: "Visual Arts", category: "Arts & Performance" },
+
+  // Academic / professional clubs
+  { id: "club_robotics", label: "Robotics Club", category: "Academic & Professional" },
+  { id: "club_debate", label: "Debate Team", category: "Academic & Professional" },
+  { id: "club_student_gov", label: "Student Government", category: "Academic & Professional" },
+  { id: "club_pre_med", label: "Pre-Med Society", category: "Academic & Professional" },
+  { id: "club_pre_law", label: "Pre-Law Society", category: "Academic & Professional" },
+  { id: "club_nursing", label: "Nursing Student Association", category: "Academic & Professional" },
+  { id: "club_business", label: "Business Club", category: "Academic & Professional" },
+  { id: "club_engineering", label: "Engineering Club", category: "Academic & Professional" },
+  { id: "club_cs", label: "Computer Science Club", category: "Academic & Professional" },
+
+  // Service / leadership
+  { id: "service_volunteer", label: "Volunteer/Service Organizations", category: "Service & Leadership" },
+  { id: "service_rotaract", label: "Rotaract", category: "Service & Leadership" },
+  { id: "service_peer_mentor", label: "Peer Mentoring", category: "Service & Leadership" },
+
+  // Greek life
+  { id: "greek_fraternity", label: "Fraternity (Greek Life)", category: "Greek Life" },
+  { id: "greek_sorority", label: "Sorority (Greek Life)", category: "Greek Life" },
+
+  // Faith & identity
+  { id: "faith_campus_ministry", label: "Campus Ministry / Faith Groups", category: "Community" },
+  { id: "community_cultural", label: "Cultural/Identity Organizations", category: "Community" },
+]
 
 function generateId(prefix = "item") {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -87,11 +146,205 @@ function safeArray(value) {
   return []
 }
 
+function normalizeActivityCatalog(value) {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item) => {
+      if (!item) return null
+      if (typeof item === "string") {
+        const label = item.trim()
+        if (!label) return null
+        return { id: generateId("activity"), label, category: "Custom" }
+      }
+      const label = typeof item.label === "string" ? item.label.trim() : ""
+      if (!label) return null
+      return {
+        id: item.id ?? generateId("activity"),
+        label,
+        category: typeof item.category === "string" ? item.category.trim() : "Custom",
+      }
+    })
+    .filter(Boolean)
+}
+
+function buildEffectiveActivityOptions(application) {
+  const savedCatalog = normalizeActivityCatalog(application?.activity_catalog)
+  if (savedCatalog.length > 0) return savedCatalog
+  return DEFAULT_ACTIVITY_CATALOG
+}
+
+function uniqByLowerLabel(items) {
+  const map = new Map()
+  safeArray(items).forEach((item) => {
+    const label = typeof item?.label === "string" ? item.label.trim() : ""
+    if (!label) return
+    const key = label.toLowerCase()
+    if (!map.has(key)) map.set(key, item)
+  })
+  return [...map.values()]
+}
+
+function normalizeGender(value) {
+  const v = String(value || "").trim().toLowerCase()
+  if (!v) return ""
+  if (["f", "female", "woman", "women", "girl"].includes(v)) return "female"
+  if (["m", "male", "man", "men", "boy"].includes(v)) return "male"
+  return v
+}
+
+function normalizeZip(value) {
+  const v = String(value || "").trim()
+  const m = v.match(/\b\d{5}(?:-\d{4})?\b/)
+  return m ? m[0] : ""
+}
+
+function zillowRentalsUrlFromZip(zip) {
+  const z = normalizeZip(zip)
+  if (!z) return ""
+  return `https://www.zillow.com/homes/for_rent/${encodeURIComponent(z)}/`
+}
+
+function normalizeSchoolName(value) {
+  return String(value || "").trim().toLowerCase()
+}
+
+function getSchoolTheme(application) {
+  const explicit = application?.theme ?? null
+  const explicitPrimary = explicit?.primary_color ? String(explicit.primary_color).trim() : ""
+  const explicitSecondary = explicit?.secondary_color ? String(explicit.secondary_color).trim() : ""
+  const explicitCheer = explicit?.cheer_line ? String(explicit.cheer_line).trim() : ""
+  const cheerEnabled = explicit?.cheer_enabled !== false
+
+  if (explicitPrimary || explicitSecondary || explicitCheer) {
+    return {
+      school: application?.name ?? "School",
+      primary: explicitPrimary || "#0f172a",
+      secondary: explicitSecondary || "#64748b",
+      cheer: cheerEnabled ? explicitCheer : "",
+    }
+  }
+
+  const name = normalizeSchoolName(application?.name)
+
+  // Keep this intentionally small + safe; we can grow it over time.
+  // Ohio State: Scarlet + Gray (official-ish web-safe values)
+  if (
+    name.includes("the ohio state") ||
+    name.includes("ohio state university") ||
+    (name.includes("ohio state") && !name.includes("oregon state"))
+  ) {
+    return {
+      school: "The Ohio State University",
+      primary: "#BB0000", // Scarlet
+      secondary: "#666666", // Gray
+      cheer: "Go Buckeyes!",
+    }
+  }
+
+  return null
+}
+
+function formatRatio(value) {
+  if (value === null || value === undefined || value === "") return "—"
+  const number = Number(value)
+  if (!Number.isFinite(number) || number <= 0) return "—"
+  // Represent as "15:1"
+  return `${Math.round(number)}:1`
+}
+
+function formatNumber(value) {
+  if (value === null || value === undefined || value === "") return "—"
+  const number = Number(value)
+  if (!Number.isFinite(number)) return "—"
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(number)
+}
+
+function safeText(value) {
+  return typeof value === "string" ? value.trim() : ""
+}
+
+function scoreDepartmentContactForGender(contact, studentGender) {
+  const gender = String(contact?.gender_target ?? "any").toLowerCase()
+  const g = normalizeGender(studentGender)
+  if (!g) return 0
+  if (g === "female") {
+    if (gender === "women") return 100
+    if (gender === "coed" || gender === "any" || gender === "unknown") return 50
+    if (gender === "men") return 10
+  }
+  if (g === "male") {
+    if (gender === "men") return 100
+    if (gender === "coed" || gender === "any" || gender === "unknown") return 50
+    if (gender === "women") return 10
+  }
+  return 0
+}
+
+function sortDepartmentContactsForStudent(contacts, studentGender) {
+  const arr = safeArray(contacts)
+  const g = normalizeGender(studentGender)
+  if (!g) return arr
+  return arr
+    .slice()
+    .sort((a, b) => scoreDepartmentContactForGender(b, g) - scoreDepartmentContactForGender(a, g))
+}
+
+function matchesAnyInterest(contact, interests) {
+  const list = safeArray(interests).map((v) => String(v || "").trim().toLowerCase()).filter(Boolean)
+  if (list.length === 0) return false
+  const haystack = [
+    contact?.area,
+    contact?.category,
+    contact?.name,
+    contact?.title,
+    contact?.notes,
+  ]
+    .map((v) => String(v || "").toLowerCase())
+    .join(" | ")
+  return list.some((needle) => haystack.includes(needle))
+}
+
 function normaliseApplications(applications) {
   if (!Array.isArray(applications)) return []
   return applications.map((application) => ({
     ...application,
     id: application.id ?? generateId("application"),
+    website_url: application.website_url ?? "",
+    campus_address: application.campus_address ?? "",
+    city: application.city ?? "",
+    state: application.state ?? "",
+    zip: application.zip ?? "",
+    main_phone: application.main_phone ?? "",
+    main_email: application.main_email ?? "",
+    theme: {
+      primary_color: application.theme?.primary_color ?? "",
+      secondary_color: application.theme?.secondary_color ?? "",
+      cheer_line: application.theme?.cheer_line ?? "",
+      cheer_enabled: application.theme?.cheer_enabled ?? true,
+    },
+    graduation_rate: application.graduation_rate ?? null,
+    student_teacher_ratio: application.student_teacher_ratio ?? null,
+    avg_class_size: application.avg_class_size ?? null,
+    portals: {
+      admissions_url: application.portals?.admissions_url ?? "",
+      financial_aid_url: application.portals?.financial_aid_url ?? "",
+      student_portal_url: application.portals?.student_portal_url ?? "",
+      counseling_url: application.portals?.counseling_url ?? "",
+      transcripts_url: application.portals?.transcripts_url ?? "",
+      send_scores_url: application.portals?.send_scores_url ?? "",
+    },
+    costs: {
+      housing_preference: application.costs?.housing_preference ?? "unknown",
+      on_campus_total: application.costs?.on_campus_total ?? null,
+      off_campus_total: application.costs?.off_campus_total ?? null,
+      selected_meal_plan_id: application.costs?.selected_meal_plan_id ?? "",
+      meal_plans: safeArray(application.costs?.meal_plans).map((plan) => ({
+        id: plan.id ?? generateId("mealplan"),
+        name: plan.name ?? "",
+        cost_per_semester: plan.cost_per_semester ?? "",
+        notes: plan.notes ?? "",
+      })),
+    },
     contacts: safeArray(application.contacts).map((contact) => ({
       id: contact.id ?? generateId("contact"),
       label: contact.label ?? "Contact",
@@ -112,13 +365,17 @@ function normaliseApplications(applications) {
     department_contacts: safeArray(application.department_contacts).map((entry) => ({
       id: entry.id ?? generateId("department"),
       area: entry.area ?? "",
+      category: entry.category ?? "",
+      gender_target: entry.gender_target ?? "any",
       name: entry.name ?? "",
       title: entry.title ?? "",
       email: entry.email ?? "",
       phone: entry.phone ?? "",
+      url: entry.url ?? "",
       notes: entry.notes ?? "",
     })),
     interests: safeArray(application.interests),
+    activity_catalog: normalizeActivityCatalog(application.activity_catalog),
     actions: {
       apply_url: application.actions?.apply_url ?? "",
       pay_fee_url: application.actions?.pay_fee_url ?? "",
@@ -145,6 +402,36 @@ function mergeApplications(existing, suggested) {
       ) ?? null
 
     if (match) {
+      const mergedTheme = {
+        ...(match.theme ?? {}),
+        ...(incomingNormalised.theme ?? {}),
+      }
+      // Prefer non-empty strings from incoming theme (avoid overwriting with empty values).
+      ;['primary_color', 'secondary_color', 'cheer_line'].forEach((key) => {
+        const v = incomingNormalised.theme?.[key]
+        if (typeof v === 'string' && !v.trim()) {
+          mergedTheme[key] = match.theme?.[key] ?? ''
+        }
+      })
+
+      const mergedPortals = {
+        ...(match.portals ?? {}),
+        ...(incomingNormalised.portals ?? {}),
+      }
+
+      const mergedCosts = {
+        ...(match.costs ?? {}),
+        ...(incomingNormalised.costs ?? {}),
+      }
+      mergedCosts.meal_plans = mergeArrayById(
+        safeArray(match.costs?.meal_plans),
+        safeArray(incomingNormalised.costs?.meal_plans),
+      )
+      // If the incoming suggestion didn't specify a selection, keep the existing selected plan.
+      if (!incomingNormalised.costs?.selected_meal_plan_id && match.costs?.selected_meal_plan_id) {
+        mergedCosts.selected_meal_plan_id = match.costs.selected_meal_plan_id
+      }
+
       const merged = {
         ...match,
         ...incomingNormalised,
@@ -152,6 +439,10 @@ function mergeApplications(existing, suggested) {
         financial_aid_pipeline: mergeArrayById(match.financial_aid_pipeline, incomingNormalised.financial_aid_pipeline),
         department_contacts: mergeArrayById(match.department_contacts, incomingNormalised.department_contacts),
         interests: mergeUniqueStrings(match.interests, incomingNormalised.interests),
+        theme: mergedTheme,
+        portals: mergedPortals,
+        costs: mergedCosts,
+        activity_catalog: mergeArrayById(match.activity_catalog, incomingNormalised.activity_catalog),
       }
       existingMap.set(merged.id, merged)
     } else {
@@ -206,8 +497,11 @@ export default function UniversityApplicationsSection({
   saving = false,
   onAskAI,
   aiLoading = false,
+  studentGender = "",
+  profileId = "",
 }) {
   const { toast } = useToast()
+  const queryClient = useQueryClient()
   const [localApplications, setLocalApplications] = useState(() => normaliseApplications(applications))
   const [isFormOpen, setIsFormOpen] = useState(false)
   const [formMode, setFormMode] = useState("create")
@@ -220,6 +514,64 @@ export default function UniversityApplicationsSection({
   }, [applications])
 
   const persistenceInFlight = saving || isPersisting
+
+  const { data: profileDocuments = [] } = useQuery({
+    queryKey: ["documents", profileId],
+    queryFn: () => listDocuments({ profile_id: profileId }),
+    enabled: Boolean(profileId),
+    staleTime: 10_000,
+  })
+
+  const deleteSchoolDocMutation = useMutation({
+    mutationFn: (docId) => deleteDocument(docId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["documents", profileId] })
+      queryClient.invalidateQueries({ queryKey: ["profile", profileId] })
+      toast({ title: "Deleted", description: "The file was removed from this profile." })
+    },
+    onError: (error) => {
+      toast({
+        variant: "destructive",
+        title: "Delete failed",
+        description: error instanceof Error ? error.message : "Unable to delete this file.",
+      })
+    },
+  })
+
+  const uploadSchoolDocMutation = useMutation({
+    mutationFn: async ({ file, docType, universityApplicationId, universityApplicationName }) => {
+      const formData = new FormData()
+      formData.append("profile_id", profileId)
+      formData.append("document", file)
+      formData.append("name", file.name)
+      formData.append("type", docType)
+      formData.append("university_application_id", universityApplicationId)
+      formData.append("university_application_name", universityApplicationName ?? "")
+
+      // Default: try to parse. These are usually letters/forms and are useful for enrichment.
+      formData.append("skip_parsing", "false")
+      formData.append("ocr", "true")
+      formData.append("handwriting", "true")
+      formData.append("ocr_language", "eng")
+
+      return ingestDocument(formData)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["documents", profileId] })
+      queryClient.invalidateQueries({ queryKey: ["profile", profileId] })
+      toast({
+        title: "School file uploaded",
+        description: "We’ll parse what we can and sync updates shortly.",
+      })
+    },
+    onError: (error) => {
+      toast({
+        variant: "destructive",
+        title: "Upload failed",
+        description: error instanceof Error ? error.message : "Unable to upload this file.",
+      })
+    },
+  })
 
   const persistApplications = useCallback(
     async (nextApplications, successMessage) => {
@@ -275,6 +627,18 @@ export default function UniversityApplicationsSection({
     )
     setIsFormOpen(false)
   }
+
+  const handleQuickUpdateApplication = useCallback(
+    async (applicationId, patch, successMessage) => {
+      const nextApplications = localApplications.map((application) => {
+        if (application.id !== applicationId) return application
+        return { ...application, ...patch }
+      })
+      setLocalApplications(nextApplications)
+      await persistApplications(nextApplications, successMessage ?? "Updated university details.")
+    },
+    [localApplications, persistApplications],
+  )
 
   const handleDeleteConfirmed = async () => {
     if (!deleteTarget) return
@@ -418,6 +782,18 @@ export default function UniversityApplicationsSection({
                   onEdit={() => handleEditApplication(application)}
                   onDelete={() => setDeleteTarget(application)}
                   onToggleStage={handleTogglePipelineStatus}
+                  studentGender={studentGender}
+                  onQuickUpdate={handleQuickUpdateApplication}
+                  disabled={persistenceInFlight}
+                  documents={profileDocuments}
+                  onUploadSchoolDoc={(payload) => uploadSchoolDocMutation.mutate(payload)}
+                  onDeleteSchoolDoc={(doc) => {
+                    if (!doc?.id) return
+                    const ok = window.confirm(`Delete "${doc.name}"? This cannot be undone.`)
+                    if (!ok) return
+                    deleteSchoolDocMutation.mutate(doc.id)
+                  }}
+                  docBusy={uploadSchoolDocMutation.isPending || deleteSchoolDocMutation.isPending}
                 />
               ))}
           </div>
@@ -474,15 +850,187 @@ function SummaryPill({ icon: Icon, label, value, accent }) {
   )
 }
 
-function ApplicationCard({ application, onEdit, onDelete, onToggleStage }) {
+const UNIVERSITY_DOC_TYPES = [
+  { value: "university_acceptance_letter", label: "Acceptance letter" },
+  { value: "university_scholarship_letter", label: "Scholarship letter" },
+  { value: "university_financial_aid_award", label: "Financial aid award" },
+  { value: "university_denial_letter", label: "Denial letter" },
+  { value: "university_housing", label: "Housing form/info" },
+  { value: "university_transcript", label: "Transcript" },
+  { value: "university_test_scores", label: "Test score report" },
+  { value: "university_other", label: "Other" },
+]
+
+function ApplicationCard({
+  application,
+  onEdit,
+  onDelete,
+  onToggleStage,
+  studentGender,
+  onQuickUpdate,
+  disabled,
+  documents,
+  onUploadSchoolDoc,
+  onDeleteSchoolDoc,
+  docBusy,
+}) {
   const statusStyle = STATUS_STYLES[application.status] ?? STATUS_STYLES.planning
   const pipeline = safeArray(application.financial_aid_pipeline)
   const contacts = safeArray(application.contacts)
-  const departmentContacts = safeArray(application.department_contacts)
+  const departmentContacts = sortDepartmentContactsForStudent(application.department_contacts, studentGender)
   const interests = safeArray(application.interests)
+  const zip = application.zip || ""
+  const zillowUrl = zillowRentalsUrlFromZip(zip)
+  const portals = application.portals ?? {}
+  const costs = application.costs ?? {}
+  const mealPlans = safeArray(costs.meal_plans)
+  const selectedMealPlan =
+    mealPlans.find((p) => p.id && String(p.id) === String(costs.selected_meal_plan_id)) ?? null
+  const relevantDepartmentContacts = departmentContacts.filter((contact) => matchesAnyInterest(contact, interests))
+  const schoolDocs = useMemo(() => {
+    const docs = safeArray(documents)
+    return docs
+      .filter((doc) => String(doc?.university_application_id || "") === String(application.id))
+      .sort((a, b) => String(b?.created_at || "").localeCompare(String(a?.created_at || "")))
+  }, [documents, application.id])
+
+  const [interestDialogOpen, setInterestDialogOpen] = useState(false)
+  const [interestSearch, setInterestSearch] = useState("")
+  const [customInterest, setCustomInterest] = useState("")
+  const [draftInterests, setDraftInterests] = useState(() => interests)
+  const [draftCatalog, setDraftCatalog] = useState(() => normalizeActivityCatalog(application.activity_catalog))
+  const [catalogTouched, setCatalogTouched] = useState(false)
+
+  const [schoolUploadFile, setSchoolUploadFile] = useState(null)
+  const [schoolUploadType, setSchoolUploadType] = useState(UNIVERSITY_DOC_TYPES[0].value)
+  const maxFileSize = 50 * 1024 * 1024
+
+  useEffect(() => {
+    if (!interestDialogOpen) return
+    setDraftInterests(safeArray(application.interests))
+    setDraftCatalog(normalizeActivityCatalog(application.activity_catalog))
+    setCatalogTouched(false)
+    setInterestSearch("")
+    setCustomInterest("")
+  }, [interestDialogOpen, application])
+
+  const effectiveOptions = useMemo(() => {
+    const base = buildEffectiveActivityOptions({ activity_catalog: draftCatalog })
+    const merged = uniqByLowerLabel([...base, ...draftCatalog])
+    const q = interestSearch.trim().toLowerCase()
+    if (!q) return merged
+    return merged.filter((item) => String(item.label || "").toLowerCase().includes(q))
+  }, [draftCatalog, interestSearch])
+
+  const groupedOptions = useMemo(() => {
+    const groups = new Map()
+    effectiveOptions.forEach((item) => {
+      const category = String(item.category || "Other").trim() || "Other"
+      if (!groups.has(category)) groups.set(category, [])
+      groups.get(category).push(item)
+    })
+    return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+  }, [effectiveOptions])
+
+  const draftSet = useMemo(() => new Set(draftInterests.map((v) => String(v || "").trim()).filter(Boolean)), [draftInterests])
+
+  const toggleDraftInterest = (label) => {
+    const clean = String(label || "").trim()
+    if (!clean) return
+    const next = new Set(draftSet)
+    if (next.has(clean)) next.delete(clean)
+    else next.add(clean)
+    setDraftInterests([...next].sort((a, b) => a.localeCompare(b)))
+  }
+
+  const handleAddCustomInterest = () => {
+    const label = customInterest.trim()
+    if (!label) return
+    const newItem = { id: generateId("activity"), label, category: "Custom" }
+    setDraftCatalog((prev) => [...normalizeActivityCatalog(prev), newItem])
+    setCatalogTouched(true)
+    setCustomInterest("")
+    toggleDraftInterest(label)
+  }
+
+  const handlePopulateFromTemplate = () => {
+    setDraftCatalog((prev) => uniqByLowerLabel([...normalizeActivityCatalog(prev), ...DEFAULT_ACTIVITY_CATALOG]))
+    setCatalogTouched(true)
+  }
+
+  const handleSaveInterests = async () => {
+    if (!onQuickUpdate) {
+      setInterestDialogOpen(false)
+      return
+    }
+    const patch = { interests: draftInterests }
+    const existingCatalog = normalizeActivityCatalog(application.activity_catalog)
+    if (catalogTouched || existingCatalog.length > 0) {
+      patch.activity_catalog = uniqByLowerLabel(draftCatalog)
+    }
+    await onQuickUpdate(application.id, patch, "Updated interests for this school.")
+    setInterestDialogOpen(false)
+  }
+
+  const handleSchoolFileSelect = (event) => {
+    const file = event.target.files?.[0] ?? null
+    if (!file) {
+      setSchoolUploadFile(null)
+      return
+    }
+    if (file.size > maxFileSize) {
+      setSchoolUploadFile(null)
+      alert("File must be 50MB or smaller.")
+      return
+    }
+    setSchoolUploadFile(file)
+  }
+
+  const handleUploadSchoolFile = () => {
+    if (!onUploadSchoolDoc) return
+    if (!schoolUploadFile) return
+    onUploadSchoolDoc({
+      file: schoolUploadFile,
+      docType: schoolUploadType,
+      universityApplicationId: application.id,
+      universityApplicationName: application.name ?? "",
+    })
+    setSchoolUploadFile(null)
+  }
+
+  const selectedHousingPreference = safeText(costs.housing_preference || "")
+  const estimatedCost =
+    selectedHousingPreference === "on_campus"
+      ? costs.on_campus_total
+      : selectedHousingPreference === "off_campus"
+        ? costs.off_campus_total
+        : null
+
+  const theme = getSchoolTheme(application)
+  const borderColor = theme?.primary || undefined
 
   return (
-    <div className="border border-slate-200 rounded-xl shadow-sm bg-white">
+    <div
+      className="border border-slate-200 rounded-xl shadow-sm bg-white overflow-hidden"
+      style={borderColor ? { borderColor } : undefined}
+    >
+      {theme ? (
+        <div
+          className="px-5 py-2 flex items-center justify-between gap-3"
+          style={{
+            background: `linear-gradient(90deg, ${theme.primary}, ${theme.secondary})`,
+          }}
+        >
+          <p className="text-xs font-semibold tracking-wide text-white/95">
+            {theme.school}
+          </p>
+          {theme.cheer ? (
+            <p className="text-xs font-semibold tracking-wide text-white/95">
+              {theme.cheer}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       <div className="p-5 border-b border-slate-100 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div className="space-y-2">
           <div className="flex items-center gap-3 flex-wrap">
@@ -523,9 +1071,17 @@ function ApplicationCard({ application, onEdit, onDelete, onToggleStage }) {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <ExternalLinkButton href={application.website_url}>Website</ExternalLinkButton>
+          <ExternalLinkButton href={portals.admissions_url}>Admissions</ExternalLinkButton>
+          <ExternalLinkButton href={portals.financial_aid_url}>Financial Aid</ExternalLinkButton>
+          <ExternalLinkButton href={portals.student_portal_url}>Student Portal</ExternalLinkButton>
+          <ExternalLinkButton href={portals.counseling_url}>Counseling</ExternalLinkButton>
+          <ExternalLinkButton href={portals.transcripts_url}>Transcripts</ExternalLinkButton>
+          <ExternalLinkButton href={portals.send_scores_url}>Send Scores</ExternalLinkButton>
           <ExternalLinkButton href={application.actions?.apply_url}>Apply</ExternalLinkButton>
           <ExternalLinkButton href={application.actions?.pay_fee_url}>Pay Fee</ExternalLinkButton>
           <ExternalLinkButton href={application.actions?.visit_url}>Visit</ExternalLinkButton>
+          <ExternalLinkButton href={zillowUrl}>Housing (Zillow)</ExternalLinkButton>
           <Button variant="outline" size="icon" onClick={onEdit}>
             <Edit className="w-4 h-4" />
           </Button>
@@ -548,11 +1104,77 @@ function ApplicationCard({ application, onEdit, onDelete, onToggleStage }) {
             <StatBox label="Tuition" value={formatCurrency(application.tuition)} />
             <StatBox label="FAFSA Code" value={application.fafsa_code || "—"} />
             <StatBox label="Application Type" value={application.application_type?.replace(/_/g, " ") ?? "—"} />
+            <StatBox label="Graduation Rate" value={formatPercent(application.graduation_rate)} />
+            <StatBox label="Student/Teacher" value={formatRatio(application.student_teacher_ratio)} />
+            <StatBox label="Avg Class Size" value={formatNumber(application.avg_class_size)} />
+            <StatBox label="Est. Cost" value={formatCurrency(estimatedCost)} />
           </div>
+
+          {(application.campus_address || application.city || application.state || application.zip || application.main_phone || application.main_email) ? (
+            <div className="space-y-2">
+              <h5 className="text-xs font-semibold uppercase tracking-wide text-slate-500">School info</h5>
+              <div className="text-sm text-slate-700 space-y-1">
+                {application.campus_address ? <p>{application.campus_address}</p> : null}
+                {(application.city || application.state || application.zip) ? (
+                  <p>
+                    {[safeText(application.city), safeText(application.state)].filter(Boolean).join(", ")}{" "}
+                    {safeText(application.zip)}
+                  </p>
+                ) : null}
+                {application.main_phone ? (
+                  <p className="text-blue-600">
+                    <a href={`tel:${application.main_phone}`} className="hover:underline">
+                      <Phone className="inline-block w-3 h-3 mr-1" />
+                      {application.main_phone}
+                    </a>
+                  </p>
+                ) : null}
+                {application.main_email ? (
+                  <p className="text-blue-600">
+                    <a href={`mailto:${application.main_email}`} className="hover:underline">
+                      <Mail className="inline-block w-3 h-3 mr-1" />
+                      {application.main_email}
+                    </a>
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          {mealPlans.length > 0 ? (
+            <div className="space-y-2">
+              <h5 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Meal plans</h5>
+              <div className="space-y-2">
+                {selectedMealPlan ? (
+                  <div className="border border-slate-100 rounded-lg p-3">
+                    <p className="text-sm font-semibold text-slate-800">{selectedMealPlan.name || "Selected plan"}</p>
+                    <p className="text-xs text-slate-600">
+                      {selectedMealPlan.cost_per_semester ? `Cost/semester: ${formatCurrency(selectedMealPlan.cost_per_semester)}` : "Cost/semester: —"}
+                    </p>
+                    {selectedMealPlan.notes ? <p className="text-xs text-slate-500 mt-1">{selectedMealPlan.notes}</p> : null}
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-500">Plans available: {mealPlans.length}. Select one in Edit.</p>
+                )}
+              </div>
+            </div>
+          ) : null}
 
           {interests.length > 0 ? (
             <div className="space-y-2">
-              <h5 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Student Interests</h5>
+              <div className="flex items-center justify-between gap-3">
+                <h5 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Interests</h5>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setInterestDialogOpen(true)}
+                  disabled={disabled}
+                >
+                  <ListChecks className="w-4 h-4 mr-2" />
+                  Edit interests
+                </Button>
+              </div>
               <div className="flex flex-wrap gap-2">
                 {interests.map((interest) => (
                   <Badge key={interest} variant="outline">
@@ -561,7 +1183,24 @@ function ApplicationCard({ application, onEdit, onDelete, onToggleStage }) {
                 ))}
               </div>
             </div>
-          ) : null}
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <h5 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Interests</h5>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setInterestDialogOpen(true)}
+                  disabled={disabled}
+                >
+                  <ListChecks className="w-4 h-4 mr-2" />
+                  Choose interests
+                </Button>
+              </div>
+              <p className="text-sm text-slate-500">Select sports/clubs/etc. to surface the right contacts.</p>
+            </div>
+          )}
         </div>
 
         <div className="lg:col-span-4 space-y-4">
@@ -612,7 +1251,47 @@ function ApplicationCard({ application, onEdit, onDelete, onToggleStage }) {
               <h5 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Department & Program Leads
               </h5>
+              {interests.length > 0 ? (
+                <p className="text-xs text-slate-500">
+                  Showing contacts prioritized for the selected interests when possible.
+                </p>
+              ) : null}
               <div className="space-y-2">
+                {relevantDepartmentContacts.length > 0 ? (
+                  <div className="border border-slate-100 rounded-lg p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
+                      Matches selected interests
+                    </p>
+                    <div className="space-y-2">
+                      {relevantDepartmentContacts.slice(0, 5).map((contact) => (
+                        <div key={contact.id} className="border border-slate-100 rounded-lg p-3 space-y-1 text-xs">
+                          <p className="font-semibold text-slate-700">{contact.area || "Program"}</p>
+                          <p className="text-slate-600">
+                            {contact.name}
+                            {contact.title ? ` • ${contact.title}` : ""}
+                          </p>
+                          <div className="flex flex-wrap gap-2 text-blue-600">
+                            {contact.email ? (
+                              <a href={`mailto:${contact.email}`} className="hover:underline flex items-center gap-1">
+                                <Mail className="w-3 h-3" /> Email
+                              </a>
+                            ) : null}
+                            {contact.phone ? (
+                              <a href={`tel:${contact.phone}`} className="hover:underline flex items-center gap-1">
+                                <Phone className="w-3 h-3" /> Call
+                              </a>
+                            ) : null}
+                            {contact.url ? (
+                              <a href={contact.url} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-1">
+                                <LinkIcon className="w-3 h-3" /> Link
+                              </a>
+                            ) : null}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 {departmentContacts.map((contact) => (
                   <div key={contact.id} className="border border-slate-100 rounded-lg p-3 space-y-1 text-xs">
                     <p className="font-semibold text-slate-700">{contact.area || "Program"}</p>
@@ -631,7 +1310,17 @@ function ApplicationCard({ application, onEdit, onDelete, onToggleStage }) {
                           <Phone className="w-3 h-3" /> Call
                         </a>
                       ) : null}
+                      {contact.url ? (
+                        <a href={contact.url} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-1">
+                          <LinkIcon className="w-3 h-3" /> Link
+                        </a>
+                      ) : null}
                     </div>
+                    {contact.category || contact.gender_target ? (
+                      <p className="text-slate-500">
+                        {[safeText(contact.category), safeText(contact.gender_target)].filter(Boolean).join(" • ")}
+                      </p>
+                    ) : null}
                     {contact.notes ? <p className="text-slate-500">{contact.notes}</p> : null}
                   </div>
                 ))}
@@ -680,6 +1369,70 @@ function ApplicationCard({ application, onEdit, onDelete, onToggleStage }) {
         </div>
       </div>
 
+      <Separator />
+      <div className="p-5 space-y-4">
+        <h4 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+          <FileUp className="w-4 h-4 text-indigo-600" />
+          School-specific files
+        </h4>
+
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="space-y-2 md:col-span-1">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Type</p>
+              <Select value={schoolUploadType} onValueChange={setSchoolUploadType} disabled={disabled || docBusy}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select type" />
+                </SelectTrigger>
+                <SelectContent>
+                  {UNIVERSITY_DOC_TYPES.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Upload</p>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <input
+                  type="file"
+                  onChange={handleSchoolFileSelect}
+                  disabled={disabled || docBusy}
+                  className="w-full text-sm"
+                />
+                <Button
+                  type="button"
+                  onClick={handleUploadSchoolFile}
+                  disabled={disabled || docBusy || !schoolUploadFile}
+                >
+                  Upload & parse
+                </Button>
+              </div>
+              {schoolUploadFile ? (
+                <p className="text-xs text-slate-600">
+                  Ready: <span className="font-medium">{schoolUploadFile.name}</span>
+                </p>
+              ) : null}
+              <p className="text-xs text-slate-500">
+                Upload acceptance letters, scholarship letters, housing forms, financial aid awards, etc. We’ll extract text and queue parsing automatically.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {schoolDocs.length === 0 ? (
+          <p className="text-sm text-slate-500">No school-specific files uploaded yet.</p>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {schoolDocs.map((doc) => (
+              <DocumentItem key={doc.id} document={doc} onDelete={onDeleteSchoolDoc} />
+            ))}
+          </div>
+        )}
+      </div>
+
       {application.notes ? (
         <>
           <Separator />
@@ -689,6 +1442,89 @@ function ApplicationCard({ application, onEdit, onDelete, onToggleStage }) {
           </div>
         </>
       ) : null}
+
+      <Dialog open={interestDialogOpen} onOpenChange={setInterestDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Activities & interests</DialogTitle>
+            <DialogDescription>
+              Choose sports/clubs/Greek life/etc. the student is interested in for this school. This helps you track the right contacts.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Search</p>
+                <Input value={interestSearch} onChange={(e) => setInterestSearch(e.target.value)} placeholder="Search activities…" />
+              </div>
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">College offerings list</p>
+                <div className="flex gap-2 flex-wrap">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handlePopulateFromTemplate}
+                    disabled={disabled}
+                  >
+                    Populate common list
+                  </Button>
+                  <p className="text-xs text-slate-500 self-center">
+                    {normalizeActivityCatalog(application.activity_catalog).length > 0
+                      ? "Using this school’s saved list."
+                      : "No school list yet—use the common list or add custom items."}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              {groupedOptions.map(([category, items]) => (
+                <div key={category} className="space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{category}</p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {items.map((item) => {
+                      const checked = draftSet.has(item.label)
+                      return (
+                        <label
+                          key={item.id ?? item.label}
+                          className="flex items-start gap-2 rounded-lg border border-slate-100 p-2 hover:border-slate-200 cursor-pointer"
+                        >
+                          <Checkbox checked={checked} onCheckedChange={() => toggleDraftInterest(item.label)} />
+                          <span className="text-sm text-slate-800">{item.label}</span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="border-t pt-4 space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Add custom</p>
+              <div className="flex gap-2">
+                <Input value={customInterest} onChange={(e) => setCustomInterest(e.target.value)} placeholder="e.g., Women’s basketball, Jazz ensemble, Esports…" />
+                <Button type="button" variant="outline" onClick={handleAddCustomInterest} disabled={disabled}>
+                  Add
+                </Button>
+              </div>
+              <p className="text-xs text-slate-500">
+                Custom items are saved to this school’s offerings list so future profiles can reuse them.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter className="flex items-center justify-between gap-2">
+            <Button type="button" variant="ghost" onClick={() => setInterestDialogOpen(false)} disabled={disabled}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={handleSaveInterests} disabled={disabled}>
+              Save interests
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

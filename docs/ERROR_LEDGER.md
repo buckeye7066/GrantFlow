@@ -7,7 +7,7 @@ This ledger captures **production failures** (user-visible or log-visible) with 
 | ID | When (UTC) | Surface | Symptom | Signature | Hypothesis | Status | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | E-001 | 2026-01-15 | `axiombiolabs.org` / `www.axiombiolabs.org` | `www` redirects to apex. Apex serves `/grantflow/` but **deep links** (`/grantflow/login`) and `/grantflow/api/*` return 404 HTML (not the SPA / API). | `www.axiombiolabs.org/grantflow/login` → `301 Location: https://axiombiolabs.org/grantflow/login`; `axiombiolabs.org/grantflow/login` → `404` HTML; `axiombiolabs.org/grantflow/api/health` → `404` HTML. `Server: DPS/2.0.0-beta+sha-42b7380` on apex responses. | Apex/`www` are not routed to the Vercel SPA project + API proxy (likely still on GoDaddy/DPS). Only a static `/grantflow/` page is being served at apex, with **no SPA fallback rewrite** and **no API proxy**. | Open | Fix DNS/hosting so apex/`www` map to the same Vercel project that serves the SPA. If apex must remain on DPS, it needs SPA fallback rewrites for `/grantflow/*` and a reverse proxy for `/grantflow/api/*` → Railway. |
-| E-002 | 2026-01-16 | `app.axiombiolabs.org` | `/grantflow/` (trailing slash) returns Vercel `NOT_FOUND`, while `/grantflow/login` works and `/grantflow/api/health` works. | `GET https://app.axiombiolabs.org/grantflow/` → `404` `text/plain` `"The page could not be found NOT_FOUND ..."`, `Server: Vercel`. `GET /grantflow/login` → `200` HTML. `GET /grantflow/api/health` → `200` JSON with `X-Request-Id`. | Vercel routing misses the **trailing-slash variant**. `vercel.json` rewrites include `/grantflow` and `/grantflow/:path*`, but not `/grantflow/` (empty `:path*`), so the root-with-slash falls through to 404. | Open | Add `redirect` (or rewrite) for `/grantflow/` → `/grantflow` so root loads reliably. (Patch landed in `vercel.json`.) |
+| E-002 | 2026-01-16 | `app.axiombiolabs.org` | `/grantflow/` (trailing slash) returns Vercel `NOT_FOUND`, while `/grantflow/login` works and `/grantflow/api/health` works. | `GET https://app.axiombiolabs.org/grantflow/` → `404` `text/plain` `"The page could not be found NOT_FOUND ..."`, `Server: Vercel`. `GET /grantflow/login` → `200` HTML. `GET /grantflow/api/health` → `200` JSON with `X-Request-Id`. | Vercel routing misses the **trailing-slash variant** OR the production domain is serving from a Vercel project that is not applying this repo’s `vercel.json`. | Open | Ensure `vercel.json` (repo root) is applied in the production Vercel project (correct root directory, correct project, correct deployment promoted). Then confirm `/grantflow/` redirects to `/grantflow`. |
 
 ## Evidence (screenshots)
 
@@ -27,6 +27,13 @@ Command-line evidence (captured 2026-01-16):
   - `https://www.axiombiolabs.org/grantflow/*` → `301` to `https://axiombiolabs.org/grantflow/*`
   - `https://axiombiolabs.org/grantflow/login` → `404` (HTML, `Server: DPS/2.0.0-beta+sha-42b7380`)
   - `https://axiombiolabs.org/grantflow/api/health` → `404` (HTML, `Server: DPS/2.0.0-beta+sha-42b7380`)
+
+Command-line evidence (captured 2026-01-17):
+
+- Run: `SMOKE_BASE_URL=https://app.axiombiolabs.org SMOKE_BASE_PATH=/grantflow npm run smoke:prod`
+  - Result: **FAIL** because `https://app.axiombiolabs.org/grantflow/` is not OK (trailing slash incident persists).
+- Run: `SMOKE_BASE_URL=https://www.axiombiolabs.org SMOKE_BASE_PATH=/grantflow npm run smoke:prod`
+  - Result: **FAIL** because `https://www.axiombiolabs.org/grantflow/login` returns `404` HTML (domain routing drift).
 
 ## Notes / Access Needed
 
