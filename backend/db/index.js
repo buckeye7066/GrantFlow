@@ -167,6 +167,35 @@ function bindingsToValues(names, bindings) {
   return names.map((name) => bindings[name]);
 }
 
+function normalizeSqliteValue(value) {
+  if (value === undefined) return null
+  if (typeof value === 'boolean') return value ? 1 : 0
+  if (value instanceof Date) return value.toISOString()
+  return value
+}
+
+function normalizeSqliteArgs(args) {
+  if (args.length === 1 && Array.isArray(args[0])) {
+    return [args[0].map(normalizeSqliteValue)]
+  }
+  if (
+    args.length === 1 &&
+    args[0] &&
+    typeof args[0] === 'object' &&
+    !Array.isArray(args[0]) &&
+    !(args[0] instanceof Date) &&
+    !Buffer.isBuffer(args[0])
+  ) {
+    const bindings = args[0]
+    const normalized = {}
+    for (const [key, val] of Object.entries(bindings)) {
+      normalized[key] = normalizeSqliteValue(val)
+    }
+    return [normalized]
+  }
+  return args.map(normalizeSqliteValue)
+}
+
 class SqliteDb {
   constructor(sqlitePath) {
     this.dialect = 'sqlite';
@@ -185,9 +214,9 @@ class SqliteDb {
   prepare(sql) {
     const stmt = this._db.prepare(sql);
     return {
-      get: (...args) => stmt.get(...args),
-      all: (...args) => stmt.all(...args),
-      run: (...args) => stmt.run(...args),
+      get: (...args) => stmt.get(...normalizeSqliteArgs(args)),
+      all: (...args) => stmt.all(...normalizeSqliteArgs(args)),
+      run: (...args) => stmt.run(...normalizeSqliteArgs(args)),
     };
   }
 

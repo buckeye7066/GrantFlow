@@ -5,12 +5,15 @@
  * Env:
  *   SMOKE_BASE_URL  - e.g. https://app.axiombiolabs.org
  *   SMOKE_BASE_PATH - e.g. /grantflow
+ *   SMOKE_CHECK_PROFILE_SCHEMA - default "true"; validates /api/profiles/schema
  */
 
 import process from 'node:process'
 
 const baseUrlRaw = String(process.env.SMOKE_BASE_URL || '').trim()
 const basePathRaw = String(process.env.SMOKE_BASE_PATH || '/grantflow').trim()
+const checkSchemaRaw = String(process.env.SMOKE_CHECK_PROFILE_SCHEMA ?? 'true').trim().toLowerCase()
+const shouldCheckSchema = checkSchemaRaw !== 'false' && checkSchemaRaw !== '0' && checkSchemaRaw !== 'no'
 
 function normalizeBasePath(value) {
   if (!value) return '/'
@@ -64,16 +67,57 @@ async function run() {
   const appRootSlash = joinUrl(baseUrl, `${basePath}/`)
   const login = joinUrl(baseUrl, `${basePath}/login`)
   const apiHealth = joinUrl(baseUrl, `${basePath}/api/health`)
+  const apiProfileSchema = joinUrl(baseUrl, `${basePath}/api/profiles/schema`)
 
-  console.log('[prod-smoke] Checking:', { appRoot, appRootSlash, login, apiHealth })
+  console.log('[prod-smoke] Checking:', {
+    appRoot,
+    appRootSlash,
+    login,
+    apiHealth,
+    ...(shouldCheckSchema ? { apiProfileSchema } : {}),
+  })
 
   // HTML surfaces: should not 404.
-  const rootResult = await expectOk(appRoot)
-  await expectOk(appRootSlash)
+  let rootResult = null
+  let rootSlashResult = null
+  try {
+    rootResult = await expectOk(appRoot)
+  } catch (err) {
+    rootResult = { error: err instanceof Error ? err.message : String(err) }
+  }
+  try {
+    rootSlashResult = await expectOk(appRootSlash)
+  } catch (err) {
+    rootSlashResult = { error: err instanceof Error ? err.message : String(err) }
+  }
+
+  if (rootResult?.error && rootSlashResult?.error) {
+    throw new Error(
+      `Both app roots failed.\n- ${appRoot}: ${rootResult.error}\n- ${appRootSlash}: ${rootSlashResult.error}`,
+    )
+  }
+
+  // Enforce that both variants are stable: the trailing-slash variant must not 404.
+  // This catches Vercel routing drift where `vercel.json` isn't being applied for the production domain.
+  if (!rootSlashResult?.res?.ok) {
+    throw new Error(
+      [
+        'Trailing-slash app root is failing.',
+        `- ${appRootSlash} is not OK`,
+        `- ${appRoot} may still load, but users/bookmarks hitting "${basePath}/" will 404.`,
+        '',
+        'Fix:',
+        '- Ensure the correct Vercel project is deploying this repo and is applying `vercel.json`.',
+        '- Redeploy/promote to production after confirming `vercel.json` includes a redirect or rewrite for `/grantflow/`.',
+      ].join('\n'),
+    )
+  }
+
+  const effectiveRootResult = rootResult?.res?.ok ? rootResult : rootSlashResult
   const loginResult = await expectOk(login)
 
   // Cheap “wrong host” detector for the known incident: GoDaddy 404 page text.
-  const htmlCombined = String(rootResult.body || '') + '\n' + String(loginResult.body || '')
+  const htmlCombined = String(effectiveRootResult.body || '') + '\n' + String(loginResult.body || '')
   if (/file not found\s*\(404 error\)/i.test(htmlCombined)) {
     throw new Error('Detected static “File not found (404 error)” page — likely DNS/Vercel domain routing drift.')
   }
@@ -90,9 +134,22 @@ async function run() {
     throw new Error(`Unexpected /api/health status=${String(status)} (expected ok|warning)`)
   }
 
+  if (shouldCheckSchema) {
+    const schema = await expectOk(apiProfileSchema, { expectJson: true })
+    const supported = schema.body?.supported_section_keys
+    const sections = schema.body?.sections
+    if (!Array.isArray(supported) || supported.length === 0) {
+      throw new Error('Expected supported_section_keys[] from /api/profiles/schema')
+    }
+    if (!sections || typeof sections !== 'object') {
+      throw new Error('Expected sections object from /api/profiles/schema')
+    }
+  }
+
   console.log('[prod-smoke] OK', {
     health_status: status,
     request_id: requestId,
+    profile_schema_checked: shouldCheckSchema,
   })
 }
 

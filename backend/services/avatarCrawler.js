@@ -1,6 +1,7 @@
 import fs from 'fs'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
+import { summarizeOpenAIError } from '../utils/openaiClient.js'
 
 export async function processAvatarLookupJob({ profileContext, uploadDir, getOpenAI }) {
   const profile = profileContext?.profile
@@ -9,12 +10,23 @@ export async function processAvatarLookupJob({ profileContext, uploadDir, getOpe
   }
   const openai = getOpenAI()
   const prompt = buildAvatarPrompt(profile)
-  const response = await openai.images.generate({
-    model: 'gpt-image-1',
-    prompt,
-    size: '512x512',
-    response_format: 'b64_json',
-  })
+  let response = null
+  try {
+    response = await openai.images.generate({
+      model: 'gpt-image-1',
+      prompt,
+      size: '512x512',
+      response_format: 'b64_json',
+    })
+  } catch (error) {
+    const summary = summarizeOpenAIError(error)
+    if (summary.isAuth) {
+      throw new Error(
+        'OpenAI authentication failed for avatar lookup. Verify OPENAI_API_KEY (server-side) and ensure the key has access to image generation.',
+      )
+    }
+    throw new Error(`Avatar lookup failed: ${summary.message}`)
+  }
 
   const base64 = response?.data?.[0]?.b64_json
   if (!base64) {

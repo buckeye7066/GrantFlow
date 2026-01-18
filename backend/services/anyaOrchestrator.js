@@ -40,6 +40,18 @@ function assertAuthenticated(user) {
   }
 }
 
+async function resolveExistingUserId(db, user) {
+  const raw = user?.userId ?? user?.id ?? null
+  const candidate = typeof raw === 'string' ? raw.trim() : raw
+  if (!candidate) return null
+  try {
+    const row = await db.prepare('SELECT id FROM users WHERE id = ?').get(candidate)
+    return row?.id ?? null
+  } catch {
+    return null
+  }
+}
+
 function assertProfileAccess(user, profileId) {
   if (!profileId) return
   if (user.role === 'admin') return
@@ -161,20 +173,36 @@ export async function createSession(db, user, { profileId, title, metadata } = {
   assertProfileAccess(user, normalizedProfileId)
 
   const id = randomUUID()
-  const info = await db
-    .prepare(
-      `
-        INSERT INTO anya_sessions (id, user_id, profile_id, status, title, metadata)
-        VALUES (?, ?, ?, 'open', ?, ?)
-      `,
-    )
-    .run(
-      id,
-      user.userId ?? null,
-      normalizedProfileId,
-      title?.trim() || null,
-      metadata ? JSON.stringify(metadata) : '{}',
-    )
+  const userIdForFk = await resolveExistingUserId(db, user)
+  let info
+  try {
+    info = await db
+      .prepare(
+        `
+          INSERT INTO anya_sessions (id, user_id, profile_id, status, title, metadata)
+          VALUES (?, ?, ?, 'open', ?, ?)
+        `,
+      )
+      .run(
+        id,
+        userIdForFk,
+        normalizedProfileId,
+        title?.trim() || null,
+        metadata ? JSON.stringify(metadata) : '{}',
+      )
+  } catch (error) {
+    const msg = String(error?.message || error)
+    if (msg.includes('FOREIGN KEY constraint failed')) {
+      const enriched = new Error(
+        `FOREIGN KEY constraint failed while creating session (userIdForFk=${String(
+          userIdForFk,
+        )}, normalizedProfileId=${String(normalizedProfileId)})`,
+      )
+      enriched.status = 500
+      throw enriched
+    }
+    throw error
+  }
 
   if (info.changes !== 1) {
     throw new Error('Unable to create session')
@@ -408,6 +436,7 @@ export async function createTask(
   const metadataJson = metadata ? JSON.stringify(metadata) : '{}'
 
   const id = randomUUID()
+  const createdByForFk = await resolveExistingUserId(db, user)
   await db.prepare(
     `
       INSERT INTO anya_tasks (
@@ -428,7 +457,7 @@ export async function createTask(
     id,
     session.id,
     session.profile_id ?? null,
-    user.userId ?? null,
+    createdByForFk,
     normalizedTitle,
     normalizedNotes,
     normalizedStatus,

@@ -67,7 +67,7 @@ function countRealNational(db) {
   return Number(row?.count ?? 0)
 }
 
-export function ensureMinimumNationalOpportunities(db, minimum = 3) {
+export async function ensureMinimumNationalOpportunities(db, minimum = 3) {
   if (!db) throw new Error('db required')
   const min = Number.isFinite(minimum) ? minimum : 3
   if (min <= 0) return { ok: true, minimum: min, ensured: 0, total: countRealNational(db) }
@@ -124,7 +124,7 @@ export function ensureMinimumNationalOpportunities(db, minimum = 3) {
 
   // 1) Seed from curated real files (broad but safe; uses upsert)
   try {
-    seedRealOpportunities(db)
+    await seedRealOpportunities(db)
     events.push({ type: 'backfill', source: 'seedRealOpportunities' })
   } catch {
     // best-effort
@@ -179,7 +179,7 @@ export function ensureMinimumNationalOpportunities(db, minimum = 3) {
     }
 
     try {
-      const result = upsertFundingOpportunity(db, opportunity)
+      const result = await upsertFundingOpportunity(db, opportunity)
       if (result?.inserted) {
         ensured += 1
         current = countRealNational(db)

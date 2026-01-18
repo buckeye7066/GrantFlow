@@ -41,7 +41,7 @@ function ensureArray(value) {
   return [value];
 }
 
-export function seedRealOpportunities(db) {
+export async function seedRealOpportunities(db) {
   const anySeedFileExists =
     existsSync(REAL_OPPS_PATH) ||
     existsSync(LOCAL_OPPS_PATH) ||
@@ -101,7 +101,9 @@ export function seedRealOpportunities(db) {
   let seeded = 0;
   for (const opp of allRealOpportunities) {
     try {
-      upsertFundingOpportunity(db, opp);
+      // NOTE: upsertFundingOpportunity is async for sqlite/postgres parity.
+      // Awaiting is safe even for sync DB adapters.
+      await upsertFundingOpportunity(db, opp);
       seeded++;
     } catch (error) {
       console.warn(`[seedRealOpportunities] Failed to upsert opportunity ${opp.title}:`, error.message);

@@ -36,6 +36,10 @@ const SECTION_ICONS = {
   financial_information: HandCoins,
   government_assistance: ShieldCheck,
   health_medical: HeartPulse,
+  medical_insurance: ShieldCheck,
+  medical_history: HeartPulse,
+  nonprofit_compliance: ClipboardList,
+  small_business_details: Briefcase,
   demographics: Users,
   family_life: Home,
   military_service: Medal,
@@ -45,6 +49,17 @@ const SECTION_ICONS = {
   student_details: GraduationCap,
   firearms: ShieldCheck,
   political_civic: Users,
+}
+
+function isSectionApplicable(sectionKey, config, profile) {
+  if (!config) return true
+  // Optional, forward-compatible: allow SECTION_CONFIG entries to specify applies_to types.
+  const appliesTo = config.applies_to ?? config.appliesTo ?? null
+  if (!Array.isArray(appliesTo) || appliesTo.length === 0) return true
+  const primaryType = profile?.primary_type ?? profile?.primaryType ?? null
+  // If a profile doesn't have a primary type yet, do not hide sections.
+  if (!primaryType) return true
+  return appliesTo.includes(primaryType)
 }
 
 function titleCase(value = "") {
@@ -186,43 +201,53 @@ function renderValue(fieldKey, value) {
     )
   }
 
+  const formatInlineValue = (inner) => {
+    if (inner === null || inner === undefined) return null
+    if (typeof inner === "boolean") return inner ? "Yes" : "No"
+    if (typeof inner === "number") return String(inner)
+    if (typeof inner === "string") return inner
+    if (Array.isArray(inner)) return inner.map((item) => String(item)).join(", ")
+    return null
+  }
+
+  const flattenObjectEntries = (obj, { maxDepth = 2, depth = 0, prefix = "" } = {}) => {
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return []
+    const entries = []
+    for (const [key, inner] of Object.entries(obj)) {
+      const nextKey = prefix ? `${prefix}.${key}` : key
+      const inline = formatInlineValue(inner)
+      if (inline !== null) {
+        entries.push([nextKey, inline])
+        continue
+      }
+      if (depth < maxDepth && inner && typeof inner === "object" && !Array.isArray(inner)) {
+        entries.push(...flattenObjectEntries(inner, { maxDepth, depth: depth + 1, prefix: nextKey }))
+      }
+    }
+    return entries
+  }
+
   if (typeof value === "object") {
-    if (looksLikeAddressObject(value)) {
-      const formatted = formatAddressObject(value)
-      if (formatted) {
-        return (
-          <div className="max-w-[280px] rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-left text-xs text-slate-700 whitespace-pre-line">
-            {formatted}
-          </div>
-        )
-      }
+    const flattened = flattenObjectEntries(value, { maxDepth: 2 })
+    if (!flattened.length) {
+      return <span className="text-sm text-slate-500">—</span>
     }
-
-    if (isPlainObject(value)) {
-      const entries = Object.entries(value).map(normalizeEntry).filter(Boolean)
-      if (entries.length > 0) {
-        return (
-          <div className="max-w-[280px] rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
-            <dl className="space-y-1">
-              {entries.slice(0, 6).map(([childKey, childValue]) => (
-                <div key={`${fieldKey}-${childKey}`} className="flex items-start justify-between gap-3">
-                  <dt className="min-w-[92px] text-[11px] font-medium uppercase tracking-wide text-slate-500">
-                    {humanizeKey(childKey)}
-                  </dt>
-                  <dd className="text-right text-slate-900">{renderPrimitive(childValue)}</dd>
-                </div>
-              ))}
-              {entries.length > 6 ? (
-                <p className="pt-1 text-[11px] text-slate-400">{`+${entries.length - 6} more`}</p>
-              ) : null}
-            </dl>
-          </div>
-        )
-      }
-    }
-
+    const preview = flattened.slice(0, 6)
+    const remaining = flattened.length - preview.length
     return (
-      <span className="text-sm text-slate-900">{renderPrimitive(value)}</span>
+      <div className="max-w-[320px] space-y-1 text-right">
+        {preview.map(([key, inline]) => (
+          <div key={key} className="flex items-start justify-end gap-2">
+            <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+              {titleCase(key)}
+            </span>
+            <span className="min-w-0 text-xs text-slate-900 whitespace-pre-wrap break-words">{inline}</span>
+          </div>
+        ))}
+        {remaining > 0 ? (
+          <div className="text-[11px] text-slate-400">{`+${remaining} more`}</div>
+        ) : null}
+      </div>
     )
   }
 
@@ -379,7 +404,11 @@ export default function ProfileOverview({
   }
   const gridColumnsClass = columnMap[dashboardPrefs.layoutColumns] ?? "md:grid-cols-2"
   const gapClass = dashboardPrefs.layoutStyle === "compact" ? "gap-4" : "gap-6"
-  const totalSections = useMemo(() => Object.keys(SECTION_CONFIG).length, [])
+  const allSectionKeys = useMemo(() => Object.keys(SECTION_CONFIG), [])
+  const applicableSectionKeys = useMemo(() => {
+    return allSectionKeys.filter((key) => isSectionApplicable(key, SECTION_CONFIG[key], profile))
+  }, [allSectionKeys, profile])
+  const totalSections = allSectionKeys.length
   const sectionsMap = useMemo(() => {
     const map = new Map()
     ;(profile.sections ?? []).forEach((section) => {
@@ -491,7 +520,12 @@ export default function ProfileOverview({
     })
   }
 
-  const orderedSectionKeys = Object.keys(SECTION_CONFIG)
+  const orderedSectionKeys = useMemo(() => {
+    const applicable = new Set(applicableSectionKeys)
+    const applicableFirst = allSectionKeys.filter((key) => applicable.has(key))
+    const rest = allSectionKeys.filter((key) => !applicable.has(key))
+    return [...applicableFirst, ...rest]
+  }, [allSectionKeys, applicableSectionKeys])
 
   return (
     <div className="space-y-10">

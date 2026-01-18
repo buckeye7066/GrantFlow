@@ -12,10 +12,10 @@
  * - Emergency assistance programs
  */
 
-import { randomUUID } from 'crypto';
 import fs from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { upsertFundingOpportunity } from './opportunityInserter.js';
 
 // NOTE: In some hosted environments, the complete county dataset file may not be present
 // (e.g. older deploy artifacts / missing repo data folder). We fall back to the bundled JSON.
@@ -164,37 +164,18 @@ function createCountyOpportunity(county, state, orgType, orgConfig) {
 /**
  * Upsert opportunity to database
  */
-function upsertOpportunity(db, opp) {
+async function upsertOpportunity(db, opp) {
   try {
-    const existing = db.prepare('SELECT id FROM funding_opportunities WHERE id = ?').get(opp.id);
-    
-    const categoriesJson = JSON.stringify(opp.categories || []);
-    const keywordsJson = JSON.stringify(opp.keywords || []);
-
-    if (existing) {
-      db.prepare(`
-        UPDATE funding_opportunities SET
-          title = ?, sponsor = ?, description = ?, application_url = ?, source_url = ?,
-          is_national = ?, state = ?, categories = ?, keywords = ?,
-          updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(opp.title, opp.sponsor, opp.description, opp.application_url, opp.source_url,
-             opp.is_national ? 1 : 0, opp.state, categoriesJson, keywordsJson, opp.id);
-      return { updated: true };
-    } else {
-      db.prepare(`
-        INSERT INTO funding_opportunities (
-          id, title, sponsor, source, source_id, source_url, description,
-          application_url, is_national, state, categories, keywords,
-          opportunity_type, is_active, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'program', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `).run(opp.id, opp.title, opp.sponsor, opp.source, opp.source_id, opp.source_url,
-             opp.description, opp.application_url, opp.is_national ? 1 : 0, opp.state,
-             categoriesJson, keywordsJson);
-      return { inserted: true };
-    }
+    // County-level entries are useful leads but not necessarily verified "real funding" records.
+    // Mark as synthetic so they don't count toward REAL invariants, while still being discoverable.
+    const result = await upsertFundingOpportunity(db, {
+      ...opp,
+      record_origin: 'synthetic',
+      evidence_url: opp.source_url ?? opp.application_url ?? null,
+    })
+    return result
   } catch (error) {
-    console.error(`[CountyCrawler] DB error for ${opp.id}: ${error.message}`);
+    console.error(`[CountyCrawler] DB error for ${opp?.id || opp?.title}: ${error.message}`);
     return { error: error.message };
   }
 }
@@ -218,7 +199,7 @@ export async function crawlStateCounties(db, state, options = {}) {
   for (const county of stateCounties) {
     for (const [orgType, orgConfig] of Object.entries(ORG_PATTERNS)) {
       const opp = createCountyOpportunity(county, state, orgType, orgConfig);
-      const result = upsertOpportunity(db, opp);
+      const result = await upsertOpportunity(db, opp);
       
       if (result.inserted) inserted++;
       else if (result.updated) updated++;

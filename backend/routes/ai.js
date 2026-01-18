@@ -15,6 +15,79 @@ function getOpenAI() {
   return createOpenAIClient().openai;
 }
 
+function getOpenAIOptional() {
+  return createOpenAIClient({ allowMissing: true }).openai;
+}
+
+async function createAnthropicClient() {
+  if (!process.env.ANTHROPIC_API_KEY) return null
+  const Anthropic = (await import('@anthropic-ai/sdk')).default
+  return new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY,
+    timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 15_000),
+    maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
+  })
+}
+
+function extractAnthropicText(response) {
+  const parts = Array.isArray(response?.content) ? response.content : []
+  return parts
+    .map((part) => (typeof part?.text === 'string' ? part.text : typeof part === 'string' ? part : ''))
+    .filter(Boolean)
+    .join('\n')
+    .trim()
+}
+
+function fallbackProposalTemplate({ grant, section }) {
+  const applicant = grant?.name || 'Applicant'
+  const funder = grant?.funder || 'Funder'
+  const title = grant?.title || 'Grant Opportunity'
+  const focus = section || 'project narrative'
+  return `Draft ${focus} (non-AI fallback)\n\nApplicant: ${applicant}\nGrant: ${title}\nFunder: ${funder}\n\n1) Need / Problem\n- [Describe the specific community need and who is impacted.]\n\n2) Project Overview\n- [What you will do, where, and for whom.]\n\n3) Activities & Timeline\n- [List 3-6 key activities with target dates.]\n\n4) Outcomes & Measurement\n- [List measurable outcomes and how you will track them.]\n\n5) Budget & Sustainability\n- [How funds will be used and how the work continues after funding.]\n`
+}
+
+function tryExtractFirstJson(text) {
+  const raw = String(text || '')
+  const jsonMatch = raw.match(/\{[\s\S]*\}/)
+  return safeParseJSON(jsonMatch ? jsonMatch[0] : raw, null)
+}
+
+async function invokeTextWithFallback({ model, system, prompt, temperature, maxTokens }) {
+  const openai = getOpenAIOptional()
+  if (openai) {
+    try {
+      const completion = await openai.chat.completions.create({
+        model: model || DEFAULT_OPENAI_MODEL,
+        messages: system ? [{ role: 'system', content: system }, { role: 'user', content: prompt }] : [{ role: 'user', content: prompt }],
+        temperature: typeof temperature === 'number' ? temperature : 0.3,
+        max_tokens: typeof maxTokens === 'number' ? maxTokens : 1200,
+      })
+      return { text: extractCompletionText(completion), provider: 'openai', usage: completion.usage ?? null }
+    } catch (error) {
+      const summary = summarizeOpenAIError(error)
+      console.warn('[ai] OpenAI failed, will try Anthropic:', summary?.message || error?.message || error)
+    }
+  }
+
+  const anthropic = await createAnthropicClient()
+  if (anthropic) {
+    try {
+      const response = await anthropic.messages.create({
+        model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+        max_tokens: typeof maxTokens === 'number' ? maxTokens : 1200,
+        temperature: typeof temperature === 'number' ? temperature : 0.3,
+        system: system || undefined,
+        messages: [{ role: 'user', content: prompt }],
+      })
+      return { text: extractAnthropicText(response), provider: 'anthropic', usage: null }
+    } catch (error) {
+      console.warn('[ai] Anthropic failed:', error?.message || error)
+    }
+  }
+
+  return { text: null, provider: 'fallback', usage: null }
+}
+
 // Match opportunities to a profile
 // Comprehensive match endpoint for discovery
 router.post('/comprehensive-match', async (req, res) => {
@@ -238,7 +311,7 @@ router.post('/match/ai', async (req, res) => {
     const { profile_id, opportunity_ids } = req.body;
     const { limit } = validatePagination({ limit: req.body.limit || 20 });
     
-    const openai = getOpenAI();
+    const openai = getOpenAIOptional();
     
     // Get the profile
     const profile = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(profile_id);
@@ -313,37 +386,32 @@ Return ONLY valid JSON in this format:
   ]
 }`;
 
-    let completion;
-    try {
-      completion = await openai.chat.completions.create({
-        model: DEFAULT_OPENAI_MODEL,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-        max_tokens: 2000,
-      });
-    } catch (openaiError) {
-      const summary = summarizeOpenAIError(openaiError);
-      console.warn('[ai/match/ai] OpenAI unavailable, falling back to basic match:', summary);
-      return res.json({
-        opportunities: opportunities.slice(0, limit).map((o) => ({
-          ...o,
-          match_score: 50,
-          match_reasons: ['AI scoring unavailable - basic match'],
-        })),
-        count: Math.min(opportunities.length, limit),
-        ai_enhanced: false,
-      });
-    }
-    
     let aiResults;
     try {
-      const content = extractCompletionText(completion);
-      // Extract JSON from response
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      aiResults = safeParseJSON(jsonMatch ? jsonMatch[0] : content, null);
-      if (!aiResults) {
-        throw new Error('Failed to parse AI response');
+      let rawText = null
+      if (openai) {
+        const completion = await openai.chat.completions.create({
+          model: DEFAULT_OPENAI_MODEL,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.3,
+          max_tokens: 2000,
+        });
+        rawText = extractCompletionText(completion)
+      } else {
+        const anthropic = await createAnthropicClient()
+        if (anthropic) {
+          const response = await anthropic.messages.create({
+            model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+            max_tokens: 2000,
+            temperature: 0.3,
+            messages: [{ role: 'user', content: prompt }],
+          })
+          rawText = extractAnthropicText(response)
+        }
       }
+
+      aiResults = tryExtractFirstJson(rawText)
+      if (!aiResults) throw new Error('Failed to parse AI response');
     } catch (parseError) {
       console.error('Failed to parse AI response:', parseError);
       // Fall back to basic matching
@@ -392,8 +460,6 @@ router.post('/generate/proposal', async (req, res) => {
   try {
     const { grant_id, section, prompt: userPrompt } = req.body;
     
-    const openai = getOpenAI();
-    
     // Get grant details
     const grant = await req.db.prepare(`
       SELECT g.*, o.* 
@@ -422,30 +488,31 @@ FUNDER: ${grant.funder}
 
 Generate a well-structured, compelling ${section || 'narrative'} of about 300-500 words.`;
 
-    let completion;
-    try {
-      completion = await openai.chat.completions.create({
-        model: DEFAULT_OPENAI_MODEL,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: prompt },
-        ],
-        temperature: 0.7,
-        max_tokens: 1500,
-      });
-    } catch (openaiError) {
-      const summary = summarizeOpenAIError(openaiError);
-      return res.status(summary.isRateLimit ? 429 : 503).json({
-        error: 'OpenAI unavailable',
-        detail: summary.message,
-      });
+    const result = await invokeTextWithFallback({
+      model: DEFAULT_OPENAI_MODEL,
+      system: systemPrompt,
+      prompt,
+      temperature: 0.7,
+      maxTokens: 1500,
+    })
+
+    if (!result.text) {
+      return res.json({
+        content: fallbackProposalTemplate({ grant, section }),
+        section,
+        grant_id,
+        tokens_used: 0,
+        ai_provider: 'fallback',
+        warning: 'No AI provider configured (OPENAI_API_KEY/ANTHROPIC_API_KEY missing) or provider error.',
+      })
     }
-    
+
     res.json({
-      content: extractCompletionText(completion),
+      content: result.text,
       section,
       grant_id,
-      tokens_used: completion.usage?.total_tokens || 0
+      tokens_used: result.usage?.total_tokens || 0,
+      ai_provider: result.provider,
     });
     
   } catch (error) {
@@ -458,8 +525,6 @@ Generate a well-structured, compelling ${section || 'narrative'} of about 300-50
 router.post('/analyze/eligibility', async (req, res) => {
   try {
     const { profile_id, opportunity_id } = req.body;
-    
-    const openai = getOpenAI();
     
     const profile = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(profile_id);
     const opportunity = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunity_id);
@@ -499,41 +564,37 @@ Return as JSON:
   "recommendations": [...]
 }`;
 
-    let completion;
-    try {
-      completion = await openai.chat.completions.create({
-        model: DEFAULT_OPENAI_MODEL,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-        max_tokens: 1000,
-      });
-    } catch (openaiError) {
-      const summary = summarizeOpenAIError(openaiError);
-      return res.status(summary.isRateLimit ? 429 : 503).json({
-        error: 'OpenAI unavailable',
-        detail: summary.message,
-      });
+    const result = await invokeTextWithFallback({
+      model: DEFAULT_OPENAI_MODEL,
+      prompt,
+      temperature: 0.3,
+      maxTokens: 1000,
+    })
+
+    if (!result.text) {
+      const bullets = safeParseJSON(opportunity.eligibility_bullets, []).slice(0, 8)
+      return res.json({
+        status: 'Analysis unavailable (AI not configured)',
+        confidence: 0,
+        met_requirements: [],
+        unmet_requirements: [],
+        recommendations: [
+          'Configure OPENAI_API_KEY or ANTHROPIC_API_KEY to enable AI eligibility analysis.',
+          ...(bullets.length ? ['Review eligibility bullets and compare them to the applicant profile.'] : []),
+        ],
+        ai_provider: 'fallback',
+        eligibility_bullets: bullets,
+      })
     }
-    
-    let analysis;
-    try {
-    const content = extractCompletionText(completion);
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      analysis = safeParseJSON(jsonMatch ? jsonMatch[0] : content, null);
-      if (!analysis) {
-        analysis = {
-          status: 'Analysis unavailable',
-          raw_response: content
-        };
-      }
-    } catch {
-      analysis = {
+
+    const parsed = tryExtractFirstJson(result.text)
+    res.json(
+      parsed || {
         status: 'Analysis unavailable',
-      raw_response: extractCompletionText(completion)
-      };
-    }
-    
-    res.json(analysis);
+        raw_response: result.text,
+        ai_provider: result.provider,
+      },
+    );
     
   } catch (error) {
     console.error('Error analyzing eligibility:', error);
@@ -543,7 +604,6 @@ Return as JSON:
 
 router.post('/reminders/plan', async (req, res) => {
   try {
-    const openai = getOpenAI();
     const body = req.body || {};
 
     const lookahead = Number.isFinite(body.lookaheadDays)
@@ -572,31 +632,40 @@ router.post('/reminders/plan', async (req, res) => {
       { additionalContext: body.additionalContext },
     );
 
-    const completion = await openai.chat.completions.create({
+    const system =
+      'You are an expert grants operations assistant. Provide actionable, concise plans without extra commentary.'
+    const result = await invokeTextWithFallback({
       model: DEFAULT_OPENAI_MODEL,
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You are an expert grants operations assistant. Provide actionable, concise plans without extra commentary.',
-        },
-        { role: 'user', content: prompt },
-      ],
+      system,
+      prompt,
       temperature: 0.4,
-      max_tokens: 900,
-    });
+      maxTokens: 900,
+    })
 
-    let plan;
-    try {
-    const content = extractCompletionText(completion);
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      plan = safeParseJSON(jsonMatch ? jsonMatch[0] : content, null);
-      if (!plan) {
-        throw new Error('Failed to parse plan');
+    let plan = null
+    if (result.text) {
+      plan = tryExtractFirstJson(result.text)
+    }
+    if (!plan) {
+      // Deterministic fallback: convert deadlines/milestones into a simple checklist.
+      plan = {
+        overview:
+          'AI plan generation is unavailable. Here is a structured checklist based on your upcoming deadlines and milestones.',
+        priorities: [
+          ...trimmedDeadlines.map((d) => ({
+            type: 'deadline',
+            title: d?.title || d?.name || 'Deadline',
+            due_date: d?.date || d?.due_date || null,
+            next_step: 'Confirm requirements and begin drafting required materials.',
+          })),
+          ...trimmedMilestones.map((m) => ({
+            type: 'milestone',
+            title: m?.title || m?.name || 'Milestone',
+            due_date: m?.date || m?.due_date || null,
+            next_step: 'Assign an owner and define deliverables.',
+          })),
+        ],
       }
-    } catch (parseError) {
-      console.error('Failed to parse reminder plan response:', parseError);
-      return res.status(502).json({ error: 'AI response could not be parsed.' });
     }
 
     res.json({
@@ -606,6 +675,7 @@ router.post('/reminders/plan', async (req, res) => {
         deadlineCount: trimmedDeadlines.length,
         milestoneCount: trimmedMilestones.length,
       },
+      ai_provider: plan && result.text ? result.provider : 'fallback',
     });
   } catch (error) {
     console.error('Error generating reminder plan:', error);
@@ -641,8 +711,6 @@ router.post('/invoke', async (req, res) => {
     // Basic sanitization: trim and normalize whitespace
     const sanitizedPrompt = prompt.trim().replace(/\s+/g, ' ');
 
-    const openai = getOpenAI();
-
     const messages = [
       {
         role: 'system',
@@ -668,14 +736,20 @@ router.post('/invoke', async (req, res) => {
 
     messages.push({ role: 'user', content: userPrompt });
 
-    const completion = await openai.chat.completions.create({
-      model,
-      messages,
-      temperature: typeof temperature === 'number' ? temperature : 0.3,
-      max_tokens: typeof max_tokens === 'number' ? Math.max(1, Math.min(max_tokens, 4000)) : 1200,
-    });
+    const systemCombined = messages
+      .filter((m) => m.role === 'system' && typeof m.content === 'string' && m.content.trim())
+      .map((m) => m.content.trim())
+      .join('\n\n')
 
-    const rawText = extractCompletionText(completion);
+    const result = await invokeTextWithFallback({
+      model,
+      system: systemCombined || null,
+      prompt: userPrompt,
+      temperature: typeof temperature === 'number' ? temperature : 0.3,
+      maxTokens: typeof max_tokens === 'number' ? Math.max(1, Math.min(max_tokens, 4000)) : 1200,
+    })
+
+    const rawText = result.text || ''
 
     if (response_json_schema) {
       const tryParse = (text) => {
@@ -696,13 +770,18 @@ router.post('/invoke', async (req, res) => {
         return res.json(parsed);
       } catch (error) {
         console.error('Failed to parse InvokeLLM JSON response:', rawText, error);
-        return res.status(502).json({ error: 'AI returned invalid JSON response.' });
+        return res.status(502).json({
+          error: 'AI returned invalid JSON response.',
+          ai_provider: result.provider,
+        });
       }
     }
 
     res.json({
       output: rawText,
       text: rawText,
+      ai_provider: result.provider,
+      warning: result.provider === 'fallback' ? 'No AI provider configured (OPENAI_API_KEY/ANTHROPIC_API_KEY missing) or provider error.' : undefined,
     });
   } catch (error) {
     console.error('AI invoke failed:', error);

@@ -10,11 +10,11 @@ const SERVICE_APPLICATION_EMAIL = process.env.SERVICE_APPLICATION_EMAIL || 'dr.j
 /**
  * Helper to save application to database
  */
-function saveApplicationToDb(db, data) {
+async function saveApplicationToDb(db, data) {
   const id = crypto.randomUUID()
   
   try {
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO service_applications (
         id, type, full_name, email, phone, organization, title,
         client_category, selected_services, total_cost,
@@ -72,7 +72,7 @@ router.post('/', async (req, res) => {
       }
 
       // Save to database
-      const applicationId = saveApplicationToDb(req.db, {
+    const applicationId = await saveApplicationToDb(req.db, {
         type: 'contact_admin',
         name,
         email,
@@ -150,7 +150,7 @@ router.post('/submit', async (req, res) => {
     }
 
     // Save to database
-    const applicationId = saveApplicationToDb(req.db, {
+    const applicationId = await saveApplicationToDb(req.db, {
       type: 'service_application',
       fullName,
       email,
@@ -223,8 +223,21 @@ router.get('/list', async (req, res) => {
     query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
     params.push(parseInt(limit), parseInt(offset))
     
-    const applications = req.db.prepare(query).all(...params)
-    const total = req.db.prepare('SELECT COUNT(*) as count FROM service_applications').get()
+    let applications = []
+    let total = { count: 0 }
+    try {
+      applications = await req.db.prepare(query).all(...params)
+      total = await req.db.prepare('SELECT COUNT(*) as count FROM service_applications').get()
+    } catch (dbError) {
+      const msg = String(dbError?.message || dbError)
+      const missingTable =
+        msg.includes('no such table: service_applications') ||
+        msg.includes('relation "service_applications" does not exist')
+      if (!missingTable) throw dbError
+      // If the table doesn't exist yet (new environment), return an empty list instead of 500.
+      applications = []
+      total = { count: 0 }
+    }
     
     res.json({
       success: true,
@@ -290,13 +303,13 @@ router.patch('/:id', async (req, res) => {
     updates.push('updated_at = CURRENT_TIMESTAMP')
     params.push(id)
     
-    req.db.prepare(`
+    await req.db.prepare(`
       UPDATE service_applications
       SET ${updates.join(', ')}
       WHERE id = ?
     `).run(...params)
     
-    const updated = req.db.prepare('SELECT * FROM service_applications WHERE id = ?').get(id)
+    const updated = await req.db.prepare('SELECT * FROM service_applications WHERE id = ?').get(id)
     
     res.json({
       success: true,

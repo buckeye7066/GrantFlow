@@ -1,17 +1,19 @@
 import Database from 'better-sqlite3';
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js';
 import path from 'path';
+import OpenAI from 'openai';
 
 const db = new Database('./data/grantflow.db');
 const uploadDir = path.join(process.cwd(), 'uploads');
 
-// Mock getOpenAI function
-const getOpenAI = () => {
-  const OpenAI = (await import('openai')).default;
-  return new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY || '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'
-  });
-};
+const apiKey = process.env.OPENAI_API_KEY;
+if (!apiKey) {
+  console.error('Missing OPENAI_API_KEY. Set it in your environment to run this script.');
+  process.exit(1);
+}
+
+const openai = new OpenAI({ apiKey });
+const getOpenAI = () => openai;
 
 console.log('=== DISPATCHING QUEUED CRAWLER JOBS ===\n');
 
