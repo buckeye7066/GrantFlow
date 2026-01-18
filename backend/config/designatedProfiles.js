@@ -35,10 +35,13 @@ export const DESIGNATED_PROFILES = [
   },
   {
     id: 'profile-anastasia',
-    display_name: 'Anastasia',
-    primary_type: 'individual',
+    display_name: 'Anastasia Nicole White',
+    primary_type: 'high_school_student',
     status: 'active',
-    tags: ['individual'],
+    tags: ['individual', 'student'],
+    // Keep canonical profile data as data (not hardcoded in this file).
+    // `ensureDesignatedProfiles` will seed these sections only if missing.
+    data_file: 'backend/config/profile-anastasia.json',
   },
   {
     id: 'profile-luibov',

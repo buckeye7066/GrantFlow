@@ -39,6 +39,16 @@ function getAuthProfileId(user) {
   return user?.profileId ?? user?.profile_id ?? null
 }
 
+function canAccessProfile({ auth, profileRow }) {
+  if (!profileRow) return false
+  if (isAdmin(auth)) return true
+  const authProfileId = getAuthProfileId(auth)
+  if (authProfileId && authProfileId === profileRow.id) return true
+  const authUserId = getAuthUserId(auth)
+  if (authUserId && profileRow.user_id && authUserId === profileRow.user_id) return true
+  return false
+}
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const uploadDir = process.env.UPLOADS_DIR
@@ -170,6 +180,33 @@ async function enrichProfileWithSummary(db, profile) {
 
 function getOpenAI() {
   return createOpenAIClient().openai
+}
+
+function getOpenAIOptional() {
+  return createOpenAIClient({ allowMissing: true }).openai
+}
+
+async function createAnthropicClient() {
+  if (!process.env.ANTHROPIC_API_KEY) return null
+  const Anthropic = (await import('@anthropic-ai/sdk')).default
+  return new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY,
+    timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 15_000),
+    maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
+  })
+}
+
+function extractAnthropicText(response) {
+  const parts = Array.isArray(response?.content) ? response.content : []
+  return parts
+    .map((part) => {
+      if (typeof part?.text === 'string') return part.text
+      if (typeof part === 'string') return part
+      return ''
+    })
+    .filter(Boolean)
+    .join('\n')
+    .trim()
 }
 
 router.get('/', async (req, res) => {
@@ -556,13 +593,13 @@ router.get('/:id/sections', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
-    return res.status(403).json({ error: 'Not authorized to access this profile' })
-  }
-
-  const profile = await req.db.prepare(`SELECT id FROM profiles WHERE id = ?`).get(id)
+  const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!profile) {
     return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!canAccessProfile({ auth, profileRow: profile })) {
+    return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to access this profile' })
   }
 
   const sections = (await req.db
@@ -589,8 +626,13 @@ router.get('/:id/sections/:sectionKey', async (req, res) => {
   const { id, sectionKey } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
-    return res.status(403).json({ error: 'Not authorized to access this profile' })
+  const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!profile) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!canAccessProfile({ auth, profileRow: profile })) {
+    return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to access this profile' })
   }
 
   const section = await req.db
@@ -620,13 +662,13 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
   const { data, updated_by } = req.body ?? {}
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
-    return res.status(403).json({ error: 'Not authorized to update this profile' })
-  }
-
-  const profile = await req.db.prepare(`SELECT id FROM profiles WHERE id = ?`).get(id)
+  const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!profile) {
     return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!canAccessProfile({ auth, profileRow: profile })) {
+    return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to update this profile' })
   }
 
   if (typeof data !== 'object' || data === null) {
@@ -668,8 +710,13 @@ router.delete('/:id/sections/:sectionKey', async (req, res) => {
   const { id, sectionKey } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
-    return res.status(403).json({ error: 'Not authorized to update this profile' })
+  const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!profile) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!canAccessProfile({ auth, profileRow: profile })) {
+    return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to update this profile' })
   }
 
   const stmt = req.db.prepare(`DELETE FROM profile_sections WHERE profile_id = ? AND section_key = ?`)
@@ -684,10 +731,6 @@ router.post('/:id/sections/:sectionKey/ai', async (req, res) => {
   const { id, sectionKey } = req.params
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
-    return res.status(403).json({ error: 'Not authorized to access this profile' })
-  }
-
   try {
     if (!supportedSectionKeys.includes(sectionKey)) {
       return res.status(400).json({ error: `Section "${sectionKey}" is not yet AI-enabled.` })
@@ -696,6 +739,10 @@ router.post('/:id/sections/:sectionKey/ai', async (req, res) => {
     const profileRow = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
     if (!profileRow) {
       return res.status(404).json({ error: 'Profile not found' })
+    }
+
+    if (!canAccessProfile({ auth, profileRow })) {
+      return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to access this profile' })
     }
 
     const sectionRows = await req.db
@@ -734,33 +781,77 @@ router.post('/:id/sections/:sectionKey/ai', async (req, res) => {
       return res.status(400).json({ error: `No prompt mapping for section "${sectionKey}"` })
     }
 
-    const openai = getOpenAI()
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: promptPayload.prompt }],
-      temperature: 0.2,
-      max_tokens: 1200,
-    })
+    const openai = getOpenAIOptional()
 
-    const raw = extractCompletionText(completion)
-    let suggestion = {}
+    // Provider order: OpenAI -> Anthropic -> deterministic empty fallback (never hard-fail the UI).
+    if (openai) {
+      const completion = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        messages: [{ role: 'user', content: promptPayload.prompt }],
+        temperature: 0.2,
+        max_tokens: 1200,
+      })
 
-    try {
+      const raw = extractCompletionText(completion)
       const jsonMatch = raw.match(/\{[\s\S]*\}/)
-      suggestion = JSON.parse(jsonMatch ? jsonMatch[0] : raw)
-    } catch (parseError) {
-      console.error('Failed to parse AI response:', parseError, raw)
-      return res.status(502).json({
-        error: 'AI response could not be parsed',
+      const suggestion = safeParseJSON(jsonMatch ? jsonMatch[0] : raw, null)
+
+      if (!suggestion || typeof suggestion !== 'object') {
+        return res.status(502).json({
+          error: 'AI response could not be parsed',
+          raw_response: raw,
+        })
+      }
+
+      return res.json({
+        section_key: sectionKey,
+        suggestion,
+        usage: completion.usage ?? null,
         raw_response: raw,
+        ai_provider: 'openai',
       })
     }
 
-    res.json({
+    const anthropic = await createAnthropicClient()
+    if (anthropic) {
+      try {
+        const response = await anthropic.messages.create({
+          model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+          max_tokens: 1200,
+          temperature: 0.2,
+          messages: [{ role: 'user', content: promptPayload.prompt }],
+        })
+
+        const raw = extractAnthropicText(response)
+        const jsonMatch = raw.match(/\{[\s\S]*\}/)
+        const suggestion = safeParseJSON(jsonMatch ? jsonMatch[0] : raw, null)
+
+        if (!suggestion || typeof suggestion !== 'object') {
+          return res.status(502).json({
+            error: 'AI response could not be parsed',
+            raw_response: raw,
+          })
+        }
+
+        return res.json({
+          section_key: sectionKey,
+          suggestion,
+          usage: null,
+          raw_response: raw,
+          ai_provider: 'anthropic',
+        })
+      } catch (anthropicError) {
+        console.warn('[profiles/sections/ai] Anthropic failed:', anthropicError?.message || anthropicError)
+      }
+    }
+
+    return res.json({
       section_key: sectionKey,
-      suggestion,
-      usage: completion.usage ?? null,
-      raw_response: raw,
+      suggestion: {},
+      usage: null,
+      raw_response: null,
+      ai_provider: 'fallback',
+      warning: 'No AI provider configured (OPENAI_API_KEY/ANTHROPIC_API_KEY missing).',
     })
   } catch (error) {
     console.error('Error generating profile section suggestion:', error)
@@ -774,20 +865,18 @@ router.post('/:id/fields/ai', async (req, res) => {
   const { fieldName, fieldLabel, currentValue, fieldDescription, sectionKey, profileData } = req.body
   const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
-    return res.status(403).json({ error: 'Not authorized to access this profile' })
-  }
-
   try {
     // Get profile for context
-    const profile = req.db.prepare(`
-      SELECT display_name, primary_type, organization_id 
-      FROM profiles WHERE id = ?
-    `).get(id)
+    const profileRow = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
     
-    if (!profile) {
+    if (!profileRow) {
       return res.status(404).json({ error: 'Profile not found' })
     }
+
+    if (!canAccessProfile({ auth, profileRow })) {
+      return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to access this profile' })
+    }
+    const profile = mapProfile(profileRow)
 
     // Create focused prompt for the specific field
     const prompt = `You are assisting with filling out a grant application field.
@@ -812,32 +901,58 @@ Requirements:
 
 Return ONLY the field value content, no JSON wrapper or explanations.`
 
-    const openai = getOpenAI()
+    const openai = getOpenAIOptional()
     let suggestion
     
-    try {
-      const completion = await openai.chat.completions.create({
-        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-        max_tokens: 400,
-      })
-      suggestion = extractCompletionText(completion).trim()
-    } catch (error) {
-      const summary = summarizeOpenAIError(error)
-      console.warn('[Field AI] OpenAI request failed:', summary?.error || error?.message || error)
-      return res.status(summary?.status ? Number(summary.status) : 503).json({
-        error: 'AI unavailable',
-        message: summary?.error || 'OpenAI request failed',
-        status: summary?.status || 503,
-        hint: 'Verify OPENAI_API_KEY (or runtime secret) and model access, then retry.',
-      })
+    if (openai) {
+      try {
+        const completion = await openai.chat.completions.create({
+          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.3,
+          max_tokens: 400,
+        })
+        suggestion = extractCompletionText(completion).trim()
+        return res.json({
+          field: fieldName,
+          suggestion,
+          usage: null,
+          ai_provider: 'openai',
+        })
+      } catch (error) {
+        const summary = summarizeOpenAIError(error)
+        console.warn('[Field AI] OpenAI request failed:', summary?.message || error?.message || error)
+        // fall through to Anthropic / fallback (do not hard-fail the UI)
+      }
+    }
+
+    const anthropic = await createAnthropicClient()
+    if (anthropic) {
+      try {
+        const response = await anthropic.messages.create({
+          model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+          max_tokens: 400,
+          temperature: 0.3,
+          messages: [{ role: 'user', content: prompt }],
+        })
+        suggestion = extractAnthropicText(response).trim()
+        return res.json({
+          field: fieldName,
+          suggestion,
+          usage: null,
+          ai_provider: 'anthropic',
+        })
+      } catch (anthropicError) {
+        console.warn('[Field AI] Anthropic request failed:', anthropicError?.message || anthropicError)
+      }
     }
     
     res.json({
       field: fieldName,
-      suggestion,
-      usage: null
+      suggestion: typeof currentValue === 'string' ? currentValue : '',
+      usage: null,
+      ai_provider: 'fallback',
+      warning: 'No AI provider configured (OPENAI_API_KEY/ANTHROPIC_API_KEY missing) or provider error.',
     })
   } catch (error) {
     console.error('Field AI suggestion error:', error)
