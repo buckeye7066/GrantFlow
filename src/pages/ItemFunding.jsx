@@ -34,6 +34,7 @@ const NOT_AVAILABLE = 'N/A'
 import { listProfiles, getProfile } from "@/api/profiles"
 import { createCrawlerJob } from "@/api/crawlers"
 import { cn } from "@/lib/utils"
+import { useAuthStore } from "@/stores/authStore"
 
 function safeArray(value) {
   if (!value) return []
@@ -310,6 +311,8 @@ function ItemResultDetail({ opportunity, match, open, onClose }) {
 
 export default function ItemFunding() {
   const { toast } = useToast()
+  const user = useAuthStore((state) => state.user)
+  const isAdmin = Boolean(user?.is_admin || user?.role === "admin" || user?.id === "admin")
   const [filters, setFilters] = useState({
     item: "",
     state: "all",
@@ -349,6 +352,9 @@ export default function ItemFunding() {
   })
 
   const selectedProfile = selectedProfileQuery.data ?? null
+  const selectedTier = selectedProfile?.billing?.tier ?? null
+  const canItemFunding = isAdmin || Boolean(selectedTier?.enable_item_funding)
+  const hasSelectedProfile = Boolean(filters.profileId && filters.profileId !== "all")
   const opportunitiesResponse = opportunitiesQuery.data ?? null
   const opportunities = opportunitiesResponse?.data ?? []
   const totalResults = typeof opportunitiesResponse?.total === "number" ? opportunitiesResponse.total : opportunities.length
@@ -421,6 +427,24 @@ export default function ItemFunding() {
       return
     }
 
+    if (!hasSelectedProfile) {
+      toast({
+        variant: "destructive",
+        title: "Select a profile first",
+        description: "Item crawlers run against a specific profile. Choose a profile, then retry.",
+      })
+      return
+    }
+
+    if (!canItemFunding) {
+      toast({
+        variant: "destructive",
+        title: "Tier upgrade required",
+        description: "Item funding is not enabled for this profile’s billing tier.",
+      })
+      return
+    }
+
     try {
       const payload = {
         type: "item_search",
@@ -431,9 +455,7 @@ export default function ItemFunding() {
         },
       }
 
-      if (filters.profileId && filters.profileId !== "all") {
-        payload.profile_id = filters.profileId
-      }
+      payload.profile_id = filters.profileId
 
       const job = await createCrawlerJob(payload)
       toast({
@@ -622,6 +644,11 @@ export default function ItemFunding() {
             <Button variant="outline" onClick={handleRequestItemCrawler}>
               Request crawler sweep
             </Button>
+            {!canItemFunding ? (
+              <p className="text-xs text-amber-700">
+                Item funding is gated by tier. Ask an admin to upgrade the billing tier to enable crawlers.
+              </p>
+            ) : null}
           </CardContent>
         </Card>
       ) : (

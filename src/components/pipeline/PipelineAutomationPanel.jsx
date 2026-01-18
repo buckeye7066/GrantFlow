@@ -34,7 +34,12 @@ function StatusBadge({ status }) {
   )
 }
 
-export default function PipelineAutomationPanel({ organizationId, profileId }) {
+export default function PipelineAutomationPanel({
+  organizationId,
+  profileId,
+  disabled = false,
+  disabledReason = null,
+}) {
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const [selectedGrant, setSelectedGrant] = React.useState(null)
@@ -124,6 +129,15 @@ export default function PipelineAutomationPanel({ organizationId, profileId }) {
             over.
           </CardDescription>
         </div>
+        {disabled ? (
+          <Button
+            disabled
+            className="bg-slate-400 hover:bg-slate-400 cursor-not-allowed"
+            title={disabledReason || "This feature is not available on your current tier."}
+          >
+            Upgrade required
+          </Button>
+        ) : (
         <Button
           onClick={() => runAllMutation.mutate()}
           disabled={runAllMutation.isPending || !summary || summary.length === 0}
@@ -141,8 +155,14 @@ export default function PipelineAutomationPanel({ organizationId, profileId }) {
             </>
           )}
         </Button>
+        )}
       </CardHeader>
       <CardContent className="space-y-4">
+        {disabled ? (
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            {disabledReason || "Your billing tier does not include pipeline automation."}
+          </div>
+        ) : null}
         {error ? (
           <div className="p-4 border border-red-200 bg-red-50 rounded-md text-sm text-red-700">
             Unable to load automation status. {error.message}
@@ -236,7 +256,7 @@ export default function PipelineAutomationPanel({ organizationId, profileId }) {
                       variant="outline"
                       size="sm"
                       onClick={() => runGrantMutation.mutate(entry.id)}
-                      disabled={isQueuedGrant}
+                      disabled={disabled || isQueuedGrant}
                     >
                       {isQueuedGrant ? (
                         <>

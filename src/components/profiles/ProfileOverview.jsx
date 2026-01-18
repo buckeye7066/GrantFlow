@@ -3,6 +3,7 @@ import { format, formatDistanceToNow } from "date-fns"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { Switch } from "@/components/ui/switch"
 import {
   CalendarClock,
   ClipboardList,
@@ -29,6 +30,7 @@ import {
 } from "lucide-react"
 import { SECTION_CONFIG } from "@/components/profiles/ProfileSectionEditor.jsx"
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx"
+import EditableField from "@/components/shared/EditableField.jsx"
 
 const SECTION_ICONS = {
   basic_information: UserCircle,
@@ -68,6 +70,18 @@ function titleCase(value = "") {
     .replace(/\s+/g, " ")
     .trim()
     .replace(/\w\S*/g, (word) => word.charAt(0).toUpperCase() + word.slice(1))
+}
+
+function toEditableString(value) {
+  if (value === null || value === undefined) return ""
+  if (typeof value === "string") return value
+  if (typeof value === "number" || typeof value === "boolean") return String(value)
+  if (Array.isArray(value)) return value.map((v) => String(v)).join(", ")
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
 }
 
 function normalizeEntry([key, value]) {
@@ -259,7 +273,15 @@ function formatCurrencyFromCents(cents) {
   }).format(cents / 100)
 }
 
-function SectionPreview({ sectionKey, section, onEdit, onAskAI, isSaving, isAIProcessing }) {
+function SectionPreview({
+  sectionKey,
+  section,
+  onEdit,
+  onAskAI,
+  onSaveField,
+  isSaving,
+  isAIProcessing,
+}) {
   const config = SECTION_CONFIG[sectionKey]
   const SectionIcon = SECTION_ICONS[sectionKey] ?? FolderOpen
   const dataEntries = Object.entries(section?.data ?? {})
@@ -268,6 +290,7 @@ function SectionPreview({ sectionKey, section, onEdit, onAskAI, isSaving, isAIPr
   const hasData = dataEntries.length > 0
 
   const isInteractive = Boolean(onEdit) && !isSaving && !isAIProcessing
+  const canInlineEdit = Boolean(onSaveField) && !isSaving && !isAIProcessing
 
   const handleCardClick = () => {
     if (!isInteractive || !onEdit) return
@@ -312,17 +335,64 @@ function SectionPreview({ sectionKey, section, onEdit, onAskAI, isSaving, isAIPr
       </CardHeader>
       <CardContent className="space-y-4">
         {hasData ? (
-          <dl className="space-y-2">
-            {dataEntries.slice(0, 8).map(([key, value]) => (
-              <div key={key} className="flex items-start justify-between gap-4">
-                <dt className="text-xs font-medium text-slate-500 uppercase tracking-wide">{titleCase(key)}</dt>
-                <dd className="flex-1 text-right">{renderValue(key, value)}</dd>
-              </div>
-            ))}
+          <div className="space-y-3">
+            {dataEntries.slice(0, 8).map(([key, value]) => {
+              const label = titleCase(key)
+              const isBoolean = typeof value === "boolean"
+
+              if (!canInlineEdit) {
+                return (
+                  <div key={key} className="flex items-start justify-between gap-4">
+                    <dt className="text-xs font-medium text-slate-500 uppercase tracking-wide">{label}</dt>
+                    <dd className="flex-1 text-right">{renderValue(key, value)}</dd>
+                  </div>
+                )
+              }
+
+              if (isBoolean) {
+                return (
+                  <div
+                    key={key}
+                    className="flex items-center justify-between gap-4"
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => event.stopPropagation()}
+                  >
+                    <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">{label}</span>
+                    <Switch
+                      checked={Boolean(value)}
+                      disabled={!canInlineEdit}
+                      onCheckedChange={(checked) => onSaveField?.(sectionKey, key, checked)}
+                    />
+                  </div>
+                )
+              }
+
+              return (
+                <div
+                  key={key}
+                  onClick={(event) => event.stopPropagation()}
+                  onKeyDown={(event) => event.stopPropagation()}
+                >
+                  <EditableField
+                    label={label}
+                    value={toEditableString(value)}
+                    type={
+                      typeof value === "string" && (value.includes("\n") || value.length > 80)
+                        ? "textarea"
+                        : "text"
+                    }
+                    isSubmitting={!canInlineEdit}
+                    onSave={(next) => onSaveField?.(sectionKey, key, next)}
+                  />
+                </div>
+              )
+            })}
             {dataEntries.length > 8 ? (
-              <p className="text-xs text-slate-400">{`+${dataEntries.length - 8} more field${dataEntries.length - 8 === 1 ? "" : "s"} stored`}</p>
+              <p className="text-xs text-slate-400">{`+${dataEntries.length - 8} more field${
+                dataEntries.length - 8 === 1 ? "" : "s"
+              } stored`}</p>
             ) : null}
-          </dl>
+          </div>
         ) : (
           <p className="text-sm text-slate-500">
             No data captured yet. Use the editor or AI assist to fill out this section exactly as listed in the comprehensive
@@ -378,6 +448,7 @@ function SectionPreview({ sectionKey, section, onEdit, onAskAI, isSaving, isAIPr
 export default function ProfileOverview({
   profile,
   onEditSection,
+  onSaveField,
   savingSectionKey,
   onAskSection,
   aiLoadingKey,
@@ -761,6 +832,7 @@ export default function ProfileOverview({
               section={sectionsMap.get(sectionKey)}
               onEdit={onEditSection}
               onAskAI={onAskSection ? () => onAskSection(sectionKey) : undefined}
+              onSaveField={onSaveField}
               isSaving={savingSectionKey === sectionKey}
               isAIProcessing={aiLoadingKey === sectionKey}
             />

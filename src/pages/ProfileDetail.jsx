@@ -279,6 +279,30 @@ export default function ProfileDetail() {
     }
   }, [editingSection, aiSuggestionMutation])
 
+  const handleInlineSaveField = React.useCallback(
+    async (sectionKey, fieldKey, nextValue) => {
+      if (!profileId) return
+      if (!profile) return
+      if (!sectionKey || !fieldKey) return
+
+      const existing =
+        profile.sections?.find((section) => section.section_key === sectionKey)?.data ?? {}
+
+      const nextData = {
+        ...(existing ?? {}),
+        [fieldKey]: nextValue,
+      }
+
+      try {
+        setSavingSectionKey(sectionKey)
+        await upsertSectionMutation.mutateAsync({ sectionKey, values: nextData })
+      } finally {
+        setSavingSectionKey(null)
+      }
+    },
+    [profileId, profile, upsertSectionMutation],
+  )
+
   const handleUploadAvatar = React.useCallback(
     (file) => {
       if (!file) return
@@ -428,6 +452,7 @@ export default function ProfileDetail() {
               profile={profile}
               billing={profile.billing ?? null}
               onEditSection={handleOpenSection}
+              onSaveField={handleInlineSaveField}
               onAskSection={handleAskSection}
               savingSectionKey={savingSectionKey}
               aiLoadingKey={aiLoadingKey}

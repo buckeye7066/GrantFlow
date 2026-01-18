@@ -30,6 +30,7 @@ export default function ProfileFieldWithAI({
   field,
   value,
   onChange,
+  inputRef,
   disabled,
   profileId,
   sectionKey,
@@ -133,11 +134,12 @@ export default function ProfileFieldWithAI({
       
       <FieldComponent
         id={safeField.name}
-        value={displayValue}
-        onChange={(e) => onChange(e.target ? e.target.value : e)}
+        ref={inputRef}
         disabled={disabled || isLoadingAI}
         {...safeField.props}
         {...props}
+        value={displayValue}
+        onChange={(e) => onChange(e?.target ? e.target.value : e)}
       />
       
       {safeField.description && (

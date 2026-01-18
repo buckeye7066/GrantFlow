@@ -10,6 +10,7 @@ import {
   canonicalSectionKeys,
 } from '../prompts/profileSections.js'
 import { COMPREHENSIVE_APPLICATION_DEFAULTS } from '../config/comprehensiveApplicationSchema.js'
+import { getAccessibleOrganizationIds, isAdminUser, ensureOrganizationAccess, requireAuthenticatedUser } from '../utils/accessControl.js'
 
 const router = express.Router();
 
@@ -227,11 +228,25 @@ async function syncOrganizationToProfileSections(db, { organizationId, orgRow, p
 // List all organizations
 router.get('/', ensureAuth, async (req, res) => {
   try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
+
     const { search, state, type } = req.query;
     const { limit, offset } = validatePagination(req.query);
     
     let query = 'SELECT * FROM organizations WHERE 1=1';
     const params = [];
+
+    // Access control: non-admins can only see organizations linked to their profiles.
+    if (!isAdminUser(user)) {
+      const orgIds = await getAccessibleOrganizationIds(req.db, user)
+      if (!orgIds || orgIds.size === 0) {
+        return res.json([])
+      }
+      const placeholders = Array.from(orgIds).map(() => '?').join(', ')
+      query += ` AND id IN (${placeholders})`
+      params.push(...Array.from(orgIds))
+    }
     
     if (search) {
       query += ' AND (name LIKE ? OR email LIKE ? OR city LIKE ?)';
@@ -277,6 +292,7 @@ router.get('/', ensureAuth, async (req, res) => {
 // Get single organization
 router.get('/:id', ensureAuth, async (req, res) => {
   try {
+    if (!(await ensureOrganizationAccess(req, res, req.params.id))) return
     const org = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(req.params.id);
     
     if (!org) {
@@ -365,6 +381,7 @@ router.post('/', ensureAuth, mutationRateLimiter, async (req, res) => {
 // Update organization
 router.put('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
   try {
+    if (!(await ensureOrganizationAccess(req, res, req.params.id))) return
     const data = req.body;
     
     // Sanitize columns against whitelist
@@ -417,6 +434,7 @@ router.put('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
 // Delete organization (soft delete with deleted_at timestamp)
 router.delete('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
   try {
+    if (!(await ensureOrganizationAccess(req, res, req.params.id))) return
     // Check if organization exists
     const org = await req.db.prepare('SELECT id FROM organizations WHERE id = ?').get(req.params.id);
     if (!org) {
@@ -436,6 +454,7 @@ router.delete('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
 // Get organization's grants
 router.get('/:id/grants', ensureAuth, async (req, res) => {
   try {
+    if (!(await ensureOrganizationAccess(req, res, req.params.id))) return
     const grants = await req.db.prepare(`
       SELECT * FROM grants 
       WHERE organization_id = ? 
@@ -452,6 +471,7 @@ router.get('/:id/grants', ensureAuth, async (req, res) => {
 // Get organization's documents
 router.get('/:id/documents', ensureAuth, async (req, res) => {
   try {
+    if (!(await ensureOrganizationAccess(req, res, req.params.id))) return
     const documents = await req.db.prepare(`
       SELECT * FROM documents 
       WHERE organization_id = ? 

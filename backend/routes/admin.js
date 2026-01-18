@@ -19,6 +19,7 @@ import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js';
 import { logAuditEvent, queryAuditLogs, getAuditSummary, cleanupAuditLogs, AUDIT_CATEGORIES, SEVERITY } from '../services/auditService.js';
 import { initializeFeatureFlags, isFeatureEnabled, getAllFlags, updateFlag, createFlagOverride, removeFlagOverride, getFlagOverrides, cleanupExpiredOverrides } from '../services/featureFlagService.js';
 import { getProfileWithLocation } from '../services/crawlers/crawlerHelpers.js';
+import { getRequestError } from '../services/requestIdErrorStore.js';
 import { crawlLocalFunding } from '../services/crawlers/localFundingCrawler.js';
 import { crawlGovernmentFunding } from '../services/crawlers/governmentFundingCrawler.js';
 import { crawlStudentGrants } from '../services/crawlers/studentGrantsCrawler.js';
@@ -913,6 +914,21 @@ router.get('/diagnostics', async (req, res) => {
   }
 });
 
+// Lookup recent server-side error details by Request ID (admin-only).
+// This is stored in-memory (best-effort) to help non-technical admins debug production issues.
+router.get('/errors/:requestId', async (req, res) => {
+  try {
+    if (!(await ensureAdminRequest(req, res))) return
+    const requestId = String(req.params.requestId || '').trim()
+    if (!requestId) return res.status(400).json({ error: 'requestId is required' })
+    const entry = getRequestError(requestId)
+    if (!entry) return res.status(404).json({ error: 'Request ID not found (may have expired)' })
+    return res.json({ ok: true, ...entry })
+  } catch (error) {
+    return res.status(500).json({ error: error?.message || String(error) })
+  }
+})
+
 /**
  * Geo Crawl support endpoints (admin-only)
  * These power the Geo Crawl UI state dropdown and scoping selectors.
@@ -987,10 +1003,15 @@ router.post('/geo/state/:state/index-counties', async (req, res) => {
 router.get('/geo/crawl/status', async (req, res) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return;
+    // This endpoint is polled by the Admin UI; prevent conditional GETs (304) which break JSON parsing.
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    res.set('Surrogate-Control', 'no-store');
     const latest = await req.db
       .prepare(
         `
-          SELECT id, type, status, created_at, started_at, completed_at, result_count, error
+          SELECT id, type, status, created_at, started_at, completed_at, result_count, error, result_meta, parameters
           FROM crawler_jobs
           WHERE type = 'comprehensive'
             AND parameters LIKE '%"mode":"geo"%'
@@ -999,7 +1020,42 @@ router.get('/geo/crawl/status', async (req, res) => {
         `,
       )
       .get();
-    res.json({ geo_crawl: latest ?? null });
+    const job = latest ?? null
+    if (!job) return res.json({ geo_crawl: null })
+
+    let resultMeta = null
+    try {
+      resultMeta = job.result_meta ? JSON.parse(job.result_meta) : null
+    } catch {
+      resultMeta = null
+    }
+
+    let params = null
+    try {
+      params = job.parameters ? JSON.parse(job.parameters) : null
+    } catch {
+      params = null
+    }
+
+    // Normalize shape for the AdminGeoCrawl UI.
+    res.json({
+      geo_crawl: {
+        id: job.id,
+        type: job.type,
+        status: job.status,
+        created_at: job.created_at,
+        started_at: job.started_at,
+        completed_at: job.completed_at,
+        error: job.error ?? null,
+        result_count: job.result_count ?? null,
+        // Friendly progress fields (best-effort)
+        processed: resultMeta?.processed ?? null,
+        total_zips: resultMeta?.total_zips ?? params?.max_zips ?? params?.maxZips ?? null,
+        inserted: resultMeta?.sources ?? job.result_count ?? null,
+        failed: resultMeta?.failed ?? null,
+        skipped: resultMeta?.skipped ?? null,
+      },
+    })
   } catch (error) {
     console.error('[admin/geo/crawl/status] Error:', error);
     res.status(500).json({ error: error.message });
@@ -1013,10 +1069,37 @@ router.post('/geo/crawl/start', async (req, res) => {
 
     // IMPORTANT: crawler_jobs.type is CHECK-constrained in production. Use an allowed type.
     // We tag the job with parameters.mode='geo' so it can be queried separately from other comprehensive runs.
+    const incoming = payload && typeof payload === 'object' ? payload : {}
+
+    // UI payload normalization:
+    // - AdminGeoCrawl sends `zips`, but the crawler expects `zip_list`.
+    // - Provide a sane `max_zips` default when a zip list is provided.
+    // - Enable local-resource discovery by default for Geo Crawl (new source discovery).
+    const zipList =
+      Array.isArray(incoming.zips) && incoming.zips.length > 0
+        ? incoming.zips
+        : Array.isArray(incoming.zip_list) && incoming.zip_list.length > 0
+          ? incoming.zip_list
+          : null
+
     const parameters = {
-      ...(payload && typeof payload === 'object' ? payload : {}),
+      ...incoming,
       mode: 'geo',
-    };
+      zip_list: zipList ?? undefined,
+      max_zips:
+        zipList && zipList.length > 0
+          ? zipList.length
+          : incoming.max_zips ?? incoming.maxZips ?? undefined,
+      // Feature toggles (crawler reads these)
+      discover_local_resources:
+        incoming.discover_local_resources ?? incoming.discoverLocalResources ?? true,
+      // Conservative defaults; can be overridden per request
+      overpass_radius_km: incoming.overpass_radius_km ?? 12,
+      overpass_max_results: incoming.overpass_max_results ?? 60,
+    }
+
+    // Avoid persisting UI-only keys.
+    delete parameters.zips
 
     const jobId = crypto.randomUUID();
     await req.db
@@ -1553,6 +1636,11 @@ router.post('/national-crawl/stop', async (req, res) => {
 router.get('/national-crawl/status', async (req, res) => {
   try {
     const db = req.db
+    // This endpoint is polled by the Admin UI; prevent conditional GETs (304) which break JSON parsing.
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+    res.set('Pragma', 'no-cache')
+    res.set('Expires', '0')
+    res.set('Surrogate-Control', 'no-store')
     
     // Get current job status if running
     if (nationalCrawlJob) {
