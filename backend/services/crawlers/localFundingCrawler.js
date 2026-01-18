@@ -25,28 +25,47 @@ const calculateDistance = (lat1, lng1, lat2, lng2) => {
 
 const SEARCH_RADIUS_MILES = 50
 
-// Real funding source URLs to crawl
+// Real (and reliable) local resource URLs.
+//
+// IMPORTANT:
+// - The previous "Community Foundation Locator" source at cof.org is currently serving an invalid TLS cert
+//   for www.cof.org (observed in multiple environments), which caused local crawling to return 0 results.
+// - We intentionally avoid insecure TLS bypasses (rejectUnauthorized=false) in production code.
+// - Instead, we provide durable directory-style local resources that can always be returned when a profile
+//   has location signals (ZIP/state), and we keep the door open for richer sources later.
 const LOCAL_FUNDING_SOURCES = [
   {
-    name: 'Community Foundation Locator',
-    baseUrl: 'https://www.cof.org/foundation-locator',
-    type: 'community_foundation'
-  },
-  {
-    name: 'United Way',
+    name: 'United Way Locator',
     baseUrl: 'https://www.unitedway.org/find-your-united-way',
-    type: 'united_way'
+    type: 'united_way',
   },
   {
-    name: 'Local Grants Network',
-    baseUrl: 'https://www.grants.gov/search-grants',
-    params: { locationType: 'local' }
-  }
+    name: 'Feeding America Food Bank Locator',
+    baseUrl: 'https://www.feedingamerica.org/find-your-local-foodbank',
+    type: 'food_bank',
+  },
+  {
+    name: 'Community Action Partnership (CAP) Locator',
+    baseUrl: 'https://communityactionpartnership.com/find-a-cap/',
+    type: 'community_action',
+  },
+  {
+    name: 'HUD Public Housing Authority (PHA) Contacts',
+    baseUrl: 'https://www.hud.gov/program_offices/public_indian_housing/pha/contacts',
+    type: 'housing_authority',
+  },
+  {
+    name: 'Benefits.gov (local benefits search entry)',
+    baseUrl: 'https://www.benefits.gov',
+    type: 'benefits_gov',
+  },
 ]
 
 export async function crawlLocalFunding(profile, options = {}) {
   const results = []
   const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 50
+  const includeDirectoryResources =
+    String(options.include_directory_resources ?? 'true').toLowerCase() !== 'false'
   
   // CRITICAL: Use signals for all profile data
   const signals = profile?.signals
@@ -60,25 +79,54 @@ export async function crawlLocalFunding(profile, options = {}) {
   const profileState = signals.location?.state || profile.state
   const profileCity = signals.location?.city || profile.city
   
-  if (!targetZip) {
-    console.warn('[LocalFundingCrawler] No ZIP code found in profile signals')
-    return results
-  }
-
   // Build search keywords from ALL profile signals
   const searchKeywords = buildSearchKeywords(profile, 25)
 
-  console.log(`[LocalFundingCrawler] Searching within ${SEARCH_RADIUS_MILES} miles of ${targetZip}`)
-  console.log(`[LocalFundingCrawler] Location: ${profileCity}, ${profileState} ${targetZip}`)
+  if (targetZip) {
+    console.log(`[LocalFundingCrawler] Searching within ${SEARCH_RADIUS_MILES} miles of ${targetZip}`)
+    console.log(`[LocalFundingCrawler] Location: ${profileCity}, ${profileState} ${targetZip}`)
+  } else {
+    console.log('[LocalFundingCrawler] No ZIP code found; returning directory-style local resources only')
+    console.log(`[LocalFundingCrawler] Location: ${profileCity || '(unknown city)'}, ${profileState || '(unknown state)'}`)
+  }
   console.log(`[LocalFundingCrawler] Using ${searchKeywords.length} keywords from profile signals`)
   console.log(`[LocalFundingCrawler] Keywords: ${searchKeywords.slice(0, 10).join(', ')}...`)
   console.log(`[LocalFundingCrawler] Interests: ${Array.from(signals.interests || []).slice(0, 5).join(', ')}`)
   console.log(`[LocalFundingCrawler] Demographics: ${Array.from(signals.demographics || []).join(', ')}`)
 
-  // Get coordinates for ZIP code
-  const coords = await getZipCoordinates(targetZip)
-  if (!coords) {
-    console.error('[LocalFundingCrawler] Could not get coordinates for ZIP:', targetZip)
+  // ZIP-based coordinates (optional)
+  const coords = targetZip ? await getZipCoordinates(targetZip) : null
+
+  // Always provide durable directory-style results first (no scraping required).
+  // This prevents "0 results" when any single upstream site changes, is blocked, or is down.
+  if (includeDirectoryResources) {
+    const directoryOpps = buildDirectoryResources({
+      profile,
+      coords,
+      profileState,
+      profileCity,
+      targetZip,
+      sources: LOCAL_FUNDING_SOURCES,
+    })
+    for (const opp of directoryOpps) {
+      // Directory resources are intentionally "always relevant" once shown:
+      // they are not a competitive opportunity match, they are authoritative entry points.
+      results.push({
+        ...opp,
+        match_score: Math.max(minMatchScore, 85),
+        match_reasons: ['Local resource directory (reliable entry point)'],
+        matched_signals: [],
+        distance_miles: 0,
+        crawler_type: 'local_funding',
+        source: opp.source ?? 'Local Resource Directory',
+        state: opp.state || profileState,
+      })
+    }
+  }
+
+  // If there is no ZIP or we couldn't resolve coordinates, don't attempt geo-radius crawling.
+  if (!targetZip || !coords) {
+    console.log(`[LocalFundingCrawler] Found ${results.length} local opportunities with ${minMatchScore}%+ match`)
     return results
   }
 
@@ -137,36 +185,129 @@ export async function crawlLocalFunding(profile, options = {}) {
   return results
 }
 
+function buildDirectoryResources({ profile, coords, profileState, profileCity, targetZip, sources }) {
+  const out = []
+  const signals = profile?.signals
+  const keywords = Array.from(signals?.keywordSet ?? []).slice(0, 12)
+  const city = profileCity || coords?.city || null
+  const state = profileState || coords?.state || null
+
+  for (const source of sources) {
+    if (!source?.type) continue
+    switch (source.type) {
+      case 'united_way':
+        out.push({
+          title: city && state ? `United Way near ${city}, ${state}` : 'United Way Locator (find local chapter)',
+          sponsor: 'United Way',
+          description:
+            'Find your local United Way chapter for community support, emergency assistance programs, and local partner referrals.',
+          url: source.baseUrl,
+          application_url: source.baseUrl,
+          source_url: source.baseUrl,
+          opportunity_type: 'program',
+          deadline_type: 'rolling',
+          is_national: false,
+          state,
+          categories: ['community', 'local', 'emergency_assistance'],
+          keywords: ['united way', 'emergency assistance', 'community', ...keywords],
+        })
+        break
+      case 'food_bank':
+        out.push({
+          title: city && state ? `Food Bank resources near ${city}, ${state}` : 'Food Bank Locator (Feeding America)',
+          sponsor: 'Feeding America',
+          description:
+            'Find local food bank partners and emergency food assistance resources near the profile ZIP.',
+          url: source.baseUrl,
+          application_url: source.baseUrl,
+          source_url: source.baseUrl,
+          opportunity_type: 'program',
+          deadline_type: 'rolling',
+          is_national: false,
+          state,
+          categories: ['food', 'local', 'emergency_assistance'],
+          keywords: ['food bank', 'food assistance', 'snap', ...keywords],
+        })
+        break
+      case 'community_action':
+        out.push({
+          title:
+            city && state
+              ? `Community Action Agency near ${city}, ${state}`
+              : 'Community Action Agency Locator (CAP)',
+          sponsor: 'Community Action Partnership',
+          description:
+            'Locate a Community Action Agency (CAA/CAP) that can help with housing, utilities, food, and employment support.',
+          url: source.baseUrl,
+          application_url: source.baseUrl,
+          source_url: source.baseUrl,
+          opportunity_type: 'program',
+          deadline_type: 'rolling',
+          is_national: false,
+          state,
+          categories: ['utilities', 'housing', 'local', 'community'],
+          keywords: ['community action', 'utilities assistance', 'rent assistance', ...keywords],
+        })
+        break
+      case 'housing_authority': {
+        const stateUrl =
+          state && typeof state === 'string' && state.length === 2
+            ? `${source.baseUrl}/${state.toLowerCase()}`
+            : source.baseUrl
+        out.push({
+          title: state ? `Housing Authority contacts (${state})` : 'Housing Authority contacts (HUD PHA directory)',
+          sponsor: 'HUD',
+          description:
+            'Public Housing Authority contacts (Section 8 vouchers, affordable housing programs, and related housing assistance).',
+          url: stateUrl,
+          application_url: stateUrl,
+          source_url: stateUrl,
+          opportunity_type: 'program',
+          deadline_type: 'rolling',
+          is_national: false,
+          state,
+          categories: ['housing', 'section8', 'local'],
+          keywords: ['housing authority', 'section 8', 'voucher', ...keywords],
+        })
+        break
+      }
+      case 'benefits_gov':
+        out.push({
+          title: 'Benefits.gov (find state/local benefits)',
+          sponsor: 'Benefits.gov',
+          description:
+            'Search for benefits and assistance programs that may apply (including state-specific and local programs).',
+          url: source.baseUrl,
+          application_url: source.baseUrl,
+          source_url: source.baseUrl,
+          opportunity_type: 'program',
+          deadline_type: 'rolling',
+          is_national: true,
+          state,
+          categories: ['benefits', 'government_assistance'],
+          keywords: ['benefits', 'assistance', 'eligibility', ...keywords],
+        })
+        break
+      default:
+        break
+    }
+  }
+
+  // De-dupe by URL/title.
+  const seen = new Set()
+  return out.filter((row) => {
+    const key = `${row?.url ?? ''}::${row?.title ?? ''}`
+    if (!key || seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
 async function searchLocalSource(source, coords, profile, searchKeywords) {
   const opportunities = []
   
-  if (source.type === 'community_foundation') {
-    try {
-      // Search community foundations near coordinates
-      const url = `${source.baseUrl}?lat=${coords.lat}&lng=${coords.lng}&radius=50`
-      const response = await getWithRetry(url, {}, { timeoutMs: 10000, retries: 2 })
-      const $ = cheerio.load(response.data)
-      
-      $('.foundation-result').each((i, elem) => {
-        const $elem = $(elem)
-        opportunities.push({
-          title: $elem.find('.foundation-name').text().trim(),
-          sponsor: $elem.find('.foundation-org').text().trim(),
-          description: $elem.find('.foundation-desc').text().trim(),
-          url: $elem.find('a').attr('href'),
-          amount_min: parseAmount($elem.find('.grant-range-min').text()),
-          amount_max: parseAmount($elem.find('.grant-range-max').text()),
-          deadline: $elem.find('.deadline').text().trim(),
-          eligibility: $elem.find('.eligibility').text().trim(),
-          latitude: parseFloat($elem.data('lat')),
-          longitude: parseFloat($elem.data('lng')),
-          keywords: ['community foundation', 'local grant'],
-        })
-      })
-    } catch (error) {
-      console.error(`[LocalFundingCrawler] Community foundation search error:`, error.message)
-    }
-  }
+  // NOTE: Network scraping for local sources is intentionally minimal for reliability.
+  // Directory-style results are handled in buildDirectoryResources() above.
   
   // Add more source-specific crawling logic here
   

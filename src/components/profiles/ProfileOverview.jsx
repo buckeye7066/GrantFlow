@@ -53,7 +53,8 @@ function isSectionApplicable(sectionKey, config, profile) {
   const appliesTo = config.applies_to ?? config.appliesTo ?? null
   if (!Array.isArray(appliesTo) || appliesTo.length === 0) return true
   const primaryType = profile?.primary_type ?? profile?.primaryType ?? null
-  if (!primaryType) return false
+  // If a profile doesn't have a primary type yet, do not hide sections.
+  if (!primaryType) return true
   return appliesTo.includes(primaryType)
 }
 
@@ -296,10 +297,11 @@ export default function ProfileOverview({
   }
   const gridColumnsClass = columnMap[dashboardPrefs.layoutColumns] ?? "md:grid-cols-2"
   const gapClass = dashboardPrefs.layoutStyle === "compact" ? "gap-4" : "gap-6"
+  const allSectionKeys = useMemo(() => Object.keys(SECTION_CONFIG), [])
   const applicableSectionKeys = useMemo(() => {
-    return Object.keys(SECTION_CONFIG).filter((key) => isSectionApplicable(key, SECTION_CONFIG[key], profile))
-  }, [profile])
-  const totalSections = applicableSectionKeys.length
+    return allSectionKeys.filter((key) => isSectionApplicable(key, SECTION_CONFIG[key], profile))
+  }, [allSectionKeys, profile])
+  const totalSections = allSectionKeys.length
   const sectionsMap = useMemo(() => {
     const map = new Map()
     ;(profile.sections ?? []).forEach((section) => {
@@ -411,7 +413,12 @@ export default function ProfileOverview({
     })
   }
 
-  const orderedSectionKeys = applicableSectionKeys
+  const orderedSectionKeys = useMemo(() => {
+    const applicable = new Set(applicableSectionKeys)
+    const applicableFirst = allSectionKeys.filter((key) => applicable.has(key))
+    const rest = allSectionKeys.filter((key) => !applicable.has(key))
+    return [...applicableFirst, ...rest]
+  }, [allSectionKeys, applicableSectionKeys])
 
   return (
     <div className="space-y-10">

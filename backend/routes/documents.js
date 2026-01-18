@@ -2,6 +2,7 @@ import express from 'express';
 import crypto from 'crypto';
 import multer from 'multer';
 import fs from 'fs';
+import net from 'net';
 import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import rateLimit from 'express-rate-limit';
@@ -127,13 +128,76 @@ function runUploadSingle(fieldName) {
   };
 }
 
+function isPrivateIpAddress(ip) {
+  // IPv4 private ranges: 10/8, 172.16/12, 192.168/16, 127/8, 169.254/16
+  const v = net.isIP(ip);
+  if (v === 4) {
+    const parts = ip.split('.').map((n) => Number(n));
+    if (parts.length !== 4 || parts.some((n) => Number.isNaN(n))) return true;
+    const [a, b] = parts;
+    if (a === 10) return true;
+    if (a === 127) return true;
+    if (a === 0) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    return false;
+  }
+
+  // IPv6 loopback/link-local/ULA
+  if (v === 6) {
+    const lower = ip.toLowerCase();
+    if (lower === '::1') return true; // loopback
+    if (lower.startsWith('fe80:')) return true; // link-local
+    if (lower.startsWith('fc') || lower.startsWith('fd')) return true; // unique local
+    return false;
+  }
+
+  return true;
+}
+
+function assertRemoteUrlAllowed(rawUrl) {
+  let parsed;
+  try {
+    parsed = new URL(String(rawUrl));
+  } catch {
+    throw new Error('Invalid URL');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('Only http(s) URLs are supported');
+  }
+
+  const hostname = (parsed.hostname || '').toLowerCase().trim();
+  if (!hostname) throw new Error('Invalid URL host');
+  if (hostname === 'localhost' || hostname === '0.0.0.0' || hostname.endsWith('.local')) {
+    throw new Error('URL host is not allowed');
+  }
+  if (net.isIP(hostname)) {
+    if (isPrivateIpAddress(hostname)) {
+      throw new Error('URL host is not allowed');
+    }
+  }
+
+  return parsed;
+}
+
 async function downloadRemoteFileToUploads({ url, req }) {
+  // Prevent obvious SSRF targets. (We intentionally do not resolve DNS here.)
+  const initial = assertRemoteUrlAllowed(url);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20_000);
   try {
-    const resp = await fetch(url, { signal: controller.signal });
+    const resp = await fetch(initial.toString(), { signal: controller.signal });
     if (!resp.ok) {
       throw new Error(`Unable to download file (${resp.status})`);
+    }
+    // If redirects occurred, validate the final URL too.
+    try {
+      if (resp.url) {
+        assertRemoteUrlAllowed(resp.url);
+      }
+    } catch {
+      throw new Error('Final URL host is not allowed');
     }
     const contentType = resp.headers.get('content-type') || 'application/octet-stream';
     const contentLength = Number(resp.headers.get('content-length') || '0');
