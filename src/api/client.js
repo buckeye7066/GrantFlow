@@ -672,6 +672,16 @@ export const {
 } = client.entities;
 
 export const getProfileSectionsClient = (profileId) => client.profileSectionsClient(profileId);
-export const apiFetch = (...args) => client.fetch(...args);
+// `apiFetch` is the preferred low-level fetch helper used throughout the app.
+// IMPORTANT: Some UI surfaces call `apiFetch.get/post/...` (Base44-style) — keep those available.
+export function apiFetch(...args) {
+  return client.fetch(...args);
+}
+
+apiFetch.get = (endpoint, options = {}) => client.get(endpoint, options)
+apiFetch.delete = (endpoint, options = {}) => client.delete(endpoint, options)
+apiFetch.post = (endpoint, data, options = {}) => client.post(endpoint, data, options)
+apiFetch.put = (endpoint, data, options = {}) => client.put(endpoint, data, options)
+apiFetch.patch = (endpoint, data, options = {}) => client.patch(endpoint, data, options)
 
 export default client;

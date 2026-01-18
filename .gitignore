@@ -40,4 +40,7 @@ seed/*.db-journal
 backend/uploads/
 backend/temp_images/
 public/*.mp4
+# Some mp4 assets in this repo have a space in ". mp4" which doesn't match "*.mp4"
+public/*mp4
+public/*mp4*
 

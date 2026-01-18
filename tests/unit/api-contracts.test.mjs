@@ -101,7 +101,8 @@ test('backend /api/health contract + request id header', async () => {
 
     const body = await res.json()
     assert.equal(typeof body, 'object')
-    assert.ok(['ok', 'warning'].includes(body.status), `expected status ok|warning, got ${body.status}`)
+    // Backward compatible: some builds return "healthy" instead of "ok".
+    assert.ok(['ok', 'warning', 'healthy'].includes(body.status), `expected status ok|warning|healthy, got ${body.status}`)
   } finally {
     try {
       proc.kill('SIGTERM')
