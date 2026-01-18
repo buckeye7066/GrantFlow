@@ -1,5 +1,25 @@
 import { randomUUID } from 'crypto'
+import fs from 'fs'
+import path from 'path'
 import { DESIGNATED_PROFILES } from '../config/designatedProfiles.js'
+import { safeParseJSON } from './safeJson.js'
+
+function loadSectionsFromDataFile(dataFile) {
+  if (!dataFile) return null
+  try {
+    const resolved = path.isAbsolute(dataFile) ? dataFile : path.resolve(process.cwd(), dataFile)
+    if (!fs.existsSync(resolved)) return null
+    const raw = fs.readFileSync(resolved, 'utf8')
+    const parsed = safeParseJSON(raw, null)
+    if (!parsed || typeof parsed !== 'object') return null
+    const sections = parsed.sections ?? parsed.profile?.sections ?? null
+    if (!sections || typeof sections !== 'object') return null
+    return sections
+  } catch (error) {
+    console.warn('[ensureDesignatedProfiles] Failed to load data file:', dataFile, error?.message || error)
+    return null
+  }
+}
 
 export async function ensureDesignatedProfiles(db) {
   // Use a real transaction for both sqlite + postgres.
@@ -20,10 +40,7 @@ export async function ensureDesignatedProfiles(db) {
     const upsertSection = tx.prepare(`
       INSERT INTO profile_sections (id, profile_id, section_key, data, updated_by, updated_at)
       VALUES (?, ?, ?, ?, 'system-sync', CURRENT_TIMESTAMP)
-      ON CONFLICT(profile_id, section_key) DO UPDATE SET
-        data = excluded.data,
-        updated_by = 'system-sync',
-        updated_at = CURRENT_TIMESTAMP
+      ON CONFLICT(profile_id, section_key) DO NOTHING
     `)
 
     for (const profile of DESIGNATED_PROFILES) {
@@ -35,8 +52,9 @@ export async function ensureDesignatedProfiles(db) {
         tags: JSON.stringify(profile.tags ?? []),
       })
 
-      if (profile.sections) {
-        for (const [sectionKey, sectionData] of Object.entries(profile.sections)) {
+      const seededSections = profile.sections ?? loadSectionsFromDataFile(profile.data_file)
+      if (seededSections) {
+        for (const [sectionKey, sectionData] of Object.entries(seededSections)) {
           await upsertSection.run(randomUUID(), profile.id, sectionKey, JSON.stringify(sectionData ?? {}))
         }
       }
