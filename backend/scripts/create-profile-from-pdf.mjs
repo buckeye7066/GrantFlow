@@ -117,8 +117,8 @@ async function main() {
   // Store document
   const documentId = crypto.randomUUID();
   db.prepare(`
-    INSERT INTO documents (id, profile_id, name, type, extracted_text, processing_status, status, notes)
-    VALUES (?, ?, ?, 'profile_document', ?, 'completed', 'final', 'Uploaded for profile creation')
+    INSERT INTO documents (id, profile_id, name, type, extracted_text, processing_status, notes)
+    VALUES (?, ?, ?, 'profile_document', ?, 'completed', 'Uploaded for profile creation')
   `).run(documentId, profileId, path.basename(pdfPath), data.text);
   
   // Link document to profile

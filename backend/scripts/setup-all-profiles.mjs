@@ -87,9 +87,10 @@ for (const profile of profiles) {
       
       // Store document record
       const fileSize = fs.statSync(profile.pdfPath).size;
+      // Do not set documents.status on insert; rely on DB defaults.
       db.prepare(`
-        INSERT INTO documents (id, profile_id, name, type, file_path, file_url, file_size, mime_type, processing_status, status, notes)
-        VALUES (?, ?, ?, 'profile_document', ?, ?, ?, 'application/pdf', 'pending', 'final', 'Original application document - needs AI processing')
+        INSERT INTO documents (id, profile_id, name, type, file_path, file_url, file_size, mime_type, processing_status, notes)
+        VALUES (?, ?, ?, 'profile_document', ?, ?, ?, 'application/pdf', 'pending', 'Original application document - needs AI processing')
       `).run(
         docId,
         profile.id,

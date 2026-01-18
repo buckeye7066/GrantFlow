@@ -70,8 +70,8 @@ test('documentIngestion: fallback completes when OpenAI missing and updates univ
   const docId = 'd1'
   db.prepare(
     `
-      INSERT INTO documents (id, profile_id, name, type, extracted_text, status, university_application_id, university_application_name)
-      VALUES (?, ?, ?, ?, ?, 'draft', ?, ?)
+      INSERT INTO documents (id, profile_id, name, type, extracted_text, university_application_id, university_application_name)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `,
   ).run(
     docId,

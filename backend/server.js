@@ -265,6 +265,28 @@ async function repairMissingUploadAvatars({ db, uploadsDir }) {
   }
 }
 
+async function repairInvalidDocumentStatuses(db) {
+  // Postgres uses a CHECK constraint on documents.status; if any legacy rows exist (e.g. "processed"),
+  // *any* UPDATE touching that row will fail until status is repaired.
+  const allowed = ['draft', 'review', 'final', 'submitted']
+  try {
+    await db
+      .prepare(
+        `
+          UPDATE documents
+          SET status = 'draft',
+              updated_at = CURRENT_TIMESTAMP
+          WHERE status IS NOT NULL
+            AND status NOT IN ('draft','review','final','submitted')
+        `,
+      )
+      .run()
+  } catch (error) {
+    // Non-fatal: some deployments may not have the documents table yet.
+    console.warn('[startup] Failed to repair invalid document statuses:', error?.message || error)
+  }
+}
+
 // Serve static files from Vite build
 app.use(express.static(distPath));
 // Serve the SPA under the configured base path so production builds (base=/grantflow) work locally.
@@ -547,6 +569,7 @@ try {
 await ensureDesignatedProfiles(db)
 await linkAllProfilesToAdmin(db)
 await ensureUserPreferencesTable(db)
+await repairInvalidDocumentStatuses(db)
 await repairMissingUploadAvatars({ db, uploadsDir })
 
 // Check funding opportunities count and provide guidance
