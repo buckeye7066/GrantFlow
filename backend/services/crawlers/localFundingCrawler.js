@@ -95,7 +95,18 @@ export async function crawlLocalFunding(profile, options = {}) {
   console.log(`[LocalFundingCrawler] Demographics: ${Array.from(signals.demographics || []).join(', ')}`)
 
   // ZIP-based coordinates (optional)
-  const coords = targetZip ? await getZipCoordinates(targetZip) : null
+  let coords = null
+  if (targetZip) {
+    try {
+      coords = await getZipCoordinates(targetZip)
+      if (!coords) {
+        console.log(`[LocalFundingCrawler] Could not resolve coordinates for ZIP ${targetZip} - will use directory resources only`)
+      }
+    } catch (error) {
+      console.error(`[LocalFundingCrawler] Unexpected error resolving ZIP ${targetZip}:`, error)
+      // Continue with null coords - directory resources will still work
+    }
+  }
 
   // Always provide durable directory-style results first (no scraping required).
   // This prevents "0 results" when any single upstream site changes, is blocked, or is down.
@@ -146,6 +157,11 @@ export async function crawlLocalFunding(profile, options = {}) {
         // Calculate distance if coordinates available
         let distance = null
         if (opp.latitude && opp.longitude) {
+          if (!coords || !coords.lat || !coords.lng) {
+            console.warn(`[LocalFundingCrawler] Cannot calculate distance - profile coordinates missing`)
+            continue
+          }
+          
           distance = calculateDistance(coords.lat, coords.lng, opp.latitude, opp.longitude)
           if (distance > SEARCH_RADIUS_MILES) continue // Skip if too far
         }
@@ -177,7 +193,9 @@ export async function crawlLocalFunding(profile, options = {}) {
         }
       }
     } catch (error) {
-      console.error(`[LocalFundingCrawler] Error searching ${source.name}:`, error.message)
+      const errorMsg = error instanceof Error ? error.message : String(error)
+      console.error(`[LocalFundingCrawler] Error searching ${source.name}:`, errorMsg)
+      // Continue with other sources - don't let one source failure break entire crawl
     }
   }
 
@@ -325,35 +343,77 @@ function isLoanOrMatchingFund(opportunity) {
 }
 
 async function getZipCoordinates(zip) {
+  // Validate ZIP code format
+  if (!zip || typeof zip !== 'string' && typeof zip !== 'number') {
+    console.warn('[LocalFundingCrawler] Invalid ZIP code format:', zip)
+    return null
+  }
+
+  const zipStr = String(zip).trim()
+  if (!/^\d{5}$/.test(zipStr)) {
+    console.warn('[LocalFundingCrawler] ZIP code must be 5 digits:', zipStr)
+    return null
+  }
+
   try {
     // Prefer local dataset to avoid network flakiness and "skipped" ZIP handling.
-    const local = zipcodes.lookup(zip)
+    const local = zipcodes.lookup(zipStr)
     if (local) {
-      return {
+      const coords = {
         lat: parseFloat(local.latitude),
         lng: parseFloat(local.longitude),
         city: local.city,
         state: local.state
       }
+      
+      // Validate parsed coordinates
+      if (isNaN(coords.lat) || isNaN(coords.lng)) {
+        console.warn('[LocalFundingCrawler] Invalid coordinates from local dataset for ZIP:', zipStr)
+        return null
+      }
+      
+      console.log(`[LocalFundingCrawler] Resolved ZIP ${zipStr} to ${coords.city}, ${coords.state} (${coords.lat}, ${coords.lng}) using local dataset`)
+      return coords
     }
 
     // Use a geocoding service or database
-    const response = await getWithRetry(`https://api.zippopotam.us/us/${zip}`, {}, { timeoutMs: 5000, retries: 1 })
+    console.log(`[LocalFundingCrawler] ZIP ${zipStr} not in local dataset, trying geocoding service`)
+    const response = await getWithRetry(`https://api.zippopotam.us/us/${zipStr}`, {}, { timeoutMs: 5000, retries: 1 })
     if (response.data && response.data.places && response.data.places[0]) {
-      return {
+      const coords = {
         lat: parseFloat(response.data.places[0].latitude),
         lng: parseFloat(response.data.places[0].longitude),
         city: response.data.places[0]['place name'],
         state: response.data.places[0]['state abbreviation']
       }
+      
+      // Validate parsed coordinates
+      if (isNaN(coords.lat) || isNaN(coords.lng)) {
+        console.warn('[LocalFundingCrawler] Invalid coordinates from geocoding service for ZIP:', zipStr)
+        return null
+      }
+      
+      console.log(`[LocalFundingCrawler] Resolved ZIP ${zipStr} to ${coords.city}, ${coords.state} (${coords.lat}, ${coords.lng}) using geocoding service`)
+      return coords
     }
+    
+    console.warn('[LocalFundingCrawler] Geocoding service returned no data for ZIP:', zipStr)
+    return null
   } catch (error) {
     // Previously this threw and surfaced as a 500 at `/api/real-crawlers/run`.
     // Fail gracefully: return null so the caller can stop this crawler without crashing the whole run.
-    console.warn('[LocalFundingCrawler] Geocoding failed; returning 0 local results for this run:', error.message)
+    const errorMsg = error instanceof Error ? error.message : String(error)
+    const errorCode = error?.code || error?.response?.status
+    
+    if (errorCode === 'ENOTFOUND' || errorCode === 'ETIMEDOUT') {
+      console.warn(`[LocalFundingCrawler] Geocoding service unavailable (${errorCode}) for ZIP ${zipStr} - will use directory resources only`)
+    } else if (errorCode === 404) {
+      console.warn(`[LocalFundingCrawler] ZIP code not found: ${zipStr}`)
+    } else {
+      console.warn(`[LocalFundingCrawler] Geocoding failed for ZIP ${zipStr}:`, errorMsg)
+    }
     return null
   }
-  return null
 }
 
 function parseAmount(amountStr) {

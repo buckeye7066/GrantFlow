@@ -101,16 +101,33 @@ function calculateLocalMatch(opp, profileState, signals) {
 export async function processLocalCrawlerJob({ db, job, dataDir, profileContext }) {
   console.log('[localCrawler] Starting local opportunity search...')
 
+  // Validate required inputs
+  if (!db) {
+    throw new Error('Database connection is required for local crawler')
+  }
+  
   if (!profileContext?.profile) {
-    throw new Error('Local crawler requires a profile context')
+    throw new Error('Local crawler requires a profile context with profile data')
+  }
+  
+  if (!dataDir || typeof dataDir !== 'string') {
+    throw new Error('Data directory path is required for local crawler')
   }
   
   const parameters = job.parameters ?? {}
   const matchThreshold = parameters.match_threshold || 60
   const maxResults = parameters.max_results || 30
   
-  // Build profile signals
-  const signals = buildProfileSignals(profileContext)
+  // Build profile signals with error handling
+  let signals
+  try {
+    signals = buildProfileSignals(profileContext)
+  } catch (error) {
+    console.error('[localCrawler] Error building profile signals:', error)
+    throw new Error(`Failed to build profile signals: ${error.message}`)
+  }
+  
+  // Extract state with multiple fallback options
   const profileState =
     profileContext?.profile?.state ||
     signals?.location?.state ||
@@ -119,37 +136,65 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
   
   if (!profileState) {
     console.warn('[localCrawler] No state specified - cannot find local opportunities')
-    return { evaluated: 0, inserted: 0, opportunityLogs: [] }
+    return { 
+      evaluated: 0, 
+      inserted: 0, 
+      opportunityLogs: [],
+      error: 'No state information available in profile'
+    }
+  }
+  
+  // Validate state format
+  if (typeof profileState !== 'string' || profileState.trim().length !== 2) {
+    console.warn('[localCrawler] Invalid state format:', profileState)
+    return { 
+      evaluated: 0, 
+      inserted: 0, 
+      opportunityLogs: [],
+      error: `Invalid state format: ${profileState} (expected 2-letter state code)`
+    }
   }
   
   console.log('[localCrawler] Profile state:', profileState)
   console.log('[localCrawler] Profile signals:', summarizeProfileSignals(signals))
   
   // Load local opportunities from data file
-  const localOpps = loadJSON(join(dataDir, 'local_opportunities.json'))
-  console.log(`[localCrawler] Loaded ${localOpps.length} local opportunities`)
+  let localOpps = []
+  try {
+    localOpps = loadJSON(join(dataDir, 'local_opportunities.json'))
+    console.log(`[localCrawler] Loaded ${localOpps.length} local opportunities`)
+  } catch (error) {
+    console.warn('[localCrawler] Could not load local opportunities file:', error.message)
+    // Continue with empty array - will try database next
+  }
   
   // Also check database for local opportunities
-  const activePredicate = db?.dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1'
-  const noMatchPredicate =
-    db?.dialect === 'postgres'
-      ? '(requires_match IS NULL OR requires_match = FALSE)'
-      : '(requires_match = 0 OR requires_match IS NULL)'
+  let dbOpps = []
+  try {
+    const activePredicate = db?.dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1'
+    const noMatchPredicate =
+      db?.dialect === 'postgres'
+        ? '(requires_match IS NULL OR requires_match = FALSE)'
+        : '(requires_match = 0 OR requires_match IS NULL)'
 
-  const dbOpps = await db
-    .prepare(
-      `
-        SELECT * FROM funding_opportunities 
-        WHERE ${activePredicate}
-        AND state = ?
-        AND ${noMatchPredicate}
-        AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
-        LIMIT 100
-      `,
-    )
-    .all(profileState)
-  
-  console.log(`[localCrawler] Found ${dbOpps.length} local opportunities in database`)
+    dbOpps = await db
+      .prepare(
+        `
+          SELECT * FROM funding_opportunities 
+          WHERE ${activePredicate}
+          AND state = ?
+          AND ${noMatchPredicate}
+          AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
+          LIMIT 100
+        `,
+      )
+      .all(profileState)
+    
+    console.log(`[localCrawler] Found ${dbOpps.length} local opportunities in database`)
+  } catch (error) {
+    console.error('[localCrawler] Error querying database for opportunities:', error.message)
+    // Continue with localOpps only - don't fail if DB query fails
+  }
   
   // Combine and dedupe
   const seenTitles = new Set()
