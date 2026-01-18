@@ -48,6 +48,7 @@ import { initializeFeatureFlags } from './services/featureFlagService.js';
 import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from './services/auditService.js';
 import { decryptRuntimeSecret } from './utils/runtimeSecrets.js';
 import { seedBaselineFromRepo } from './utils/seedBaselineFromRepo.js';
+import { assertFundingApiKeys, getFundingApiKeyPresence } from './src/config/apiKeys.js';
 
 // Validate critical environment variables at startup.
 // NOTE: OpenAI is intentionally OPTIONAL for core app flows (auth/profile/opportunities).
@@ -64,6 +65,17 @@ if (missingEnvVars.length > 0) {
   } else {
     console.warn('WARNING: Running in non-production mode without all required environment variables.');
   }
+}
+
+// Funding API keys (safe presence only). Never print key values.
+try {
+  console.info('[funding-api-keys] presence', getFundingApiKeyPresence())
+  // Enforced only when FUNDING_APIS_REQUIRE_KEYS=true
+  assertFundingApiKeys()
+} catch (error) {
+  // If enforcement is OFF, assertFundingApiKeys returns and we never land here.
+  // If enforcement is ON and we are not exiting (non-prod), we still want a clear warning.
+  console.warn('[funding-api-keys] startup check failed:', error?.message || String(error))
 }
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null;

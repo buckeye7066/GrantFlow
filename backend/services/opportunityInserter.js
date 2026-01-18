@@ -30,6 +30,12 @@ function deriveRecordOrigin(opportunity) {
   return 'live_crawl'
 }
 
+function normalizeDateLikeOrNull(value) {
+  if (value == null) return null
+  if (typeof value === 'string' && value.trim() === '') return null
+  return value
+}
+
 export function upsertFundingOpportunity(db, opportunity) {
   const source = opportunity.source ?? 'crawler'
   const sourceId =
@@ -87,7 +93,8 @@ export function upsertFundingOpportunity(db, opportunity) {
         ? opportunity.amount_max
         : null,
     amount_description: opportunity.amount_description ?? null,
-    deadline: opportunity.deadline ?? null,
+    // Postgres rejects empty-string dates (e.g. ""), so normalize to null.
+    deadline: normalizeDateLikeOrNull(opportunity.deadline),
     deadline_type: opportunity.deadline_type ?? null,
     application_url: opportunity.application_url ?? null,
     is_national: isNational ? 1 : 0,
@@ -96,7 +103,7 @@ export function upsertFundingOpportunity(db, opportunity) {
     keywords: JSON.stringify(ensureArray(opportunity.keywords)),
     opportunity_type: opportunity.opportunity_type ?? 'grant',
     type: opportunity.type ?? 'OPPORTUNITY',
-    last_verified_at: opportunity.last_verified_at ?? null,
+    last_verified_at: normalizeDateLikeOrNull(opportunity.last_verified_at),
     profile_id: opportunity.profile_id ?? null,
     requires_501c3: opportunity.requires_501c3 ? 1 : 0,
     requires_match: opportunity.requires_match ? 1 : 0,

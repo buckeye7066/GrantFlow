@@ -150,8 +150,8 @@ function mergeSectionData(existing = {}, incoming = {}) {
   return { data: merged, updatedFields }
 }
 
-function upsertProfileSection(db, profileId, sectionKey, data, documentId) {
-  db.prepare(
+async function upsertProfileSection(db, profileId, sectionKey, data, documentId) {
+  await db.prepare(
     `
       INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
       VALUES (?, ?, ?, ?)
@@ -178,15 +178,13 @@ export async function processDocumentIngestionJob({
     throw new Error('document_ingest job missing document_id parameter')
   }
 
-  const document = db
-    .prepare('SELECT * FROM documents WHERE id = ?')
-    .get(documentId)
+  const document = await db.prepare('SELECT * FROM documents WHERE id = ?').get(documentId)
 
   if (!document) {
     throw new Error(`Document ${documentId} not found`)
   }
 
-  db.prepare(
+  await db.prepare(
     'UPDATE documents SET processing_status = ?, processing_error = NULL WHERE id = ?',
   ).run('processing', documentId)
 
@@ -206,7 +204,9 @@ export async function processDocumentIngestionJob({
         ocrLanguage: 'eng',
       })
       if (result?.text) {
-        db.prepare('UPDATE documents SET extracted_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
+        await db
+          .prepare('UPDATE documents SET extracted_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+          .run(
           result.text,
           documentId,
         )
@@ -238,7 +238,7 @@ export async function processDocumentIngestionJob({
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'AI parsing unavailable (missing API key).'
-      db.prepare(
+      await db.prepare(
         `
           UPDATE documents
           SET processing_status = 'failed',
@@ -272,10 +272,9 @@ export async function processDocumentIngestionJob({
           mimeType: document.mime_type,
         })
         if (visionText) {
-          db.prepare('UPDATE documents SET extracted_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
-            visionText,
-            documentId,
-          )
+          await db
+            .prepare('UPDATE documents SET extracted_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            .run(visionText, documentId)
           document.extracted_text = visionText
           docExcerpt = truncateText(document.extracted_text ?? document.notes ?? '', 5000)
         }
@@ -287,7 +286,7 @@ export async function processDocumentIngestionJob({
     if (!docExcerpt) {
       const message =
         'No extractable text found for this document. If it is scanned, upload a JPG/PNG version to enable OCR.'
-      db.prepare(
+      await db.prepare(
         `
           UPDATE documents
           SET processing_status = 'failed',
@@ -347,7 +346,7 @@ export async function processDocumentIngestionJob({
         const { data: merged, updatedFields } = mergeSectionData(existing, suggestion)
 
         if (updatedFields.size > 0) {
-          upsertProfileSection(db, profile.id, sectionKey, merged, document.id)
+          await upsertProfileSection(db, profile.id, sectionKey, merged, document.id)
           sections[sectionKey] = merged
           updates.push({
             section_key: sectionKey,
@@ -373,7 +372,7 @@ export async function processDocumentIngestionJob({
 
     if (fatalOpenAIError) {
       const message = `AI parsing failed: ${fatalOpenAIError}`
-      db.prepare(
+      await db.prepare(
         `
           UPDATE documents
           SET processing_status = 'failed',
@@ -416,14 +415,17 @@ export async function processDocumentIngestionJob({
       total_sections_updated: updates.length,
     }
 
-    db.prepare(
+    await db.prepare(
       `
         UPDATE documents
         SET processing_status = ?,
             ai_summary = ?,
             ai_sections = ?,
             processing_error = NULL,
-            status = 'processed'
+            status = CASE
+              WHEN status = 'draft' THEN 'review'
+              ELSE status
+            END
         WHERE id = ?
       `,
     ).run(status, summary, JSON.stringify(aiSectionsLog, null, 2), documentId)
@@ -437,7 +439,7 @@ export async function processDocumentIngestionJob({
       result_meta: resultMeta,
     }
   } catch (error) {
-    db.prepare(
+    await db.prepare(
       `
         UPDATE documents
         SET processing_status = 'failed',
