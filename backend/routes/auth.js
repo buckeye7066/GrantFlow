@@ -1370,15 +1370,25 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       error: emailSent ? null : 'email_delivery_failed_or_unconfigured',
     }).catch(() => {})
 
-    // ALWAYS include preview code when email wasn't sent (regardless of environment)
-    // This ensures users can always log in even if email service is down
+    // Preview code rules:
+    // - ALWAYS include when email wasn't sent (ensures login continuity during email outages)
+    // - Include in non-production for developer ergonomics
+    // - In production, ONLY allow preview for the admin email when explicitly enabled
+    //   via AUTH_ALLOW_PREVIEW_CODE_IN_PROD=true (for emergency debugging)
+    const allowAdminPreviewInProd =
+      process.env.NODE_ENV === 'production' &&
+      process.env.AUTH_ALLOW_PREVIEW_CODE_IN_PROD === 'true' &&
+      isAdminEmail(email)
+
     if (!emailSent) {
       responseData.previewCode = code
       responseData.notice = 'Email service is not configured or unavailable. Use the preview code below to continue.'
-    } else if (process.env.NODE_ENV !== 'production') {
-      // Also include in development even if email was sent
+    } else if (process.env.NODE_ENV !== 'production' || allowAdminPreviewInProd) {
       responseData.previewCode = code
-      responseData.notice = 'Development mode: Code included for testing'
+      responseData.notice =
+        process.env.NODE_ENV !== 'production'
+          ? 'Development mode: Code included for testing'
+          : 'Admin preview enabled for production debugging (disable AUTH_ALLOW_PREVIEW_CODE_IN_PROD after use).'
     }
 
     console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent)
