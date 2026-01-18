@@ -196,6 +196,43 @@ function normalizeSqliteArgs(args) {
   return args.map(normalizeSqliteValue)
 }
 
+function formatPgSyntaxSnippet({ sql, position }) {
+  const rawSql = String(sql || '')
+  const pos = Number(position)
+  if (!rawSql || !Number.isFinite(pos) || pos <= 0) return null
+
+  // Postgres positions are 1-based character offsets.
+  const index = Math.max(0, Math.min(rawSql.length, pos - 1))
+  const window = 80
+  const start = Math.max(0, index - window)
+  const end = Math.min(rawSql.length, index + window)
+
+  const snippet = rawSql
+    .slice(start, end)
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  return snippet ? `…${snippet}…` : null
+}
+
+function decoratePgErrorWithSqlSnippet(error, sql) {
+  const code = error?.code ? String(error.code) : null
+  if (code !== '42601') return error // syntax_error
+
+  const snippet = formatPgSyntaxSnippet({ sql, position: error?.position })
+  if (!snippet) return error
+
+  const baseMessage = error instanceof Error ? error.message : String(error)
+  const nextMessage = `${baseMessage} (sql_snippet=${snippet})`
+
+  if (error instanceof Error) {
+    error.message = nextMessage
+    return error
+  }
+
+  return new Error(nextMessage)
+}
+
 class SqliteDb {
   constructor(sqlitePath) {
     this.dialect = 'sqlite';
@@ -266,27 +303,39 @@ class PostgresTx {
           hasNamed && isObjectBindings(args)
             ? bindingsToValues(converted.names, args[0])
             : toParamArray(args);
-        const res = await this._client.query(converted.text, values);
-        return res.rows[0];
+        try {
+          const res = await this._client.query(converted.text, values);
+          return res.rows[0];
+        } catch (error) {
+          throw decoratePgErrorWithSqlSnippet(error, converted.text)
+        }
       },
       all: async (...args) => {
         const values =
           hasNamed && isObjectBindings(args)
             ? bindingsToValues(converted.names, args[0])
             : toParamArray(args);
-        const res = await this._client.query(converted.text, values);
-        return res.rows;
+        try {
+          const res = await this._client.query(converted.text, values);
+          return res.rows;
+        } catch (error) {
+          throw decoratePgErrorWithSqlSnippet(error, converted.text)
+        }
       },
       run: async (...args) => {
         const values =
           hasNamed && isObjectBindings(args)
             ? bindingsToValues(converted.names, args[0])
             : toParamArray(args);
-        const res = await this._client.query(converted.text, values);
-        return {
-          changes: res.rowCount ?? 0,
-          lastInsertRowid: null,
-        };
+        try {
+          const res = await this._client.query(converted.text, values);
+          return {
+            changes: res.rowCount ?? 0,
+            lastInsertRowid: null,
+          };
+        } catch (error) {
+          throw decoratePgErrorWithSqlSnippet(error, converted.text)
+        }
       },
     };
   }
@@ -315,22 +364,34 @@ class PostgresDb {
     return {
       get: async (...args) => {
         const values = hasNamed && isObjectBindings(args) ? bindingsToValues(converted.names, args[0]) : toParamArray(args);
-        const res = await this._pool.query(converted.text, values);
-        return res.rows[0];
+        try {
+          const res = await this._pool.query(converted.text, values);
+          return res.rows[0];
+        } catch (error) {
+          throw decoratePgErrorWithSqlSnippet(error, converted.text)
+        }
       },
       all: async (...args) => {
         const values = hasNamed && isObjectBindings(args) ? bindingsToValues(converted.names, args[0]) : toParamArray(args);
-        const res = await this._pool.query(converted.text, values);
-        return res.rows;
+        try {
+          const res = await this._pool.query(converted.text, values);
+          return res.rows;
+        } catch (error) {
+          throw decoratePgErrorWithSqlSnippet(error, converted.text)
+        }
       },
       run: async (...args) => {
         const values = hasNamed && isObjectBindings(args) ? bindingsToValues(converted.names, args[0]) : toParamArray(args);
-        const res = await this._pool.query(converted.text, values);
-        // better-sqlite3 shape compatibility (best-effort)
-        return {
-          changes: res.rowCount ?? 0,
-          lastInsertRowid: null,
-        };
+        try {
+          const res = await this._pool.query(converted.text, values);
+          // better-sqlite3 shape compatibility (best-effort)
+          return {
+            changes: res.rowCount ?? 0,
+            lastInsertRowid: null,
+          };
+        } catch (error) {
+          throw decoratePgErrorWithSqlSnippet(error, converted.text)
+        }
       },
     };
   }

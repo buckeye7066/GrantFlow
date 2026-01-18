@@ -8,8 +8,22 @@ import { validatePagination } from '../utils/validation.js';
 import { DEFAULT_OPENAI_MODEL, OPENAI_TIMEOUT_MS, MAX_PROMPT_LENGTH } from '../config/constants.js';
 import { calculateMatchScore } from '../services/matchingEngine.js';
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';
+import {
+  ensureGrantAccess,
+  ensureOrganizationAccess,
+  getAccessibleOrganizationIds,
+  isAdminUser,
+  requireAuthenticatedUser,
+} from '../utils/accessControl.js'
 
 const router = express.Router();
+
+// All AI endpoints are authenticated; these endpoints can expose profile/org/grant context.
+router.use((req, res, next) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  return next()
+})
 
 function getOpenAI() {
   return createOpenAIClient().openai;
@@ -168,6 +182,8 @@ router.post('/match', async (req, res) => {
     if (!profile_id) {
       return res.status(400).json({ error: 'profile_id is required' });
     }
+
+    if (!(await ensureOrganizationAccess(req, res, String(profile_id)))) return
     
     // Get the organization profile
     const profile = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(profile_id);
@@ -314,6 +330,10 @@ router.post('/match/ai', async (req, res) => {
     const openai = getOpenAIOptional();
     
     // Get the profile
+    if (!profile_id) {
+      return res.status(400).json({ error: 'profile_id is required' })
+    }
+    if (!(await ensureOrganizationAccess(req, res, String(profile_id)))) return
     const profile = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(profile_id);
     if (!profile) {
       return res.status(404).json({ error: 'Profile not found' });
@@ -459,6 +479,12 @@ Return ONLY valid JSON in this format:
 router.post('/generate/proposal', async (req, res) => {
   try {
     const { grant_id, section, prompt: userPrompt } = req.body;
+
+    if (!grant_id) {
+      return res.status(400).json({ error: 'grant_id is required' })
+    }
+    const grantAccess = await ensureGrantAccess(req, res, String(grant_id))
+    if (!grantAccess) return
     
     // Get grant details
     const grant = await req.db.prepare(`
@@ -525,6 +551,9 @@ Generate a well-structured, compelling ${section || 'narrative'} of about 300-50
 router.post('/analyze/eligibility', async (req, res) => {
   try {
     const { profile_id, opportunity_id } = req.body;
+
+    if (!profile_id) return res.status(400).json({ error: 'profile_id is required' })
+    if (!(await ensureOrganizationAccess(req, res, String(profile_id)))) return
     
     const profile = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(profile_id);
     const opportunity = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunity_id);
@@ -604,6 +633,7 @@ Return as JSON:
 
 router.post('/reminders/plan', async (req, res) => {
   try {
+    const user = req.user ?? { role: 'guest' }
     const body = req.body || {};
 
     const lookahead = Number.isFinite(body.lookaheadDays)
@@ -614,7 +644,11 @@ router.post('/reminders/plan', async (req, res) => {
     let milestones = Array.isArray(body.upcomingMilestones) ? body.upcomingMilestones : null;
 
     if (!deadlines || !milestones || deadlines.length === 0 || milestones.length === 0) {
-      const snapshot = fetchReminderSnapshot(req.db, lookahead);
+      const snapshot = await (async () => {
+        if (isAdminUser(user)) return await fetchReminderSnapshot(req.db, lookahead)
+        const orgIds = await getAccessibleOrganizationIds(req.db, user)
+        return await fetchReminderSnapshot(req.db, lookahead, { organizationIds: Array.from(orgIds ?? []) })
+      })()
       deadlines = deadlines && deadlines.length > 0 ? deadlines : snapshot.urgentDeadlines;
       milestones = milestones && milestones.length > 0 ? milestones : snapshot.upcomingMilestones;
     }

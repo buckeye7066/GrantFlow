@@ -2,6 +2,8 @@
  * Centralized error handling middleware
  */
 
+import { recordRequestError } from '../services/requestIdErrorStore.js'
+
 /**
  * Format error response based on environment
  * @param {Error} error - The error object
@@ -23,6 +25,21 @@ export function formatError(error) {
  */
 export function errorHandler(err, req, res, next) {
   const requestId = req.requestId || req.request_id || null;
+  const statusCode = err.statusCode || err.status || 500;
+
+  // Store recent errors for admin lookup by request_id (in-memory, best-effort).
+  try {
+    recordRequestError({
+      requestId,
+      path: req.path,
+      method: req.method,
+      statusCode,
+      message: err?.message,
+      stack: err?.stack,
+    })
+  } catch {
+    // ignore (best-effort)
+  }
 
   // Log error for debugging
   console.error('Error:', {
@@ -32,9 +49,6 @@ export function errorHandler(err, req, res, next) {
     path: req.path,
     method: req.method
   });
-  
-  // Determine status code
-  const statusCode = err.statusCode || err.status || 500;
   
   // Send error response
   const body = formatError(err);

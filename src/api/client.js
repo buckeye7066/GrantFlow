@@ -240,14 +240,23 @@ class APIClient {
     const url = `${this.baseUrl}${endpoint}`;
     const token = this.getToken();
     const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+
+    // Strip internal retry flags so we don't pass unknown keys to `fetch()`.
+    const {
+      _isRetry: _internalIsRetry,
+      _noCacheRetry: _internalNoCacheRetry,
+      ...requestOptions
+    } = options || {};
     
     // Track if this is a retry attempt to prevent infinite loops
-    const isRetry = options._isRetry || false;
+    const isRetry = _internalIsRetry || false;
+    const noCacheRetry = _internalNoCacheRetry || false;
     const requestId = this.getRequestId();
+    const method = String(requestOptions.method || 'GET').toUpperCase();
 
     const headers = {
       ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
-      ...options.headers,
+      ...requestOptions.headers,
     };
 
     if (isFormData) {
@@ -265,12 +274,32 @@ class APIClient {
     const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
 
     try {
-      const response = await fetch(url, {
-        ...options,
+      const requestInit = {
+        ...requestOptions,
         headers,
         credentials: 'include', // Ensure cookies are sent with the request
         signal: controller.signal,
-      });
+      };
+
+      // Avoid browser HTTP caching/ETag revalidation (which can return 304 with an empty body).
+      // This is especially important for polled status endpoints in the Admin UI.
+      if (!('cache' in requestOptions) && method === 'GET') {
+        requestInit.cache = 'no-store';
+      }
+
+      let response = await fetch(url, requestInit);
+
+      // Some proxies/browsers may still revalidate and return 304. Retry once with explicit no-store.
+      if (response.status === 304 && !noCacheRetry) {
+        response = await fetch(url, {
+          ...requestInit,
+          cache: 'no-store',
+          headers: {
+            ...headers,
+            'Cache-Control': 'no-cache',
+          },
+        });
+      }
       
       clearTimeout(timeoutId);
 
@@ -286,7 +315,7 @@ class APIClient {
         }
         
         // Mark the retry and handle unauthorized
-        const retryOptions = { ...options, _isRetry: true };
+        const retryOptions = { ...requestOptions, _isRetry: true };
         return this.handleUnauthorized({ endpoint, options: retryOptions });
       }
 

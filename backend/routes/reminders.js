@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { getAccessibleOrganizationIds, isAdminUser, requireAuthenticatedUser } from '../utils/accessControl.js'
 
 const router = Router();
 
@@ -59,7 +60,10 @@ function normalizeMilestone(row) {
   };
 }
 
-export async function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD) {
+export async function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD, options = {}) {
+  const organizationIds =
+    options && Array.isArray(options.organizationIds) ? options.organizationIds.filter(Boolean) : null
+
   // Compute date window boundaries in JavaScript
   const now = new Date();
   now.setHours(0, 0, 0, 0); // Start of today
@@ -71,26 +75,38 @@ export async function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD) 
   const todayStr = now.toISOString().split('T')[0];
   const endDateStr = endDate.toISOString().split('T')[0];
 
-  const deadlineRows = await db.prepare(
-    `
-      SELECT
-        g.id,
-        g.title,
-        g.funder,
-        g.deadline,
-        g.status,
-        g.amount_requested,
-        o.name AS organization_name
-      FROM grants g
-      LEFT JOIN organizations o ON o.id = g.organization_id
-      WHERE g.deadline IS NOT NULL
-        AND g.deadline >= ?
-        AND g.deadline <= ?
-        AND g.status IN ('discovered', 'interested', 'drafting', 'app_prep', 'submission_ready')
-      ORDER BY g.deadline ASC
-      LIMIT 10
-    `,
-  ).all(todayStr, endDateStr);
+  const deadlineConditions = [
+    'g.deadline IS NOT NULL',
+    'g.deadline >= ?',
+    'g.deadline <= ?',
+    "g.status IN ('discovered', 'interested', 'drafting', 'app_prep', 'submission_ready')",
+  ]
+  const deadlineParams = [todayStr, endDateStr]
+
+  if (organizationIds && organizationIds.length > 0) {
+    deadlineConditions.push(`g.organization_id IN (${organizationIds.map(() => '?').join(',')})`)
+    deadlineParams.push(...organizationIds)
+  }
+
+  const deadlineRows = await db
+    .prepare(
+      `
+        SELECT
+          g.id,
+          g.title,
+          g.funder,
+          g.deadline,
+          g.status,
+          g.amount_requested,
+          o.name AS organization_name
+        FROM grants g
+        LEFT JOIN organizations o ON o.id = g.organization_id
+        WHERE ${deadlineConditions.join('\n        AND ')}
+        ORDER BY g.deadline ASC
+        LIMIT 10
+      `,
+    )
+    .all(...deadlineParams);
 
   const milestoneSql =
     db?.dialect === 'postgres'
@@ -135,7 +151,21 @@ export async function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD) 
           LIMIT 10
         `;
 
-  const milestoneRows = await db.prepare(milestoneSql).all(todayStr, endDateStr);
+  const milestoneParams = [todayStr, endDateStr]
+
+  // m.completed predicate differs per dialect and is already baked into milestoneSql; keep the filter separate.
+  let milestoneSqlWithScope = milestoneSql
+
+  if (organizationIds && organizationIds.length > 0) {
+    const placeholders = organizationIds.map(() => '?').join(',')
+    milestoneSqlWithScope = milestoneSqlWithScope.replace(
+      'ORDER BY m.due_date ASC',
+      `AND COALESCE(m.organization_id, g.organization_id) IN (${placeholders})\n          ORDER BY m.due_date ASC`,
+    )
+    milestoneParams.push(...organizationIds)
+  }
+
+  const milestoneRows = await db.prepare(milestoneSqlWithScope).all(...milestoneParams);
 
   return {
     urgentDeadlines: deadlineRows.map(normalizeDeadline).filter(Boolean),
@@ -146,7 +176,8 @@ export async function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD) 
 router.get('/', async (req, res) => {
   try {
     // AUTH GUARD: Require authentication
-    if (!req.user || req.user.role === 'guest') {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) {
       return res.status(401).json({ 
         error: 'Authentication required',
         message: 'You must be logged in to view reminders'
@@ -160,7 +191,13 @@ router.get('/', async (req, res) => {
       return res.status(500).json({ error: 'Database connection not available' });
     }
     
-    const snapshot = await fetchReminderSnapshot(req.db);
+    const snapshot = await (async () => {
+      if (isAdminUser(user)) return await fetchReminderSnapshot(req.db)
+      const orgIds = await getAccessibleOrganizationIds(req.db, user)
+      return await fetchReminderSnapshot(req.db, DAYS_LOOKAHEAD, {
+        organizationIds: Array.from(orgIds ?? []),
+      })
+    })()
     
     res.json({
       generatedAt: new Date().toISOString(),

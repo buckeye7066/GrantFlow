@@ -12,6 +12,7 @@ import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js';
 import fetch from 'node-fetch';
 import { extractTextFromFile } from '../services/documentTextExtraction.js';
 import { classifyUniversityApplicationForDocument, loadUniversityApplicationsForProfile } from '../services/universityDocumentClassifier.js';
+import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 
 // OpenAI client helper
 function getOpenAI() {
@@ -563,6 +564,9 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
     }
 
     if (!skipParsing) {
+      if (profileId) {
+        if (!(await requireTierCapability(req, res, profileId, TIER_CAPABILITIES.DOCUMENT_AI))) return
+      }
       const requestedBy = context.user?.profileId ?? context.user?.userId ?? 'system';
       const jobId = crypto.randomUUID();
       await req.db
@@ -664,6 +668,10 @@ router.post('/:id/parse', async (req, res) => {
     const profileId = normalizeProfileId(document.profile_id);
     const requestedBy = context.user?.profileId ?? context.user?.userId ?? 'system';
 
+    if (profileId) {
+      if (!(await requireTierCapability(req, res, profileId, TIER_CAPABILITIES.DOCUMENT_AI))) return
+    }
+
     // De-dupe: if there's already a queued/running ingest job for this document, don't create another.
     const existing = await req.db
       .prepare(
@@ -741,6 +749,10 @@ router.post('/parse-all', async (req, res) => {
 
     const profileId = normalizeProfileId(req.body?.profile_id);
     if (!ensureProfileAccess(res, context, profileId)) return;
+
+    if (profileId) {
+      if (!(await requireTierCapability(req, res, profileId, TIER_CAPABILITIES.DOCUMENT_AI))) return
+    }
 
     const requestedBy = context.user?.profileId ?? context.user?.userId ?? 'system';
 

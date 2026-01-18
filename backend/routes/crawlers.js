@@ -1,12 +1,13 @@
 import express from 'express'
 import fs from 'fs'
-import OpenAI from 'openai'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
 import { validatePagination } from '../utils/validation.js'
+import { createOpenAIClient } from '../utils/openaiClient.js'
 import { formatError } from '../middleware/errorHandler.js'
 import { DEFAULT_PAGE_LIMIT, CRAWLER_JOB_TYPES } from '../config/constants.js'
+import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 
 const router = express.Router()
 
@@ -35,11 +36,10 @@ if (!fs.existsSync(uploadDir)) {
 }
 
 function getOpenAI() {
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY environment variable is not set')
-  }
-  return new OpenAI({ apiKey })
+  // Use the hardened client factory so common env-var copy/paste issues are normalized
+  // and placeholder/masked keys fail fast with safe diagnostics.
+  const { openai } = createOpenAIClient({ allowMissing: false })
+  return openai
 }
 
 function ensureAuth(req, res) {
@@ -980,6 +980,19 @@ router.post('/jobs', async (req, res) => {
       organizationId = profileRow.organization_id ?? null
     }
 
+    // Tier gating (enforced server-side; UI gating is not sufficient).
+    const tierRequirementByType = {
+      pipeline_automation: TIER_CAPABILITIES.PIPELINE_AUTOMATION,
+      item_search: TIER_CAPABILITIES.ITEM_FUNDING,
+      document_ingest: TIER_CAPABILITIES.DOCUMENT_AI,
+      profile_enrichment: TIER_CAPABILITIES.DOCUMENT_AI,
+      avatar_lookup: TIER_CAPABILITIES.DOCUMENT_AI,
+    }
+    const requiredCapability = tierRequirementByType[type] ?? null
+    if (requiredCapability && targetProfileId) {
+      if (!(await requireTierCapability(req, res, targetProfileId, requiredCapability))) return
+    }
+
     const parametersJson = JSON.stringify(parameters ?? {})
     const jobId = crypto.randomUUID()
     const insert = req.db.prepare(`
@@ -1039,6 +1052,19 @@ router.post('/jobs/:id/retry', async (req, res) => {
 
     if (job.status !== 'failed' && job.status !== 'completed' && job.status !== 'cancelled') {
       return res.status(400).json({ error: 'Only completed, failed, or cancelled jobs can be retried' })
+    }
+
+    // Tier gating applies to retries too (prevents bypass via retry endpoints).
+    const tierRequirementByType = {
+      pipeline_automation: TIER_CAPABILITIES.PIPELINE_AUTOMATION,
+      item_search: TIER_CAPABILITIES.ITEM_FUNDING,
+      document_ingest: TIER_CAPABILITIES.DOCUMENT_AI,
+      profile_enrichment: TIER_CAPABILITIES.DOCUMENT_AI,
+      avatar_lookup: TIER_CAPABILITIES.DOCUMENT_AI,
+    }
+    const requiredCapability = tierRequirementByType[job.type] ?? null
+    if (requiredCapability && job.profile_id) {
+      if (!(await requireTierCapability(req, res, job.profile_id, requiredCapability))) return
     }
 
     let originalParameters = {}

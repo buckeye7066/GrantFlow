@@ -1392,6 +1392,11 @@ export default function Automation() {
     enabled: Boolean(isAdmin ? (selectedProfile && selectedProfile !== "none") : activeProfileId),
   })
 
+  const tier = profileDetailQuery.data?.billing?.tier ?? null
+  const canPipelineAutomation = isAdmin || Boolean(tier?.enable_pipeline_automation)
+  const canItemFunding = isAdmin || Boolean(tier?.enable_item_funding)
+  const canDocumentAI = isAdmin || Boolean(tier?.enable_document_ai)
+
   const profileForTasks = isAdmin ? selectedProfile : activeProfileId
 
   const tasksQuery = useQuery({
@@ -1530,6 +1535,40 @@ export default function Automation() {
       })
       return
     }
+
+    const gateByType = {
+      pipeline_automation: {
+        allowed: canPipelineAutomation,
+        message: "Pipeline automation is not included in this profile’s billing tier.",
+      },
+      item_search: {
+        allowed: canItemFunding,
+        message: "Item funding searches are not included in this profile’s billing tier.",
+      },
+      profile_enrichment: {
+        allowed: canDocumentAI,
+        message: "AI enrichment is not included in this profile’s billing tier.",
+      },
+      avatar_lookup: {
+        allowed: canDocumentAI,
+        message: "AI avatar generation is not included in this profile’s billing tier.",
+      },
+      document_ingest: {
+        allowed: canDocumentAI,
+        message: "AI document parsing is not included in this profile’s billing tier.",
+      },
+    }
+
+    const gate = gateByType[type]
+    if (gate && !gate.allowed) {
+      toast({
+        variant: "destructive",
+        title: "Tier upgrade required",
+        description: gate.message,
+      })
+      return
+    }
+
     createJobMutation.mutate({
       type,
       profile_id: profileId ?? undefined,
@@ -1654,7 +1693,7 @@ export default function Automation() {
               prompt: enrichmentPrompt || undefined,
             })
           }
-          disabled={selectedSections.length === 0 || (!isAdmin && !activeProfileId)}
+          disabled={selectedSections.length === 0 || (!isAdmin && !activeProfileId) || !canDocumentAI}
           loading={createJobMutation.isPending && createJobMutation.variables?.type === "profile_enrichment"}
         />
       </section>
@@ -1944,6 +1983,8 @@ export default function Automation() {
                 <PipelineAutomationPanel
                   organizationId={profileDetailQuery.data?.organization_id ?? selectedProfileEntity?.organization_id ?? null}
                   profileId={isAdmin ? (selectedProfile && selectedProfile !== "none" ? selectedProfile : undefined) : activeProfileId}
+                  disabled={!canPipelineAutomation}
+                  disabledReason="This profile’s tier does not include pipeline automation. Ask an admin to upgrade the tier in Admin → Billing."
                 />
             </CardContent>
           </Card>
@@ -1969,7 +2010,7 @@ export default function Automation() {
                     item: itemQuery,
                   })
                 }
-                disabled={!itemQuery.trim() || (!isAdmin && !activeProfileId)}
+                disabled={!itemQuery.trim() || (!isAdmin && !activeProfileId) || !canItemFunding}
               >
                 {createJobMutation.isPending && createJobMutation.variables?.type === "item_search" ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -1982,6 +2023,11 @@ export default function Automation() {
                 Uses profile demographics, assistance flags, and location to prioritise relevant funding. Results appear
                 under Funding Opportunities.
               </p>
+              {!canItemFunding ? (
+                <p className="text-xs text-amber-700">
+                  Item funding lookups are gated by tier. Upgrade the profile tier to enable this crawler.
+                </p>
+              ) : null}
             </CardContent>
           </Card>
 

@@ -1,6 +1,14 @@
 import express from 'express';
+import { ensureProfileAccess, isAdminUser, requireAuthenticatedUser } from '../utils/accessControl.js'
 
 const router = express.Router();
+
+// Discovery endpoints can reference stored profiles; require auth globally.
+router.use((req, res, next) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  return next()
+})
 
 /**
  * Extract all demographic signals from profile, organization, and sections
@@ -410,9 +418,12 @@ router.post('/comprehensiveMatch', async (req, res) => {
       });
     }
 
+    const user = req.user ?? { role: 'guest' }
+
     // Get profile from database if profile_id is provided
     let profile = profile_json;
     if (typeof profile_json === 'string') {
+      if (!(await ensureProfileAccess(req, res, profile_json))) return
       const profileRow = req.db
         .prepare('SELECT * FROM profiles WHERE id = ?')
         .get(profile_json);
@@ -425,6 +436,13 @@ router.post('/comprehensiveMatch', async (req, res) => {
       }
       
       profile = profileRow;
+    } else if (!isAdminUser(user)) {
+      // Prevent non-admin callers from submitting arbitrary profile JSON blobs that could be
+      // confused with stored profiles in downstream code.
+      return res.status(403).json({
+        success: false,
+        error: 'Non-admin requests must provide a profile_id string',
+      })
     }
 
     // Fetch linked organization for demographic data
@@ -595,6 +613,7 @@ router.post('/searchOpportunities', async (req, res) => {
     
     // Profile-based filtering
     if (profile_id) {
+      if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
       const profile = req.db
         .prepare('SELECT * FROM profiles WHERE id = ?')
         .get(profile_id);
@@ -701,6 +720,10 @@ router.post('/searchOpportunities', async (req, res) => {
  */
 router.post('/archOpportunities', async (req, res) => {
   try {
+    const user = req.user ?? { role: 'guest' }
+    if (!isAdminUser(user)) {
+      return res.status(403).json({ success: false, error: 'Admin privileges required' })
+    }
     const { opportunity_ids = [], action = 'archive' } = req.body;
     
     if (!Array.isArray(opportunity_ids) || opportunity_ids.length === 0) {
@@ -791,6 +814,8 @@ router.post('/discoverECFServices', async (req, res) => {
         error: 'profile_id is required'
       });
     }
+
+    if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
     
     const profile = req.db
       .prepare('SELECT * FROM profiles WHERE id = ?')

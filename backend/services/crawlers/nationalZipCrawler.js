@@ -32,7 +32,38 @@ const DEFAULT_CONFIG = {
   min_sources_per_zip: 3,
   rate_limit_ms: 1000, // 1 second between ZIP requests
   checkpoint_every: 50, // Checkpoint after every 50 ZIPs
-  timeout_ms: 10000
+  timeout_ms: 10000,
+  // Geo Crawl discovery defaults (enabled via options.discover_local_resources)
+  overpass_radius_km: 12,
+  overpass_max_results: 60,
+}
+
+function normalizeUrl(raw) {
+  const value = String(raw ?? '').trim()
+  if (!value) return null
+  if (/^https?:\/\//i.test(value)) return value
+  if (/^www\./i.test(value)) return `https://${value}`
+  if (/^facebook\.com\//i.test(value) || /^instagram\.com\//i.test(value)) return `https://${value}`
+  return null
+}
+
+function pickFirstUrl(...candidates) {
+  for (const candidate of candidates) {
+    const normalized = normalizeUrl(candidate)
+    if (normalized) return normalized
+  }
+  return null
+}
+
+function isLoanOrMatchingFund(opp) {
+  const title = String(opp?.title || '').toLowerCase()
+  const desc = String(opp?.description || '').toLowerCase()
+  const text = `${title} ${desc}`
+
+  if (opp?.requires_match === true) return true
+  if (/\bloan\b|\bmicroloan\b|\bfinancing\b|\bapr\b/.test(text)) return true
+  if (/\bmatching\b|\bcost share\b|\bmatch required\b|\b1:1\b|\bdollar for dollar\b/.test(text)) return true
+  return false
 }
 
 function normalizeZip(value) {
@@ -106,7 +137,8 @@ async function searchGrantsGovByZip(zip, coords) {
 
     const hits = response?.data?.data?.oppHits
     if (Array.isArray(hits)) {
-      for (const hit of hits) {
+      for (const [idx, hit] of hits.entries()) {
+        const sourceIdRaw = hit?.id || hit?.number || hit?.oppNumber || null
         opportunities.push({
           title: hit?.title || hit?.number || 'Grant opportunity',
           sponsor: hit?.agency || hit?.agencyCode || 'Grants.gov',
@@ -115,7 +147,7 @@ async function searchGrantsGovByZip(zip, coords) {
           opportunity_number: hit?.number || null,
           deadline: hit?.closeDate || null,
           source: 'grants.gov',
-          source_id: hit?.id || null,
+          source_id: sourceIdRaw ? String(sourceIdRaw) : `grantsgov:${zip}:${idx}`,
           zip: zip,
           state: coords?.state,
         })
@@ -125,6 +157,123 @@ async function searchGrantsGovByZip(zip, coords) {
     console.error(`[NationalZipCrawler] Grants.gov error for ZIP ${zip}:`, error.message)
   }
   
+  return opportunities
+}
+
+function buildOverpassQuery({ lat, lng, radiusMeters, maxResults }) {
+  const r = Math.max(1000, Math.min(50000, Number(radiusMeters) || 12000))
+  const limit = Math.max(10, Math.min(500, Number(maxResults) || 60))
+
+  return `
+[out:json][timeout:25];
+(
+  nwr(around:${r},${lat},${lng})["amenity"="food_bank"];
+  nwr(around:${r},${lat},${lng})["amenity"="shelter"];
+  nwr(around:${r},${lat},${lng})["amenity"="community_centre"];
+  nwr(around:${r},${lat},${lng})["amenity"="townhall"];
+  nwr(around:${r},${lat},${lng})["social_facility"];
+  nwr(around:${r},${lat},${lng})["office"="government"];
+  nwr(around:${r},${lat},${lng})["office"="ngo"];
+  nwr(around:${r},${lat},${lng})["shop"="charity"];
+  nwr(around:${r},${lat},${lng})["shop"="second_hand"];
+);
+out tags center ${limit};
+`
+    .trim()
+}
+
+function mapOsmElementToOpportunity({ element, zip, coords }) {
+  const tags = element?.tags ?? {}
+  const name = String(tags.name || tags.operator || tags.brand || '').trim()
+  if (!name) return null
+
+  const url = pickFirstUrl(
+    tags.website,
+    tags['contact:website'],
+    tags.url,
+    tags['contact:url'],
+    tags['contact:facebook'],
+    tags.facebook,
+    tags['contact:instagram'],
+    tags.instagram,
+  )
+  if (!url) return null
+
+  const kind = String(tags.amenity || tags.social_facility || tags.shop || '').trim()
+  const normalizedKind = kind.toLowerCase()
+
+  const categories = []
+  if (normalizedKind.includes('food')) categories.push('food_assistance')
+  if (normalizedKind.includes('shelter')) categories.push('housing_assistance')
+  if (normalizedKind.includes('community')) categories.push('community_support')
+  if (normalizedKind.includes('charity') || normalizedKind.includes('second_hand')) {
+    categories.push('material_assistance')
+  }
+  if (tags.social_facility) categories.push('social_services')
+
+  const city = coords?.city ? String(coords.city) : ''
+  const state = coords?.state ? String(coords.state) : null
+  const keywords = [zip, city, state, normalizedKind].filter(Boolean).map((v) => String(v).toLowerCase())
+
+  const suffix = normalizedKind ? ` (${normalizedKind.replace(/_/g, ' ')})` : ''
+
+  return {
+    title: `${name}${suffix}`,
+    sponsor: name,
+    description:
+      tags.description
+        ? String(tags.description).trim().slice(0, 600)
+        : `Local resource discovered near ${zip}${city ? ` (${city})` : ''}.`,
+    url,
+    application_url: url,
+    source_url: url,
+    evidence_url: url,
+    opportunity_type: 'benefit',
+    type: 'PROGRAM',
+    requires_match: false,
+    match_percentage: 0,
+    is_national: false,
+    state,
+    categories,
+    keywords,
+    source: 'osm_overpass',
+    source_id: `${element.type}:${element.id}`,
+    last_verified_at: new Date().toISOString(),
+  }
+}
+
+async function searchOverpassLocalResources(zip, coords, config) {
+  const opportunities = []
+  if (!coords || !Number.isFinite(coords.lat) || !Number.isFinite(coords.lng)) return opportunities
+
+  const query = buildOverpassQuery({
+    lat: coords.lat,
+    lng: coords.lng,
+    radiusMeters: Number(config.overpass_radius_km ?? 12) * 1000,
+    maxResults: config.overpass_max_results ?? 60,
+  })
+
+  try {
+    const resp = await axios.post(
+      'https://overpass-api.de/api/interpreter',
+      new URLSearchParams({ data: query }).toString(),
+      {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        timeout: Math.max(8000, Number(config.timeout_ms) || 10000),
+      },
+    )
+
+    const elements = resp?.data?.elements
+    if (!Array.isArray(elements)) return opportunities
+
+    for (const el of elements) {
+      const mapped = mapOsmElementToOpportunity({ element: el, zip, coords })
+      if (mapped) opportunities.push(mapped)
+    }
+  } catch (error) {
+    console.warn(`[NationalZipCrawler] Overpass error for ZIP ${zip}:`, error?.message || error)
+  }
+
   return opportunities
 }
 
@@ -232,11 +381,12 @@ async function getZipCoordinates(zip) {
 /**
  * Process a single ZIP code
  */
-async function processZip(zip, db) {
+async function processZip(zip, db, config) {
   console.log(`[NationalZipCrawler] Processing ZIP ${zip}...`)
   
   const startTime = Date.now()
   let sources = []
+  let inserted = 0
   let error = null
   let status = 'completed'
   
@@ -251,24 +401,29 @@ async function processZip(zip, db) {
     }
     
     // Search all data sources
-    const [grantsGovResults, stateResults, foundationResults] = await Promise.all([
+    const discoverLocal = Boolean(config?.discover_local_resources)
+    const [grantsGovResults, stateResults, foundationResults, overpassResults] = await Promise.all([
       searchGrantsGovByZip(zip, coords),
       searchStateGrantsByZip(zip, coords),
-      searchFoundationLocator(zip, coords)
+      searchFoundationLocator(zip, coords),
+      discoverLocal ? searchOverpassLocalResources(zip, coords, config) : Promise.resolve([]),
     ])
     
-    sources = [...grantsGovResults, ...stateResults, ...foundationResults]
+    sources = [...grantsGovResults, ...stateResults, ...foundationResults, ...(overpassResults || [])]
     
     console.log(`  Found ${sources.length} sources for ZIP ${zip}`)
     
     // Save opportunities to database
     for (const opp of sources) {
-      await saveOpportunity(db, opp)
+      if (isLoanOrMatchingFund(opp)) continue
+      const changes = await saveOpportunity(db, opp)
+      if (Number(changes) > 0) inserted += Number(changes)
     }
     
     // Check if we met minimum sources requirement
-    if (sources.length < DEFAULT_CONFIG.min_sources_per_zip) {
-      console.log(`  Warning: Only found ${sources.length} sources (minimum: ${DEFAULT_CONFIG.min_sources_per_zip})`)
+    const min = Number(config?.min_sources_per_zip ?? DEFAULT_CONFIG.min_sources_per_zip)
+    if (inserted < min) {
+      console.log(`  Warning: Only inserted ${inserted} sources (minimum: ${min})`)
     }
     
   } catch (err) {
@@ -280,7 +435,7 @@ async function processZip(zip, db) {
   return {
     zip,
     status,
-    sources_found: sources.length,
+    sources_found: inserted,
     error,
     duration: Date.now() - startTime
   }
@@ -290,47 +445,112 @@ async function processZip(zip, db) {
  * Save opportunity to database
  */
 async function saveOpportunity(db, opp) {
+  if (!opp?.title) return 0
+  if (!opp?.source || !opp?.source_id) return 0
+
   const insertSql =
     db?.dialect === 'postgres'
       ? `
           INSERT INTO funding_opportunities (
             id,
-            title, sponsor, description, source, source_id, source_url,
-            state, deadline, created_at, updated_at
-          ) VALUES (gen_random_uuid()::text, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-          ON CONFLICT DO NOTHING
+            title, sponsor, description,
+            source, source_id, source_url,
+            application_url, evidence_url,
+            is_national, state,
+            categories, keywords,
+            opportunity_type, type,
+            requires_match, match_percentage,
+            last_verified_at,
+            created_at, updated_at
+          ) VALUES (
+            gen_random_uuid()::text,
+            ?, ?, ?,
+            ?, ?, ?,
+            ?, ?,
+            ?, ?,
+            ?, ?,
+            ?, ?,
+            ?, ?,
+            ?,
+            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+          )
+          ON CONFLICT (source, source_id) DO NOTHING
         `
       : `
           INSERT OR IGNORE INTO funding_opportunities (
-            title, sponsor, description, source, source_id, source_url,
-            state, deadline, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+            title, sponsor, description,
+            source, source_id, source_url,
+            application_url, evidence_url,
+            is_national, state,
+            categories, keywords,
+            opportunity_type, type,
+            requires_match, match_percentage,
+            last_verified_at,
+            created_at, updated_at
+          ) VALUES (
+            ?, ?, ?,
+            ?, ?, ?,
+            ?, ?,
+            ?, ?,
+            ?, ?,
+            ?, ?,
+            ?, ?,
+            ?,
+            datetime('now'), datetime('now')
+          )
         `
 
   const stmt = db.prepare(insertSql)
+
+  const categoriesJson = JSON.stringify(Array.isArray(opp.categories) ? opp.categories : [])
+  const keywordsJson = JSON.stringify(Array.isArray(opp.keywords) ? opp.keywords : [])
+  const isNational = Boolean(opp.is_national)
+  const requiresMatch = Boolean(opp.requires_match)
+  const matchPct = typeof opp.match_percentage === 'number' ? opp.match_percentage : 0
+  const lastVerifiedAt = opp.last_verified_at ? String(opp.last_verified_at) : new Date().toISOString()
   
   if (db?.dialect === 'postgres') {
-    await stmt.run(
+    const result = await stmt.run(
       opp.title,
-      opp.sponsor,
-      opp.description,
-      opp.source,
-      opp.source_id || null,
-      opp.url,
+      opp.sponsor || null,
+      opp.description || null,
+      String(opp.source),
+      String(opp.source_id),
+      opp.source_url || opp.url || null,
+      opp.application_url || opp.url || null,
+      opp.evidence_url || opp.url || null,
+      isNational,
       opp.state || null,
-      opp.deadline || null,
+      categoriesJson,
+      keywordsJson,
+      opp.opportunity_type || null,
+      opp.type || 'OPPORTUNITY',
+      requiresMatch,
+      matchPct,
+      lastVerifiedAt,
     )
+    return result?.changes ?? 0
   } else {
-    stmt.run(
+    const result = stmt.run(
       opp.title,
-      opp.sponsor,
-      opp.description,
-      opp.source,
-      opp.source_id || null,
-      opp.url,
+      opp.sponsor || null,
+      opp.description || null,
+      String(opp.source),
+      String(opp.source_id),
+      opp.source_url || opp.url || null,
+      opp.application_url || opp.url || null,
+      opp.evidence_url || opp.url || null,
+      isNational ? 1 : 0,
       opp.state || null,
-      opp.deadline || null,
+      categoriesJson,
+      keywordsJson,
+      opp.opportunity_type || null,
+      opp.type || 'OPPORTUNITY',
+      requiresMatch ? 1 : 0,
+      matchPct,
+      lastVerifiedAt,
     )
+    return result?.changes ?? 0
   }
 }
 
@@ -451,6 +671,8 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   
   let processedCount = 0
   let totalSources = 0
+  let failedCount = 0
+  let skippedCount = 0
   const startTime = Date.now()
   
   // Process in batches
@@ -461,13 +683,15 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
     console.log(`Processing batch ${Math.floor(i / config.batch_size) + 1}: ZIPs ${i} - ${batchEnd}`)
     
     for (const zip of batch) {
-      const result = await processZip(zip, db)
+      const result = await processZip(zip, db, config)
       
       // Update progress in database
       await updateZipProgress(db, result.zip, result.status, result.sources_found, result.error)
       
       processedCount++
       totalSources += result.sources_found
+      if (result.status === 'failed') failedCount += 1
+      if (result.status === 'skipped') skippedCount += 1
       
       // Rate limiting
       if (Number(config.rate_limit_ms) > 0) {
@@ -509,6 +733,9 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   return {
     processed: processedCount,
     sources: totalSources,
+    failed: failedCount,
+    skipped: skippedCount,
+    total_zips: totalZips,
     duration: totalDuration
   }
 }

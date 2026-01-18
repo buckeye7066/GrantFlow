@@ -14,6 +14,7 @@ import { linkProfileToAdmin } from '../utils/adminProfileLinks.js'
 import { safeParseJSON } from '../utils/safeJson.js'
 import { validatePagination } from '../utils/validation.js'
 import { formatError } from '../middleware/errorHandler.js'
+import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 
 const router = express.Router()
 
@@ -546,6 +547,8 @@ router.post('/:id/avatar/ai', async (req, res) => {
     return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to update this profile' })
   }
 
+  if (!(await requireTierCapability(req, res, id, TIER_CAPABILITIES.DOCUMENT_AI))) return
+
   const parameters = {
     display_name: profileRow.display_name,
     primary_type: profileRow.primary_type,
@@ -745,6 +748,8 @@ router.post('/:id/sections/:sectionKey/ai', async (req, res) => {
       return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to access this profile' })
     }
 
+    if (!(await requireTierCapability(req, res, id, TIER_CAPABILITIES.DOCUMENT_AI))) return
+
     const sectionRows = await req.db
       .prepare(
         `
@@ -876,6 +881,8 @@ router.post('/:id/fields/ai', async (req, res) => {
     if (!canAccessProfile({ auth, profileRow })) {
       return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to access this profile' })
     }
+
+    if (!(await requireTierCapability(req, res, id, TIER_CAPABILITIES.DOCUMENT_AI))) return
     const profile = mapProfile(profileRow)
 
     // Create focused prompt for the specific field

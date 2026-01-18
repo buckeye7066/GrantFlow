@@ -1202,15 +1202,23 @@ export default function ProfileSectionEditor({
               // Use ProfileFieldWithAI for text fields to provide individual AI assistance
               return (
                 <div key={field.name}>
-                  <ProfileFieldWithAI
-                    field={field}
-                    value={form.watch(field.name)}
-                    onChange={(newValue) => form.setValue(field.name, newValue)}
-                    disabled={isSaving || aiStatus === 'loading'}
-                    profileId={profileId}
-                    sectionKey={sectionKey}
-                    formContext={form.getValues()}
-                    {...form.register(field.name)}
+                  <Controller
+                    control={form.control}
+                    name={field.name}
+                    render={({ field: controllerField }) => (
+                      <ProfileFieldWithAI
+                        field={field}
+                        value={controllerField.value}
+                        onChange={(newValue) => controllerField.onChange(newValue)}
+                        onBlur={controllerField.onBlur}
+                        name={controllerField.name}
+                        inputRef={controllerField.ref}
+                        disabled={isSaving || aiStatus === 'loading'}
+                        profileId={profileId}
+                        sectionKey={sectionKey}
+                        formContext={form.getValues()}
+                      />
+                    )}
                   />
                   {form.formState.errors?.[field.name] && (
                     <p className="text-xs text-red-600 mt-1">

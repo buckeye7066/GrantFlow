@@ -1,5 +1,6 @@
 import express from 'express';
 import crypto from 'crypto';
+import { isAdminUser, requireAuthenticatedUser } from '../utils/accessControl.js'
 
 const router = express.Router();
 
@@ -340,6 +341,12 @@ router.get('/:id', async (req, res) => {
 // Create opportunity (for manual entry or crawlers)
 router.post('/', async (req, res) => {
   try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
+    if (!isAdminUser(user)) {
+      return res.status(403).json({ error: 'Admin privileges required' })
+    }
+
     const id = crypto.randomUUID();
     let data = validateFundingTerms(req.body || {});
     const normalizedData = Object.fromEntries(
@@ -376,6 +383,12 @@ router.post('/', async (req, res) => {
 // Bulk import opportunities
 router.post('/bulk', async (req, res) => {
   try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
+    if (!isAdminUser(user)) {
+      return res.status(403).json({ error: 'Admin privileges required' })
+    }
+
     const { opportunities } = req.body;
 
     if (!Array.isArray(opportunities)) {
@@ -466,6 +479,12 @@ router.post('/bulk', async (req, res) => {
 // Update opportunity
 router.put('/:id', async (req, res) => {
   try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
+    if (!isAdminUser(user)) {
+      return res.status(403).json({ error: 'Admin privileges required' })
+    }
+
     let data = validateFundingTerms(req.body || {});
     const normalizedData = Object.fromEntries(
       Object.entries(data).filter(([, value]) => value !== undefined),
@@ -501,6 +520,12 @@ router.put('/:id', async (req, res) => {
 // Delete opportunity (soft delete)
 router.delete('/:id', async (req, res) => {
   try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
+    if (!isAdminUser(user)) {
+      return res.status(403).json({ error: 'Admin privileges required' })
+    }
+
     await req.db.prepare('UPDATE funding_opportunities SET is_active = ? WHERE id = ?').run(false, req.params.id);
     res.json({ success: true, message: 'Opportunity deactivated' });
   } catch (error) {

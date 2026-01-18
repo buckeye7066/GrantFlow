@@ -161,8 +161,17 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
       const maxZips = Number(params.max_zips ?? params.maxZips ?? 50)
       const batchSize = Number(params.batch_size ?? Math.min(50, Math.max(1, maxZips || 50)))
       const rateLimitMs = Number(params.rate_limit_ms ?? 250)
-      const minSources = Number(params.min_sources_per_zip ?? 1)
-      const zipList = Array.isArray(params.zip_list) ? params.zip_list : null
+      const minSources = Number(params.min_sources_per_zip ?? 3)
+      const zipList =
+        Array.isArray(params.zip_list) && params.zip_list.length > 0
+          ? params.zip_list
+          : Array.isArray(params.zips) && params.zips.length > 0
+            ? params.zips
+            : null
+      const discoverLocal =
+        params.discover_local_resources ?? params.discoverLocalResources ?? true
+      const overpassRadiusKm = Number(params.overpass_radius_km ?? 12)
+      const overpassMaxResults = Number(params.overpass_max_results ?? 60)
 
       console.log('[comprehensiveCrawler] GEO mode starting', { state, maxZips, batchSize })
       const result = await runNationalZipCrawl(db, {
@@ -172,6 +181,9 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
         batch_size: Number.isFinite(batchSize) ? batchSize : 25,
         rate_limit_ms: Number.isFinite(rateLimitMs) ? rateLimitMs : 250,
         min_sources_per_zip: Number.isFinite(minSources) ? minSources : 1,
+        discover_local_resources: Boolean(discoverLocal),
+        overpass_radius_km: Number.isFinite(overpassRadiusKm) ? overpassRadiusKm : 12,
+        overpass_max_results: Number.isFinite(overpassMaxResults) ? overpassMaxResults : 60,
         resume: false,
       })
 
@@ -184,6 +196,9 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
           state: state ?? null,
           processed: result?.processed ?? 0,
           sources: result?.sources ?? 0,
+          failed: result?.failed ?? 0,
+          skipped: result?.skipped ?? 0,
+          total_zips: result?.total_zips ?? null,
         },
         message: `Geo crawl completed: processed ${result?.processed ?? 0} ZIPs`,
       }

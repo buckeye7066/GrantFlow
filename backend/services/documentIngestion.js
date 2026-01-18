@@ -266,7 +266,17 @@ export async function processDocumentIngestionJob({
   }
 
   await db.prepare(
-    'UPDATE documents SET processing_status = ?, processing_error = NULL WHERE id = ?',
+    `
+      UPDATE documents
+      SET processing_status = ?,
+          processing_error = NULL,
+          -- Self-heal legacy/invalid document statuses (Postgres enforces a CHECK constraint).
+          status = CASE
+            WHEN status IN ('draft', 'review', 'final', 'submitted') THEN status
+            ELSE 'draft'
+          END
+      WHERE id = ?
+    `,
   ).run('processing', documentId)
 
   const updates = []
@@ -386,7 +396,11 @@ export async function processDocumentIngestionJob({
           UPDATE documents
           SET processing_status = 'completed',
               ai_summary = ?,
-              processing_error = ?
+              processing_error = ?,
+              status = CASE
+                WHEN status IN ('draft', 'review', 'final', 'submitted') THEN status
+                ELSE 'draft'
+              END
           WHERE id = ?
         `,
       ).run(message, message, documentId)
@@ -558,7 +572,11 @@ export async function processDocumentIngestionJob({
         SET processing_status = ?,
             ai_summary = ?,
             ai_sections = ?,
-            processing_error = ?
+            processing_error = ?,
+            status = CASE
+              WHEN status IN ('draft', 'review', 'final', 'submitted') THEN status
+              ELSE 'draft'
+            END
         WHERE id = ?
       `,
     ).run(status, summary, JSON.stringify(aiSectionsLog, null, 2), processingError, documentId)
@@ -576,7 +594,11 @@ export async function processDocumentIngestionJob({
       `
         UPDATE documents
         SET processing_status = 'failed',
-            processing_error = ?
+            processing_error = ?,
+            status = CASE
+              WHEN status IN ('draft', 'review', 'final', 'submitted') THEN status
+              ELSE 'draft'
+            END
         WHERE id = ?
       `,
     ).run(error instanceof Error ? error.message : String(error), documentId)

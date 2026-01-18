@@ -5,6 +5,14 @@ import { validatePagination, validateRequiredFields, sanitizeColumns } from '../
 import { formatError } from '../middleware/errorHandler.js';
 import { mutationRateLimiter } from '../middleware/rateLimiting.js';
 import { GRANT_STATUSES } from '../config/constants.js';
+import {
+  ensureGrantAccess as ensureGrantAccessUtil,
+  ensureOrganizationAccess,
+  ensureProfileAccess,
+  getAccessibleOrganizationIds,
+  isAdminUser,
+  requireAuthenticatedUser,
+} from '../utils/accessControl.js'
 
 const router = express.Router();
 
@@ -16,39 +24,7 @@ const ALLOWED_GRANT_COLUMNS = new Set([
   'application_steps', 'contact_name', 'contact_email', 'contact_phone'
 ]);
 
-async function ensureGrantAccess(req, res, grantId) {
-  const auth = req.user ?? { role: 'guest' }
-  if (auth.role === 'guest') {
-    res.status(401).json({ error: 'Authentication required' })
-    return null
-  }
-
-  const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(grantId)
-  if (!grant) {
-    res.status(404).json({ error: 'Grant not found' })
-    return null
-  }
-
-  if (auth.role === 'admin') {
-    return grant
-  }
-
-  if (!auth.profileId) {
-    res.status(403).json({ error: 'Not authorized to access this grant' })
-    return null
-  }
-
-  const profile = await req.db
-    .prepare('SELECT id FROM profiles WHERE id = ? AND organization_id = ?')
-    .get(auth.profileId, grant.organization_id)
-
-  if (!profile) {
-    res.status(403).json({ error: 'Not authorized to access this grant' })
-    return null
-  }
-
-  return grant
-}
+// NOTE: Access control is centralized in `backend/utils/accessControl.js`
 
 function mapAutomationEvent(row) {
   if (!row) return null
@@ -73,6 +49,9 @@ function mapAutomationEvent(row) {
 // List all grants
 router.get('/', async (req, res) => {
   try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
+
     const { organization_id, status } = req.query;
     const { limit, offset } = validatePagination(req.query);
     
@@ -83,6 +62,19 @@ router.get('/', async (req, res) => {
       WHERE 1=1
     `;
     const params = [];
+
+    if (!isAdminUser(user)) {
+      const orgIds = await getAccessibleOrganizationIds(req.db, user)
+      if (!orgIds || orgIds.size === 0) {
+        return res.json([])
+      }
+      if (organization_id && !orgIds.has(String(organization_id))) {
+        return res.status(403).json({ error: 'Not authorized to access this organization' })
+      }
+      const placeholders = Array.from(orgIds).map(() => '?').join(',')
+      query += ` AND g.organization_id IN (${placeholders})`
+      params.push(...Array.from(orgIds))
+    }
     
     if (organization_id) {
       query += ' AND g.organization_id = ?';
@@ -121,6 +113,9 @@ router.get('/', async (req, res) => {
 // Get grants grouped by status (for pipeline view)
 router.get('/pipeline', async (req, res) => {
   try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
+
     const { organization_id } = req.query;
     
     let query = `
@@ -129,9 +124,31 @@ router.get('/pipeline', async (req, res) => {
       LEFT JOIN organizations o ON g.organization_id = o.id
     `;
     const params = [];
+
+    if (!isAdminUser(user)) {
+      const orgIds = await getAccessibleOrganizationIds(req.db, user)
+      if (!orgIds || orgIds.size === 0) {
+        return res.json({
+          discovered: [],
+          interested: [],
+          drafting: [],
+          app_prep: [],
+          revision: [],
+          submitted: [],
+          awarded: [],
+          rejected: [],
+        })
+      }
+      if (organization_id && !orgIds.has(String(organization_id))) {
+        return res.status(403).json({ error: 'Not authorized to access this organization' })
+      }
+      const placeholders = Array.from(orgIds).map(() => '?').join(',')
+      query += ` WHERE g.organization_id IN (${placeholders})`
+      params.push(...Array.from(orgIds))
+    }
     
     if (organization_id) {
-      query += ' WHERE g.organization_id = ?';
+      query += isAdminUser(user) ? ' WHERE g.organization_id = ?' : ' AND g.organization_id = ?';
       params.push(organization_id);
     }
     
@@ -170,26 +187,16 @@ router.get('/pipeline', async (req, res) => {
 });
 
 router.get('/automation/summary', async (req, res) => {
-  const auth = req.user ?? { role: 'guest' }
-  if (auth.role === 'guest') {
-    return res.status(401).json({ error: 'Authentication required' })
-  }
+  const auth = requireAuthenticatedUser(req, res)
+  if (!auth) return
 
   const organizationId = req.query.organization_id
   if (!organizationId) {
     return res.status(400).json({ error: 'organization_id query parameter is required' })
   }
 
-  if (auth.role !== 'admin') {
-    if (!auth.profileId) {
-      return res.status(403).json({ error: 'Not authorized' })
-    }
-    const profile = await req.db
-      .prepare('SELECT id FROM profiles WHERE id = ? AND organization_id = ?')
-      .get(auth.profileId, organizationId)
-    if (!profile) {
-      return res.status(403).json({ error: 'Not authorized to access this organization' })
-    }
+  if (!isAdminUser(auth)) {
+    if (!(await ensureOrganizationAccess(req, res, String(organizationId)))) return
   }
 
   try {
@@ -247,7 +254,7 @@ router.get('/automation/summary', async (req, res) => {
 });
 
 router.get('/:id/automation/events', async (req, res) => {
-  const grant = await ensureGrantAccess(req, res, req.params.id)
+  const grant = await ensureGrantAccessUtil(req, res, req.params.id)
   if (!grant) return
 
   try {
@@ -272,7 +279,7 @@ router.get('/:id/automation/events', async (req, res) => {
 });
 
 router.get('/:id/automation/latest', async (req, res) => {
-  const grant = await ensureGrantAccess(req, res, req.params.id)
+  const grant = await ensureGrantAccessUtil(req, res, req.params.id)
   if (!grant) return
 
   try {
@@ -298,6 +305,9 @@ router.get('/:id/automation/latest', async (req, res) => {
 // Get single grant
 router.get('/:id', async (req, res) => {
   try {
+    const grantAccess = await ensureGrantAccessUtil(req, res, req.params.id)
+    if (!grantAccess) return
+
     const grant = await req.db.prepare(`
       SELECT g.*, o.name as organization_name 
       FROM grants g
@@ -337,6 +347,9 @@ router.get('/:id', async (req, res) => {
 // Create grant
 router.post('/', mutationRateLimiter, async (req, res) => {
   try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
+
     const data = req.body;
     
     // Validate required fields
@@ -348,6 +361,8 @@ router.post('/', mutationRateLimiter, async (req, res) => {
       });
     }
     
+    if (!(await ensureOrganizationAccess(req, res, String(data.organization_id)))) return
+
     const id = crypto.randomUUID();
     
     // Sanitize columns against whitelist
@@ -378,6 +393,9 @@ router.post('/', mutationRateLimiter, async (req, res) => {
 // Update grant
 router.put('/:id', mutationRateLimiter, async (req, res) => {
   try {
+    const grantAccess = await ensureGrantAccessUtil(req, res, req.params.id)
+    if (!grantAccess) return
+
     const data = req.body;
     
     // Sanitize columns against whitelist
@@ -412,6 +430,9 @@ router.put('/:id', mutationRateLimiter, async (req, res) => {
 // Update grant status (quick update for drag-and-drop)
 router.patch('/:id/status', mutationRateLimiter, async (req, res) => {
   try {
+    const grantAccess = await ensureGrantAccessUtil(req, res, req.params.id)
+    if (!grantAccess) return
+
     const { status } = req.body;
     
     if (!GRANT_STATUSES.includes(status)) {
@@ -435,6 +456,9 @@ router.patch('/:id/status', mutationRateLimiter, async (req, res) => {
 // Delete grant
 router.delete('/:id', mutationRateLimiter, async (req, res) => {
   try {
+    const grantAccess = await ensureGrantAccessUtil(req, res, req.params.id)
+    if (!grantAccess) return
+
     // Delete related records first
     await req.db.prepare('DELETE FROM milestones WHERE grant_id = ?').run(req.params.id);
     await req.db.prepare('DELETE FROM expenses WHERE grant_id = ?').run(req.params.id);
@@ -456,6 +480,9 @@ router.delete('/:id', mutationRateLimiter, async (req, res) => {
 // Add grant from opportunity (supports both database opportunities and direct data)
 router.post('/from-opportunity', async (req, res) => {
   try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
+
     let { 
       opportunity_id, 
       organization_id, 
@@ -465,6 +492,13 @@ router.post('/from-opportunity', async (req, res) => {
       // Direct opportunity data (for synthetic/discovered opportunities)
       opportunity_data
     } = req.body;
+
+    if (profile_id) {
+      if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
+    }
+    if (organization_id) {
+      if (!(await ensureOrganizationAccess(req, res, String(organization_id)))) return
+    }
     
     // Try to get opportunity from database first
     let opportunity = null;
@@ -519,6 +553,9 @@ router.post('/from-opportunity', async (req, res) => {
     if (!organization_id) {
       return res.status(400).json({ error: 'Organization ID or Profile ID is required' });
     }
+
+    // Re-check access after auto-linking.
+    if (!(await ensureOrganizationAccess(req, res, String(organization_id)))) return
     
     // Check for duplicate grants by title for this organization
     const existingGrant = await req.db.prepare(

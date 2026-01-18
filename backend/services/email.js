@@ -3,9 +3,10 @@
  * Falls back gracefully when Resend is not available or configured
  */
 
+import { ADMIN_EMAIL } from '../config/constants.js'
+
 const RESEND_API_KEY = process.env.RESEND_API_KEY || null
 const FROM_EMAIL = process.env.FROM_EMAIL || 'onboarding@resend.dev'
-const DEFAULT_ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@grantflow.app'
 const AUTH_NOTIFY_EMAIL = process.env.AUTH_NOTIFY_EMAIL || null
 // Production defaults: enable admin notifications unless explicitly disabled.
 const AUTH_NOTIFY_ON_LOGIN =
@@ -138,7 +139,7 @@ export async function sendAuthAttemptNotification(
     return false
   }
 
-  const to = AUTH_NOTIFY_EMAIL || DEFAULT_ADMIN_EMAIL
+  const to = AUTH_NOTIFY_EMAIL || ADMIN_EMAIL
   const safeIdentifier = typeof identifier === 'string' ? identifier : 'unknown'
   const safeEvent = typeof event === 'string' ? event : 'auth_event'
   const ok = Boolean(success)

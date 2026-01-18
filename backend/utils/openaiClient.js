@@ -97,7 +97,11 @@ export function summarizeOpenAIError(error) {
 
   const rawMessage = String(nestedMessage || message || 'Unknown OpenAI error')
   // Never leak API keys in logs/errors stored in DB.
-  const finalMessage = rawMessage.replace(/sk-[A-Za-z0-9_-]+/g, 'sk-***REDACTED***')
+  const finalMessage = rawMessage
+    // Typical keys: sk-..., sk-proj-...
+    .replace(/sk-[A-Za-z0-9_-]{10,}/g, 'sk-***REDACTED***')
+    // Some upstream messages may already be partially masked (contain "*") — still redact the token.
+    .replace(/sk-[A-Za-z0-9_\-*]{10,}/g, 'sk-***REDACTED***')
 
   const isAuth =
     status === 401 ||
