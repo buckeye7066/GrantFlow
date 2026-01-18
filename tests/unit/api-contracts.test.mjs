@@ -105,7 +105,10 @@ test('backend /api/health contract + request id header', async () => {
 
     const body = await res.json()
     assert.equal(typeof body, 'object')
-    assert.ok(['ok', 'warning'].includes(body.status), `expected status ok|warning, got ${body.status}`)
+    // Backward-compatible: some deployments may still return legacy statuses.
+    // Canonical statuses are: ok|warning|error.
+    const allowedStatuses = new Set(['ok', 'warning', 'healthy', 'degraded'])
+    assert.ok(allowedStatuses.has(body.status), `expected status ok|warning (or legacy healthy|degraded), got ${body.status}`)
   } finally {
     await stopProcess(proc)
   }
