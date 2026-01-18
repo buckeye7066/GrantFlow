@@ -127,6 +127,107 @@ export const PROFILE_SCHEMA = {
     },
   },
 
+  medical_insurance: {
+    title: 'Medical Insurance',
+    description:
+      'Insurance coverage details used for care coordination, assistance programs, and documentation (do not invent identifiers).',
+    applies_to: ['medical_assistance', 'medical_need', 'individual_need', 'family', 'medical_assistance'],
+    fields: {
+      insurance_provider: {
+        type: 'string',
+        default: '',
+        description: 'Primary insurance provider name (e.g., BlueCross, Aetna, Medicaid managed-care plan).',
+      },
+      plan_name: { type: 'string', default: '', description: 'Plan name (e.g., HMO/PPO plan name) if known.' },
+      plan_type: { type: 'string', default: '', description: 'Plan type (e.g., HMO, PPO, Medicaid, Medicare, Marketplace).' },
+      member_id: {
+        type: 'string',
+        default: '',
+        description:
+          'Member/Subscriber ID if explicitly provided in documents; leave blank if unknown (sensitive identifier).',
+      },
+      group_id: {
+        type: 'string',
+        default: '',
+        description: 'Group ID if explicitly provided in documents; leave blank if unknown (sensitive identifier).',
+      },
+      policy_holder_name: { type: 'string', default: '', description: 'Name of policy holder when relevant.' },
+      effective_date: { type: 'string', default: '', description: 'Coverage effective date (YYYY-MM-DD) if known.' },
+      phone_for_claims: { type: 'string', default: '', description: 'Member services / claims phone number if known.' },
+      notes: {
+        type: 'string',
+        default: '',
+        description: 'High-level notes about coverage gaps, copays, prior auth needs, etc. (no fabricated details).',
+      },
+    },
+  },
+
+  medical_history: {
+    title: 'Medical History & Needs',
+    description:
+      'Medical background needed to target condition-specific resources and support letters (avoid unnecessary PHI; keep concise).',
+    applies_to: ['medical_assistance', 'medical_need', 'individual_need', 'family', 'medical_assistance'],
+    fields: {
+      primary_condition: { type: 'string', default: '', description: 'Primary condition/diagnosis when explicitly stated.' },
+      secondary_conditions: {
+        type: 'array<string>',
+        default: [],
+        description: 'Other conditions/diagnoses explicitly stated (strings).',
+      },
+      mobility_needs: {
+        type: 'string',
+        default: '',
+        description: 'Mobility needs summary (e.g., wheelchair, walker, limited standing).',
+      },
+      dme_needed: {
+        type: 'array<string>',
+        default: [],
+        description: 'Durable medical equipment needed (e.g., shower chair) when explicitly stated.',
+      },
+      doctor_name: { type: 'string', default: '', description: 'Primary clinician/doctor name if known.' },
+      clinic_name: { type: 'string', default: '', description: 'Clinic/hospital name if known.' },
+      letter_support_needed: {
+        type: 'boolean',
+        default: false,
+        description: 'True if a letter of medical necessity / support letter is needed for coverage or assistance.',
+      },
+      notes: { type: 'string', default: '', description: 'Concise medical history context (<= ~5 sentences).' },
+    },
+  },
+
+  nonprofit_compliance: {
+    title: 'Nonprofit Compliance',
+    description: 'Nonprofit compliance signals used for grant readiness and eligibility.',
+    applies_to: ['nonprofit', 'organization'],
+    fields: {
+      is_501c3: { type: 'boolean', default: false, description: 'True if 501(c)(3) status is confirmed.' },
+      fiscal_sponsor: { type: 'boolean', default: false, description: 'True if operating under a fiscal sponsor.' },
+      fiscal_sponsor_name: { type: 'string', default: '', description: 'Fiscal sponsor name if applicable.' },
+      sam_registered: { type: 'boolean', default: false, description: 'True if SAM.gov registration is confirmed.' },
+      insurance_coverage: { type: 'string', default: '', description: 'General insurance coverage (GL, D&O) if known.' },
+      compliance_notes: { type: 'string', default: '', description: 'Notes about audits, policies, and compliance gaps.' },
+    },
+  },
+
+  small_business_details: {
+    title: 'Small Business Details',
+    description: 'Business details used for small business programs, certifications, and lending resources.',
+    applies_to: ['small_business'],
+    fields: {
+      business_name: { type: 'string', default: '', description: 'Legal business name if different from profile name.' },
+      naics_code: { type: 'string', default: '', description: 'NAICS code if known.' },
+      years_in_business: { type: 'number|null', default: null, description: 'Years in business (integer) if known.' },
+      employee_count: { type: 'number|null', default: null, description: 'Employee count if known.' },
+      annual_revenue: { type: 'number|null', default: null, description: 'Annual revenue (USD) if known; null if unknown.' },
+      certifications: {
+        type: 'array<string>',
+        default: [],
+        description: 'Certifications (e.g., WOSB, HUBZone, MBE) when explicitly stated.',
+      },
+      notes: { type: 'string', default: '', description: 'Notes about products/services, capacity, and priorities.' },
+    },
+  },
+
   demographics: {
     title: 'Demographics',
     description: 'Demographic identifiers that unlock targeted funds and scholarships.',
