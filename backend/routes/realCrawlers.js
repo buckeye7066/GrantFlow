@@ -158,6 +158,16 @@ async function runLiveCrawler({ crawlerType, profile, itemRequest, minMatchScore
   const startedAt = Date.now()
   const options = { min_match_score: minMatchScore }
 
+  // Validate profile before attempting to crawl
+  if (!profile || typeof profile !== 'object') {
+    return {
+      ok: false,
+      duration_ms: Date.now() - startedAt,
+      error: 'Invalid profile data - profile is required',
+      opportunities: [],
+    }
+  }
+
   try {
     let rawResults = []
     switch (crawlerType) {
@@ -215,10 +225,25 @@ async function runLiveCrawler({ crawlerType, profile, itemRequest, minMatchScore
       error: null,
     }
   } catch (error) {
+    const errorMsg = error?.message || String(error)
+    const errorCode = error?.code
+    
+    // Provide more specific error messages
+    let friendlyError = errorMsg
+    if (errorCode === 'TIMEOUT') {
+      friendlyError = `${crawlerType} crawler timed out after ${LIVE_CRAWL_TIMEOUT_MS}ms`
+    } else if (errorMsg.includes('ENOTFOUND') || errorMsg.includes('ETIMEDOUT')) {
+      friendlyError = `Network error: Unable to reach external data sources for ${crawlerType}`
+    } else if (errorMsg.includes('API key') || errorMsg.includes('SAM_GOV_API_KEY')) {
+      friendlyError = `API configuration missing for ${crawlerType} crawler`
+    }
+    
+    console.error(`[RealCrawlers] ${crawlerType} live crawler error:`, errorMsg)
+    
     return {
       ok: false,
       duration_ms: Date.now() - startedAt,
-      error: error?.message || String(error),
+      error: friendlyError,
       opportunities: [],
     }
   }
@@ -371,7 +396,18 @@ router.post('/run', ensureAuth, async (req, res) => {
     // Prefer DB-backed profile_id so we always use the full 22-page profile_sections context.
     let profile = null
     if (profile_id) {
-      profile = await getProfileWithLocation(db, profile_id)
+      try {
+        profile = await getProfileWithLocation(db, profile_id)
+      } catch (profileError) {
+        console.error('[RealCrawlers] Error loading profile:', profileError)
+        return res.status(200).json({
+          success: false,
+          error: 'Profile loading failed',
+          message: `Could not load profile: ${profileError?.message || 'Unknown error'}`,
+          crawler_type,
+          opportunities: [],
+        })
+      }
     } else {
       profile = profile_data
     }
@@ -381,6 +417,11 @@ router.post('/run', ensureAuth, async (req, res) => {
         error: 'Profile not found',
         message: `Profile with ID ${profile_id} does not exist`,
       })
+    }
+    
+    // Validate profile has required data
+    if (!profile.signals && !profile.sections) {
+      console.warn('[RealCrawlers] Profile missing signals and sections - results may be limited')
     }
 
     const profileContext =

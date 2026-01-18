@@ -6,6 +6,7 @@
  * CRITICAL: Uses 100% of profile data via signals for search queries and scoring.
  */
 
+import axios from 'axios'
 import * as cheerio from 'cheerio'
 import axios from 'axios'
 import { buildSearchKeywords, calculateMatchScore, filterByDeadline } from './crawlerHelpers.js'
