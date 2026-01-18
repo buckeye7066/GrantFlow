@@ -628,8 +628,10 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
     const documentId = crypto.randomUUID();
     const publicUrl = `/uploads/${file.filename}`;
     
-    await req.db.prepare(
-      `INSERT INTO documents (
+    // IMPORTANT: Do NOT set documents.status on insert.
+    // Rely on DB default and leave later status updates alone.
+    const insertDocSql = `
+      INSERT INTO documents (
         id,
         profile_id,
         name,
@@ -640,10 +642,10 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
         mime_type,
         extracted_text,
         processing_status,
-        status,
         notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `
+    const insertDocArgs = [
       documentId,
       profileId,
       file.originalname,
@@ -654,9 +656,18 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
       file.mimetype,
       extractedText,
       'completed',
-      'active',
-      'Uploaded by admin for profile creation'
-    );
+      'Uploaded by admin for profile creation',
+    ]
+    try {
+      await req.db.prepare(insertDocSql).run(...insertDocArgs)
+    } catch (error) {
+      const msg = String(error?.message || error)
+      if (msg.includes('documents_status_check')) {
+        await req.db.prepare(insertDocSql).run(...insertDocArgs)
+      } else {
+        throw error
+      }
+    }
 
     await req.db
       .prepare(

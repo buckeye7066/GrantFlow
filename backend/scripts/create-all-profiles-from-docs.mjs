@@ -126,8 +126,8 @@ for (const doc of profileDocs) {
   
   // Store document record
   db.prepare(`
-    INSERT INTO documents (id, profile_id, name, type, file_path, file_url, file_size, mime_type, extracted_text, processing_status, status, notes)
-    VALUES (?, ?, ?, 'profile_document', ?, ?, ?, 'application/pdf', ?, ?, 'final', 'Original application document')
+    INSERT INTO documents (id, profile_id, name, type, file_path, file_url, file_size, mime_type, extracted_text, processing_status, notes)
+    VALUES (?, ?, ?, 'profile_document', ?, ?, ?, 'application/pdf', ?, ?, 'Original application document')
   `).run(
     docId,
     profile.id,
