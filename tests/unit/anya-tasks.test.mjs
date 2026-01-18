@@ -43,6 +43,8 @@ async function waitForHttpOk(url, { timeoutMs = 45_000 } = {}) {
 }
 
 async function startBackend({ rootDir, port, sqlitePath }) {
+  let stdoutBuf = ''
+  let stderrBuf = ''
   const env = {
     ...process.env,
     NODE_ENV: 'development',
@@ -50,7 +52,8 @@ async function startBackend({ rootDir, port, sqlitePath }) {
     PORT: String(port),
     DB_AUTO_MIGRATE: 'true',
     SQLITE_DB_PATH: sqlitePath,
-    ADMIN_TOKEN: process.env.ADMIN_TOKEN || 'dev-admin-token',
+    // Make tests deterministic even if host env has ADMIN_TOKEN set.
+    ADMIN_TOKEN: 'dev-admin-token',
     CORS_ORIGIN: process.env.CORS_ORIGIN || 'http://localhost:5173,http://127.0.0.1:5173',
     AUTH_FRONTEND_APP_BASE: process.env.VITE_APP_BASE || '/grantflow',
     // Avoid any surprise background work during unit tests.
@@ -58,16 +61,21 @@ async function startBackend({ rootDir, port, sqlitePath }) {
     NATIONAL_PROGRAMS_CRAWLER_ENABLED: 'false',
   }
 
-  const proc = spawn('node', ['backend/server.js'], {
+  const proc = spawn(process.execPath, ['backend/server.js'], {
     cwd: rootDir,
     env,
-    shell: true,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
 
-  proc.stdout?.on('data', () => {})
-  proc.stderr?.on('data', () => {})
+  proc.stdout?.on('data', (chunk) => {
+    stdoutBuf += String(chunk ?? '')
+    if (stdoutBuf.length > 20_000) stdoutBuf = stdoutBuf.slice(-20_000)
+  })
+  proc.stderr?.on('data', (chunk) => {
+    stderrBuf += String(chunk ?? '')
+    if (stderrBuf.length > 20_000) stderrBuf = stderrBuf.slice(-20_000)
+  })
 
   const ok = await waitForHttpOk(`http://127.0.0.1:${port}/api/health`, { timeoutMs: 45_000 })
   if (!ok) {
@@ -77,7 +85,10 @@ async function startBackend({ rootDir, port, sqlitePath }) {
     throw new Error('Backend did not become healthy for Anya tests')
   }
 
-  return proc
+  return {
+    proc,
+    getLogs: () => ({ stdout: stdoutBuf, stderr: stderrBuf }),
+  }
 }
 
 async function waitForExit(proc, { timeoutMs = 10_000 } = {}) {
@@ -121,7 +132,7 @@ test('Anya sessions + tasks: create and update task', async () => {
   const tempDir = await fsp.mkdtemp(join(os.tmpdir(), 'grantflow-anya-'))
   const sqlitePath = join(tempDir, 'grantflow-test.db')
 
-  const proc = await startBackend({ rootDir, port, sqlitePath })
+  const { proc, getLogs } = await startBackend({ rootDir, port, sqlitePath })
   try {
     const headers = {
       'content-type': 'application/json',
@@ -133,7 +144,13 @@ test('Anya sessions + tasks: create and update task', async () => {
       headers,
       body: JSON.stringify({ title: 'Test session' }),
     })
-    assert.equal(createSessionRes.ok, true)
+    if (!createSessionRes.ok) {
+      const text = await createSessionRes.text().catch(() => '')
+      const logs = getLogs?.()
+      throw new Error(
+        `Expected /api/anya/sessions to succeed, got ${createSessionRes.status} ${createSessionRes.statusText}: ${text}\n\nstdout:\n${logs?.stdout || ''}\n\nstderr:\n${logs?.stderr || ''}`,
+      )
+    }
     const session = await createSessionRes.json()
     assert.ok(session?.id, 'expected created session id')
 
@@ -163,6 +180,12 @@ test('Anya sessions + tasks: create and update task', async () => {
       proc.kill('SIGTERM')
     } catch {}
     await waitForExit(proc, { timeoutMs: 10_000 })
+    if (proc.exitCode === null) {
+      try {
+        proc.kill('SIGKILL')
+      } catch {}
+      await waitForExit(proc, { timeoutMs: 5_000 })
+    }
     await safeRm(tempDir)
   }
 })

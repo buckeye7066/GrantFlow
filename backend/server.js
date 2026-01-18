@@ -90,7 +90,7 @@ const __dirname = dirname(__filename);
 const uploadsDir = process.env.UPLOADS_DIR
   ? resolve(process.env.UPLOADS_DIR)
   : join(__dirname, 'uploads');
-// Backward-compat: older builds stored uploads at repo-root `/uploads`.
+// Backward-compat: some older builds stored uploads at repo-root `/uploads`.
 const legacyUploadsDir = join(__dirname, '..', 'uploads');
 const distPath = join(__dirname, '..', 'dist');
 
@@ -207,22 +207,16 @@ try {
   console.warn('Failed to create uploads directory:', error);
 }
 // IMPORTANT: Missing uploads must return 404 (not SPA index.html).
-// Use `fallthrough: false` to stop the request pipeline when a file is missing.
-app.use('/uploads', express.static(uploadsDir, { fallthrough: false, index: false }));
-// If legacy dir exists (and differs), serve it too so old URLs still work.
+// Serve both current + legacy upload locations, then terminate with a strict 404.
+app.use('/uploads', express.static(uploadsDir, { index: false }));
 try {
   if (legacyUploadsDir !== uploadsDir && fs.existsSync(legacyUploadsDir)) {
-    app.use('/uploads', express.static(legacyUploadsDir, { fallthrough: false, index: false }));
+    app.use('/uploads', express.static(legacyUploadsDir, { index: false }));
   }
 } catch {
   // ignore legacy-dir probing failures
 }
-app.use('/uploads', (err, _req, res, next) => {
-  if (err && (err.status === 404 || err.statusCode === 404)) {
-    return res.status(404).send('Not Found');
-  }
-  return next(err);
-});
+app.use('/uploads', (_req, res) => res.status(404).send('Not Found'));
 
 async function repairMissingUploadAvatars({ db, uploadsDir }) {
   // If the DB references upload URLs that no longer exist on disk (common after an ephemeral volume reset),
@@ -278,23 +272,16 @@ const APP_BASE_PATH = process.env.AUTH_FRONTEND_APP_BASE || process.env.VITE_APP
 if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
   const normalizedBase = String(APP_BASE_PATH).replace(/\/+$/, '');
   // Expose uploads under the same base path (common when reverse proxies only route /grantflow/*).
-  app.use(`${normalizedBase}/uploads`, express.static(uploadsDir, { fallthrough: false, index: false }));
+  app.use(`${normalizedBase}/uploads`, express.static(uploadsDir, { index: false }));
   try {
     if (legacyUploadsDir !== uploadsDir && fs.existsSync(legacyUploadsDir)) {
-      app.use(
-        `${normalizedBase}/uploads`,
-        express.static(legacyUploadsDir, { fallthrough: false, index: false }),
-      );
+      app.use(`${normalizedBase}/uploads`, express.static(legacyUploadsDir, { index: false }));
     }
   } catch {
     // ignore legacy-dir probing failures
   }
-  app.use(`${normalizedBase}/uploads`, (err, _req, res, next) => {
-    if (err && (err.status === 404 || err.statusCode === 404)) {
-      return res.status(404).send('Not Found');
-    }
-    return next(err);
-  });
+  app.use(`${normalizedBase}/uploads`, (_req, res) => res.status(404).send('Not Found'));
+
   app.use(APP_BASE_PATH, express.static(distPath));
 }
 
@@ -379,10 +366,15 @@ const allowedMigrations = [
   { table: 'crawler_jobs', column: 'retry_count', type: 'INTEGER DEFAULT 0' },
   { table: 'crawler_jobs', column: 'last_retry_at', type: 'DATETIME' },
   // Positive classification for "REAL" opportunity invariants
-  { table: 'funding_opportunities', column: 'record_origin', type: "TEXT DEFAULT 'live_crawl'" }
+  { table: 'funding_opportunities', column: 'record_origin', type: "TEXT DEFAULT 'live_crawl'" },
+  { table: 'funding_opportunities', column: 'evidence_url', type: 'TEXT' },
+  { table: 'funding_opportunities', column: 'last_verified_at', type: 'DATETIME' },
+  // Link documents to per-school university applications (student profiles)
+  { table: 'documents', column: 'university_application_id', type: 'TEXT' },
+  { table: 'documents', column: 'university_application_name', type: 'TEXT' },
 ];
 
-const validTables = new Set(['profiles', 'crawler_jobs', 'users', 'organizations', 'grants', 'funding_opportunities']);
+const validTables = new Set(['profiles', 'crawler_jobs', 'users', 'organizations', 'grants', 'funding_opportunities', 'documents']);
 const validColumnPattern = /^[a-z_]+$/;
 
 // This legacy auto-migration is SQLite-only. Postgres must be migrated deterministically via SQL migrations.
@@ -551,6 +543,8 @@ try {
   })
   await ensureDesignatedProfiles(db)
 }
+// Always ensure designated profiles exist (idempotent); baseline seed may not include newer fixtures.
+await ensureDesignatedProfiles(db)
 await linkAllProfilesToAdmin(db)
 await ensureUserPreferencesTable(db)
 await repairMissingUploadAvatars({ db, uploadsDir })
@@ -561,71 +555,13 @@ if (db.dialect === 'sqlite') {
     const oppCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get();
     if (oppCount && oppCount.count === 0) {
       console.info('[startup] No funding opportunities found, auto-seeding...');
-
-      // Load opportunity files
-      const crawlersDir = join(__dirname, 'data', 'crawlers');
-      const files = [
-        { path: join(crawlersDir, 'real_funding_opportunities.json'), type: 'structured' },
-        { path: join(crawlersDir, 'scholarship_opportunities.json'), type: 'array' },
-        { path: join(crawlersDir, 'local_opportunities.json'), type: 'array' },
-        { path: join(crawlersDir, 'item_funding_sources.json'), type: 'array' },
-      ];
-
-      const allOpportunities = [];
-      for (const file of files) {
-        try {
-          if (fs.existsSync(file.path)) {
-            const content = fs.readFileSync(file.path, 'utf8');
-            const data = JSON.parse(content);
-            if (file.type === 'structured') {
-              Object.values(data).forEach(category => {
-                if (Array.isArray(category)) allOpportunities.push(...category);
-              });
-            } else if (Array.isArray(data)) {
-              allOpportunities.push(...data);
-            }
-          }
-        } catch (e) {
-          console.warn(`[startup] Failed to load ${file.path}:`, e.message);
-        }
-      }
-
-      if (allOpportunities.length > 0) {
-        const upsert = db.prepare(`
-          INSERT INTO funding_opportunities (
-            id, source, source_id, title, sponsor, description,
-            application_url, source_url, deadline, amount_min, amount_max,
-            categories, keywords, eligibility_bullets, match_reasons,
-            state, requires_match, requires_501c3, is_active, is_national, record_origin,
-            opportunity_type, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-          ON CONFLICT(id) DO NOTHING
-        `);
-
-        const transaction = db.transaction(() => {
-          for (const opp of allOpportunities) {
-            try {
-              const id = opp.id || crypto.randomUUID();
-              const isNational = opp.is_national === true || opp.is_national === 1 || opp.state === 'nationwide';
-              upsert.run(
-                id, opp.source || 'seeded_real', opp.source_id || id,
-                opp.title || opp.program_name, opp.sponsor || opp.funder, opp.description || opp.summary,
-                opp.application_url || opp.url, opp.url || opp.source_url || opp.application_url, opp.deadline,
-                opp.amount_min || opp.award_floor, opp.amount_max || opp.award_ceiling,
-                JSON.stringify(opp.categories || []), JSON.stringify(opp.keywords || []),
-                JSON.stringify(opp.eligibility_bullets || []), JSON.stringify(opp.match_reasons || []),
-                opp.state || (isNational ? 'nationwide' : null),
-                opp.requires_match ? 1 : 0, opp.requires_501c3 ? 1 : 0, isNational ? 1 : 0,
-                'curated_verified',
-                opp.opportunity_type || 'grant'
-              );
-            } catch (e) { /* ignore individual errors */ }
-          }
-        });
-
-        transaction();
-        const newCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get();
-        console.info(`[startup] Seeded ${newCount.count} funding opportunities`);
+      try {
+        const { seedRealOpportunities } = await import('./utils/seedRealOpportunities.js')
+        await seedRealOpportunities(db)
+        const newCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get()
+        console.info(`[startup] Seeded ${newCount.count} funding opportunities`)
+      } catch (e) {
+        console.warn('[startup] Failed to auto-seed funding opportunities:', e?.message || e)
       }
     } else {
       console.info(`[startup] Found ${oppCount.count} existing funding opportunities`);
@@ -681,7 +617,7 @@ try {
   }
 
     if (shouldEnsure) {
-      const ensured = ensureMinimumNationalOpportunities(db, min)
+      const ensured = await ensureMinimumNationalOpportunities(db, min)
     const backfilled = (ensured.events || []).some((e) => e.type === 'backfill' || e.type === 'schema_backfill')
 
     const evt = {
@@ -721,11 +657,22 @@ try {
       .get()?.count
     if ((existing ?? 0) < 250) {
       console.info('[startup] Seeding assistance directories (state_211 + assistance_network)...')
-      const result = seedAssistanceDirectories(db)
-      const after = db
-        .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")
-        .get()?.count
-      console.info('[startup] Seeded assistance directories', { ...result, after })
+      const dataDir = join(__dirname, 'data')
+      const hasAssistanceSeedFiles =
+        fs.existsSync(join(dataDir, 'state_assistance_programs.json')) ||
+        fs.existsSync(join(dataDir, 'local_assistance_networks.json'))
+
+      if (!hasAssistanceSeedFiles) {
+        console.info(
+          `[startup] Assistance directory seed files missing under ${dataDir}; skipping`,
+        )
+      } else {
+        const result = await seedAssistanceDirectories(db)
+        const after = db
+          .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")
+          .get()?.count
+        console.info('[startup] Seeded assistance directories', { ...result, after })
+      }
     } else {
       console.info('[startup] Assistance directories already seeded', { count: existing })
     }
@@ -763,6 +710,7 @@ function resolveJwtSecret() {
 }
 
 const EFFECTIVE_JWT_SECRET = resolveJwtSecret();
+const isProd = process.env.NODE_ENV === 'production'
 
 // Make db available to routes
 app.use((req, res, next) => {
@@ -776,7 +724,6 @@ app.use(async (req, res, next) => {
   const xAnyaToken = req.headers['x-anya-token'];
   let user = { role: 'guest', profileId: null };
   let handled = false;
-  const isProd = process.env.NODE_ENV === 'production'
 
   // 1. Check X-Admin-Token
   const expectedAdminToken = ADMIN_TOKEN;
@@ -787,7 +734,13 @@ app.use(async (req, res, next) => {
     ((expectedAdminToken && xAdminToken === expectedAdminToken) ||
       (expectedBulkKey && xAdminToken === expectedBulkKey))
   ) {
-    user = { role: 'admin', is_admin: true, full_name: ADMIN_NAME, email: ADMIN_EMAIL };
+    user = {
+      role: 'admin',
+      is_admin: true,
+      profileId: null,
+      full_name: ADMIN_NAME,
+      email: ADMIN_EMAIL,
+    };
     handled = true;
   }
 
@@ -859,7 +812,13 @@ app.use(async (req, res, next) => {
     }
 
     if (!handled && token && ADMIN_TOKEN && token === ADMIN_TOKEN) {
-      user = { role: 'admin', is_admin: true, full_name: ADMIN_NAME, email: ADMIN_EMAIL };
+      user = {
+        role: 'admin',
+        is_admin: true,
+        profileId: null,
+        full_name: ADMIN_NAME,
+        email: ADMIN_EMAIL,
+      };
       handled = true;
     }
 
@@ -986,7 +945,7 @@ const authMeLimiter = rateLimit({
   message: { error: 'Too many requests, please try again later.' }
 });
 
-app.get('/api/auth/me', authMeLimiter, (req, res) => {
+app.get('/api/auth/me', authMeLimiter, async (req, res) => {
   try {
     const user = req.user ?? { role: 'guest' };
     if (user.role === 'guest') {
@@ -997,7 +956,7 @@ app.get('/api/auth/me', authMeLimiter, (req, res) => {
       let dbUser, profiles;
       
       try {
-        dbUser = db
+        dbUser = await req.db
           .prepare(
             `
               SELECT *
@@ -1016,11 +975,42 @@ app.get('/api/auth/me', authMeLimiter, (req, res) => {
       }
 
       if (!dbUser) {
-        return res.status(401).json({ error: 'User record not found' });
+        // Dev/admin token convenience: ADMIN_TOKEN can authenticate an admin user without a stored user record.
+        // Create the user record on-demand so the frontend auth bootstrap (`/api/auth/me`) is not brittle.
+        if (user.role === 'admin' || user.is_admin === true) {
+          try {
+            db.prepare(
+              `
+                INSERT INTO users (id, display_name, primary_email, is_admin)
+                VALUES (?, ?, ?, 1)
+              `,
+            ).run(
+              user.userId,
+              user.full_name || ADMIN_NAME || 'Admin User',
+              user.email || ADMIN_EMAIL || null,
+            )
+
+            dbUser = db
+              .prepare(
+                `
+                  SELECT *
+                  FROM users
+                  WHERE id = ?
+                `,
+              )
+              .get(user.userId)
+          } catch (repairError) {
+            console.warn('[/api/auth/me] Unable to self-heal missing admin user:', repairError?.message || repairError)
+          }
+        }
+
+        if (!dbUser) {
+          return res.status(401).json({ error: 'User record not found' });
+        }
       }
 
       try {
-        profiles = db
+        profiles = await req.db
           .prepare(
             `
               SELECT id, display_name, organization_id, status
@@ -1045,7 +1035,7 @@ app.get('/api/auth/me', authMeLimiter, (req, res) => {
           avatar_url: dbUser.avatar_url,
           is_admin: Boolean(dbUser.is_admin),
         },
-        profiles,
+        profiles: Array.isArray(profiles) ? profiles : [],
         active_profile_id: user.profileId ?? profiles[0]?.id ?? null,
       });
     }
@@ -1121,11 +1111,28 @@ app.get('/api/meta/build', (_req, res) => {
 // Public health endpoint - safe for non-admin users
 app.get('/api/health', async (req, res) => {
   try {
-    const healthSummary = await getSafeHealthSummary(db);
+    const healthSummary = await getSafeHealthSummary(db)
+    // Contract: public health endpoints must use { ok, warning, error } for status.
+    // Some internal helpers may return { healthy, degraded, unhealthy } — normalize here.
+    const rawStatus = String(healthSummary?.status ?? 'error').toLowerCase()
+    const status =
+      rawStatus === 'healthy'
+        ? 'ok'
+        : rawStatus === 'degraded'
+          ? 'warning'
+          : rawStatus === 'unhealthy'
+            ? 'error'
+            : rawStatus || 'error'
+
     // Treat "warning" as healthy for platform checks (Railway healthchecks, Docker HEALTHCHECK, etc.)
-    // Only fail hard when the health summary indicates a real error.
-    const statusCode = healthSummary.status === 'error' ? 500 : 200;
-    res.status(statusCode).json(healthSummary);
+    // Only fail hard when the normalized status indicates a real error.
+    const statusCode = status === 'error' ? 500 : 200
+    const body =
+      rawStatus === status
+        ? healthSummary
+        : { ...healthSummary, status, legacy_status: rawStatus }
+
+    res.status(statusCode).json(body)
   } catch (error) {
     console.error('[/api/health] Error:', error);
     res.status(500).json({
@@ -1140,9 +1147,24 @@ app.get('/api/health', async (req, res) => {
 // Platform health aliases (k8s-style)
 app.get('/healthz', async (_req, res) => {
   try {
-    const healthSummary = await getSafeHealthSummary(db);
-    const statusCode = healthSummary.status === 'error' ? 500 : 200;
-    res.status(statusCode).json(healthSummary);
+    const healthSummary = await getSafeHealthSummary(db)
+    const rawStatus = healthSummary?.status ?? 'error'
+    const status =
+      rawStatus === 'healthy'
+        ? 'ok'
+        : rawStatus === 'degraded'
+          ? 'warning'
+          : rawStatus === 'unhealthy'
+            ? 'error'
+            : rawStatus
+
+    const statusCode = status === 'error' ? 500 : 200
+    const body =
+      rawStatus === status
+        ? healthSummary
+        : { ...healthSummary, status, legacy_status: rawStatus }
+
+    res.status(statusCode).json(body)
   } catch (error) {
     console.error('[/healthz] Error:', error);
     res.status(500).json({ status: 'error', summary: 'Failed to retrieve health information' });

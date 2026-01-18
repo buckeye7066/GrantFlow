@@ -31,3 +31,10 @@ test('uploads are configurable via UPLOADS_DIR', () => {
   assert.ok(profiles.includes('process.env.UPLOADS_DIR'), 'backend/routes/profiles.js should honor UPLOADS_DIR')
 })
 
+test('crawler completion update does not use "CASE WHEN ? IS NULL" (breaks Postgres)', () => {
+  const src = read('backend/services/crawlerDispatcher.js')
+  assert.ok(
+    !/CASE\s+WHEN\s+\?\s+IS\s+NULL/i.test(src),
+    'crawlerDispatcher.js contains CASE WHEN ? IS NULL which can throw "could not determine data type of parameter $1" in Postgres',
+  )
+})

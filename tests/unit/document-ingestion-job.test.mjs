@@ -129,7 +129,8 @@ test('document_ingest job: updates profile sections and marks document ready for
 
     const docRow = db.prepare('SELECT processing_status, status, ai_summary, ai_sections FROM documents WHERE id = ?').get(documentId)
     assert.equal(docRow.processing_status, 'completed')
-    assert.equal(docRow.status, 'review')
+    // `documents.status` is constrained (draft/review/final/submitted). Ingestion should not invent statuses.
+    assert.equal(docRow.status, 'draft')
     assert.ok(typeof docRow.ai_summary === 'string' && docRow.ai_summary.length > 0)
     assert.ok(typeof docRow.ai_sections === 'string' && docRow.ai_sections.length > 0)
 

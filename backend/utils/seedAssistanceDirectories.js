@@ -42,7 +42,7 @@ function ensureArray(value) {
   return [value]
 }
 
-export function seedAssistanceDirectories(db) {
+export async function seedAssistanceDirectories(db) {
   const dataDir = join(__dirname, '..', 'data')
   const stateProgramsPath = join(dataDir, 'state_assistance_programs.json')
   const localNetworksPath = join(dataDir, 'local_assistance_networks.json')
@@ -55,8 +55,8 @@ export function seedAssistanceDirectories(db) {
 
   let attempted = 0
 
-  const upsertOne = (item, source) => {
-    const url = item?.url || item?.source_url || item?.application_url
+  const upsertOne = async (item, source) => {
+    const url = item?.url || item?.source_url || item?.application_url || item?.evidence_url
     if (!url) return
 
     const isNational = Boolean(item?.is_national) || item?.state === 'nationwide'
@@ -84,13 +84,13 @@ export function seedAssistanceDirectories(db) {
       record_origin: 'curated_verified',
     }
 
-    upsertFundingOpportunity(db, opportunity)
+    await upsertFundingOpportunity(db, opportunity)
   }
 
   for (const p of programs) {
     attempted++
     try {
-      upsertOne(p, 'state_211')
+      await upsertOne(p, 'state_211')
     } catch (e) {
       // ignore per item
     }
@@ -99,7 +99,7 @@ export function seedAssistanceDirectories(db) {
   for (const n of networks) {
     attempted++
     try {
-      upsertOne(n, 'assistance_network')
+      await upsertOne(n, 'assistance_network')
     } catch (e) {
       // ignore per item
     }
