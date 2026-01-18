@@ -1,8 +1,6 @@
-## Production readiness docs
+# Production Readiness Docs (moved)
 
-This content has been consolidated to avoid duplicate / conflicting runbooks.
+This doc has been superseded by **[`PROD_READINESS.md`](PROD_READINESS.md)**.
 
-- **Primary deployment guide**: `docs/VERCEL_RAILWAY_DEPLOYMENT.md`
-- **Release procedure + verification**: `docs/RELEASE_RUNBOOK.md`
-- **Environment + variables**: `docs/ENVIRONMENT.md` and `docs/ENV_VARS.md`
+For deployment steps, see **[`VERCEL_RAILWAY_DEPLOYMENT.md`](VERCEL_RAILWAY_DEPLOYMENT.md)**.
 

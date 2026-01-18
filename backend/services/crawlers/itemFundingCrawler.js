@@ -6,6 +6,7 @@
 
 import axios from 'axios'
 import * as cheerio from 'cheerio'
+import { buildProfileSignals } from '../profileHelpers.js'
 
 const ITEM_FUNDING_SOURCES = [
   {
@@ -211,6 +212,13 @@ async function buildItemSourceLinks(source, itemInfo, profile) {
 
 function calculateItemMatchScore(opportunity, itemInfo, profile) {
   let score = 50 // Base score for item funding
+
+  const signals =
+    profile?.signals ??
+    buildProfileSignals({
+      profile,
+      sections: profile?.sections ?? {},
+    })
   
   // Item type match (critical - 30 points)
   const oppCategories = opportunity.item_categories || []
@@ -225,7 +233,8 @@ function calculateItemMatchScore(opportunity, itemInfo, profile) {
   
   // Profile type match (20 points)
   const eligText = (opportunity.eligibility || '').toLowerCase()
-  const profileType = (profile.organization_type || profile.profile_type || '').toLowerCase()
+  const profileType =
+    (profile.organization_type || profile.profile_type || profile.primary_type || '').toLowerCase()
   
   if (profileType === 'nonprofit' && eligText.includes('nonprofit')) {
     score += 20
@@ -242,15 +251,35 @@ function calculateItemMatchScore(opportunity, itemInfo, profile) {
   }
   
   // Mission alignment for mission-minded orgs (15 points)
-  if (profile.mission && opportunity.title?.toLowerCase().includes('mission')) {
+  const hasMissionSignal =
+    Boolean(profile.mission) ||
+    Boolean(profile?.sections?.narrative?.mission) ||
+    Boolean(profile?.sections?.organization_details?.mission)
+  if (hasMissionSignal && opportunity.title?.toLowerCase().includes('mission')) {
     score += 15
+  }
+
+  // Cross-signal alignment (up to +15)
+  // Treat *any* profile data point as a potential match signal by leveraging the signals keyword set.
+  const oppText = `${opportunity.title || ''} ${opportunity.description || ''} ${opportunity.eligibility || ''}`.toLowerCase()
+  const keywordList = Array.from(signals?.keywordSet ?? [])
+  let keywordMatches = 0
+  for (const kw of keywordList) {
+    if (!kw || kw.length < 4) continue
+    if (oppText.includes(kw)) {
+      keywordMatches += 1
+      if (keywordMatches >= 10) break
+    }
+  }
+  if (keywordMatches > 0) {
+    score += Math.min(15, keywordMatches * 2)
   }
   
   // Specification match (10 points)
   if (itemInfo.specifications.length > 0) {
-    const oppText = `${opportunity.title} ${opportunity.description}`.toLowerCase()
+    const oppText2 = `${opportunity.title} ${opportunity.description}`.toLowerCase()
     const matchedSpecs = itemInfo.specifications.filter(spec => 
-      oppText.includes(spec.toLowerCase())
+      oppText2.includes(spec.toLowerCase())
     )
     if (matchedSpecs.length > 0) {
       score += 10

@@ -55,6 +55,10 @@ function normalizeTextValue(fieldName, value) {
   if (typeof value === 'string') return value
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
 
+  if (Array.isArray(value)) {
+    return value.map((entry) => (entry === null || entry === undefined ? '' : String(entry))).filter(Boolean).join(', ')
+  }
+
   if (isPlainObject(value) && fieldName === 'address') {
     const formatted = formatAddressObject(value)
     if (formatted) return formatted
@@ -97,6 +101,13 @@ const basicInfoSchema = z.object({
   phone: z.string().optional().or(z.literal("")),
   website: z.string().url("Enter a valid URL").optional().or(z.literal("")),
   address: z.string().optional().or(z.literal("")),
+  city: z.string().optional().or(z.literal("")),
+  state: z.string().optional().or(z.literal("")),
+  zip_code: z.string().optional().or(z.literal("")),
+  county: z.string().optional().or(z.literal("")),
+  date_of_birth: z.string().optional().or(z.literal("")),
+  gender: z.string().optional().or(z.literal("")),
+  nationality: z.string().optional().or(z.literal("")),
   notes: z.string().optional().or(z.literal("")),
 })
 
@@ -137,7 +148,39 @@ const booleanField = z
   .optional()
   .transform((value) => toBoolean(value))
 
+const toStringList = (value) => {
+  if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean)
+  if (typeof value === 'string') {
+    const raw = value.trim()
+    if (!raw) return []
+    // Allow JSON array input
+    if (raw.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(raw)
+        if (Array.isArray(parsed)) return parsed.map((v) => String(v).trim()).filter(Boolean)
+      } catch {
+        // Ignore invalid JSON input; fall back to comma-separated parsing.
+      }
+    }
+    return raw.split(',').map((entry) => entry.trim()).filter(Boolean)
+  }
+  return []
+}
+
+const stringListField = z
+  .union([z.array(z.string()), z.string()])
+  .optional()
+  .transform((value) => toStringList(value))
+
 const financialInformationSchema = z.object({
+  annual_income: z
+    .union([z.number(), z.string()])
+    .optional()
+    .transform((value) => {
+      if (value === "" || value === undefined || value === null) return ""
+      const parsed = Number(value)
+      return Number.isFinite(parsed) ? parsed : ""
+    }),
   household_income: z
     .union([z.number(), z.string()])
     .optional()
@@ -158,6 +201,10 @@ const financialInformationSchema = z.object({
   low_income: booleanField,
   unemployed: booleanField,
   displaced_worker: booleanField,
+  funding_needs: z.string().optional().or(z.literal("")),
+  funding_purpose: z.string().optional().or(z.literal("")),
+  receives_assistance: stringListField,
+  assistance_notes: z.string().optional().or(z.literal("")),
   notes: z.string().optional().or(z.literal("")),
 })
 
@@ -279,6 +326,16 @@ const demographicsSchema = z.object({
   tribal_affiliation: z.string().optional().or(z.literal("")),
   lgbtq: booleanField,
   immigrant_status: z.string().optional().or(z.literal("")),
+  ethnicity: z.string().optional().or(z.literal("")),
+  heritage: z.string().optional().or(z.literal("")),
+  languages: stringListField,
+  religious_affiliation: z.string().optional().or(z.literal("")),
+  citizenship: z.string().optional().or(z.literal("")),
+  us_citizen: booleanField,
+  disability_status: z.string().optional().or(z.literal("")),
+  veteran_status: z.string().optional().or(z.literal("")),
+  age_group: z.string().optional().or(z.literal("")),
+  white_caucasian: booleanField,
   notes: z.string().optional().or(z.literal("")),
 })
 
@@ -339,6 +396,85 @@ const locationSchema = z.object({
   notes: z.string().optional().or(z.literal("")),
 })
 
+const educationSchema = z.object({
+  highest_level: z.string().optional().or(z.literal("")),
+  current_institution: z.string().optional().or(z.literal("")),
+  target_colleges: stringListField,
+  intended_major: z.string().optional().or(z.literal("")),
+  gpa: z
+    .union([z.number(), z.string()])
+    .optional()
+    .transform((value) => {
+      if (value === "" || value === undefined || value === null) return ""
+      const parsed = Number(value)
+      return Number.isFinite(parsed) ? parsed : ""
+    }),
+  act_score: z
+    .union([z.number(), z.string()])
+    .optional()
+    .transform((value) => {
+      if (value === "" || value === undefined || value === null) return ""
+      const parsed = Number(value)
+      return Number.isFinite(parsed) ? parsed : ""
+    }),
+  sat_score: z
+    .union([z.number(), z.string()])
+    .optional()
+    .transform((value) => {
+      if (value === "" || value === undefined || value === null) return ""
+      const parsed = Number(value)
+      return Number.isFinite(parsed) ? parsed : ""
+    }),
+  community_service_hours: z
+    .union([z.number(), z.string()])
+    .optional()
+    .transform((value) => {
+      if (value === "" || value === undefined || value === null) return ""
+      const parsed = Number(value)
+      return Number.isFinite(parsed) ? parsed : ""
+    }),
+  leadership_roles: stringListField,
+  valedictorian: booleanField,
+  notes: z.string().optional().or(z.literal("")),
+})
+
+const employmentSchema = z.object({
+  current_status: z.string().optional().or(z.literal("")),
+  career_goal: z.string().optional().or(z.literal("")),
+  experience: z.string().optional().or(z.literal("")),
+  notes: z.string().optional().or(z.literal("")),
+})
+
+const housingSchema = z.object({
+  status: z.string().optional().or(z.literal("")),
+  type: z.string().optional().or(z.literal("")),
+  address: z.string().optional().or(z.literal("")),
+  broadband_speed: z.string().optional().or(z.literal("")),
+  geographic_designation: stringListField,
+  notes: z.string().optional().or(z.literal("")),
+})
+
+const householdSchema = z.object({
+  household_size: z
+    .union([z.number(), z.string()])
+    .optional()
+    .transform((value) => {
+      if (value === "" || value === undefined || value === null) return ""
+      const parsed = Number(value)
+      return Number.isFinite(parsed) ? parsed : ""
+    }),
+  responsibilities: z.string().optional().or(z.literal("")),
+  support_system: z.string().optional().or(z.literal("")),
+  notes: z.string().optional().or(z.literal("")),
+})
+
+const programsServicesSchema = z.object({
+  focus_areas: stringListField,
+  interests: stringListField,
+  keywords: stringListField,
+  notes: z.string().optional().or(z.literal("")),
+})
+
 const narrativeSchema = z.object({
   mission: z.string().optional().or(z.literal("")),
   primary_goal: z.string().optional().or(z.literal("")),
@@ -365,6 +501,13 @@ export const SECTION_CONFIG = {
       phone: "",
       website: "",
       address: "",
+      city: "",
+      state: "",
+      zip_code: "",
+      county: "",
+      date_of_birth: "",
+      gender: "",
+      nationality: "",
       notes: "",
     },
     fields: [
@@ -373,6 +516,13 @@ export const SECTION_CONFIG = {
       { name: "phone", label: "Phone number", component: Input },
       { name: "website", label: "Website", component: Input },
       { name: "address", label: "Address", component: Textarea, props: { rows: 3 } },
+      { name: "city", label: "City", component: Input },
+      { name: "state", label: "State", component: Input, props: { maxLength: 2 }, description: "Two-letter abbreviation preferred (e.g. TN)." },
+      { name: "zip_code", label: "ZIP code", component: Input },
+      { name: "county", label: "County", component: Input },
+      { name: "date_of_birth", label: "Date of birth", component: Input, props: { placeholder: "YYYY-MM-DD" } },
+      { name: "gender", label: "Gender", component: Input },
+      { name: "nationality", label: "Nationality", component: Input },
       { name: "notes", label: "Notes", component: Textarea, props: { rows: 3 } },
     ],
   },
@@ -406,21 +556,31 @@ export const SECTION_CONFIG = {
       "Document income, household size, and employment status to support need-based matching.",
     schema: financialInformationSchema,
     defaults: {
+      annual_income: "",
       household_income: "",
       household_size: "",
       financial_need_level: "",
       low_income: false,
       unemployed: false,
       displaced_worker: false,
+      funding_needs: "",
+      funding_purpose: "",
+      receives_assistance: "",
+      assistance_notes: "",
       notes: "",
     },
     fields: [
+      { name: "annual_income", label: "Annual income (USD)", component: Input, props: { type: "number", min: 0 } },
       { name: "household_income", label: "Household income (USD)", component: Input, props: { type: "number", min: 0 } },
       { name: "household_size", label: "Household size", component: Input, props: { type: "number", min: 1 } },
       { name: "financial_need_level", label: "Financial need level", component: Input, props: { placeholder: "e.g. high, moderate" } },
       { name: "low_income", label: "Low income household", type: "boolean" },
       { name: "unemployed", label: "Currently unemployed", type: "boolean" },
       { name: "displaced_worker", label: "Displaced worker", type: "boolean" },
+      { name: "funding_needs", label: "Funding needs", component: Textarea, props: { rows: 2, placeholder: "What do you need funding for?" } },
+      { name: "funding_purpose", label: "Funding purpose", component: Textarea, props: { rows: 2, placeholder: "How will funds be used?" } },
+      { name: "receives_assistance", label: "Receives assistance (list)", component: Textarea, props: { rows: 2, placeholder: "Separate with commas (e.g. SNAP, Medicaid)" } },
+      { name: "assistance_notes", label: "Assistance notes", component: Textarea, props: { rows: 2, placeholder: "Any nuance about benefits or barriers" } },
       { name: "notes", label: "Notes", component: Textarea, props: { rows: 3, placeholder: "Context for financial need" } },
     ],
   },
@@ -605,6 +765,16 @@ export const SECTION_CONFIG = {
       tribal_affiliation: "",
       lgbtq: false,
       immigrant_status: "",
+      ethnicity: "",
+      heritage: "",
+      languages: "",
+      religious_affiliation: "",
+      citizenship: "",
+      us_citizen: false,
+      disability_status: "",
+      veteran_status: "",
+      age_group: "",
+      white_caucasian: false,
       notes: "",
     },
     fields: [
@@ -615,7 +785,130 @@ export const SECTION_CONFIG = {
       { name: "tribal_affiliation", label: "Tribal affiliation", component: Input, description: "Specify tribe if applicable." },
       { name: "lgbtq", label: "Identifies as LGBTQ+", type: "boolean" },
       { name: "immigrant_status", label: "Immigration status", component: Input, props: { placeholder: "us_citizen, permanent_resident, refugee, etc." } },
+      { name: "ethnicity", label: "Ethnicity (free text)", component: Input },
+      { name: "heritage", label: "Heritage / ancestry", component: Input },
+      { name: "languages", label: "Languages (list)", component: Textarea, props: { rows: 2, placeholder: "Separate with commas" } },
+      { name: "religious_affiliation", label: "Religious affiliation", component: Input },
+      { name: "citizenship", label: "Citizenship", component: Input },
+      { name: "us_citizen", label: "US citizen", type: "boolean" },
+      { name: "disability_status", label: "Disability status (high level)", component: Input },
+      { name: "veteran_status", label: "Veteran status (high level)", component: Input },
+      { name: "age_group", label: "Age group", component: Input, props: { placeholder: "youth, young adult, senior, etc." } },
+      { name: "white_caucasian", label: "White / Caucasian", type: "boolean" },
       { name: "notes", label: "Demographic notes", component: Textarea, props: { rows: 3, placeholder: "Additional context or identities" } },
+    ],
+  },
+
+  education: {
+    title: "Education",
+    description:
+      "Academic history and student qualifiers (GPA, tests, service hours) for scholarship and education-focused matching.",
+    schema: educationSchema,
+    defaults: {
+      highest_level: "",
+      current_institution: "",
+      target_colleges: "",
+      intended_major: "",
+      gpa: "",
+      act_score: "",
+      sat_score: "",
+      community_service_hours: "",
+      leadership_roles: "",
+      valedictorian: false,
+      notes: "",
+    },
+    fields: [
+      { name: "highest_level", label: "Highest level completed", component: Input, props: { placeholder: "high_school, associate, bachelor, etc." } },
+      { name: "current_institution", label: "Current institution", component: Input },
+      { name: "target_colleges", label: "Target colleges (list)", component: Textarea, props: { rows: 2, placeholder: "Separate with commas" } },
+      { name: "intended_major", label: "Intended major", component: Input },
+      { name: "gpa", label: "GPA", component: Input, props: { type: "number", min: 0, max: 4, step: "0.01" } },
+      { name: "act_score", label: "ACT score", component: Input, props: { type: "number", min: 0, max: 36 } },
+      { name: "sat_score", label: "SAT score", component: Input, props: { type: "number", min: 0, max: 1600 } },
+      { name: "community_service_hours", label: "Community service hours", component: Input, props: { type: "number", min: 0 } },
+      { name: "leadership_roles", label: "Leadership roles (list)", component: Textarea, props: { rows: 2, placeholder: "Separate with commas" } },
+      { name: "valedictorian", label: "Valedictorian", type: "boolean" },
+      { name: "notes", label: "Education notes", component: Textarea, props: { rows: 3 } },
+    ],
+  },
+
+  employment: {
+    title: "Employment",
+    description:
+      "Employment status and experience used for workforce training and career-change programs.",
+    schema: employmentSchema,
+    defaults: {
+      current_status: "",
+      career_goal: "",
+      experience: "",
+      notes: "",
+    },
+    fields: [
+      { name: "current_status", label: "Current status", component: Input, props: { placeholder: "employed, unemployed, student, retired, etc." } },
+      { name: "career_goal", label: "Career goal", component: Textarea, props: { rows: 2 } },
+      { name: "experience", label: "Experience", component: Textarea, props: { rows: 3 } },
+      { name: "notes", label: "Employment notes", component: Textarea, props: { rows: 2 } },
+    ],
+  },
+
+  housing: {
+    title: "Housing",
+    description:
+      "Housing stability and geographic designations relevant to assistance programs.",
+    schema: housingSchema,
+    defaults: {
+      status: "",
+      type: "",
+      address: "",
+      broadband_speed: "",
+      geographic_designation: "",
+      notes: "",
+    },
+    fields: [
+      { name: "status", label: "Housing status", component: Input, props: { placeholder: "stable, homeless, transitional, etc." } },
+      { name: "type", label: "Housing type", component: Input, props: { placeholder: "rent, own, shelter, etc." } },
+      { name: "address", label: "Housing address (if different)", component: Textarea, props: { rows: 3 } },
+      { name: "broadband_speed", label: "Broadband speed", component: Input, props: { placeholder: "e.g. 25/3 Mbps" } },
+      { name: "geographic_designation", label: "Geographic designation (list)", component: Textarea, props: { rows: 2, placeholder: "Separate with commas (rural, urban, frontier...)" } },
+      { name: "notes", label: "Housing notes", component: Textarea, props: { rows: 2 } },
+    ],
+  },
+
+  family: {
+    title: "Household Details",
+    description:
+      "Household structure and support system details (separate from eligibility flags).",
+    schema: householdSchema,
+    defaults: {
+      household_size: "",
+      responsibilities: "",
+      support_system: "",
+      notes: "",
+    },
+    fields: [
+      { name: "household_size", label: "Household size", component: Input, props: { type: "number", min: 1 } },
+      { name: "responsibilities", label: "Responsibilities", component: Textarea, props: { rows: 2 } },
+      { name: "support_system", label: "Support system", component: Textarea, props: { rows: 2 } },
+      { name: "notes", label: "Household notes", component: Textarea, props: { rows: 2 } },
+    ],
+  },
+
+  programs_services: {
+    title: "Programs & Services",
+    description:
+      "Focus areas, services, and keywords used to match funding opportunities (high-signal for crawlers).",
+    schema: programsServicesSchema,
+    defaults: {
+      focus_areas: "",
+      interests: "",
+      keywords: "",
+      notes: "",
+    },
+    fields: [
+      { name: "focus_areas", label: "Focus areas (list)", component: Textarea, props: { rows: 2, placeholder: "Separate with commas" } },
+      { name: "interests", label: "Interests (list)", component: Textarea, props: { rows: 2, placeholder: "Separate with commas" } },
+      { name: "keywords", label: "Keywords (list)", component: Textarea, props: { rows: 2, placeholder: "Separate with commas" } },
+      { name: "notes", label: "Programs/services notes", component: Textarea, props: { rows: 3 } },
     ],
   },
   family_life: {

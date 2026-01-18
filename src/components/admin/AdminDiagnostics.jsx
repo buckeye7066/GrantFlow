@@ -323,7 +323,10 @@ export default function AdminDiagnostics() {
       setOpenaiKeyLoading(true);
       setOpenaiKeyError(null);
       setOpenaiKeyResult(null);
-      const data = await apiFetch.post('/api/admin/openai/verify-key', { apiKey: openaiKey });
+      const data = await apiFetch('/api/admin/openai/verify-key', {
+        method: 'POST',
+        body: JSON.stringify({ apiKey: openaiKey }),
+      });
       setOpenaiKeyResult({ mode: 'verify', data });
     } catch (err) {
       setOpenaiKeyError(err?.message || 'Failed to verify key');
@@ -337,7 +340,10 @@ export default function AdminDiagnostics() {
       setOpenaiKeyLoading(true);
       setOpenaiKeyError(null);
       setOpenaiKeyResult(null);
-      const data = await apiFetch.post('/api/admin/openai/apply-key', { apiKey: openaiKey });
+      const data = await apiFetch('/api/admin/openai/apply-key', {
+        method: 'POST',
+        body: JSON.stringify({ apiKey: openaiKey }),
+      });
       setOpenaiKeyResult({ mode: 'apply', data });
       // Refresh diagnostics snapshot so env flags reflect the new config state.
       await loadDiagnostics();
@@ -353,7 +359,10 @@ export default function AdminDiagnostics() {
       setOpenaiKeyLoading(true);
       setOpenaiKeyError(null);
       setOpenaiKeyResult(null);
-      const data = await apiFetch.post('/api/admin/openai/persist-current', {});
+      const data = await apiFetch('/api/admin/openai/persist-current', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
       setOpenaiKeyResult({ mode: 'persist-current', data });
       await loadDiagnostics();
     } catch (err) {

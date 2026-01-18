@@ -430,10 +430,11 @@ export default function ServiceApplication() {
         <div className="bg-slate-50 rounded-lg p-4 space-y-2">
           <h4 className="font-semibold text-slate-900">Payment Terms</h4>
           <ul className="text-sm text-slate-700 space-y-1">
-            <li>• 40% due at project kickoff</li>
+            <li>• 40% due at project kickoff (scope locked; calendar set)</li>
             <li>• 40% due at complete draft delivery</li>
             <li>• 20% due at submission and handoff package delivery</li>
             <li>• Net 15 days from invoice date</li>
+            <li>• Late fees: 1.5% monthly interest on overdue balances</li>
           </ul>
         </div>
 

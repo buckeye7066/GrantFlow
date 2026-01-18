@@ -231,6 +231,11 @@ CREATE TABLE IF NOT EXISTS documents (
   grant_id TEXT REFERENCES grants(id) ON DELETE SET NULL,
   profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
   
+  -- Optional: link a document to a specific university application entry within the profile
+  -- (used for acceptance letters, scholarship letters, housing forms, etc.)
+  university_application_id TEXT,
+  university_application_name TEXT,
+  
   name TEXT NOT NULL,
   type TEXT, -- 'proposal', 'budget', 'letter_of_support', 'form', 'report', etc.
   

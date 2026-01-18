@@ -354,10 +354,15 @@ const allowedMigrations = [
   { table: 'crawler_jobs', column: 'retry_count', type: 'INTEGER DEFAULT 0' },
   { table: 'crawler_jobs', column: 'last_retry_at', type: 'DATETIME' },
   // Positive classification for "REAL" opportunity invariants
-  { table: 'funding_opportunities', column: 'record_origin', type: "TEXT DEFAULT 'live_crawl'" }
+  { table: 'funding_opportunities', column: 'record_origin', type: "TEXT DEFAULT 'live_crawl'" },
+  { table: 'funding_opportunities', column: 'evidence_url', type: 'TEXT' },
+  { table: 'funding_opportunities', column: 'last_verified_at', type: 'DATETIME' },
+  // Link documents to per-school university applications (student profiles)
+  { table: 'documents', column: 'university_application_id', type: 'TEXT' },
+  { table: 'documents', column: 'university_application_name', type: 'TEXT' },
 ];
 
-const validTables = new Set(['profiles', 'crawler_jobs', 'users', 'organizations', 'grants', 'funding_opportunities']);
+const validTables = new Set(['profiles', 'crawler_jobs', 'users', 'organizations', 'grants', 'funding_opportunities', 'documents']);
 const validColumnPattern = /^[a-z_]+$/;
 
 // This legacy auto-migration is SQLite-only. Postgres must be migrated deterministically via SQL migrations.
@@ -536,71 +541,13 @@ if (db.dialect === 'sqlite') {
     const oppCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get();
     if (oppCount && oppCount.count === 0) {
       console.info('[startup] No funding opportunities found, auto-seeding...');
-
-      // Load opportunity files
-      const crawlersDir = join(__dirname, 'data', 'crawlers');
-      const files = [
-        { path: join(crawlersDir, 'real_funding_opportunities.json'), type: 'structured' },
-        { path: join(crawlersDir, 'scholarship_opportunities.json'), type: 'array' },
-        { path: join(crawlersDir, 'local_opportunities.json'), type: 'array' },
-        { path: join(crawlersDir, 'item_funding_sources.json'), type: 'array' },
-      ];
-
-      const allOpportunities = [];
-      for (const file of files) {
-        try {
-          if (fs.existsSync(file.path)) {
-            const content = fs.readFileSync(file.path, 'utf8');
-            const data = JSON.parse(content);
-            if (file.type === 'structured') {
-              Object.values(data).forEach(category => {
-                if (Array.isArray(category)) allOpportunities.push(...category);
-              });
-            } else if (Array.isArray(data)) {
-              allOpportunities.push(...data);
-            }
-          }
-        } catch (e) {
-          console.warn(`[startup] Failed to load ${file.path}:`, e.message);
-        }
-      }
-
-      if (allOpportunities.length > 0) {
-        const upsert = db.prepare(`
-          INSERT INTO funding_opportunities (
-            id, source, source_id, title, sponsor, description,
-            application_url, source_url, deadline, amount_min, amount_max,
-            categories, keywords, eligibility_bullets, match_reasons,
-            state, requires_match, requires_501c3, is_active, is_national, record_origin,
-            opportunity_type, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-          ON CONFLICT(id) DO NOTHING
-        `);
-
-        const transaction = db.transaction(() => {
-          for (const opp of allOpportunities) {
-            try {
-              const id = opp.id || crypto.randomUUID();
-              const isNational = opp.is_national === true || opp.is_national === 1 || opp.state === 'nationwide';
-              upsert.run(
-                id, opp.source || 'seeded_real', opp.source_id || id,
-                opp.title || opp.program_name, opp.sponsor || opp.funder, opp.description || opp.summary,
-                opp.application_url || opp.url, opp.url || opp.source_url || opp.application_url, opp.deadline,
-                opp.amount_min || opp.award_floor, opp.amount_max || opp.award_ceiling,
-                JSON.stringify(opp.categories || []), JSON.stringify(opp.keywords || []),
-                JSON.stringify(opp.eligibility_bullets || []), JSON.stringify(opp.match_reasons || []),
-                opp.state || (isNational ? 'nationwide' : null),
-                opp.requires_match ? 1 : 0, opp.requires_501c3 ? 1 : 0, isNational ? 1 : 0,
-                'curated_verified',
-                opp.opportunity_type || 'grant'
-              );
-            } catch (e) { /* ignore individual errors */ }
-          }
-        });
-
-        transaction();
-        const newCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get();
-        console.info(`[startup] Seeded ${newCount.count} funding opportunities`);
+      try {
+        const { seedRealOpportunities } = await import('./utils/seedRealOpportunities.js')
+        await seedRealOpportunities(db)
+        const newCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get()
+        console.info(`[startup] Seeded ${newCount.count} funding opportunities`)
+      } catch (e) {
+        console.warn('[startup] Failed to auto-seed funding opportunities:', e?.message || e)
       }
     } else {
       console.info(`[startup] Found ${oppCount.count} existing funding opportunities`);
@@ -656,7 +603,7 @@ try {
   }
 
     if (shouldEnsure) {
-      const ensured = ensureMinimumNationalOpportunities(db, min)
+      const ensured = await ensureMinimumNationalOpportunities(db, min)
     const backfilled = (ensured.events || []).some((e) => e.type === 'backfill' || e.type === 'schema_backfill')
 
     const evt = {
@@ -696,11 +643,22 @@ try {
       .get()?.count
     if ((existing ?? 0) < 250) {
       console.info('[startup] Seeding assistance directories (state_211 + assistance_network)...')
-      const result = seedAssistanceDirectories(db)
-      const after = db
-        .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")
-        .get()?.count
-      console.info('[startup] Seeded assistance directories', { ...result, after })
+      const dataDir = join(__dirname, 'data')
+      const hasAssistanceSeedFiles =
+        fs.existsSync(join(dataDir, 'state_assistance_programs.json')) ||
+        fs.existsSync(join(dataDir, 'local_assistance_networks.json'))
+
+      if (!hasAssistanceSeedFiles) {
+        console.info(
+          `[startup] Assistance directory seed files missing under ${dataDir}; skipping`,
+        )
+      } else {
+        const result = await seedAssistanceDirectories(db)
+        const after = db
+          .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")
+          .get()?.count
+        console.info('[startup] Seeded assistance directories', { ...result, after })
+      }
     } else {
       console.info('[startup] Assistance directories already seeded', { count: existing })
     }
@@ -756,14 +714,19 @@ app.use(async (req, res, next) => {
   // 1. Check X-Admin-Token
   const expectedAdminToken = ADMIN_TOKEN;
   const expectedBulkKey = process.env.BULK_POPULATE_KEY || null;
-
   if (
     !handled &&
     xAdminToken &&
     ((expectedAdminToken && xAdminToken === expectedAdminToken) ||
       (expectedBulkKey && xAdminToken === expectedBulkKey))
   ) {
-    user = { role: 'admin', is_admin: true, full_name: ADMIN_NAME, email: ADMIN_EMAIL };
+    user = {
+      role: 'admin',
+      is_admin: true,
+      profileId: null,
+      full_name: ADMIN_NAME,
+      email: ADMIN_EMAIL,
+    };
     handled = true;
   }
 
@@ -835,7 +798,13 @@ app.use(async (req, res, next) => {
     }
 
     if (!handled && token && ADMIN_TOKEN && token === ADMIN_TOKEN) {
-      user = { role: 'admin', is_admin: true, full_name: ADMIN_NAME, email: ADMIN_EMAIL };
+      user = {
+        role: 'admin',
+        is_admin: true,
+        profileId: null,
+        full_name: ADMIN_NAME,
+        email: ADMIN_EMAIL,
+      };
       handled = true;
     }
 
@@ -992,7 +961,38 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
       }
 
       if (!dbUser) {
-        return res.status(401).json({ error: 'User record not found' });
+        // Dev/admin token convenience: ADMIN_TOKEN can authenticate an admin user without a stored user record.
+        // Create the user record on-demand so the frontend auth bootstrap (`/api/auth/me`) is not brittle.
+        if (user.role === 'admin' || user.is_admin === true) {
+          try {
+            db.prepare(
+              `
+                INSERT INTO users (id, display_name, primary_email, is_admin)
+                VALUES (?, ?, ?, 1)
+              `,
+            ).run(
+              user.userId,
+              user.full_name || ADMIN_NAME || 'Admin User',
+              user.email || ADMIN_EMAIL || null,
+            )
+
+            dbUser = db
+              .prepare(
+                `
+                  SELECT *
+                  FROM users
+                  WHERE id = ?
+                `,
+              )
+              .get(user.userId)
+          } catch (repairError) {
+            console.warn('[/api/auth/me] Unable to self-heal missing admin user:', repairError?.message || repairError)
+          }
+        }
+
+        if (!dbUser) {
+          return res.status(401).json({ error: 'User record not found' });
+        }
       }
 
       try {

@@ -462,50 +462,93 @@ async function assignProfileToUser(db, userId, email) {
     return null
   }
 
+  async function findProfileRowForEmail(normalizedEmail) {
+    if (!normalizedEmail) return null
+
+    // Postgres: JSON ->> extraction is safe and fast.
+    if (db?.dialect === 'postgres') {
+      try {
+        return (
+          (await db
+            .prepare(
+              `
+                SELECT p.id, p.user_id
+                FROM profiles p
+                JOIN profile_sections ps ON ps.profile_id = p.id
+                WHERE ps.section_key = 'basic_information'
+                  AND LOWER((ps.data::jsonb ->> 'email')) = ?
+                LIMIT 1
+              `,
+            )
+            .get(normalizedEmail)) ?? null
+        )
+      } catch {
+        return null
+      }
+    }
+
+    // SQLite: prefer json_extract when available.
+    try {
+      const row = await db
+        .prepare(
+          `
+            SELECT p.id, p.user_id
+            FROM profiles p
+            JOIN profile_sections ps ON ps.profile_id = p.id
+            WHERE ps.section_key = 'basic_information'
+              AND LOWER(json_extract(ps.data, '$.email')) = ?
+            LIMIT 1
+          `,
+        )
+        .get(normalizedEmail)
+      if (row?.id) return row
+    } catch {
+      // ignore and fall back to LIKE matching
+    }
+
+    // Fallback: match in JSON string (works even if json1 isn't enabled).
+    const needle = `"email":"${normalizedEmail.replace(/"/g, '').toLowerCase()}"`
+    try {
+      return (
+        (await db
+          .prepare(
+            `
+              SELECT p.id, p.user_id
+              FROM profiles p
+              JOIN profile_sections ps ON ps.profile_id = p.id
+              WHERE ps.section_key = 'basic_information'
+                AND LOWER(ps.data) LIKE ?
+              LIMIT 1
+            `,
+          )
+          .get(`%${needle}%`)) ?? null
+      )
+    } catch {
+      return null
+    }
+  }
+
   if (email) {
+    const normalizedEmail = normalizeEmail(email)
+
     // 1) Best-effort match to an existing profile by email captured in profile sections.
     // This is the safest way to ensure returning users re-claim their original profile
     // even when IDs/mappings drift across DB restores.
-    try {
-      const normalized = normalizeEmail(email)
-      const matchSql =
-        db?.dialect === 'postgres'
-          ? `
-              SELECT p.id, p.user_id
-              FROM profiles p
-              JOIN profile_sections ps ON ps.profile_id = p.id
-              WHERE ps.section_key = 'basic_information'
-                AND lower((ps.data::jsonb ->> 'email')) = ?
-              LIMIT 1
-            `
-          : `
-              SELECT p.id, p.user_id
-              FROM profiles p
-              JOIN profile_sections ps ON ps.profile_id = p.id
-              WHERE ps.section_key = 'basic_information'
-                AND lower(json_extract(ps.data, '$.email')) = ?
-              LIMIT 1
-            `
-
-      const matchedProfile = await db.prepare(matchSql).get(normalized)
-      if (matchedProfile?.id) {
-        if (!matchedProfile.user_id || matchedProfile.user_id === userId) {
-          await db
-            .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-            .run(userId, matchedProfile.id)
-          return matchedProfile.id
-        }
-        if (await isAdminUserId(db, matchedProfile.user_id)) {
-          await db
-            .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-            .run(userId, matchedProfile.id)
-          return matchedProfile.id
-        }
-        console.warn(`[auth] Profile email match ${matchedProfile.id} already linked to another user`)
-        return matchedProfile.id
+    const byEmail = await findProfileRowForEmail(normalizedEmail)
+    if (byEmail?.id) {
+      if (!byEmail.user_id || byEmail.user_id === userId) {
+        await db
+          .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+          .run(userId, byEmail.id)
+        return byEmail.id
       }
-    } catch (error) {
-      console.warn('[auth] Email-to-profile match failed (non-fatal):', error?.message || error)
+      if (await isAdminUserId(db, byEmail.user_id)) {
+        await db
+          .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+          .run(userId, byEmail.id)
+        return byEmail.id
+      }
+      return byEmail.id
     }
 
     // 2) Next, apply explicit designated ID mappings (baseline profiles).
@@ -1366,7 +1409,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
     sendAuthAttemptNotification({
       event: 'email_start',
       identifier: email,
-      success: true,
+      success: Boolean(emailSent),
       error: emailSent ? null : 'email_delivery_failed_or_unconfigured',
     }).catch(() => {})
 
@@ -1704,6 +1747,13 @@ router.post('/phone/start', phoneStartLimiter, async (req, res) => {
 
   sendPhoneVerificationCode(normalized, code)
 
+  // Optional ops alert (never includes the code).
+  sendAuthAttemptNotification({
+    event: 'phone_start',
+    identifier: normalized,
+    success: true,
+  }).catch(() => {})
+
   return res.status(202).json({
     message: 'Verification code sent',
     previewCode: process.env.NODE_ENV !== 'production' ? code : undefined,
@@ -1786,6 +1836,12 @@ router.post('/phone/verify', async (req, res) => {
       )
       .run(credential.id)
 
+    sendAuthAttemptNotification({
+      event: 'phone_verify',
+      identifier: normalized,
+      success: false,
+      error: 'invalid_code',
+    }).catch(() => {})
     return res.status(400).json({ error: 'Invalid verification code' })
   }
 
@@ -1899,6 +1955,20 @@ router.post('/phone/verify', async (req, res) => {
       profile_id: anyaInfo.profileId,
     }
   }
+
+  // Admin notice on successful sign-in (post-verify)
+  sendAuthAttemptNotification({
+    event: 'sign_in',
+    identifier: normalized,
+    success: true,
+    context: {
+      method: 'phone',
+      userId: user.id,
+      profileId: activeProfileId,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    },
+  }).catch(() => {})
 
   return res.json(response)
 })

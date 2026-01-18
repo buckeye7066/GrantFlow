@@ -72,12 +72,14 @@ function calculateLocalMatch(opp, profileState, signals) {
   
   // Keyword matching
   let keywordMatches = 0
-  if (signals.keywords) {
-    for (const keyword of signals.keywords) {
-      if (oppKeywords.has(keyword) || oppText.includes(keyword)) {
+  const profileKeywords = signals?.keywordSet ? Array.from(signals.keywordSet) : []
+  if (profileKeywords.length > 0) {
+    for (const keyword of profileKeywords) {
+      const normalized = String(keyword).toLowerCase()
+      if (oppKeywords.has(normalized) || oppText.includes(normalized)) {
         keywordMatches++
         if (keywordMatches <= 3) {
-          matchReasons.push(`Keyword: ${keyword}`)
+          matchReasons.push(`Keyword: ${normalized}`)
         }
       }
     }
@@ -85,7 +87,11 @@ function calculateLocalMatch(opp, profileState, signals) {
   score += Math.min(20, keywordMatches * 5)
   
   // 501c3 check
-  if (opp.requires_501c3 && !signals.is_nonprofit) {
+  const isNonprofit =
+    Boolean(signals?.keywordSet?.has?.('nonprofit')) ||
+    Boolean(signals?.keywordSet?.has?.('501c3')) ||
+    Boolean(signals?.keywordSet?.has?.('501(c)(3)'))
+  if (opp.requires_501c3 && !isNonprofit) {
     score -= 20
     matchReasons.push('Note: Requires 501(c)(3) status')
   }
