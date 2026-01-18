@@ -153,12 +153,18 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
     const params = []
     params.push(true)
 
+    // Only return real opportunities by default.
+    // (We keep NULL as "unknown" origin, but explicitly exclude synthetic placeholders.)
+    conditions.push("(record_origin IS NULL OR record_origin != 'synthetic')")
+    conditions.push("(source IS NULL OR source NOT IN ('synthetic','template'))")
+
     // Keep results current: no expired deadlines unless rolling/ongoing/NULL.
     conditions.push(`(deadline_type IN ('rolling','ongoing') OR deadline IS NULL OR deadline >= ${req.db?.dialect === 'postgres' ? 'CURRENT_DATE' : "date('now')"})`)
 
     // Default geography behavior: state + national + NULL state.
     if (profileState && typeof profileState === 'string' && profileState.length === 2) {
-      conditions.push('(state = ? OR is_national = ? OR state IS NULL)')
+      // NOTE: many legacy rows use `state='nationwide'` for national programs, even when is_national isn't set.
+      conditions.push("(state = ? OR is_national = ? OR state IS NULL OR state = 'nationwide')")
       params.push(profileState)
       params.push(true)
     }
@@ -202,12 +208,37 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
 
     scored.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
 
+    // Robustness guardrail:
+    // If strict min_score filtering results in 0 (common when ingestion/mapping lags),
+    // fall back to returning the best-scoring opportunities so the UI never shows "0"
+    // for profiles with plenty of signal data.
+    let returnedOpps = scored
+    let fallbackApplied = false
+
+    if (returnedOpps.length === 0 && candidates.length > 0 && Number.isFinite(minScore) && minScore > 0) {
+      const rescored = candidates
+        .map((opp) => {
+          const computed = calculateMatchScore(profileContext, opp)
+          return {
+            ...opp,
+            match_score: computed.score,
+            match_reasons: computed.reasons,
+            url: opp.application_url ?? opp.source_url ?? null,
+          }
+        })
+        .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+
+      returnedOpps = rescored.slice(0, Math.min(limit, 200))
+      fallbackApplied = returnedOpps.length > 0
+    }
+
     res.json({
       profile_id: profileId,
       min_score: Number.isFinite(minScore) ? minScore : null,
       total_scored: candidates.length,
-      returned: scored.length,
-      opportunities: scored,
+      returned: returnedOpps.length,
+      fallback_applied: fallbackApplied || undefined,
+      opportunities: returnedOpps,
     })
   } catch (error) {
     console.error('Error matching profile to opportunities:', error)

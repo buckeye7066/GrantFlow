@@ -6,9 +6,9 @@
  * CRITICAL: Uses 100% of profile data via signals for search queries and scoring.
  */
 
-import axios from 'axios'
 import * as cheerio from 'cheerio'
 import { buildSearchKeywords, calculateMatchScore, filterByDeadline } from './crawlerHelpers.js'
+import { getWithRetry, postWithRetry } from './httpClient.js'
 
 // Real government funding APIs and sources
 const GOVERNMENT_SOURCES = {
@@ -204,10 +204,12 @@ async function searchFederalSource(source, profile, searchKeywords) {
     }
     
     try {
-      const response = await axios.post(source.apiUrl, searchParams, {
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 15000
-      })
+      const response = await postWithRetry(
+        source.apiUrl,
+        searchParams,
+        { headers: { 'Content-Type': 'application/json' } },
+        { timeoutMs: 15000, retries: 2 },
+      )
       
       if (response.data && response.data.opportunitySearchResult) {
         const searchResults = response.data.opportunitySearchResult
@@ -235,7 +237,7 @@ async function searchFederalSource(source, profile, searchKeywords) {
   } else if (source.type === 'scrape') {
     // Web scraping for other sources
     try {
-      const response = await axios.get(source.baseUrl, { timeout: 10000 })
+      const response = await getWithRetry(source.baseUrl, {}, { timeoutMs: 10000, retries: 2 })
       const $ = cheerio.load(response.data)
       
       // NIH specific parsing

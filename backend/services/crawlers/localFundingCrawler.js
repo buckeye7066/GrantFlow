@@ -6,10 +6,10 @@
  * CRITICAL: Uses 100% of profile data via signals for search queries and scoring.
  */
 
-import axios from 'axios'
 import * as cheerio from 'cheerio'
 import zipcodes from 'zipcodes'
 import { buildSearchKeywords, calculateMatchScore, filterByDeadline } from './crawlerHelpers.js'
+import { getWithRetry } from './httpClient.js'
 
 // Calculate distance between two coordinates (in miles)
 const calculateDistance = (lat1, lng1, lat2, lng2) => {
@@ -144,7 +144,7 @@ async function searchLocalSource(source, coords, profile, searchKeywords) {
     try {
       // Search community foundations near coordinates
       const url = `${source.baseUrl}?lat=${coords.lat}&lng=${coords.lng}&radius=50`
-      const response = await axios.get(url, { timeout: 10000 })
+      const response = await getWithRetry(url, {}, { timeoutMs: 10000, retries: 2 })
       const $ = cheerio.load(response.data)
       
       $('.foundation-result').each((i, elem) => {
@@ -197,7 +197,7 @@ async function getZipCoordinates(zip) {
     }
 
     // Use a geocoding service or database
-    const response = await axios.get(`https://api.zippopotam.us/us/${zip}`, { timeout: 5000 })
+    const response = await getWithRetry(`https://api.zippopotam.us/us/${zip}`, {}, { timeoutMs: 5000, retries: 1 })
     if (response.data && response.data.places && response.data.places[0]) {
       return {
         lat: parseFloat(response.data.places[0].latitude),
