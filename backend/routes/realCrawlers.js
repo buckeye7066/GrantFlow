@@ -256,7 +256,7 @@ function buildCandidateOpportunityQuery({ crawlerType, profileContext, tokens, i
   conditions.push(
     isPostgres
       ? "(deadline_type IN ('rolling','ongoing') OR deadline IS NULL OR deadline >= CURRENT_DATE)"
-      : '(deadline_type IN ("rolling","ongoing") OR deadline IS NULL OR deadline >= date("now"))',
+      : "(deadline_type IN ('rolling','ongoing') OR deadline IS NULL OR deadline >= date('now'))",
   )
 
   // Geography: state + national.
@@ -268,16 +268,24 @@ function buildCandidateOpportunityQuery({ crawlerType, profileContext, tokens, i
 
   // Crawler-type hints (lightweight pre-filter).
   if (crawlerType === 'student_grants') {
-    conditions.push('(LOWER(opportunity_type) IN ("scholarship","grant") OR LOWER(title) LIKE "%scholar%" OR LOWER(description) LIKE "%scholar%")')
+    conditions.push(
+      "(LOWER(opportunity_type) IN ('scholarship','grant') OR LOWER(title) LIKE '%scholar%' OR LOWER(description) LIKE '%scholar%')",
+    )
   }
   if (crawlerType === 'ecf_benefits') {
-    conditions.push('(LOWER(source) = "ecf_choices_discovery" OR LOWER(title) LIKE "%ecf%" OR LOWER(description) LIKE "%ecf%")')
+    conditions.push(
+      "(LOWER(source) = 'ecf_choices_discovery' OR LOWER(title) LIKE '%ecf%' OR LOWER(description) LIKE '%ecf%')",
+    )
   }
   if (crawlerType === 'special_needs') {
-    conditions.push('(LOWER(title) LIKE "%disab%" OR LOWER(description) LIKE "%disab%" OR LOWER(title) LIKE "%cancer%" OR LOWER(description) LIKE "%cancer%")')
+    conditions.push(
+      "(LOWER(title) LIKE '%disab%' OR LOWER(description) LIKE '%disab%' OR LOWER(title) LIKE '%cancer%' OR LOWER(description) LIKE '%cancer%')",
+    )
   }
   if (crawlerType === 'government_funding') {
-    conditions.push('(LOWER(source) IN ("grants.gov","usaspending.gov","grants_gov","usa_spending","state_portal","hud_cdbg","liheap","snap_et") OR LOWER(title) LIKE "%federal%" OR LOWER(description) LIKE "%federal%")')
+    conditions.push(
+      "(LOWER(source) IN ('grants.gov','usaspending.gov','grants_gov','usa_spending','state_portal','hud_cdbg','liheap','snap_et') OR LOWER(title) LIKE '%federal%' OR LOWER(description) LIKE '%federal%')",
+    )
   }
 
   // Keyword narrowing from profile (kept small to avoid huge SQL).
@@ -381,14 +389,24 @@ router.post('/run', ensureAuth, async (req, res) => {
         : { profile, sections: profile?.sections ?? {}, signals: profile?.signals ?? null }
 
     const coveragePct = profileContext?.signals?.coverage?.pct ?? 0
-    if (!profileContext?.sections || Object.keys(profileContext.sections).length === 0 || coveragePct < 1) {
-      return res.status(400).json({
-        error: 'Profile context incomplete',
-        message:
-          'Refusing to run: crawler requires 100% profile coverage (all sections loaded and included in signals). Please complete/save the profile sections and retry.',
-        coverage: profileContext?.signals?.coverage ?? null,
-      })
-    }
+    const sectionCount = profileContext?.sections ? Object.keys(profileContext.sections).length : 0
+    const keywordCount =
+      typeof profileContext?.signals?.keywordSet?.size === 'number'
+        ? profileContext.signals.keywordSet.size
+        : Array.isArray(profileContext?.signals?.keywords)
+        ? profileContext.signals.keywords.length
+        : 0
+    const zip =
+      profileContext?.signals?.location?.zip ??
+      profile?.zip_code ??
+      profile?.postal_code ??
+      null
+    const state =
+      profileContext?.signals?.location?.state ??
+      profile?.state ??
+      null
+
+    const profileContextIncomplete = sectionCount === 0 || coveragePct < 1
     
     console.log(`[RealCrawlers] Running ${crawler_type} for profile ${profile_id || 'custom'}`)
     
@@ -399,6 +417,12 @@ router.post('/run', ensureAuth, async (req, res) => {
       used_db_fallback: false,
       live: null,
       db: null,
+      has_zip: Boolean(zip),
+      has_state: Boolean(state),
+      keyword_count: keywordCount,
+      coverage_pct: coveragePct,
+      section_count: sectionCount,
+      profile_context_incomplete: profileContextIncomplete,
     }
 
     const live = await runLiveCrawler({
