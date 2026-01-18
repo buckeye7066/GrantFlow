@@ -179,8 +179,8 @@ function mergeSectionData(existing = {}, incoming = {}) {
   return { data: merged, updatedFields }
 }
 
-function upsertProfileSection(db, profileId, sectionKey, data, documentId) {
-  db.prepare(
+async function upsertProfileSection(db, profileId, sectionKey, data, documentId) {
+  await db.prepare(
     `
       INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
       VALUES (?, ?, ?, ?)
@@ -206,7 +206,7 @@ export async function processDocumentIngestionJob({
     throw new Error('document_ingest job missing document_id parameter')
   }
 
-  const document = db
+  const document = await db
     .prepare('SELECT * FROM documents WHERE id = ?')
     .get(documentId)
 
@@ -214,7 +214,7 @@ export async function processDocumentIngestionJob({
     throw new Error(`Document ${documentId} not found`)
   }
 
-  db.prepare(
+  await db.prepare(
     'UPDATE documents SET processing_status = ?, processing_error = NULL WHERE id = ?',
   ).run('processing', documentId)
 
@@ -233,7 +233,7 @@ export async function processDocumentIngestionJob({
         ocrLanguage: 'eng',
       })
       if (result?.text) {
-        db.prepare('UPDATE documents SET extracted_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
+        await db.prepare('UPDATE documents SET extracted_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
           result.text,
           documentId,
         )
@@ -275,7 +275,7 @@ export async function processDocumentIngestionJob({
     if (!docExcerpt) {
       const message =
         'No extractable text found for this document. If it is scanned, upload a JPG/PNG version to enable OCR.'
-      db.prepare(
+      await db.prepare(
         `
           UPDATE documents
           SET processing_status = 'failed',
@@ -305,7 +305,7 @@ export async function processDocumentIngestionJob({
         heuristicBasic,
       )
       if (updatedBasic.size > 0) {
-        upsertProfileSection(db, profile.id, 'basic_information', mergedBasic, document.id)
+        await upsertProfileSection(db, profile.id, 'basic_information', mergedBasic, document.id)
         sections.basic_information = mergedBasic
         updates.push({ section_key: 'basic_information', updated_fields: Array.from(updatedBasic) })
         aiSectionsLog.basic_information = { ...(aiSectionsLog.basic_information || {}), heuristic: heuristicBasic }
@@ -317,7 +317,7 @@ export async function processDocumentIngestionJob({
         heuristicOrg,
       )
       if (updatedOrg.size > 0) {
-        upsertProfileSection(db, profile.id, 'organization_details', mergedOrg, document.id)
+        await upsertProfileSection(db, profile.id, 'organization_details', mergedOrg, document.id)
         sections.organization_details = mergedOrg
         updates.push({ section_key: 'organization_details', updated_fields: Array.from(updatedOrg) })
         aiSectionsLog.organization_details = { ...(aiSectionsLog.organization_details || {}), heuristic: heuristicOrg }
@@ -365,7 +365,7 @@ export async function processDocumentIngestionJob({
         const { data: merged, updatedFields } = mergeSectionData(existing, suggestion)
 
         if (updatedFields.size > 0) {
-          upsertProfileSection(db, profile.id, sectionKey, merged, document.id)
+          await upsertProfileSection(db, profile.id, sectionKey, merged, document.id)
           sections[sectionKey] = merged
           updates.push({
             section_key: sectionKey,
@@ -391,7 +391,7 @@ export async function processDocumentIngestionJob({
 
     if (fatalOpenAIError) {
       const message = `AI parsing failed: ${fatalOpenAIError}`
-      db.prepare(
+      await db.prepare(
         `
           UPDATE documents
           SET processing_status = 'failed',
@@ -434,7 +434,7 @@ export async function processDocumentIngestionJob({
       total_sections_updated: updates.length,
     }
 
-    db.prepare(
+    await db.prepare(
       `
         UPDATE documents
         SET processing_status = ?,
@@ -455,7 +455,7 @@ export async function processDocumentIngestionJob({
       result_meta: resultMeta,
     }
   } catch (error) {
-    db.prepare(
+    await db.prepare(
       `
         UPDATE documents
         SET processing_status = 'failed',
