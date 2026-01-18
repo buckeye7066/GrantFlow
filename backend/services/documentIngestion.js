@@ -326,7 +326,7 @@ export async function processDocumentIngestionJob({
       // best-effort
     }
 
-    let fatalOpenAIError = null
+    let openAIWarning = null
 
     for (const sectionKey of TARGET_SECTIONS) {
       if (!openai) break
@@ -381,35 +381,15 @@ export async function processDocumentIngestionJob({
         const summary = summarizeOpenAIError(error)
         console.error(`Failed to enrich section ${sectionKey}`, summary)
 
-        // If the key is invalid (or access is forbidden), stop and surface the real error.
+        // If the key is invalid (or access is forbidden), stop AI parsing.
+        // IMPORTANT: do NOT mark the document failed — we still may have extracted useful structured
+        // fields via deterministic heuristics.
         if (summary.isAuth) {
-          fatalOpenAIError = summary.message
+          openAIWarning = summary.message
+          aiSectionsLog._openai_auth_error = summary.message
+          openai = null
           break
         }
-      }
-    }
-
-    if (fatalOpenAIError) {
-      const message = `AI parsing failed: ${fatalOpenAIError}`
-      await db.prepare(
-        `
-          UPDATE documents
-          SET processing_status = 'failed',
-              processing_error = ?
-          WHERE id = ?
-        `,
-      ).run(message, documentId)
-      return {
-        inserted: 0,
-        sections_updated: [],
-        document_id: documentId,
-        summary: message,
-        result_count: 0,
-        result_meta: {
-          document_id: documentId,
-          profile_id: profile?.id ?? null,
-          error: message,
-        },
       }
     }
 
@@ -434,17 +414,19 @@ export async function processDocumentIngestionJob({
       total_sections_updated: updates.length,
     }
 
+    const processingError = openAIWarning ? `AI parsing unavailable: ${openAIWarning}` : null
+
     await db.prepare(
       `
         UPDATE documents
         SET processing_status = ?,
             ai_summary = ?,
             ai_sections = ?,
-            processing_error = NULL,
+            processing_error = ?,
             status = 'processed'
         WHERE id = ?
       `,
-    ).run(status, summary, JSON.stringify(aiSectionsLog, null, 2), documentId)
+    ).run(status, summary, JSON.stringify(aiSectionsLog, null, 2), processingError, documentId)
 
     return {
       inserted: updates.length,
