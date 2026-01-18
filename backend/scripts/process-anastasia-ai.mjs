@@ -3,7 +3,11 @@ import fs from 'fs';
 import path from 'path';
 import OpenAI from 'openai';
 
-const OPENAI_API_KEY = "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";
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+if (!OPENAI_API_KEY) {
+  console.error('Missing OPENAI_API_KEY. Set it in your environment to run this script.');
+  process.exit(1);
+}
 
 const db = new Database('./data/grantflow.db');
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });

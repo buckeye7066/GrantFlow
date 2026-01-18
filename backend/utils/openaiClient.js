@@ -95,7 +95,9 @@ export function summarizeOpenAIError(error) {
   const nestedMessage =
     error?.error?.message || error?.response?.data?.error?.message || error?.response?.data?.message
 
-  const finalMessage = String(nestedMessage || message || 'Unknown OpenAI error')
+  const rawMessage = String(nestedMessage || message || 'Unknown OpenAI error')
+  // Never leak API keys in logs/errors stored in DB.
+  const finalMessage = rawMessage.replace(/sk-[A-Za-z0-9_-]+/g, 'sk-***REDACTED***')
 
   const isAuth =
     status === 401 ||

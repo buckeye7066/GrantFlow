@@ -140,11 +140,53 @@ function renderValue(value) {
     )
   }
 
+  const formatInlineValue = (inner) => {
+    if (inner === null || inner === undefined) return null
+    if (typeof inner === "boolean") return inner ? "Yes" : "No"
+    if (typeof inner === "number") return String(inner)
+    if (typeof inner === "string") return inner
+    if (Array.isArray(inner)) return inner.map((item) => String(item)).join(", ")
+    return null
+  }
+
+  const flattenObjectEntries = (obj, { maxDepth = 2, depth = 0, prefix = "" } = {}) => {
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return []
+    const entries = []
+    for (const [key, inner] of Object.entries(obj)) {
+      const nextKey = prefix ? `${prefix}.${key}` : key
+      const inline = formatInlineValue(inner)
+      if (inline !== null) {
+        entries.push([nextKey, inline])
+        continue
+      }
+      if (depth < maxDepth && inner && typeof inner === "object" && !Array.isArray(inner)) {
+        entries.push(...flattenObjectEntries(inner, { maxDepth, depth: depth + 1, prefix: nextKey }))
+      }
+    }
+    return entries
+  }
+
   if (typeof value === "object") {
+    const flattened = flattenObjectEntries(value, { maxDepth: 2 })
+    if (!flattened.length) {
+      return <span className="text-sm text-slate-500">—</span>
+    }
+    const preview = flattened.slice(0, 6)
+    const remaining = flattened.length - preview.length
     return (
-      <pre className="text-xs text-slate-600 bg-slate-50 rounded-md p-2 max-w-[280px] whitespace-pre-wrap">
-        {JSON.stringify(value, null, 2)}
-      </pre>
+      <div className="max-w-[320px] space-y-1 text-right">
+        {preview.map(([key, inline]) => (
+          <div key={key} className="flex items-start justify-end gap-2">
+            <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+              {titleCase(key)}
+            </span>
+            <span className="min-w-0 text-xs text-slate-900 whitespace-pre-wrap break-words">{inline}</span>
+          </div>
+        ))}
+        {remaining > 0 ? (
+          <div className="text-[11px] text-slate-400">{`+${remaining} more`}</div>
+        ) : null}
+      </div>
     )
   }
 

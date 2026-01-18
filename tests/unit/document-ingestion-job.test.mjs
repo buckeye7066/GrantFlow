@@ -95,7 +95,7 @@ async function withTempSqliteDb() {
   }
 }
 
-test('document_ingest job: updates profile sections and marks document processed', async () => {
+test('document_ingest job: updates profile sections and marks document ready for review', async () => {
   const { db, close } = await withTempSqliteDb()
   try {
     const profileId = 'profile-1'
