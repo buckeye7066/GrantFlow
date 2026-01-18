@@ -265,6 +265,28 @@ async function repairMissingUploadAvatars({ db, uploadsDir }) {
   }
 }
 
+async function repairInvalidDocumentStatuses(db) {
+  // Postgres uses a CHECK constraint on documents.status; if any legacy rows exist (e.g. "processed"),
+  // *any* UPDATE touching that row will fail until status is repaired.
+  const allowed = ['draft', 'review', 'final', 'submitted']
+  try {
+    await db
+      .prepare(
+        `
+          UPDATE documents
+          SET status = 'draft',
+              updated_at = CURRENT_TIMESTAMP
+          WHERE status IS NOT NULL
+            AND status NOT IN ('draft','review','final','submitted')
+        `,
+      )
+      .run()
+  } catch (error) {
+    // Non-fatal: some deployments may not have the documents table yet.
+    console.warn('[startup] Failed to repair invalid document statuses:', error?.message || error)
+  }
+}
+
 // Serve static files from Vite build
 app.use(express.static(distPath));
 // Serve the SPA under the configured base path so production builds (base=/grantflow) work locally.
@@ -547,6 +569,7 @@ try {
 await ensureDesignatedProfiles(db)
 await linkAllProfilesToAdmin(db)
 await ensureUserPreferencesTable(db)
+await repairInvalidDocumentStatuses(db)
 await repairMissingUploadAvatars({ db, uploadsDir })
 
 // Check funding opportunities count and provide guidance
@@ -849,6 +872,45 @@ app.use(async (req, res, next) => {
   req.user = user;
   next();
 });
+
+// Ensure synthetic admin-token users exist so foreign keys don't explode.
+// This keeps admin-token flows (Anya, etc.) stable even on fresh DBs.
+app.use(async (req, _res, next) => {
+  const user = req.user
+  if (!user || user.role !== 'admin' || !user.userId) return next()
+
+  try {
+    const existing = await db
+      .prepare(
+        `
+          SELECT id
+          FROM users
+          WHERE id = ?
+          LIMIT 1
+        `,
+      )
+      .get(user.userId)
+
+    if (!existing?.id) {
+      await db
+        .prepare(
+          `
+            INSERT INTO users (id, display_name, primary_email, is_admin)
+            VALUES (?, ?, ?, 1)
+          `,
+        )
+        .run(
+          user.userId,
+          user.full_name || ADMIN_NAME || 'Admin User',
+          user.email || ADMIN_EMAIL || null,
+        )
+    }
+  } catch {
+    // Best-effort only: do not block requests if the users table is unavailable.
+  }
+
+  return next()
+})
 
 // Health check with dependency checks
 // Health check endpoint (v3.0 - complete county data)

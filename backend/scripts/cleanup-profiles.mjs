@@ -75,8 +75,8 @@ async function attachDocument(profileId, fileName) {
   
   // Insert document record
   db.prepare(`
-    INSERT INTO documents (id, profile_id, name, type, file_path, file_url, file_size, mime_type, extracted_text, processing_status, status, notes)
-    VALUES (?, ?, ?, 'profile_document', ?, ?, ?, 'application/pdf', ?, 'completed', 'final', 'Original application document')
+    INSERT INTO documents (id, profile_id, name, type, file_path, file_url, file_size, mime_type, extracted_text, processing_status, notes)
+    VALUES (?, ?, ?, 'profile_document', ?, ?, ?, 'application/pdf', ?, 'completed', 'Original application document')
   `).run(docId, profileId, fileName, destPath, `/uploads/${destFilename}`, fileSize, extractedText);
   
   console.log(`  ✓ Attached ${fileName} (${extractedText.length} chars extracted)`);

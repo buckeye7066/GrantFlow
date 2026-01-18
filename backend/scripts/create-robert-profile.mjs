@@ -166,9 +166,10 @@ if (fs.existsSync(pdfPath)) {
   // Read extracted text
   const extractedText = fs.readFileSync('./temp_images/r1_text.txt', 'utf8');
   
+  // Do not set documents.status on insert; rely on DB defaults.
   db.prepare(`
-    INSERT INTO documents (id, profile_id, name, type, file_url, file_path, file_size, mime_type, extracted_text, processing_status, status, notes)
-    VALUES (?, ?, ?, 'profile_document', ?, ?, ?, 'application/pdf', ?, 'completed', 'final', 'Uploaded for Robert White profile')
+    INSERT INTO documents (id, profile_id, name, type, file_url, file_path, file_size, mime_type, extracted_text, processing_status, notes)
+    VALUES (?, ?, ?, 'profile_document', ?, ?, ?, 'application/pdf', ?, 'completed', 'Uploaded for Robert White profile')
   `).run(
     documentId,
     profileId,

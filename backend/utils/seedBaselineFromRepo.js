@@ -70,6 +70,19 @@ function normalizeRecordOrigin(raw) {
   return allowed.has(v) ? v : 'curated_verified'
 }
 
+function normalizeDocumentStatus(raw) {
+  if (raw == null) return null
+  const v = String(raw ?? '').trim()
+  if (!v) return null
+  // Canonical statuses (SQLite + Postgres schemas)
+  const allowed = new Set(['draft', 'review', 'final', 'submitted'])
+  if (allowed.has(v)) return v
+  // Legacy values observed during early deployments/seeding.
+  if (v === 'processed') return 'draft'
+  if (v === 'pending') return 'draft'
+  return 'draft'
+}
+
 export function loadBaselineSeedFromRepo() {
   const seedPath = resolveBaselineSeedPath()
   if (!fs.existsSync(seedPath)) {
@@ -400,7 +413,6 @@ export async function seedBaselineFromRepo(db, opts = {}) {
         ai_sections,
         processing_status,
         processing_error,
-        status,
         version,
         notes,
         updated_at
@@ -420,7 +432,6 @@ export async function seedBaselineFromRepo(db, opts = {}) {
         @ai_sections,
         @processing_status,
         @processing_error,
-        @status,
         @version,
         @notes,
         CURRENT_TIMESTAMP
@@ -440,7 +451,6 @@ export async function seedBaselineFromRepo(db, opts = {}) {
         ai_sections = excluded.ai_sections,
         processing_status = excluded.processing_status,
         processing_error = excluded.processing_error,
-        status = excluded.status,
         version = excluded.version,
         notes = excluded.notes,
         updated_at = CURRENT_TIMESTAMP
@@ -572,7 +582,7 @@ export async function seedBaselineFromRepo(db, opts = {}) {
     if (shouldSeedDocuments) {
       for (const d of seed.documents) {
         if (!d?.id || !d?.name) continue
-        await upsertDoc.run({
+        const payload = {
           id: d.id,
           organization_id: d.organization_id ?? null,
           grant_id: d.grant_id ?? null,
@@ -588,10 +598,20 @@ export async function seedBaselineFromRepo(db, opts = {}) {
           ai_sections: d.ai_sections ?? null,
           processing_status: d.processing_status ?? null,
           processing_error: d.processing_error ?? null,
-          status: d.status ?? null,
           version: d.version ?? 1,
           notes: d.notes ?? null,
-        })
+        }
+        try {
+          await upsertDoc.run(payload)
+        } catch (error) {
+          const msg = String(error?.message || error)
+          if (msg.includes('documents_status_check')) {
+            // Retry without status. (This upsert no longer includes status.)
+            await upsertDoc.run(payload)
+          } else {
+            throw error
+          }
+        }
         counts.documents_upserted++
       }
 

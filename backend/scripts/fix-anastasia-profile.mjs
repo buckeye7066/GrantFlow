@@ -151,9 +151,10 @@ async function main() {
   // Delete old documents for this profile
   db.prepare('DELETE FROM documents WHERE profile_id = ?').run(profileId);
   
+  // Do not set documents.status on insert; rely on DB defaults.
   db.prepare(`
-    INSERT INTO documents (id, profile_id, name, type, file_path, file_url, file_size, mime_type, extracted_text, processing_status, status, notes)
-    VALUES (?, ?, ?, 'profile_document', ?, ?, ?, 'application/pdf', ?, 'completed', 'final', 'Original application document')
+    INSERT INTO documents (id, profile_id, name, type, file_path, file_url, file_size, mime_type, extracted_text, processing_status, notes)
+    VALUES (?, ?, ?, 'profile_document', ?, ?, ?, 'application/pdf', ?, 'completed', 'Original application document')
   `).run(
     docId,
     profileId,
