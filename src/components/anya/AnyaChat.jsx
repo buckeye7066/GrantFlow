@@ -194,15 +194,35 @@ export default function AnyaChat({ profileId }) {
       setIsLoading(true)
       try {
         const sessions = await getAnyaSessions()
-        const existing = sessions?.find((session) => {
-          if (effectiveProfileId) {
-            return session.profile_id === effectiveProfileId
-          }
-          return !session.profile_id
-        })
-        let activeSession = existing
+
+        const findExisting = (targetProfileId) =>
+          sessions?.find((session) => {
+            if (targetProfileId) {
+              return session.profile_id === targetProfileId
+            }
+            return !session.profile_id
+          })
+
+        let desiredProfileId = effectiveProfileId ?? null
+        let activeSession = findExisting(desiredProfileId)
+
         if (!activeSession) {
-          activeSession = await createAnyaSession({ profileId: effectiveProfileId ?? undefined })
+          try {
+            activeSession = await createAnyaSession({ profileId: desiredProfileId ?? undefined })
+          } catch (error) {
+            // Common in admin contexts where `activeProfileId` can be unset/stale.
+            // If the backend says the profile doesn't exist, fall back to a general (profile-less) session.
+            const status = error?.status ?? null
+            const message = String(error?.message || '')
+            const isProfileMissing = status === 404 || /profile not found/i.test(message)
+            if (!isProfileMissing) throw error
+
+            desiredProfileId = null
+            activeSession = findExisting(null)
+            if (!activeSession) {
+              activeSession = await createAnyaSession({ profileId: undefined })
+            }
+          }
         }
         if (!isMounted) return
         setSessionId(activeSession?.id ?? null)

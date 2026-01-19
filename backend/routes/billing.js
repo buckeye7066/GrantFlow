@@ -12,6 +12,12 @@ import { formatError } from '../middleware/errorHandler.js'
 
 const router = express.Router()
 
+function toDbBool(db, value) {
+  const b = Boolean(value)
+  // better-sqlite3 can be strict about bound param types; use 0/1 for sqlite.
+  return db?.dialect === 'postgres' ? b : b ? 1 : 0
+}
+
 function requireAuth(req, res, next) {
   if (!req.user || req.user.role === 'guest') {
     return res.status(401).json({ error: 'Not authenticated' })
@@ -97,9 +103,9 @@ router.post('/tiers', requireAdmin, async (req, res) => {
         description ?? null,
         Number.isFinite(base_monthly_cents) ? base_monthly_cents : null,
         Number.isFinite(hourly_rate_cents) ? hourly_rate_cents : null,
-        Boolean(enable_pipeline_automation),
-        Boolean(enable_item_funding),
-        Boolean(enable_document_ai),
+        toDbBool(req.db, enable_pipeline_automation),
+        toDbBool(req.db, enable_item_funding),
+        toDbBool(req.db, enable_document_ai),
       )
 
     const tier = await req.db.prepare('SELECT * FROM billing_tiers WHERE id = ?').get(tierId)
@@ -148,9 +154,9 @@ router.put('/tiers/:id', requireAdmin, async (req, res) => {
         description ?? null,
         Number.isFinite(base_monthly_cents) ? base_monthly_cents : null,
         Number.isFinite(hourly_rate_cents) ? hourly_rate_cents : null,
-        Boolean(enable_pipeline_automation),
-        Boolean(enable_item_funding),
-        Boolean(enable_document_ai),
+        toDbBool(req.db, enable_pipeline_automation),
+        toDbBool(req.db, enable_item_funding),
+        toDbBool(req.db, enable_document_ai),
         tierId,
       )
 
@@ -276,7 +282,14 @@ router.put('/accounts/:profileId', requireAdmin, async (req, res) => {
       assigned_reason = req.body?.assigned_reason ?? accountRow.assigned_reason,
       custom_monthly_cents = accountRow.custom_monthly_cents,
       custom_hourly_cents = accountRow.custom_hourly_cents,
-      metadata = accountRow.metadata ? JSON.parse(accountRow.metadata) : null,
+      metadata = (() => {
+        if (!accountRow.metadata) return null
+        try {
+          return JSON.parse(accountRow.metadata)
+        } catch {
+          return null
+        }
+      })(),
     } = req.body ?? {}
 
     const allowedDiscounts = new Set(['none', 'student', 'minister', 'hardship', 'custom'])
@@ -284,7 +297,8 @@ router.put('/accounts/:profileId', requireAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Invalid discount_type' })
     }
 
-    const sanitizedDiscountPercent = Number.isFinite(discount_percent) ? Math.max(0, discount_percent) : 0
+    const parsedDiscountPercent = typeof discount_percent === 'string' ? Number.parseFloat(discount_percent) : discount_percent
+    const sanitizedDiscountPercent = Number.isFinite(parsedDiscountPercent) ? Math.max(0, parsedDiscountPercent) : 0
     const sanitizedMetadata =
       metadata && typeof metadata === 'object' ? JSON.stringify(metadata) : accountRow.metadata ?? null
 
@@ -312,7 +326,7 @@ router.put('/accounts/:profileId', requireAdmin, async (req, res) => {
         assigned_reason ?? null,
         discount_type,
         sanitizedDiscountPercent,
-        Boolean(is_pro_bono),
+        toDbBool(req.db, is_pro_bono),
         pro_bono_reason ?? null,
         Number.isFinite(req.body?.custom_monthly_cents) ? req.body.custom_monthly_cents : custom_monthly_cents,
         Number.isFinite(req.body?.custom_hourly_cents) ? req.body.custom_hourly_cents : custom_hourly_cents,
