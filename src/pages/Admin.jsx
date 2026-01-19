@@ -1,12 +1,13 @@
 import React from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Shield, Activity, AlertCircle, Bot, DollarSign, Wrench, Workflow, Users } from 'lucide-react';
+import { Shield, Activity, AlertCircle, Bot, DollarSign, Wrench, Workflow, Users, Bell } from 'lucide-react';
 import AdminDocumentUpload from '@/components/admin/AdminDocumentUpload';
 import AdminDiagnostics from '@/components/admin/AdminDiagnostics';
 import AdminGeoCrawl from '@/components/admin/AdminGeoCrawl';
 import AdminMaintenance from '@/components/admin/AdminMaintenance';
 import AdminAnyaConsole from '@/components/admin/AdminAnyaConsole';
 import AdminServiceApplications from '@/components/admin/AdminServiceApplications';
+import AdminLoginNotifications from '@/components/admin/AdminLoginNotifications.jsx';
 import Billing from '@/pages/Billing';
 import Automation from '@/pages/Automation';
 import { useAuthStore } from '@/stores/authStore';
@@ -51,6 +52,10 @@ export default function Admin() {
               <Users className="w-4 h-4 mr-2" />
               Applications
             </TabsTrigger>
+            <TabsTrigger value="logins">
+              <Bell className="w-4 h-4 mr-2" />
+              Logins
+            </TabsTrigger>
             <TabsTrigger value="diagnostics">
               <Activity className="w-4 h-4 mr-2" />
               Diagnostics
@@ -77,6 +82,10 @@ export default function Admin() {
           
           <TabsContent value="applications" className="mt-6">
             <AdminServiceApplications />
+          </TabsContent>
+
+          <TabsContent value="logins" className="mt-6">
+            <AdminLoginNotifications />
           </TabsContent>
 
           <TabsContent value="diagnostics" className="mt-6">

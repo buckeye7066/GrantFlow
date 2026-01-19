@@ -26,8 +26,22 @@ function detectProvider() {
     normalizeProvider(process.env.DB_PROVIDER) ||
     normalizeProvider(process.env.DB_DIALECT);
 
+  const hasPostgresUrl = isPostgresUrl(process.env.DATABASE_URL)
+
+  // Production safety: prefer Postgres when a postgres:// DATABASE_URL is present,
+  // even if an old DB_PROVIDER/DB_DIALECT value is still set to sqlite.
+  // This prevents "DB_PROVIDER=sqlite" config drift from taking the service down.
+  if (hasPostgresUrl) {
+    if (explicit && explicit !== 'postgres' && isProd()) {
+      console.warn(
+        `[db] Overriding DB_PROVIDER/DB_DIALECT="${explicit}" to "postgres" because DATABASE_URL is a postgres:// URL (production).`,
+      )
+      return 'postgres'
+    }
+    if (!explicit) return 'postgres'
+  }
+
   if (explicit) return explicit;
-  if (isPostgresUrl(process.env.DATABASE_URL)) return 'postgres';
   return 'sqlite';
 }
 
@@ -443,6 +457,20 @@ export function getDb() {
   if (singleton) return singleton;
 
   const provider = detectProvider();
+
+  // Production invariant (Railway): Postgres must be used in production.
+  // We keep an explicit escape hatch for emergency recovery only.
+  if (isProd() && provider !== 'postgres') {
+    const allowSqliteInProd =
+      String(process.env.ALLOW_SQLITE_IN_PROD || '').trim().toLowerCase() === 'true'
+    if (!allowSqliteInProd) {
+      throw new Error(
+        `[db] Production must use Postgres. Refusing to start with provider="${provider}".\n` +
+          `Configure a Railway Postgres database so DATABASE_URL is a postgres:// connection string.\n` +
+          `If you must temporarily run SQLite in production (NOT recommended), set ALLOW_SQLITE_IN_PROD=true.`,
+      )
+    }
+  }
 
   if (provider === 'postgres') {
     const url = String(process.env.DATABASE_URL || '').trim();
