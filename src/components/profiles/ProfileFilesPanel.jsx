@@ -52,7 +52,7 @@ function isLikelyParseable(file) {
   return parseableMimes.has(file?.type) || parseableExt.has(extension)
 }
 
-export default function ProfileFilesPanel({ profileId, profileName }) {
+export default function ProfileFilesPanel({ profileId, profileName, canDocumentAI = true }) {
   const { toast } = useToast()
   const queryClient = useQueryClient()
   const fileInputRef = useRef(null)
@@ -403,24 +403,26 @@ export default function ProfileFilesPanel({ profileId, profileName }) {
                   </>
                 )}
               </Button>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  if (!profileId) return
-                  if (documents.length === 0) {
-                    toast({ title: "No documents", description: "Upload at least one document first." })
-                    return
-                  }
-                  const ok = window.confirm(
-                    `Queue parsing for up to 25 of the most recent documents for ${profileName ?? "this profile"}?`,
-                  )
-                  if (!ok) return
-                  parseAllMutation.mutate()
-                }}
-                disabled={!profileId || parseAllMutation.isPending}
-              >
-                {parseAllMutation.isPending ? "Queueing…" : "Parse all"}
-              </Button>
+              {canDocumentAI ? (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (!profileId) return
+                    if (documents.length === 0) {
+                      toast({ title: "No documents", description: "Upload at least one document first." })
+                      return
+                    }
+                    const ok = window.confirm(
+                      `Queue parsing for up to 25 of the most recent documents for ${profileName ?? "this profile"}?`,
+                    )
+                    if (!ok) return
+                    parseAllMutation.mutate()
+                  }}
+                  disabled={!profileId || parseAllMutation.isPending}
+                >
+                  {parseAllMutation.isPending ? "Queueing…" : "Parse all"}
+                </Button>
+              ) : null}
             </div>
           </div>
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">

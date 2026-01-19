@@ -21,7 +21,7 @@ import {
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/components/ui/use-toast";
-import { listProfiles } from "@/api/profiles";
+import { getProfile, listProfiles } from "@/api/profiles";
 import { listDocuments, deleteDocument, ingestDocument, parseAllProfileDocuments } from "@/api/documents";
 import { listCrawlerJobs, triggerProfileEnrichment } from "@/api/crawlers";
 import { useAuthStore } from "@/stores/authStore";
@@ -31,6 +31,7 @@ export default function Documents() {
     user: state.user,
     activeProfileId: state.activeProfileId,
   }));
+  const isAdmin = Boolean(user?.is_admin || user?.id === "admin");
   const [selectedProfileId, setSelectedProfileId] = useState(activeProfileId ?? null);
   const [deletingDoc, setDeletingDoc] = useState(null);
   const [uploadFile, setUploadFile] = useState(null);
@@ -69,6 +70,15 @@ export default function Documents() {
   }, [selectedProfileId]);
 
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? null;
+
+  const profileDetailQuery = useQuery({
+    queryKey: ["documents-profile-detail", selectedProfileId],
+    queryFn: () => getProfile(selectedProfileId),
+    enabled: Boolean(selectedProfileId),
+  });
+
+  const tier = profileDetailQuery.data?.billing?.tier ?? null;
+  const canDocumentAI = isAdmin || Boolean(tier?.enable_document_ai);
 
   const { data: documents = [], isLoading: isLoadingDocuments } = useQuery({
     queryKey: ['documents', selectedProfileId],
@@ -529,36 +539,41 @@ const latestDuration = describeDuration(latestEnrichmentJob)
                     </>
                   )}
                 </Button>
-                <Button
-                  variant="outline"
-                  onClick={async () => {
-                    if (!selectedProfileId) return
-                    if (documents.length === 0) {
-                      toast({ title: "No documents", description: "Upload at least one document first." })
-                      return
-                    }
-                    const ok = window.confirm("Queue parsing for up to 25 of the most recent documents in this profile?")
-                    if (!ok) return
-                    try {
-                      const result = await parseAllProfileDocuments(selectedProfileId, { handwriting: Boolean(handwritingOcr) })
-                      queryClient.invalidateQueries({ queryKey: ["documents", selectedProfileId] })
-                      queryClient.invalidateQueries({ queryKey: ["profile", selectedProfileId] })
-                      toast({
-                        title: "Parsing queued",
-                        description: `Queued ${result?.queued_count ?? "some"} document(s) for parsing.`,
-                      })
-                    } catch (error) {
-                      toast({
-                        variant: "destructive",
-                        title: "Parse-all failed",
-                        description: error instanceof Error ? error.message : "Unable to queue parsing for these documents.",
-                      })
-                    }
-                  }}
-                  disabled={!selectedProfileId || isUploading}
-                >
-                  Parse all
-                </Button>
+                {canDocumentAI ? (
+                  <Button
+                    variant="outline"
+                    onClick={async () => {
+                      if (!selectedProfileId) return
+                      if (documents.length === 0) {
+                        toast({ title: "No documents", description: "Upload at least one document first." })
+                        return
+                      }
+                      const ok = window.confirm("Queue parsing for up to 25 of the most recent documents in this profile?")
+                      if (!ok) return
+                      try {
+                        const result = await parseAllProfileDocuments(selectedProfileId, {
+                          handwriting: Boolean(handwritingOcr),
+                        })
+                        queryClient.invalidateQueries({ queryKey: ["documents", selectedProfileId] })
+                        queryClient.invalidateQueries({ queryKey: ["profile", selectedProfileId] })
+                        toast({
+                          title: "Parsing queued",
+                          description: `Queued ${result?.queued_count ?? "some"} document(s) for parsing.`,
+                        })
+                      } catch (error) {
+                        toast({
+                          variant: "destructive",
+                          title: "Parse-all failed",
+                          description:
+                            error instanceof Error ? error.message : "Unable to queue parsing for these documents.",
+                        })
+                      }
+                    }}
+                    disabled={!selectedProfileId || isUploading}
+                  >
+                    Parse all
+                  </Button>
+                ) : null}
               </div>
             </div>
             {uploadFile ? (
