@@ -1429,25 +1429,22 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       error: emailSent ? null : 'email_delivery_failed_or_unconfigured',
     }).catch(() => {})
 
-    // Preview code rules:
-    // - ALWAYS include when email wasn't sent (ensures login continuity during email outages)
-    // - Include in non-production for developer ergonomics
-    // - In production, ONLY allow preview for the admin email when explicitly enabled
-    //   via AUTH_ALLOW_PREVIEW_CODE_IN_PROD=true (for emergency debugging)
-    const allowAdminPreviewInProd =
-      process.env.NODE_ENV === 'production' &&
-      process.env.AUTH_ALLOW_PREVIEW_CODE_IN_PROD === 'true' &&
-      isAdminEmail(email)
+    // SECURITY: never expose OTP codes in production responses.
+    // If email delivery fails in production, return an error so the user cannot continue without the email.
+    const isProd = process.env.NODE_ENV === 'production'
+    if (isProd && !emailSent) {
+      return res.status(503).json({
+        error: 'Email service is temporarily unavailable. Please try again shortly.',
+        error_type: 'email_unavailable',
+      })
+    }
 
-    if (!emailSent) {
+    // Developer ergonomics: in non-production, include a preview code for easier local testing.
+    if (!isProd) {
       responseData.previewCode = code
-      responseData.notice = 'Email service is not configured or unavailable. Use the preview code below to continue.'
-    } else if (process.env.NODE_ENV !== 'production' || allowAdminPreviewInProd) {
-      responseData.previewCode = code
-      responseData.notice =
-        process.env.NODE_ENV !== 'production'
-          ? 'Development mode: Code included for testing'
-          : 'Admin preview enabled for production debugging (disable AUTH_ALLOW_PREVIEW_CODE_IN_PROD after use).'
+      responseData.notice = emailSent
+        ? 'Development mode: Code included for testing'
+        : 'Email service is not configured or unavailable. Use the preview code below to continue.'
     }
 
     console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent)
@@ -1782,7 +1779,6 @@ router.post('/phone/start', phoneStartLimiter, async (req, res) => {
 
   return res.status(202).json({
     message: 'Verification code sent',
-    previewCode: process.env.NODE_ENV !== 'production' ? code : undefined,
     user_hint: {
       id: user.id,
       display_name: user.display_name,

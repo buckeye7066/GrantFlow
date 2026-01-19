@@ -20,7 +20,6 @@ export function isEmailServiceConfigured() {
 export async function sendVerificationEmail(email, code) {
   console.warn('[emailFallback] Using fallback email service')
   console.warn('[emailFallback] Email would be sent to:', email)
-  console.warn('[emailFallback] Verification code:', code)
   
   // Always return false to indicate email wasn't actually sent
   // This ensures the preview code is shown in the UI
