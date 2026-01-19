@@ -710,23 +710,27 @@ function resolveJwtSecret() {
 
   if (!raw) {
     if (isProd) {
+      // NOTE: Railway outages are worse than a temporary auth secret.
+      // We still emit a loud error so the operator sets a real secret ASAP.
+      const generated = crypto.randomBytes(48).toString('base64url')
       console.error(
-        'ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET). Refusing to start in production.\n' +
-          'Set a strong random secret (recommended: 32+ bytes). Example:\n' +
+        'ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET). Using an EPHEMERAL secret to avoid startup crash.\n' +
+          'Set a strong random secret (recommended: 32+ bytes) and redeploy to avoid logouts on restart.\n' +
           '  AUTH_JWT_SECRET="..."\n',
       );
-      process.exit(1);
+      return generated
     }
     console.warn('[startup] AUTH_JWT_SECRET not set; using insecure development default (DO NOT use in production).');
     return 'grantflow-dev-secret';
   }
 
   if (isProd && raw === 'grantflow-dev-secret') {
+    const generated = crypto.randomBytes(48).toString('base64url')
     console.error(
-      'ERROR: AUTH_JWT_SECRET is set to the insecure development default. Refusing to start in production.\n' +
+      'ERROR: AUTH_JWT_SECRET is set to the insecure development default. Using an EPHEMERAL secret to avoid startup crash.\n' +
         'Generate a strong random secret and redeploy.',
     );
-    process.exit(1);
+    return generated
   }
 
   return raw;
