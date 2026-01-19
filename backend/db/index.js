@@ -13,6 +13,29 @@ function isPostgresUrl(value) {
   return /^postgres(ql)?:\/\//i.test(String(value || '').trim());
 }
 
+function inferPostgresUrlFromEnv() {
+  const databaseUrl = String(process.env.DATABASE_URL || '').trim()
+  if (isPostgresUrl(databaseUrl)) return databaseUrl
+
+  // Many managed Postgres providers (including Railway) inject PG* vars rather than DATABASE_URL.
+  const host = String(process.env.PGHOST || process.env.POSTGRES_HOST || '').trim()
+  const port = String(process.env.PGPORT || process.env.POSTGRES_PORT || '5432').trim()
+  const user = String(process.env.PGUSER || process.env.POSTGRES_USER || '').trim()
+  const password = String(process.env.PGPASSWORD || process.env.POSTGRES_PASSWORD || '').trim()
+  const database = String(process.env.PGDATABASE || process.env.POSTGRES_DB || '').trim()
+  const sslMode = String(process.env.PGSSLMODE || '').trim()
+
+  if (!host || !user || !database) return null
+
+  const auth = password ? `${encodeURIComponent(user)}:${encodeURIComponent(password)}` : encodeURIComponent(user)
+  const base = `postgres://${auth}@${host}:${port}/${encodeURIComponent(database)}`
+
+  // Railway Postgres commonly requires SSL; we accept explicit PGSSLMODE as a signal,
+  // otherwise we default SSL-on for production Railway runtimes.
+  const forceSsl = Boolean(sslMode) || (isProd() && isRailwayRuntime())
+  return forceSsl ? `${base}?sslmode=require` : base
+}
+
 function normalizeProvider(raw) {
   const v = String(raw || '').trim().toLowerCase();
   if (!v) return '';
@@ -26,7 +49,8 @@ function detectProvider() {
     normalizeProvider(process.env.DB_PROVIDER) ||
     normalizeProvider(process.env.DB_DIALECT);
 
-  const hasPostgresUrl = isPostgresUrl(process.env.DATABASE_URL)
+  const inferredUrl = inferPostgresUrlFromEnv()
+  const hasPostgresUrl = Boolean(inferredUrl)
 
   // Production safety: prefer Postgres when a postgres:// DATABASE_URL is present,
   // even if an old DB_PROVIDER/DB_DIALECT value is still set to sqlite.
@@ -485,11 +509,12 @@ export function getDb() {
   }
 
   if (provider === 'postgres') {
-    const url = String(process.env.DATABASE_URL || '').trim();
-    if (!isPostgresUrl(url)) {
+    const url = inferPostgresUrlFromEnv()
+    if (!url || !isPostgresUrl(url)) {
       throw new Error(
-        '[db] DB_PROVIDER=postgres requires DATABASE_URL to be set to a postgres:// connection string',
-      );
+        '[db] Postgres configuration missing. Set DATABASE_URL to a postgres:// connection string, ' +
+          'or set PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE (Railway-style).',
+      )
     }
     singleton = new PostgresDb(url);
     return singleton;
