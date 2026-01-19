@@ -231,13 +231,26 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
   console.log(`[comprehensiveCrawler] Loaded ${realOpps.length} real opportunities`)
   
   // Also load from database
-  const dbOpps = db.prepare(`
-    SELECT * FROM funding_opportunities 
-    WHERE is_active = 1 
-    AND (requires_match = 0 OR requires_match IS NULL)
-    ORDER BY created_at DESC
-    LIMIT 200
-  `).all()
+  const dbOppsQuery =
+    db?.dialect === 'postgres'
+      ? `
+          SELECT *
+          FROM funding_opportunities
+          WHERE is_active IS TRUE
+            AND (requires_match IS FALSE OR requires_match IS NULL)
+          ORDER BY created_at DESC
+          LIMIT 200
+        `
+      : `
+          SELECT *
+          FROM funding_opportunities
+          WHERE is_active = 1
+            AND (requires_match = 0 OR requires_match IS NULL)
+          ORDER BY created_at DESC
+          LIMIT 200
+        `
+
+  const dbOpps = db.prepare(dbOppsQuery).all()
   
   console.log(`[comprehensiveCrawler] Found ${dbOpps.length} opportunities in database`)
   
