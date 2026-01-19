@@ -14,6 +14,7 @@ import { ensureDesignatedProfiles } from '../utils/ensureDesignatedProfiles.js';
 import { seedBaselineFromRepo } from '../utils/seedBaselineFromRepo.js';
 import { buildProfileSignals, calculateMatchScore } from '../services/profileHelpers.js';
 import { getSystemDiagnostics } from '../services/diagnosticsService.js';
+import { listClientSignInEvents } from '../services/adminLoginEventStore.js'
 import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js';
 import { logAuditEvent, queryAuditLogs, getAuditSummary, cleanupAuditLogs, AUDIT_CATEGORIES, SEVERITY } from '../services/auditService.js';
@@ -925,6 +926,30 @@ router.get('/diagnostics', async (req, res) => {
   }
 });
 
+// GET /api/admin/login-events - Recent client logins (admin only)
+// Stored in-memory only (best-effort; cleared on restart).
+router.get('/login-events', async (req, res) => {
+  try {
+    if (!(await ensureAdminRequest(req, res))) return
+
+    // Polled by the Admin UI; prevent conditional GETs (304) which break JSON parsing.
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+    res.set('Pragma', 'no-cache')
+
+    const since = typeof req.query?.since === 'string' ? req.query.since : null
+    const limitRaw = typeof req.query?.limit === 'string' ? req.query.limit : null
+    const limit = limitRaw ? Number(limitRaw) : 25
+
+    return res.json({
+      ok: true,
+      events: listClientSignInEvents({ since, limit }),
+    })
+  } catch (error) {
+    console.error('[admin/login-events] Error:', error)
+    return res.status(500).json({ error: 'Failed to load login events' })
+  }
+})
+
 // Lookup recent server-side error details by Request ID (admin-only).
 // This is stored in-memory (best-effort) to help non-technical admins debug production issues.
 router.get('/errors/:requestId', async (req, res) => {
@@ -1508,224 +1533,6 @@ router.post('/link-admin-to-organizations', async (req, res) => {
     res.status(500).json({ success: false, error: error.message || 'Failed to link admin to organizations' });
   }
 });
-
-/**
- * National ZIP crawl management endpoints
- */
-
-// Track running national crawl jobs
-let nationalCrawlJob = null
-
-/**
- * Start national ZIP crawl
- * POST /api/admin/national-crawl/start
- */
-router.post('/national-crawl/start', async (req, res) => {
-  try {
-    if (nationalCrawlJob && nationalCrawlJob.status === 'running') {
-      return res.status(409).json({
-        error: 'National crawl already running',
-        job_id: nationalCrawlJob.id
-      })
-    }
-    
-    const { batch_size, min_sources_per_zip } = req.body
-    const db = req.db
-    
-    // Import national ZIP crawler
-    const { runNationalZipCrawl } = await import('../services/crawlers/nationalZipCrawler.js')
-    
-    // Create job record
-    const jobId = crypto.randomUUID()
-    const params = {
-      batch_size: batch_size || 50,
-      min_sources_per_zip: min_sources_per_zip || 3
-    }
-    
-    await db.prepare(`
-      INSERT INTO crawler_jobs (
-        id, type, status, parameters, requested_by, created_at
-      ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `).run(
-      jobId,
-      'national_zip_scan',
-      'running',
-      JSON.stringify(params),
-      req.user?.id || 'admin'
-    )
-    
-    nationalCrawlJob = {
-      id: jobId,
-      status: 'running',
-      started_at: new Date().toISOString()
-    }
-    
-    // Run crawl in background
-    const dbPath = process.env.DB_PATH || join(__dirname, '..', 'data', 'grantflow.db')
-    
-    runNationalZipCrawl(dbPath, params)
-      .then(async (result) => {
-        nationalCrawlJob.status = 'completed'
-        nationalCrawlJob.completed_at = new Date().toISOString()
-        nationalCrawlJob.result = result
-        
-        // Update job record
-        await db.prepare(`
-          UPDATE crawler_jobs 
-          SET status = 'completed', 
-              completed_at = CURRENT_TIMESTAMP,
-              result_count = ?,
-              result_meta = ?
-          WHERE id = ?
-        `).run(result.sources, JSON.stringify(result), jobId)
-      })
-      .catch(async (error) => {
-        nationalCrawlJob.status = 'failed'
-        nationalCrawlJob.error = error.message
-        
-        // Update job record
-        await db.prepare(`
-          UPDATE crawler_jobs 
-          SET status = 'failed', 
-              completed_at = CURRENT_TIMESTAMP,
-              error = ?
-          WHERE id = ?
-        `).run(error.message, jobId)
-      })
-    
-    res.json({
-      success: true,
-      job_id: jobId,
-      message: 'National ZIP crawl started',
-      parameters: params
-    })
-  } catch (error) {
-    console.error('[admin/national-crawl/start] Error:', error)
-    res.status(500).json({ error: error.message })
-  }
-})
-
-/**
- * Stop national ZIP crawl
- * POST /api/admin/national-crawl/stop
- */
-router.post('/national-crawl/stop', async (req, res) => {
-  try {
-    if (!nationalCrawlJob || nationalCrawlJob.status !== 'running') {
-      return res.status(404).json({
-        error: 'No national crawl currently running'
-      })
-    }
-    
-    // Mark as cancelled (actual stopping would require more complex implementation)
-    nationalCrawlJob.status = 'cancelled'
-    nationalCrawlJob.cancelled_at = new Date().toISOString()
-    
-    // Update job record
-    await req.db.prepare(`
-      UPDATE crawler_jobs 
-      SET status = 'cancelled', 
-          completed_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).run(nationalCrawlJob.id)
-    
-    res.json({
-      success: true,
-      message: 'National ZIP crawl stopped',
-      job_id: nationalCrawlJob.id
-    })
-  } catch (error) {
-    console.error('[admin/national-crawl/stop] Error:', error)
-    res.status(500).json({ error: error.message })
-  }
-})
-
-/**
- * Get national ZIP crawl status
- * GET /api/admin/national-crawl/status
- */
-router.get('/national-crawl/status', async (req, res) => {
-  try {
-    const db = req.db
-    // This endpoint is polled by the Admin UI; prevent conditional GETs (304) which break JSON parsing.
-    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
-    res.set('Pragma', 'no-cache')
-    res.set('Expires', '0')
-    res.set('Surrogate-Control', 'no-store')
-    
-    // Get current job status if running
-    if (nationalCrawlJob) {
-      // Get progress from database
-      const progress = await db.prepare(`
-        SELECT 
-          COUNT(*) as total_zips,
-          SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_zips,
-          SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_zips,
-          SUM(sources_found) as total_sources,
-          AVG(sources_found) as avg_sources
-        FROM national_zip_progress
-      `).get()
-      
-      return res.json({
-        job: nationalCrawlJob,
-        progress: {
-          total_zips: progress.total_zips || 0,
-          completed: progress.completed_zips || 0,
-          failed: progress.failed_zips || 0,
-          sources_found: progress.total_sources || 0,
-          avg_sources_per_zip: progress.avg_sources || 0
-        }
-      })
-    }
-    
-    // Get last completed job
-    const lastJob = db.prepare(`
-      SELECT * FROM crawler_jobs 
-      WHERE type = 'national_zip_scan' 
-      ORDER BY created_at DESC 
-      LIMIT 1
-    `).get()
-    
-    if (!lastJob) {
-      return res.json({
-        message: 'No national crawl jobs found',
-        progress: null
-      })
-    }
-    
-    // Get final progress
-    const progress = db.prepare(`
-      SELECT 
-        COUNT(*) as total_zips,
-        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_zips,
-        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_zips,
-        SUM(sources_found) as total_sources,
-        AVG(sources_found) as avg_sources
-      FROM national_zip_progress
-    `).get()
-    
-    res.json({
-      last_job: {
-        id: lastJob.id,
-        status: lastJob.status,
-        started_at: lastJob.started_at,
-        completed_at: lastJob.completed_at,
-        result_count: lastJob.result_count,
-        error: lastJob.error
-      },
-      progress: {
-        total_zips: progress.total_zips || 0,
-        completed: progress.completed_zips || 0,
-        failed: progress.failed_zips || 0,
-        sources_found: progress.total_sources || 0,
-        avg_sources_per_zip: progress.avg_sources || 0
-      }
-    })
-  } catch (error) {
-    console.error('[admin/national-crawl/status] Error:', error)
-    res.status(500).json({ error: error.message })
-  }
-})
 
 // ============================================================================
 // Audit Log Endpoints
