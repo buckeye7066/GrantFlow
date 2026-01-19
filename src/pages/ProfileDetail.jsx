@@ -22,6 +22,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx"
 import { useSettingsStore } from "@/stores/settingsStore"
+import { useAuthStore } from "@/stores/authStore"
 import ProfileFilesPanel from "@/components/profiles/ProfileFilesPanel.jsx"
 import ProfileAppliedFundingPrint from "@/components/profiles/ProfileAppliedFundingPrint.jsx"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -36,6 +37,8 @@ export default function ProfileDetail() {
   const profileId = searchParams.get("id")
   const { toast } = useToast()
   const queryClient = useQueryClient()
+  const user = useAuthStore((state) => state.user)
+  const isAdmin = Boolean(user?.is_admin || user?.id === "admin")
   const { state: dashboardPrefs, dispatch: preferencesDispatch } = useDashboardPreferences()
   const preferences = useSettingsStore((state) => state.preferences)
   const updatePreference = useSettingsStore((state) => state.updatePreference)
@@ -359,6 +362,8 @@ export default function ProfileDetail() {
     )
   }
 
+  const canDocumentAI = isAdmin || Boolean(profile?.billing?.tier?.enable_document_ai)
+
   const primaryType = String(profile.primary_type || "").toLowerCase()
   const basicInfo =
     profile.sections?.find((section) => section.section_key === "basic_information")?.data ?? {}
@@ -529,13 +534,21 @@ export default function ProfileDetail() {
                 </div>
               </div>
 
-              <ProfileFilesPanel profileId={profileId} profileName={profile.display_name} />
+              <ProfileFilesPanel
+                profileId={profileId}
+                profileName={profile.display_name}
+                canDocumentAI={canDocumentAI}
+              />
             </div>
           </TabsContent>
 
           <TabsContent value="documents" className="mt-6">
             <div className="space-y-6">
-              <ProfileFilesPanel profileId={profileId} profileName={profile.display_name} />
+              <ProfileFilesPanel
+                profileId={profileId}
+                profileName={profile.display_name}
+                canDocumentAI={canDocumentAI}
+              />
               <ProfileAppliedFundingPrint organizationId={profile.organization_id} profileName={profile.display_name} />
             </div>
           </TabsContent>
