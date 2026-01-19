@@ -7,6 +7,7 @@ import OpenAI from 'openai'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { initializeAnyaForAdmin } from '../services/anyaLoginTrigger.js'
+import { recordClientSignInEvent } from '../services/adminLoginEventStore.js'
 
 // Import email service (with fallback if main service fails to load)
 import { sendVerificationEmail as mainSendEmail, sendAuthAttemptNotification as mainAuthNotify } from '../services/email.js'
@@ -1644,17 +1645,14 @@ router.post('/email/verify', async (req, res) => {
   // Initialize Anya for admin users on login
   let anyaInfo = null
   try {
-    // Postgres rollout: Anya DB call sites are not yet fully async-safe.
-    if (req.db?.dialect !== 'postgres') {
-      anyaInfo = initializeAnyaForAdmin(req.db, user, activeProfileId, { uploadDir, getOpenAI })
-    }
+    anyaInfo = await initializeAnyaForAdmin(req.db, user, activeProfileId, { uploadDir, getOpenAI })
   } catch (error) {
     console.error('[auth] Failed to initialize Anya:', error)
     // Don't fail the login if Anya initialization fails
   }
 
   // Auto-trigger discovery crawlers on email login (fire and forget)
-  if (activeProfileId && req.db?.dialect !== 'postgres') {
+  if (activeProfileId) {
     triggerAutoDiscoveryCrawlers(req.db, activeProfileId, { uploadDir, getOpenAI }).catch(err => {
       console.error('[auth/email] Failed to queue auto-discovery crawlers:', err)
     })
@@ -1701,6 +1699,19 @@ router.post('/email/verify', async (req, res) => {
       userAgent: req.headers['user-agent'],
     },
   }).catch(() => {})
+
+  // In-app admin notification (best-effort, stored in-memory).
+  // Record only non-admin sign-ins so the Admin panel highlights client activity.
+  if (!user?.is_admin) {
+    recordClientSignInEvent({
+      identifier: email,
+      method: 'email',
+      userId: user?.id ?? null,
+      profileId: activeProfileId ?? null,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    })
+  }
 
   return res.json(response)
 })
@@ -1921,17 +1932,14 @@ router.post('/phone/verify', async (req, res) => {
   // Initialize Anya for admin users on login
   let anyaInfo = null
   try {
-    // Postgres rollout: Anya DB call sites are not yet fully async-safe.
-    if (req.db?.dialect !== 'postgres') {
-      anyaInfo = initializeAnyaForAdmin(req.db, user, activeProfileId, { uploadDir, getOpenAI })
-    }
+    anyaInfo = await initializeAnyaForAdmin(req.db, user, activeProfileId, { uploadDir, getOpenAI })
   } catch (error) {
     console.error('[auth] Failed to initialize Anya:', error)
     // Don't fail the login if Anya initialization fails
   }
 
   // Auto-trigger discovery crawlers on phone login (fire and forget)
-  if (activeProfileId && req.db?.dialect !== 'postgres') {
+  if (activeProfileId) {
     triggerAutoDiscoveryCrawlers(req.db, activeProfileId, { uploadDir, getOpenAI }).catch(err => {
       console.error('[auth/phone] Failed to queue auto-discovery crawlers:', err)
     })
@@ -1969,6 +1977,17 @@ router.post('/phone/verify', async (req, res) => {
       userAgent: req.headers['user-agent'],
     },
   }).catch(() => {})
+
+  if (!user?.is_admin) {
+    recordClientSignInEvent({
+      identifier: normalized,
+      method: 'phone',
+      userId: user?.id ?? null,
+      profileId: activeProfileId ?? null,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    })
+  }
 
   return res.json(response)
 })
@@ -2099,8 +2118,19 @@ router.get('/:provider/callback', async (req, res) => {
       },
     }).catch(() => {})
 
+    if (!user?.is_admin) {
+      recordClientSignInEvent({
+        identifier: profile?.email ? normalizeEmail(profile.email) : `${provider}:${profile?.providerAccountId || 'unknown'}`,
+        method: `oauth:${provider}`,
+        userId: user?.id ?? null,
+        profileId: activeProfileId ?? null,
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+      })
+    }
+
     // Auto-trigger discovery crawlers on OAuth login (fire and forget)
-    if (activeProfileId && req.db?.dialect !== 'postgres') {
+    if (activeProfileId) {
       triggerAutoDiscoveryCrawlers(req.db, activeProfileId, { uploadDir, getOpenAI }).catch(err => {
         console.error(`[auth/${provider}] Failed to queue auto-discovery crawlers:`, err)
       })

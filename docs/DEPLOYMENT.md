@@ -3,7 +3,7 @@
 GrantFlow is deployed using modern cloud services for optimal performance and reliability:
 
 - **Frontend**: Vercel (serves `/grantflow`)
-- **Backend**: Railway (Node/Express + SQLite)
+- **Backend**: Railway (Node/Express + Postgres)
 
 ## Full Deployment Instructions
 

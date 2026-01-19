@@ -921,7 +921,8 @@ app.get('/health', async (req, res) => {
     uptime: process.uptime(),
     dependencies: {
       database: 'unknown',
-      openai: 'unknown'
+      openai: 'unknown',
+      anthropic: 'unknown',
     }
   };
   
@@ -940,6 +941,7 @@ app.get('/health', async (req, res) => {
   
   // Check if OpenAI API key is configured
   health.dependencies.openai = process.env.OPENAI_API_KEY ? 'configured' : 'not configured';
+  health.dependencies.anthropic = process.env.ANTHROPIC_API_KEY ? 'configured' : 'not configured';
   
   const statusCode = health.status === 'healthy' ? 200 : 503;
   res.status(statusCode).json(health);
@@ -1367,11 +1369,14 @@ app.use((req, res) => {
 function gracefulShutdown(signal) {
   console.log(`\nReceived ${signal}, closing server gracefully...`);
   
-  server.close(() => {
+  server.close(async () => {
     console.log('HTTP server closed');
     
     try {
-      db.close();
+      const maybe = db?.close?.()
+      if (maybe && typeof maybe.then === 'function') {
+        await maybe
+      }
       console.log('Database connection closed');
     } catch (error) {
       console.error('Error closing database:', error);

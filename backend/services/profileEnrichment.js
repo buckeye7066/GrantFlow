@@ -1,6 +1,31 @@
 import { buildProfileSignals, summarizeProfileSignals } from './profileHelpers.js'
 import { extractCompletionText } from '../utils/openai.js'
 import { safeParseJSON } from '../utils/safeJson.js'
+import { summarizeOpenAIError } from '../utils/openaiClient.js'
+
+async function createAnthropicClient() {
+  const key = String(process.env.ANTHROPIC_API_KEY || '').trim()
+  if (!key) return null
+  const Anthropic = (await import('@anthropic-ai/sdk')).default
+  return new Anthropic({
+    apiKey: key,
+    timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 20_000),
+    maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
+  })
+}
+
+function extractAnthropicText(response) {
+  const parts = Array.isArray(response?.content) ? response.content : []
+  return parts
+    .map((part) => {
+      if (typeof part?.text === 'string') return part.text
+      if (typeof part === 'string') return part
+      return ''
+    })
+    .filter(Boolean)
+    .join('\n')
+    .trim()
+}
 
 function mergeValues(existingValue, incomingValue) {
   if (incomingValue === undefined || incomingValue === null) {
@@ -55,8 +80,8 @@ function mergeSection(existingSection = {}, incomingSection = {}) {
   return merged
 }
 
-function upsertEnrichedSection(db, profileId, sectionKey, data) {
-  db.prepare(
+async function upsertEnrichedSection(db, profileId, sectionKey, data) {
+  await db.prepare(
     `
       INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
       VALUES (?, ?, ?, ?)
@@ -84,7 +109,7 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
   const sectionsToEnrich = Array.isArray(sectionsParam) && sectionsParam.length > 0 ? sectionsParam : ['basic_information']
   const prompt = typeof parameters.prompt === 'string' ? parameters.prompt.trim() : ''
 
-  const existingSections = db
+  const existingRows = await db
     .prepare(
       `
         SELECT section_key, data
@@ -93,10 +118,11 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
       `,
     )
     .all(profile.id)
-    .reduce((acc, row) => {
-      acc[row.section_key] = safeParseJSON(row.data, {})
-      return acc
-    }, {})
+
+  const existingSections = (existingRows || []).reduce((acc, row) => {
+    acc[row.section_key] = safeParseJSON(row.data, {})
+    return acc
+  }, {})
 
   const signalSummary = summarizeProfileSignals(
     profileContext.signals ?? buildProfileSignals({ profile, sections: profileContext.sections ?? {} }),
@@ -125,42 +151,57 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
     throw new Error('getOpenAI function is required')
   }
 
-  const openai = getOpenAI()
+  let openai = null
+  try {
+    openai = getOpenAI()
+  } catch {
+    openai = null
+  }
 
   let completion
   try {
-    completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      temperature: 0.1,
-      response_format: { type: 'json_object' },
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You are Anya, the GrantFlow enrichment assistant. Respond with JSON shaped as { "sections": [ { "key": string, "data": object, "notes": string? } ] }. Only include fields you can support with evidence.',
-        },
-        {
-          role: 'user',
-          content: JSON.stringify(payload, null, 2),
-        },
-      ],
-    })
+    if (openai) {
+      completion = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        temperature: 0.1,
+        response_format: { type: 'json_object' },
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are Anya, the GrantFlow enrichment assistant. Respond with JSON shaped as { "sections": [ { "key": string, "data": object, "notes": string? } ] }. Only include fields you can support with evidence.',
+          },
+          {
+            role: 'user',
+            content: JSON.stringify(payload, null, 2),
+          },
+        ],
+      })
+    } else {
+      throw new Error('OpenAI client unavailable')
+    }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    db.prepare(
-      `
-        UPDATE crawler_jobs
-        SET status = 'failed',
-            completed_at = CURRENT_TIMESTAMP,
-            result_meta = ?,
-            error = ?
-        WHERE id = ?
-      `,
-    ).run(JSON.stringify({ error: message }), message, job.id)
-    throw error
+    const summary = summarizeOpenAIError(error)
+    const anthropic = await createAnthropicClient()
+    if (anthropic && (summary.isAuth || !openai)) {
+      const response = await anthropic.messages.create({
+        model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+        max_tokens: 1800,
+        temperature: 0.1,
+        system:
+          'You are Anya, the GrantFlow enrichment assistant. Respond with JSON shaped as { "sections": [ { "key": string, "data": object, "notes": string? } ] }. Output JSON only.',
+        messages: [{ role: 'user', content: JSON.stringify(payload, null, 2) }],
+      })
+      completion = response
+    } else {
+      throw error
+    }
   }
 
-  const content = extractCompletionText(completion) || '{}'
+  const content =
+    completion?.choices
+      ? (extractCompletionText(completion) || '{}')
+      : (extractAnthropicText(completion) || '{}')
   let parsed = {}
   try {
     parsed = safeParseJSON(content, {})
@@ -168,16 +209,6 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
       throw new Error('Invalid parsed JSON - expected object')
     }
   } catch (error) {
-    db.prepare(
-      `
-        UPDATE crawler_jobs
-        SET status = 'failed',
-            completed_at = CURRENT_TIMESTAMP,
-            result_meta = ?,
-            error = 'Invalid JSON returned from enrichment model'
-        WHERE id = ?
-      `,
-    ).run(JSON.stringify({ error: 'Invalid JSON returned from enrichment model' }), job.id)
     throw new Error('Profile enrichment response was not valid JSON')
   }
 
@@ -193,8 +224,18 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
     const data = section.data
     if (!data || typeof data !== 'object') return
 
+    // handled below (async)
+  })
+
+  for (const section of sections) {
+    if (!section || typeof section !== 'object') continue
+    const sectionKey = section.key
+    if (typeof sectionKey !== 'string' || !sectionKey) continue
+    const data = section.data
+    if (!data || typeof data !== 'object') continue
+
     const merged = mergeSection(existingSections[sectionKey], data)
-    upsertEnrichedSection(db, profile.id, sectionKey, merged)
+    await upsertEnrichedSection(db, profile.id, sectionKey, merged)
     existingSections[sectionKey] = merged
     updatedSections.push(sectionKey)
     enrichmentLog.push({
@@ -202,28 +243,15 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
       updated_fields: Object.keys(data),
       notes: section.notes ?? null,
     })
-  })
-
-  const resultMeta = {
-    sections: enrichmentLog,
-    prompt: prompt || null,
   }
 
-  db.prepare(
-    `
-      UPDATE crawler_jobs
-      SET status = 'completed',
-          completed_at = CURRENT_TIMESTAMP,
-          result_count = ?,
-          result_meta = ?,
-          error = NULL
-      WHERE id = ?
-    `,
-  ).run(updatedSections.length, JSON.stringify(resultMeta), job.id)
+  const resultMeta = { sections: enrichmentLog, prompt: prompt || null }
 
   return {
+    result_count: updatedSections.length,
+    result_meta: resultMeta,
     updated_sections: updatedSections,
-    notes: sections.map((section) => section.notes).filter(Boolean),
+    notes: sections.map((section) => section?.notes).filter(Boolean),
     log: enrichmentLog,
   }
 }

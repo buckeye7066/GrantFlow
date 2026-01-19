@@ -22,6 +22,14 @@ function normalizeProvider(raw) {
 }
 
 function detectProvider() {
+  // Railway production invariant:
+  // If Railway provides a Postgres DATABASE_URL, always prefer Postgres even if DB_PROVIDER is stale/mis-set.
+  const isRailway =
+    Boolean(process.env.RAILWAY_ENVIRONMENT) ||
+    Boolean(process.env.RAILWAY_PROJECT_ID) ||
+    Boolean(process.env.RAILWAY_SERVICE_ID)
+  if (isRailway && isPostgresUrl(process.env.DATABASE_URL)) return 'postgres'
+
   const explicit =
     normalizeProvider(process.env.DB_PROVIDER) ||
     normalizeProvider(process.env.DB_DIALECT);
