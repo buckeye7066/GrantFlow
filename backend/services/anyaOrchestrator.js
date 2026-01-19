@@ -61,29 +61,6 @@ function extractAnthropicText(response) {
 const DEFAULT_ASSISTANT_MODEL = process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini'
 const DEFAULT_ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307'
 
-let cachedAnthropic = null
-async function getAnthropicClient() {
-  if (cachedAnthropic) return cachedAnthropic
-  const key = String(process.env.ANTHROPIC_API_KEY || '').trim()
-  if (!key) return null
-  const Anthropic = (await import('@anthropic-ai/sdk')).default
-  cachedAnthropic = new Anthropic({
-    apiKey: key,
-    timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 15_000),
-    maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
-  })
-  return cachedAnthropic
-}
-
-function extractAnthropicText(response) {
-  const parts = Array.isArray(response?.content) ? response.content : []
-  return parts
-    .map((part) => (typeof part?.text === 'string' ? part.text : typeof part === 'string' ? part : ''))
-    .filter(Boolean)
-    .join('\n')
-    .trim()
-}
-
 function coerceProfileId(requestedProfileId) {
   if (!requestedProfileId) return null
   return String(requestedProfileId).trim() || null

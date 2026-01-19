@@ -470,10 +470,20 @@ export async function getSafeHealthSummary(db) {
     // Get basic counts
     const opportunitiesCount = await getTableCount(db, 'funding_opportunities');
     
-    // Get recent failures count (last 24 hours)
+    // Get recent failures (last 24 hours).
+    // IMPORTANT: we want /api/health to reflect whether crawlers are currently failing,
+    // not how many historical rows happen to be in "failed" state.
+    //
+    // Strategy:
+    // - Compute the latest job per crawler type within the window.
+    // - Count a type as "failing" only if its latest job failed.
+    // - Exclude non-critical crawler types (e.g. avatar_lookup is cosmetic).
     let recentFailures = 0;
+    let recentFailuresTotal = 0;
+    let failingTypes = [];
     try {
-      const failuresSql =
+      // Total failed rows (informational only).
+      const failuresTotalSql =
         db?.dialect === 'postgres'
           ? `
               SELECT COUNT(*) as count
@@ -488,8 +498,43 @@ export async function getSafeHealthSummary(db) {
                 AND created_at >= datetime('now', '-24 hours')
             `;
 
-      const failures = await db.prepare(failuresSql).get();
-      recentFailures = Number(failures?.count || 0);
+      const failuresTotal = await db.prepare(failuresTotalSql).get();
+      recentFailuresTotal = Number(failuresTotal?.count || 0);
+
+      // Latest job per type within window.
+      const latestByTypeSql =
+        db?.dialect === 'postgres'
+          ? `
+              SELECT DISTINCT ON (type)
+                type,
+                status,
+                error,
+                created_at
+              FROM crawler_jobs
+              WHERE created_at >= (NOW() - INTERVAL '24 hours')
+              ORDER BY type, created_at DESC
+            `
+          : `
+              SELECT cj.type, cj.status, cj.error, cj.created_at
+              FROM crawler_jobs cj
+              JOIN (
+                SELECT type, MAX(created_at) AS max_created_at
+                FROM crawler_jobs
+                WHERE created_at >= datetime('now', '-24 hours')
+                GROUP BY type
+              ) latest
+              ON latest.type = cj.type AND latest.max_created_at = cj.created_at
+            `;
+
+      const latestRows = await db.prepare(latestByTypeSql).all();
+      const nonCriticalTypes = new Set(['avatar_lookup']);
+
+      failingTypes = (latestRows || [])
+        .filter((row) => row?.status === 'failed')
+        .map((row) => String(row?.type || '').trim())
+        .filter((type) => type && !nonCriticalTypes.has(type));
+
+      recentFailures = failingTypes.length;
     } catch (e) {
       // Ignore if crawler_jobs doesn't exist
     }
@@ -521,8 +566,10 @@ export async function getSafeHealthSummary(db) {
       counts: {
         opportunities: opportunitiesCount,
         recentFailures,
+        recentFailuresTotal,
       },
       summary,
+      failingTypes,
       dialect: db.dialect ?? null,
     };
   } catch (error) {

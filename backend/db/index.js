@@ -57,8 +57,6 @@ function detectProvider() {
   const explicit =
     normalizeProvider(process.env.DB_PROVIDER) ||
     normalizeProvider(process.env.DB_DIALECT);
-
-  const inferredUrl = inferPostgresUrlFromEnv()
   const hasPostgresUrl = Boolean(inferredUrl)
 
   // Production safety: prefer Postgres when a postgres:// DATABASE_URL is present,
