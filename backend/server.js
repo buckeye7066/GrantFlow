@@ -310,7 +310,10 @@ if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
 // Validate database connection on startup (works for both sqlite and postgres)
 try {
   console.info('[database] Validating database connection...');
-  await db.healthcheck();
+  const hc = await db.healthcheck();
+  if (!hc?.ok) {
+    throw new Error(hc?.error || 'Database healthcheck failed')
+  }
   console.info('[database] Database connection validated successfully', {
     dialect: db.dialect,
     path: db.path ?? null,
@@ -933,7 +936,8 @@ app.get('/health', async (req, res) => {
   // Check database connection
   try {
     if (db.healthcheck) {
-      await db.healthcheck();
+      const hc = await db.healthcheck();
+      if (!hc?.ok) throw new Error(hc?.error || 'Database healthcheck failed')
     } else {
       await db.prepare('SELECT 1').get();
     }
@@ -969,7 +973,8 @@ app.get('/api/auth/diagnostics', async (req, res) => {
   // Check database connection
   try {
     if (db.healthcheck) {
-      await db.healthcheck();
+      const hc = await db.healthcheck();
+      if (!hc?.ok) throw new Error(hc?.error || 'Database healthcheck failed')
     } else {
       await db.prepare('SELECT COUNT(*) as count FROM users').get();
     }
@@ -1242,7 +1247,8 @@ app.get('/healthz', async (_req, res) => {
 app.get('/readyz', async (_req, res) => {
   try {
     if (db.healthcheck) {
-      await db.healthcheck();
+      const hc = await db.healthcheck();
+      if (!hc?.ok) throw new Error(hc?.error || 'Database healthcheck failed')
     } else {
       await db.prepare('SELECT 1 as ok').get();
     }
