@@ -532,6 +532,9 @@ export function getDb() {
           'or set PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE (Railway-style).',
       )
     }
+
+    singleton = new PostgresDb(url)
+    return singleton
   }
 
   // sqlite fallback (default)
