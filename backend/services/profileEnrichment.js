@@ -1,31 +1,6 @@
 import { buildProfileSignals, summarizeProfileSignals } from './profileHelpers.js'
-import { extractCompletionText } from '../utils/openai.js'
 import { safeParseJSON } from '../utils/safeJson.js'
-import { summarizeOpenAIError } from '../utils/openaiClient.js'
-
-async function createAnthropicClient() {
-  const key = String(process.env.ANTHROPIC_API_KEY || '').trim()
-  if (!key) return null
-  const Anthropic = (await import('@anthropic-ai/sdk')).default
-  return new Anthropic({
-    apiKey: key,
-    timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 20_000),
-    maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
-  })
-}
-
-function extractAnthropicText(response) {
-  const parts = Array.isArray(response?.content) ? response.content : []
-  return parts
-    .map((part) => {
-      if (typeof part?.text === 'string') return part.text
-      if (typeof part === 'string') return part
-      return ''
-    })
-    .filter(Boolean)
-    .join('\n')
-    .trim()
-}
+import { invokeJsonWithFallback } from '../utils/aiProviders.js'
 
 function mergeValues(existingValue, incomingValue) {
   if (incomingValue === undefined || incomingValue === null) {
@@ -146,70 +121,43 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
       'Enrich these sections with factual, structured data. Never fabricate financials or sensitive personal identifiers.',
   }
 
-  // Validate getOpenAI function exists
-  if (!getOpenAI || typeof getOpenAI !== 'function') {
-    throw new Error('getOpenAI function is required')
-  }
-
   let openai = null
   try {
-    openai = getOpenAI()
+    openai = typeof getOpenAI === 'function' ? getOpenAI() : null
   } catch {
     openai = null
   }
 
-  let completion
-  try {
-    if (openai) {
-      completion = await openai.chat.completions.create({
-        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-        temperature: 0.1,
-        response_format: { type: 'json_object' },
-        messages: [
-          {
-            role: 'system',
-            content:
-              'You are Anya, the GrantFlow enrichment assistant. Respond with JSON shaped as { "sections": [ { "key": string, "data": object, "notes": string? } ] }. Only include fields you can support with evidence.',
-          },
-          {
-            role: 'user',
-            content: JSON.stringify(payload, null, 2),
-          },
-        ],
-      })
-    } else {
-      throw new Error('OpenAI client unavailable')
-    }
-  } catch (error) {
-    const summary = summarizeOpenAIError(error)
-    const anthropic = await createAnthropicClient()
-    if (anthropic && (summary.isAuth || !openai)) {
-      const response = await anthropic.messages.create({
-        model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
-        max_tokens: 1800,
-        temperature: 0.1,
-        system:
-          'You are Anya, the GrantFlow enrichment assistant. Respond with JSON shaped as { "sections": [ { "key": string, "data": object, "notes": string? } ] }. Output JSON only.',
-        messages: [{ role: 'user', content: JSON.stringify(payload, null, 2) }],
-      })
-      completion = response
-    } else {
-      throw error
-    }
+  const result = await invokeJsonWithFallback({
+    openai,
+    system:
+      'You are Anya, the GrantFlow enrichment assistant. Respond with JSON shaped as { "sections": [ { "key": string, "data": object, "notes": string? } ] }. Only include fields you can support with evidence.',
+    prompt: JSON.stringify(payload, null, 2),
+    temperature: 0.1,
+    maxTokens: 1800,
+    openaiModel: 'gpt-4o-mini',
+  })
+
+  if (!result.ok || !result.json) {
+    const warning =
+      'AI enrichment unavailable (OpenAI invalid/missing and no Anthropic fallback configured).'
+    db.prepare(
+      `
+        UPDATE crawler_jobs
+        SET status = 'completed',
+            completed_at = CURRENT_TIMESTAMP,
+            result_count = 0,
+            result_meta = ?,
+            error = NULL
+        WHERE id = ?
+      `,
+    ).run(JSON.stringify({ warning, provider: result.provider }), job.id)
+    return { updated_sections: [], notes: [warning], log: [] }
   }
 
-  const content =
-    completion?.choices
-      ? (extractCompletionText(completion) || '{}')
-      : (extractAnthropicText(completion) || '{}')
-  let parsed = {}
-  try {
-    parsed = safeParseJSON(content, {})
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error('Invalid parsed JSON - expected object')
-    }
-  } catch (error) {
-    throw new Error('Profile enrichment response was not valid JSON')
+  const parsed = result.json
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Profile enrichment response was not a JSON object')
   }
 
   const sections = Array.isArray(parsed.sections) ? parsed.sections : []

@@ -3,11 +3,11 @@ import crypto from 'crypto'
 import rateLimit from 'express-rate-limit'
 import jwt from 'jsonwebtoken'
 import twilio from 'twilio'
-import OpenAI from 'openai'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { initializeAnyaForAdmin } from '../services/anyaLoginTrigger.js'
 import { recordClientSignInEvent } from '../services/adminLoginEventStore.js'
+import { getOpenAIOptional } from '../utils/aiProviders.js'
 
 // Import email service (with fallback if main service fails to load)
 import { sendVerificationEmail as mainSendEmail, sendAuthAttemptNotification as mainAuthNotify } from '../services/email.js'
@@ -28,12 +28,12 @@ const uploadDir = join(__dirname, '..', 'uploads')
 const router = express.Router()
 
 function getOpenAI() {
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) {
-    console.warn('[auth] OPENAI_API_KEY not set, crawler dispatch may fail')
+  const openai = getOpenAIOptional()
+  if (!openai) {
+    console.warn('[auth] OpenAI not configured; AI-backed crawlers will fall back when possible')
     return null
   }
-  return new OpenAI({ apiKey })
+  return openai
 }
 
 function resolveJwtSecret() {
@@ -665,32 +665,36 @@ async function ensureEmailCredential(db, email) {
   return { user, credential }
 }
 
-function cleanupExpiredOAuthStates(db) {
-  db.prepare(
-    `
-      DELETE FROM oauth_states
-      WHERE expires_at <= CURRENT_TIMESTAMP
-    `,
-  ).run()
+async function cleanupExpiredOAuthStates(db) {
+  await db
+    .prepare(
+      `
+        DELETE FROM oauth_states
+        WHERE expires_at <= CURRENT_TIMESTAMP
+      `,
+    )
+    .run()
 }
 
-function createOAuthState(db, { provider, codeVerifier, redirectTo, metadata }) {
-  cleanupExpiredOAuthStates(db)
+async function createOAuthState(db, { provider, codeVerifier, redirectTo, metadata }) {
+  await cleanupExpiredOAuthStates(db)
   const state = base64UrlEncode(crypto.randomBytes(24))
   const expiresAt = new Date(Date.now() + OAUTH_STATE_TTL * 1000).toISOString()
-  db.prepare(
-    `
-      INSERT INTO oauth_states (provider, state, code_verifier, redirect_to, metadata, expires_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `,
-  ).run(provider, state, codeVerifier ?? null, redirectTo ?? null, metadata ? JSON.stringify(metadata) : null, expiresAt)
+  await db
+    .prepare(
+      `
+        INSERT INTO oauth_states (provider, state, code_verifier, redirect_to, metadata, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `,
+    )
+    .run(provider, state, codeVerifier ?? null, redirectTo ?? null, metadata ? JSON.stringify(metadata) : null, expiresAt)
 
   return { state, codeVerifier }
 }
 
-function consumeOAuthState(db, provider, state) {
+async function consumeOAuthState(db, provider, state) {
   if (!state) return null
-  const row = db
+  const row = await db
     .prepare(
       `
         SELECT *
@@ -702,12 +706,14 @@ function consumeOAuthState(db, provider, state) {
     .get(provider, state)
 
   if (row) {
-    db.prepare(
-      `
-        DELETE FROM oauth_states
-        WHERE id = ?
-      `,
-    ).run(row.id)
+    await db
+      .prepare(
+        `
+          DELETE FROM oauth_states
+          WHERE id = ?
+        `,
+      )
+      .run(row.id)
     if (row.metadata) {
       try {
         row.metadata = JSON.parse(row.metadata)
@@ -931,7 +937,7 @@ async function fetchProviderProfile(provider, config, tokens) {
   throw new Error(`Unsupported provider: ${provider}`)
 }
 
-function ensureProviderUser(db, provider, profile) {
+async function ensureProviderUser(db, provider, profile) {
   const providerAccountId = profile.providerAccountId
   if (!providerAccountId) {
     const error = new Error('Provider response missing account identifier')
@@ -939,7 +945,7 @@ function ensureProviderUser(db, provider, profile) {
     throw error
   }
 
-  const linkedUser = db
+  const linkedUser = await db
     .prepare(
       `
         SELECT u.*
@@ -958,7 +964,7 @@ function ensureProviderUser(db, provider, profile) {
   let user = null
   const email = profile.email?.trim().toLowerCase() ?? null
   if (email) {
-    user = db
+    user = await db
       .prepare(
         `
           SELECT *
@@ -972,20 +978,22 @@ function ensureProviderUser(db, provider, profile) {
   if (!user) {
     const userId = crypto.randomUUID()
     const isAdmin = isAdminEmail(email) ? 1 : 0
-    db.prepare(
-      `
-        INSERT INTO users (id, display_name, primary_email, avatar_url, is_admin)
-        VALUES (?, ?, ?, ?, ?)
-      `,
-    ).run(userId, profile.displayName ?? 'GrantFlow User', email, profile.avatarUrl ?? null, isAdmin)
-    user = getUserById(db, userId)
+    await db
+      .prepare(
+        `
+          INSERT INTO users (id, display_name, primary_email, avatar_url, is_admin)
+          VALUES (?, ?, ?, ?, ?)
+        `,
+      )
+      .run(userId, profile.displayName ?? 'GrantFlow User', email, profile.avatarUrl ?? null, isAdmin)
+    user = await getUserById(db, userId)
     return user
   }
 
   // Ensure admin status is set for existing users
   if (email) {
-    ensureAdminStatus(db, user.id, email)
-    user = getUserById(db, user.id)
+    await ensureAdminStatus(db, user.id, email)
+    user = await getUserById(db, user.id)
   }
 
   const updates = []
@@ -1000,22 +1008,24 @@ function ensureProviderUser(db, provider, profile) {
   }
   if (updates.length > 0) {
     params.push(user.id)
-    db.prepare(
-      `
-        UPDATE users
-        SET ${updates.join(', ')},
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `,
-    ).run(...params)
-    user = getUserById(db, user.id)
+    await db
+      .prepare(
+        `
+          UPDATE users
+          SET ${updates.join(', ')},
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `,
+      )
+      .run(...params)
+    user = await getUserById(db, user.id)
   }
 
   return user
 }
 
-function upsertProviderAccount(db, { provider, providerAccountId, userId, tokens, profile }) {
-  const existing = db
+async function upsertProviderAccount(db, { provider, providerAccountId, userId, tokens, profile }) {
+  const existing = await db
     .prepare(
       `
         SELECT *
@@ -1037,56 +1047,60 @@ function upsertProviderAccount(db, { provider, providerAccountId, userId, tokens
       : tokens.expiresAt ?? null
 
   if (existing) {
-    db.prepare(
+    await db
+      .prepare(
+        `
+          UPDATE user_providers
+          SET user_id = ?,
+              access_token = ?,
+              refresh_token = ?,
+              expires_at = ?,
+              scopes = ?,
+              metadata = ?,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `,
+      )
+      .run(
+        userId,
+        tokens.accessToken ?? null,
+        tokens.refreshToken ?? null,
+        expiresAt,
+        tokens.scope ?? null,
+        JSON.stringify(metadata),
+        existing.id,
+      )
+    return existing.id
+  }
+
+  const providerId = crypto.randomUUID()
+  await db
+    .prepare(
       `
-        UPDATE user_providers
-        SET user_id = ?,
-            access_token = ?,
-            refresh_token = ?,
-            expires_at = ?,
-            scopes = ?,
-            metadata = ?,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
+        INSERT INTO user_providers (
+          id,
+          user_id,
+          provider,
+          provider_account_id,
+          access_token,
+          refresh_token,
+          expires_at,
+          scopes,
+          metadata
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
-    ).run(
+    )
+    .run(
+      providerId,
       userId,
+      provider,
+      providerAccountId,
       tokens.accessToken ?? null,
       tokens.refreshToken ?? null,
       expiresAt,
       tokens.scope ?? null,
       JSON.stringify(metadata),
-      existing.id,
     )
-    return existing.id
-  }
-
-  const providerId = crypto.randomUUID()
-  db.prepare(
-    `
-      INSERT INTO user_providers (
-        id,
-        user_id,
-        provider,
-        provider_account_id,
-        access_token,
-        refresh_token,
-        expires_at,
-        scopes,
-        metadata
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-  ).run(
-    providerId,
-    userId,
-    provider,
-    providerAccountId,
-    tokens.accessToken ?? null,
-    tokens.refreshToken ?? null,
-    expiresAt,
-    tokens.scope ?? null,
-    JSON.stringify(metadata),
-  )
   return providerId
 }
 
@@ -1744,8 +1758,8 @@ router.post('/phone/start', phoneStartLimiter, async (req, res) => {
   const codeHash = hashValue(`${normalized}:${code}`)
   const expiresAt = new Date(now.getTime() + PHONE_CODE_TTL * 1000).toISOString()
 
-  insertVerificationCode(req.db, credential.id, codeHash, expiresAt)
-  req.db
+  await insertVerificationCode(req.db, credential.id, codeHash, expiresAt)
+  await req.db
     .prepare(
       `
         UPDATE user_credentials
@@ -1993,7 +2007,7 @@ router.post('/phone/verify', async (req, res) => {
   return res.json(response)
 })
 
-router.get('/:provider/start', (req, res) => {
+router.get('/:provider/start', async (req, res) => {
   const provider = (req.params?.provider || '').toLowerCase()
   
   console.info(`[auth] OAuth start requested for provider: ${provider}`)
@@ -2018,7 +2032,7 @@ router.get('/:provider/start', (req, res) => {
     const sanitizedRedirect = sanitizeRedirectTarget(req, requestedRedirect)
 
     const codeVerifier = config.supportsPKCE ? generateCodeVerifier() : null
-    const oauthState = createOAuthState(req.db, {
+    const oauthState = await createOAuthState(req.db, {
       provider,
       codeVerifier,
       redirectTo: sanitizedRedirect,
@@ -2055,7 +2069,7 @@ router.get('/:provider/callback', async (req, res) => {
   const error = req.query?.error_description || req.query?.error
   const code = typeof req.query?.code === 'string' ? req.query.code : null
 
-  const stateRecord = consumeOAuthState(req.db, provider, stateToken)
+  const stateRecord = await consumeOAuthState(req.db, provider, stateToken)
   const redirectBase = stateRecord?.redirect_to || defaultFrontendRedirect(req)
   const redirectWithParams = (params) => res.redirect(buildRedirectUrl(redirectBase, { provider, ...params }))
 
@@ -2075,8 +2089,8 @@ router.get('/:provider/callback', async (req, res) => {
   try {
     const tokens = await exchangeAuthorizationCode(provider, config, code, stateRecord)
     const profile = await fetchProviderProfile(provider, config, tokens)
-    const user = ensureProviderUser(req.db, provider, profile)
-    upsertProviderAccount(req.db, {
+    const user = await ensureProviderUser(req.db, provider, profile)
+    await upsertProviderAccount(req.db, {
       provider,
       providerAccountId: profile.providerAccountId,
       userId: user.id,
