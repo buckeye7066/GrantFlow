@@ -78,19 +78,7 @@ This comprehensive overhaul transforms the GrantFlow crawler system from a proto
    - Added 'national_zip_scan' to type CHECK constraint
    - Safely rebuilt table with updated constraint
 
-**Migration:** `backend/db/migrations/003_add_national_crawl_and_contact_info.sql`
-
----
-
-### 4. Geo Crawl ✅
-
-Geo Crawl is the canonical crawler surfaced in the Admin UI. A deterministic smoke run is available via:
-
-- `npm run crawler:smoke`
-
----
-
-### 5. Admin Access Control ✅
+### 4. Admin Access Control ✅
 
 **Changes to `backend/routes/profiles.js`:**
 
@@ -148,7 +136,7 @@ Documents all real data sources:
 - Documentation links
 
 **Updated README:**
-- Geo Crawl section (how to run, monitor, smoke)
+- Geo Crawl section (how to run, monitor)
 - Crawler Matrix Test section (validation, output, exit codes)
 - Admin Profile Access section (permissions, enforcement)
 
@@ -215,7 +203,7 @@ The following are absolutely prohibited and now enforced:
 
 ### Created Files (8)
 1. `scripts/test-all-crawlers-all-profiles.mjs` - Test harness
-2. `backend/services/nationalCrawlerV2/` - Geo Crawl (canonical) implementation
+2. `backend/services/crawlers/nationalZipCrawler.js` - ZIP-based discovery crawler (used by Geo Crawl)
 3. `backend/db/migrations/003_add_national_crawl_and_contact_info.sql` - Migration
 4. `docs/DATA_SOURCES.md` - Source documentation
 5. `docs/CRAWLER_OVERHAUL_SUMMARY.md` - This file
@@ -227,8 +215,8 @@ The following are absolutely prohibited and now enforced:
 4. `backend/services/crawlers/itemFundingCrawler.js` - Remove placeholder URLs
 5. `backend/routes/realCrawlers.js` - Use real crawlers, fix imports
 6. `backend/routes/profiles.js` - Add admin access control
-7. `backend/routes/admin.js` - Geo Crawl admin endpoints/tools
-8. `backend/db/schema.sql` - Add contact_info, national_zip_progress
+7. `backend/routes/admin.js` - Admin endpoints
+8. `backend/db/schema.sql` - Add contact_info, zip progress tracking
 9. `README.md` - Add documentation sections
 
 ---

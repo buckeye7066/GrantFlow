@@ -27,7 +27,7 @@
 - **Action**:
   - Check Railway logs for "Out of Memory" or "Circuit breaker open".
   - If a specific crawler is failing repeatedly, the circuit breaker will trip for 5 minutes.
-  - Use the Admin UI → Geo Crawl tools to cancel/stop queued crawl jobs.
+  - If Geo Crawl jobs are stuck, cancel queued jobs via the Admin UI and redeploy if a running job is wedged.
   - Manually clear the queue if needed: `DELETE FROM crawler_jobs WHERE status IN ('queued', 'running')`.
 
 ### 3. Profile Missing Sections
