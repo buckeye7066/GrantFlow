@@ -466,13 +466,25 @@ export function getDb() {
 
   if (provider === 'postgres') {
     const url = String(process.env.DATABASE_URL || '').trim();
-    if (!isPostgresUrl(url)) {
+    if (isPostgresUrl(url)) {
+      singleton = new PostgresDb(url);
+      return singleton;
+    }
+
+    // Railway safety valve:
+    // If DB_PROVIDER is set to postgres but DATABASE_URL is missing/invalid, crashing yields a perpetual 502.
+    // Prefer booting (sqlite fallback) so the Admin UI/health endpoints remain reachable, while clearly logging.
+    if (isRailwayRuntime()) {
+      console.error(
+        '[db] CRITICAL: DB_PROVIDER=postgres but DATABASE_URL is missing/invalid. Falling back to sqlite to keep the service reachable.\n' +
+          'Fix: attach/configure Railway Postgres so DATABASE_URL is a postgres:// connection string.',
+      );
+      // fall through to sqlite
+    } else {
       throw new Error(
         '[db] DB_PROVIDER=postgres requires DATABASE_URL to be set to a postgres:// connection string',
       );
     }
-    singleton = new PostgresDb(url);
-    return singleton;
   }
 
   // sqlite fallback (default)
