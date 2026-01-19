@@ -225,6 +225,7 @@ async function seedBillingTiersIfMissing(db) {
           `
 
     const insert = db.prepare(insertSql)
+    const toDbBool = (value) => (db?.dialect === 'postgres' ? Boolean(value) : Boolean(value) ? 1 : 0)
 
     // Product tiers (existing UI expectations)
     await insert.run(
@@ -233,9 +234,9 @@ async function seedBillingTiersIfMissing(db) {
       'Baseline research support with curated grant discovery and shared AI document enrichment.',
       0,
       0,
-      false,
-      true,
-      true,
+      toDbBool(false),
+      toDbBool(true),
+      toDbBool(true),
     )
     await insert.run(
       'growth',
@@ -243,9 +244,9 @@ async function seedBillingTiersIfMissing(db) {
       'Expanded automation, itemized funding intelligence, and AI-supported document ingestion.',
       9900,
       15000,
-      true,
-      true,
-      true,
+      toDbBool(true),
+      toDbBool(true),
+      toDbBool(true),
     )
     await insert.run(
       'enterprise',
@@ -253,16 +254,52 @@ async function seedBillingTiersIfMissing(db) {
       'Full-service concierge with custom automation rules and dedicated analyst support.',
       24900,
       22500,
-      true,
-      true,
-      true,
+      toDbBool(true),
+      toDbBool(true),
+      toDbBool(true),
     )
 
     // Client category tiers (from your service menu / payment sheet)
-    await insert.run('individual', 'Individual', 'Individuals/families seeking assistance.', 0, 8500, false, true, true)
-    await insert.run('small_org', 'Small Org', 'Annual budget under $250,000.', 0, 8500, false, true, true)
-    await insert.run('mid_size', 'Mid-Size', 'Annual budget $250,000 - $2,000,000.', 0, 11500, true, true, true)
-    await insert.run('large_org', 'Large Org', 'Annual budget over $2,000,000.', 0, 15000, true, true, true)
+    await insert.run(
+      'individual',
+      'Individual',
+      'Individuals/families seeking assistance.',
+      0,
+      8500,
+      toDbBool(false),
+      toDbBool(true),
+      toDbBool(true),
+    )
+    await insert.run(
+      'small_org',
+      'Small Org',
+      'Annual budget under $250,000.',
+      0,
+      8500,
+      toDbBool(false),
+      toDbBool(true),
+      toDbBool(true),
+    )
+    await insert.run(
+      'mid_size',
+      'Mid-Size',
+      'Annual budget $250,000 - $2,000,000.',
+      0,
+      11500,
+      toDbBool(true),
+      toDbBool(true),
+      toDbBool(true),
+    )
+    await insert.run(
+      'large_org',
+      'Large Org',
+      'Annual budget over $2,000,000.',
+      0,
+      15000,
+      toDbBool(true),
+      toDbBool(true),
+      toDbBool(true),
+    )
   } catch {
     // If this fails for any reason, we still want the caller to proceed with a clear error.
   }
