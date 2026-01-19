@@ -1561,7 +1561,12 @@ export async function seedAllRealFunding(db) {
   // Get counts
   const counts = getOpportunityCountsByState(db);
   
-  const total = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get().count;
+  const totalRow = await db
+    .prepare(db?.dialect === 'postgres'
+      ? 'SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = TRUE'
+      : 'SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1')
+    .get()
+  const total = Number(totalRow?.count || 0)
   
   console.log(`[RealFunding] Complete. Total active opportunities: ${total}`);
   console.log(`[RealFunding] Every ZIP code has access to at least ${counts.nationwide} national programs`);

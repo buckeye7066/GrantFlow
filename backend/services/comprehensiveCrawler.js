@@ -140,7 +140,7 @@ function calculateOpportunityMatch(opp, signals, profileState) {
 /**
  * Process comprehensive crawler job using real opportunities
  */
-export function processComprehensiveCrawlerJob({ db, job, dataDir, profileContext }) {
+export async function processComprehensiveCrawlerJob({ db, job, dataDir, profileContext }) {
   console.log('[comprehensiveCrawler] Starting with real opportunities...')
   
   const parameters = job.parameters ?? {}
@@ -182,7 +182,7 @@ export function processComprehensiveCrawlerJob({ db, job, dataDir, profileContex
           LIMIT 200
         `
 
-  const dbOpps = db.prepare(dbOppsQuery).all()
+  const dbOpps = await db.prepare(dbOppsQuery).all()
   
   console.log(`[comprehensiveCrawler] Found ${dbOpps.length} real opportunities in database`)
   
@@ -237,7 +237,7 @@ export function processComprehensiveCrawlerJob({ db, job, dataDir, profileContex
   let insertedCount = 0
   for (const opp of topOpps) {
     try {
-      const result = upsertFundingOpportunity(db, {
+      const result = await upsertFundingOpportunity(db, {
         title: opp.title,
         sponsor: opp.sponsor,
         description: opp.description,
