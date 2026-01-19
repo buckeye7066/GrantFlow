@@ -1450,7 +1450,7 @@ router.post('/crawl-state-counties/:state', async (req, res) => {
 router.get('/county-status', async (req, res) => {
   try {
     const { getCrawlerStatus } = await import('../services/countyFundingCrawler.js')
-    const status = getCrawlerStatus(req.db)
+    const status = await getCrawlerStatus(req.db)
     
     const totalOpps = Number(
       (await req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = ?').get(true))?.count || 0,

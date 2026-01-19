@@ -248,14 +248,20 @@ export async function crawlAllCounties(db, options = {}) {
 /**
  * Get progress/status of county crawler
  */
-export function getCrawlerStatus(db) {
-  const total = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE source = ?').get('county_crawler').count;
-  const byState = db.prepare(`
-    SELECT state, COUNT(*) as count 
-    FROM funding_opportunities 
-    WHERE source = 'county_crawler' 
-    GROUP BY state
-  `).all();
+export async function getCrawlerStatus(db) {
+  const totalRow = await db
+    .prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE source = ?')
+    .get('county_crawler')
+  const total = Number(totalRow?.count || 0)
+
+  const byState = await db
+    .prepare(`
+      SELECT state, COUNT(*) as count 
+      FROM funding_opportunities 
+      WHERE source = 'county_crawler' 
+      GROUP BY state
+    `)
+    .all()
   
   return {
     total_county_opportunities: total,

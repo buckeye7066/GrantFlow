@@ -61,29 +61,6 @@ function extractAnthropicText(response) {
 const DEFAULT_ASSISTANT_MODEL = process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini'
 const DEFAULT_ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307'
 
-let cachedAnthropic = null
-async function getAnthropicClient() {
-  if (cachedAnthropic) return cachedAnthropic
-  const key = String(process.env.ANTHROPIC_API_KEY || '').trim()
-  if (!key) return null
-  const Anthropic = (await import('@anthropic-ai/sdk')).default
-  cachedAnthropic = new Anthropic({
-    apiKey: key,
-    timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 15_000),
-    maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
-  })
-  return cachedAnthropic
-}
-
-function extractAnthropicText(response) {
-  const parts = Array.isArray(response?.content) ? response.content : []
-  return parts
-    .map((part) => (typeof part?.text === 'string' ? part.text : typeof part === 'string' ? part : ''))
-    .filter(Boolean)
-    .join('\n')
-    .trim()
-}
-
 function coerceProfileId(requestedProfileId) {
   if (!requestedProfileId) return null
   return String(requestedProfileId).trim() || null
@@ -967,60 +944,61 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
         breaker: openAIBreaker.snapshot(),
       })
 
-    if (error?.code === 'CIRCUIT_OPEN') {
-      return "The AI service is temporarily overloaded. Give me 30 seconds and try again."
-    }
-    if (summary.isAuth) {
-      // OpenAI key invalid: fall back to Anthropic if configured.
-      try {
-        const anthropic = await getAnthropicClient()
-        if (anthropic) {
-          const response = await anthropic.messages.create({
-            model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
-            max_tokens: 1000,
-            temperature: 0.3,
-            system: systemPrompt,
-            messages: conversationMessages.map((m) => ({
-              role: m.role === 'assistant' ? 'assistant' : 'user',
-              content: m.content,
-            })),
-          })
-          const reply = extractAnthropicText(response)
-          if (reply) return reply
-        }
-      } catch (anthErr) {
-        console.error('[Anya] Anthropic fallback failed:', anthErr?.message || anthErr)
+      if (error?.code === 'CIRCUIT_OPEN') {
+        return "The AI service is temporarily overloaded. Give me 30 seconds and try again."
       }
 
-      // Deterministic, non-LLM fallback (still safe and actionable).
-      return "AI is not configured correctly (missing/invalid OpenAI key). Falling back to guided assistance. Tell me what you’re trying to accomplish in GrantFlow and I’ll walk you through the exact clicks."
-    }
-    if (summary.isRateLimit) {
-      // Rate limit: also try Anthropic as a fallback provider.
-      try {
-        const anthropic = await getAnthropicClient()
-        if (anthropic) {
-          const response = await anthropic.messages.create({
-            model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
-            max_tokens: 1000,
-            temperature: 0.3,
-            system: systemPrompt,
-            messages: conversationMessages.map((m) => ({
-              role: m.role === 'assistant' ? 'assistant' : 'user',
-              content: m.content,
-            })),
-          })
-          const reply = extractAnthropicText(response)
-          if (reply) return reply
+      if (summary.isAuth) {
+        // OpenAI key invalid: fall back to Anthropic if configured.
+        try {
+          const anthropic = await getAnthropicClient()
+          if (anthropic) {
+            const response = await anthropic.messages.create({
+              model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+              max_tokens: 1000,
+              temperature: 0.3,
+              system: systemPrompt,
+              messages: conversationMessages.map((m) => ({
+                role: m.role === 'assistant' ? 'assistant' : 'user',
+                content: m.content,
+              })),
+            })
+            const reply = extractAnthropicText(response)
+            if (reply) return reply
+          }
+        } catch (anthErr) {
+          console.error('[Anya] Anthropic fallback failed:', anthErr?.message || anthErr)
         }
-      } catch (anthErr) {
-        console.error('[Anya] Anthropic fallback failed:', anthErr?.message || anthErr)
+
+        // Deterministic, non-LLM fallback (still safe and actionable).
+        return "AI is not configured correctly (missing/invalid OpenAI key). Falling back to guided assistance. Tell me what you’re trying to accomplish in GrantFlow and I’ll walk you through the exact clicks."
       }
 
-      return "The AI service is rate-limiting us right now. Please try again shortly."
+      if (summary.isRateLimit) {
+        // Rate limit: also try Anthropic as a fallback provider.
+        try {
+          const anthropic = await getAnthropicClient()
+          if (anthropic) {
+            const response = await anthropic.messages.create({
+              model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+              max_tokens: 1000,
+              temperature: 0.3,
+              system: systemPrompt,
+              messages: conversationMessages.map((m) => ({
+                role: m.role === 'assistant' ? 'assistant' : 'user',
+                content: m.content,
+              })),
+            })
+            const reply = extractAnthropicText(response)
+            if (reply) return reply
+          }
+        } catch (anthErr) {
+          console.error('[Anya] Anthropic fallback failed:', anthErr?.message || anthErr)
+        }
+
+        return 'The AI service is rate-limiting us right now. Please try again shortly.'
+      }
     }
-  } catch (error) {
-    console.error('[Anya] Anthropic API Error:', error?.message || error)
   }
 
   // 3) Deterministic safe fallback (no LLM)
