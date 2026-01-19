@@ -12,7 +12,11 @@ import fs from 'node:fs'
 import { runNationalCrawlerV2 } from '../backend/services/nationalCrawlerV2/run.js'
 
 const projectRoot = path.resolve(process.cwd())
-const dbPath = process.env.DATABASE_URL || path.join(projectRoot, 'backend', 'data', 'grantflow.db')
+// IMPORTANT: this script uses sqlite directly (better-sqlite3). Do NOT point it at a Postgres DATABASE_URL.
+const dbPath =
+  process.env.DB_PATH ||
+  process.env.SQLITE_DB_PATH ||
+  path.join(projectRoot, 'backend', 'data', 'grantflow.db')
 
 function normalizeSqliteValue(value) {
   if (value === undefined) return null
