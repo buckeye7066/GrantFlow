@@ -82,38 +82,11 @@ This comprehensive overhaul transforms the GrantFlow crawler system from a proto
 
 ---
 
-### 4. National ZIP Crawl ✅
+### 4. Geo Crawl ✅
 
-**Created:** `backend/services/crawlers/nationalZipCrawler.js`
+Geo Crawl is the canonical crawler surfaced in the Admin UI. A deterministic smoke run is available via:
 
-**Features:**
-- Processes all ~43,859 US ZIP codes
-- Finds minimum 3 real sources per ZIP
-- Batch processing (default: 50 ZIPs per batch)
-- Checkpointing after every batch
-- Resumable after interruption
-- Rate limiting (configurable, default 1000ms)
-- Memory-safe (no accumulating arrays)
-
-**Real Data Sources:**
-- Grants.gov API - Federal opportunities
-- State grant portals (OH, CA, TX, NY, FL)
-- Foundation locator services
-
-**Admin Endpoints:**
-- `POST /api/admin/national-crawl/start` - Start crawl
-- `POST /api/admin/national-crawl/stop` - Stop crawl
-- `GET /api/admin/national-crawl/status` - Get progress
-
-**Progress Tracking:**
-```sql
-SELECT 
-  COUNT(*) as total_zips,
-  SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
-  SUM(sources_found) as total_sources,
-  AVG(sources_found) as avg_per_zip
-FROM national_zip_progress;
-```
+- `npm run crawler:smoke`
 
 ---
 
@@ -175,7 +148,7 @@ Documents all real data sources:
 - Documentation links
 
 **Updated README:**
-- National Crawl section (how to run, monitor, resume)
+- Geo Crawl section (how to run, monitor, smoke)
 - Crawler Matrix Test section (validation, output, exit codes)
 - Admin Profile Access section (permissions, enforcement)
 
@@ -233,7 +206,7 @@ The following are absolutely prohibited and now enforced:
 - [x] Code review passed (4 issues found and fixed)
 - [ ] Security scan with codeql_checker
 - [ ] Admin profile access testing
-- [ ] National crawl functionality testing
+- [ ] Geo crawl functionality testing
 - [ ] UI testing for contact info display
 
 ---
@@ -242,7 +215,7 @@ The following are absolutely prohibited and now enforced:
 
 ### Created Files (8)
 1. `scripts/test-all-crawlers-all-profiles.mjs` - Test harness
-2. `backend/services/crawlers/nationalZipCrawler.js` - National crawler
+2. `backend/services/nationalCrawlerV2/` - Geo Crawl (canonical) implementation
 3. `backend/db/migrations/003_add_national_crawl_and_contact_info.sql` - Migration
 4. `docs/DATA_SOURCES.md` - Source documentation
 5. `docs/CRAWLER_OVERHAUL_SUMMARY.md` - This file
@@ -254,7 +227,7 @@ The following are absolutely prohibited and now enforced:
 4. `backend/services/crawlers/itemFundingCrawler.js` - Remove placeholder URLs
 5. `backend/routes/realCrawlers.js` - Use real crawlers, fix imports
 6. `backend/routes/profiles.js` - Add admin access control
-7. `backend/routes/admin.js` - Add national crawl endpoints
+7. `backend/routes/admin.js` - Geo Crawl admin endpoints/tools
 8. `backend/db/schema.sql` - Add contact_info, national_zip_progress
 9. `README.md` - Add documentation sections
 

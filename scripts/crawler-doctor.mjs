@@ -135,18 +135,21 @@ async function main() {
     },
   })
 
-  console.log('[crawler:doctor] Running crawler smoke tests...')
-  await runCmd('node', ['--test', 'tests/crawler/smoke/nationalCrawlerV2.test.js'])
+  // Repo moved crawler tests into `tests/unit/*`. Keep doctor lightweight and non-brittle.
+  console.log('[crawler:doctor] Running crawler unit tests (subset)...')
+  await runCmd('node', ['--test', 'tests/unit/geo-crawl.test.mjs'])
+  await runCmd('node', ['--test', 'tests/unit/local-crawler-job.test.mjs'])
+  await runCmd('node', ['--test', 'tests/unit/real-crawlers-local-funding.test.mjs'])
 
   console.log('[crawler:doctor] Starting API server and running API smoke...')
   const { child, port } = await startServerAndGetPort()
   try {
     const base = `http://127.0.0.1:${port}`
     const health = await fetchJson(`${base}/health`)
-    const crawlerHealth = await fetchJson(`${base}/api/crawler-v2/health`)
-    const programs = await fetchJson(`${base}/api/nf-programs?track=TRACK_A&limit=5`)
-    if (!programs?.data || !Array.isArray(programs.data)) {
-      throw new Error('API smoke failed: /api/nf-programs did not return data[]')
+    const apiHealth = await fetchJson(`${base}/api/health`)
+    const readyz = await fetchJson(`${base}/readyz`)
+    if (String(readyz?.status || '').toLowerCase() !== 'ready') {
+      throw new Error('API smoke failed: /readyz did not return status=ready')
     }
     console.log('[crawler:doctor] API smoke OK')
 
@@ -161,8 +164,8 @@ async function main() {
         [
           `[doctor] ${new Date().toISOString()} API smoke OK`,
           `[doctor] /health.status=${health?.status ?? 'unknown'}`,
-          `[doctor] /api/crawler-v2/health.status=${crawlerHealth?.status ?? 'unknown'}`,
-          `[doctor] /api/nf-programs TRACK_A sample_count=${programs?.data?.length ?? 0}`,
+          `[doctor] /api/health.status=${apiHealth?.status ?? 'unknown'}`,
+          `[doctor] /readyz.status=${readyz?.status ?? 'unknown'}`,
           '',
         ].join('\n'),
         'utf8',

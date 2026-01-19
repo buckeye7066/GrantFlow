@@ -212,6 +212,15 @@ function normalizeSqliteValue(value) {
   if (value === undefined) return null
   if (typeof value === 'boolean') return value ? 1 : 0
   if (value instanceof Date) return value.toISOString()
+  // better-sqlite3 cannot bind objects/arrays; stringify for TEXT/JSON columns.
+  // (Buffers are handled by SQLite directly; Dates handled above.)
+  if (value && typeof value === 'object' && !Buffer.isBuffer(value)) {
+    try {
+      return JSON.stringify(value)
+    } catch {
+      return String(value)
+    }
+  }
   return value
 }
 

@@ -216,64 +216,15 @@ See `package.json` for the full script catalogue.
 
 ---
 
-## National Crawl
+## Geo Crawl (Canonical)
 
-The National ZIP Crawl feature enables comprehensive funding source discovery across all ~43,859 US ZIP codes.
-
-### How to Run
-
-**Start a national crawl (Admin only):**
+Geo Crawl is the canonical crawler surfaced in the Admin UI. For a deterministic, CI-friendly validation run:
 
 ```bash
-POST /api/admin/national-crawl/start
-{
-  "batch_size": 50,
-  "min_sources_per_zip": 3
-}
+npm run crawler:smoke
 ```
 
-**Monitor progress:**
-
-```bash
-GET /api/admin/national-crawl/status
-```
-
-**Stop a running crawl:**
-
-```bash
-POST /api/admin/national-crawl/stop
-```
-
-### Features
-
-- **Batch Processing:** Processes ZIPs in configurable batches (default: 50)
-- **Checkpointing:** Saves progress after every batch to `national_zip_progress` table
-- **Resumable:** If interrupted, automatically resumes from last checkpoint
-- **Rate Limited:** Respects upstream API limits (configurable delay between requests)
-- **Memory Safe:** Processes in batches to avoid memory accumulation
-- **Real Data Only:** Uses Grants.gov API, state portals, and foundation locators
-
-### Data Sources
-
-The national crawl integrates with multiple real data sources:
-- **Grants.gov API** - Federal grant opportunities
-- **State Grant Portals** - State-specific funding (OH, CA, TX, NY, FL configured)
-- **Foundation Locator** - Community foundation grants
-
-See [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md) for complete source documentation.
-
-### Monitoring
-
-Track crawl progress in the database:
-
-```sql
-SELECT 
-  COUNT(*) as total_zips,
-  SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
-  SUM(sources_found) as total_sources,
-  AVG(sources_found) as avg_per_zip
-FROM national_zip_progress;
-```
+This writes artifacts to `artifacts/crawler/YYYY-MM-DD/` and must be **100% successful** in smoke mode.
 
 ---
 
@@ -333,7 +284,7 @@ GrantFlow enforces role-based access control for profile management.
 - ✅ View ALL profiles in the system
 - ✅ Create profiles for any user
 - ✅ Access any profile details
-- ✅ Run national crawls
+- ✅ Run Geo Crawl (admin tools)
 - ✅ Access admin endpoints
 
 ### Enduser
@@ -343,7 +294,7 @@ GrantFlow enforces role-based access control for profile management.
 - ✅ Create profiles for themselves only
 - ✅ Access only their own profile details
 - ❌ Cannot see other users' profiles
-- ❌ Cannot run national crawls
+- ❌ Cannot run Geo Crawl admin tools
 - ❌ Cannot access admin endpoints
 
 ### API Endpoints
@@ -869,77 +820,6 @@ GrantFlow uses **only** legitimate, publicly accessible data sources with proper
 3. **TOS Compliance**: Review each source's terms of service before high-volume use
 4. **No Scraping**: Never screen-scrape Benefits.gov or state sites without permission
 5. **API Registration**: Register for required API keys and monitor usage limits
-
----
-
-## 🗺️ National ZIP Crawler Design
-
-The National ZIP Crawler processes all ~43,859 US ZIP codes to ensure comprehensive coverage:
-
-### Architecture
-
-```
-┌─────────────────────────────────────────────────────┐
-│ National ZIP Crawler                                 │
-│                                                      │
-│  1. Load all US ZIP codes                           │
-│  2. Process in batches (100 per batch)              │
-│  3. For each ZIP, find ≥3 funding sources           │
-│  4. Classify: OPPORTUNITY → PROGRAM → DIRECTORY     │
-│  5. Store evidence URL + verification timestamp     │
-│  6. Checkpoint every 500 ZIPs (resumable)           │
-└─────────────────────────────────────────────────────┘
-```
-
-### Fallback Logic
-
-For each ZIP code, attempt to find sources in this priority order:
-
-1. **OPPORTUNITY** (best): Active federal/state grants with deadlines
-2. **PROGRAM** (good): Standing programs like Medicaid, SNAP
-3. **DIRECTORY** (fallback): State portals, agency listings
-
-If fewer than 3 sources found, record reason in logs.
-
-### Database Schema
-
-```sql
-CREATE TABLE zip_funding_sources (
-  id TEXT PRIMARY KEY,
-  created_at DATETIME,
-  zip_code TEXT NOT NULL,
-  source_name TEXT NOT NULL,
-  source_type TEXT CHECK(source_type IN ('OPPORTUNITY', 'PROGRAM', 'DIRECTORY')),
-  evidence_url TEXT,
-  evidence_title TEXT,
-  last_verified_at DATETIME,
-  number_of_opportunities_found INTEGER,
-  metadata TEXT -- JSON: sponsor, deadline, etc.
-);
-```
-
-### Usage
-
-```javascript
-import { startNationalCrawl, resumeCrawl, getCrawlStatus } from './backend/services/nationalZipCrawler.js'
-
-// Start new crawl
-await startNationalCrawl(db)
-
-// Resume from checkpoint
-await resumeCrawl(db)
-
-// Check status
-const status = getCrawlStatus()
-console.log(`Progress: ${status.progress}`)
-```
-
-### Performance
-
-- **Estimated Time**: ~48-72 hours for full crawl (with rate limiting)
-- **Resumability**: Checkpoints every 500 ZIPs
-- **Rate Limiting**: 2 seconds between batches, 100ms between ZIPs
-- **Concurrency**: Processes batches sequentially to avoid overwhelming APIs
 
 ---
 
