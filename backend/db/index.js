@@ -35,6 +35,18 @@ function isProd() {
   return String(process.env.NODE_ENV || '').toLowerCase() === 'production';
 }
 
+function isRailwayRuntime() {
+  // Railway sets a variety of env vars; treat any of these as strong signal.
+  return Boolean(
+    process.env.RAILWAY_PROJECT_ID ||
+      process.env.RAILWAY_SERVICE_ID ||
+      process.env.RAILWAY_ENVIRONMENT ||
+      process.env.RAILWAY_STATIC_URL ||
+      process.env.RAILWAY_GIT_COMMIT_SHA ||
+      process.env.RAILWAY_DEPLOYMENT_ID,
+  )
+}
+
 function looksLikeRailwayVolumePath(p) {
   // Railway persistent volumes are commonly mounted at /mnt/data
   return typeof p === 'string' && p.replace(/\\/g, '/').startsWith('/mnt/data/');
@@ -464,15 +476,27 @@ export function getDb() {
   // Production-grade invariant: SQLite must be on a persistent volume.
   // - If running on Railway and /mnt/data exists, we default there automatically.
   // - If still not on /mnt/data, fail fast unless explicitly allowed.
+  //
+  // NOTE: Railway deployments occasionally come up without the volume mounted during
+  // initial provisioning or misconfiguration. In that case, crashing hard yields a
+  // perpetual 502 and blocks recovery via the Admin UI. On Railway production we warn
+  // loudly and continue booting so the system remains reachable, while `/health`
+  // can still signal the misconfiguration.
   if (isProd() && !looksLikeRailwayVolumePath(sqlitePath)) {
     const allowEphemeral =
       String(process.env.ALLOW_EPHEMERAL_SQLITE || '').trim().toLowerCase() === 'true';
-    if (!allowEphemeral) {
+    if (!allowEphemeral && !isRailwayRuntime()) {
       throw new Error(
         `[db] Refusing to start with ephemeral SQLite path in production: ${sqlitePath}\n` +
           `Set SQLITE_DB_PATH to a persistent volume path (e.g. /mnt/data/grantflow.db on Railway),\n` +
           `or set ALLOW_EPHEMERAL_SQLITE=true to override (NOT recommended).`,
       );
+    }
+    if (!allowEphemeral && isRailwayRuntime()) {
+      console.warn(
+        `[db] WARNING: Running with ephemeral SQLite path on Railway production: ${sqlitePath}\n` +
+          `Mount a persistent volume at /mnt/data (recommended), or switch to Postgres (preferred).`,
+      )
     }
   }
 
