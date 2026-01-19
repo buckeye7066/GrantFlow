@@ -317,8 +317,10 @@ try {
   });
 } catch (dbError) {
   console.error('[database] CRITICAL: Failed to initialize database:', dbError);
-  console.error('[database] Cannot start server without database connection');
-  process.exit(1);
+  // Production safety: do not hard-exit. A hard exit yields a perpetual 502 and blocks recovery via Admin UI.
+  // We keep the process alive so `/api/health` and admin diagnostics can surface the failure reason.
+  console.error('[database] Continuing startup in degraded mode (DB unavailable).');
+  app.locals.db_startup_error = dbError instanceof Error ? dbError.message : String(dbError)
 }
 
 // NOTE: Schema/migrations should be applied via `npm run migrate` in production.
@@ -336,9 +338,7 @@ if (shouldAutoMigrate) {
       console.info('[database] Schema applied (auto-migrate enabled)', { dialect: db.dialect });
     } catch (schemaError) {
       console.error('[database] Error running schema migrations:', schemaError);
-      if (process.env.NODE_ENV === 'production') {
-        process.exit(1);
-      }
+      // Do not hard-exit; keep the service reachable for diagnostics.
     }
   }
 }

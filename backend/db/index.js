@@ -13,6 +13,26 @@ function isPostgresUrl(value) {
   return /^postgres(ql)?:\/\//i.test(String(value || '').trim());
 }
 
+function inferPostgresUrlFromEnv() {
+  const databaseUrl = String(process.env.DATABASE_URL || '').trim()
+  if (isPostgresUrl(databaseUrl)) return databaseUrl
+
+  // Some providers (and some Railway setups) expose PG* vars instead of DATABASE_URL.
+  const host = String(process.env.PGHOST || process.env.POSTGRES_HOST || '').trim()
+  const port = String(process.env.PGPORT || process.env.POSTGRES_PORT || '5432').trim()
+  const user = String(process.env.PGUSER || process.env.POSTGRES_USER || '').trim()
+  const password = String(process.env.PGPASSWORD || process.env.POSTGRES_PASSWORD || '').trim()
+  const database = String(process.env.PGDATABASE || process.env.POSTGRES_DB || '').trim()
+  const sslMode = String(process.env.PGSSLMODE || '').trim()
+
+  if (!host || !user || !database) return null
+
+  const auth = password ? `${encodeURIComponent(user)}:${encodeURIComponent(password)}` : encodeURIComponent(user)
+  const base = `postgres://${auth}@${host}:${port}/${encodeURIComponent(database)}`
+  const forceSsl = Boolean(sslMode) || (isProd() && isRailwayRuntime())
+  return forceSsl ? `${base}?sslmode=require` : base
+}
+
 function normalizeProvider(raw) {
   const v = String(raw || '').trim().toLowerCase();
   if (!v) return '';
@@ -28,14 +48,15 @@ function detectProvider() {
     Boolean(process.env.RAILWAY_ENVIRONMENT) ||
     Boolean(process.env.RAILWAY_PROJECT_ID) ||
     Boolean(process.env.RAILWAY_SERVICE_ID)
-  if (isRailway && isPostgresUrl(process.env.DATABASE_URL)) return 'postgres'
+  const inferredUrl = inferPostgresUrlFromEnv()
+  if (isRailway && inferredUrl) return 'postgres'
 
   const explicit =
     normalizeProvider(process.env.DB_PROVIDER) ||
     normalizeProvider(process.env.DB_DIALECT);
 
   if (explicit) return explicit;
-  if (isPostgresUrl(process.env.DATABASE_URL)) return 'postgres';
+  if (inferredUrl) return 'postgres';
   return 'sqlite';
 }
 
@@ -465,19 +486,19 @@ export function getDb() {
   const provider = detectProvider();
 
   if (provider === 'postgres') {
-    const url = String(process.env.DATABASE_URL || '').trim();
-    if (isPostgresUrl(url)) {
+    const url = inferPostgresUrlFromEnv()
+    if (url && isPostgresUrl(url)) {
       singleton = new PostgresDb(url);
       return singleton;
     }
 
     // Railway safety valve:
-    // If DB_PROVIDER is set to postgres but DATABASE_URL is missing/invalid, crashing yields a perpetual 502.
+    // If DB_PROVIDER is set to postgres but a usable postgres:// URL is missing/invalid, crashing yields a perpetual 502.
     // Prefer booting (sqlite fallback) so the Admin UI/health endpoints remain reachable, while clearly logging.
     if (isRailwayRuntime()) {
       console.error(
-        '[db] CRITICAL: DB_PROVIDER=postgres but DATABASE_URL is missing/invalid. Falling back to sqlite to keep the service reachable.\n' +
-          'Fix: attach/configure Railway Postgres so DATABASE_URL is a postgres:// connection string.',
+        '[db] CRITICAL: DB_PROVIDER=postgres but Postgres connection vars are missing/invalid. Falling back to sqlite to keep the service reachable.\n' +
+          'Fix: attach/configure Railway Postgres so DATABASE_URL is a postgres:// connection string (or provide PGHOST/PGUSER/PGPASSWORD/PGDATABASE).',
       );
       // fall through to sqlite
     } else {
