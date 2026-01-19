@@ -52,7 +52,7 @@ function normalizeDateLikeOrNull(value) {
   return value
 }
 
-export function upsertFundingOpportunity(db, opportunity) {
+export async function upsertFundingOpportunity(db, opportunity) {
   const source = opportunity.source ?? 'crawler'
   const title = normalizeNonEmptyString(opportunity?.title)
   if (!title) {
@@ -86,7 +86,7 @@ export function upsertFundingOpportunity(db, opportunity) {
     stableSourceIdFromOpportunity(source, opportunity)
 
   // Check if record exists and if it's verified
-  const existing = db
+  const existing = await db
     .prepare(
       `SELECT id, last_verified_at FROM funding_opportunities WHERE source = ? AND source_id = ? LIMIT 1`,
     )
@@ -176,7 +176,7 @@ export function upsertFundingOpportunity(db, opportunity) {
       WHERE id = ?
     `)
 
-    update.run(
+    await update.run(
       record.title,
       record.sponsor,
       record.description,
@@ -320,12 +320,12 @@ export function upsertFundingOpportunity(db, opportunity) {
       @match_percentage,
       @match_reasons,
       @notes,
-      1,
+      @is_active,
       CURRENT_TIMESTAMP
     )
   `)
 
-  insert.run({
+  await insert.run({
     id,
     title: record.title,
     sponsor: record.sponsor,
@@ -355,18 +355,17 @@ export function upsertFundingOpportunity(db, opportunity) {
     match_percentage: record.match_percentage,
     match_reasons: record.match_reasons,
     notes: record.notes,
+    is_active: toDbBoolean(db, true),
   })
 
   return { id, inserted: true, skipped: false }
 }
 
-export function bulkUpsertFundingOpportunities(db, opportunities = []) {
+export async function bulkUpsertFundingOpportunities(db, opportunities = []) {
   const inserted = []
-  opportunities.forEach((opportunity) => {
-    const result = upsertFundingOpportunity(db, opportunity)
-    if (result.inserted) {
-      inserted.push(result.id)
-    }
-  })
+  for (const opportunity of opportunities) {
+    const result = await upsertFundingOpportunity(db, opportunity)
+    if (result?.inserted) inserted.push(result.id)
+  }
   return inserted
 }
