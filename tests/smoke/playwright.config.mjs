@@ -11,6 +11,20 @@ export default defineConfig({
   fullyParallel: true,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : [['list']],
+  // Self-start the app server for local + CI smoke runs.
+  // These tests validate basePath routing + health endpoints, so we need the backend running.
+  webServer: {
+    command: 'node backend/start.js',
+    cwd: process.cwd(),
+    port: 8080,
+    reuseExistingServer: !process.env.CI,
+    timeout: 120_000,
+    env: {
+      ...process.env,
+      PORT: process.env.PORT || '8080',
+      NODE_ENV: process.env.NODE_ENV || (process.env.CI ? 'test' : 'development'),
+    },
+  },
   use: {
     baseURL,
     headless: true,
