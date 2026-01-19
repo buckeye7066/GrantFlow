@@ -784,14 +784,14 @@ It enumerates environment variables referenced in code and/or present in example
 - **Code references**:
   - `scripts/crawler-doctor.mjs:L134` (process.env)
   - `scripts/crawler-run.mjs:L25` (process.env)
-  - `scripts/crawler-smoke.mjs:L57` (process.env)
+  - `scripts/crawler-smoke.mjs:L61` (process.env)
 
 ### `CRAWLER_MAX_URLS_PER_SOURCE`
 
 - **Templates**: (not present)
 - **Code references**:
   - `scripts/crawler-run.mjs:L26` (process.env)
-  - `scripts/crawler-smoke.mjs:L58` (process.env)
+  - `scripts/crawler-smoke.mjs:L62` (process.env)
 
 ### `CRAWLER_MODE`
 
@@ -822,7 +822,7 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**: (not present)
 - **Code references**:
   - `scripts/crawler-run.mjs:L27` (process.env)
-  - `scripts/crawler-smoke.mjs:L59` (process.env)
+  - `scripts/crawler-smoke.mjs:L63` (process.env)
 
 ### `CRAWLER_USE_LIVE_SOURCES`
 
@@ -858,7 +858,6 @@ It enumerates environment variables referenced in code and/or present in example
   - `repo/backend/db/index.js:L30–L358` (process.env)
   - `scripts/crawler-doctor.mjs:L18` (process.env)
   - `scripts/crawler-run.mjs:L19` (process.env)
-  - `scripts/crawler-smoke.mjs:L15` (process.env)
   - `scripts/opportunities-national-minimum.mjs:L20` (process.env)
   - `scripts/run-live-crawlers-all-profiles.mjs:L30` (process.env)
 
@@ -885,6 +884,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/tests/crawlerMatrixTest.js:L26` (process.env)
   - `scripts/build-seed-db.mjs:L41` (process.env)
   - `scripts/check-profiles.mjs:L45–L46` (process.env)
+  - `scripts/crawler-smoke.mjs:L17` (process.env)
   - `scripts/db-opportunity-tag-stats.cjs:L3` (process.env)
   - `scripts/db-term-coverage.cjs:L3` (process.env)
   - `scripts/db-top-tags.cjs:L3` (process.env)
@@ -1529,6 +1529,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/scripts/migrate-sqlite-to-postgres.mjs:L312` (process.env)
   - `backend/start.js:L17` (process.env)
   - `repo/backend/db/index.js:L44` (process.env)
+  - `scripts/crawler-smoke.mjs:L18` (process.env)
 
 ### `TEST_STATE`
 
