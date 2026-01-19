@@ -6,7 +6,16 @@ import { summarizeOpenAIError } from '../utils/openaiClient.js'
 export async function processAvatarLookupJob({ profileContext, uploadDir, getOpenAI }) {
   const profile = profileContext?.profile
   if (!profile) {
-    throw new Error('Avatar lookup requires a profile context')
+    // Never fail the job: avatar lookup is a cosmetic enhancement.
+    return {
+      inserted: 0,
+      result_count: 0,
+      result_meta: {
+        ok: false,
+        reason: 'missing_profile_context',
+        message: 'Avatar generation skipped (missing profile context).',
+      },
+    }
   }
   let openai = null
   try {
@@ -36,8 +45,20 @@ export async function processAvatarLookupJob({ profileContext, uploadDir, getOpe
       response_format: 'b64_json',
     })
   } catch (error) {
-    const summary = summarizeOpenAIError(error)
-    if (summary.isAuth) {
+    let summary = { isAuth: false, message: 'Unknown OpenAI error' }
+    try {
+      summary = summarizeOpenAIError(error)
+    } catch {
+      // ignore summarizer failures; we'll fall back to a safe message
+      const message = error instanceof Error ? error.message : String(error)
+      summary = { isAuth: /incorrect api key|invalid api key|unauthorized|401/i.test(message), message }
+    }
+
+    const message = error instanceof Error ? error.message : String(error)
+    const isAuth =
+      Boolean(summary?.isAuth) || /incorrect api key|invalid api key|unauthorized|401/i.test(message)
+
+    if (isAuth) {
       return {
         inserted: 0,
         result_count: 0,
@@ -55,14 +76,23 @@ export async function processAvatarLookupJob({ profileContext, uploadDir, getOpe
       result_meta: {
         ok: false,
         reason: 'openai_error',
-        message: `Avatar generation failed: ${summary.message}`,
+        message: `Avatar generation failed: ${summary?.message || message}`,
       },
     }
   }
 
   const base64 = response?.data?.[0]?.b64_json
   if (!base64) {
-    throw new Error('Image generation returned no content')
+    // Never fail the job: keep crawler pipeline moving.
+    return {
+      inserted: 0,
+      result_count: 0,
+      result_meta: {
+        ok: false,
+        reason: 'openai_no_content',
+        message: 'Avatar generation returned no image content. Using default avatar.',
+      },
+    }
   }
 
   const filename = `${Date.now()}-${randomUUID()}.png`

@@ -161,14 +161,28 @@ export function processComprehensiveCrawlerJob({ db, job, dataDir, profileContex
   console.log(`[comprehensiveCrawler] Loaded ${realOpps.length} real opportunities from data files`)
   
   // Also load from database
-  const dbOpps = db.prepare(`
-    SELECT * FROM funding_opportunities 
-    WHERE is_active = 1 
-    AND (requires_match = 0 OR requires_match IS NULL)
-    AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
-    ORDER BY created_at DESC
-    LIMIT 200
-  `).all()
+  const dbOppsQuery =
+    db?.dialect === 'postgres'
+      ? `
+          SELECT *
+          FROM funding_opportunities
+          WHERE is_active IS TRUE
+            AND (requires_match IS FALSE OR requires_match IS NULL)
+            AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
+          ORDER BY created_at DESC
+          LIMIT 200
+        `
+      : `
+          SELECT *
+          FROM funding_opportunities
+          WHERE is_active = 1
+            AND (requires_match = 0 OR requires_match IS NULL)
+            AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
+          ORDER BY created_at DESC
+          LIMIT 200
+        `
+
+  const dbOpps = db.prepare(dbOppsQuery).all()
   
   console.log(`[comprehensiveCrawler] Found ${dbOpps.length} real opportunities in database`)
   
