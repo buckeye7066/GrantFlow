@@ -1,0 +1,158 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { useToast } from '@/components/ui/use-toast'
+import { apiFetch } from '@/api/client'
+import { Bell, RefreshCw } from 'lucide-react'
+
+function formatWhen(iso) {
+  try {
+    return new Date(iso).toLocaleString()
+  } catch {
+    return String(iso || '')
+  }
+}
+
+export default function AdminLoginNotifications() {
+  const { toast } = useToast()
+  const [events, setEvents] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const [refreshing, setRefreshing] = useState(false)
+
+  const lastSeenMsRef = useRef(0)
+  const seenIdsRef = useRef(new Set())
+
+  const fetchEvents = async ({ isManual } = {}) => {
+    const sinceIso = lastSeenMsRef.current ? new Date(lastSeenMsRef.current).toISOString() : null
+    const qs = new URLSearchParams()
+    if (sinceIso) qs.set('since', sinceIso)
+    qs.set('limit', '50')
+
+    const url = `/api/admin/login-events?${qs.toString()}`
+
+    try {
+      if (isManual) setRefreshing(true)
+      setError(null)
+      const data = await apiFetch(url)
+      const incoming = Array.isArray(data?.events) ? data.events : []
+
+      if (incoming.length > 0) {
+        // Track max timestamp to advance the cursor.
+        const maxMs = incoming.reduce((acc, e) => {
+          const ms = Date.parse(e?.at || '')
+          return Number.isFinite(ms) ? Math.max(acc, ms) : acc
+        }, lastSeenMsRef.current || 0)
+        lastSeenMsRef.current = maxMs
+
+        // Toast only for unseen ids.
+        const newOnes = incoming.filter((e) => e?.id && !seenIdsRef.current.has(e.id))
+        newOnes.forEach((e) => {
+          if (e?.id) seenIdsRef.current.add(e.id)
+        })
+
+        // Keep latest first, de-dupe by id.
+        setEvents((prev) => {
+          const next = [...incoming, ...prev]
+          const byId = new Map()
+          next.forEach((e) => {
+            if (e?.id && !byId.has(e.id)) byId.set(e.id, e)
+          })
+          return Array.from(byId.values()).slice(0, 50)
+        })
+
+        // Notify the admin (toast) for each new login.
+        newOnes.slice(0, 5).forEach((e) => {
+          const who = e?.identifier || 'Unknown user'
+          const how = e?.method ? ` (${e.method})` : ''
+          toast({
+            title: 'Client signed in',
+            description: `${who}${how}`,
+          })
+        })
+      }
+    } catch (err) {
+      setError(err?.message || 'Failed to load login events')
+    } finally {
+      setLoading(false)
+      setRefreshing(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchEvents().catch(() => {})
+    const id = setInterval(() => {
+      fetchEvents().catch(() => {})
+    }, 15000)
+    return () => clearInterval(id)
+  }, [])
+
+  const rows = useMemo(() => (Array.isArray(events) ? events : []), [events])
+
+  return (
+    <div className="space-y-6">
+      <Card className="border border-slate-200 bg-white/70 backdrop-blur">
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle className="flex items-center gap-2 text-slate-900">
+            <Bell className="h-5 w-5 text-blue-600" />
+            Client login notifications
+          </CardTitle>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => fetchEvents({ isManual: true })}
+            disabled={refreshing}
+          >
+            <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <div className="text-sm text-slate-600">Loading…</div>
+          ) : error ? (
+            <div className="text-sm text-red-700">{error}</div>
+          ) : rows.length === 0 ? (
+            <div className="text-sm text-slate-600">No client logins recorded yet.</div>
+          ) : (
+            <div className="overflow-auto rounded border border-slate-200 bg-white">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-slate-50 border-b">
+                  <tr>
+                    <th className="text-left p-2">When</th>
+                    <th className="text-left p-2">Client</th>
+                    <th className="text-left p-2">Method</th>
+                    <th className="text-left p-2">IP</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((e) => (
+                    <tr key={e.id} className="border-b last:border-b-0">
+                      <td className="p-2 text-slate-600">{formatWhen(e.at)}</td>
+                      <td className="p-2">
+                        <div className="font-medium text-slate-900">{e.identifier || 'Unknown'}</div>
+                        {e.profile_id ? (
+                          <div className="text-xs text-slate-500">profile: {String(e.profile_id).slice(0, 8)}…</div>
+                        ) : null}
+                      </td>
+                      <td className="p-2">
+                        {e.method ? (
+                          <Badge variant="secondary">{e.method}</Badge>
+                        ) : (
+                          <span className="text-slate-500">—</span>
+                        )}
+                      </td>
+                      <td className="p-2 text-slate-600">{e.ip || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
