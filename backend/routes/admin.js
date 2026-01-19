@@ -14,6 +14,7 @@ import { ensureDesignatedProfiles } from '../utils/ensureDesignatedProfiles.js';
 import { seedBaselineFromRepo } from '../utils/seedBaselineFromRepo.js';
 import { buildProfileSignals, calculateMatchScore } from '../services/profileHelpers.js';
 import { getSystemDiagnostics } from '../services/diagnosticsService.js';
+import { listClientSignInEvents } from '../services/adminLoginEventStore.js'
 import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js';
 import { logAuditEvent, queryAuditLogs, getAuditSummary, cleanupAuditLogs, AUDIT_CATEGORIES, SEVERITY } from '../services/auditService.js';
@@ -924,6 +925,30 @@ router.get('/diagnostics', async (req, res) => {
     });
   }
 });
+
+// GET /api/admin/login-events - Recent client logins (admin only)
+// Stored in-memory only (best-effort; cleared on restart).
+router.get('/login-events', async (req, res) => {
+  try {
+    if (!(await ensureAdminRequest(req, res))) return
+
+    // Polled by the Admin UI; prevent conditional GETs (304) which break JSON parsing.
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+    res.set('Pragma', 'no-cache')
+
+    const since = typeof req.query?.since === 'string' ? req.query.since : null
+    const limitRaw = typeof req.query?.limit === 'string' ? req.query.limit : null
+    const limit = limitRaw ? Number(limitRaw) : 25
+
+    return res.json({
+      ok: true,
+      events: listClientSignInEvents({ since, limit }),
+    })
+  } catch (error) {
+    console.error('[admin/login-events] Error:', error)
+    return res.status(500).json({ error: 'Failed to load login events' })
+  }
+})
 
 // Lookup recent server-side error details by Request ID (admin-only).
 // This is stored in-memory (best-effort) to help non-technical admins debug production issues.

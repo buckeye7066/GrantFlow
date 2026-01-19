@@ -3,10 +3,11 @@ import crypto from 'crypto'
 import rateLimit from 'express-rate-limit'
 import jwt from 'jsonwebtoken'
 import twilio from 'twilio'
-import OpenAI from 'openai'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { initializeAnyaForAdmin } from '../services/anyaLoginTrigger.js'
+import { recordClientSignInEvent } from '../services/adminLoginEventStore.js'
+import { getOpenAIOptional } from '../utils/aiProviders.js'
 
 // Import email service (with fallback if main service fails to load)
 import { sendVerificationEmail as mainSendEmail, sendAuthAttemptNotification as mainAuthNotify } from '../services/email.js'
@@ -27,12 +28,12 @@ const uploadDir = join(__dirname, '..', 'uploads')
 const router = express.Router()
 
 function getOpenAI() {
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) {
-    console.warn('[auth] OPENAI_API_KEY not set, crawler dispatch may fail')
+  const openai = getOpenAIOptional()
+  if (!openai) {
+    console.warn('[auth] OpenAI not configured; AI-backed crawlers will fall back when possible')
     return null
   }
-  return new OpenAI({ apiKey })
+  return openai
 }
 
 function resolveJwtSecret() {
@@ -1702,6 +1703,19 @@ router.post('/email/verify', async (req, res) => {
     },
   }).catch(() => {})
 
+  // In-app admin notification (best-effort, stored in-memory).
+  // Record only non-admin sign-ins so the Admin panel highlights client activity.
+  if (!user?.is_admin) {
+    recordClientSignInEvent({
+      identifier: email,
+      method: 'email',
+      userId: user?.id ?? null,
+      profileId: activeProfileId ?? null,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    })
+  }
+
   return res.json(response)
 })
 
@@ -1970,6 +1984,17 @@ router.post('/phone/verify', async (req, res) => {
     },
   }).catch(() => {})
 
+  if (!user?.is_admin) {
+    recordClientSignInEvent({
+      identifier: normalized,
+      method: 'phone',
+      userId: user?.id ?? null,
+      profileId: activeProfileId ?? null,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    })
+  }
+
   return res.json(response)
 })
 
@@ -2098,6 +2123,17 @@ router.get('/:provider/callback', async (req, res) => {
         userAgent: req.headers['user-agent'],
       },
     }).catch(() => {})
+
+    if (!user?.is_admin) {
+      recordClientSignInEvent({
+        identifier: profile?.email ? normalizeEmail(profile.email) : `${provider}:${profile?.providerAccountId || 'unknown'}`,
+        method: `oauth:${provider}`,
+        userId: user?.id ?? null,
+        profileId: activeProfileId ?? null,
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+      })
+    }
 
     // Auto-trigger discovery crawlers on OAuth login (fire and forget)
     if (activeProfileId && req.db?.dialect !== 'postgres') {
