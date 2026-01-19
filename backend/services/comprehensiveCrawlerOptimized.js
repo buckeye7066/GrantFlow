@@ -250,7 +250,7 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
           LIMIT 200
         `
 
-  const dbOpps = db.prepare(dbOppsQuery).all()
+  const dbOpps = await db.prepare(dbOppsQuery).all()
   
   console.log(`[comprehensiveCrawler] Found ${dbOpps.length} opportunities in database`)
   
@@ -370,7 +370,7 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
     for (const opp of topOpps.filter(o => o.match_score >= 80)) {
       try {
         // Find the inserted opportunity ID
-        const insertedOpp = db.prepare(`
+        const insertedOpp = await db.prepare(`
           SELECT id FROM funding_opportunities 
           WHERE source = 'verified_real' AND source_id = ?
           LIMIT 1
