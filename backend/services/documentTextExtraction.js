@@ -1,7 +1,11 @@
 import { promises as fsp } from 'fs'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import pdfParse from 'pdf-parse'
 import mammoth from 'mammoth'
 import { createWorker } from 'tesseract.js'
+
+const execFileAsync = promisify(execFile)
 
 function withTimeout(promise, { ms, label }) {
   if (!ms || ms <= 0) return promise
@@ -93,6 +97,32 @@ function normalizeExtension(fileName) {
   return parts.pop() || ''
 }
 
+async function tryExtractPdfWithPdftotext({ filePath, timeoutMs }) {
+  // Optional fallback: some PDFs fail in pdfjs/pdf-parse on some platforms.
+  // If poppler is present, `pdftotext` can extract text reliably.
+  const candidates = process.platform === 'win32' ? ['pdftotext.exe', 'pdftotext'] : ['pdftotext']
+  for (const bin of candidates) {
+    try {
+      const { stdout } = await execFileAsync(
+        bin,
+        // output "-" means stdout for poppler's pdftotext
+        ['-layout', '-nopgbrk', filePath, '-'],
+        {
+          timeout: Math.max(1_000, Number(timeoutMs) || 20_000),
+          maxBuffer: 10 * 1024 * 1024,
+        },
+      )
+      const text = String(stdout || '').trim()
+      if (text) return text
+    } catch (error) {
+      // If binary missing or extraction fails, try next candidate.
+      const code = error?.code
+      if (code === 'ENOENT') continue
+    }
+  }
+  return null
+}
+
 /**
  * Extract plaintext from an uploaded file.
  * - Supports: PDF, DOCX, TXT, and image OCR (jpg/png/webp/gif/bmp/tiff)
@@ -119,21 +149,31 @@ export async function extractTextFromFile({
   try {
     // PDFs
     if (safeMime === 'application/pdf' || ext === 'pdf') {
-      const buffer = await withTimeout(fsp.readFile(filePath), {
-        ms: timeoutMs,
-        label: 'Read PDF',
-      })
-      const result = await withTimeout(pdfParse(buffer), {
-        ms: timeoutMs,
-        label: 'Parse PDF',
-      })
-      const text = clampText(result?.text, maxChars)
-      if (!text) {
-        warnings.push(
-          'No text detected in PDF. If this is a scanned document, upload a JPG/PNG (or screenshots of pages) to enable OCR, or export the PDF with selectable text.',
-        )
+      try {
+        const buffer = await withTimeout(fsp.readFile(filePath), {
+          ms: timeoutMs,
+          label: 'Read PDF',
+        })
+        const result = await withTimeout(pdfParse(buffer), {
+          ms: timeoutMs,
+          label: 'Parse PDF',
+        })
+        const text = clampText(result?.text, maxChars)
+        if (!text) {
+          warnings.push(
+            'No text detected in PDF. If this is a scanned document, upload a JPG/PNG (or screenshots of pages) to enable OCR, or export the PDF with selectable text.',
+          )
+        }
+        return { text, method: 'pdf-parse', warnings }
+      } catch (error) {
+        warnings.push(error instanceof Error ? error.message : String(error))
+
+        const fallback = await tryExtractPdfWithPdftotext({ filePath, timeoutMs })
+        const text = clampText(fallback, maxChars)
+        if (text) return { text, method: 'pdftotext', warnings }
+
+        return { text: null, method: null, warnings }
       }
-      return { text, method: 'pdf-parse', warnings }
     }
 
     // DOCX (sometimes browsers mislabel as application/msword or octet-stream; extension is the best hint).

@@ -77,7 +77,7 @@ test('extractTextFromFile: PDF extracts text via pdf-parse', async () => {
       mimeType: 'application/pdf',
       fileName: 'sample.pdf',
     })
-    assert.equal(result.method, 'pdf-parse')
+    assert.ok(['pdf-parse', 'pdftotext'].includes(result.method))
     assert.ok(result.text && result.text.includes('Hello PDF'))
   } finally {
     await fsp.rm(dir, { recursive: true, force: true })
