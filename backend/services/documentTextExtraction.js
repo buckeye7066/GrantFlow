@@ -1,5 +1,7 @@
 import { promises as fsp } from 'fs'
 import { execFile } from 'node:child_process'
+import os from 'node:os'
+import { join } from 'node:path'
 import { promisify } from 'node:util'
 import pdfParse from 'pdf-parse'
 import mammoth from 'mammoth'
@@ -102,22 +104,26 @@ async function tryExtractPdfWithPdftotext({ filePath, timeoutMs }) {
   // If poppler is present, `pdftotext` can extract text reliably.
   const candidates = process.platform === 'win32' ? ['pdftotext.exe', 'pdftotext'] : ['pdftotext']
   for (const bin of candidates) {
+    const dir = await fsp.mkdtemp(join(os.tmpdir(), 'grantflow-pdftotext-'))
+    const outPath = join(dir, 'out.txt')
     try {
-      const { stdout } = await execFileAsync(
+      await execFileAsync(
         bin,
-        // output "-" means stdout for poppler's pdftotext
-        ['-layout', '-nopgbrk', filePath, '-'],
+        ['-layout', '-nopgbrk', filePath, outPath],
         {
           timeout: Math.max(1_000, Number(timeoutMs) || 20_000),
           maxBuffer: 10 * 1024 * 1024,
         },
       )
-      const text = String(stdout || '').trim()
+      const raw = await fsp.readFile(outPath, 'utf8').catch(() => '')
+      const text = String(raw || '').trim()
       if (text) return text
     } catch (error) {
       // If binary missing or extraction fails, try next candidate.
       const code = error?.code
       if (code === 'ENOENT') continue
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true }).catch(() => {})
     }
   }
   return null
