@@ -9,7 +9,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const proxyTarget = env.VITE_API_PROXY_TARGET || 'http://localhost:8080'
-  const assetBase = env.VITE_ASSET_BASE || '/'
+  const normalizeViteBase = (base: string | undefined) => {
+    const b = String(base || '/').trim()
+    if (b === '' || b === '/') return '/'
+    return b.endsWith('/') ? b : (b + '/')
+  }
+
+  const assetBaseRaw = env.VITE_ASSET_BASE || (mode === 'production' ? '/grantflow/' : '/')
+  const assetBase = normalizeViteBase(assetBaseRaw)
 
   return {
     base: assetBase,
