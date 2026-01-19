@@ -26,6 +26,18 @@ export const SEVERITY = {
   CRITICAL: 'critical',
 }
 
+function isThenable(value) {
+  return Boolean(value && typeof value.then === 'function')
+}
+
+function fireAndForget(value) {
+  if (!isThenable(value)) return
+  value.catch((error) => {
+    // Never throw from audit logging; keep it best-effort.
+    console.warn('[Audit] async failure:', error?.message || error)
+  })
+}
+
 /**
  * Log an audit event to the database
  */
@@ -45,19 +57,20 @@ export function logAuditEvent(db, {
     console.warn('[Audit] No database connection, skipping audit log')
     return null
   }
-
-  // Postgres migration rollout: audit table DDL and sync inserts are SQLite-specific today.
-  // Avoid crashing the server due to dialect mismatches; we'll migrate audit_logs via SQL migrations next.
-  if (db.dialect === 'postgres') {
-    return null
-  }
   
   try {
-    // Ensure audit_logs table exists
-    ensureAuditTable(db)
+    // Ensure audit_logs table exists (best-effort).
+    // This is intentionally safe to call on every write; both sqlite + postgres use IF NOT EXISTS.
+    fireAndForget(ensureAuditTable(db))
     
     const id = randomUUID()
-    const detailsJson = details ? JSON.stringify(scrubSensitive(details)) : null
+    const scrubbed = details ? scrubSensitive(details) : null
+    const detailsPayload =
+      db.dialect === 'postgres'
+        ? scrubbed // store as JSONB
+        : scrubbed
+          ? JSON.stringify(scrubbed)
+          : null
     
     const stmt = db.prepare(`
       INSERT INTO audit_logs (
@@ -66,7 +79,7 @@ export function logAuditEvent(db, {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     
-    stmt.run(
+    const write = stmt.run(
       id,
       category,
       action,
@@ -75,10 +88,11 @@ export function logAuditEvent(db, {
       profileId,
       resourceType,
       resourceId,
-      detailsJson,
+      detailsPayload,
       ipAddress,
       userAgent
     )
+    fireAndForget(write)
     
     // Log critical events to console as well
     if (severity === SEVERITY.CRITICAL || severity === SEVERITY.ERROR) {
@@ -96,10 +110,28 @@ export function logAuditEvent(db, {
   }
 }
 
+function coerceCount(value) {
+  if (value == null) return 0
+  if (typeof value === 'number') return value
+  const n = Number(value)
+  return Number.isFinite(n) ? n : 0
+}
+
+function parseDetailsValue(raw) {
+  if (raw == null) return null
+  if (typeof raw === 'object') return raw
+  if (typeof raw !== 'string') return null
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
+
 /**
  * Query audit logs
  */
-export function queryAuditLogs(db, {
+export async function queryAuditLogs(db, {
   category = null,
   action = null,
   severity = null,
@@ -167,16 +199,17 @@ export function queryAuditLogs(db, {
     }
     
     // Get total count
-    const total = db.prepare(countQuery).get(...params)?.count || 0
+    const totalRow = await db.prepare(countQuery).get(...params)
+    const total = coerceCount(totalRow?.count)
     
     // Get paginated results
     query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
-    const logs = db.prepare(query).all(...params, limit, offset)
+    const logs = await db.prepare(query).all(...params, limit, offset)
     
     return {
-      logs: logs.map(log => ({
+      logs: (logs || []).map(log => ({
         ...log,
-        details: log.details ? JSON.parse(log.details) : null,
+        details: parseDetailsValue(log.details),
       })),
       total,
       limit,
@@ -191,14 +224,14 @@ export function queryAuditLogs(db, {
 /**
  * Get audit summary stats
  */
-export function getAuditSummary(db, { days = 7 } = {}) {
+export async function getAuditSummary(db, { days = 7 } = {}) {
   if (!db) return null
   
   try {
     const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
     
     // Events by category
-    const byCategory = db.prepare(`
+    const byCategory = await db.prepare(`
       SELECT category, COUNT(*) as count
       FROM audit_logs
       WHERE created_at >= ?
@@ -207,7 +240,7 @@ export function getAuditSummary(db, { days = 7 } = {}) {
     `).all(startDate)
     
     // Events by severity
-    const bySeverity = db.prepare(`
+    const bySeverity = await db.prepare(`
       SELECT severity, COUNT(*) as count
       FROM audit_logs
       WHERE created_at >= ?
@@ -215,7 +248,7 @@ export function getAuditSummary(db, { days = 7 } = {}) {
     `).all(startDate)
     
     // Recent critical events
-    const criticalEvents = db.prepare(`
+    const criticalEvents = await db.prepare(`
       SELECT *
       FROM audit_logs
       WHERE severity IN ('error', 'critical')
@@ -225,7 +258,7 @@ export function getAuditSummary(db, { days = 7 } = {}) {
     `).all(startDate)
     
     // Top users by activity
-    const topUsers = db.prepare(`
+    const topUsers = await db.prepare(`
       SELECT user_id, COUNT(*) as count
       FROM audit_logs
       WHERE user_id IS NOT NULL
@@ -240,9 +273,9 @@ export function getAuditSummary(db, { days = 7 } = {}) {
       startDate,
       byCategory,
       bySeverity,
-      criticalEvents: criticalEvents.map(e => ({
+      criticalEvents: (criticalEvents || []).map(e => ({
         ...e,
-        details: e.details ? JSON.parse(e.details) : null,
+        details: parseDetailsValue(e.details),
       })),
       topUsers,
     }
@@ -255,29 +288,56 @@ export function getAuditSummary(db, { days = 7 } = {}) {
 /**
  * Ensure audit_logs table exists
  */
-function ensureAuditTable(db) {
+async function ensureAuditTable(db) {
+  if (db?.dialect === 'postgres') {
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id TEXT PRIMARY KEY,
+        created_at TIMESTAMPTZ DEFAULT now(),
+        category TEXT NOT NULL,
+        action TEXT NOT NULL,
+        severity TEXT DEFAULT 'info',
+        user_id TEXT,
+        profile_id TEXT,
+        resource_type TEXT,
+        resource_id TEXT,
+        details JSONB,
+        ip_address TEXT,
+        user_agent TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_audit_category ON audit_logs(category);
+      CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_logs(action);
+      CREATE INDEX IF NOT EXISTS idx_audit_severity ON audit_logs(severity);
+      CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id);
+      CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at);
+    `)
+    return
+  }
+
+  // sqlite
   db.exec(`
-    CREATE TABLE IF NOT EXISTS audit_logs (
-      id TEXT PRIMARY KEY,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      category TEXT NOT NULL,
-      action TEXT NOT NULL,
-      severity TEXT DEFAULT 'info',
-      user_id TEXT,
-      profile_id TEXT,
-      resource_type TEXT,
-      resource_id TEXT,
-      details TEXT,
-      ip_address TEXT,
-      user_agent TEXT
-    );
-    
-    CREATE INDEX IF NOT EXISTS idx_audit_category ON audit_logs(category);
-    CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_logs(action);
-    CREATE INDEX IF NOT EXISTS idx_audit_severity ON audit_logs(severity);
-    CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id);
-    CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at);
-  `)
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id TEXT PRIMARY KEY,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        category TEXT NOT NULL,
+        action TEXT NOT NULL,
+        severity TEXT DEFAULT 'info',
+        user_id TEXT,
+        profile_id TEXT,
+        resource_type TEXT,
+        resource_id TEXT,
+        details TEXT,
+        ip_address TEXT,
+        user_agent TEXT
+      );
+      
+      CREATE INDEX IF NOT EXISTS idx_audit_category ON audit_logs(category);
+      CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_logs(action);
+      CREATE INDEX IF NOT EXISTS idx_audit_severity ON audit_logs(severity);
+      CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id);
+      CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at);
+    `)
 }
 
 /**
@@ -348,13 +408,13 @@ export function createAuditMiddleware(category, action) {
 /**
  * Cleanup old audit logs (retention policy)
  */
-export function cleanupAuditLogs(db, { retentionDays = 90 } = {}) {
+export async function cleanupAuditLogs(db, { retentionDays = 90 } = {}) {
   if (!db) return { deleted: 0 }
   
   try {
     const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString()
     
-    const result = db.prepare(`
+    const result = await db.prepare(`
       DELETE FROM audit_logs
       WHERE created_at < ?
         AND severity NOT IN ('error', 'critical')

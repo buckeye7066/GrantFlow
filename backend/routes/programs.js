@@ -56,7 +56,7 @@ function buildFilters({ search, jurisdiction, state, county, isActive, dialect }
   }
 }
 
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const track = normalizeTrack(req.query.track)
     const { limit, offset } = validatePagination(req.query)
@@ -67,10 +67,10 @@ router.get('/', (req, res) => {
     const county = typeof req.query.county === 'string' ? req.query.county : null
     const isActive = typeof req.query.is_active === 'string' ? req.query.is_active : null
 
-    const fetchTrack = (t) => {
+    const fetchTrack = async (t) => {
       const table = tableForTrack(t)
       const { clause, params } = buildFilters({ search, jurisdiction, state, county, isActive, dialect: req.db?.dialect })
-      const rows = req.db
+      const rows = await req.db
         .prepare(
           `
             SELECT *
@@ -82,7 +82,7 @@ router.get('/', (req, res) => {
           `,
         )
         .all(...params, limit, offset)
-      const total = req.db
+      const total = (await req.db
         .prepare(
           `
             SELECT COUNT(*) AS total
@@ -90,18 +90,18 @@ router.get('/', (req, res) => {
             ${clause}
           `,
         )
-        .get(...params)?.total
+        .get(...params))?.total
       return { data: rows, total: total ?? rows.length }
     }
 
     if (track) {
-      const result = fetchTrack(track)
+      const result = await fetchTrack(track)
       return res.json({ track, ...result, limit, offset })
     }
 
     // Never merge tracks: return separate payloads.
-    const client = fetchTrack('CLIENT')
-    const provider = fetchTrack('PROVIDER')
+    const client = await fetchTrack('CLIENT')
+    const provider = await fetchTrack('PROVIDER')
     return res.json({ client, provider, limit, offset })
   } catch (error) {
     console.error('[programs] list error:', error)
@@ -109,7 +109,7 @@ router.get('/', (req, res) => {
   }
 })
 
-router.get('/changes', (req, res) => {
+router.get('/changes', async (req, res) => {
   try {
     const track = normalizeTrack(req.query.track)
     const { limit, offset } = validatePagination(req.query)
@@ -122,7 +122,7 @@ router.get('/changes', (req, res) => {
     }
     const clause = where.length ? `WHERE ${where.join(' AND ')}` : ''
 
-    const rows = req.db
+    const rows = await req.db
       .prepare(
         `
           SELECT *
@@ -135,7 +135,7 @@ router.get('/changes', (req, res) => {
       )
       .all(...params, limit, offset)
 
-    const total = req.db
+    const total = (await req.db
       .prepare(
         `
           SELECT COUNT(*) AS total
@@ -143,7 +143,7 @@ router.get('/changes', (req, res) => {
           ${clause}
         `,
       )
-      .get(...params)?.total
+      .get(...params))?.total
 
     return res.json({ track: track ?? 'ALL', data: rows, total: total ?? rows.length, limit, offset })
   } catch (error) {
@@ -152,7 +152,7 @@ router.get('/changes', (req, res) => {
   }
 })
 
-router.get('/:track/:programId', (req, res) => {
+router.get('/:track/:programId', async (req, res) => {
   try {
     const track = normalizeTrack(req.params.track)
     if (!track) return res.status(400).json({ error: 'Invalid track (client/provider)' })
@@ -160,10 +160,10 @@ router.get('/:track/:programId', (req, res) => {
     const programId = req.params.programId
     const table = tableForTrack(track)
 
-    const program = req.db.prepare(`SELECT * FROM ${table} WHERE program_id = ?`).get(programId)
+    const program = await req.db.prepare(`SELECT * FROM ${table} WHERE program_id = ?`).get(programId)
     if (!program) return res.status(404).json({ error: 'Program not found' })
 
-    const versions = req.db
+    const versions = await req.db
       .prepare(
         `
           SELECT id, created_at, fetched_at, http_status, content_type, content_hash, change_type, changed_fields, change_summary
@@ -175,7 +175,7 @@ router.get('/:track/:programId', (req, res) => {
       )
       .all(track, programId)
 
-    const events = req.db
+    const events = await req.db
       .prepare(
         `
           SELECT *

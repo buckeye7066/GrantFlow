@@ -14,6 +14,7 @@ import { ensureDesignatedProfiles } from '../utils/ensureDesignatedProfiles.js';
 import { seedBaselineFromRepo } from '../utils/seedBaselineFromRepo.js';
 import { buildProfileSignals, calculateMatchScore } from '../services/profileHelpers.js';
 import { getSystemDiagnostics } from '../services/diagnosticsService.js';
+import { listClientSignInEvents } from '../services/adminLoginEventStore.js'
 import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js';
 import { logAuditEvent, queryAuditLogs, getAuditSummary, cleanupAuditLogs, AUDIT_CATEGORIES, SEVERITY } from '../services/auditService.js';
@@ -925,6 +926,30 @@ router.get('/diagnostics', async (req, res) => {
   }
 });
 
+// GET /api/admin/login-events - Recent client logins (admin only)
+// Stored in-memory only (best-effort; cleared on restart).
+router.get('/login-events', async (req, res) => {
+  try {
+    if (!(await ensureAdminRequest(req, res))) return
+
+    // Polled by the Admin UI; prevent conditional GETs (304) which break JSON parsing.
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+    res.set('Pragma', 'no-cache')
+
+    const since = typeof req.query?.since === 'string' ? req.query.since : null
+    const limitRaw = typeof req.query?.limit === 'string' ? req.query.limit : null
+    const limit = limitRaw ? Number(limitRaw) : 25
+
+    return res.json({
+      ok: true,
+      events: listClientSignInEvents({ since, limit }),
+    })
+  } catch (error) {
+    console.error('[admin/login-events] Error:', error)
+    return res.status(500).json({ error: 'Failed to load login events' })
+  }
+})
+
 // Lookup recent server-side error details by Request ID (admin-only).
 // This is stored in-memory (best-effort) to help non-technical admins debug production issues.
 router.get('/errors/:requestId', async (req, res) => {
@@ -1679,7 +1704,7 @@ router.get('/national-crawl/status', async (req, res) => {
     }
     
     // Get last completed job
-    const lastJob = db.prepare(`
+    const lastJob = await db.prepare(`
       SELECT * FROM crawler_jobs 
       WHERE type = 'national_zip_scan' 
       ORDER BY created_at DESC 
@@ -1694,7 +1719,7 @@ router.get('/national-crawl/status', async (req, res) => {
     }
     
     // Get final progress
-    const progress = db.prepare(`
+    const progress = await db.prepare(`
       SELECT 
         COUNT(*) as total_zips,
         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_zips,
@@ -1752,7 +1777,7 @@ router.get('/audit-logs', async (req, res) => {
       offset = 0,
     } = req.query;
     
-    const result = queryAuditLogs(req.db, {
+    const result = await queryAuditLogs(req.db, {
       category,
       action,
       severity,
@@ -1781,7 +1806,7 @@ router.get('/audit-logs/summary', async (req, res) => {
     if (!(await ensureAdminRequest(req, res))) return;
     
     const days = Math.min(parseInt(req.query.days) || 7, 90);
-    const summary = getAuditSummary(req.db, { days });
+    const summary = await getAuditSummary(req.db, { days });
     
     res.json(summary);
   } catch (error) {
@@ -1799,7 +1824,7 @@ router.post('/audit-logs/cleanup', async (req, res) => {
     if (!(await ensureAdminRequest(req, res))) return;
     
     const retentionDays = Math.min(parseInt(req.body.retentionDays) || 90, 365);
-    const result = cleanupAuditLogs(req.db, { retentionDays });
+    const result = await cleanupAuditLogs(req.db, { retentionDays });
     
     // Log the cleanup action
     logAuditEvent(req.db, {

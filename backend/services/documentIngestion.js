@@ -41,6 +41,30 @@ function isImageMime(mimeType) {
   return safe.startsWith('image/') || safe === 'application/octet-stream'
 }
 
+async function createAnthropicClient() {
+  const key = String(process.env.ANTHROPIC_API_KEY || '').trim()
+  if (!key) return null
+  const Anthropic = (await import('@anthropic-ai/sdk')).default
+  return new Anthropic({
+    apiKey: key,
+    timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 20_000),
+    maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
+  })
+}
+
+function extractAnthropicText(response) {
+  const parts = Array.isArray(response?.content) ? response.content : []
+  return parts
+    .map((part) => {
+      if (typeof part?.text === 'string') return part.text
+      if (typeof part === 'string') return part
+      return ''
+    })
+    .filter(Boolean)
+    .join('\n')
+    .trim()
+}
+
 async function extractTextFromImageWithVision({ openai, filePath, mimeType }) {
   if (!openai) return null
   if (!filePath) return null
@@ -511,6 +535,63 @@ export async function processDocumentIngestionJob({
           aiSectionsLog._openai_auth_error = summary.message
           openai = null
           break
+        }
+      }
+    }
+
+    // Anthropic fallback: if OpenAI is missing/invalid, try extracting structured JSON via Anthropic.
+    // This keeps AI-assisted parsing working even when OPENAI_API_KEY is invalid.
+    if (!openai) {
+      const anthropic = await createAnthropicClient()
+      if (anthropic) {
+        aiSectionsLog._ai_provider_fallback = 'anthropic'
+
+        for (const sectionKey of TARGET_SECTIONS) {
+          const promptPayload = buildProfileSectionPrompt(sectionKey, {
+            profile,
+            sections,
+            documents: documentSummary,
+          })
+          if (!promptPayload) continue
+
+          try {
+            const response = await anthropic.messages.create({
+              model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+              max_tokens: 1200,
+              temperature: 0.1,
+              system: 'You are an expert data extraction assistant. Respond with valid JSON only.',
+              messages: [{ role: 'user', content: promptPayload.prompt }],
+            })
+
+            const raw = extractAnthropicText(response) || '{}'
+            let suggestion = {}
+            try {
+              suggestion = JSON.parse(raw)
+            } catch {
+              continue
+            }
+
+            const existing = sections[sectionKey] ?? {}
+            const { data: merged, updatedFields } = mergeSectionData(existing, suggestion)
+
+            if (updatedFields.size > 0) {
+              await upsertProfileSection(db, profile.id, sectionKey, merged, document.id)
+              sections[sectionKey] = merged
+              updates.push({
+                section_key: sectionKey,
+                updated_fields: Array.from(updatedFields),
+              })
+            }
+
+            aiSectionsLog[sectionKey] = {
+              suggestion,
+              updated: Array.from(updatedFields),
+              provider: 'anthropic',
+            }
+          } catch (error) {
+            // Keep best-effort behavior; do not fail the whole ingestion job.
+            aiSectionsLog._anthropic_error = error?.message || String(error)
+          }
         }
       }
     }

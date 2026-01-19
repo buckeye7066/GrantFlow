@@ -1,5 +1,6 @@
 import { buildPipelineAutomationPrompt, PIPELINE_ALLOWED_STATUSES } from '../prompts/pipelineAutomation.js'
 import { extractCompletionText } from '../utils/openai.js'
+import { summarizeOpenAIError } from '../utils/openaiClient.js'
 
 const STATUS_ORDER = [
   'discovered',
@@ -39,8 +40,32 @@ function capAdvance(current, suggested) {
   return STATUS_ORDER[cappedIndex]
 }
 
-function fetchGrantContext(db, grantId) {
-  const grant = db
+async function createAnthropicClient() {
+  const key = String(process.env.ANTHROPIC_API_KEY || '').trim()
+  if (!key) return null
+  const Anthropic = (await import('@anthropic-ai/sdk')).default
+  return new Anthropic({
+    apiKey: key,
+    timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 20_000),
+    maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
+  })
+}
+
+function extractAnthropicText(response) {
+  const parts = Array.isArray(response?.content) ? response.content : []
+  return parts
+    .map((part) => {
+      if (typeof part?.text === 'string') return part.text
+      if (typeof part === 'string') return part
+      return ''
+    })
+    .filter(Boolean)
+    .join('\n')
+    .trim()
+}
+
+async function fetchGrantContext(db, grantId) {
+  const grant = await db
     .prepare(
       `
         SELECT *
@@ -55,7 +80,7 @@ function fetchGrantContext(db, grantId) {
   }
 
   const organization = grant.organization_id
-    ? db
+    ? await db
         .prepare(
           `
             SELECT *
@@ -66,7 +91,7 @@ function fetchGrantContext(db, grantId) {
         .get(grant.organization_id)
     : null
 
-  const milestones = db
+  const milestones = await db
     .prepare(
       `
         SELECT id, title, due_date, completed, completed_date, type
@@ -77,7 +102,7 @@ function fetchGrantContext(db, grantId) {
     )
     .all(grantId)
 
-  const documents = db
+  const documents = await db
     .prepare(
       `
         SELECT id, name, type, status, ai_summary, processing_status, created_at
@@ -89,7 +114,7 @@ function fetchGrantContext(db, grantId) {
     )
     .all(grantId)
 
-  const drafts = db
+  const drafts = await db
     .prepare(
       `
         SELECT id, section_name, status, updated_at
@@ -100,7 +125,7 @@ function fetchGrantContext(db, grantId) {
     )
     .all(grantId)
 
-  const expenses = db
+  const expenses = await db
     .prepare(
       `
         SELECT id, amount, description, date
@@ -146,8 +171,8 @@ function buildProfileSummary(profileContext) {
   return summary
 }
 
-function recordAutomationEvent(db, payload) {
-  db.prepare(
+async function recordAutomationEvent(db, payload) {
+  await db.prepare(
     `
       INSERT INTO grant_pipeline_events (
         grant_id,
@@ -169,7 +194,7 @@ function recordAutomationEvent(db, payload) {
     payload.suggestedStatus ?? null,
     payload.appliedStatus ?? null,
     payload.confidence ?? null,
-    payload.handoffRequired ? 1 : 0,
+    payload.handoffRequired ? true : false,
     payload.handoffReason ?? null,
     payload.recommendedActions ? JSON.stringify(payload.recommendedActions) : null,
     payload.aiSummary ?? null,
@@ -184,10 +209,10 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
   let grants = []
 
   if (grantId) {
-    const context = fetchGrantContext(db, grantId)
+    const context = await fetchGrantContext(db, grantId)
     grants.push(context)
   } else if (organizationId) {
-    const rows = db
+    const rows = await db
       .prepare(
         `
           SELECT id
@@ -198,9 +223,12 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
       )
       .all(organizationId)
 
-    grants = rows.map((row) => fetchGrantContext(db, row.id))
+    grants = []
+    for (const row of rows) {
+      grants.push(await fetchGrantContext(db, row.id))
+    }
   } else {
-    const rows = db
+    const rows = await db
       .prepare(
         `
           SELECT id
@@ -212,7 +240,10 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
       )
       .all(parameters.limit ?? 10)
 
-    grants = rows.map((row) => fetchGrantContext(db, row.id))
+    grants = []
+    for (const row of rows) {
+      grants.push(await fetchGrantContext(db, row.id))
+    }
   }
 
   if (grants.length === 0) {
@@ -224,7 +255,13 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
   }
 
   const profileSummary = buildProfileSummary(profileContext)
-  const openai = getOpenAI()
+  let openai = null
+  try {
+    openai = typeof getOpenAI === 'function' ? getOpenAI() : null
+  } catch {
+    openai = null
+  }
+  const anthropic = await createAnthropicClient()
 
   let advanced = 0
   let handoffs = 0
@@ -244,41 +281,75 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
 
     let aiResponse = null
     try {
-      const completion = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        temperature: 0.2,
-        response_format: { type: 'json_object' },
-        messages: [
-          {
-            role: 'system',
-            content: 'You are Anya, the GrantFlow pipeline automation assistant.',
-          },
-          { role: 'user', content: prompt },
-        ],
-      })
-
-      aiResponse = extractCompletionText(completion) || '{}'
+      if (openai) {
+        const completion = await openai.chat.completions.create({
+          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          temperature: 0.2,
+          response_format: { type: 'json_object' },
+          messages: [
+            {
+              role: 'system',
+              content: 'You are Anya, the GrantFlow pipeline automation assistant.',
+            },
+            { role: 'user', content: prompt },
+          ],
+        })
+        aiResponse = extractCompletionText(completion) || '{}'
+      } else {
+        throw new Error('OpenAI client unavailable')
+      }
     } catch (error) {
-      recordAutomationEvent(db, {
-        jobId: job.id,
-        grantId: grant.id,
-        previousStatus: grant.status,
-        suggestedStatus: null,
-        appliedStatus: grant.status,
-        confidence: null,
-        handoffRequired: false,
-        handoffReason: null,
-        recommendedActions: null,
-        aiSummary: `Automation failed: ${error instanceof Error ? error.message : String(error)}`,
-      })
-      continue
+      const summary = summarizeOpenAIError(error)
+      if (anthropic && (summary.isAuth || !openai)) {
+        try {
+          const response = await anthropic.messages.create({
+            model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+            max_tokens: 1200,
+            temperature: 0.2,
+            system:
+              'You are Anya, the GrantFlow pipeline automation assistant. Output JSON only (json_object).',
+            messages: [{ role: 'user', content: prompt }],
+          })
+          aiResponse = extractAnthropicText(response) || '{}'
+        } catch (anthropicError) {
+          await recordAutomationEvent(db, {
+            jobId: job.id,
+            grantId: grant.id,
+            previousStatus: grant.status,
+            suggestedStatus: null,
+            appliedStatus: grant.status,
+            confidence: null,
+            handoffRequired: false,
+            handoffReason: null,
+            recommendedActions: null,
+            aiSummary: `Automation failed: ${
+              anthropicError instanceof Error ? anthropicError.message : String(anthropicError)
+            }`,
+          })
+          continue
+        }
+      } else {
+        await recordAutomationEvent(db, {
+          jobId: job.id,
+          grantId: grant.id,
+          previousStatus: grant.status,
+          suggestedStatus: null,
+          appliedStatus: grant.status,
+          confidence: null,
+          handoffRequired: false,
+          handoffReason: null,
+          recommendedActions: null,
+          aiSummary: `Automation failed: ${error instanceof Error ? error.message : String(error)}`,
+        })
+        continue
+      }
     }
 
     let parsed = {}
     try {
       parsed = JSON.parse(aiResponse)
     } catch (error) {
-      recordAutomationEvent(db, {
+      await recordAutomationEvent(db, {
         jobId: job.id,
         grantId: grant.id,
         previousStatus: grant.status,
@@ -311,7 +382,7 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
     }
 
     if (appliedStatus !== grant.status) {
-      db.prepare(
+      await db.prepare(
         `
           UPDATE grants
           SET status = ?, updated_at = CURRENT_TIMESTAMP
@@ -321,7 +392,7 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
       advanced += 1
     }
 
-    recordAutomationEvent(db, {
+    await recordAutomationEvent(db, {
       jobId: job.id,
       grantId: grant.id,
       previousStatus: grant.status,
