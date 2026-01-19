@@ -1005,6 +1005,8 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
       const reply = extractAnthropicText(response)
       if (reply) return reply
     }
+  } catch (error) {
+    console.error('[Anya] Anthropic API Error:', error?.message || error)
   }
 
   // 3) Deterministic safe fallback (no LLM)
