@@ -1174,6 +1174,7 @@ function resolveBuildSha() {
 }
 
 // Build metadata endpoint (public, no secrets)
+// NOTE: This endpoint is used to confirm production is on the expected commit.
 app.get('/api/meta/build', (_req, res) => {
   res.json({
     sha: resolveBuildSha(),
