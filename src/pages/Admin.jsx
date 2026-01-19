@@ -8,6 +8,7 @@ import AdminMaintenance from '@/components/admin/AdminMaintenance';
 import AdminAnyaConsole from '@/components/admin/AdminAnyaConsole';
 import AdminServiceApplications from '@/components/admin/AdminServiceApplications';
 import AdminLoginNotifications from '@/components/admin/AdminLoginNotifications.jsx';
+import AdminProfileDedupe from '@/components/admin/AdminProfileDedupe.jsx';
 import Billing from '@/pages/Billing';
 import Automation from '@/pages/Automation';
 import { useAuthStore } from '@/stores/authStore';
@@ -56,6 +57,10 @@ export default function Admin() {
               <Bell className="w-4 h-4 mr-2" />
               Logins
             </TabsTrigger>
+            <TabsTrigger value="profiles">
+              <Users className="w-4 h-4 mr-2" />
+              Profiles
+            </TabsTrigger>
             <TabsTrigger value="diagnostics">
               <Activity className="w-4 h-4 mr-2" />
               Diagnostics
@@ -86,6 +91,10 @@ export default function Admin() {
 
           <TabsContent value="logins" className="mt-6">
             <AdminLoginNotifications />
+          </TabsContent>
+
+          <TabsContent value="profiles" className="mt-6">
+            <AdminProfileDedupe />
           </TabsContent>
 
           <TabsContent value="diagnostics" className="mt-6">
