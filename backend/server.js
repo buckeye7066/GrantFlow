@@ -310,15 +310,20 @@ if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
 // Validate database connection on startup (works for both sqlite and postgres)
 try {
   console.info('[database] Validating database connection...');
-  await db.healthcheck();
+  const hc = await db.healthcheck();
+  if (!hc?.ok) {
+    throw new Error(hc?.error || 'Database healthcheck failed')
+  }
   console.info('[database] Database connection validated successfully', {
     dialect: db.dialect,
     path: db.path ?? null,
   });
 } catch (dbError) {
   console.error('[database] CRITICAL: Failed to initialize database:', dbError);
-  console.error('[database] Cannot start server without database connection');
-  process.exit(1);
+  // Production safety: do not hard-exit. A hard exit yields a perpetual 502 and blocks recovery via Admin UI.
+  // We keep the process alive so `/api/health` and admin diagnostics can surface the failure reason.
+  console.error('[database] Continuing startup in degraded mode (DB unavailable).');
+  app.locals.db_startup_error = dbError instanceof Error ? dbError.message : String(dbError)
 }
 
 // NOTE: Schema/migrations should be applied via `npm run migrate` in production.
@@ -336,9 +341,7 @@ if (shouldAutoMigrate) {
       console.info('[database] Schema applied (auto-migrate enabled)', { dialect: db.dialect });
     } catch (schemaError) {
       console.error('[database] Error running schema migrations:', schemaError);
-      if (process.env.NODE_ENV === 'production') {
-        process.exit(1);
-      }
+      // Do not hard-exit; keep the service reachable for diagnostics.
     }
   }
 }
@@ -710,23 +713,27 @@ function resolveJwtSecret() {
 
   if (!raw) {
     if (isProd) {
+      // NOTE: Railway outages are worse than a temporary auth secret.
+      // We still emit a loud error so the operator sets a real secret ASAP.
+      const generated = crypto.randomBytes(48).toString('base64url')
       console.error(
-        'ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET). Refusing to start in production.\n' +
-          'Set a strong random secret (recommended: 32+ bytes). Example:\n' +
+        'ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET). Using an EPHEMERAL secret to avoid startup crash.\n' +
+          'Set a strong random secret (recommended: 32+ bytes) and redeploy to avoid logouts on restart.\n' +
           '  AUTH_JWT_SECRET="..."\n',
       );
-      process.exit(1);
+      return generated
     }
     console.warn('[startup] AUTH_JWT_SECRET not set; using insecure development default (DO NOT use in production).');
     return 'grantflow-dev-secret';
   }
 
   if (isProd && raw === 'grantflow-dev-secret') {
+    const generated = crypto.randomBytes(48).toString('base64url')
     console.error(
-      'ERROR: AUTH_JWT_SECRET is set to the insecure development default. Refusing to start in production.\n' +
+      'ERROR: AUTH_JWT_SECRET is set to the insecure development default. Using an EPHEMERAL secret to avoid startup crash.\n' +
         'Generate a strong random secret and redeploy.',
     );
-    process.exit(1);
+    return generated
   }
 
   return raw;
@@ -921,14 +928,16 @@ app.get('/health', async (req, res) => {
     uptime: process.uptime(),
     dependencies: {
       database: 'unknown',
-      openai: 'unknown'
+      openai: 'unknown',
+      anthropic: 'unknown',
     }
   };
   
   // Check database connection
   try {
     if (db.healthcheck) {
-      await db.healthcheck();
+      const hc = await db.healthcheck();
+      if (!hc?.ok) throw new Error(hc?.error || 'Database healthcheck failed')
     } else {
       await db.prepare('SELECT 1').get();
     }
@@ -969,7 +978,8 @@ app.get('/api/auth/diagnostics', async (req, res) => {
   // Check database connection
   try {
     if (db.healthcheck) {
-      await db.healthcheck();
+      const hc = await db.healthcheck();
+      if (!hc?.ok) throw new Error(hc?.error || 'Database healthcheck failed')
     } else {
       await db.prepare('SELECT COUNT(*) as count FROM users').get();
     }
@@ -1242,7 +1252,8 @@ app.get('/healthz', async (_req, res) => {
 app.get('/readyz', async (_req, res) => {
   try {
     if (db.healthcheck) {
-      await db.healthcheck();
+      const hc = await db.healthcheck();
+      if (!hc?.ok) throw new Error(hc?.error || 'Database healthcheck failed')
     } else {
       await db.prepare('SELECT 1 as ok').get();
     }
@@ -1373,11 +1384,14 @@ app.use((req, res) => {
 function gracefulShutdown(signal) {
   console.log(`\nReceived ${signal}, closing server gracefully...`);
   
-  server.close(() => {
+  server.close(async () => {
     console.log('HTTP server closed');
     
     try {
-      db.close();
+      const maybe = db?.close?.()
+      if (maybe && typeof maybe.then === 'function') {
+        await maybe
+      }
       console.log('Database connection closed');
     } catch (error) {
       console.error('Error closing database:', error);

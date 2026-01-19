@@ -1,12 +1,12 @@
 /**
- * National ZIP Code Crawler
- * 
- * Iterates over ALL ~43,859 US ZIP codes
- * For each ZIP, finds AT LEAST 3 REAL funding sources
- * 
+ * Geo Crawl (ZIP discovery)
+ *
+ * Discovers real funding sources for ZIP-scoped crawl runs.
+ * This is the canonical crawl path used by the Admin "Geo Crawl" tools.
+ *
  * Features:
  * - Batch processing (configurable, default 25-100 ZIPs per batch)
- * - Checkpointing to national_zip_progress table every batch
+ * - Checkpointing to national_zip_progress table every batch (legacy table name)
  * - Rate limiting and caching to avoid hammering upstream sources
  * - Resumable after interruption
  * - Memory-safe (no accumulating massive arrays)
@@ -154,7 +154,7 @@ async function searchGrantsGovByZip(zip, coords) {
       }
     }
   } catch (error) {
-    console.error(`[NationalZipCrawler] Grants.gov error for ZIP ${zip}:`, error.message)
+    console.error(`[GeoCrawl] Grants.gov error for ZIP ${zip}:`, error.message)
   }
   
   return opportunities
@@ -271,7 +271,7 @@ async function searchOverpassLocalResources(zip, coords, config) {
       if (mapped) opportunities.push(mapped)
     }
   } catch (error) {
-    console.warn(`[NationalZipCrawler] Overpass error for ZIP ${zip}:`, error?.message || error)
+    console.warn(`[GeoCrawl] Overpass error for ZIP ${zip}:`, error?.message || error)
   }
 
   return opportunities
@@ -305,12 +305,12 @@ async function searchStateGrantsByZip(zip, coords) {
   try {
     // Note: Each state has different API/scraping requirements
     // This is a placeholder - real implementation would scrape or use APIs
-    console.log(`[NationalZipCrawler] Would search ${coords.state} portal for ZIP ${zip}`)
+    console.log(`[GeoCrawl] Would search ${coords.state} portal for ZIP ${zip}`)
     
     // For now, return placeholder indicating state portal search would happen
     // In production, implement actual scraping/API calls
   } catch (error) {
-    console.error(`[NationalZipCrawler] State portal error for ZIP ${zip}:`, error.message)
+    console.error(`[GeoCrawl] State portal error for ZIP ${zip}:`, error.message)
   }
   
   return opportunities
@@ -331,12 +331,12 @@ async function searchFoundationLocator(zip, coords) {
     // Note: Real implementation would need proper API access
     const url = `https://www.cof.org/foundation-locator?lat=${coords.lat}&lng=${coords.lng}&radius=25`
     
-    console.log(`[NationalZipCrawler] Would search foundation locator for ZIP ${zip}`)
+    console.log(`[GeoCrawl] Would search foundation locator for ZIP ${zip}`)
     
     // For now, return placeholder
     // In production, implement actual API calls or scraping
   } catch (error) {
-    console.error(`[NationalZipCrawler] Foundation locator error for ZIP ${zip}:`, error.message)
+    console.error(`[GeoCrawl] Foundation locator error for ZIP ${zip}:`, error.message)
   }
   
   return opportunities
@@ -382,7 +382,7 @@ async function getZipCoordinates(zip) {
  * Process a single ZIP code
  */
 async function processZip(zip, db, config) {
-  console.log(`[NationalZipCrawler] Processing ZIP ${zip}...`)
+  console.log(`[GeoCrawl] Processing ZIP ${zip}...`)
   
   const startTime = Date.now()
   let sources = []
@@ -616,7 +616,7 @@ async function getLastProcessedZipForList(db, zipList) {
 }
 
 /**
- * Main national ZIP crawl function
+ * Geo Crawl ZIP discovery function
  */
 export async function runNationalZipCrawl(dbPath, options = {}) {
   const config = { ...DEFAULT_CONFIG, ...options }
@@ -638,7 +638,7 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   }
 
   console.log('='.repeat(80))
-  console.log('National ZIP Crawl Starting')
+  console.log('Geo Crawl Starting')
   console.log('='.repeat(80))
   console.log(`Batch size: ${config.batch_size}`)
   console.log(`Min sources per ZIP: ${config.min_sources_per_zip}`)
@@ -646,7 +646,7 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   console.log()
   
   // Resumability:
-  // - Full national crawl is resumable by default (resume=true)
+  // - Full crawl is resumable by default (resume=true)
   // - State-scoped and explicit-list crawls default to resume=false to avoid surprising skips.
   const inferredResumeDefault = !options.state && !options.zip_list
   const allowResume = options.resume != null ? Boolean(options.resume) : inferredResumeDefault
@@ -718,7 +718,7 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   const totalDuration = Date.now() - startTime
   
   console.log('='.repeat(80))
-  console.log('National ZIP Crawl Complete')
+  console.log('Geo Crawl Complete')
   console.log('='.repeat(80))
   console.log(`Total ZIPs processed: ${processedCount}`)
   console.log(`Total sources found: ${totalSources}`)

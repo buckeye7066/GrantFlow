@@ -51,6 +51,14 @@
       "destination": "https://grantflow-production.up.railway.app/uploads/:path*"
     },
     {
+      "source": "/grantflow/assets/:path*",
+      "destination": "/assets/:path*"
+    },
+    {
+      "source": "/grantflow/favicon.ico",
+      "destination": "/favicon.ico"
+    },
+    {
       "source": "/grantflow",
       "destination": "/index.html"
     },

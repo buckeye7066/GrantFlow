@@ -20,7 +20,7 @@ function isAdmin(user) {
 /**
  * Create an Anya session for the admin user
  */
-function createAnyaSession(db, userId, profileId) {
+async function createAnyaSession(db, userId, profileId) {
   const sessionId = randomUUID()
   
   const stmt = db.prepare(`
@@ -34,7 +34,7 @@ function createAnyaSession(db, userId, profileId) {
     ) VALUES (?, ?, ?, ?, ?, ?)
   `)
   
-  stmt.run(
+  await stmt.run(
     sessionId,
     userId || null,
     profileId || null,
@@ -53,7 +53,7 @@ function createAnyaSession(db, userId, profileId) {
 /**
  * Create a crawler job
  */
-function createCrawlerJob(db, profileId, crawlerType, parameters = {}) {
+async function createCrawlerJob(db, profileId, crawlerType, parameters = {}) {
   const jobId = randomUUID()
   
   const stmt = db.prepare(`
@@ -66,7 +66,7 @@ function createCrawlerJob(db, profileId, crawlerType, parameters = {}) {
     ) VALUES (?, ?, ?, ?, ?)
   `)
   
-  stmt.run(
+  await stmt.run(
     jobId,
     profileId,
     crawlerType,
@@ -80,7 +80,7 @@ function createCrawlerJob(db, profileId, crawlerType, parameters = {}) {
 /**
  * Add a message to Anya session
  */
-function addAnyaMessage(db, sessionId, role, content) {
+async function addAnyaMessage(db, sessionId, role, content) {
   const messageId = randomUUID()
   
   const stmt = db.prepare(`
@@ -92,7 +92,7 @@ function addAnyaMessage(db, sessionId, role, content) {
     ) VALUES (?, ?, ?, ?)
   `)
   
-  stmt.run(
+  await stmt.run(
     messageId,
     sessionId,
     role,
@@ -107,7 +107,7 @@ function addAnyaMessage(db, sessionId, role, content) {
  * Creates crawler jobs and Anya session
  * @param {object} options - Options object with db, user, profileId, uploadDir, getOpenAI
  */
-export function initializeAnyaForAdmin(db, user, profileId = null, { uploadDir, getOpenAI } = {}) {
+export async function initializeAnyaForAdmin(db, user, profileId = null, { uploadDir, getOpenAI } = {}) {
   // Only initialize for admin users
   if (!isAdmin(user)) {
     return null
@@ -116,7 +116,7 @@ export function initializeAnyaForAdmin(db, user, profileId = null, { uploadDir, 
   try {
     // Get the admin's profile if not provided
     if (!profileId && user.id) {
-      const row = db.prepare(`
+      const row = await db.prepare(`
         SELECT id FROM profiles WHERE user_id = ? LIMIT 1
       `).get(user.id)
       
@@ -125,7 +125,7 @@ export function initializeAnyaForAdmin(db, user, profileId = null, { uploadDir, 
     
     // If still no profile, get the first profile as fallback
     if (!profileId) {
-      const row = db.prepare(`
+      const row = await db.prepare(`
         SELECT id FROM profiles ORDER BY created_at ASC LIMIT 1
       `).get()
       
@@ -137,21 +137,21 @@ export function initializeAnyaForAdmin(db, user, profileId = null, { uploadDir, 
     }
     
     // Create Anya session
-    const sessionId = createAnyaSession(db, user.id, profileId)
+    const sessionId = await createAnyaSession(db, user.id, profileId)
     
     // Create crawler jobs
     const jobIds = {
-      local: createCrawlerJob(db, profileId, 'local', {
+      local: await createCrawlerJob(db, profileId, 'local', {
         radius_miles: 50,
         max_results: 100,
       }),
-      scholarship: createCrawlerJob(db, profileId, 'scholarship', {
+      scholarship: await createCrawlerJob(db, profileId, 'scholarship', {
         max_results: 50,
       }),
-      comprehensive: createCrawlerJob(db, profileId, 'comprehensive', {
+      comprehensive: await createCrawlerJob(db, profileId, 'comprehensive', {
         max_results: 200,
       }),
-      profile_enrichment: createCrawlerJob(db, profileId, 'profile_enrichment', {}),
+      profile_enrichment: await createCrawlerJob(db, profileId, 'profile_enrichment', {}),
     }
     
     // Dispatch each crawler job to actually start them (fire and forget)
@@ -187,7 +187,7 @@ I'll notify you when these crawlers complete. You can check their progress anyti
 
 How can I help you today?`
     
-    addAnyaMessage(db, sessionId, 'assistant', welcomeMessage)
+    await addAnyaMessage(db, sessionId, 'assistant', welcomeMessage)
     
     return {
       sessionId,
@@ -203,10 +203,10 @@ How can I help you today?`
 /**
  * Get Anya session info for response
  */
-export function getAnyaSessionInfo(db, sessionId) {
+export async function getAnyaSessionInfo(db, sessionId) {
   if (!sessionId) return null
   
-  const session = db.prepare(`
+  const session = await db.prepare(`
     SELECT * FROM anya_sessions WHERE id = ? LIMIT 1
   `).get(sessionId)
   

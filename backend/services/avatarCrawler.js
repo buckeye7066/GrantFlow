@@ -8,7 +8,24 @@ export async function processAvatarLookupJob({ profileContext, uploadDir, getOpe
   if (!profile) {
     throw new Error('Avatar lookup requires a profile context')
   }
-  const openai = getOpenAI()
+  let openai = null
+  try {
+    openai = typeof getOpenAI === 'function' ? getOpenAI() : null
+  } catch (error) {
+    openai = null
+  }
+  if (!openai) {
+    // Fallback: do not fail the job. The UI already has a default avatar.
+    return {
+      inserted: 0,
+      result_count: 0,
+      result_meta: {
+        ok: false,
+        reason: 'openai_unavailable',
+        message: 'Avatar generation unavailable (OpenAI not configured). Using default avatar.',
+      },
+    }
+  }
   const prompt = buildAvatarPrompt(profile)
   let response = null
   try {
@@ -21,11 +38,26 @@ export async function processAvatarLookupJob({ profileContext, uploadDir, getOpe
   } catch (error) {
     const summary = summarizeOpenAIError(error)
     if (summary.isAuth) {
-      throw new Error(
-        'OpenAI authentication failed for avatar lookup. Verify OPENAI_API_KEY (server-side) and ensure the key has access to image generation.',
-      )
+      return {
+        inserted: 0,
+        result_count: 0,
+        result_meta: {
+          ok: false,
+          reason: 'openai_auth_failed',
+          message:
+            'Avatar generation unavailable (OpenAI authentication failed). Verify OPENAI_API_KEY and image model access.',
+        },
+      }
     }
-    throw new Error(`Avatar lookup failed: ${summary.message}`)
+    return {
+      inserted: 0,
+      result_count: 0,
+      result_meta: {
+        ok: false,
+        reason: 'openai_error',
+        message: `Avatar generation failed: ${summary.message}`,
+      },
+    }
   }
 
   const base64 = response?.data?.[0]?.b64_json

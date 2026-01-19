@@ -1250,6 +1250,7 @@ router.post('/repair-all-profiles', async (req, res) => {
 
     // Import canonical sections
     const { supportedSectionKeys } = await import('../prompts/profileSections.js');
+    const { getDefaultSectionData } = await import('../config/profileSchema.js')
 
     // Get all profiles
     const profiles = await req.db.prepare('SELECT id, display_name FROM profiles').all();
@@ -1257,49 +1258,81 @@ router.post('/repair-all-profiles', async (req, res) => {
     const results = {
       profiles_processed: 0,
       sections_created: 0,
+      keys_repaired: 0,
       details: []
     };
 
-    const upsert = req.db.prepare(`
-      INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
-      VALUES (?, ?, '{}', 'admin-repair')
-      ON CONFLICT(profile_id, section_key) DO NOTHING
-    `);
+    await req.db.withTransaction(async (tx) => {
+      const insertMissing = tx.prepare(`
+        INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+        VALUES (?, ?, ?, 'admin-repair')
+        ON CONFLICT(profile_id, section_key) DO NOTHING
+      `)
 
-    const transaction = req.db.transaction(() => {
+      const selectSections = tx.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
+      const updateSection = tx.prepare(`
+        UPDATE profile_sections
+        SET data = ?, updated_by = 'admin-repair', updated_at = CURRENT_TIMESTAMP
+        WHERE profile_id = ? AND section_key = ?
+      `)
+
       for (const profile of profiles) {
-        const existingSections = req.db
-          .prepare('SELECT section_key FROM profile_sections WHERE profile_id = ?')
-          .all(profile.id);
-        
-        const existingKeys = new Set(existingSections.map(s => s.section_key));
-        const createdForProfile = [];
+        const rows = await selectSections.all(profile.id)
+        const existingMap = new Map(rows.map((r) => [r.section_key, r.data]))
 
-        supportedSectionKeys.forEach(sectionKey => {
-          if (!existingKeys.has(sectionKey)) {
-            upsert.run(profile.id, sectionKey);
-            createdForProfile.push(sectionKey);
+        const createdForProfile = []
+        let repairedKeysForProfile = 0
+
+        for (const sectionKey of supportedSectionKeys) {
+          const defaults = getDefaultSectionData(sectionKey) ?? {}
+          const existingRaw = existingMap.get(sectionKey)
+
+          if (!existingRaw) {
+            await insertMissing.run(profile.id, sectionKey, JSON.stringify(defaults))
+            createdForProfile.push(sectionKey)
+            repairedKeysForProfile += Object.keys(defaults).length
+            continue
           }
-        });
 
-        results.profiles_processed++;
-        results.sections_created += createdForProfile.length;
+          let current = {}
+          try {
+            current = existingRaw ? JSON.parse(existingRaw) : {}
+          } catch {
+            current = {}
+          }
 
-        if (createdForProfile.length > 0) {
+          let changed = false
+          for (const [key, defaultValue] of Object.entries(defaults)) {
+            if (!Object.prototype.hasOwnProperty.call(current, key)) {
+              current[key] = defaultValue
+              changed = true
+              repairedKeysForProfile += 1
+            }
+          }
+
+          if (changed) {
+            await updateSection.run(JSON.stringify(current), profile.id, sectionKey)
+          }
+        }
+
+        results.profiles_processed++
+        results.sections_created += createdForProfile.length
+        results.keys_repaired += repairedKeysForProfile
+
+        if (createdForProfile.length > 0 || repairedKeysForProfile > 0) {
           results.details.push({
             profile_id: profile.id,
             display_name: profile.display_name,
-            sections_created: createdForProfile.length
-          });
+            sections_created: createdForProfile.length,
+            keys_repaired: repairedKeysForProfile,
+          })
         }
       }
-    });
-
-    transaction();
+    })
 
     // Log audit event
     try {
-      req.db.prepare(`
+      await req.db.prepare(`
         INSERT INTO audit_logs (event_type, user_id, details, created_at)
         VALUES ('admin_repair_all_profiles', ?, ?, CURRENT_TIMESTAMP)
       `).run(
@@ -1307,6 +1340,7 @@ router.post('/repair-all-profiles', async (req, res) => {
         JSON.stringify({
           profiles_processed: results.profiles_processed,
           sections_created: results.sections_created,
+          keys_repaired: results.keys_repaired,
           timestamp: new Date().toISOString()
         })
       );
@@ -1559,7 +1593,7 @@ router.get('/audit-logs', async (req, res) => {
       offset = 0,
     } = req.query;
     
-    const result = queryAuditLogs(req.db, {
+    const result = await queryAuditLogs(req.db, {
       category,
       action,
       severity,
@@ -1588,7 +1622,7 @@ router.get('/audit-logs/summary', async (req, res) => {
     if (!(await ensureAdminRequest(req, res))) return;
     
     const days = Math.min(parseInt(req.query.days) || 7, 90);
-    const summary = getAuditSummary(req.db, { days });
+    const summary = await getAuditSummary(req.db, { days });
     
     res.json(summary);
   } catch (error) {
@@ -1606,7 +1640,7 @@ router.post('/audit-logs/cleanup', async (req, res) => {
     if (!(await ensureAdminRequest(req, res))) return;
     
     const retentionDays = Math.min(parseInt(req.body.retentionDays) || 90, 365);
-    const result = cleanupAuditLogs(req.db, { retentionDays });
+    const result = await cleanupAuditLogs(req.db, { retentionDays });
     
     // Log the cleanup action
     logAuditEvent(req.db, {

@@ -1,6 +1,4 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useForm } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -24,16 +22,6 @@ const codeSchema = z.object({
 })
 
 export default function EmailSignInForm({ onComplete }) {
-  const emailForm = useForm({
-    resolver: zodResolver(emailSchema),
-    defaultValues: { email: '' },
-  })
-
-  const codeForm = useForm({
-    resolver: zodResolver(codeSchema),
-    defaultValues: { code: '' },
-  })
-
   const [step, setStep] = useState('email')
   const [email, setEmail] = useState('')
   const [status, setStatus] = useState({ type: 'idle', message: null, previewCode: null, notice: null })
@@ -41,6 +29,8 @@ export default function EmailSignInForm({ onComplete }) {
   const [resendCountdown, setResendCountdown] = useState(0)
   const [isLoading, setIsLoading] = useState(false)
   const [copyFeedback, setCopyFeedback] = useState(null)
+  const [emailError, setEmailError] = useState(null)
+  const [codeError, setCodeError] = useState(null)
   const authStore = useAuthStore()
 
   useEffect(() => {
@@ -58,11 +48,23 @@ export default function EmailSignInForm({ onComplete }) {
     return `${maskedUser}@${domain}`
   }, [email])
 
-  const handleSendCode = emailForm.handleSubmit(async (values) => {
+  const handleSendCode = async (event) => {
+    event?.preventDefault?.()
     try {
       setIsLoading(true)
       setStatus({ type: 'idle', message: null, previewCode: null, notice: null })
-      const cleanedEmail = normalizeEmail(values.email)
+
+      // Read from FormData so the form works even when synthetic typing doesn't trigger React change events.
+      const form = event?.currentTarget
+      const rawEmail = form ? new FormData(form).get('email') : null
+      const parsed = emailSchema.safeParse({ email: rawEmail })
+      if (!parsed.success) {
+        setEmailError(parsed.error.issues?.[0]?.message || 'Enter a valid email address')
+        return
+      }
+
+      setEmailError(null)
+      const cleanedEmail = normalizeEmail(parsed.data.email)
       const response = await authStore.startEmailSignIn(cleanedEmail)
       setEmail(cleanedEmail)
       setVerificationToken(response?.verification_token ?? null)
@@ -82,14 +84,14 @@ export default function EmailSignInForm({ onComplete }) {
         type: 'success',
         message: previewCode
           ? 'A verification code has been generated for you.'
-          : `We sent a 6-digit code to ${maskedEmail ?? values.email}. Enter it below to continue.`,
+          : `We sent a 6-digit code to ${maskedEmail ?? cleanedEmail}. Enter it below to continue.`,
         previewCode,
         notice,
       })
     } catch (error) {
       // Provide more specific error messages based on error type
       let message = 'Unable to send verification code.'
-      
+
       if (error?.message?.includes('not configured') || error?.message?.includes('RESEND_API_KEY')) {
         message = 'Email service is temporarily unavailable. Please contact support or try again later.'
       } else if (error?.message?.includes('network') || error?.message?.includes('fetch')) {
@@ -101,19 +103,30 @@ export default function EmailSignInForm({ onComplete }) {
       } else if (error?.message) {
         message = error.message
       }
-      
+
       setStatus({ type: 'error', message, previewCode: null, notice: null })
       setCopyFeedback(null)
     } finally {
       setIsLoading(false)
     }
-  })
+  }
 
-  const handleVerify = codeForm.handleSubmit(async (values) => {
+  const handleVerify = async (event) => {
+    event?.preventDefault?.()
     try {
       setIsLoading(true)
       setStatus({ type: 'idle', message: null })
-      const response = await authStore.verifyEmailCode({ email, code: values.code, verificationToken })
+
+      const form = event?.currentTarget
+      const rawCode = form ? new FormData(form).get('code') : null
+      const parsed = codeSchema.safeParse({ code: String(rawCode ?? '') })
+      if (!parsed.success) {
+        setCodeError(parsed.error.issues?.[0]?.message || 'Enter the 6-digit code we sent')
+        return
+      }
+
+      setCodeError(null)
+      const response = await authStore.verifyEmailCode({ email, code: parsed.data.code, verificationToken })
       if (typeof onComplete === 'function') {
         onComplete(response)
       }
@@ -126,7 +139,7 @@ export default function EmailSignInForm({ onComplete }) {
     } catch (error) {
       // Provide more specific error messages
       let message = 'The code you entered was not valid. Try again.'
-      
+
       if (error?.message?.includes('expired')) {
         message = 'Your verification code has expired. Please request a new one.'
       } else if (error?.message?.includes('invalid') || error?.message?.includes('incorrect')) {
@@ -138,17 +151,42 @@ export default function EmailSignInForm({ onComplete }) {
       } else if (error?.message) {
         message = error.message
       }
-      
+
       setStatus({ type: 'error', message, previewCode: null, notice: null })
     } finally {
       setIsLoading(false)
     }
-  })
+  }
 
-  const handleResend = () => {
+  const handleResend = async () => {
     if (resendCountdown > 0 || !email) return
-    emailForm.setValue('email', email)
-    handleSendCode()
+    try {
+      setIsLoading(true)
+      setStatus({ type: 'idle', message: null, previewCode: null, notice: null })
+      const response = await authStore.startEmailSignIn(email)
+      setVerificationToken(response?.verification_token ?? null)
+      setResendCountdown(45)
+      setCopyFeedback(null)
+      const previewCode = response?.previewCode ?? null
+      const notice =
+        response?.notice ??
+        (previewCode
+          ? 'Email delivery is not configured for this environment. Use the generated code below to continue.'
+          : null)
+      setStatus({
+        type: 'success',
+        message: previewCode
+          ? 'A verification code has been generated for you.'
+          : `We sent a 6-digit code to ${maskedEmail ?? email}. Enter it below to continue.`,
+        previewCode,
+        notice,
+      })
+    } catch (error) {
+      const message = error?.error || error?.message || 'Unable to resend verification code.'
+      setStatus({ type: 'error', message, previewCode: null, notice: null })
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   const handleCopyPreviewCode = async () => {
@@ -210,14 +248,13 @@ export default function EmailSignInForm({ onComplete }) {
             <Label htmlFor="auth-email">Profile email</Label>
             <Input
               id="auth-email"
+              name="email"
               type="email"
               placeholder="jane@example.org"
-              {...emailForm.register('email')}
-              aria-invalid={emailForm.formState.errors.email ? 'true' : 'false'}
+              autoComplete="email"
+              aria-invalid={emailError ? 'true' : 'false'}
             />
-            {emailForm.formState.errors.email ? (
-              <p className="text-xs text-red-600">{emailForm.formState.errors.email.message}</p>
-            ) : null}
+            {emailError ? <p className="text-xs text-red-600">{emailError}</p> : null}
           </div>
           <Button type="submit" disabled={isLoading} className="w-full">
             {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
@@ -235,16 +272,15 @@ export default function EmailSignInForm({ onComplete }) {
             <Label htmlFor="auth-code">6-digit code</Label>
             <Input
               id="auth-code"
+              name="code"
               type="text"
               inputMode="numeric"
               maxLength={6}
               placeholder="Enter code"
-              {...codeForm.register('code')}
-              aria-invalid={codeForm.formState.errors.code ? 'true' : 'false'}
+              autoComplete="one-time-code"
+              aria-invalid={codeError ? 'true' : 'false'}
             />
-            {codeForm.formState.errors.code ? (
-              <p className="text-xs text-red-600">{codeForm.formState.errors.code.message}</p>
-            ) : null}
+            {codeError ? <p className="text-xs text-red-600">{codeError}</p> : null}
           </div>
           <Button type="submit" disabled={isLoading} className="w-full">
             {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}

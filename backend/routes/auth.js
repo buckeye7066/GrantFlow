@@ -41,13 +41,14 @@ function resolveJwtSecret() {
   const isProd = process.env.NODE_ENV === 'production'
 
   if (!raw) {
+    // Production safety: do not hard-exit. A missing JWT secret otherwise causes a perpetual 502 on Railway.
+    // We generate an ephemeral secret so the service can boot; all sessions will be invalidated on restart.
     if (isProd) {
       console.error(
-        'ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET). Refusing to start in production.\n' +
-          'Set a strong random secret (recommended: 32+ bytes). Example:\n' +
-          '  AUTH_JWT_SECRET="..."',
+        'ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET). Generating ephemeral secret so the service can start.\n' +
+          'Fix: set AUTH_JWT_SECRET in Railway/Vercel env vars to a strong random secret (recommended: 32+ bytes).',
       )
-      process.exit(1)
+      return crypto.randomBytes(32).toString('base64url')
     }
     console.warn('[auth] AUTH_JWT_SECRET not set; using insecure development default (DO NOT use in production).')
     return 'grantflow-dev-secret'
@@ -55,10 +56,10 @@ function resolveJwtSecret() {
 
   if (isProd && raw === 'grantflow-dev-secret') {
     console.error(
-      'ERROR: AUTH_JWT_SECRET is set to the insecure development default. Refusing to start in production.\n' +
-        'Generate a strong random secret and redeploy.',
+      'ERROR: AUTH_JWT_SECRET is set to the insecure development default. Generating ephemeral secret so the service can start.\n' +
+        'Fix: set AUTH_JWT_SECRET in Railway/Vercel env vars to a strong random secret (recommended: 32+ bytes).',
     )
-    process.exit(1)
+    return crypto.randomBytes(32).toString('base64url')
   }
 
   return raw
@@ -1659,17 +1660,14 @@ router.post('/email/verify', async (req, res) => {
   // Initialize Anya for admin users on login
   let anyaInfo = null
   try {
-    // Postgres rollout: Anya DB call sites are not yet fully async-safe.
-    if (req.db?.dialect !== 'postgres') {
-      anyaInfo = initializeAnyaForAdmin(req.db, user, activeProfileId, { uploadDir, getOpenAI })
-    }
+    anyaInfo = await initializeAnyaForAdmin(req.db, user, activeProfileId, { uploadDir, getOpenAI })
   } catch (error) {
     console.error('[auth] Failed to initialize Anya:', error)
     // Don't fail the login if Anya initialization fails
   }
 
   // Auto-trigger discovery crawlers on email login (fire and forget)
-  if (activeProfileId && req.db?.dialect !== 'postgres') {
+  if (activeProfileId) {
     triggerAutoDiscoveryCrawlers(req.db, activeProfileId, { uploadDir, getOpenAI }).catch(err => {
       console.error('[auth/email] Failed to queue auto-discovery crawlers:', err)
     })
@@ -1949,17 +1947,14 @@ router.post('/phone/verify', async (req, res) => {
   // Initialize Anya for admin users on login
   let anyaInfo = null
   try {
-    // Postgres rollout: Anya DB call sites are not yet fully async-safe.
-    if (req.db?.dialect !== 'postgres') {
-      anyaInfo = initializeAnyaForAdmin(req.db, user, activeProfileId, { uploadDir, getOpenAI })
-    }
+    anyaInfo = await initializeAnyaForAdmin(req.db, user, activeProfileId, { uploadDir, getOpenAI })
   } catch (error) {
     console.error('[auth] Failed to initialize Anya:', error)
     // Don't fail the login if Anya initialization fails
   }
 
   // Auto-trigger discovery crawlers on phone login (fire and forget)
-  if (activeProfileId && req.db?.dialect !== 'postgres') {
+  if (activeProfileId) {
     triggerAutoDiscoveryCrawlers(req.db, activeProfileId, { uploadDir, getOpenAI }).catch(err => {
       console.error('[auth/phone] Failed to queue auto-discovery crawlers:', err)
     })
@@ -2150,7 +2145,7 @@ router.get('/:provider/callback', async (req, res) => {
     }
 
     // Auto-trigger discovery crawlers on OAuth login (fire and forget)
-    if (activeProfileId && req.db?.dialect !== 'postgres') {
+    if (activeProfileId) {
       triggerAutoDiscoveryCrawlers(req.db, activeProfileId, { uploadDir, getOpenAI }).catch(err => {
         console.error(`[auth/${provider}] Failed to queue auto-discovery crawlers:`, err)
       })

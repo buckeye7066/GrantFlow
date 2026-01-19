@@ -55,8 +55,8 @@ function mergeSection(existingSection = {}, incomingSection = {}) {
   return merged
 }
 
-function upsertEnrichedSection(db, profileId, sectionKey, data) {
-  db.prepare(
+async function upsertEnrichedSection(db, profileId, sectionKey, data) {
+  await db.prepare(
     `
       INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
       VALUES (?, ?, ?, ?)
@@ -84,7 +84,7 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
   const sectionsToEnrich = Array.isArray(sectionsParam) && sectionsParam.length > 0 ? sectionsParam : ['basic_information']
   const prompt = typeof parameters.prompt === 'string' ? parameters.prompt.trim() : ''
 
-  const existingSections = db
+  const existingRows = await db
     .prepare(
       `
         SELECT section_key, data
@@ -93,10 +93,11 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
       `,
     )
     .all(profile.id)
-    .reduce((acc, row) => {
-      acc[row.section_key] = safeParseJSON(row.data, {})
-      return acc
-    }, {})
+
+  const existingSections = (existingRows || []).reduce((acc, row) => {
+    acc[row.section_key] = safeParseJSON(row.data, {})
+    return acc
+  }, {})
 
   const signalSummary = summarizeProfileSignals(
     profileContext.signals ?? buildProfileSignals({ profile, sections: profileContext.sections ?? {} }),
@@ -171,8 +172,18 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
     const data = section.data
     if (!data || typeof data !== 'object') return
 
+    // handled below (async)
+  })
+
+  for (const section of sections) {
+    if (!section || typeof section !== 'object') continue
+    const sectionKey = section.key
+    if (typeof sectionKey !== 'string' || !sectionKey) continue
+    const data = section.data
+    if (!data || typeof data !== 'object') continue
+
     const merged = mergeSection(existingSections[sectionKey], data)
-    upsertEnrichedSection(db, profile.id, sectionKey, merged)
+    await upsertEnrichedSection(db, profile.id, sectionKey, merged)
     existingSections[sectionKey] = merged
     updatedSections.push(sectionKey)
     enrichmentLog.push({
@@ -180,28 +191,15 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
       updated_fields: Object.keys(data),
       notes: section.notes ?? null,
     })
-  })
-
-  const resultMeta = {
-    sections: enrichmentLog,
-    prompt: prompt || null,
   }
 
-  db.prepare(
-    `
-      UPDATE crawler_jobs
-      SET status = 'completed',
-          completed_at = CURRENT_TIMESTAMP,
-          result_count = ?,
-          result_meta = ?,
-          error = NULL
-      WHERE id = ?
-    `,
-  ).run(updatedSections.length, JSON.stringify(resultMeta), job.id)
+  const resultMeta = { sections: enrichmentLog, prompt: prompt || null }
 
   return {
+    result_count: updatedSections.length,
+    result_meta: resultMeta,
     updated_sections: updatedSections,
-    notes: sections.map((section) => section.notes).filter(Boolean),
+    notes: sections.map((section) => section?.notes).filter(Boolean),
     log: enrichmentLog,
   }
 }
