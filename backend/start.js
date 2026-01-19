@@ -85,10 +85,17 @@ function maybeRunSqliteToPostgresMigrationInBackground() {
     )
     console.log(`[migrate] Starting SQLite→Postgres data migration from ${sqlitePath}`)
 
-    const child = spawn(process.execPath, [scriptPath, '--sqlite', sqlitePath], {
+    const assertFresh = process.env.MIGRATE_ASSERT_FRESH !== undefined ? String(process.env.MIGRATE_ASSERT_FRESH) : 'true'
+    const verifyCounts = process.env.MIGRATE_VERIFY_COUNTS !== undefined ? String(process.env.MIGRATE_VERIFY_COUNTS) : 'true'
+
+    const child = spawn(
+      process.execPath,
+      [scriptPath, '--sqlite', sqlitePath, '--assert-fresh', assertFresh, '--verify-counts', verifyCounts],
+      {
       stdio: 'inherit',
       env: process.env,
-    })
+      },
+    )
 
     child.on('exit', (code) => {
       if (code === 0) {
