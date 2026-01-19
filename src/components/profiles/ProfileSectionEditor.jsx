@@ -1130,7 +1130,8 @@ export default function ProfileSectionEditor({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !isSaving && !next && onClose()}>
-      <DialogContent className="max-w-xl">
+      {/* Keep actions visible even for long forms */}
+      <DialogContent className="max-w-xl max-h-[85vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <div className="flex items-center justify-between">
             <div className="flex-1">
@@ -1164,90 +1165,91 @@ export default function ProfileSectionEditor({
           </div>
         </DialogHeader>
 
-        {!config ? (
-          <Alert variant="default">
-            <Info className="w-4 h-4" />
-            <AlertDescription className="text-sm text-slate-600">
-              This section isn’t wired to a form yet. Close this dialog and use the “Edit section” button to update the JSON directly.
-            </AlertDescription>
-          </Alert>
-        ) : (
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {config.fields.map((field) => {
-              if (field.type === 'boolean') {
-                return (
-                  <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3" key={field.name}>
-                    <div className="space-y-1">
-                      <Label htmlFor={field.name}>{field.label}</Label>
-                      {field.description && (
-                        <p className="text-xs text-slate-500">{field.description}</p>
-                      )}
+        {/* Scrollable body (native scrollbar/slider) */}
+        <div className="flex-1 overflow-y-auto pr-1">
+          {!config ? (
+            <Alert variant="default">
+              <Info className="w-4 h-4" />
+              <AlertDescription className="text-sm text-slate-600">
+                This section isn’t wired to a form yet. Close this dialog and use the “Edit section” button to update the
+                JSON directly.
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-4">
+              {config.fields.map((field) => {
+                if (field.type === 'boolean') {
+                  return (
+                    <div
+                      className="flex items-center justify-between rounded-lg border border-slate-200 p-3"
+                      key={field.name}
+                    >
+                      <div className="space-y-1">
+                        <Label htmlFor={field.name}>{field.label}</Label>
+                        {field.description && <p className="text-xs text-slate-500">{field.description}</p>}
+                      </div>
+                      <Controller
+                        control={form.control}
+                        name={field.name}
+                        render={({ field: controllerField }) => (
+                          <Switch
+                            id={field.name}
+                            checked={Boolean(controllerField.value)}
+                            onCheckedChange={(checked) => controllerField.onChange(checked)}
+                            disabled={isSaving || aiStatus === 'loading'}
+                          />
+                        )}
+                      />
                     </div>
+                  )
+                }
+
+                // Use ProfileFieldWithAI for text fields to provide individual AI assistance
+                return (
+                  <div key={field.name}>
                     <Controller
                       control={form.control}
                       name={field.name}
                       render={({ field: controllerField }) => (
-                        <Switch
-                          id={field.name}
-                          checked={Boolean(controllerField.value)}
-                          onCheckedChange={(checked) => controllerField.onChange(checked)}
+                        <ProfileFieldWithAI
+                          field={field}
+                          value={controllerField.value}
+                          onChange={(newValue) => controllerField.onChange(newValue)}
+                          onBlur={controllerField.onBlur}
+                          name={controllerField.name}
+                          inputRef={controllerField.ref}
                           disabled={isSaving || aiStatus === 'loading'}
+                          profileId={profileId}
+                          sectionKey={sectionKey}
+                          formContext={form.getValues()}
                         />
                       )}
                     />
+                    {form.formState.errors?.[field.name] && (
+                      <p className="text-xs text-red-600 mt-1">{form.formState.errors[field.name]?.message}</p>
+                    )}
                   </div>
                 )
-              }
+              })}
+            </form>
+          )}
 
-              // Use ProfileFieldWithAI for text fields to provide individual AI assistance
-              return (
-                <div key={field.name}>
-                  <Controller
-                    control={form.control}
-                    name={field.name}
-                    render={({ field: controllerField }) => (
-                      <ProfileFieldWithAI
-                        field={field}
-                        value={controllerField.value}
-                        onChange={(newValue) => controllerField.onChange(newValue)}
-                        onBlur={controllerField.onBlur}
-                        name={controllerField.name}
-                        inputRef={controllerField.ref}
-                        disabled={isSaving || aiStatus === 'loading'}
-                        profileId={profileId}
-                        sectionKey={sectionKey}
-                        formContext={form.getValues()}
-                      />
-                    )}
-                  />
-                  {form.formState.errors?.[field.name] && (
-                    <p className="text-xs text-red-600 mt-1">
-                      {form.formState.errors[field.name]?.message}
-                    </p>
-                  )}
-                </div>
-              )
-            })}
-          </form>
-        )}
+          {aiError && (
+            <Alert variant="destructive" className="mt-4">
+              <AlertDescription className="text-sm">{aiError}</AlertDescription>
+            </Alert>
+          )}
 
-        {aiError && (
-          <Alert variant="destructive" className="mt-4">
-            <AlertDescription className="text-sm">
-              {aiError}
-            </AlertDescription>
-          </Alert>
-        )}
+          {aiStatus === 'succeeded' && (
+            <Alert variant="default" className="mt-4">
+              <AlertDescription className="text-sm text-blue-700">
+                AI suggestion applied. Review and adjust before saving.
+              </AlertDescription>
+            </Alert>
+          )}
+        </div>
 
-        {aiStatus === 'succeeded' && (
-          <Alert variant="default" className="mt-4">
-            <AlertDescription className="text-sm text-blue-700">
-              AI suggestion applied. Review and adjust before saving.
-            </AlertDescription>
-          </Alert>
-        )}
-
-        <DialogFooter className="flex items-center justify-between">
+        <DialogFooter className="flex items-center justify-between border-t border-slate-200 pt-4">
           <Button variant="ghost" onClick={onClose} disabled={isSaving}>
             Cancel
           </Button>
