@@ -27,6 +27,7 @@ import { crawlStudentGrants } from '../services/crawlers/studentGrantsCrawler.js
 import { crawlSpecialNeeds } from '../services/crawlers/specialNeedsCrawler.js';
 import { crawlItemFunding } from '../services/crawlers/itemFundingCrawler.js';
 import { crawlECFBenefits } from '../services/crawlers/ecfBenefitsCrawler.js';
+import { findDuplicateProfileGroups, mergeProfiles } from '../services/profileDedupeService.js'
 import zipcodes from 'zipcodes';
 
 const router = express.Router();
@@ -2036,5 +2037,60 @@ router.post('/crawlers/audit-live', async (req, res) => {
     return res.status(500).json({ success: false, error: error?.message || String(error) });
   }
 });
+
+/**
+ * GET /api/admin/profiles/duplicates
+ * Admin-only: list duplicate candidate profile groups (dry-run report).
+ */
+router.get('/profiles/duplicates', async (req, res) => {
+  try {
+    if (!(await ensureAdminRequest(req, res))) return;
+
+    const strategy = String(req.query?.strategy || 'exact_name')
+    const limitGroups = Math.max(1, Math.min(Number(req.query?.limitGroups) || 50, 500))
+    const minGroupSize = Math.max(2, Math.min(Number(req.query?.minGroupSize) || 2, 50))
+    const includeInactive = String(req.query?.includeInactive || '').toLowerCase() === 'true'
+
+    const report = await findDuplicateProfileGroups(req.db, { strategy, limitGroups, minGroupSize, includeInactive })
+
+    return res.json({
+      ok: true,
+      strategy,
+      limitGroups,
+      minGroupSize,
+      includeInactive,
+      groups: report.groups,
+    })
+  } catch (error) {
+    console.error('[admin/profiles/duplicates] Error:', error)
+    return res.status(500).json({ ok: false, error: error?.message || String(error) })
+  }
+})
+
+/**
+ * POST /api/admin/profiles/merge
+ * Admin-only: merge one or more "loser" profiles into a "winner" profile.
+ */
+router.post('/profiles/merge', async (req, res) => {
+  try {
+    if (!(await ensureAdminRequest(req, res))) return;
+
+    const winnerId = req.body?.winnerId
+    const loserIds = req.body?.loserIds
+    const dryRun = req.body?.dryRun !== false
+
+    const result = await mergeProfiles(req.db, {
+      winnerId,
+      loserIds,
+      dryRun,
+      actorUserId: req.user?.userId ?? null,
+    })
+
+    return res.json({ ok: true, ...result })
+  } catch (error) {
+    console.error('[admin/profiles/merge] Error:', error)
+    return res.status(500).json({ ok: false, error: error?.message || String(error) })
+  }
+})
 
 export default router;
