@@ -1,11 +1,11 @@
--- Migration 003: Add national ZIP crawl support and contact info
+-- Migration 003: Add Geo Crawl progress tracking and contact info (legacy table name: national_zip_progress)
 -- Date: 2026-01-09
 
 -- Add contact_info to funding_opportunities table
 -- Contact information stored as JSON: { name, email, phone, address, website }
 ALTER TABLE funding_opportunities ADD COLUMN contact_info TEXT DEFAULT NULL;
 
--- Create national_zip_progress table for tracking national crawl
+-- Create national_zip_progress table for tracking Geo Crawl (legacy table name)
 CREATE TABLE IF NOT EXISTS national_zip_progress (
   zip TEXT PRIMARY KEY,
   last_run_at DATETIME DEFAULT CURRENT_TIMESTAMP,

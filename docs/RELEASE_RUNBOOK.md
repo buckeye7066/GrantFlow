@@ -3,7 +3,7 @@
 ## Production Environment
 - **Frontend**: Vercel (served from `/grantflow`)
 - **Backend**: Railway (Dockerfile build + `npm start`)
-- **Database**: Postgres *or* SQLite depending on `DB_PROVIDER` (see `docs/ENVIRONMENT.md`)
+- **Database**: Postgres (Railway)
 
 ## Phase 5 Notes (Deploy sanity + rollback)
 
@@ -27,7 +27,7 @@
 - **Action**:
   - Check Railway logs for "Out of Memory" or "Circuit breaker open".
   - If a specific crawler is failing repeatedly, the circuit breaker will trip for 5 minutes.
-  - Use `POST /api/admin/national-crawl/stop` to force stop a Geo Crawl.
+  - Use the Admin UI → Geo Crawl tools to cancel/stop queued crawl jobs.
   - Manually clear the queue if needed: `DELETE FROM crawler_jobs WHERE status IN ('queued', 'running')`.
 
 ### 3. Profile Missing Sections

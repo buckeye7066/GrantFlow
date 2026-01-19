@@ -14,6 +14,42 @@ import { runNationalCrawlerV2 } from '../backend/services/nationalCrawlerV2/run.
 const projectRoot = path.resolve(process.cwd())
 const dbPath = process.env.DATABASE_URL || path.join(projectRoot, 'backend', 'data', 'grantflow.db')
 
+function normalizeSqliteValue(value) {
+  if (value === undefined) return null
+  if (typeof value === 'boolean') return value ? 1 : 0
+  if (value instanceof Date) return value.toISOString()
+  if (value && typeof value === 'object' && !Buffer.isBuffer(value)) {
+    try {
+      return JSON.stringify(value)
+    } catch {
+      return String(value)
+    }
+  }
+  return value
+}
+
+function normalizeSqliteArgs(args) {
+  if (args.length === 1 && Array.isArray(args[0])) {
+    return [args[0].map(normalizeSqliteValue)]
+  }
+  if (
+    args.length === 1 &&
+    args[0] &&
+    typeof args[0] === 'object' &&
+    !Array.isArray(args[0]) &&
+    !(args[0] instanceof Date) &&
+    !Buffer.isBuffer(args[0])
+  ) {
+    const bindings = args[0]
+    const normalized = {}
+    for (const [key, val] of Object.entries(bindings)) {
+      normalized[key] = normalizeSqliteValue(val)
+    }
+    return [normalized]
+  }
+  return args.map(normalizeSqliteValue)
+}
+
 function main() {
   const mode = 'SMOKE_MODE'
   // Smoke must be stable and use only known-200 public pages.
@@ -27,8 +63,31 @@ function main() {
     process.exit(1)
   }
 
-  const db = new Database(dbPath)
-  db.pragma('journal_mode = WAL')
+  const raw = new Database(dbPath)
+  raw.pragma('journal_mode = WAL')
+
+  // Wrap raw better-sqlite3 so call sites can pass booleans/objects safely.
+  const db = {
+    dialect: 'sqlite',
+    prepare(sql) {
+      const stmt = raw.prepare(sql)
+      return {
+        get: (...args) => stmt.get(...normalizeSqliteArgs(args)),
+        all: (...args) => stmt.all(...normalizeSqliteArgs(args)),
+        run: (...args) => stmt.run(...normalizeSqliteArgs(args)),
+      }
+    },
+    exec(sql) {
+      return raw.exec(sql)
+    },
+    transaction(fn) {
+      const wrapped = raw.transaction(fn)
+      return (...args) => wrapped(...args)
+    },
+    close() {
+      raw.close()
+    },
+  }
 
   runNationalCrawlerV2({
     db,

@@ -311,21 +311,38 @@ router.post('/', async (req, res) => {
   const profileUserId = isAdmin(user) ? (user_id || userId) : userId
 
   const profileId = crypto.randomUUID()
-  const insert = req.db.prepare(`
-    INSERT INTO profiles (id, display_name, primary_type, organization_id, user_id, created_by, status, tags)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `)
+  // Ensure every newly created profile starts with all canonical sections + canonical keys.
+  // This prevents downstream crawlers/scoring from encountering missing sections.
+  await req.db.withTransaction(async (tx) => {
+    const insert = tx.prepare(`
+      INSERT INTO profiles (id, display_name, primary_type, organization_id, user_id, created_by, status, tags)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `)
 
-  await insert.run(
-    profileId,
-    display_name,
-    primary_type ?? null,
-    organization_id ?? null,
-    profileUserId ?? null,
-    created_by ?? user?.id ?? null,
-    status,
-    JSON.stringify(tags),
-  )
+    await insert.run(
+      profileId,
+      display_name,
+      primary_type ?? null,
+      organization_id ?? null,
+      profileUserId ?? null,
+      created_by ?? user?.id ?? null,
+      status,
+      JSON.stringify(tags),
+    )
+
+    const upsertSection = tx.prepare(
+      `
+        INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(profile_id, section_key) DO NOTHING
+      `,
+    )
+
+    for (const sectionKey of supportedSectionKeys) {
+      const defaults = getDefaultSectionData(sectionKey)
+      await upsertSection.run(profileId, sectionKey, JSON.stringify(defaults ?? {}), 'system-create')
+    }
+  })
 
   await linkProfileToAdmin(req.db, profileId)
   const refreshed = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(profileId)
