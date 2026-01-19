@@ -82,16 +82,16 @@ function buildFilters(query) {
   return { clause: where.length ? `WHERE ${where.join(' AND ')}` : '', params }
 }
 
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const track = normalizeTrack(req.query.track)
     const limit = Math.min(500, Math.max(1, Number.parseInt(req.query.limit ?? 50, 10) || 50))
     const offset = Math.max(0, Number.parseInt(req.query.offset ?? 0, 10) || 0)
 
-    const fetchTrack = (t) => {
+    const fetchTrack = async (t) => {
       const table = tableForTrack(t)
       const { clause, params } = buildFilters(req.query)
-      const rows = req.db
+      const rows = await req.db
         .prepare(
           `
             SELECT *
@@ -103,7 +103,7 @@ router.get('/', (req, res) => {
           `,
         )
         .all(...params, limit, offset)
-      const total = req.db
+      const total = (await req.db
         .prepare(
           `
             SELECT COUNT(*) AS total
@@ -111,19 +111,19 @@ router.get('/', (req, res) => {
             ${clause}
           `,
         )
-        .get(...params)?.total
-      return { data: rows.map(decorate), total: total ?? rows.length }
+        .get(...params))?.total
+      return { data: (rows || []).map(decorate), total: total ?? (rows || []).length }
     }
 
     if (track) {
-      const result = fetchTrack(track)
+      const result = await fetchTrack(track)
       return res.json({ track, ...result, limit, offset })
     }
 
     // Never merge: return separate arrays.
     return res.json({
-      track_a: fetchTrack('TRACK_A'),
-      track_b: fetchTrack('TRACK_B'),
+      track_a: await fetchTrack('TRACK_A'),
+      track_b: await fetchTrack('TRACK_B'),
       limit,
       offset,
     })
@@ -133,15 +133,15 @@ router.get('/', (req, res) => {
   }
 })
 
-router.get('/:track/:programId', (req, res) => {
+router.get('/:track/:programId', async (req, res) => {
   try {
     const track = normalizeTrack(req.params.track)
     if (!track) return res.status(400).json({ error: 'Invalid track' })
     const table = tableForTrack(track)
-    const row = req.db.prepare(`SELECT * FROM ${table} WHERE program_id = ?`).get(req.params.programId)
+    const row = await req.db.prepare(`SELECT * FROM ${table} WHERE program_id = ?`).get(req.params.programId)
     if (!row) return res.status(404).json({ error: 'Program not found' })
 
-    const versions = req.db
+    const versions = await req.db
       .prepare(
         `
           SELECT *

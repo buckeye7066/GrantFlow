@@ -25,7 +25,41 @@ function getOpenAIClient() {
   return cachedOpenAI
 }
 
+let cachedAnthropic = null
+const anthropicBreaker = createCircuitBreaker({
+  name: 'anya-anthropic',
+  failureThreshold: Number(process.env.ANYA_ANTHROPIC_FAILURE_THRESHOLD || 3),
+  cooldownMs: Number(process.env.ANYA_ANTHROPIC_COOLDOWN_MS || 30_000),
+})
+
+async function getAnthropicClient() {
+  if (cachedAnthropic) return cachedAnthropic
+  const key = String(process.env.ANTHROPIC_API_KEY || '').trim()
+  if (!key) return null
+  const Anthropic = (await import('@anthropic-ai/sdk')).default
+  cachedAnthropic = new Anthropic({
+    apiKey: key,
+    timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 20_000),
+    maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
+  })
+  return cachedAnthropic
+}
+
+function extractAnthropicText(response) {
+  const parts = Array.isArray(response?.content) ? response.content : []
+  return parts
+    .map((part) => {
+      if (typeof part?.text === 'string') return part.text
+      if (typeof part === 'string') return part
+      return ''
+    })
+    .filter(Boolean)
+    .join('\n')
+    .trim()
+}
+
 const DEFAULT_ASSISTANT_MODEL = process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini'
+const DEFAULT_ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307'
 
 let cachedAnthropic = null
 async function getAnthropicClient() {
@@ -791,27 +825,9 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
   try {
     openai = getOpenAIClient()
   } catch (error) {
-    console.warn('[anya] OpenAI client unavailable; providing guided assistance instead:', error.message)
-    
-    // Provide helpful responses without AI with personalization
-    const lowerContent = trimmed.toLowerCase()
-    
-    if (lowerContent.includes('grant') || lowerContent.includes('funding')) {
-      return `Hi ${userName}! I can help you discover grants! Try:\n• Click 'Discover Grants' to browse opportunities\n• Use 'Smart Matcher' for AI-powered recommendations\n• Check 'Pipeline' to track your applications`
-    }
-    
-    if (lowerContent.includes('profile') || lowerContent.includes('organization')) {
-      return `Hi ${userName}! To manage your profile:\n• Go to 'My Profiles' to view and edit profile details\n• Upload documents in the profile section\n• Set your organization type and focus areas`
-    }
-    
-    return [
-      `Hi ${userName}! I can help guide you through GrantFlow! Here are key features:`,
-      "• **Discover Grants** - Find funding opportunities",
-      "• **Smart Matcher** - Get personalized recommendations", 
-      "• **Pipeline** - Track your applications",
-      "",
-      "What would you like to work on?"
-    ].join('\n')
+    // Don't hard-fail: if OpenAI is missing/invalid, we will fall back to Anthropic.
+    console.warn('[anya] OpenAI client unavailable; will try Anthropic and deterministic fallbacks:', error?.message || error)
+    openai = null
   }
 
   let historyMessages = null
@@ -916,38 +932,40 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
 
   const systemPrompt = systemPromptParts.join('\n')
 
-  try {
-    console.log('[Anya] Calling OpenAI API with model:', DEFAULT_ASSISTANT_MODEL)
-    const response = await openAIBreaker.exec(
-      async () =>
-        await openai.chat.completions.create({
-          model: DEFAULT_ASSISTANT_MODEL,
-          messages: [{ role: 'system', content: systemPrompt }, ...conversationMessages],
-          temperature: 0.3,
-          max_tokens: 1000,
-        }),
-      {
-        shouldTrip: (err) => {
-          const summary = summarizeOpenAIError(err)
-          if (summary.isAuth || summary.isRateLimit) return true
-          const status = summary.status
-          return status == null || status >= 500
+  // 1) Try OpenAI first (if configured)
+  if (openai) {
+    try {
+      console.log('[Anya] Calling OpenAI API with model:', DEFAULT_ASSISTANT_MODEL)
+      const response = await openAIBreaker.exec(
+        async () =>
+          await openai.chat.completions.create({
+            model: DEFAULT_ASSISTANT_MODEL,
+            messages: [{ role: 'system', content: systemPrompt }, ...conversationMessages],
+            temperature: 0.3,
+            max_tokens: 1000,
+          }),
+        {
+          shouldTrip: (err) => {
+            const summary = summarizeOpenAIError(err)
+            if (summary.isAuth || summary.isRateLimit) return true
+            const status = summary.status
+            return status == null || status >= 500
+          },
         },
-      },
-    )
+      )
 
-    const reply = response.choices[0]?.message?.content?.trim()
-    if (reply) {
-      console.log('[Anya] OpenAI API response received successfully')
-      return reply
-    }
-  } catch (error) {
-    const summary = summarizeOpenAIError(error)
-    console.error('[Anya] OpenAI API Error:', {
-      status: summary.status,
-      message: summary.message,
-      breaker: openAIBreaker.snapshot(),
-    })
+      const reply = response.choices[0]?.message?.content?.trim()
+      if (reply) {
+        console.log('[Anya] OpenAI API response received successfully')
+        return reply
+      }
+    } catch (error) {
+      const summary = summarizeOpenAIError(error)
+      console.error('[Anya] OpenAI API Error:', {
+        status: summary.status,
+        message: summary.message,
+        breaker: openAIBreaker.snapshot(),
+      })
 
     if (error?.code === 'CIRCUIT_OPEN') {
       return "The AI service is temporarily overloaded. Give me 30 seconds and try again."
@@ -1001,9 +1019,27 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
 
       return "The AI service is rate-limiting us right now. Please try again shortly."
     }
+  } catch (error) {
+    console.error('[Anya] Anthropic API Error:', error?.message || error)
   }
 
-  return "I'm having trouble reaching the AI service right now. Please try again in a moment."
+  // 3) Deterministic safe fallback (no LLM)
+  if (lowerContent.includes('grant') || lowerContent.includes('funding')) {
+    return `Hi ${userName}! I can help you discover grants. Try:\n• Click 'Discover Grants' to browse opportunities\n• Use 'Smart Matcher' for recommendations\n• Check 'Pipeline' to track your applications`
+  }
+
+  if (lowerContent.includes('profile') || lowerContent.includes('organization')) {
+    return `Hi ${userName}! To manage your profile:\n• Go to 'My Profiles' to view and edit profile details\n• Upload documents in the profile section\n• Set your organization type and focus areas`
+  }
+
+  return [
+    `Hi ${userName}! I can help guide you through GrantFlow. Here are key features:`,
+    "• **Discover Grants** - Find funding opportunities",
+    "• **Smart Matcher** - Get personalized recommendations",
+    "• **Pipeline** - Track your applications",
+    "",
+    "What would you like to work on?",
+  ].join('\n')
 }
 
 export function listTools(user) {

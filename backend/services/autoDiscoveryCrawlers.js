@@ -1,4 +1,5 @@
 import { dispatchCrawlerJob } from './crawlerDispatcher.js'
+import { randomUUID } from 'crypto'
 
 /**
  * Check if a profile has student indicators
@@ -51,7 +52,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
       return
     }
 
-    const profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
+    const profile = await db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
     if (!profile) {
       console.warn('[auto-discovery] Profile not found:', profileId)
       return
@@ -62,6 +63,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
     // 1. Local crawler (profile zip + 50 mile radius)
     // Always queue local crawler for personalized geographic opportunities
     jobs.push({
+      id: randomUUID(),
       type: 'local',
       profile_id: profileId,
       parameters: { radius: 50 }
@@ -71,6 +73,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
     const isStudent = checkStudentIndicators(profile)
     if (isStudent) {
       jobs.push({
+        id: randomUUID(),
         type: 'scholarship',
         profile_id: profileId,
         parameters: {}
@@ -80,6 +83,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
     // 3. Comprehensive crawler (nationwide, all templates)
     // No limit_per_zip - process ALL templates
     jobs.push({
+      id: randomUUID(),
       type: 'comprehensive',
       profile_id: profileId,
       parameters: {
@@ -89,37 +93,25 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
     
     // Insert all jobs into database
     const insertStmt = db.prepare(`
-      INSERT INTO crawler_jobs (type, status, profile_id, parameters, requested_by)
-      VALUES (?, 'queued', ?, ?, 'auto-discovery')
+      INSERT INTO crawler_jobs (id, type, status, profile_id, parameters, requested_by)
+      VALUES (?, ?, 'queued', ?, ?, 'auto-discovery')
     `)
-    
-    const jobIds = []
-    jobs.forEach(job => {
-      const result = insertStmt.run(job.type, job.profile_id, JSON.stringify(job.parameters))
-      jobIds.push(result.lastInsertRowid)
-    })
-    
+
+    for (const job of jobs) {
+      await insertStmt.run(job.id, job.type, job.profile_id, JSON.stringify(job.parameters))
+    }
+
     // Dispatch jobs asynchronously (fire and forget)
-    // Query only the fields needed for dispatch
-    const queuedJobs = db.prepare(`
-      SELECT id, type, profile_id, parameters
-      FROM crawler_jobs 
-      WHERE profile_id = ? AND status = 'queued' AND requested_by = 'auto-discovery'
-      ORDER BY created_at DESC
-      LIMIT ?
-    `).all(profileId, jobs.length)
-    
-    // Dispatch each job asynchronously
-    queuedJobs.forEach(job => {
-      dispatchCrawlerJob({ 
-        db, 
-        jobId: job.id, 
+    for (const job of jobs) {
+      dispatchCrawlerJob({
+        db,
+        jobId: job.id,
         uploadDir: options.uploadDir,
-        getOpenAI: options.getOpenAI
-      }).catch(err => {
+        getOpenAI: options.getOpenAI,
+      }).catch((err) => {
         console.error(`[auto-discovery] Job ${job.id} dispatch failed:`, err)
       })
-    })
+    }
   } catch (error) {
     console.error('[auto-discovery] Failed to trigger crawlers:', error)
     // Don't throw - we don't want to block login if auto-discovery fails

@@ -45,6 +45,15 @@ function normalizeProvider(raw) {
 }
 
 function detectProvider() {
+  // Railway production invariant:
+  // If Railway provides a Postgres DATABASE_URL, always prefer Postgres even if DB_PROVIDER is stale/mis-set.
+  const isRailway =
+    Boolean(process.env.RAILWAY_ENVIRONMENT) ||
+    Boolean(process.env.RAILWAY_PROJECT_ID) ||
+    Boolean(process.env.RAILWAY_SERVICE_ID)
+  const inferredUrl = inferPostgresUrlFromEnv()
+  if (isRailway && inferredUrl) return 'postgres'
+
   const explicit =
     normalizeProvider(process.env.DB_PROVIDER) ||
     normalizeProvider(process.env.DB_DIALECT);
@@ -221,6 +230,15 @@ function normalizeSqliteValue(value) {
   if (value === undefined) return null
   if (typeof value === 'boolean') return value ? 1 : 0
   if (value instanceof Date) return value.toISOString()
+  // better-sqlite3 cannot bind objects/arrays; stringify for TEXT/JSON columns.
+  // (Buffers are handled by SQLite directly; Dates handled above.)
+  if (value && typeof value === 'object' && !Buffer.isBuffer(value)) {
+    try {
+      return JSON.stringify(value)
+    } catch {
+      return String(value)
+    }
+  }
   return value
 }
 
@@ -516,8 +534,6 @@ export function getDb() {
           'or set PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE (Railway-style).',
       )
     }
-    singleton = new PostgresDb(url);
-    return singleton;
   }
 
   // sqlite fallback (default)
