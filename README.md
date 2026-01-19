@@ -215,17 +215,6 @@ Refer to the QA checklist in [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_RE
 See `package.json` for the full script catalogue.
 
 ---
-
-## Geo Crawl (Canonical)
-
-Geo Crawl is the canonical crawler surfaced in the Admin UI. For a deterministic, CI-friendly validation run:
-
-```bash
-npm run crawler:smoke
-```
-
-This writes artifacts to `artifacts/crawler/YYYY-MM-DD/` and must be **100% successful** in smoke mode.
-
 ---
 
 ## Crawler Matrix Test
@@ -284,7 +273,7 @@ GrantFlow enforces role-based access control for profile management.
 - ✅ View ALL profiles in the system
 - ✅ Create profiles for any user
 - ✅ Access any profile details
-- ✅ Run Geo Crawl (admin tools)
+- ✅ Run Geo Crawl (admin-only)
 - ✅ Access admin endpoints
 
 ### Enduser
@@ -294,7 +283,7 @@ GrantFlow enforces role-based access control for profile management.
 - ✅ Create profiles for themselves only
 - ✅ Access only their own profile details
 - ❌ Cannot see other users' profiles
-- ❌ Cannot run Geo Crawl admin tools
+- ❌ Cannot run Geo Crawl
 - ❌ Cannot access admin endpoints
 
 ### API Endpoints
@@ -331,7 +320,7 @@ All access control is enforced server-side. UI hints are NOT sufficient - the ba
 ## Support & Maintenance
 
 - Monitor OpenAI and Twilio usage; set billing caps and alerts.
-- Schedule backups of `grantflow.db` and `/uploads` from the Railway volume.
+- Schedule backups of Postgres (Railway) and `/uploads` from the Railway volume.
 - Keep OAuth redirect URIs in each provider dashboard synchronized with production (`https://app.axiombiolabs.org/grantflow/api/auth/<provider>/callback`).
 - Review crawler logs regularly to ensure data sources remain operational.
 - Update data source configurations if APIs change (see `docs/DATA_SOURCES.md`).
@@ -820,6 +809,69 @@ GrantFlow uses **only** legitimate, publicly accessible data sources with proper
 3. **TOS Compliance**: Review each source's terms of service before high-volume use
 4. **No Scraping**: Never screen-scrape Benefits.gov or state sites without permission
 5. **API Registration**: Register for required API keys and monitor usage limits
+
+---
+
+## 🗺️ Geo Crawl ZIP Discovery Design
+
+Geo Crawl uses ZIP-scoped discovery to populate the opportunity catalog by geography.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│ Geo Crawl ZIP Discovery                              │
+│                                                      │
+│  1. Load all US ZIP codes                           │
+│  2. Process in batches (100 per batch)              │
+│  3. For each ZIP, find ≥3 funding sources           │
+│  4. Classify: OPPORTUNITY → PROGRAM → DIRECTORY     │
+│  5. Store evidence URL + verification timestamp     │
+│  6. Checkpoint every 500 ZIPs (resumable)           │
+└─────────────────────────────────────────────────────┘
+```
+
+### Fallback Logic
+
+For each ZIP code, attempt to find sources in this priority order:
+
+1. **OPPORTUNITY** (best): Active federal/state grants with deadlines
+2. **PROGRAM** (good): Standing programs like Medicaid, SNAP
+3. **DIRECTORY** (fallback): State portals, agency listings
+
+If fewer than 3 sources found, record reason in logs.
+
+### Database Schema
+
+```sql
+CREATE TABLE zip_funding_sources (
+  id TEXT PRIMARY KEY,
+  created_at DATETIME,
+  zip_code TEXT NOT NULL,
+  source_name TEXT NOT NULL,
+  source_type TEXT CHECK(source_type IN ('OPPORTUNITY', 'PROGRAM', 'DIRECTORY')),
+  evidence_url TEXT,
+  evidence_title TEXT,
+  last_verified_at DATETIME,
+  number_of_opportunities_found INTEGER,
+  metadata TEXT -- JSON: sponsor, deadline, etc.
+);
+```
+
+### Usage
+
+```javascript
+// Admin UI triggers Geo Crawl via:
+// - POST /api/admin/geo/crawl/start
+// - GET  /api/admin/geo/crawl/status
+```
+
+### Performance
+
+- **Estimated Time**: ~48-72 hours for full crawl (with rate limiting)
+- **Resumability**: Checkpoints every 500 ZIPs
+- **Rate Limiting**: 2 seconds between batches, 100ms between ZIPs
+- **Concurrency**: Processes batches sequentially to avoid overwhelming APIs
 
 ---
 

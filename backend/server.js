@@ -948,8 +948,13 @@ app.get('/health', async (req, res) => {
   }
   
   // Check if OpenAI API key is configured
-  health.dependencies.openai = process.env.OPENAI_API_KEY ? 'configured' : 'not configured';
-  health.dependencies.anthropic = process.env.ANTHROPIC_API_KEY ? 'configured' : 'not configured';
+  const hasOpenAIKey = Boolean(String(process.env.OPENAI_API_KEY || '').trim())
+  const hasAnthropicKey = Boolean(String(process.env.ANTHROPIC_API_KEY || '').trim())
+  health.dependencies.openai = hasOpenAIKey
+    ? 'configured'
+    : hasAnthropicKey
+      ? 'fallback_anthropic_configured'
+      : 'not configured';
   
   const statusCode = health.status === 'healthy' ? 200 : 503;
   res.status(statusCode).json(health);
