@@ -3,11 +3,11 @@ import crypto from 'crypto'
 import rateLimit from 'express-rate-limit'
 import jwt from 'jsonwebtoken'
 import twilio from 'twilio'
-import OpenAI from 'openai'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { initializeAnyaForAdmin } from '../services/anyaLoginTrigger.js'
 import { recordClientSignInEvent } from '../services/adminLoginEventStore.js'
+import { getOpenAIOptional } from '../utils/aiProviders.js'
 
 // Import email service (with fallback if main service fails to load)
 import { sendVerificationEmail as mainSendEmail, sendAuthAttemptNotification as mainAuthNotify } from '../services/email.js'
@@ -28,12 +28,12 @@ const uploadDir = join(__dirname, '..', 'uploads')
 const router = express.Router()
 
 function getOpenAI() {
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) {
-    console.warn('[auth] OPENAI_API_KEY not set, crawler dispatch may fail')
+  const openai = getOpenAIOptional()
+  if (!openai) {
+    console.warn('[auth] OpenAI not configured; AI-backed crawlers will fall back when possible')
     return null
   }
-  return new OpenAI({ apiKey })
+  return openai
 }
 
 function resolveJwtSecret() {

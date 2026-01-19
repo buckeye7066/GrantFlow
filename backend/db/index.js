@@ -49,6 +49,18 @@ function isProd() {
   return String(process.env.NODE_ENV || '').toLowerCase() === 'production';
 }
 
+function isRailwayRuntime() {
+  // Railway sets a variety of env vars; we treat any of these as a strong signal.
+  return Boolean(
+    process.env.RAILWAY_PROJECT_ID ||
+      process.env.RAILWAY_SERVICE_ID ||
+      process.env.RAILWAY_ENVIRONMENT ||
+      process.env.RAILWAY_STATIC_URL ||
+      process.env.RAILWAY_GIT_COMMIT_SHA ||
+      process.env.RAILWAY_DEPLOYMENT_ID,
+  );
+}
+
 function looksLikeRailwayVolumePath(p) {
   // Railway persistent volumes are commonly mounted at /mnt/data
   return typeof p === 'string' && p.replace(/\\/g, '/').startsWith('/mnt/data/');
@@ -484,6 +496,15 @@ export function getDb() {
   }
 
   // sqlite fallback (default)
+  if (isProd() && isRailwayRuntime()) {
+    // Production invariant: Railway deployments must use Postgres, not SQLite.
+    // SQLite volumes can work, but they are too easy to misconfigure and silently lose data on redeploy.
+    throw new Error(
+      '[db] Refusing to start on Railway production with SQLite.\n' +
+        'Configure a Railway Postgres plugin and set DATABASE_URL (postgres://...), or set DB_PROVIDER=postgres.',
+    );
+  }
+
   const dataDir = join(__dirname, '..', 'data');
   if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 

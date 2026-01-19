@@ -1,6 +1,6 @@
 import { buildProfileSignals, summarizeProfileSignals } from './profileHelpers.js'
-import { extractCompletionText } from '../utils/openai.js'
 import { safeParseJSON } from '../utils/safeJson.js'
+import { invokeJsonWithFallback } from '../utils/aiProviders.js'
 
 function mergeValues(existingValue, incomingValue) {
   if (incomingValue === undefined || incomingValue === null) {
@@ -120,65 +120,43 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
       'Enrich these sections with factual, structured data. Never fabricate financials or sensitive personal identifiers.',
   }
 
-  // Validate getOpenAI function exists
-  if (!getOpenAI || typeof getOpenAI !== 'function') {
-    throw new Error('getOpenAI function is required')
+  let openai = null
+  try {
+    openai = typeof getOpenAI === 'function' ? getOpenAI() : null
+  } catch {
+    openai = null
   }
 
-  const openai = getOpenAI()
+  const result = await invokeJsonWithFallback({
+    openai,
+    system:
+      'You are Anya, the GrantFlow enrichment assistant. Respond with JSON shaped as { "sections": [ { "key": string, "data": object, "notes": string? } ] }. Only include fields you can support with evidence.',
+    prompt: JSON.stringify(payload, null, 2),
+    temperature: 0.1,
+    maxTokens: 1800,
+    openaiModel: 'gpt-4o-mini',
+  })
 
-  let completion
-  try {
-    completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      temperature: 0.1,
-      response_format: { type: 'json_object' },
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You are Anya, the GrantFlow enrichment assistant. Respond with JSON shaped as { "sections": [ { "key": string, "data": object, "notes": string? } ] }. Only include fields you can support with evidence.',
-        },
-        {
-          role: 'user',
-          content: JSON.stringify(payload, null, 2),
-        },
-      ],
-    })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
+  if (!result.ok || !result.json) {
+    const warning =
+      'AI enrichment unavailable (OpenAI invalid/missing and no Anthropic fallback configured).'
     db.prepare(
       `
         UPDATE crawler_jobs
-        SET status = 'failed',
+        SET status = 'completed',
             completed_at = CURRENT_TIMESTAMP,
+            result_count = 0,
             result_meta = ?,
-            error = ?
+            error = NULL
         WHERE id = ?
       `,
-    ).run(JSON.stringify({ error: message }), message, job.id)
-    throw error
+    ).run(JSON.stringify({ warning, provider: result.provider }), job.id)
+    return { updated_sections: [], notes: [warning], log: [] }
   }
 
-  const content = extractCompletionText(completion) || '{}'
-  let parsed = {}
-  try {
-    parsed = safeParseJSON(content, {})
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error('Invalid parsed JSON - expected object')
-    }
-  } catch (error) {
-    db.prepare(
-      `
-        UPDATE crawler_jobs
-        SET status = 'failed',
-            completed_at = CURRENT_TIMESTAMP,
-            result_meta = ?,
-            error = 'Invalid JSON returned from enrichment model'
-        WHERE id = ?
-      `,
-    ).run(JSON.stringify({ error: 'Invalid JSON returned from enrichment model' }), job.id)
-    throw new Error('Profile enrichment response was not valid JSON')
+  const parsed = result.json
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Profile enrichment response was not a JSON object')
   }
 
   const sections = Array.isArray(parsed.sections) ? parsed.sections : []
