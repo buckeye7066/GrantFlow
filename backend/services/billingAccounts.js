@@ -225,7 +225,7 @@ async function seedBillingTiersIfMissing(db) {
           `
 
     const insert = db.prepare(insertSql)
-    const toDbBool = (value) => (db?.dialect === 'postgres' ? Boolean(value) : Boolean(value) ? 1 : 0)
+    const toDbBool = (value) => (db?.dialect === 'postgres' ? value : value ? 1 : 0)
 
     // Product tiers (existing UI expectations)
     await insert.run(

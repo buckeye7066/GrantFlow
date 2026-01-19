@@ -298,6 +298,15 @@ CREATE TABLE IF NOT EXISTS users (
   metadata TEXT
 );
 
+-- Many-to-many user ↔ organization membership (used by admin tooling and access control).
+CREATE TABLE IF NOT EXISTS user_organizations (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, organization_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_organizations_org ON user_organizations(organization_id);
+
 CREATE TABLE IF NOT EXISTS user_credentials (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
