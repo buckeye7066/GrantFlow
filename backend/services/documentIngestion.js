@@ -2,6 +2,7 @@ import { buildProfileSectionPrompt } from '../prompts/profileSections.js'
 import { extractCompletionText } from '../utils/openai.js'
 import { extractTextFromFile } from './documentTextExtraction.js'
 import { summarizeOpenAIError } from '../utils/openaiClient.js'
+import { invokeJsonWithFallback } from '../utils/aiProviders.js'
 import { promises as fsp } from 'node:fs'
 import { buildFallbackDocumentSummary, applyFallbackUniversityUpdates } from './documentFallbackParser.js'
 import { classifyUniversityApplicationForDocument, loadUniversityApplicationsForProfile } from './universityDocumentClassifier.js'
@@ -450,9 +451,10 @@ export async function processDocumentIngestionJob({
     }
 
     let openAIWarning = null
+    const hasAnyAiProvider = Boolean(openai || process.env.ANTHROPIC_API_KEY)
 
     for (const sectionKey of TARGET_SECTIONS) {
-      if (!openai) break
+      if (!hasAnyAiProvider) break
       const promptPayload = buildProfileSectionPrompt(sectionKey, {
         profile,
         sections,
@@ -462,26 +464,31 @@ export async function processDocumentIngestionJob({
       if (!promptPayload) continue
 
       try {
-        const completion = await openai.chat.completions.create({
-          model: 'gpt-4o-mini',
+        const result = await invokeJsonWithFallback({
+          openai,
+          system: 'You are an expert data extraction assistant. Respond with valid JSON only.',
+          prompt: promptPayload.prompt,
           temperature: 0.1,
-          response_format: { type: 'json_object' },
-          messages: [
-            {
-              role: 'system',
-              content: 'You are an expert data extraction assistant. Respond with valid JSON only.',
-            },
-            { role: 'user', content: promptPayload.prompt },
-          ],
+          maxTokens: 1200,
+          openaiModel: 'gpt-4o-mini',
         })
 
-        const raw = extractCompletionText(completion) || '{}'
-        let suggestion = {}
-        try {
-          suggestion = JSON.parse(raw)
-        } catch {
+        if (!result.ok || !result.json) {
+          const openaiAuth = result?.openaiError?.isAuth
+          const errorMessage =
+            (result?.openaiError?.message || result?.anthropicError?.message || result?.error?.message || 'AI parsing failed')
+          aiSectionsLog[sectionKey] = { error: errorMessage, provider: result?.provider ?? 'fallback' }
+          if (openaiAuth) {
+            openAIWarning = result.openaiError.message
+            aiSectionsLog._openai_auth_error = result.openaiError.message
+          }
+          // Stop trying AI if both providers are failing; deterministic fallback continues below.
+          if (!openai && !process.env.ANTHROPIC_API_KEY) break
+          if (result?.anthropicError) break
           continue
         }
+
+        const suggestion = result.json
 
         const existing = sections[sectionKey] ?? {}
         const { data: merged, updatedFields } = mergeSectionData(existing, suggestion)
@@ -498,20 +505,18 @@ export async function processDocumentIngestionJob({
         aiSectionsLog[sectionKey] = {
           suggestion,
           updated: Array.from(updatedFields),
+          provider: result.provider,
         }
       } catch (error) {
         const summary = summarizeOpenAIError(error)
         console.error(`Failed to enrich section ${sectionKey}`, summary)
-
-        // If the key is invalid (or access is forbidden), stop AI parsing.
-        // IMPORTANT: do NOT mark the document failed — we still may have extracted useful structured
-        // fields via deterministic heuristics.
         if (summary.isAuth) {
           openAIWarning = summary.message
           aiSectionsLog._openai_auth_error = summary.message
           openai = null
-          break
         }
+        // If AI is unstable, stop looping to avoid repeated failures.
+        break
       }
     }
 

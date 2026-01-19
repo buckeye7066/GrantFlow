@@ -215,66 +215,6 @@ Refer to the QA checklist in [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_RE
 See `package.json` for the full script catalogue.
 
 ---
-
-## National Crawl
-
-The National ZIP Crawl feature enables comprehensive funding source discovery across all ~43,859 US ZIP codes.
-
-### How to Run
-
-**Start a national crawl (Admin only):**
-
-```bash
-POST /api/admin/national-crawl/start
-{
-  "batch_size": 50,
-  "min_sources_per_zip": 3
-}
-```
-
-**Monitor progress:**
-
-```bash
-GET /api/admin/national-crawl/status
-```
-
-**Stop a running crawl:**
-
-```bash
-POST /api/admin/national-crawl/stop
-```
-
-### Features
-
-- **Batch Processing:** Processes ZIPs in configurable batches (default: 50)
-- **Checkpointing:** Saves progress after every batch to `national_zip_progress` table
-- **Resumable:** If interrupted, automatically resumes from last checkpoint
-- **Rate Limited:** Respects upstream API limits (configurable delay between requests)
-- **Memory Safe:** Processes in batches to avoid memory accumulation
-- **Real Data Only:** Uses Grants.gov API, state portals, and foundation locators
-
-### Data Sources
-
-The national crawl integrates with multiple real data sources:
-- **Grants.gov API** - Federal grant opportunities
-- **State Grant Portals** - State-specific funding (OH, CA, TX, NY, FL configured)
-- **Foundation Locator** - Community foundation grants
-
-See [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md) for complete source documentation.
-
-### Monitoring
-
-Track crawl progress in the database:
-
-```sql
-SELECT 
-  COUNT(*) as total_zips,
-  SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
-  SUM(sources_found) as total_sources,
-  AVG(sources_found) as avg_per_zip
-FROM national_zip_progress;
-```
-
 ---
 
 ## Crawler Matrix Test
@@ -333,7 +273,7 @@ GrantFlow enforces role-based access control for profile management.
 - ✅ View ALL profiles in the system
 - ✅ Create profiles for any user
 - ✅ Access any profile details
-- ✅ Run national crawls
+- ✅ Run Geo Crawl (admin-only)
 - ✅ Access admin endpoints
 
 ### Enduser
@@ -343,7 +283,7 @@ GrantFlow enforces role-based access control for profile management.
 - ✅ Create profiles for themselves only
 - ✅ Access only their own profile details
 - ❌ Cannot see other users' profiles
-- ❌ Cannot run national crawls
+- ❌ Cannot run Geo Crawl
 - ❌ Cannot access admin endpoints
 
 ### API Endpoints
@@ -380,7 +320,7 @@ All access control is enforced server-side. UI hints are NOT sufficient - the ba
 ## Support & Maintenance
 
 - Monitor OpenAI and Twilio usage; set billing caps and alerts.
-- Schedule backups of `grantflow.db` and `/uploads` from the Railway volume.
+- Schedule backups of Postgres (Railway) and `/uploads` from the Railway volume.
 - Keep OAuth redirect URIs in each provider dashboard synchronized with production (`https://app.axiombiolabs.org/grantflow/api/auth/<provider>/callback`).
 - Review crawler logs regularly to ensure data sources remain operational.
 - Update data source configurations if APIs change (see `docs/DATA_SOURCES.md`).
@@ -872,15 +812,15 @@ GrantFlow uses **only** legitimate, publicly accessible data sources with proper
 
 ---
 
-## 🗺️ National ZIP Crawler Design
+## 🗺️ Geo Crawl ZIP Discovery Design
 
-The National ZIP Crawler processes all ~43,859 US ZIP codes to ensure comprehensive coverage:
+Geo Crawl uses ZIP-scoped discovery to populate the opportunity catalog by geography.
 
 ### Architecture
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│ National ZIP Crawler                                 │
+│ Geo Crawl ZIP Discovery                              │
 │                                                      │
 │  1. Load all US ZIP codes                           │
 │  2. Process in batches (100 per batch)              │
@@ -921,17 +861,9 @@ CREATE TABLE zip_funding_sources (
 ### Usage
 
 ```javascript
-import { startNationalCrawl, resumeCrawl, getCrawlStatus } from './backend/services/nationalZipCrawler.js'
-
-// Start new crawl
-await startNationalCrawl(db)
-
-// Resume from checkpoint
-await resumeCrawl(db)
-
-// Check status
-const status = getCrawlStatus()
-console.log(`Progress: ${status.progress}`)
+// Admin UI triggers Geo Crawl via:
+// - POST /api/admin/geo/crawl/start
+// - GET  /api/admin/geo/crawl/status
 ```
 
 ### Performance
