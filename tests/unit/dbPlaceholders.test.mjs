@@ -9,9 +9,42 @@ function qmarkToDollarPlaceholders(sql) {
   let idx = 0
   let inSingle = false
   let inDouble = false
+  let inLineComment = false
+  let inBlockComment = false
 
   for (let i = 0; i < sql.length; i++) {
     const ch = sql[i]
+
+    if (inLineComment) {
+      out += ch
+      if (ch === '\n') inLineComment = false
+      continue
+    }
+
+    if (inBlockComment) {
+      out += ch
+      if (ch === '*' && sql[i + 1] === '/') {
+        out += '/'
+        i++
+        inBlockComment = false
+      }
+      continue
+    }
+
+    if (!inSingle && !inDouble) {
+      if (ch === '-' && sql[i + 1] === '-') {
+        out += '--'
+        i++
+        inLineComment = true
+        continue
+      }
+      if (ch === '/' && sql[i + 1] === '*') {
+        out += '/*'
+        i++
+        inBlockComment = true
+        continue
+      }
+    }
 
     if (ch === "'" && !inDouble) {
       if (inSingle && sql[i + 1] === "'") {
@@ -99,6 +132,24 @@ test('Placeholder conversion: handle escaped quotes', () => {
   
   assert.equal(result.text, "INSERT INTO test (text) VALUES ('It''s a test?'), ($1)")
   assert.equal(result.count, 1)
+})
+
+test('Placeholder conversion: ignore ? inside SQL comments (line + block)', () => {
+  const sql = `
+    UPDATE crawler_jobs
+    SET status = 'completed',
+        -- IMPORTANT: "CASE WHEN ? IS NULL" should not consume a placeholder
+        result_count = COALESCE(?, result_count),
+        /* also ignore ? in block comments like "??" */
+        result_meta = COALESCE(?, result_meta)
+    WHERE id = ?
+  `
+  const result = qmarkToDollarPlaceholders(sql)
+
+  assert.equal(result.count, 3)
+  assert.ok(result.text.includes('COALESCE($1, result_count)'))
+  assert.ok(result.text.includes('COALESCE($2, result_meta)'))
+  assert.ok(result.text.includes('WHERE id = $3'))
 })
 
 test('Placeholder conversion: complex query with JSON', () => {
