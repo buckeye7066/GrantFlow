@@ -77,17 +77,21 @@ export async function sendVerificationEmail(email, code) {
   
   if (!client) {
     console.warn('[email] Email service not configured. RESEND_API_KEY is missing from environment variables.')
-    console.warn('[email] Code for', email, ':', code)
+    // Never log OTP codes in production logs.
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn('[email] Code for', email, ':', code)
+    }
     // Return false to indicate email wasn't sent, allowing fallback to preview code
     return false
   }
 
   try {
+    const timeoutMs = Number(process.env.AUTH_EMAIL_SEND_TIMEOUT_MS || 15000)
     // Add a timeout wrapper to prevent hanging
     const sendWithTimeout = new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
-        reject(new Error('Email send timeout after 5 seconds'))
-      }, 5000) // 5 second timeout
+        reject(new Error(`Email send timeout after ${timeoutMs}ms`))
+      }, Math.max(1000, timeoutMs))
       
       client.emails.send({
         from: FROM_EMAIL,

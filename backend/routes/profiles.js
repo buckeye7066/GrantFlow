@@ -614,22 +614,34 @@ router.delete('/:id', async (req, res) => {
     await req.db.transaction(async (tx) => {
       try {
         await tx.prepare('UPDATE documents SET profile_id = NULL WHERE profile_id = ?').run(id)
-      } catch {}
+      } catch {
+        // best-effort cleanup only
+      }
       try {
         await tx.prepare('UPDATE crawler_jobs SET profile_id = NULL WHERE profile_id = ?').run(id)
-      } catch {}
+      } catch {
+        // best-effort cleanup only
+      }
       try {
         await tx.prepare('UPDATE anya_sessions SET profile_id = NULL WHERE profile_id = ?').run(id)
-      } catch {}
+      } catch {
+        // best-effort cleanup only
+      }
       try {
         await tx.prepare('UPDATE anya_tasks SET profile_id = NULL WHERE profile_id = ?').run(id)
-      } catch {}
+      } catch {
+        // best-effort cleanup only
+      }
       try {
         await tx.prepare('DELETE FROM profile_documents WHERE profile_id = ?').run(id)
-      } catch {}
+      } catch {
+        // best-effort cleanup only
+      }
       try {
         await tx.prepare('DELETE FROM profile_sections WHERE profile_id = ?').run(id)
-      } catch {}
+      } catch {
+        // best-effort cleanup only
+      }
       try {
         await tx
           .prepare(
@@ -640,7 +652,9 @@ router.delete('/:id', async (req, res) => {
           )
           .run(id)
         await tx.prepare('DELETE FROM billing_accounts WHERE profile_id = ?').run(id)
-      } catch {}
+      } catch {
+        // best-effort cleanup only
+      }
 
       const stmt = tx.prepare('DELETE FROM profiles WHERE id = ?')
       await stmt.run(id)
