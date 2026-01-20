@@ -48,9 +48,29 @@ const uploadDir = process.env.UPLOADS_DIR
 const zipCoordinatesPath = process.env.GEO_ZIP_COORDINATES_PATH
   ? resolve(process.env.GEO_ZIP_COORDINATES_PATH)
   : join(repoRootDir, 'backend', 'data', 'crawlers', 'zip_coordinates.json');
-const countiesByStatePath = process.env.GEO_COUNTIES_BY_STATE_PATH
-  ? resolve(process.env.GEO_COUNTIES_BY_STATE_PATH)
-  : join(repoRootDir, 'county_batch1.json');
+function resolveCountiesDatasetPath() {
+  const configured = process.env.GEO_COUNTIES_BY_STATE_PATH
+    ? resolve(process.env.GEO_COUNTIES_BY_STATE_PATH)
+    : null
+  if (configured && fs.existsSync(configured)) return configured
+
+  // Common fallback locations (repo root vs backend/data). Prefer backend-scoped path.
+  const candidates = [
+    join(repoRootDir, 'backend', 'data', 'crawlers', 'county_batch1.json'),
+    join(repoRootDir, 'backend', 'data', 'crawlers', 'counties_by_state.json'),
+    join(repoRootDir, 'county_batch1.json'),
+  ]
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return candidate
+    } catch {
+      // ignore
+    }
+  }
+  return configured || candidates[0]
+}
+
+const countiesByStatePath = resolveCountiesDatasetPath();
 
 let zipCoordinatesCache = null;
 let zipStateIndexCache = null;
@@ -1017,7 +1037,16 @@ router.get('/geo/state/:state/counties', async (req, res) => {
     const state = String(req.params.state || '').toUpperCase();
     const countiesByState = loadCountiesByState();
     const list = Array.isArray(countiesByState?.[state]) ? countiesByState[state] : [];
-    res.json({ counties: list.map((county) => ({ county })) });
+    res.json({
+      counties: list.map((county) => ({ county })),
+      available: list.length > 0,
+      source:
+        process.env.GEO_COUNTIES_BY_STATE_PATH && fs.existsSync(resolve(process.env.GEO_COUNTIES_BY_STATE_PATH))
+          ? 'GEO_COUNTIES_BY_STATE_PATH'
+          : fs.existsSync(countiesByStatePath)
+            ? 'fallback_file'
+            : 'missing',
+    });
   } catch (error) {
     console.error('[admin/geo/state/counties] Error:', error);
     res.status(500).json({ error: error.message });
@@ -1027,10 +1056,32 @@ router.get('/geo/state/:state/counties', async (req, res) => {
 router.post('/geo/state/:state/index-counties', async (req, res) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return;
-    // Counties are shipped from a bundled JSON file. This endpoint exists so the UI can
-    // confirm availability / future-proof for DB-backed indexing.
+    const state = String(req.params.state || '').toUpperCase();
+
+    // Today, counties are loaded from a dataset file (optional in some deploys).
+    // If the file is missing, tell the UI explicitly so the user isn't stuck thinking "nothing happened".
+    if (!fs.existsSync(countiesByStatePath)) {
+      return res.status(501).json({
+        ok: false,
+        error: 'County dataset is not configured on this deployment.',
+        hint:
+          'Set GEO_COUNTIES_BY_STATE_PATH to a JSON file or deploy with backend/data/crawlers/county_batch1.json. Until then, use ZIP/city scoping.',
+      })
+    }
+
+    const countiesByState = loadCountiesByState();
+    const list = Array.isArray(countiesByState?.[state]) ? countiesByState[state] : [];
+
+    // This endpoint is synchronous (load/validate). Return a completed “job” placeholder for UI consistency.
     const job = { id: crypto.randomUUID(), status: 'completed' };
-    res.json({ success: true, job });
+    res.json({
+      ok: true,
+      success: true,
+      job,
+      state,
+      counties: list.length,
+      source: process.env.GEO_COUNTIES_BY_STATE_PATH ? 'GEO_COUNTIES_BY_STATE_PATH' : 'fallback_file',
+    });
   } catch (error) {
     console.error('[admin/geo/state/index-counties] Error:', error);
     res.status(500).json({ error: error.message });
