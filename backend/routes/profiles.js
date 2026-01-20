@@ -262,6 +262,7 @@ router.get('/', async (req, res) => {
   const user = req.user
   const userId = getAuthUserId(user)
   const includeSummary = req.query.summary === 'true'
+  const includeDeleted = req.query.includeDeleted === 'true'
   
   // Validate pagination parameters.
   // For admins, default to the max page size unless a limit is explicitly provided.
@@ -283,7 +284,7 @@ router.get('/', async (req, res) => {
 
     // Get all profiles linked to this user (with pagination)
     const rows = await req.db.prepare(
-      `${profileSelect} WHERE p.user_id = ? ORDER BY p.created_at ASC LIMIT ? OFFSET ?`
+      `${profileSelect} WHERE p.user_id = ? AND (p.status IS NULL OR p.status <> 'deleted') ORDER BY p.created_at ASC LIMIT ? OFFSET ?`
     ).all(userId, limit, offset)
     
     const profiles = rows.map(mapProfile)
@@ -296,7 +297,8 @@ router.get('/', async (req, res) => {
   }
 
   // Admin: return ALL profiles with pagination
-  const stmt = req.db.prepare(`${profileSelect} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`)
+  const adminWhere = includeDeleted ? '' : "WHERE (p.status IS NULL OR p.status <> 'deleted')"
+  const stmt = req.db.prepare(`${profileSelect} ${adminWhere} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`)
   const profiles = (await stmt.all(limit, offset)).map(mapProfile)
   
   if (includeSummary) {
@@ -631,61 +633,90 @@ router.delete('/:id', async (req, res) => {
     }
   }
 
-  // Delete the profile. Prefer a straight delete (CASCADE/SET NULL), but if the DB is in a mixed
-  // migration state, fall back to a best-effort cleanup.
+  // Delete the profile.
+  //
+  // IMPORTANT (Postgres):
+  // Hard DELETE can fail due to FK RESTRICT constraints, and setting profile_id = NULL during cleanup
+  // can also fail when those columns are NOT NULL. To avoid 500s, fall back to a reliable soft-delete.
   try {
     const stmt = req.db.prepare('DELETE FROM profiles WHERE id = ?')
     await stmt.run(id)
   } catch (error) {
-    console.warn('[profiles] DELETE failed, attempting best-effort cleanup:', id, error?.message || error)
-    await req.db.transaction(async (tx) => {
-      try {
-        await tx.prepare('UPDATE documents SET profile_id = NULL WHERE profile_id = ?').run(id)
-      } catch {
-        // ignore best-effort cleanup errors
-      }
-      try {
-        await tx.prepare('UPDATE crawler_jobs SET profile_id = NULL WHERE profile_id = ?').run(id)
-      } catch {
-        // ignore best-effort cleanup errors
-      }
-      try {
-        await tx.prepare('UPDATE anya_sessions SET profile_id = NULL WHERE profile_id = ?').run(id)
-      } catch {
-        // ignore best-effort cleanup errors
-      }
-      try {
-        await tx.prepare('UPDATE anya_tasks SET profile_id = NULL WHERE profile_id = ?').run(id)
-      } catch {
-        // ignore best-effort cleanup errors
-      }
-      try {
-        await tx.prepare('DELETE FROM profile_documents WHERE profile_id = ?').run(id)
-      } catch {
-        // ignore best-effort cleanup errors
-      }
-      try {
-        await tx.prepare('DELETE FROM profile_sections WHERE profile_id = ?').run(id)
-      } catch {
-        // ignore best-effort cleanup errors
-      }
-      try {
-        await tx
-          .prepare(
-            `
-              DELETE FROM billing_account_events
-              WHERE account_id IN (SELECT id FROM billing_accounts WHERE profile_id = ?)
-            `,
-          )
-          .run(id)
-        await tx.prepare('DELETE FROM billing_accounts WHERE profile_id = ?').run(id)
-      } catch {
-        // ignore best-effort cleanup errors
-      }
+    console.warn('[profiles] Hard DELETE failed; soft-deleting profile:', id, error?.message || error)
 
-      const stmt = tx.prepare('DELETE FROM profiles WHERE id = ?')
-      await stmt.run(id)
-    })
+    // Best-effort cleanup of rows owned by the profile. Do NOT attempt `SET profile_id = NULL`.
+    try {
+      await req.db.transaction(async (tx) => {
+        try {
+          await tx.prepare('DELETE FROM profile_documents WHERE profile_id = ?').run(id)
+        } catch {
+          // ignore best-effort cleanup errors
+        }
+        try {
+          await tx.prepare('DELETE FROM profile_sections WHERE profile_id = ?').run(id)
+        } catch {
+          // ignore best-effort cleanup errors
+        }
+        try {
+          await tx.prepare('DELETE FROM crawler_jobs WHERE profile_id = ?').run(id)
+        } catch {
+          // ignore best-effort cleanup errors
+        }
+        try {
+          await tx.prepare('DELETE FROM crawler_schedules WHERE profile_id = ?').run(id)
+        } catch {
+          // ignore best-effort cleanup errors
+        }
+        try {
+          await tx.prepare('DELETE FROM anya_tool_usage WHERE profile_id = ?').run(id)
+        } catch {
+          // ignore best-effort cleanup errors
+        }
+        try {
+          await tx.prepare('DELETE FROM anya_tasks WHERE profile_id = ?').run(id)
+        } catch {
+          // ignore best-effort cleanup errors
+        }
+        try {
+          await tx.prepare('DELETE FROM anya_sessions WHERE profile_id = ?').run(id)
+        } catch {
+          // ignore best-effort cleanup errors
+        }
+        try {
+          await tx.prepare('DELETE FROM service_applications WHERE profile_id = ?').run(id)
+        } catch {
+          // ignore best-effort cleanup errors
+        }
+        try {
+          await tx.prepare('DELETE FROM funding_opportunities WHERE profile_id = ?').run(id)
+        } catch {
+          // ignore best-effort cleanup errors
+        }
+        try {
+          await tx
+            .prepare(
+              `
+                DELETE FROM billing_account_events
+                WHERE account_id IN (SELECT id FROM billing_accounts WHERE profile_id = ?)
+              `,
+            )
+            .run(id)
+          await tx.prepare('DELETE FROM billing_accounts WHERE profile_id = ?').run(id)
+        } catch {
+          // ignore best-effort cleanup errors
+        }
+
+        await tx
+          .prepare("UPDATE profiles SET status = 'deleted', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+          .run(id)
+      })
+    } catch (softDeleteError) {
+      // If the transaction fails (schema drift, missing tables, etc.), still attempt a direct soft delete.
+      console.warn('[profiles] Soft-delete transaction failed; attempting direct soft-delete:', id, softDeleteError?.message || softDeleteError)
+      await req.db
+        .prepare("UPDATE profiles SET status = 'deleted', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+        .run(id)
+    }
   }
 
   // Clean up avatar file if it exists
