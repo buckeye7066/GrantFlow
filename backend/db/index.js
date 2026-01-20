@@ -130,9 +130,42 @@ function qmarkToDollarPlaceholders(sql) {
   let idx = 0;
   let inSingle = false;
   let inDouble = false;
+  let inLineComment = false;
+  let inBlockComment = false;
 
   for (let i = 0; i < sql.length; i++) {
     const ch = sql[i];
+
+    if (inLineComment) {
+      out += ch;
+      if (ch === '\n') inLineComment = false;
+      continue;
+    }
+
+    if (inBlockComment) {
+      out += ch;
+      if (ch === '*' && sql[i + 1] === '/') {
+        out += '/';
+        i++;
+        inBlockComment = false;
+      }
+      continue;
+    }
+
+    if (!inSingle && !inDouble) {
+      if (ch === '-' && sql[i + 1] === '-') {
+        out += '--';
+        i++;
+        inLineComment = true;
+        continue;
+      }
+      if (ch === '/' && sql[i + 1] === '*') {
+        out += '/*';
+        i++;
+        inBlockComment = true;
+        continue;
+      }
+    }
 
     if (ch === "'" && !inDouble) {
       // Handle escaped single quotes '' inside single-quoted strings
@@ -171,9 +204,42 @@ function atNameToDollarPlaceholders(sql) {
   const names = [];
   let inSingle = false;
   let inDouble = false;
+  let inLineComment = false;
+  let inBlockComment = false;
 
   for (let i = 0; i < sql.length; i++) {
     const ch = sql[i];
+
+    if (inLineComment) {
+      out += ch;
+      if (ch === '\n') inLineComment = false;
+      continue;
+    }
+
+    if (inBlockComment) {
+      out += ch;
+      if (ch === '*' && sql[i + 1] === '/') {
+        out += '/';
+        i++;
+        inBlockComment = false;
+      }
+      continue;
+    }
+
+    if (!inSingle && !inDouble) {
+      if (ch === '-' && sql[i + 1] === '-') {
+        out += '--';
+        i++;
+        inLineComment = true;
+        continue;
+      }
+      if (ch === '/' && sql[i + 1] === '*') {
+        out += '/*';
+        i++;
+        inBlockComment = true;
+        continue;
+      }
+    }
 
     if (ch === "'" && !inDouble) {
       if (inSingle && sql[i + 1] === "'") {

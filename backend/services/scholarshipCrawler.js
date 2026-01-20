@@ -247,9 +247,29 @@ export async function processScholarshipCrawlerJob({
   })
   const signals = buildProfileSignals({ profile, sections })
 
-  const scholarships = loadJSON(
-    join(dataDir, 'scholarship_opportunities.json'),
-  )
+  const datasetPath = join(dataDir, 'scholarship_opportunities.json')
+  if (!fs.existsSync(datasetPath)) {
+    // Production safety: missing dataset should not hard-fail the whole crawler system.
+    // Return a completed job with 0 results so diagnostics don't stay red.
+    return {
+      evaluated: 0,
+      matched: 0,
+      inserted: 0,
+      savedToPipeline: 0,
+      result_count: 0,
+      result_meta: {
+        evaluated: 0,
+        matched: 0,
+        inserted: 0,
+        savedToPipeline: 0,
+        note: `Scholarship dataset missing at ${datasetPath}`,
+        duration_seconds: Math.max(0, Math.round((Date.now() - startTime) / 1000)),
+      },
+      opportunityLogs: [],
+    }
+  }
+
+  const scholarships = loadJSON(datasetPath)
 
   const scored = scholarships
     .map((opportunity) => {

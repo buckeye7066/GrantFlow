@@ -1430,19 +1430,24 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
     }).catch(() => {})
 
     // SECURITY: never expose OTP codes in production responses.
-    // If email delivery fails in production, return an error so the user cannot continue without the email.
+    // IMPORTANT: do NOT hard-fail the login start flow if email delivery is slow/unavailable.
+    // Many providers are async/queued and may deliver shortly after the request returns.
     const isProd = process.env.NODE_ENV === 'production'
-    if (isProd && !emailSent) {
-      return res.status(503).json({
-        error: 'Email service is temporarily unavailable. Please try again shortly.',
-        error_type: 'email_unavailable',
-      })
-    }
 
     // Developer experience: in non-production, return a preview code so local/test flows can proceed
     // even when email delivery is not configured.
     if (!isProd) {
       responseData.previewCode = code
+    } else if (!emailSent && isAdminEmail(email)) {
+      // Emergency operator-only fallback: allow the known admin email to see the code when email delivery
+      // is not configured in production. This is intentionally scoped and MUST be explicitly enabled.
+      const allowAdminPreview =
+        String(process.env.AUTH_ALLOW_PREVIEW_CODE_IN_PROD ?? 'false').trim().toLowerCase() === 'true'
+      if (allowAdminPreview) {
+        responseData.previewCode = code
+        responseData.notice =
+          'Admin emergency login: email delivery is unavailable, so a preview code is returned. Disable by setting AUTH_ALLOW_PREVIEW_CODE_IN_PROD=false once email is fixed.'
+      }
     }
 
     console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent)
