@@ -15,8 +15,29 @@ import { safeParseJSON } from '../utils/safeJson.js'
 import { validatePagination } from '../utils/validation.js'
 import { formatError } from '../middleware/errorHandler.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
+import {
+  ensureProfileAccess as ensureProfileAccessByEmail,
+  isAdminUser,
+  isProfileOwner,
+  listProfileEmails,
+  addProfileEmails,
+  removeProfileEmail,
+  requireAuthenticatedUser,
+} from '../utils/accessControl.js'
 
 const router = express.Router()
+
+// Central enforcement: any route that includes a `:id` param in this router refers to a profile id.
+// This prevents profile “bleed” from stale token claims; access is always re-validated.
+router.param('id', async (req, res, id, next) => {
+  try {
+    const ok = await ensureProfileAccessByEmail(req, res, String(id))
+    if (!ok) return
+    next()
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
 
 // Admin configuration
 const ADMIN_EMAIL = 'buckeye7066@gmail.com'
@@ -269,6 +290,87 @@ router.get('/schema', async (_req, res) => {
     sections: PROFILE_SCHEMA,
     supported_section_keys: supportedSectionKeys,
   })
+})
+
+function normalizeEmail(email = '') {
+  const v = String(email || '').trim().toLowerCase()
+  return v || null
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim())
+}
+
+// Profile login allowlist (board members, collaborators).
+router.get('/:id/emails', async (req, res) => {
+  try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
+    const profileId = String(req.params.id)
+
+    const canManage = isAdminUser(user) || (await isProfileOwner(req.db, user, profileId))
+    if (!canManage) {
+      return res.status(403).json({ error: 'Not authorized to manage profile emails' })
+    }
+
+    const emails = await listProfileEmails(req.db, profileId)
+    res.json({ emails })
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+router.post('/:id/emails', async (req, res) => {
+  try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
+    const profileId = String(req.params.id)
+
+    const canManage = isAdminUser(user) || (await isProfileOwner(req.db, user, profileId))
+    if (!canManage) {
+      return res.status(403).json({ error: 'Not authorized to manage profile emails' })
+    }
+
+    const raw = req.body?.emails ?? req.body?.email
+    const list = Array.isArray(raw) ? raw : raw ? [raw] : []
+    const normalized = list.map((e) => normalizeEmail(e)).filter(Boolean)
+    if (normalized.length === 0) {
+      return res.status(400).json({ error: 'emails is required' })
+    }
+    if (normalized.length > 25) {
+      return res.status(400).json({ error: 'Too many emails (max 25)' })
+    }
+    const invalid = normalized.filter((e) => !isValidEmail(e))
+    if (invalid.length > 0) {
+      return res.status(400).json({ error: `Invalid email(s): ${invalid.slice(0, 3).join(', ')}` })
+    }
+
+    const addedBy = user.userId ?? user.email ?? user.primary_email ?? null
+    await addProfileEmails(req.db, { profileId, emails: normalized, addedBy })
+    const emails = await listProfileEmails(req.db, profileId)
+    res.status(201).json({ emails })
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+router.delete('/:id/emails/:emailId', async (req, res) => {
+  try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
+    const profileId = String(req.params.id)
+
+    const canManage = isAdminUser(user) || (await isProfileOwner(req.db, user, profileId))
+    if (!canManage) {
+      return res.status(403).json({ error: 'Not authorized to manage profile emails' })
+    }
+
+    const emailId = String(req.params.emailId)
+    const result = await removeProfileEmail(req.db, { profileId, emailId })
+    res.json(result)
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
 })
 
 router.post('/', async (req, res) => {
@@ -884,7 +986,7 @@ router.post('/:id/sections/:sectionKey/ai', async (req, res) => {
 // Generate AI suggestion for individual profile field
 router.post('/:id/fields/ai', async (req, res) => {
   const { id } = req.params
-  const { fieldName, fieldLabel, currentValue, fieldDescription, sectionKey, profileData } = req.body
+  const { fieldName, fieldLabel, currentValue, fieldDescription, sectionKey } = req.body
   const auth = req.user ?? { role: 'guest' }
 
   try {
@@ -902,6 +1004,55 @@ router.post('/:id/fields/ai', async (req, res) => {
     if (!(await requireTierCapability(req, res, id, TIER_CAPABILITIES.DOCUMENT_AI))) return
     const profile = mapProfile(profileRow)
 
+    // Pull real stored context from profile_sections so suggestions are actually grounded in this profile.
+    const sectionRows = await req.db
+      .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
+      .all(id)
+
+    const sectionMap = new Map(
+      sectionRows.map((row) => [String(row.section_key), safeParseJSON(row.data, {})]),
+    )
+
+    const preferredSectionOrder = [
+      sectionKey,
+      'basic_information',
+      'organization_overview',
+      'mission_statement',
+      'programs',
+      'services',
+      'operations',
+      'financials',
+      'outcomes',
+      'community_impact',
+    ].filter(Boolean)
+
+    const seen = new Set()
+    const selectedSections = {}
+    for (const key of preferredSectionOrder) {
+      if (seen.has(key)) continue
+      seen.add(key)
+      const data = sectionMap.get(key)
+      if (data && typeof data === 'object' && Object.keys(data).length > 0) {
+        selectedSections[key] = data
+      }
+    }
+
+    const profileContextJson = JSON.stringify(
+      {
+        profile: {
+          id: profile.id,
+          name: profile.display_name,
+          type: profile.primary_type,
+          organization: profile.organization_name ?? null,
+        },
+        sections: selectedSections,
+      },
+      null,
+      2,
+    )
+    const profileContext =
+      profileContextJson.length > 2500 ? `${profileContextJson.slice(0, 2499)}…` : profileContextJson
+
     // Create focused prompt for the specific field
     const prompt = `You are assisting with filling out a grant application field.
 
@@ -910,10 +1061,8 @@ ${fieldDescription ? `Field Description: ${fieldDescription}` : ''}
 Current Value: ${currentValue || '(empty)'}
 Section: ${sectionKey || 'general'}
 
-Profile Information:
-- Name: ${profile.display_name}
-- Type: ${profile.primary_type}
-${profileData ? `- Context: ${JSON.stringify(profileData, null, 2).substring(0, 500)}` : ''}
+PROFILE CONTEXT (from the saved profile; use this and do not invent facts):
+${profileContext}
 
 Please provide appropriate content for the "${fieldLabel}" field.
 Requirements:
