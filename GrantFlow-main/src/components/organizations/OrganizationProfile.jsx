@@ -1,0 +1,901 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { base44 } from "@/api/base44Client";
+import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
+import { Link, useNavigate } from 'react-router-dom';
+import { createPageUrl } from '@/utils';
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { User, Building, Mail, Phone, Globe, DollarSign, Target, Award, TrendingUp, Calendar, Info, Loader2, Printer, MapPin, Sparkles, Wand, FolderOpen, ImagePlus, Kanban, Search, DatabaseZap, ExternalLink, Star, ArrowRightSquare, AlertCircle } from "lucide-react";
+import OrganizationProfileDetails from './OrganizationProfileDetails';
+import KanbanBoard from "@/components/pipeline/KanbanBoard";
+import PrintablePipeline from "@/components/pipeline/PrintablePipeline";
+import PipelineAutomationPanel from "@/components/pipeline/PipelineAutomationPanel";
+import { usePrintMode } from '@/components/hooks/usePrintMode';
+import { format } from "date-fns";
+import OrganizationEmailComposer from './OrganizationEmailComposer';
+import DocumentItem from '../documents/DocumentItem';
+import ErrorBoundary from '@/components/shared/ErrorBoundary';
+import AutoTimeTracker from '../billing/AutoTimeTracker';
+import { Badge } from "@/components/ui/badge";
+import { useToast } from "@/components/ui/use-toast";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+
+const capitalize = (s) => s && s.charAt(0).toUpperCase() + s.slice(1);
+
+// REBUILT: This component is now a "dumb" component. It receives all data as props
+// and passes all update events up to the parent. It no longer fetches its own data.
+export default function OrganizationProfile({
+  organizationId,
+  retryKey = 0,
+  documents = [],
+  isLoadingDocuments = false,
+  taxonomyItems = [],
+  onDocumentsRefetch
+}) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState('details');
+  const [isEmailComposerOpen, setIsEmailComposerOpen] = useState(false);
+  const [isFindingPicture, setIsFindingPicture] = useState(false);
+  const [imgError, setImgError] = React.useState(false);
+  const [manualRetryCount, setManualRetryCount] = React.useState(0);
+  const [showEditForm, setShowEditForm] = React.useState(false);
+  const [editCoreOpen, setEditCoreOpen] = React.useState(false);
+  const [editDisplayName, setEditDisplayName] = React.useState('');
+  const [editPrimaryType, setEditPrimaryType] = React.useState('organization');
+  const [editTags, setEditTags] = React.useState('');
+  const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false);
+  const isPrint = usePrintMode();
+
+  // Fetch organization data based on organizationId
+  const { data: orgData, isLoading, error, refetch } = useQuery({
+    queryKey: ['organization', organizationId, retryKey, manualRetryCount],
+    queryFn: async () => {
+      console.log('[OrganizationProfile] Fetching organization:', organizationId);
+
+      // Check if we already have this in cache (from upload)
+      const cached = queryClient.getQueryData(['organization', organizationId]);
+      if (cached) {
+        console.log('[OrganizationProfile] Found in cache, using cached data');
+        return cached;
+      }
+
+      try {
+        // Add delay to allow database propagation
+        await new Promise(resolve => setTimeout(resolve, 300));
+
+        // FIXED: Use Profile API instead of Organization API since IDs are profile IDs
+        const result = await base44.entities.Profile.get(organizationId);
+        console.log('[OrganizationProfile] Query result:', result);
+
+        if (!result) {
+          throw new Error('Organization not found');
+        }
+
+        return result;
+      } catch (err) {
+        console.error('[OrganizationProfile] Error fetching organization:', err);
+        throw err;
+      }
+    },
+    enabled: !!organizationId,
+    retry: (failureCount, error) => {
+      // Don't retry on 404 (profile doesn't exist)
+      if (error?.response?.status === 404 || error?.message?.includes('not found')) {
+        return false;
+      }
+      // Retry up to 3 times for other errors
+      return failureCount < 3;
+    },
+    retryDelay: (attemptIndex) => {
+      // Shorter retry delays: 500ms, 1s, 2s
+      return Math.min(500 * Math.pow(2, attemptIndex), 2000);
+    },
+    staleTime: 0,
+    // Add gcTime to keep data in cache longer
+    gcTime: 1000 * 60 * 5, // 5 minutes
+  });
+
+
+  // Reintroduced useQuery hook for contactMethods
+  const { data: contactMethods = [], isLoading: isLoadingContacts } = useQuery({
+    queryKey: ['contactMethods', organizationId],
+    queryFn: () => base44.entities.ContactMethod.filter({ organization_id: organizationId }),
+    enabled: !!organizationId, // Only run if organization.id is available
+  });
+
+  // Fetch grants for this organization - including drafting stage
+  const { data: grants = [], isLoading: isLoadingGrants } = useQuery({
+    queryKey: ['grants', organizationId],
+    queryFn: () => base44.entities.Grant.filter({ organization_id: organizationId }),
+    enabled: !!organizationId,
+  });
+
+  // NEW: Fetch funding sources for this organization
+  const { data: fundingSources = [], isLoading: isLoadingSources } = useQuery({
+    queryKey: ['fundingSources', organizationId],
+    queryFn: () => base44.entities.SourceDirectory.filter({ discovered_for_organization_id: organizationId }),
+    enabled: !!organizationId,
+  });
+
+  // Log grants to verify drafting grants are included
+  React.useEffect(() => {
+    if (grants.length > 0 && orgData) {
+      console.log(`[Profile] Found ${grants.length} grants for ${orgData?.name}`);
+      const draftingGrants = grants.filter(g => g.status === 'drafting');
+      console.log(`[Profile] ${draftingGrants.length} grants in drafting stage:`, draftingGrants.map(g => g.title));
+    }
+  }, [grants, orgData?.name]);
+
+  const emails = contactMethods.filter(c => c.type === 'email');
+  const phones = contactMethods.filter(c => c.type === 'phone');
+
+  useEffect(() => {
+    // Reset image error state when organization's profile image URL changes
+    setImgError(false);
+  }, [orgData?.profile_image_url]);
+
+  useEffect(() => {
+    if (!orgData) return;
+    // Sync the edit dialog fields from the loaded profile data
+    setEditDisplayName(orgData.display_name ?? orgData.name ?? '');
+    setEditPrimaryType(orgData.primary_type ?? orgData.applicant_type ?? 'organization');
+    const tags = Array.isArray(orgData.tags) ? orgData.tags : [];
+    setEditTags(tags.join(', '));
+  }, [orgData]);
+
+
+  const updateGrantMutation = useMutation({
+    mutationFn: ({ id, data }) => base44.entities.Grant.update(id, data),
+    onSuccess: () => {
+      // Invalidate grants query to trigger refetch in parent component
+      queryClient.invalidateQueries({ queryKey: ['grants', organizationId] }); // Updated queryKey
+    },
+    onError: (error) => {
+      console.error("Error updating grant:", error);
+    }
+  });
+
+  const deleteGrantMutation = useMutation({
+    mutationFn: (id) => base44.entities.Grant.delete(id),
+    onSuccess: () => {
+      // Invalidate grants query to trigger refetch in parent component
+      queryClient.invalidateQueries({ queryKey: ['grants', organizationId] }); // Updated queryKey
+    },
+    onError: (error) => {
+      console.error("Error deleting grant:", error);
+    }
+  });
+
+  // Add mutation for updating organization (now using Profile API)
+  const updateOrgMutation = useMutation({
+    mutationFn: ({ id, data }) => base44.entities.Profile.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['organization', organizationId] });
+      queryClient.invalidateQueries({ queryKey: ['organizations'] });
+      setShowEditForm(false);
+      toast({
+        title: "✓ Saved",
+        description: "Your changes have been saved automatically.",
+        duration: 2000,
+      });
+    },
+    onError: (error) => {
+      console.error("Error updating organization:", error);
+      toast({
+        variant: "destructive",
+        title: "Save Failed",
+        description: error.message || "There was an error saving your changes. Please try again.",
+      });
+    }
+  });
+
+  // Add mutation for deleting organization (now using Profile API)
+  const deleteOrgMutation = useMutation({
+    mutationFn: (id) => base44.entities.Profile.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['organizations'] });
+      toast({
+        title: "Profile Deleted",
+        description: "The profile has been successfully deleted.",
+      });
+      navigate(createPageUrl('Organizations'));
+    },
+    onError: (error) => {
+      console.error("Error deleting organization:", error);
+      toast({
+        variant: "destructive",
+        title: "Delete Failed",
+        description: error.message || "There was an error deleting the profile.",
+      });
+    }
+  });
+
+  const subtitle = React.useMemo(() => {
+    if (!orgData) return '';
+    if (orgData.applicant_type === 'organization') {
+        // Use taxonomyItems from props
+        const orgType = taxonomyItems.find(t => t.group === 'organization_type' && t.slug === orgData.nonprofit_type);
+        return orgType ? orgType.label : 'Organization';
+    }
+    return (orgData.applicant_type || '').replace(/_/g, ' ').split(' ').map(capitalize).join(' ');
+  }, [orgData, taxonomyItems]); // taxonomyItems is now a prop
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-col justify-center items-center h-full min-h-[400px] gap-4">
+        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+        <p className="text-slate-500">Loading organization details...</p>
+        <p className="text-xs text-slate-400">This may take a moment for newly created profiles</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col justify-center items-center h-full min-h-[400px] p-4 text-center gap-4">
+        <div className="p-4 bg-red-50 rounded-lg border border-red-200 max-w-lg">
+          <AlertCircle className="w-12 h-12 text-red-600 mx-auto mb-3" />
+          <h3 className="text-lg font-semibold text-red-900 mb-2">Profile Not Found</h3>
+          <p className="text-red-700 mb-2">
+            The profile couldn't be loaded at this time.
+          </p>
+          <p className="text-sm text-red-600 mb-4">
+            This might happen if:
+            <ul className="text-left mt-2 space-y-1 ml-4">
+              <li>• The profile was just created and needs a moment to sync</li>
+              <li>• There was a temporary connection issue</li>
+              <li>• The profile ID is incorrect</li>
+            </ul>
+          </p>
+          <div className="flex gap-3 justify-center flex-wrap">
+            <Button
+              onClick={() => {
+                console.log('[OrganizationProfile] Manual retry triggered');
+                setManualRetryCount(prev => prev + 1);
+                refetch();
+              }}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              <Loader2 className="w-4 h-4 mr-2" />
+              Try Again
+            </Button>
+            <Button
+              onClick={() => {
+                toast({
+                  title: "Waiting for sync...",
+                  description: "Waiting 3 seconds for the database to sync, then retrying...",
+                });
+                setTimeout(() => {
+                  setManualRetryCount(prev => prev + 1);
+                  refetch();
+                }, 3000);
+              }}
+              variant="outline"
+              className="border-blue-600 text-blue-600 hover:bg-blue-50"
+            >
+              Wait & Retry
+            </Button>
+            <Button
+              onClick={() => navigate(createPageUrl('Organizations'))}
+              variant="outline"
+            >
+              ← Back to Profiles
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!orgData) {
+    return (
+      <div className="flex flex-col justify-center items-center h-full min-h-[400px] gap-4">
+        <p className="text-slate-500">Organization not found.</p>
+        <Button onClick={() => navigate(createPageUrl('Organizations'))}>
+          ← Back to Organizations
+        </Button>
+      </div>
+    );
+  }
+
+  const handleGrantUpdate = (id, data) => {
+    updateGrantMutation.mutate({ id, data });
+  };
+
+  const handleDeleteGrant = (id) => {
+    deleteGrantMutation.mutate(id);
+  };
+
+  const handleBack = () => {
+    navigate(createPageUrl('Organizations'));
+  };
+
+  const handleEdit = () => {
+    setShowEditForm(true);
+  };
+
+  const handleDelete = () => {
+    setShowDeleteConfirm(true);
+  };
+
+  const handleConfirmDelete = () => {
+    if (orgData?.id) {
+      deleteOrgMutation.mutate(orgData.id);
+    }
+  };
+
+  const handleUpdate = async ({ id, orgData: updateData }) => {
+    updateOrgMutation.mutate({ id, data: updateData });
+  };
+
+  const handleFindPicture = async () => {
+      if (!orgData?.website) {
+          toast({
+            title: "Website Missing",
+            description: "Please add a website to the profile before searching for a picture.",
+            variant: "destructive",
+          });
+          return;
+      }
+      setIsFindingPicture(true);
+      try {
+          const prompt = `You are an expert brand asset analyst. Your mission is to find the official logo for the organization named "${orgData.name}". Use their website, ${orgData.website}, as the primary source, but use web searches as a powerful fallback.
+
+**Search Strategy:**
+1.  **Primary Source (Website Analysis):**
+    *   **Inspect HTML Meta Tags:** Thoroughly check the source of ${orgData.website} for meta tags like \`og:image\`, \`twitter:image\`, \`apple-touch-icon\`, and \`<link rel="icon" ...>\`. These often point directly to the logo.
+    *   **Homepage DOM Analysis:** If meta tags are unhelpful, analyze the rendered homepage's structure. Look for an \`<img>\` tag within the main header or navigation, typically linked to the homepage. Extract its absolute URL. Prioritize SVG logos if available.
+2.  **Secondary Source (Web Search):
+    *   **Targeted Google Search:** If the website analysis fails, perform a targeted Google search. Use precise queries like: \`"${orgData.name}" logo filetype:svg\`, \`"${orgData.name}" logo site:clearbit.com\`, and finally \`"${orgData.name}" logo official\`. Clearbit is a good source for company logos.
+    *   **Validate the Result:** From the search results, select the URL that's most likely to be the official, high-quality logo. Avoid watermarked images, social media profile pictures, or images from third-party news articles unless no other option exists.
+
+**Final Output:**
+Return a single JSON object with the key "logo_url" containing the absolute, direct URL to the best image file you found. The URL must end in .png, .jpg, .jpeg, or .svg. For example: {"logo_url": "https://example.com/logo.svg"}`;
+
+          const response = await base44.integrations.Core.InvokeLLM({
+            prompt,
+            add_context_from_internet: true,
+            response_json_schema: {
+                "type": "object",
+                "properties": {
+                    "logo_url": { "type": "string" }
+                }
+            }
+          });
+
+          if (response?.logo_url && (response.logo_url.startsWith('http') || response.logo_url.startsWith('https'))) {
+              handleUpdate({ id: orgData.id, orgData: { profile_image_url: response.logo_url } });
+              toast({
+                title: "Picture Found!",
+                description: "AI successfully found and updated the profile picture.",
+              });
+          } else {
+              toast({
+                title: "Picture Not Found",
+                description: "AI could not find a suitable image, even after a web search. You can still upload one manually.",
+                variant: "destructive",
+              });
+          }
+      } catch (error) {
+          console.error("Error finding picture:", error);
+          toast({
+            title: "Error Searching",
+            description: "An error occurred while the AI was searching for a picture. This can happen with complex websites. Please try uploading manually.",
+            variant: "destructive",
+          });
+      } finally {
+          setIsFindingPicture(false);
+      }
+  };
+
+  const triggerPrint = () => {
+    // FIX: Explicitly wait for all data to be loaded before printing.
+    if (isLoading || isLoadingContacts || isLoadingGrants || !orgData) {
+        toast({
+          title: "Data Loading",
+          description: "Some data is still loading, please wait a moment before printing.",
+          variant: "warning",
+        });
+        return;
+    }
+    // FIX: Replaced the call to the removed hook with a direct call to the browser's native print function.
+    window.print();
+  };
+
+  // Get status badge color
+  const getStatusBadge = (status) => {
+    const statusConfig = {
+      discovered: { label: 'Discovered', className: 'bg-slate-100 text-slate-700' },
+      interested: { label: 'Interested', className: 'bg-blue-100 text-blue-700' },
+      auto_applied: { label: 'Auto Applied', className: 'bg-purple-100 text-purple-700' },
+      drafting: { label: 'Drafting', className: 'bg-amber-100 text-amber-700' },
+      portal: { label: 'Portal', className: 'bg-indigo-100 text-indigo-700' },
+      application_prep: { label: 'App Prep', className: 'bg-orange-100 text-orange-700' },
+      revision: { label: 'Revision', className: 'bg-yellow-100 text-yellow-700' },
+      submitted: { label: 'Submitted', className: 'bg-emerald-100 text-emerald-700' },
+      awarded: { label: 'Awarded', className: 'bg-green-100 text-green-700' },
+      declined: { label: 'Declined', className: 'bg-red-100 text-red-700' },
+      closed: { label: 'Closed', className: 'bg-slate-100 text-slate-700' },
+      report: { label: 'Reporting', className: 'bg-cyan-100 text-cyan-700' },
+    };
+    return statusConfig[status] || statusConfig.discovered;
+  };
+
+  return (
+    // FIX: Removed ref={componentRef} from the main container.
+    <div className="min-h-full flex flex-col">
+      {/* PrintableProfile component is no longer conditionally rendered separately. The main component is styled for print. */}
+
+      <header className="p-6 border-b bg-white flex justify-between items-start printable-hidden flex-shrink-0">
+        <div className="flex items-start gap-6">
+            <div className="relative group">
+                {/* Conditional rendering based on profile_image_url and imgError state */}
+                {orgData.profile_image_url && !imgError ? (
+                    <img
+                      src={orgData.profile_image_url}
+                      alt={orgData.name}
+                      className="w-24 h-24 rounded-xl object-cover border-2 border-slate-100"
+                      onError={() => setImgError(true)} // Set imgError to true if image fails to load
+                    />
+                ) : (
+                    <div className="w-24 h-24 rounded-xl bg-slate-100 flex items-center justify-center border-2 border-dashed">
+                        <ImagePlus className="w-8 h-8 text-slate-400" />
+                    </div>
+                )}
+                 <div
+                    className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-50 flex items-center justify-center rounded-xl transition-opacity cursor-pointer"
+                    onClick={handleEdit}
+                 >
+                    <span className="text-white font-bold opacity-0 group-hover:opacity-100 transition-opacity text-sm">Upload</span>
+                </div>
+            </div>
+            <div>
+              <Button variant="ghost" onClick={handleBack} className="mb-2 -ml-3 h-auto p-2">
+                &larr; Back to list
+              </Button>
+              <h1 className="text-3xl font-bold text-slate-900">{orgData.display_name ?? orgData.name}</h1>
+              <p className="text-md text-slate-600 mt-1">{subtitle}</p>
+              {(!orgData.profile_image_url || imgError) && (
+                  <Button variant="outline" size="sm" className="mt-3" onClick={handleFindPicture} disabled={isFindingPicture || updateOrgMutation.isPending}>
+                      {isFindingPicture ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+                      {isFindingPicture ? 'Searching...' : 'Find Picture with AI'}
+                  </Button>
+              )}
+            </div>
+        </div>
+        <div className="flex items-start gap-2 flex-wrap">
+           {/* Auto-save indicator */}
+           {updateOrgMutation.isPending && (
+             <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 rounded-lg border border-blue-200">
+               <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+               <span className="text-sm text-blue-700">Saving...</span>
+             </div>
+           )}
+           <Button
+             variant="outline"
+             onClick={() => setEditCoreOpen(true)}
+           >
+             Edit Profile
+           </Button>
+           <Link to={createPageUrl("Pricing")}>
+             <Button variant="outline">
+               <DollarSign className="w-4 h-4 mr-2" />
+               View Pricing
+             </Button>
+           </Link>
+           <Button
+             variant="outline"
+             onClick={() => {
+               console.log('[Profile] Email button clicked');
+               console.log('[Profile] Emails available:', emails);
+               setIsEmailComposerOpen(true);
+             }}
+             disabled={emails.length === 0 || isLoadingContacts}
+           >
+             <Sparkles className="w-4 h-4 mr-2" />
+             Email for Update
+           </Button>
+           <Button
+             variant="outline"
+             onClick={triggerPrint}
+           >
+             <Printer className="w-4 h-4 mr-2" />
+             Print Profile
+           </Button>
+           <Button variant="destructive" onClick={handleDelete}>Delete</Button>
+        </div>
+      </header>
+
+      <main className="flex-1 bg-slate-50 printable-profile-container">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="p-4 printable-section">
+            <TabsList className="printable-hidden">
+              <TabsTrigger value="details">Details</TabsTrigger>
+              <TabsTrigger value="sources">
+                Funding Sources {fundingSources.length > 0 && `(${fundingSources.length})`}
+              </TabsTrigger>
+              <TabsTrigger value="matches">
+                Opportunities {grants.length > 0 && `(${grants.length})`}
+              </TabsTrigger>
+              <TabsTrigger value="pipeline">
+                Pipeline View
+              </TabsTrigger>
+              <TabsTrigger value="documents">Documents</TabsTrigger>
+            </TabsList>
+            <TabsContent value="details" className="mt-4 print:mt-0">
+              <OrganizationProfileDetails
+                organization={orgData}
+                contactMethods={contactMethods}
+                onUpdate={handleUpdate}
+                isUpdating={updateOrgMutation.isPending}
+                taxonomyItems={taxonomyItems}
+              />
+            </TabsContent>
+
+            {/* NEW: Funding Sources Tab */}
+            <TabsContent value="sources" className="mt-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <DatabaseZap className="w-5 h-5" />
+                    Funding Sources Discovered
+                  </CardTitle>
+                  <p className="text-sm text-slate-600 mt-2">
+                    Local funding sources that were discovered for this profile
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  {isLoadingSources ? (
+                    <div className="flex justify-center items-center py-16">
+                      <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+                    </div>
+                  ) : fundingSources.length === 0 ? (
+                    <div className="text-center py-16 bg-slate-50 rounded-lg border">
+                      <DatabaseZap className="w-16 h-16 mx-auto text-slate-300 mb-4" />
+                      <h3 className="text-xl font-semibold text-slate-900 mb-2">No Sources Yet</h3>
+                      <p className="text-slate-600 mb-4">
+                        Use AI Discovery in Source Directory to find local funding sources for this profile.
+                      </p>
+                      <Link to={createPageUrl("SourceDirectory")}>
+                        <Button className="bg-blue-600 hover:bg-blue-700">
+                          <Sparkles className="w-4 h-4 mr-2" />
+                          Discover Sources
+                        </Button>
+                      </Link>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {fundingSources.map((source) => (
+                        <div key={source.id} className="flex items-center justify-between p-4 border rounded-lg hover:bg-slate-50">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <h4 className="font-semibold text-slate-900">{source.name}</h4>
+                              <Badge variant="outline" className="capitalize">
+                                {source.source_type?.replace(/_/g, ' ')}
+                              </Badge>
+                              {source.active ? (
+                                <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200">
+                                  Active
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="bg-slate-50">
+                                  Inactive
+                                </Badge>
+                              )}
+                            </div>
+                            <p className="text-sm text-slate-600">
+                              {source.city && source.state ? `${source.city}, ${source.state}` : source.state || 'Location not specified'}
+                            </p>
+                            {source.opportunities_found > 0 && (
+                              <p className="text-sm text-blue-600 mt-1">
+                                {source.opportunities_found} opportunit{source.opportunities_found === 1 ? 'y' : 'ies'} found
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {source.website_url && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => window.open(source.website_url, '_blank')}
+                              >
+                                <ExternalLink className="w-4 h-4" />
+                              </Button>
+                            )}
+                            <Link to={createPageUrl("SourceDetail", { id: source.id })}>
+                              <Button variant="outline" size="sm">
+                                View in Directory
+                              </Button>
+                            </Link>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* NEW: Opportunities/Matches Tab */}
+            <TabsContent value="matches" className="mt-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Target className="w-5 h-5" />
+                    Funding Opportunities
+                  </CardTitle>
+                  <p className="text-sm text-slate-600 mt-2">
+                    All opportunities discovered and tracked for this profile
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  {isLoadingGrants ? (
+                    <div className="flex justify-center items-center py-16">
+                      <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+                    </div>
+                  ) : grants.length === 0 ? (
+                    <div className="text-center py-16 bg-slate-50 rounded-lg border">
+                      <Target className="w-16 h-16 mx-auto text-slate-300 mb-4" />
+                      <h3 className="text-xl font-semibold text-slate-900 mb-2">No Opportunities Yet</h3>
+                      <p className="text-slate-600 mb-4">
+                        Start by discovering grants for this profile.
+                      </p>
+                      <Link to={createPageUrl("DiscoverGrants")}>
+                        <Button className="bg-blue-600 hover:bg-blue-700">
+                          <Search className="w-4 h-4 mr-2" />
+                          Discover Grants
+                        </Button>
+                      </Link>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {grants.map((grant) => {
+                        const statusBadge = getStatusBadge(grant.status);
+                        const amount = grant.typical_award || grant.award_ceiling || grant.award_floor;
+
+                        return (
+                          <Link key={grant.id} to={createPageUrl("GrantDetail", { id: grant.id })}>
+                            <div className="flex items-center justify-between p-4 border rounded-lg hover:bg-slate-50 hover:border-blue-300 transition-all cursor-pointer">
+                              <div className="flex-1 min-w-0 pr-4">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <h4 className="font-semibold text-slate-900 truncate">{grant.title}</h4>
+                                  {grant.starred && <Star className="w-4 h-4 text-yellow-400 fill-yellow-400 shrink-0" />}
+                                </div>
+                                <p className="text-sm text-slate-600 truncate">{grant.funder}</p>
+                                {grant.deadline && (
+                                  <div className="flex items-center gap-1 mt-1">
+                                    <Calendar className="w-3 h-3 text-slate-400" />
+                                    <span className="text-xs text-slate-500">
+                                      {format(new Date(grant.deadline), 'MMM d, yyyy')}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-3 shrink-0">
+                                {amount && (
+                                  <div className="text-right">
+                                    <div className="text-sm font-semibold text-emerald-600">
+                                      ${amount.toLocaleString()}
+                                    </div>
+                                    <div className="text-xs text-slate-500">Award</div>
+                                  </div>
+                                )}
+                                <Badge className={statusBadge.className}>
+                                  {statusBadge.label}
+                                </Badge>
+                                <ArrowRightSquare className="w-5 h-5 text-slate-400" />
+                              </div>
+                            </div>
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* Renamed: Pipeline View Tab */}
+            <TabsContent value="pipeline" className="mt-4 print:hidden">
+               {organizationId && (
+                 <div className="mb-6">
+                   <PipelineAutomationPanel
+                     organizationId={organizationId}
+                   />
+                 </div>
+               )}
+               <div className="flex justify-end mb-4 printable-hidden">
+                  <Link to={createPageUrl("PrintPipeline", { organizationId })} target="_blank">
+                    <Button variant="outline"><Printer className="w-4 h-4 mr-2" />Print Pipeline</Button>
+                  </Link>
+               </div>
+               {isLoadingGrants ? (
+                 <div className="flex justify-center items-center py-16">
+                   <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+                 </div>
+               ) : grants.length === 0 ? (
+                 <div className="text-center py-16 bg-white rounded-lg border">
+                   <Kanban className="w-16 h-16 mx-auto text-slate-300 mb-4" />
+                   <h3 className="text-xl font-semibold text-slate-900 mb-2">No Grants Yet</h3>
+                   <p className="text-slate-600 mb-4">Start by discovering grants for this profile.</p>
+                   <Link to={createPageUrl("DiscoverGrants")}>
+                     <Button className="bg-blue-600 hover:bg-blue-700">
+                       <Search className="w-4 h-4 mr-2" />
+                       Discover Grants
+                     </Button>
+                   </Link>
+                 </div>
+               ) : (
+                 <ErrorBoundary message="Could not load the grant pipeline for this profile.">
+                   <KanbanBoard
+                      grants={grants}
+                      organizations={[orgData]}
+                      onGrantUpdate={handleGrantUpdate}
+                      onGrantDelete={handleDeleteGrant}
+                    />
+                 </ErrorBoundary>
+               )}
+            </TabsContent>
+
+            {/* Documents tab */}
+            <TabsContent value="documents" className="mt-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Document Library</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {isLoadingDocuments ? (
+                     <div className="flex justify-center items-center py-16">
+                        <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+                     </div>
+                  ) : documents.length === 0 ? (
+                    <div className="text-center py-16 text-slate-500">
+                        <FolderOpen className="w-16 h-16 mx-auto mb-4 text-slate-300" />
+                        <h3 className="text-xl font-semibold text-slate-900 mb-2">No Documents Yet</h3>
+                        <p>Upload a document to start building this profile's intelligence layer.</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {documents.map(doc => (
+                        <DocumentItem key={doc.id} document={doc} onDelete={() => {}} />
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
+      </main>
+
+      {/* NEW: Auto Time Tracker */}
+      {orgData && (
+        <AutoTimeTracker
+          organizationId={orgData.id}
+          organizationName={orgData.name}
+        />
+      )}
+
+      {isEmailComposerOpen && emails.length > 0 && (
+        <OrganizationEmailComposer
+          open={isEmailComposerOpen}
+          onClose={() => setIsEmailComposerOpen(false)}
+          organization={orgData}
+          emails={emails}
+        />
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Profile?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{orgData?.name}"? This action cannot be undone and will also delete all related grants, documents, and data.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteOrgMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirmDelete}
+              className="bg-red-600 hover:bg-red-700"
+              disabled={deleteOrgMutation.isPending}
+            >
+              {deleteOrgMutation.isPending ? 'Deleting...' : 'Delete Profile'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Edit Core Profile Dialog (real persisted fields) */}
+      <Dialog open={editCoreOpen} onOpenChange={setEditCoreOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit Profile</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="profile-display-name">Display name</Label>
+              <Input
+                id="profile-display-name"
+                value={editDisplayName}
+                onChange={(e) => setEditDisplayName(e.target.value)}
+                placeholder="Profile name"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Profile type</Label>
+              <Select value={editPrimaryType} onValueChange={setEditPrimaryType}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select profile type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="organization">Organization</SelectItem>
+                  <SelectItem value="nonprofit">Nonprofit</SelectItem>
+                  <SelectItem value="small_business">Small Business</SelectItem>
+                  <SelectItem value="individual_need">Individual</SelectItem>
+                  <SelectItem value="family">Family</SelectItem>
+                  <SelectItem value="medical_assistance">Medical Assistance</SelectItem>
+                  <SelectItem value="high_school_student">High School Student</SelectItem>
+                  <SelectItem value="college_student">College Student</SelectItem>
+                  <SelectItem value="graduate_student">Graduate Student</SelectItem>
+                  <SelectItem value="government">Government</SelectItem>
+                  <SelectItem value="other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="profile-tags">Tags (comma-separated)</Label>
+              <Input
+                id="profile-tags"
+                value={editTags}
+                onChange={(e) => setEditTags(e.target.value)}
+                placeholder="e.g. veteran, rural, STEM"
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="flex gap-2 justify-end">
+            <Button
+              variant="outline"
+              onClick={() => setEditCoreOpen(false)}
+              disabled={updateOrgMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                const tags = editTags
+                  .split(',')
+                  .map((t) => t.trim())
+                  .filter(Boolean);
+
+                updateOrgMutation.mutate({
+                  id: organizationId,
+                  data: {
+                    display_name: editDisplayName?.trim() || (orgData.display_name ?? orgData.name ?? ''),
+                    primary_type: editPrimaryType || (orgData.primary_type ?? orgData.applicant_type ?? null),
+                    tags,
+                  },
+                });
+              }}
+              disabled={updateOrgMutation.isPending || !editDisplayName.trim()}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              {updateOrgMutation.isPending ? 'Saving…' : 'Save'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

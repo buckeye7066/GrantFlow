@@ -1,0 +1,257 @@
+/**
+ * Ingestion Service
+ * Handles ingestion of opportunities from various sources into the database
+ */
+
+import crypto from 'crypto';
+
+/**
+ * Ingest opportunities into the database
+ * @param {object} db - Database connection
+ * @param {array} opportunities - Array of normalized opportunities
+ * @param {string} sourceName - Source name for tracking
+ * @returns {object} Ingestion results
+ */
+export function ingestOpportunities(db, opportunities, sourceName) {
+  const runId = crypto.randomUUID();
+  const startedAt = new Date().toISOString();
+  
+  console.log(`[ingestion] Starting ingestion run ${runId} for source: ${sourceName}`);
+  
+  // Create ingestion run record
+  const createRun = db.prepare(`
+    INSERT INTO ingestion_runs (id, source, started_at, status, records_fetched)
+    VALUES (?, ?, ?, 'running', ?)
+  `);
+  
+  createRun.run(runId, sourceName, startedAt, opportunities.length);
+  
+  let inserted = 0;
+  let updated = 0;
+  let errors = 0;
+  const errorMessages = [];
+  
+  // Prepare upsert statement
+  // Use INSERT ... ON CONFLICT to handle deduplication by (source, source_id)
+  const upsert = db.prepare(`
+    INSERT INTO funding_opportunities (
+      id, source, source_id, title, sponsor, description,
+      application_url, source_url, deadline, deadline_type,
+      amount_min, amount_max, amount_description,
+      is_national, state,
+      categories, keywords, eligibility_bullets,
+      requires_match, requires_501c3, match_percentage,
+      opportunity_type, is_active, raw_source_payload, last_crawled,
+      created_at, updated_at
+    ) VALUES (
+      ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?,
+      ?, ?, ?,
+      ?, ?,
+      ?, ?, ?,
+      ?, ?, ?,
+      ?, ?, ?, ?,
+      CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+    )
+    ON CONFLICT(source, source_id) DO UPDATE SET
+      title = excluded.title,
+      sponsor = excluded.sponsor,
+      description = excluded.description,
+      application_url = excluded.application_url,
+      source_url = excluded.source_url,
+      deadline = excluded.deadline,
+      deadline_type = excluded.deadline_type,
+      amount_min = excluded.amount_min,
+      amount_max = excluded.amount_max,
+      amount_description = excluded.amount_description,
+      is_national = excluded.is_national,
+      state = excluded.state,
+      categories = excluded.categories,
+      keywords = excluded.keywords,
+      eligibility_bullets = excluded.eligibility_bullets,
+      requires_match = excluded.requires_match,
+      requires_501c3 = excluded.requires_501c3,
+      match_percentage = excluded.match_percentage,
+      opportunity_type = excluded.opportunity_type,
+      is_active = excluded.is_active,
+      raw_source_payload = excluded.raw_source_payload,
+      last_crawled = excluded.last_crawled,
+      updated_at = CURRENT_TIMESTAMP
+  `);
+  
+  // Check if record exists to determine if it's insert or update
+  const checkExists = db.prepare(
+    'SELECT id FROM funding_opportunities WHERE source = ? AND source_id = ?'
+  );
+  
+  // Process in a transaction for performance
+  const ingest = db.transaction(() => {
+    for (const opp of opportunities) {
+      try {
+        // Check if exists before upsert to track insert vs update
+        const existing = checkExists.get(opp.source, opp.source_id);
+        
+        upsert.run(
+          opp.id,
+          opp.source,
+          opp.source_id,
+          opp.title,
+          opp.sponsor,
+          opp.description,
+          opp.application_url,
+          opp.source_url,
+          opp.deadline,
+          opp.deadline_type,
+          opp.amount_min,
+          opp.amount_max,
+          opp.amount_description,
+          opp.is_national,
+          opp.state,
+          opp.categories,
+          opp.keywords,
+          opp.eligibility_bullets,
+          opp.requires_match,
+          opp.requires_501c3,
+          opp.match_percentage,
+          opp.opportunity_type,
+          opp.is_active,
+          opp.raw_source_payload,
+          opp.last_crawled
+        );
+        
+        if (existing) {
+          updated++;
+        } else {
+          inserted++;
+        }
+      } catch (error) {
+        errors++;
+        const errorMsg = `Error ingesting ${opp.source_id}: ${error.message}`;
+        console.error(`[ingestion] ${errorMsg}`);
+        errorMessages.push(errorMsg);
+        
+        // Stop if too many errors
+        if (errors > 10) {
+          throw new Error(`Too many errors during ingestion: ${errors}`);
+        }
+      }
+    }
+  });
+  
+  try {
+    ingest();
+    
+    // Update ingestion run as completed
+    const completeRun = db.prepare(`
+      UPDATE ingestion_runs
+      SET status = 'completed',
+          completed_at = ?,
+          records_inserted = ?,
+          records_updated = ?
+      WHERE id = ?
+    `);
+    
+    completeRun.run(new Date().toISOString(), inserted, updated, runId);
+    
+    console.log(`[ingestion] Completed run ${runId}: inserted=${inserted}, updated=${updated}, errors=${errors}`);
+    
+    return {
+      success: true,
+      run_id: runId,
+      source: sourceName,
+      records_fetched: opportunities.length,
+      records_inserted: inserted,
+      records_updated: updated,
+      errors,
+      error_messages: errorMessages,
+    };
+  } catch (error) {
+    // Update ingestion run as failed
+    const failRun = db.prepare(`
+      UPDATE ingestion_runs
+      SET status = 'failed',
+          completed_at = ?,
+          error_message = ?
+      WHERE id = ?
+    `);
+    
+    failRun.run(new Date().toISOString(), error.message, runId);
+    
+    console.error(`[ingestion] Failed run ${runId}:`, error.message);
+    
+    return {
+      success: false,
+      run_id: runId,
+      source: sourceName,
+      error: error.message,
+      records_fetched: opportunities.length,
+      records_inserted: inserted,
+      records_updated: updated,
+      errors,
+      error_messages: errorMessages,
+    };
+  }
+}
+
+/**
+ * Get ingestion status for all sources
+ * @param {object} db - Database connection
+ * @returns {object} Status by source
+ */
+export function getIngestionStatus(db) {
+  const sources = ['grants.gov', 'usaspending.gov'];
+  const status = {};
+  
+  for (const source of sources) {
+    // Get last successful run
+    const lastRun = db.prepare(`
+      SELECT *
+      FROM ingestion_runs
+      WHERE source = ? AND status = 'completed'
+      ORDER BY completed_at DESC
+      LIMIT 1
+    `).get(source);
+    
+    // Get count of opportunities from this source
+    const count = db.prepare(`
+      SELECT COUNT(*) as count
+      FROM funding_opportunities
+      WHERE source = ? AND is_active = 1
+    `).get(source);
+    
+    // Get last error if any
+    const lastError = db.prepare(`
+      SELECT error_message, completed_at
+      FROM ingestion_runs
+      WHERE source = ? AND status = 'failed'
+      ORDER BY completed_at DESC
+      LIMIT 1
+    `).get(source);
+    
+    status[source] = {
+      last_ingested_at: lastRun?.completed_at || null,
+      count: count?.count || 0,
+      last_error: lastError ? {
+        message: lastError.error_message,
+        occurred_at: lastError.completed_at,
+      } : null,
+    };
+  }
+  
+  // Get total count
+  const total = db.prepare(`
+    SELECT COUNT(*) as count
+    FROM funding_opportunities
+    WHERE is_active = 1
+  `).get();
+  
+  return {
+    sources: status,
+    total_opportunities: total?.count || 0,
+  };
+}
+
+export default {
+  ingestOpportunities,
+  getIngestionStatus,
+};

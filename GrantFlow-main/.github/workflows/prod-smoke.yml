@@ -1,0 +1,37 @@
+name: Prod smoke (read-only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Base URL (e.g. https://app.axiombiolabs.org)"
+        required: true
+        default: "https://app.axiombiolabs.org"
+      base_path:
+        description: "App base path (e.g. /grantflow)"
+        required: true
+        default: "/grantflow"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Run read-only smoke
+        env:
+          SMOKE_BASE_URL: ${{ inputs.base_url }}
+          SMOKE_BASE_PATH: ${{ inputs.base_path }}
+        run: node scripts/smoke-prod-readonly.mjs
+

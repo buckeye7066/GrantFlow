@@ -1,0 +1,226 @@
+/* Print styles for various GrantFlow components */
+/* Used by BillingSheet, PrintablePipeline, PrintableProfile, and PrintableApplication */
+
+@media print {
+  .no-print { 
+    display: none !important; 
+  }
+  
+  @page { 
+    margin: 0.6in 0.5in;
+    size: letter portrait;
+  }
+  
+  body {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+  
+  .avoid-break {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  
+  .allow-break {
+    page-break-inside: auto;
+  }
+
+  /* Ultra-compact print styles */
+  .print-compact {
+    padding: 2px 0 !important;
+    margin: 1px 0 !important;
+  }
+  
+  .print-compact h3 {
+    font-size: 12px !important;
+    margin-bottom: 4px !important;
+    margin-top: 8px !important;
+  }
+  
+  .print-compact table {
+    font-size: 9px !important;
+  }
+  
+  .print-compact td, .print-compact th {
+    padding: 2px 1px !important;
+    line-height: 1.1 !important;
+  }
+  
+  .print-compact .service-description {
+    font-size: 7px !important;
+    line-height: 1.1 !important;
+    margin-top: 1px !important;
+  }
+  
+  /* Header styles */
+  .print-header {
+    margin-bottom: 8px !important;
+    padding-bottom: 4px !important;
+  }
+  
+  .print-header h1 {
+    font-size: 18px !important;
+    margin-bottom: 2px !important;
+  }
+  
+  .print-header h2 {
+    font-size: 14px !important;
+  }
+  
+  .print-header h3 {
+    font-size: 16px !important;
+    margin-bottom: 2px !important;
+  }
+  
+  .print-header p {
+    font-size: 9px !important;
+    margin-top: 2px !important;
+    line-height: 1.2 !important;
+  }
+  
+  /* Client info box */
+  .client-info-box {
+    padding: 6px !important;
+    margin-bottom: 8px !important;
+  }
+  
+  .client-info-box h3 {
+    font-size: 11px !important;
+    margin-bottom: 4px !important;
+  }
+  
+  .client-info-box p, .client-info-box .text-sm {
+    font-size: 8px !important;
+    line-height: 1.2 !important;
+  }
+  
+  /* Category box */
+  .category-box {
+    padding: 6px !important;
+    margin-bottom: 8px !important;
+  }
+  
+  .category-box h3 {
+    font-size: 11px !important;
+    margin-bottom: 4px !important;
+  }
+  
+  .category-box p {
+    font-size: 7px !important;
+    line-height: 1.2 !important;
+    margin-bottom: 2px !important;
+  }
+  
+  /* Ethical notice */
+  .ethical-notice {
+    padding: 4px !important;
+    margin: 4px 0 !important;
+    font-size: 7px !important;
+    line-height: 1.1 !important;
+  }
+  
+  /* Signature section */
+  .signature-section {
+    margin-top: 8px !important;
+    padding-top: 6px !important;
+  }
+  
+  .signature-section h3 {
+    font-size: 10px !important;
+    margin-bottom: 4px !important;
+  }
+  
+  .signature-section p {
+    font-size: 7px !important;
+    line-height: 1.2 !important;
+    margin-bottom: 4px !important;
+  }
+  
+  .signature-section .signature-line {
+    height: 30px !important;
+    margin-bottom: 0 !important;
+  }
+  
+  /* Footer */
+  .print-footer {
+    margin-top: 8px !important;
+    padding-top: 4px !important;
+    font-size: 7px !important;
+    line-height: 1.2 !important;
+  }
+  
+  /* Force signature and footer to stay on last page */
+  .print-footer-group {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Pipeline styles */
+  .gf-columns {
+    display: block;
+    column-count: 2;
+    column-gap: 1.5rem;
+    column-fill: balance;
+  }
+  
+  .gf-column {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    margin-bottom: 1rem;
+  }
+  
+  .gf-card {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  
+  .print-controls {
+    display: none;
+  }
+}
+
+/* Screen styles for pipeline */
+@media screen {
+  .gf-columns {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 1rem;
+  }
+  
+  .gf-column {
+    background-color: #f8fafc;
+    border-radius: 0.5rem;
+    padding: 1rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  }
+  
+  .gf-column-title {
+    font-size: 1.125rem;
+    font-weight: 600;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid #e2e8f0;
+  }
+  
+  .gf-card {
+    background-color: white;
+    border-radius: 0.375rem;
+    padding: 0.75rem;
+    margin-bottom: 0.5rem;
+    border-left: 4px solid #94a3b8;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  }
+  
+  .gf-card-title {
+    font-weight: 600;
+    font-size: 0.95rem;
+    margin-bottom: 0.35rem;
+    color: #1e293b;
+  }
+  
+  .gf-card-detail {
+    font-size: 0.825rem;
+    color: #64748b;
+    margin-bottom: 0.15rem;
+  }
+}
