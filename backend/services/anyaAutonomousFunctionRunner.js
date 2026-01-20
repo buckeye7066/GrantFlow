@@ -1,5 +1,6 @@
 import path from 'path'
 import { promises as fs } from 'fs'
+import { randomUUID } from 'crypto'
 import { dispatchCrawlerJob } from './crawlerDispatcher.js'
 
 const REPO_ROOT = path.resolve(process.cwd())
@@ -8,22 +9,24 @@ const REPO_ROOT = path.resolve(process.cwd())
  * Create audit log entry for autonomous crawler operations
  */
 async function auditLog(entry) {
-  const auditDir = path.join(REPO_ROOT, 'backend', 'data', 'audit')
-  await fs.mkdir(auditDir, { recursive: true })
-  
-  const timestamp = new Date().toISOString()
-  const logEntry = {
-    timestamp,
-    ...entry,
-  }
-  
-  const logFile = path.join(auditDir, 'autonomous-crawlers.log')
-  const logLine = JSON.stringify(logEntry) + '\n'
-  
+  // IMPORTANT: hosted deployments may have a read-only filesystem for the repo.
+  // Audit logging is best-effort and must never crash the request.
   try {
+    const auditDir = path.join(REPO_ROOT, 'backend', 'data', 'audit')
+    await fs.mkdir(auditDir, { recursive: true })
+
+    const timestamp = new Date().toISOString()
+    const logEntry = {
+      timestamp,
+      ...entry,
+    }
+
+    const logFile = path.join(auditDir, 'autonomous-crawlers.log')
+    const logLine = JSON.stringify(logEntry) + '\n'
+
     await fs.appendFile(logFile, logLine, 'utf8')
   } catch (error) {
-    console.error('[auditLog] Failed to write audit log:', error)
+    console.warn('[auditLog] Failed to write audit log:', error?.message || error)
   }
 }
 
@@ -81,12 +84,12 @@ export async function runAutonomousCrawlers(options, context) {
     let profiles
     if (profileIds && Array.isArray(profileIds) && profileIds.length > 0) {
       const placeholders = profileIds.map(() => '?').join(',')
-      profiles = db
+      profiles = await db
         .prepare(`SELECT id, display_name, status FROM profiles WHERE id IN (${placeholders})`)
         .all(...profileIds)
     } else {
       // Get all active profiles
-      profiles = db
+      profiles = await db
         .prepare(`SELECT id, display_name, status FROM profiles WHERE status = 'active'`)
         .all()
     }
@@ -99,13 +102,13 @@ export async function runAutonomousCrawlers(options, context) {
     for (const profile of profiles) {
       for (const crawlerType of crawlerTypes) {
         try {
-          const jobId = Math.random().toString(36).substring(2, 15)
+          const jobId = randomUUID()
           const parameters = {
             autonomous_run: true,
             profile_id: profile.id,
           }
 
-          db.prepare(
+          await db.prepare(
             `
             INSERT INTO crawler_jobs (id, type, profile_id, status, parameters, created_at)
             VALUES (?, ?, ?, 'queued', ?, CURRENT_TIMESTAMP)
@@ -179,7 +182,7 @@ export async function runAutonomousCrawlers(options, context) {
         // Check status of all jobs
         const jobIds = report.jobs.map(j => j.job_id)
         const placeholders = jobIds.map(() => '?').join(',')
-        const jobs = db
+        const jobs = await db
           .prepare(`SELECT id, status, error FROM crawler_jobs WHERE id IN (${placeholders})`)
           .all(...jobIds)
 
@@ -252,27 +255,27 @@ export async function runAutonomousCrawlers(options, context) {
         const failedJobs = report.jobs.filter(j => j.status === 'failed')
         
         for (const failedJob of failedJobs) {
-          const retriesUsed = db
+          const retriesUsed = (await db
             .prepare(`SELECT retry_count FROM crawler_jobs WHERE id = ?`)
-            .get(failedJob.job_id)?.retry_count || 0
+            .get(failedJob.job_id))?.retry_count || 0
 
           if (retriesUsed < maxRetries) {
             try {
-              const newJobId = Math.random().toString(36).substring(2, 15)
+              const newJobId = randomUUID()
               const parameters = {
                 autonomous_run: true,
                 profile_id: failedJob.profile_id,
                 retried_from_job_id: failedJob.job_id,
               }
 
-              db.prepare(
+              await db.prepare(
                 `
                 INSERT INTO crawler_jobs (id, type, profile_id, status, parameters, created_at)
                 VALUES (?, ?, ?, 'queued', ?, CURRENT_TIMESTAMP)
                 `
               ).run(newJobId, failedJob.crawler_type, failedJob.profile_id, JSON.stringify(parameters))
 
-              db.prepare(
+              await db.prepare(
                 `
                 UPDATE crawler_jobs
                 SET retry_count = COALESCE(retry_count, 0) + 1,
