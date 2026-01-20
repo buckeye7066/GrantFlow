@@ -48,7 +48,12 @@ const MILITARY_KEYWORDS = {
 }
 
 function loadJSON(path) {
-  return JSON.parse(fs.readFileSync(path, 'utf8'))
+  try {
+    return JSON.parse(fs.readFileSync(path, 'utf8'))
+  } catch (error) {
+    console.warn('[scholarshipCrawler] Failed to load dataset:', error?.message || String(error))
+    return null
+  }
 }
 
 function tokenizeText(targetSet, value) {
@@ -270,6 +275,25 @@ export async function processScholarshipCrawlerJob({
   }
 
   const scholarships = loadJSON(datasetPath)
+  if (!Array.isArray(scholarships) || scholarships.length === 0) {
+    // Production safety: treat missing/unreadable dataset as "no results" (completed), not a failure.
+    return {
+      evaluated: 0,
+      matched: 0,
+      inserted: 0,
+      savedToPipeline: 0,
+      result_count: 0,
+      result_meta: {
+        evaluated: 0,
+        matched: 0,
+        inserted: 0,
+        savedToPipeline: 0,
+        note: `Scholarship dataset unavailable or empty at ${datasetPath}`,
+        duration_seconds: Math.max(0, Math.round((Date.now() - startTime) / 1000)),
+      },
+      opportunityLogs: [],
+    }
+  }
 
   const scored = scholarships
     .map((opportunity) => {
