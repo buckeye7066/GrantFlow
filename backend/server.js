@@ -1223,6 +1223,7 @@ async function scheduleCrawlerSmokeJobs({ db, uploadsDir }) {
   const documentId = `smoke-document-${suffix}`
   const comprehensiveJobId = `smoke-comprehensive-${suffix}`
   const documentIngestJobId = `smoke-document-ingest-${suffix}`
+  const scholarshipJobId = `smoke-scholarship-${suffix}`
 
   const insertProfileSql =
     db?.dialect === 'postgres'
@@ -1261,7 +1262,10 @@ async function scheduleCrawlerSmokeJobs({ db, uploadsDir }) {
         `
 
   try {
-    await db.prepare(insertProfileSql).run(profileId, 'GrantFlow Smoke Profile', 'organization', 'active', '[]')
+    // Use a student-ish primary_type so scholarship crawler has relevant context.
+    await db
+      .prepare(insertProfileSql)
+      .run(profileId, 'GrantFlow Smoke Profile', 'college_student', 'active', JSON.stringify(['student']))
 
     await db
       .prepare(insertDocumentSql)
@@ -1288,6 +1292,16 @@ async function scheduleCrawlerSmokeJobs({ db, uploadsDir }) {
     await db
       .prepare(insertJobSql)
       .run(
+        scholarshipJobId,
+        'scholarship',
+        profileId,
+        JSON.stringify({ limit: 1 }),
+        'system-smoke',
+      )
+
+    await db
+      .prepare(insertJobSql)
+      .run(
         documentIngestJobId,
         'document_ingest',
         profileId,
@@ -1297,6 +1311,7 @@ async function scheduleCrawlerSmokeJobs({ db, uploadsDir }) {
 
     // Fire-and-forget dispatch (non-blocking).
     dispatchCrawlerJob({ db, jobId: comprehensiveJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(() => {})
+    dispatchCrawlerJob({ db, jobId: scholarshipJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(() => {})
     dispatchCrawlerJob({ db, jobId: documentIngestJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(() => {})
   } catch (error) {
     console.warn('[smoke] Failed to schedule crawler smoke jobs:', error?.message || String(error))
