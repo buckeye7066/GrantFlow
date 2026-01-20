@@ -1439,7 +1439,11 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       })
     }
 
-    // SECURITY: never expose OTP codes in API responses (any environment).
+    // Developer experience: in non-production, return a preview code so local/test flows can proceed
+    // even when email delivery is not configured.
+    if (!isProd) {
+      responseData.previewCode = code
+    }
 
     console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent)
     return res.status(202).json(responseData)
