@@ -59,8 +59,28 @@ export default function AdminProfileDedupe() {
         await refresh()
       }
     } catch (err) {
-      toast({ title: 'Merge failed', description: err.message, variant: 'destructive' })
-      setOutput({ ok: false, error: err.message })
+      const requestId = err?.requestId || err?.details?.request_id || null
+      toast({
+        title: 'Merge failed',
+        description: requestId ? `${err.message} (request_id=${requestId})` : err.message,
+        variant: 'destructive',
+      })
+
+      const base = { ok: false, error: err.message, request_id: requestId }
+      setOutput(base)
+
+      // Best-effort: fetch server-side error details (in-memory store) for quicker debugging.
+      if (requestId) {
+        try {
+          const details = await apiFetch(`/api/admin/errors/${encodeURIComponent(requestId)}`)
+          setOutput({ ...base, server_error: details })
+        } catch (lookupErr) {
+          setOutput({
+            ...base,
+            server_error_lookup_failed: lookupErr?.message || String(lookupErr),
+          })
+        }
+      }
     } finally {
       setLoading(false)
     }
