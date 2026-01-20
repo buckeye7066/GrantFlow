@@ -1483,6 +1483,53 @@ app.get('/api/meta/build', (_req, res) => {
   })
 })
 
+// Public (safe) status for auto profile de-dupe runs.
+// Does not expose profile names, IDs, or any secrets.
+app.get('/api/meta/dedupe', async (_req, res) => {
+  try {
+    const row = await db
+      .prepare(
+        `
+          SELECT created_at, details
+          FROM audit_logs
+          WHERE category = 'admin'
+            AND action = 'auto_profile_dedupe'
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+      )
+      .get()
+
+    if (!row) {
+      return res.json({ ok: true, last_run: null })
+    }
+
+    const details =
+      db?.dialect === 'postgres'
+        ? row.details
+        : (() => {
+            try {
+              return row.details ? JSON.parse(row.details) : null
+            } catch {
+              return null
+            }
+          })()
+
+    return res.json({
+      ok: true,
+      last_run: {
+        created_at: row.created_at ?? null,
+        merged_groups: details?.merged_groups ?? null,
+        merged_losers: details?.merged_losers ?? null,
+        skipped_groups: details?.skipped_groups ?? null,
+        sha: details?.sha ? String(details.sha).slice(0, 12) : null,
+      },
+    })
+  } catch (error) {
+    return res.json({ ok: false, error: error?.message || String(error) })
+  }
+})
+
 // Public health endpoint - safe for non-admin users
 app.get('/api/health', async (req, res) => {
   try {
