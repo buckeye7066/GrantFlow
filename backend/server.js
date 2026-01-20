@@ -1326,6 +1326,7 @@ async function scheduleAutoProfileDedupe({ db }) {
 
   const sha = resolveBuildSha()
   const runId = sha ? `auto-dedupe-${String(sha).slice(0, 12)}` : `auto-dedupe-${crypto.randomUUID().slice(0, 12)}`
+  console.info('[auto-dedupe] starting', { runId, sha: sha ? String(sha).slice(0, 12) : null })
 
   // Skip if we already ran on this deploy SHA (best-effort via audit_logs).
   try {
@@ -1341,7 +1342,10 @@ async function scheduleAutoProfileDedupe({ db }) {
         `,
       )
       .get(runId)
-    if (exists) return
+    if (exists) {
+      console.info('[auto-dedupe] already ran for this deploy; skipping', { runId })
+      return
+    }
   } catch {
     // audit_logs may not exist yet; proceed.
   }
@@ -1369,6 +1373,14 @@ async function scheduleAutoProfileDedupe({ db }) {
       const orgIds = new Set([winner.organization_id, ...losers.map((l) => l.organization_id)].filter(Boolean).map(String))
       if (userIds.size > 1 || orgIds.size > 1) {
         skippedGroups += 1
+        console.info('[auto-dedupe] skipped group (conflicting links)', {
+          runId,
+          key: group.key,
+          winnerId: winner.id,
+          loserCount: losers.length,
+          userIds: Array.from(userIds),
+          orgIds: Array.from(orgIds),
+        })
         logAuditEvent(db, {
           category: AUDIT_CATEGORIES.ADMIN,
           action: 'auto_profile_dedupe_skipped',
@@ -1398,6 +1410,7 @@ async function scheduleAutoProfileDedupe({ db }) {
         })
         mergedGroups += 1
         mergedLosers += loserIds.length
+        console.info('[auto-dedupe] merged group', { runId, key: group.key, winnerId: winner.id, loserCount: loserIds.length })
         logAuditEvent(db, {
           category: AUDIT_CATEGORIES.ADMIN,
           action: 'auto_profile_merge',
@@ -1408,6 +1421,13 @@ async function scheduleAutoProfileDedupe({ db }) {
         })
       } catch (mergeError) {
         skippedGroups += 1
+        console.warn('[auto-dedupe] merge failed', {
+          runId,
+          key: group.key,
+          winnerId: winner.id,
+          loserCount: loserIds.length,
+          error: mergeError?.message || String(mergeError),
+        })
         logAuditEvent(db, {
           category: AUDIT_CATEGORIES.ADMIN,
           action: 'auto_profile_merge_failed',
@@ -1438,6 +1458,13 @@ async function scheduleAutoProfileDedupe({ db }) {
         skipped_groups: skippedGroups,
         duration_seconds: Math.max(0, Math.round((Date.now() - startedAt) / 1000)),
       },
+    })
+    console.info('[auto-dedupe] finished', {
+      runId,
+      mergedGroups,
+      mergedLosers,
+      skippedGroups,
+      durationSeconds: Math.max(0, Math.round((Date.now() - startedAt) / 1000)),
     })
   }
 }
