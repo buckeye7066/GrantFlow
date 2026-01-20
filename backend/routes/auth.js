@@ -1450,6 +1450,15 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       }
     }
 
+    // Production UX: if we could not deliver the email and we are NOT returning a preview code,
+    // fail the request so the UI doesn't strand the user on the "enter code" screen.
+    if (isProd && !emailSent && !responseData.previewCode) {
+      return res.status(503).json({
+        error: 'Email service is temporarily unavailable. Please try again shortly.',
+        error_type: 'email_unavailable',
+      })
+    }
+
     console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent)
     return res.status(202).json(responseData)
     
