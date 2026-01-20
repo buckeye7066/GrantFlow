@@ -50,6 +50,7 @@ import { decryptRuntimeSecret } from './utils/runtimeSecrets.js';
 import { seedBaselineFromRepo } from './utils/seedBaselineFromRepo.js';
 import { assertFundingApiKeys, getFundingApiKeyPresence } from './src/config/apiKeys.js';
 import { ensureProfileEmailSchema } from './utils/accessControl.js';
+import { dispatchCrawlerJob } from './services/crawlerDispatcher.js';
 
 // Validate critical environment variables at startup.
 // NOTE: OpenAI is intentionally OPTIONAL for core app flows (auth/profile/opportunities).
@@ -1209,6 +1210,98 @@ function resolveBuildSha() {
   )
 }
 
+async function scheduleCrawlerSmokeJobs({ db, uploadsDir }) {
+  // Goal: prove crawlers can run end-to-end on the currently deployed build, without needing a human
+  // to click UI buttons. This runs once per deployed SHA and is intentionally tiny.
+  if (process.env.NODE_ENV !== 'production') return
+
+  const sha = resolveBuildSha()
+  const suffix = (sha ? String(sha).slice(0, 8) : crypto.randomUUID().slice(0, 8)).replace(/[^a-z0-9_-]/gi, '')
+
+  const profileId = `smoke-profile-${suffix}`
+  const documentId = `smoke-document-${suffix}`
+  const comprehensiveJobId = `smoke-comprehensive-${suffix}`
+  const documentIngestJobId = `smoke-document-ingest-${suffix}`
+
+  const insertProfileSql =
+    db?.dialect === 'postgres'
+      ? `
+          INSERT INTO profiles (id, display_name, primary_type, status, tags)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT (id) DO NOTHING
+        `
+      : `
+          INSERT OR IGNORE INTO profiles (id, display_name, primary_type, status, tags)
+          VALUES (?, ?, ?, ?, ?)
+        `
+
+  const insertDocumentSql =
+    db?.dialect === 'postgres'
+      ? `
+          INSERT INTO documents (id, profile_id, name, type, extracted_text, processing_status, status)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT (id) DO NOTHING
+        `
+      : `
+          INSERT OR IGNORE INTO documents (id, profile_id, name, type, extracted_text, processing_status, status)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `
+
+  const insertJobSql =
+    db?.dialect === 'postgres'
+      ? `
+          INSERT INTO crawler_jobs (id, type, status, profile_id, parameters, requested_by)
+          VALUES (?, ?, 'queued', ?, ?, ?)
+          ON CONFLICT (id) DO NOTHING
+        `
+      : `
+          INSERT OR IGNORE INTO crawler_jobs (id, type, status, profile_id, parameters, requested_by)
+          VALUES (?, ?, 'queued', ?, ?, ?)
+        `
+
+  try {
+    await db.prepare(insertProfileSql).run(profileId, 'GrantFlow Smoke Profile', 'organization', 'active', '[]')
+
+    await db
+      .prepare(insertDocumentSql)
+      .run(
+        documentId,
+        profileId,
+        `smoke-${suffix}.txt`,
+        'source_material',
+        'Name: GrantFlow Smoke\nEmail: smoke@example.com\nPhone: 555-555-1212',
+        'pending',
+        'draft',
+      )
+
+    await db
+      .prepare(insertJobSql)
+      .run(
+        comprehensiveJobId,
+        'comprehensive',
+        profileId,
+        JSON.stringify({ max_results: 1, match_threshold: 80, save_to_database: false }),
+        'system-smoke',
+      )
+
+    await db
+      .prepare(insertJobSql)
+      .run(
+        documentIngestJobId,
+        'document_ingest',
+        profileId,
+        JSON.stringify({ document_id: documentId, skip_ai: true }),
+        'system-smoke',
+      )
+
+    // Fire-and-forget dispatch (non-blocking).
+    dispatchCrawlerJob({ db, jobId: comprehensiveJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(() => {})
+    dispatchCrawlerJob({ db, jobId: documentIngestJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(() => {})
+  } catch (error) {
+    console.warn('[smoke] Failed to schedule crawler smoke jobs:', error?.message || String(error))
+  }
+}
+
 // Build metadata endpoint (public, no secrets)
 // NOTE: This endpoint is used to confirm production is on the expected commit.
 app.get('/api/meta/build', (_req, res) => {
@@ -1473,6 +1566,11 @@ server.on('listening', () => {
   } catch (err) {
     console.warn('[FeatureFlags] Failed to initialize:', err.message);
   }
+
+  // Schedule a tiny crawler smoke run once per deploy (production only).
+  setTimeout(() => {
+    scheduleCrawlerSmokeJobs({ db, uploadsDir }).catch(() => {})
+  }, 10_000)
   
   // Log server startup event
   try {
