@@ -35,6 +35,7 @@ import statsRouter from './routes/stats.js';
 import jwt from 'jsonwebtoken';
 import crawlerV2Router from './routes/crawlerV2.js';
 import nfProgramsRouter from './routes/nfPrograms.js';
+import nofoRouter from './routes/nofo.js';
 import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
@@ -1200,6 +1201,8 @@ app.use('/api/grant-monitoring', grantMonitoringRouter);
 app.use('/api/crawlers', crawlersRouter);
 app.use('/api/real-crawlers', realCrawlersRouter);
 app.use('/api/preferences', preferencesRouter);
+// Base44 function-style endpoints (used by NOFO Parser + Diagnostics)
+app.use('/api', nofoRouter);
 
 function resolveBuildSha() {
   return (
