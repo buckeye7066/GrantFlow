@@ -48,9 +48,29 @@ const uploadDir = process.env.UPLOADS_DIR
 const zipCoordinatesPath = process.env.GEO_ZIP_COORDINATES_PATH
   ? resolve(process.env.GEO_ZIP_COORDINATES_PATH)
   : join(repoRootDir, 'backend', 'data', 'crawlers', 'zip_coordinates.json');
-const countiesByStatePath = process.env.GEO_COUNTIES_BY_STATE_PATH
-  ? resolve(process.env.GEO_COUNTIES_BY_STATE_PATH)
-  : join(repoRootDir, 'county_batch1.json');
+function resolveCountiesDatasetPath() {
+  const configured = process.env.GEO_COUNTIES_BY_STATE_PATH
+    ? resolve(process.env.GEO_COUNTIES_BY_STATE_PATH)
+    : null
+  if (configured && fs.existsSync(configured)) return configured
+
+  // Common fallback locations (repo root vs backend/data). Prefer backend-scoped path.
+  const candidates = [
+    join(repoRootDir, 'backend', 'data', 'crawlers', 'county_batch1.json'),
+    join(repoRootDir, 'backend', 'data', 'crawlers', 'counties_by_state.json'),
+    join(repoRootDir, 'county_batch1.json'),
+  ]
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return candidate
+    } catch {
+      // ignore
+    }
+  }
+  return configured || candidates[0]
+}
+
+const countiesByStatePath = resolveCountiesDatasetPath();
 
 let zipCoordinatesCache = null;
 let zipStateIndexCache = null;
@@ -253,6 +273,99 @@ async function extractTextFromPDF(filePath) {
 // Helper function to get OpenAI instance
 function getOpenAI() {
   return createOpenAIClient().openai;
+}
+
+function getOpenAIOptional() {
+  return createOpenAIClient({ allowMissing: true }).openai
+}
+
+async function createAnthropicClient() {
+  if (!process.env.ANTHROPIC_API_KEY) return null
+  const Anthropic = (await import('@anthropic-ai/sdk')).default
+  return new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY,
+    timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 15_000),
+    maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
+  })
+}
+
+function extractAnthropicText(response) {
+  const parts = Array.isArray(response?.content) ? response.content : []
+  return parts
+    .map((part) => (typeof part?.text === 'string' ? part.text : typeof part === 'string' ? part : ''))
+    .filter(Boolean)
+    .join('\n')
+    .trim()
+}
+
+function tryExtractFirstJson(text) {
+  const raw = String(text || '')
+  const jsonMatch = raw.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) return null
+  try {
+    return JSON.parse(jsonMatch[0])
+  } catch {
+    return null
+  }
+}
+
+async function invokeJsonWithFallback({ system, prompt, maxTokens = 1500, temperature = 0.1 } = {}) {
+  const openai = getOpenAIOptional()
+  if (openai) {
+    try {
+      const completion = await openai.chat.completions.create({
+        model: AI_MODEL,
+        messages: [
+          system ? { role: 'system', content: system } : null,
+          { role: 'user', content: prompt },
+        ].filter(Boolean),
+        response_format: { type: 'json_object' },
+        temperature,
+        max_tokens: maxTokens,
+      })
+
+      const raw = completion.choices?.[0]?.message?.content
+      if (raw) {
+        try {
+          return { json: JSON.parse(raw), provider: 'openai', raw }
+        } catch {
+          const extracted = tryExtractFirstJson(raw)
+          if (extracted) return { json: extracted, provider: 'openai', raw }
+        }
+      }
+    } catch (error) {
+      const summary = summarizeOpenAIError(error)
+      console.warn('[admin/ai] OpenAI failed, will try Anthropic:', summary?.message || error?.message || error)
+    }
+  }
+
+  const anthropic = await createAnthropicClient()
+  if (anthropic) {
+    try {
+      const response = await anthropic.messages.create({
+        model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+        max_tokens: maxTokens,
+        temperature,
+        system: system || undefined,
+        messages: [
+          {
+            role: 'user',
+            content:
+              `${prompt}\n\n` +
+              `Return ONLY a valid JSON object. Do not include markdown fences or commentary.`,
+          },
+        ],
+      })
+
+      const raw = extractAnthropicText(response)
+      const extracted = tryExtractFirstJson(raw)
+      if (extracted) return { json: extracted, provider: 'anthropic', raw }
+    } catch (error) {
+      console.warn('[admin/ai] Anthropic failed:', error?.message || error)
+    }
+  }
+
+  return { json: null, provider: 'fallback', raw: null }
 }
 
 // GET /api/admin/openai/verify
@@ -584,29 +697,25 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
       }
 
       // Step 2: Use OpenAI to extract structured profile information
-    const openai = getOpenAI();
-    const completion = await openai.chat.completions.create({
-      model: AI_MODEL,
-      messages: [
-        {
-          role: 'system',
-          content: PROFILE_EXTRACTION_PROMPT,
-        },
-        {
-          role: 'user',
-          content: `Extract profile information from this document:\n\n${extractedText.slice(0, MAX_TEXT_LENGTH_FOR_AI)}`,
-        },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.1,
-    });
+      const { json: extractedDataJson, provider: aiProvider } = await invokeJsonWithFallback({
+        system: PROFILE_EXTRACTION_PROMPT,
+        prompt: `Extract profile information from this document:\n\n${extractedText.slice(0, MAX_TEXT_LENGTH_FOR_AI)}`,
+        maxTokens: 1500,
+        temperature: 0.1,
+      })
 
-    const extractedDataStr = completion.choices[0]?.message?.content;
-    if (!extractedDataStr) {
-      throw new Error('OpenAI returned empty response');
-    }
-
-    const extractedData = JSON.parse(extractedDataStr);
+      // If AI is unavailable/misconfigured, do NOT fail the admin workflow.
+      // Create a profile from the filename + raw PDF text and queue deeper parsing when possible.
+      const extractedData =
+        extractedDataJson && typeof extractedDataJson === 'object'
+          ? extractedDataJson
+          : {
+              display_name: file.originalname.replace(/\.[^/.]+$/, '').trim(),
+              primary_type: null,
+              _ai_provider: aiProvider,
+              _ai_warning:
+                'AI extraction unavailable (OpenAI key invalid/unconfigured and no Anthropic key present). Created profile with minimal fields.',
+            }
 
       // Step 3: Create a new profile with extracted information
     const profileId = crypto.randomUUID();
@@ -761,7 +870,7 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
           db: req.db,
           jobId: parseJob.id,
           uploadDir,
-          getOpenAI,
+          getOpenAI: getOpenAIOptional,
         });
       }
 
@@ -802,8 +911,10 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
     }
     
     res.status(500).json({ 
-      error: error.message || 'Failed to process document and create profile',
-      details: error.toString()
+      error: 'Failed to process document and create profile',
+      error_type: 'admin_upload_failed',
+      message:
+        'The server failed to process the PDF. If this is an AI configuration issue, configure Anthropic as a fallback and retry.',
     });
   }
 });
@@ -1017,7 +1128,16 @@ router.get('/geo/state/:state/counties', async (req, res) => {
     const state = String(req.params.state || '').toUpperCase();
     const countiesByState = loadCountiesByState();
     const list = Array.isArray(countiesByState?.[state]) ? countiesByState[state] : [];
-    res.json({ counties: list.map((county) => ({ county })) });
+    res.json({
+      counties: list.map((county) => ({ county })),
+      available: list.length > 0,
+      source:
+        process.env.GEO_COUNTIES_BY_STATE_PATH && fs.existsSync(resolve(process.env.GEO_COUNTIES_BY_STATE_PATH))
+          ? 'GEO_COUNTIES_BY_STATE_PATH'
+          : fs.existsSync(countiesByStatePath)
+            ? 'fallback_file'
+            : 'missing',
+    });
   } catch (error) {
     console.error('[admin/geo/state/counties] Error:', error);
     res.status(500).json({ error: error.message });
@@ -1027,10 +1147,32 @@ router.get('/geo/state/:state/counties', async (req, res) => {
 router.post('/geo/state/:state/index-counties', async (req, res) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return;
-    // Counties are shipped from a bundled JSON file. This endpoint exists so the UI can
-    // confirm availability / future-proof for DB-backed indexing.
+    const state = String(req.params.state || '').toUpperCase();
+
+    // Today, counties are loaded from a dataset file (optional in some deploys).
+    // If the file is missing, tell the UI explicitly so the user isn't stuck thinking "nothing happened".
+    if (!fs.existsSync(countiesByStatePath)) {
+      return res.status(501).json({
+        ok: false,
+        error: 'County dataset is not configured on this deployment.',
+        hint:
+          'Set GEO_COUNTIES_BY_STATE_PATH to a JSON file or deploy with backend/data/crawlers/county_batch1.json. Until then, use ZIP/city scoping.',
+      })
+    }
+
+    const countiesByState = loadCountiesByState();
+    const list = Array.isArray(countiesByState?.[state]) ? countiesByState[state] : [];
+
+    // This endpoint is synchronous (load/validate). Return a completed “job” placeholder for UI consistency.
     const job = { id: crypto.randomUUID(), status: 'completed' };
-    res.json({ success: true, job });
+    res.json({
+      ok: true,
+      success: true,
+      job,
+      state,
+      counties: list.length,
+      source: process.env.GEO_COUNTIES_BY_STATE_PATH ? 'GEO_COUNTIES_BY_STATE_PATH' : 'fallback_file',
+    });
   } catch (error) {
     console.error('[admin/geo/state/index-counties] Error:', error);
     res.status(500).json({ error: error.message });
