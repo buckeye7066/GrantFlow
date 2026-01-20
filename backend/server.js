@@ -51,6 +51,7 @@ import { seedBaselineFromRepo } from './utils/seedBaselineFromRepo.js';
 import { assertFundingApiKeys, getFundingApiKeyPresence } from './src/config/apiKeys.js';
 import { ensureProfileEmailSchema } from './utils/accessControl.js';
 import { dispatchCrawlerJob } from './services/crawlerDispatcher.js';
+import { findDuplicateProfileGroups, mergeProfiles } from './services/profileDedupeService.js'
 
 // Validate critical environment variables at startup.
 // NOTE: OpenAI is intentionally OPTIONAL for core app flows (auth/profile/opportunities).
@@ -1317,6 +1318,130 @@ async function scheduleCrawlerSmokeJobs({ db, uploadsDir }) {
   }
 }
 
+async function scheduleAutoProfileDedupe({ db }) {
+  // Goal: delete duplicate profiles automatically without requiring a human to click buttons.
+  // This runs once per deployed SHA and is intentionally conservative.
+  if (process.env.NODE_ENV !== 'production') return
+  if (!db) return
+
+  const sha = resolveBuildSha()
+  const runId = sha ? `auto-dedupe-${String(sha).slice(0, 12)}` : `auto-dedupe-${crypto.randomUUID().slice(0, 12)}`
+
+  // Skip if we already ran on this deploy SHA (best-effort via audit_logs).
+  try {
+    const exists = await db
+      .prepare(
+        `
+          SELECT 1
+          FROM audit_logs
+          WHERE category = 'admin'
+            AND action = 'auto_profile_dedupe'
+            AND resource_id = ?
+          LIMIT 1
+        `,
+      )
+      .get(runId)
+    if (exists) return
+  } catch {
+    // audit_logs may not exist yet; proceed.
+  }
+
+  const startedAt = Date.now()
+  let mergedGroups = 0
+  let mergedLosers = 0
+  let skippedGroups = 0
+
+  try {
+    const report = await findDuplicateProfileGroups(db, {
+      strategy: 'exact_name',
+      limitGroups: 500,
+      minGroupSize: 2,
+      includeInactive: false,
+    })
+
+    for (const group of report?.groups || []) {
+      const winner = group?.winner
+      const losers = Array.isArray(group?.losers) ? group.losers : []
+      if (!winner?.id || losers.length === 0) continue
+
+      // Safety: skip if multiple distinct non-null users or organizations are involved.
+      const userIds = new Set([winner.user_id, ...losers.map((l) => l.user_id)].filter(Boolean).map(String))
+      const orgIds = new Set([winner.organization_id, ...losers.map((l) => l.organization_id)].filter(Boolean).map(String))
+      if (userIds.size > 1 || orgIds.size > 1) {
+        skippedGroups += 1
+        logAuditEvent(db, {
+          category: AUDIT_CATEGORIES.ADMIN,
+          action: 'auto_profile_dedupe_skipped',
+          severity: SEVERITY.WARNING,
+          resourceType: 'profile',
+          resourceId: winner.id,
+          details: {
+            run_id: runId,
+            group_key: group.key,
+            reason: 'conflicting user_id and/or organization_id across group',
+            user_ids: Array.from(userIds),
+            organization_ids: Array.from(orgIds),
+            winner_id: winner.id,
+            loser_ids: losers.map((l) => l.id),
+          },
+        })
+        continue
+      }
+
+      const loserIds = losers.map((l) => l.id).filter(Boolean)
+      try {
+        await mergeProfiles(db, {
+          winnerId: winner.id,
+          loserIds,
+          dryRun: false,
+          actorUserId: null,
+        })
+        mergedGroups += 1
+        mergedLosers += loserIds.length
+        logAuditEvent(db, {
+          category: AUDIT_CATEGORIES.ADMIN,
+          action: 'auto_profile_merge',
+          severity: SEVERITY.INFO,
+          resourceType: 'profile',
+          resourceId: winner.id,
+          details: { run_id: runId, group_key: group.key, winner_id: winner.id, loser_ids: loserIds },
+        })
+      } catch (mergeError) {
+        skippedGroups += 1
+        logAuditEvent(db, {
+          category: AUDIT_CATEGORIES.ADMIN,
+          action: 'auto_profile_merge_failed',
+          severity: SEVERITY.ERROR,
+          resourceType: 'profile',
+          resourceId: winner.id,
+          details: {
+            run_id: runId,
+            group_key: group.key,
+            winner_id: winner.id,
+            loser_ids: loserIds,
+            error: mergeError?.message || String(mergeError),
+          },
+        })
+      }
+    }
+  } finally {
+    logAuditEvent(db, {
+      category: AUDIT_CATEGORIES.ADMIN,
+      action: 'auto_profile_dedupe',
+      severity: SEVERITY.INFO,
+      resourceType: 'system',
+      resourceId: runId,
+      details: {
+        sha: sha || null,
+        merged_groups: mergedGroups,
+        merged_losers: mergedLosers,
+        skipped_groups: skippedGroups,
+        duration_seconds: Math.max(0, Math.round((Date.now() - startedAt) / 1000)),
+      },
+    })
+  }
+}
+
 // Build metadata endpoint (public, no secrets)
 // NOTE: This endpoint is used to confirm production is on the expected commit.
 app.get('/api/meta/build', (_req, res) => {
@@ -1586,6 +1711,13 @@ server.on('listening', () => {
   setTimeout(() => {
     scheduleCrawlerSmokeJobs({ db, uploadsDir }).catch(() => {})
   }, 10_000)
+
+  // Auto-merge duplicate profiles once per deploy (production only).
+  setTimeout(() => {
+    scheduleAutoProfileDedupe({ db }).catch((err) => {
+      console.warn('[auto-dedupe] failed:', err?.message || String(err))
+    })
+  }, 20_000)
   
   // Log server startup event
   try {
