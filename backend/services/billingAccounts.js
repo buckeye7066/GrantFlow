@@ -1,4 +1,5 @@
 import crypto from 'crypto'
+import { safeParseJSON } from '../utils/safeJson.js'
 
 export function mapTierRow(row) {
   if (!row) return null
@@ -132,6 +133,17 @@ export async function ensureBillingSchema(db) {
 
 export function mapAccountRow(row) {
   if (!row) return null
+  const parseMetadata = (value) => {
+    if (!value) return null
+    if (typeof value === 'object') return value
+    if (typeof value !== 'string') return null
+    // Avoid throwing on legacy/corrupt values.
+    try {
+      return JSON.parse(value)
+    } catch {
+      return safeParseJSON(value, null)
+    }
+  }
   return {
     id: row.id,
     profile_id: row.profile_id,
@@ -144,7 +156,7 @@ export function mapAccountRow(row) {
     pro_bono_reason: row.pro_bono_reason,
     custom_monthly_cents: row.custom_monthly_cents,
     custom_hourly_cents: row.custom_hourly_cents,
-    metadata: row.metadata ? JSON.parse(row.metadata) : null,
+    metadata: parseMetadata(row.metadata),
     created_at: row.created_at,
     updated_at: row.updated_at,
     tier: row.tier_name
