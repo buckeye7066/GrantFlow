@@ -121,7 +121,8 @@ export async function upsertFundingOpportunity(db, opportunity) {
       amount_min: typeof opportunity.amount_min === 'number' ? opportunity.amount_min : null,
       amount_max: typeof opportunity.amount_max === 'number' ? opportunity.amount_max : null,
       amount_description: opportunity.amount_description ?? null,
-      deadline: opportunity.deadline ?? null,
+      // Postgres DATE cannot accept empty string; normalize to null.
+      deadline: normalizeDateLikeOrNull(opportunity.deadline),
       deadline_type: opportunity.deadline_type ?? null,
       application_url: applicationUrl,
       is_national: toDbBoolean(db, isNational),
