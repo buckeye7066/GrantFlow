@@ -987,7 +987,7 @@ router.post('/jobs', async (req, res) => {
     if (admin) {
       targetProfileId = bodyProfileId ?? null
     } else if (auth.role === 'user') {
-      targetProfileId = bodyProfileId ?? null
+      targetProfileId = bodyProfileId ?? auth.profileId ?? null
       if (targetProfileId) {
         if (!(await ensureProfileAccess(req, res, String(targetProfileId)))) return
       }

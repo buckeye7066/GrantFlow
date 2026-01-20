@@ -1440,9 +1440,9 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       responseData.previewCode = code
     } else if (!emailSent && isAdminEmail(email)) {
       // Emergency operator-only fallback: allow the known admin email to see the code when email delivery
-      // is not configured in production. This is intentionally scoped and can be disabled via env.
+      // is not configured in production. This is intentionally scoped and MUST be explicitly enabled.
       const allowAdminPreview =
-        String(process.env.AUTH_ALLOW_PREVIEW_CODE_IN_PROD ?? 'true').trim().toLowerCase() === 'true'
+        String(process.env.AUTH_ALLOW_PREVIEW_CODE_IN_PROD ?? 'false').trim().toLowerCase() === 'true'
       if (allowAdminPreview) {
         responseData.previewCode = code
         responseData.notice =
