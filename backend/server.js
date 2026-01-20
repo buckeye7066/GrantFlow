@@ -49,6 +49,7 @@ import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from './services/auditServi
 import { decryptRuntimeSecret } from './utils/runtimeSecrets.js';
 import { seedBaselineFromRepo } from './utils/seedBaselineFromRepo.js';
 import { assertFundingApiKeys, getFundingApiKeyPresence } from './src/config/apiKeys.js';
+import { ensureProfileEmailSchema } from './utils/accessControl.js';
 
 // Validate critical environment variables at startup.
 // NOTE: OpenAI is intentionally OPTIONAL for core app flows (auth/profile/opportunities).
@@ -1088,21 +1089,56 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
       }
 
       try {
-        profiles = await req.db
-          .prepare(
-            `
-              SELECT id, display_name, organization_id, status
-              FROM profiles
-              WHERE user_id = ?
-              ORDER BY created_at ASC
-            `,
-          )
-          .all(dbUser.id);
+        const emails = Array.from(
+          new Set(
+            [dbUser?.primary_email, user?.email]
+              .map((v) => String(v || '').trim().toLowerCase())
+              .filter(Boolean),
+          ),
+        )
+
+        // Ensure schema exists (idempotent). If it fails, fall back to user_id only.
+        try {
+          await ensureProfileEmailSchema(req.db)
+        } catch {
+          // ignore
+        }
+
+        if (emails.length > 0) {
+          const placeholders = emails.map(() => '?').join(', ')
+          profiles = await req.db
+            .prepare(
+              `
+                SELECT DISTINCT p.id, p.display_name, p.organization_id, p.status
+                FROM profiles p
+                LEFT JOIN profile_emails pe ON pe.profile_id = p.id
+                WHERE p.user_id = ?
+                   OR lower(pe.email) IN (${placeholders})
+                ORDER BY p.created_at ASC
+              `,
+            )
+            .all(dbUser.id, ...emails);
+        } else {
+          profiles = await req.db
+            .prepare(
+              `
+                SELECT id, display_name, organization_id, status
+                FROM profiles
+                WHERE user_id = ?
+                ORDER BY created_at ASC
+              `,
+            )
+            .all(dbUser.id);
+        }
       } catch (dbError) {
         console.error('[/api/auth/me] Database error fetching profiles:', dbError);
         // Return user data without profiles if profiles query fails
         profiles = [];
       }
+
+      // Do not "bleed" into an arbitrary profile_id from the token; only use it if it’s in the accessible list.
+      const profileIds = new Set((profiles || []).map((p) => p?.id).filter(Boolean))
+      const safeActiveProfileId = user.profileId && profileIds.has(user.profileId) ? user.profileId : profiles?.[0]?.id ?? null
 
       return res.json({
         user: {
@@ -1114,7 +1150,7 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
           is_admin: Boolean(dbUser.is_admin),
         },
         profiles: Array.isArray(profiles) ? profiles : [],
-        active_profile_id: user.profileId ?? profiles[0]?.id ?? null,
+        active_profile_id: safeActiveProfileId,
       });
     }
 

@@ -2,6 +2,7 @@ import express from 'express'
 import { formatError } from '../middleware/errorHandler.js'
 import { calculateMatchScore } from '../services/matchingEngine.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
+import { ensureProfileAccess, isAdminUser } from '../utils/accessControl.js'
 
 const router = express.Router()
 
@@ -14,18 +15,14 @@ function requireAuth(req, res) {
   return auth
 }
 
-function requireProfileAccess(req, res, profileId) {
+async function requireProfileAccess(req, res, profileId) {
   const auth = requireAuth(req, res)
   if (!auth) return null
 
-  if (auth.role === 'admin') return auth
+  if (isAdminUser(auth) || auth.role === 'admin') return auth
 
-  // Non-admin tokens are scoped to a single profile [[memory:12811124]]
-  if (!auth.profileId || auth.profileId !== profileId) {
-    res.status(403).json({ error: 'Not authorized to access this profile' })
-    return null
-  }
-
+  const ok = await ensureProfileAccess(req, res, profileId)
+  if (!ok) return null
   return auth
 }
 
@@ -35,7 +32,7 @@ function requireProfileAccess(req, res, profileId) {
  */
 router.get('/profile/:profileId/grants', async (req, res) => {
   const profileId = req.params.profileId
-  const auth = requireProfileAccess(req, res, profileId)
+  const auth = await requireProfileAccess(req, res, profileId)
   if (!auth) return
 
   try {
@@ -133,7 +130,7 @@ router.get('/profile/:profileId/grants', async (req, res) => {
  */
 router.get('/profile/:profileId/opportunities', async (req, res) => {
   const profileId = req.params.profileId
-  const auth = requireProfileAccess(req, res, profileId)
+  const auth = await requireProfileAccess(req, res, profileId)
   if (!auth) return
 
   try {

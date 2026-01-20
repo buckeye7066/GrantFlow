@@ -50,7 +50,7 @@ import { SECTION_CONFIG } from "@/components/profiles/ProfileSectionEditor"
 const JOB_LABELS = {
   local: "Local 50-mile sweep",
   scholarship: "Scholarship intelligence",
-  comprehensive: "Nationwide crawl",
+  comprehensive: "Geo Crawl",
   item_search: "Item funding search",
   avatar_lookup: "AI avatar lookup",
   document_ingest: "Document enrichment",
@@ -246,7 +246,7 @@ function describeJobParameters(job) {
   return null
 }
 
-function OverallMetricsCard({ overall, generatedAt, isLoading }) {
+function OverallMetricsCard({ overall, generatedAt, isLoading, onOpenQueue }) {
   const running = overall?.running ?? 0
   const queued = overall?.queued ?? 0
   const failed = overall?.failed ?? 0
@@ -267,9 +267,29 @@ function OverallMetricsCard({ overall, generatedAt, isLoading }) {
     ? formatDistanceToNow(new Date(overall.last_retry_at), { addSuffix: true })
     : null
   const isActive = running > 0 || queued > 0
+  const isClickable = typeof onOpenQueue === "function"
 
   return (
-    <Card className="border border-slate-200 bg-white/80 shadow-sm">
+    <Card
+      className={cn(
+        "border border-slate-200 bg-white/80 shadow-sm",
+        isClickable ? "cursor-pointer hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500/40" : null,
+      )}
+      onClick={isClickable ? onOpenQueue : undefined}
+      onKeyDown={
+        isClickable
+          ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault()
+                onOpenQueue()
+              }
+            }
+          : undefined
+      }
+      role={isClickable ? "button" : undefined}
+      tabIndex={isClickable ? 0 : undefined}
+      aria-label={isClickable ? "Open automation queue" : undefined}
+    >
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="flex items-center gap-2 text-base">
@@ -492,9 +512,29 @@ function MetricCard({ metric, onInspect, inspectionState, isLoading }) {
       )
     : { completed: 0, failed: 0 }
   const recentRunSum = recentTotals.completed + recentTotals.failed
+  const isClickable = typeof onInspect === "function" && Boolean(lastJob?.id)
 
   return (
-    <Card className="border border-slate-200 bg-white/80 shadow-sm">
+    <Card
+      className={cn(
+        "border border-slate-200 bg-white/80 shadow-sm",
+        isClickable ? "cursor-pointer hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500/40" : null,
+      )}
+      onClick={isClickable ? () => onInspect(lastJob.id) : undefined}
+      onKeyDown={
+        isClickable
+          ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault()
+                onInspect(lastJob.id)
+              }
+            }
+          : undefined
+      }
+      role={isClickable ? "button" : undefined}
+      tabIndex={isClickable ? 0 : undefined}
+      aria-label={isClickable ? `Inspect latest ${label} job` : undefined}
+    >
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="flex items-center gap-2 text-base">
@@ -588,7 +628,10 @@ function MetricCard({ metric, onInspect, inspectionState, isLoading }) {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => lastJob && onInspect(lastJob.id)}
+            onClick={(event) => {
+              event.stopPropagation()
+              if (lastJob) onInspect(lastJob.id)
+            }}
             disabled={!lastJob}
             className="flex items-center gap-2"
           >
@@ -601,9 +644,29 @@ function MetricCard({ metric, onInspect, inspectionState, isLoading }) {
   )
 }
 
-function LiveQueueCard({ runningJobs, recentFailures, onInspect, onRetry, onCancel, retryingJobId, cancellingJobId }) {
+function LiveQueueCard({
+  runningJobs,
+  recentFailures,
+  onInspect,
+  onRetry,
+  onCancel,
+  retryingJobId,
+  cancellingJobId,
+  onOpenQueue,
+}) {
   const hasRunning = Array.isArray(runningJobs) && runningJobs.length > 0
   const hasFailures = Array.isArray(recentFailures) && recentFailures.length > 0
+  const isClickable = typeof onInspect === "function" && (hasRunning || hasFailures || typeof onOpenQueue === "function")
+  const openDefault = () => {
+    const firstJob = (hasRunning ? runningJobs?.[0] : null) ?? (hasFailures ? recentFailures?.[0] : null)
+    if (firstJob?.id && typeof onInspect === "function") {
+      onInspect(firstJob.id)
+      return
+    }
+    if (typeof onOpenQueue === "function") {
+      onOpenQueue()
+    }
+  }
 
   const renderJobRow = (job) => {
     const summary = summarizeJob(job)
@@ -648,14 +711,25 @@ function LiveQueueCard({ runningJobs, recentFailures, onInspect, onRetry, onCanc
               variant="outline"
               size="sm"
               className="text-xs"
-              onClick={() => onCancel(job.id)}
+              onClick={(event) => {
+                event.stopPropagation()
+                onCancel(job.id)
+              }}
               disabled={cancellingJobId === job.id}
             >
               {cancellingJobId === job.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <XCircle className="h-3 w-3" />}
               {cancellingJobId === job.id ? "Cancelling…" : "Cancel"}
             </Button>
           ) : null}
-          <Button variant="ghost" size="sm" className="text-xs" onClick={() => onInspect(job.id)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-xs"
+            onClick={(event) => {
+              event.stopPropagation()
+              onInspect(job.id)
+            }}
+          >
             View job
           </Button>
         </div>
@@ -703,7 +777,15 @@ function LiveQueueCard({ runningJobs, recentFailures, onInspect, onRetry, onCanc
           </p>
         ) : null}
         <div className="flex justify-end gap-2">
-          <Button variant="outline" size="sm" className="text-xs" onClick={() => onInspect(job.id)}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-xs"
+            onClick={(event) => {
+              event.stopPropagation()
+              onInspect(job.id)
+            }}
+          >
             Inspect failure
           </Button>
           {typeof onRetry === "function" ? (
@@ -711,7 +793,10 @@ function LiveQueueCard({ runningJobs, recentFailures, onInspect, onRetry, onCanc
               variant="destructive"
               size="sm"
               className="text-xs gap-2"
-              onClick={() => onRetry(job.id)}
+              onClick={(event) => {
+                event.stopPropagation()
+                onRetry(job.id)
+              }}
               disabled={retryingJobId === job.id}
             >
               {retryingJobId === job.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
@@ -724,7 +809,26 @@ function LiveQueueCard({ runningJobs, recentFailures, onInspect, onRetry, onCanc
   }
 
   return (
-    <Card className="border border-slate-200 bg-white/80 shadow-sm md:col-span-2 xl:col-span-1">
+    <Card
+      className={cn(
+        "border border-slate-200 bg-white/80 shadow-sm md:col-span-2 xl:col-span-1",
+        isClickable ? "cursor-pointer hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500/40" : null,
+      )}
+      onClick={isClickable ? openDefault : undefined}
+      onKeyDown={
+        isClickable
+          ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault()
+                openDefault()
+              }
+            }
+          : undefined
+      }
+      role={isClickable ? "button" : undefined}
+      tabIndex={isClickable ? 0 : undefined}
+      aria-label={isClickable ? "Open live queue details" : undefined}
+    >
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
           <Loader2 className="h-5 w-5 text-blue-600" />
@@ -1637,6 +1741,13 @@ export default function Automation() {
     })
   }
 
+  const handleOpenQueue = () => {
+    if (typeof document === "undefined") return
+    const el = document.getElementById("automation-queue")
+    if (!el) return
+    el.scrollIntoView({ behavior: "smooth", block: "start" })
+  }
+
   return (
     <div className="p-6 md:p-10 space-y-8">
       <header className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
@@ -1677,7 +1788,7 @@ export default function Automation() {
         />
         <QuickActionCard
           icon={Target}
-          title="Nationwide crawl"
+          title="Geo Crawl"
           description="Populate the Funding Opportunities catalog with at least three grants per ZIP."
           onClick={() => handleQueueJob("comprehensive")}
           disabled={createJobMutation.isPending}
@@ -1734,6 +1845,7 @@ export default function Automation() {
           overall={overallMetrics}
           generatedAt={metricsQuery.data?.generated_at ?? null}
           isLoading={metricsQuery.isFetching}
+          onOpenQueue={handleOpenQueue}
         />
         {metricsQuery.isError ? (
           <Card className="border border-red-200 bg-red-50 text-sm text-red-700 shadow-sm">
@@ -1764,11 +1876,12 @@ export default function Automation() {
           onCancel={handleCancelJob}
           retryingJobId={retryingJobId}
           cancellingJobId={cancellingJobId}
+          onOpenQueue={handleOpenQueue}
         />
       </section>
 
       <section className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-        <Card className="border border-slate-200 bg-white/80 shadow-sm">
+        <Card id="automation-queue" className="border border-slate-200 bg-white/80 shadow-sm">
           <CardHeader className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <CardTitle className="text-lg">Automation queue</CardTitle>

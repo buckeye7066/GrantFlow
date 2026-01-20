@@ -9,6 +9,7 @@ import {
   logBillingAccountEvent,
 } from '../services/billingAccounts.js'
 import { formatError } from '../middleware/errorHandler.js'
+import { ensureProfileAccess as ensureProfileAccessByEmail } from '../utils/accessControl.js'
 
 const router = express.Router()
 
@@ -30,14 +31,6 @@ function requireAdmin(req, res, next) {
     return res.status(403).json({ error: 'Admin privileges required' })
   }
   return next()
-}
-
-function canAccessProfile(req, profileRow) {
-  if (!profileRow) return false
-  if (req.user?.role === 'admin') return true
-  if (req.user?.profileId && req.user.profileId === profileRow.id) return true
-  if (req.user?.userId && profileRow.user_id && req.user.userId === profileRow.user_id) return true
-  return false
 }
 
 router.use(requireAuth)
@@ -213,6 +206,9 @@ router.get('/accounts/:profileId', async (req, res) => {
   try {
     await ensureBillingSchema(req.db)
     const profileId = req.params.profileId
+    if (!(await ensureProfileAccessByEmail(req, res, profileId))) {
+      return
+    }
     const profile = await req.db
       .prepare(
         `
@@ -225,10 +221,6 @@ router.get('/accounts/:profileId', async (req, res) => {
 
     if (!profile) {
       return res.status(404).json({ error: 'Profile not found' })
-    }
-
-    if (!canAccessProfile(req, profile)) {
-      return res.status(403).json({ error: 'Forbidden' })
     }
 
     const accountRow = await ensureBillingAccount(req.db, profileId)

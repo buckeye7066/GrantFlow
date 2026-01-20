@@ -8,6 +8,7 @@ import { createOpenAIClient } from '../utils/openaiClient.js'
 import { formatError } from '../middleware/errorHandler.js'
 import { DEFAULT_PAGE_LIMIT, CRAWLER_JOB_TYPES } from '../config/constants.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
+import { ensureProfileAccess, getAccessibleProfileIds, isAdminUser } from '../utils/accessControl.js'
 
 const router = express.Router()
 
@@ -78,13 +79,29 @@ function mapJob(row) {
   return job
 }
 
-function buildJobFilter(auth, { profileId, organizationId, type, status } = {}) {
+function buildJobFilter(auth, { profileId, organizationId, type, status, accessibleProfileIds } = {}) {
   const clauses = []
   const params = []
 
-  if (auth.role !== 'admin') {
-    clauses.push('profile_id = ?')
-    params.push(auth.profileId)
+  const admin = auth.role === 'admin' || isAdminUser(auth)
+
+  if (!admin) {
+    const accessible = accessibleProfileIds instanceof Set ? Array.from(accessibleProfileIds) : []
+
+    if (profileId) {
+      if (!accessibleProfileIds || !accessibleProfileIds.has(profileId)) {
+        return { clause: 'WHERE 1=0', params: [] }
+      }
+      clauses.push('profile_id = ?')
+      params.push(profileId)
+    } else {
+      if (accessible.length === 0) {
+        return { clause: 'WHERE 1=0', params: [] }
+      }
+      const placeholders = accessible.map(() => '?').join(', ')
+      clauses.push(`profile_id IN (${placeholders})`)
+      params.push(...accessible)
+    }
   } else {
     if (profileId) {
       clauses.push('profile_id = ?')
@@ -376,11 +393,15 @@ router.get('/jobs', async (req, res) => {
         ? req.query.organization_id
         : null
 
+    const admin = auth.role === 'admin' || isAdminUser(auth)
+    const accessibleProfileIds = admin ? null : await getAccessibleProfileIds(req.db, auth)
+
     const { clause, params } = buildJobFilter(auth, {
       profileId: profileFilter,
       organizationId: organizationFilter,
       type: typeFilter,
       status: statusFilter,
+      accessibleProfileIds,
     })
 
     const limitValue = Number.isFinite(limit) ? limit : 100
@@ -416,9 +437,13 @@ router.get('/jobs/metrics', async (req, res) => {
         ? req.query.organization_id
         : null
 
+    const admin = auth.role === 'admin' || isAdminUser(auth)
+    const accessibleProfileIds = admin ? null : await getAccessibleProfileIds(req.db, auth)
+
     const { clause, params } = buildJobFilter(auth, {
       profileId: profileFilter,
       organizationId: organizationFilter,
+      accessibleProfileIds,
     })
 
     const statusRows = await req.db
@@ -925,8 +950,12 @@ router.get('/jobs/:id', async (req, res) => {
       return res.status(404).json({ error: 'Job not found' })
     }
 
-    if (auth.role !== 'admin' && job.profile_id !== auth.profileId) {
-      return res.status(403).json({ error: 'Not authorized to access this job' })
+    const admin = auth.role === 'admin' || isAdminUser(auth)
+    if (!admin) {
+      if (!job.profile_id) {
+        return res.status(403).json({ error: 'Not authorized to access this job' })
+      }
+      if (!(await ensureProfileAccess(req, res, String(job.profile_id)))) return
     }
 
     const mappedJob = mapJob(job)
@@ -954,12 +983,13 @@ router.post('/jobs', async (req, res) => {
     }
 
     let targetProfileId = null
-    if (auth.role === 'admin') {
+    const admin = auth.role === 'admin' || isAdminUser(auth)
+    if (admin) {
       targetProfileId = bodyProfileId ?? null
     } else if (auth.role === 'user') {
-      targetProfileId = auth.profileId
-      if (bodyProfileId && bodyProfileId !== auth.profileId) {
-        return res.status(403).json({ error: 'Cannot request jobs for another profile' })
+      targetProfileId = bodyProfileId ?? null
+      if (targetProfileId) {
+        if (!(await ensureProfileAccess(req, res, String(targetProfileId)))) return
       }
     }
 
@@ -1013,7 +1043,7 @@ router.post('/jobs', async (req, res) => {
       targetProfileId,
       organizationId,
       parametersJson,
-      auth.role === 'admin' ? 'admin' : targetProfileId,
+      admin ? 'admin' : (auth.userId ?? auth.email ?? targetProfileId ?? 'user'),
     )
 
     const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
@@ -1042,12 +1072,10 @@ router.post('/jobs/:id/retry', async (req, res) => {
       return res.status(404).json({ error: 'Job not found' })
     }
 
-    if (
-      auth.role !== 'admin' &&
-      job.profile_id &&
-      job.profile_id !== auth.profileId
-    ) {
-      return res.status(403).json({ error: 'Not authorized to retry this job' })
+    const admin = auth.role === 'admin' || isAdminUser(auth)
+    if (!admin) {
+      if (!job.profile_id) return res.status(403).json({ error: 'Not authorized to retry this job' })
+      if (!(await ensureProfileAccess(req, res, String(job.profile_id)))) return
     }
 
     if (job.status !== 'failed' && job.status !== 'completed' && job.status !== 'cancelled') {
@@ -1080,11 +1108,11 @@ router.post('/jobs/:id/retry', async (req, res) => {
     }
 
     const requestedBy =
-      auth.role === 'admin'
+      admin
         ? 'admin'
         : job.profile_id
         ? job.profile_id
-        : auth.profileId ?? 'system'
+        : auth.userId ?? auth.email ?? 'system'
 
     const newJobId = crypto.randomUUID()
     await req.db
@@ -1151,12 +1179,10 @@ router.post('/jobs/:id/cancel', async (req, res) => {
       return res.status(404).json({ error: 'Job not found' })
     }
 
-    if (
-      auth.role !== 'admin' &&
-      job.profile_id &&
-      job.profile_id !== auth.profileId
-    ) {
-      return res.status(403).json({ error: 'Not authorized to cancel this job' })
+    const admin = auth.role === 'admin' || isAdminUser(auth)
+    if (!admin) {
+      if (!job.profile_id) return res.status(403).json({ error: 'Not authorized to cancel this job' })
+      if (!(await ensureProfileAccess(req, res, String(job.profile_id)))) return
     }
 
     if (job.status !== 'queued') {
@@ -1264,9 +1290,9 @@ router.get('/auto-discovery-status/:profileId', async (req, res) => {
       return res.status(400).json({ error: 'profileId is required' })
     }
 
-    // Non-admin users can only access their own profile's status
-    if (auth.role !== 'admin' && auth.profileId !== profileId) {
-      return res.status(403).json({ error: 'Access denied to this profile' })
+    const admin = auth.role === 'admin' || isAdminUser(auth)
+    if (!admin) {
+      if (!(await ensureProfileAccess(req, res, String(profileId)))) return
     }
 
     // Count jobs created by auto-discovery for this profile
