@@ -13,6 +13,7 @@ import fetch from 'node-fetch';
 import { extractTextFromFile } from '../services/documentTextExtraction.js';
 import { classifyUniversityApplicationForDocument, loadUniversityApplicationsForProfile } from '../services/universityDocumentClassifier.js';
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
+import { getAccessibleProfileIds, isAdminUser } from '../utils/accessControl.js'
 
 // OpenAI client helper
 function getOpenAI() {
@@ -248,22 +249,14 @@ async function downloadRemoteFileToUploads({ url, req }) {
 
 async function buildAccessContext(req) {
   const user = req.user ?? { role: 'guest' };
-  const isAdmin = user.role === 'admin';
-  const accessibleProfiles = new Set();
+  const isAdmin = isAdminUser(user) || user.role === 'admin';
 
-  if (!isAdmin) {
-    if (user.profileId) {
-      accessibleProfiles.add(user.profileId);
-    }
-    if (user.userId) {
-      const rows = await req.db
-        .prepare('SELECT id FROM profiles WHERE user_id = ?')
-        .all(user.userId);
-      rows.forEach((row) => accessibleProfiles.add(row.id));
-    }
+  if (isAdmin) {
+    return { user, isAdmin: true, accessibleProfiles: new Set() };
   }
 
-  return { user, isAdmin, accessibleProfiles };
+  const ids = await getAccessibleProfileIds(req.db, user);
+  return { user, isAdmin: false, accessibleProfiles: ids || new Set() };
 }
 
 function ensureAuthenticated(res, context) {

@@ -1439,13 +1439,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       })
     }
 
-    // Developer ergonomics: in non-production, include a preview code for easier local testing.
-    if (!isProd) {
-      responseData.previewCode = code
-      responseData.notice = emailSent
-        ? 'Development mode: Code included for testing'
-        : 'Email service is not configured or unavailable. Use the preview code below to continue.'
-    }
+    // SECURITY: never expose OTP codes in API responses (any environment).
 
     console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent)
     return res.status(202).json(responseData)

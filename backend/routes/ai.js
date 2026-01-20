@@ -66,6 +66,18 @@ function tryExtractFirstJson(text) {
   return safeParseJSON(jsonMatch ? jsonMatch[0] : raw, null)
 }
 
+function compactJson(value, maxLen = 2800) {
+  let text = ''
+  try {
+    text = JSON.stringify(value, null, 2)
+  } catch {
+    text = String(value ?? '')
+  }
+  if (!text) return ''
+  if (text.length <= maxLen) return text
+  return `${text.slice(0, Math.max(0, maxLen - 1))}…`
+}
+
 async function invokeTextWithFallback({ model, system, prompt, temperature, maxTokens }) {
   const openai = getOpenAIOptional()
   if (openai) {
@@ -488,9 +500,35 @@ router.post('/generate/proposal', async (req, res) => {
     
     // Get grant details
     const grant = await req.db.prepare(`
-      SELECT g.*, o.* 
+      SELECT 
+        g.*,
+        o.name AS organization_name,
+        o.applicant_type AS organization_applicant_type,
+        o.mission AS organization_mission,
+        o.city AS organization_city,
+        o.state AS organization_state,
+        o.website AS organization_website,
+        fo.id AS opportunity_id,
+        fo.title AS opportunity_title,
+        fo.sponsor AS opportunity_sponsor,
+        fo.description AS opportunity_description,
+        fo.deadline AS opportunity_deadline,
+        fo.deadline_type AS opportunity_deadline_type,
+        fo.state AS opportunity_state,
+        fo.is_national AS opportunity_is_national,
+        fo.amount_min AS opportunity_amount_min,
+        fo.amount_max AS opportunity_amount_max,
+        fo.amount_description AS opportunity_amount_description,
+        fo.application_url AS opportunity_application_url,
+        fo.eligibility_bullets AS opportunity_eligibility_bullets,
+        fo.categories AS opportunity_categories,
+        fo.keywords AS opportunity_keywords,
+        fo.requires_501c3 AS opportunity_requires_501c3,
+        fo.requires_match AS opportunity_requires_match,
+        fo.match_percentage AS opportunity_match_percentage
       FROM grants g
       JOIN organizations o ON g.organization_id = o.id
+      LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
       WHERE g.id = ?
     `).get(grant_id);
     
@@ -498,21 +536,78 @@ router.post('/generate/proposal', async (req, res) => {
       return res.status(404).json({ error: 'Grant not found' });
     }
     
-    const systemPrompt = `You are an expert grant writer. Generate compelling, specific content for grant applications. 
-Be specific, use concrete examples, and tailor the content to the applicant's profile and the grant requirements.
-Write in a professional but engaging tone.`;
+    const applicantContext = {
+      name: grant.organization_name ?? grant.name ?? null,
+      applicant_type: grant.organization_applicant_type ?? grant.applicant_type ?? null,
+      mission: grant.organization_mission ?? grant.mission ?? null,
+      location: {
+        city: grant.organization_city ?? null,
+        state: grant.organization_state ?? null,
+      },
+      website: grant.organization_website ?? null,
+      grant_tracking: {
+        grant_id: grant.id,
+        status: grant.status ?? null,
+        amount_requested: grant.amount_requested ?? null,
+        deadline: grant.deadline ?? null,
+        notes: grant.notes ?? null,
+      },
+    }
 
-    const prompt = userPrompt || `Write a ${section || 'project narrative'} section for a grant application.
+    const opportunityContext = grant.opportunity_id
+      ? {
+          id: grant.opportunity_id,
+          title: grant.opportunity_title ?? null,
+          sponsor: grant.opportunity_sponsor ?? null,
+          description: grant.opportunity_description ?? null,
+          deadline: grant.opportunity_deadline ?? null,
+          deadline_type: grant.opportunity_deadline_type ?? null,
+          geography: {
+            is_national: grant.opportunity_is_national ?? null,
+            state: grant.opportunity_state ?? null,
+          },
+          funding: {
+            amount_min: grant.opportunity_amount_min ?? null,
+            amount_max: grant.opportunity_amount_max ?? null,
+            amount_description: grant.opportunity_amount_description ?? null,
+          },
+          application_url: grant.opportunity_application_url ?? null,
+          eligibility_bullets: safeParseJSON(grant.opportunity_eligibility_bullets, []),
+          categories: safeParseJSON(grant.opportunity_categories, []),
+          keywords: safeParseJSON(grant.opportunity_keywords, []),
+          requirements: {
+            requires_501c3: grant.opportunity_requires_501c3 ?? null,
+            requires_match: grant.opportunity_requires_match ?? null,
+            match_percentage: grant.opportunity_match_percentage ?? null,
+          },
+        }
+      : {
+          // Fallback when the grant isn't linked to a funding_opportunities row.
+          title: grant.title ?? null,
+          funder: grant.funder ?? null,
+          deadline: grant.deadline ?? null,
+          application_url: grant.application_url ?? null,
+        }
 
-APPLICANT: ${grant.name}
-TYPE: ${grant.applicant_type}
-MISSION: ${grant.mission || 'Not specified'}
-FUNDING NEEDED: ${grant.funding_amount_needed || 'Not specified'}
+    const systemPrompt = `You are an expert grant writer.
+Write compelling, specific grant content grounded in the applicant context and the funding source context.
+If details are missing, ask for the missing info via clear bracketed placeholders rather than inventing facts.`
 
-GRANT: ${grant.title}
-FUNDER: ${grant.funder}
+    const prompt =
+      userPrompt ||
+      `Write a ${section || 'project narrative'} section for a grant application (about 300-500 words).
 
-Generate a well-structured, compelling ${section || 'narrative'} of about 300-500 words.`;
+APPLICANT CONTEXT:
+${compactJson(applicantContext)}
+
+FUNDING SOURCE CONTEXT:
+${compactJson(opportunityContext)}
+
+Requirements:
+- Match tone/format expectations implied by the funder and opportunity description.
+- Reuse specifics from the applicant context (mission, programs, location, current grant status).
+- If eligibility bullets exist, ensure the narrative aligns to them.
+- Use [PLACEHOLDER: ...] for unknown facts (do not guess).`;
 
     const result = await invokeTextWithFallback({
       model: DEFAULT_OPENAI_MODEL,
