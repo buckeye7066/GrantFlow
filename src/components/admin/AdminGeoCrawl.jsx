@@ -39,6 +39,7 @@ async function startGeoCrawl(payload) {
 export default function AdminGeoCrawl() {
   const { toast } = useToast()
   const [loading, setLoading] = useState(false)
+  const [countyIndexNotice, setCountyIndexNotice] = useState("")
   const [states, setStates] = useState([])
   const [selectedState, setSelectedState] = useState("")
   const [zips, setZips] = useState([])
@@ -78,6 +79,11 @@ export default function AdminGeoCrawl() {
         setZips(zipRes?.zips ?? [])
         setCounties(countyRes?.counties ?? [])
         setStatus(statusRes ?? null)
+        setCountyIndexNotice(
+          countyRes?.available === false
+            ? "County dataset isn’t configured on this deployment yet. Use ZIP/city scoping for now."
+            : "",
+        )
         // Reset local selection + filters when switching states to avoid mismatched selections.
         setSelectedZips(new Set())
         setSelectedCounties(new Set())
@@ -216,12 +222,29 @@ export default function AdminGeoCrawl() {
 
   const handleIndexCounties = async () => {
     if (!selectedState) return
+    setLoading(true)
     try {
       const res = await indexCounties(selectedState)
-      toast({ title: "County indexing started", description: `Job ${res?.job?.id || ""}` })
-      setStatus((prev) => ({ ...(prev || {}), geo_index: res?.job }))
+      toast({
+        title: "Counties indexed",
+        description: res?.counties != null ? `${res.counties} counties available for ${selectedState}.` : "Done.",
+      })
+
+      // Refresh county list immediately so the UI updates.
+      const countyRes = await fetchCounties(selectedState)
+      setCounties(countyRes?.counties ?? [])
+      setCountyIndexNotice(
+        countyRes?.available === false
+          ? "County dataset isn’t configured on this deployment yet. Use ZIP/city scoping for now."
+          : "",
+      )
     } catch (err) {
+      setCountyIndexNotice(
+        "County dataset isn’t configured on this deployment yet. Use ZIP/city scoping for now.",
+      )
       toast({ title: "Failed to start county indexing", description: err.message, variant: "destructive" })
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -323,6 +346,11 @@ export default function AdminGeoCrawl() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Counties (requires indexing)</Label>
+                  {countyIndexNotice ? (
+                    <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                      {countyIndexNotice}
+                    </div>
+                  ) : null}
                   <Input
                     placeholder="Search counties..."
                     value={countySearch}
