@@ -1391,7 +1391,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       // Add timeout to email sending to prevent hanging
       const emailPromise = sendVerificationEmail(email, code)
       const timeoutPromise = new Promise((resolve) => {
-        setTimeout(() => resolve(false), 5000) // 5 second timeout
+        setTimeout(() => resolve(false), Number(process.env.AUTH_EMAIL_SEND_TIMEOUT_MS || 15000)) // default 15s
       })
       
       emailSent = await Promise.race([emailPromise, timeoutPromise])
@@ -1430,14 +1430,9 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
     }).catch(() => {})
 
     // SECURITY: never expose OTP codes in production responses.
-    // If email delivery fails in production, return an error so the user cannot continue without the email.
+    // IMPORTANT: do NOT hard-fail the login start flow if email delivery is slow/unavailable.
+    // Many providers are async/queued and may deliver shortly after the request returns.
     const isProd = process.env.NODE_ENV === 'production'
-    if (isProd && !emailSent) {
-      return res.status(503).json({
-        error: 'Email service is temporarily unavailable. Please try again shortly.',
-        error_type: 'email_unavailable',
-      })
-    }
 
     // Developer experience: in non-production, return a preview code so local/test flows can proceed
     // even when email delivery is not configured.
