@@ -58,18 +58,22 @@ async function getDatabaseDiagnostics(db) {
   try {
     // Test database connectivity
     await db.prepare('SELECT 1').get();
+ 
+    // For Postgres, `DB_PATH` is irrelevant; the "path" field is only meaningful for SQLite.
+    const dialect = db?.dialect || 'unknown'
+    const dbPath = dialect === 'sqlite' ? (process.env.DB_PATH || 'data/grantflow.db') : null;
     
-    // Get database file path
-    const dbPath = process.env.DB_PATH || 'data/grantflow.db';
-    
-    // Check if database is writable by attempting a simple query
-    let writable = true;
-    if (db?.dialect === 'sqlite') {
+    // Check if database is writable by attempting a simple query (SQLite only).
+    let writable = dialect === 'sqlite';
+    if (dialect === 'sqlite') {
       try {
         await db.prepare('SELECT COUNT(*) FROM sqlite_master').get();
+        writable = true
       } catch (error) {
         writable = false;
       }
+    } else {
+      writable = null
     }
     
     // Get table counts
@@ -310,6 +314,21 @@ async function getRecentErrors(db) {
         ? `created_at >= (NOW() - INTERVAL '7 days')`
         : `created_at >= datetime('now', '-7 days')`
 
+    // Compute most recent success per type (used to hide stale failures that have already recovered).
+    const lastSuccessRows = await db.prepare(`
+      SELECT type, MAX(created_at) AS last_success_at
+      FROM crawler_jobs
+      WHERE status = 'completed'
+        AND ${since7dPredicate}
+      GROUP BY type
+    `).all()
+
+    const lastSuccessByType = new Map()
+    ;(lastSuccessRows || []).forEach((row) => {
+      if (!row?.type || !row?.last_success_at) return
+      lastSuccessByType.set(String(row.type), new Date(row.last_success_at).getTime())
+    })
+
     // Get failed crawler jobs from last 7 days
     const failedJobs = await db.prepare(`
       SELECT id, type, status, profile_id, organization_id, error, created_at
@@ -321,6 +340,15 @@ async function getRecentErrors(db) {
     `).all();
     
     failedJobs.forEach(job => {
+      const type = String(job.type || '')
+      const createdAtMs = job.created_at ? new Date(job.created_at).getTime() : null
+      const lastSuccessMs = lastSuccessByType.get(type) ?? null
+
+      // If the crawler type has succeeded after this failure, treat it as "stale" and omit it from the headline list.
+      if (createdAtMs && lastSuccessMs && createdAtMs < lastSuccessMs) {
+        return
+      }
+
       errors.push({
         scope: 'crawler_job',
         job_id: job.id ?? null,
