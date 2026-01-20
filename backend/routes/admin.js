@@ -77,6 +77,15 @@ let zipStateIndexCache = null;
 let countiesByStateCache = null;
 let zipCoordinatesMissing = false;
 
+const STATE_FIPS = Object.freeze({
+  AL: '01', AK: '02', AZ: '04', AR: '05', CA: '06', CO: '08', CT: '09', DE: '10', DC: '11',
+  FL: '12', GA: '13', HI: '15', ID: '16', IL: '17', IN: '18', IA: '19', KS: '20', KY: '21',
+  LA: '22', ME: '23', MD: '24', MA: '25', MI: '26', MN: '27', MS: '28', MO: '29', MT: '30',
+  NE: '31', NV: '32', NH: '33', NJ: '34', NM: '35', NY: '36', NC: '37', ND: '38', OH: '39',
+  OK: '40', OR: '41', PA: '42', RI: '44', SC: '45', SD: '46', TN: '47', TX: '48', UT: '49',
+  VT: '50', VA: '51', WA: '53', WV: '54', WI: '55', WY: '56',
+})
+
 const US_STATE_CODES = Object.freeze([
   'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA',
   'HI','ID','IL','IN','IA','KS','KY','LA','ME','MD',
@@ -230,6 +239,35 @@ function loadCountiesByState() {
   }
   countiesByStateCache = JSON.parse(fs.readFileSync(countiesByStatePath, 'utf8'));
   return countiesByStateCache;
+}
+
+async function fetchCountiesFromCensus(stateCode) {
+  const st = String(stateCode || '').toUpperCase()
+  const fips = STATE_FIPS[st] || null
+  if (!fips) return []
+
+  // No API key required.
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 12_000)
+  try {
+    const url = `https://api.census.gov/data/2019/pep/population?get=NAME&for=county:*&in=state:${encodeURIComponent(fips)}`
+    const res = await fetch(url, { signal: controller.signal })
+    if (!res.ok) return []
+    const data = await res.json().catch(() => null)
+    if (!Array.isArray(data) || data.length < 2) return []
+
+    const names = data
+      .slice(1)
+      .map((row) => (Array.isArray(row) ? String(row[0] || '') : ''))
+      .map((name) => name.split(',')[0].trim())
+      .filter(Boolean)
+
+    return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b))
+  } catch {
+    return []
+  } finally {
+    clearTimeout(timeoutId)
+  }
 }
 
 if (!fs.existsSync(uploadDir)) {
@@ -1149,25 +1187,23 @@ router.post('/geo/state/:state/index-counties', async (req, res) => {
     if (!(await ensureAdminRequest(req, res))) return;
     const state = String(req.params.state || '').toUpperCase();
 
-    // Today, counties are loaded from a dataset file (optional in some deploys).
-    // If the file is missing, degrade gracefully (200) so the UI doesn't spam console errors.
-    if (!fs.existsSync(countiesByStatePath)) {
-      const job = { id: crypto.randomUUID(), status: 'skipped' }
-      return res.json({
-        ok: true,
-        success: true,
-        job,
-        state,
-        counties: 0,
-        available: false,
-        source: 'missing',
-        warning:
-          'County dataset is not configured on this deployment. Use ZIP/city scoping or set GEO_COUNTIES_BY_STATE_PATH.',
-      })
+    const countiesByState = loadCountiesByState();
+    let list = Array.isArray(countiesByState?.[state]) ? countiesByState[state] : [];
+
+    // If file-backed dataset is missing/empty, fall back to Census API and cache the result.
+    let source = fs.existsSync(countiesByStatePath) ? 'fallback_file' : 'missing'
+    if (process.env.GEO_COUNTIES_BY_STATE_PATH && fs.existsSync(resolve(process.env.GEO_COUNTIES_BY_STATE_PATH))) {
+      source = 'GEO_COUNTIES_BY_STATE_PATH'
     }
 
-    const countiesByState = loadCountiesByState();
-    const list = Array.isArray(countiesByState?.[state]) ? countiesByState[state] : [];
+    if (!list.length) {
+      const fetched = await fetchCountiesFromCensus(state)
+      if (fetched.length) {
+        countiesByState[state] = fetched
+        list = fetched
+        source = 'census_api'
+      }
+    }
 
     // This endpoint is synchronous (load/validate). Return a completed “job” placeholder for UI consistency.
     const job = { id: crypto.randomUUID(), status: 'completed' };
@@ -1178,7 +1214,11 @@ router.post('/geo/state/:state/index-counties', async (req, res) => {
       state,
       counties: list.length,
       available: list.length > 0,
-      source: process.env.GEO_COUNTIES_BY_STATE_PATH ? 'GEO_COUNTIES_BY_STATE_PATH' : 'fallback_file',
+      source,
+      warning:
+        list.length > 0
+          ? null
+          : 'No counties available for this state. If GEO_COUNTIES_BY_STATE_PATH is not set, ensure outbound HTTPS is allowed to reach the US Census API.',
     });
   } catch (error) {
     console.error('[admin/geo/state/index-counties] Error:', error);
