@@ -1439,15 +1439,20 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
     if (!isProd) {
       responseData.previewCode = code
     } else if (!emailSent && isAdminEmail(email)) {
-      // Emergency operator-only fallback: allow the known admin email to see the code when email delivery
-      // is not configured in production. This is intentionally scoped and MUST be explicitly enabled.
-      const allowAdminPreview =
-        String(process.env.AUTH_ALLOW_PREVIEW_CODE_IN_PROD ?? 'false').trim().toLowerCase() === 'true'
-      if (allowAdminPreview) {
-        responseData.previewCode = code
-        responseData.notice =
-          'Admin emergency login: email delivery is unavailable, so a preview code is returned. Disable by setting AUTH_ALLOW_PREVIEW_CODE_IN_PROD=false once email is fixed.'
-      }
+      // Operator fallback (production): if email delivery is failing, allow ONLY the admin allowlist email
+      // to receive a preview code so the operator is never locked out of the system.
+      responseData.previewCode = code
+      responseData.notice =
+        'Admin login fallback: email delivery failed, so a preview code is returned. Fix email delivery to remove this.'
+    }
+
+    // Production UX: if we could not deliver the email and we are NOT returning a preview code,
+    // fail the request so the UI doesn't strand the user on the "enter code" screen.
+    if (isProd && !emailSent && !responseData.previewCode) {
+      return res.status(503).json({
+        error: 'Email service is temporarily unavailable. Please try again shortly.',
+        error_type: 'email_unavailable',
+      })
     }
 
     console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent)
