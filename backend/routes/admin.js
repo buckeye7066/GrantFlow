@@ -2042,9 +2042,9 @@ router.post('/crawlers/audit-live', async (req, res) => {
  * GET /api/admin/profiles/duplicates
  * Admin-only: list duplicate candidate profile groups (dry-run report).
  */
-router.get('/profiles/duplicates', async (req, res) => {
+router.get('/profiles/duplicates', async (req, res, next) => {
   try {
-    if (!(await ensureAdminRequest(req, res))) return;
+    if (!(await ensureAdminRequest(req, res))) return
 
     const strategy = String(req.query?.strategy || 'exact_name')
     const limitGroups = Math.max(1, Math.min(Number(req.query?.limitGroups) || 50, 500))
@@ -2063,7 +2063,7 @@ router.get('/profiles/duplicates', async (req, res) => {
     })
   } catch (error) {
     console.error('[admin/profiles/duplicates] Error:', error)
-    return res.status(500).json({ ok: false, error: error?.message || String(error) })
+    return next(error)
   }
 })
 
@@ -2071,9 +2071,9 @@ router.get('/profiles/duplicates', async (req, res) => {
  * POST /api/admin/profiles/merge
  * Admin-only: merge one or more "loser" profiles into a "winner" profile.
  */
-router.post('/profiles/merge', async (req, res) => {
+router.post('/profiles/merge', async (req, res, next) => {
   try {
-    if (!(await ensureAdminRequest(req, res))) return;
+    if (!(await ensureAdminRequest(req, res))) return
 
     const winnerId = req.body?.winnerId
     const loserIds = req.body?.loserIds
@@ -2089,7 +2089,7 @@ router.post('/profiles/merge', async (req, res) => {
     return res.json({ ok: true, ...result })
   } catch (error) {
     console.error('[admin/profiles/merge] Error:', error)
-    return res.status(500).json({ ok: false, error: error?.message || String(error) })
+    return next(error)
   }
 })
 
