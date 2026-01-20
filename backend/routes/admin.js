@@ -1150,13 +1150,19 @@ router.post('/geo/state/:state/index-counties', async (req, res) => {
     const state = String(req.params.state || '').toUpperCase();
 
     // Today, counties are loaded from a dataset file (optional in some deploys).
-    // If the file is missing, tell the UI explicitly so the user isn't stuck thinking "nothing happened".
+    // If the file is missing, degrade gracefully (200) so the UI doesn't spam console errors.
     if (!fs.existsSync(countiesByStatePath)) {
-      return res.status(501).json({
-        ok: false,
-        error: 'County dataset is not configured on this deployment.',
-        hint:
-          'Set GEO_COUNTIES_BY_STATE_PATH to a JSON file or deploy with backend/data/crawlers/county_batch1.json. Until then, use ZIP/city scoping.',
+      const job = { id: crypto.randomUUID(), status: 'skipped' }
+      return res.json({
+        ok: true,
+        success: true,
+        job,
+        state,
+        counties: 0,
+        available: false,
+        source: 'missing',
+        warning:
+          'County dataset is not configured on this deployment. Use ZIP/city scoping or set GEO_COUNTIES_BY_STATE_PATH.',
       })
     }
 
@@ -1171,6 +1177,7 @@ router.post('/geo/state/:state/index-counties', async (req, res) => {
       job,
       state,
       counties: list.length,
+      available: list.length > 0,
       source: process.env.GEO_COUNTIES_BY_STATE_PATH ? 'GEO_COUNTIES_BY_STATE_PATH' : 'fallback_file',
     });
   } catch (error) {
