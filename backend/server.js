@@ -1214,7 +1214,6 @@ async function scheduleCrawlerSmokeJobs({ db, uploadsDir }) {
   // Goal: prove crawlers can run end-to-end on the currently deployed build, without needing a human
   // to click UI buttons. This runs once per deployed SHA and is intentionally tiny.
   if (process.env.NODE_ENV !== 'production') return
-  if (String(process.env.ENABLE_CRAWLER_SMOKE_JOBS || '').trim().toLowerCase() !== 'true') return
 
   const sha = resolveBuildSha()
   const suffix = (sha ? String(sha).slice(0, 8) : crypto.randomUUID().slice(0, 8)).replace(/[^a-z0-9_-]/gi, '')
