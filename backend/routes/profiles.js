@@ -452,45 +452,58 @@ router.post('/', async (req, res) => {
 })
 
 router.get('/:id', async (req, res) => {
-  const { id } = req.params
-  const user = req.user
-  const userId = getAuthUserId(user)
-  const row = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
-  if (!row) {
-    return res.status(404).json({ error: 'Profile not found' })
-  }
-
-  // Check access permissions
-  if (!isAdmin(user)) {
-    // Enduser: can only access profiles where user_id matches
-    if (!userId || row.user_id !== userId) {
-      return res.status(403).json({ error: 'Access denied' })
+  try {
+    const { id } = req.params
+    const user = req.user
+    const userId = getAuthUserId(user)
+    const row = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+    if (!row) {
+      return res.status(404).json({ error: 'Profile not found' })
     }
+
+    // Check access permissions
+    if (!isAdmin(user)) {
+      // Enduser: can only access profiles where user_id matches
+      if (!userId || row.user_id !== userId) {
+        return res.status(403).json({ error: 'Access denied' })
+      }
+    }
+
+    // Return profile with sections
+    const sections = (await req.db
+      .prepare(
+        `
+        SELECT section_key, data, updated_at, updated_by
+        FROM profile_sections
+        WHERE profile_id = ?
+        ORDER BY section_key
+      `,
+      )
+      .all(id))
+      .map((section) => ({
+        section_key: section.section_key,
+        data: safeParseJSON(section.data, {}),
+        updated_at: section.updated_at,
+        updated_by: section.updated_by,
+      }))
+
+    let billing = null
+    try {
+      billing = mapAccountRow(await ensureBillingAccount(req.db, id))
+    } catch (error) {
+      console.warn('[profiles] Unable to load billing account for profile', id, error?.message || error)
+      billing = null
+    }
+
+    return res.json({
+      ...mapProfile(row),
+      sections,
+      billing,
+    })
+  } catch (error) {
+    console.error('[profiles] GET /:id failed', error)
+    return res.status(500).json(formatError(error))
   }
-
-  // Return profile with sections
-  const sections = (await req.db
-    .prepare(
-      `
-      SELECT section_key, data, updated_at, updated_by
-      FROM profile_sections
-      WHERE profile_id = ?
-      ORDER BY section_key
-    `,
-    )
-    .all(id))
-    .map((section) => ({
-      section_key: section.section_key,
-      data: safeParseJSON(section.data, {}),
-      updated_at: section.updated_at,
-      updated_by: section.updated_by,
-    }))
-
-  res.json({
-    ...mapProfile(row),
-    sections,
-    billing: mapAccountRow(await ensureBillingAccount(req.db, id)),
-  })
 })
 
 router.put('/:id', async (req, res) => {
@@ -574,7 +587,8 @@ router.delete('/:id', async (req, res) => {
     return res.status(404).json({ error: 'Profile not found' })
   }
 
-  if (auth.role !== 'admin') {
+  const admin = isAdmin(auth)
+  if (!admin) {
     const matchesProfileId = authProfileId === id
     const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
     if (!matchesProfileId && !matchesUserId) {
