@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
 import { getProfile, listProfiles } from '@/api/profiles';
+import { apiFetch } from '@/api/client';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Loader2, Search, User } from 'lucide-react';
@@ -150,11 +151,9 @@ export default function DiscoverGrants() {
     }
 
     try {
-      // Use the from-opportunity endpoint which auto-creates org if needed
-      // Include full opportunity_data for synthetic/discovered opportunities
-      const response = await fetch('/api/grants/from-opportunity', {
+      // IMPORTANT: use apiFetch so Authorization is attached (prevents 401s).
+      const newGrant = await apiFetch('/api/grants/from-opportunity', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           opportunity_id: opportunity.id || null,
           profile_id: selectedProfileId,
@@ -171,17 +170,10 @@ export default function DiscoverGrants() {
             awardMax: opportunity.awardMax || opportunity.amount_max,
             descriptionMd: opportunity.descriptionMd || opportunity.description,
             eligibilityBullets: opportunity.eligibilityBullets || [],
-            source: opportunity.source || 'discovery'
-          }
-        })
-      });
-      
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || 'Failed to add to pipeline');
-      }
-      
-      const newGrant = await response.json();
+            source: opportunity.source || 'discovery',
+          },
+        }),
+      })
       
       // Check if it was already in pipeline
       if (newGrant.already_exists) {
