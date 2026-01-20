@@ -161,3 +161,22 @@ test('mergeProfiles repoints references and deletes loser', async () => {
   assert.equal(parsed.email, 'liubov@example.com')
 })
 
+test('mergeProfiles tolerates missing optional tables/columns (production schema drift safety)', async () => {
+  const db = makeTestDb()
+
+  // Simulate a partial schema (e.g. a drifted Postgres instance) by dropping a few tables.
+  db.prepare('DROP TABLE crawler_schedules').run()
+  db.prepare('DROP TABLE anya_tool_usage').run()
+
+  db.prepare('INSERT INTO profiles (id, display_name, status, updated_at) VALUES (?, ?, ?, ?)').run('winner2', 'GrantFlow Smoke', 'active', '2026-01-01')
+  db.prepare('INSERT INTO profiles (id, display_name, status, updated_at) VALUES (?, ?, ?, ?)').run('loser2', 'GrantFlow Smoke', 'active', '2026-01-02')
+
+  db.prepare('INSERT INTO documents (id, profile_id, name) VALUES (?, ?, ?)').run('d2', 'loser2', 'doc')
+
+  const res = await mergeProfiles(db, { winnerId: 'winner2', loserIds: ['loser2'], dryRun: false, actorUserId: 'admin' })
+  assert.equal(res.dry_run, false)
+
+  const doc = db.prepare('SELECT profile_id FROM documents WHERE id = ?').get('d2')
+  assert.equal(doc.profile_id, 'winner2')
+})
+
