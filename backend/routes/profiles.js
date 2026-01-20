@@ -35,7 +35,29 @@ router.param('id', async (req, res, id, next) => {
     if (!ok) return
     next()
   } catch (error) {
-    res.status(500).json(formatError(error))
+    // Production safety: never hard-500 profiles due to an access-control edge case.
+    // Fall back to a minimal owner check so users aren't blocked by schema drift/migration timing.
+    try {
+      const user = req.user ?? { role: 'guest' }
+      if (isAdmin(user) || isAdminUser(user)) return next()
+
+      const authUserId = getAuthUserId(user)
+      const authProfileId = getAuthProfileId(user)
+      if (authProfileId && String(authProfileId) === String(id)) return next()
+
+      if (authUserId) {
+        const row = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(String(id))
+        if (row?.user_id && String(row.user_id) === String(authUserId)) return next()
+      }
+    } catch {
+      // ignore fallback failures
+    }
+
+    console.warn('[profiles] access precheck failed; denying access', {
+      profileId: String(id),
+      error: error?.message || String(error),
+    })
+    return res.status(403).json({ error: 'Not authorized to access this profile' })
   }
 })
 
