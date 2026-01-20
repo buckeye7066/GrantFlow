@@ -479,25 +479,33 @@ router.post('/', async (req, res) => {
 })
 
 router.get('/:id', async (req, res) => {
+  const { id } = req.params
+  const user = req.user
+  const userId = getAuthUserId(user)
+
+  let row = null
   try {
-    const { id } = req.params
-    const user = req.user
-    const userId = getAuthUserId(user)
-    const row = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
-    if (!row) {
-      return res.status(404).json({ error: 'Profile not found' })
-    }
+    row = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  } catch (error) {
+    console.error('[profiles] Failed to load profile row:', error)
+    return res.status(500).json(formatError(error))
+  }
 
-    // Check access permissions
-    if (!isAdmin(user)) {
-      // Enduser: can only access profiles where user_id matches
-      if (!userId || row.user_id !== userId) {
-        return res.status(403).json({ error: 'Access denied' })
-      }
-    }
+  if (!row) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
 
-    // Return profile with sections
-    const sections = (await req.db
+  // Check access permissions
+  if (!isAdmin(user)) {
+    // Enduser: can only access profiles where user_id matches
+    if (!userId || row.user_id !== userId) {
+      return res.status(403).json({ error: 'Access denied' })
+    }
+  }
+
+  let sections = []
+  try {
+    sections = (await req.db
       .prepare(
         `
         SELECT section_key, data, updated_at, updated_by
@@ -506,31 +514,31 @@ router.get('/:id', async (req, res) => {
         ORDER BY section_key
       `,
       )
-      .all(id))
-      .map((section) => ({
-        section_key: section.section_key,
-        data: safeParseJSON(section.data, {}),
-        updated_at: section.updated_at,
-        updated_by: section.updated_by,
-      }))
-
-    let billing = null
-    try {
-      billing = mapAccountRow(await ensureBillingAccount(req.db, id))
-    } catch (error) {
-      console.warn('[profiles] Unable to load billing account for profile', id, error?.message || error)
-      billing = null
-    }
-
-    return res.json({
-      ...mapProfile(row),
-      sections,
-      billing,
-    })
+      .all(id)).map((section) => ({
+      section_key: section.section_key,
+      data: safeParseJSON(section.data, {}),
+      updated_at: section.updated_at,
+      updated_by: section.updated_by,
+    }))
   } catch (error) {
-    console.error('[profiles] GET /:id failed', error)
-    return res.status(500).json(formatError(error))
+    // Never 500 just because sections are missing/migrating.
+    console.warn('[profiles] Unable to load profile sections:', id, error?.message || error)
+    sections = []
   }
+
+  let billing = null
+  try {
+    billing = mapAccountRow(await ensureBillingAccount(req.db, id))
+  } catch (error) {
+    console.warn('[profiles] Unable to load billing account for profile', id, error?.message || error)
+    billing = null
+  }
+
+  return res.json({
+    ...mapProfile(row),
+    sections,
+    billing,
+  })
 })
 
 router.put('/:id', async (req, res) => {
@@ -623,61 +631,62 @@ router.delete('/:id', async (req, res) => {
     }
   }
 
-  // Delete the profile. We do a best-effort cleanup first to avoid FK surprises across
-  // mixed migration states (Railway Postgres vs legacy SQLite).
-  await req.db.transaction(async (tx) => {
-    // Break references that are ON DELETE SET NULL in most schemas.
-    try {
-      await tx.prepare('UPDATE documents SET profile_id = NULL WHERE profile_id = ?').run(id)
-    } catch {
-      // ignore (table/column may differ in older installs)
-    }
-    try {
-      await tx.prepare('UPDATE crawler_jobs SET profile_id = NULL WHERE profile_id = ?').run(id)
-    } catch {
-      // ignore
-    }
-    try {
-      await tx.prepare('UPDATE anya_sessions SET profile_id = NULL WHERE profile_id = ?').run(id)
-    } catch {
-      // ignore
-    }
-    try {
-      await tx.prepare('UPDATE anya_tasks SET profile_id = NULL WHERE profile_id = ?').run(id)
-    } catch {
-      // ignore
-    }
-
-    // Clean dependent rows (CASCADE in most schemas, but do it explicitly anyway).
-    try {
-      await tx.prepare('DELETE FROM profile_documents WHERE profile_id = ?').run(id)
-    } catch {
-      // ignore
-    }
-    try {
-      await tx.prepare('DELETE FROM profile_sections WHERE profile_id = ?').run(id)
-    } catch {
-      // ignore
-    }
-    try {
-      // Remove billing account events first, then billing accounts.
-      await tx
-        .prepare(
-          `
-            DELETE FROM billing_account_events
-            WHERE account_id IN (SELECT id FROM billing_accounts WHERE profile_id = ?)
-          `,
-        )
-        .run(id)
-      await tx.prepare('DELETE FROM billing_accounts WHERE profile_id = ?').run(id)
-    } catch {
-      // ignore
-    }
-
-    // Finally delete the profile itself.
-    const stmt = tx.prepare('DELETE FROM profiles WHERE id = ?')
+  // Delete the profile. Prefer a straight delete (CASCADE/SET NULL), but if the DB is in a mixed
+  // migration state, fall back to a best-effort cleanup.
+  try {
+    const stmt = req.db.prepare('DELETE FROM profiles WHERE id = ?')
     await stmt.run(id)
-  })
+  } catch (error) {
+    console.warn('[profiles] DELETE failed, attempting best-effort cleanup:', id, error?.message || error)
+    await req.db.transaction(async (tx) => {
+      try {
+        await tx.prepare('UPDATE documents SET profile_id = NULL WHERE profile_id = ?').run(id)
+      } catch {
+        // ignore best-effort cleanup errors
+      }
+      try {
+        await tx.prepare('UPDATE crawler_jobs SET profile_id = NULL WHERE profile_id = ?').run(id)
+      } catch {
+        // ignore best-effort cleanup errors
+      }
+      try {
+        await tx.prepare('UPDATE anya_sessions SET profile_id = NULL WHERE profile_id = ?').run(id)
+      } catch {
+        // ignore best-effort cleanup errors
+      }
+      try {
+        await tx.prepare('UPDATE anya_tasks SET profile_id = NULL WHERE profile_id = ?').run(id)
+      } catch {
+        // ignore best-effort cleanup errors
+      }
+      try {
+        await tx.prepare('DELETE FROM profile_documents WHERE profile_id = ?').run(id)
+      } catch {
+        // ignore best-effort cleanup errors
+      }
+      try {
+        await tx.prepare('DELETE FROM profile_sections WHERE profile_id = ?').run(id)
+      } catch {
+        // ignore best-effort cleanup errors
+      }
+      try {
+        await tx
+          .prepare(
+            `
+              DELETE FROM billing_account_events
+              WHERE account_id IN (SELECT id FROM billing_accounts WHERE profile_id = ?)
+            `,
+          )
+          .run(id)
+        await tx.prepare('DELETE FROM billing_accounts WHERE profile_id = ?').run(id)
+      } catch {
+        // ignore best-effort cleanup errors
+      }
+
+      const stmt = tx.prepare('DELETE FROM profiles WHERE id = ?')
+      await stmt.run(id)
+    })
+  }
 
   // Clean up avatar file if it exists
   if (existing.avatar_url && existing.avatar_url.startsWith('/uploads/')) {
