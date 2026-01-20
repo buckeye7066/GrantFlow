@@ -336,6 +336,51 @@ async function tableExists(tx, tableName) {
   return Boolean(row?.name)
 }
 
+async function columnExists(tx, tableName, columnName) {
+  const table = String(tableName)
+  const col = String(columnName)
+  if (!table || !col) return false
+
+  if (tx.dialect === 'postgres') {
+    const row = await tx
+      .prepare(
+        `
+          SELECT 1
+          FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND table_name = ?
+            AND column_name = ?
+          LIMIT 1
+        `,
+      )
+      .get(table, col)
+    return Boolean(row)
+  }
+
+  // SQLite: PRAGMA table_info doesn't accept bound params, so we must validate the identifier.
+  if (!/^[a-zA-Z0-9_]+$/.test(table)) return false
+  const rows = await tx.prepare(`PRAGMA table_info(${table})`).all()
+  return (rows || []).some((r) => String(r?.name || '') === col)
+}
+
+async function safeRepointProfileId(tx, {
+  table,
+  idColumn = 'profile_id',
+  fromId,
+  toId,
+  whereExtraSql = '',
+  whereExtraArgs = [],
+}) {
+  if (!fromId || !toId) return { skipped: true, reason: 'missing ids' }
+  if (!(await tableExists(tx, table))) return { skipped: true, reason: `missing table ${table}` }
+  if (!(await columnExists(tx, table, idColumn))) return { skipped: true, reason: `missing column ${table}.${idColumn}` }
+
+  const where = `${idColumn} = ?${whereExtraSql ? ` AND (${whereExtraSql})` : ''}`
+  const sql = `UPDATE ${table} SET ${idColumn} = ? WHERE ${where}`
+  await tx.prepare(sql).run(toId, fromId, ...(whereExtraArgs || []))
+  return { skipped: false }
+}
+
 export async function mergeProfiles(db, {
   winnerId,
   loserIds,
@@ -345,7 +390,8 @@ export async function mergeProfiles(db, {
   if (!winnerId || !Array.isArray(loserIds) || loserIds.length === 0) {
     throw new Error('mergeProfiles requires winnerId and loserIds[]')
   }
-  if (loserIds.includes(winnerId)) {
+  const uniqueLoserIds = Array.from(new Set(loserIds.filter(Boolean).map(String)))
+  if (uniqueLoserIds.includes(String(winnerId))) {
     throw new Error('loserIds must not include winnerId')
   }
 
@@ -425,6 +471,9 @@ export async function mergeProfiles(db, {
 
     const mergeProfileDocuments = async (loserId) => {
       if (dryRun) return { type: 'profile_documents.repoint', from: loserId, to: winnerId }
+      if (!(await tableExists(tx, 'profile_documents'))) {
+        return { type: 'profile_documents.repoint', from: loserId, to: winnerId, skipped: true, reason: 'profile_documents table missing' }
+      }
       if (tx.dialect === 'postgres') {
         await tx
           .prepare(
@@ -454,6 +503,7 @@ export async function mergeProfiles(db, {
     }
 
     const mergeBillingAccounts = async (loserId) => {
+      if (!(await tableExists(tx, 'billing_accounts'))) return null
       const winnerAcct = await tx.prepare('SELECT id, metadata FROM billing_accounts WHERE profile_id = ?').get(winnerId)
       const loserAcct = await tx.prepare('SELECT id, metadata FROM billing_accounts WHERE profile_id = ?').get(loserId)
       if (!winnerAcct && !loserAcct) return null
@@ -471,7 +521,9 @@ export async function mergeProfiles(db, {
       }
 
       if (loserAcct && winnerAcct) {
-        await tx.prepare('UPDATE billing_account_events SET account_id = ? WHERE account_id = ?').run(winnerAcct.id, loserAcct.id)
+        if (await tableExists(tx, 'billing_account_events')) {
+          await tx.prepare('UPDATE billing_account_events SET account_id = ? WHERE account_id = ?').run(winnerAcct.id, loserAcct.id)
+        }
 
         const mergedMeta = mergeSection(
           safeParseJSON(winnerAcct.metadata, {}),
@@ -486,7 +538,7 @@ export async function mergeProfiles(db, {
       return null
     }
 
-    for (const loserId of loserIds) {
+    for (const loserId of uniqueLoserIds) {
       const loser = await tx
         .prepare('SELECT id, display_name, user_id, organization_id FROM profiles WHERE id = ?')
         .get(loserId)
@@ -511,18 +563,44 @@ export async function mergeProfiles(db, {
         changes.push({ type: 'funding_opportunities.repoint', from: loserId, to: winnerId })
         changes.push({ type: 'anya_brain_memory.repoint', from: loserId, to: winnerId })
       } else {
-        await tx.prepare('UPDATE documents SET profile_id = ? WHERE profile_id = ?').run(winnerId, loserId)
-        await tx.prepare('UPDATE crawler_jobs SET profile_id = ? WHERE profile_id = ?').run(winnerId, loserId)
-        await tx.prepare('UPDATE crawler_schedules SET profile_id = ? WHERE profile_id = ?').run(winnerId, loserId)
-        await tx.prepare('UPDATE anya_sessions SET profile_id = ? WHERE profile_id = ?').run(winnerId, loserId)
-        await tx.prepare('UPDATE anya_tasks SET profile_id = ? WHERE profile_id = ?').run(winnerId, loserId)
-        await tx.prepare('UPDATE anya_tool_usage SET profile_id = ? WHERE profile_id = ?').run(winnerId, loserId)
-        await tx.prepare('UPDATE service_applications SET profile_id = ? WHERE profile_id = ?').run(winnerId, loserId)
-        await tx.prepare('UPDATE funding_opportunities SET profile_id = ? WHERE profile_id = ?').run(winnerId, loserId)
+        const repoints = [
+          { table: 'documents', idColumn: 'profile_id' },
+          { table: 'crawler_jobs', idColumn: 'profile_id' },
+          { table: 'crawler_schedules', idColumn: 'profile_id' },
+          { table: 'anya_sessions', idColumn: 'profile_id' },
+          { table: 'anya_tasks', idColumn: 'profile_id' },
+          { table: 'anya_tool_usage', idColumn: 'profile_id' },
+          { table: 'service_applications', idColumn: 'profile_id' },
+          { table: 'funding_opportunities', idColumn: 'profile_id' },
+        ]
 
-        await tx
-          .prepare("UPDATE anya_brain_memory SET scope_id = ? WHERE scope = 'profile' AND scope_id = ?")
-          .run(winnerId, loserId)
+        for (const repoint of repoints) {
+          const outcome = await safeRepointProfileId(tx, {
+            table: repoint.table,
+            idColumn: repoint.idColumn,
+            fromId: loserId,
+            toId: winnerId,
+          })
+          if (outcome?.skipped) {
+            changes.push({ type: `${repoint.table}.repoint`, from: loserId, to: winnerId, skipped: true, reason: outcome.reason })
+          }
+        }
+
+        // Anya brain memory uses scope_id instead of profile_id.
+        if (await tableExists(tx, 'anya_brain_memory')) {
+          const okCols =
+            (await columnExists(tx, 'anya_brain_memory', 'scope')) &&
+            (await columnExists(tx, 'anya_brain_memory', 'scope_id'))
+          if (okCols) {
+            await tx
+              .prepare("UPDATE anya_brain_memory SET scope_id = ? WHERE scope = 'profile' AND scope_id = ?")
+              .run(winnerId, loserId)
+          } else {
+            changes.push({ type: 'anya_brain_memory.repoint', from: loserId, to: winnerId, skipped: true, reason: 'missing anya_brain_memory columns' })
+          }
+        } else {
+          changes.push({ type: 'anya_brain_memory.repoint', from: loserId, to: winnerId, skipped: true, reason: 'missing anya_brain_memory table' })
+        }
       }
 
       const billingOp = await mergeBillingAccounts(loserId)
@@ -541,8 +619,19 @@ export async function mergeProfiles(db, {
       if (dryRun) {
         changes.push({ type: 'profiles.delete', id: loserId })
       } else {
-        await tx.prepare('DELETE FROM profiles WHERE id = ?').run(loserId)
-        changes.push({ type: 'profiles.delete', id: loserId })
+        try {
+          await tx.prepare('DELETE FROM profiles WHERE id = ?').run(loserId)
+          changes.push({ type: 'profiles.delete', id: loserId })
+        } catch (deleteError) {
+          // Postgres can enforce FK constraints that SQLite doesn't. If hard-delete fails,
+          // soft-delete instead so the merge operation succeeds without leaving data inconsistent.
+          await tx.prepare("UPDATE profiles SET status = 'deleted' WHERE id = ?").run(loserId)
+          changes.push({
+            type: 'profiles.soft_delete',
+            id: loserId,
+            reason: deleteError?.message || String(deleteError),
+          })
+        }
       }
 
       if (!dryRun && actorUserId) {
@@ -575,7 +664,7 @@ export async function mergeProfiles(db, {
     return {
       dry_run: dryRun,
       winner_id: winnerId,
-      merged_loser_ids: loserIds,
+      merged_loser_ids: uniqueLoserIds,
       changes,
     }
   })
