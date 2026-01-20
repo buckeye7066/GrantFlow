@@ -239,9 +239,7 @@ export default function AdminGeoCrawl() {
           : "",
       )
     } catch (err) {
-      setCountyIndexNotice(
-        "County dataset isn’t configured on this deployment yet. Use ZIP/city scoping for now.",
-      )
+      setCountyIndexNotice("County dataset isn’t configured on this deployment yet. Use ZIP/city scoping for now.")
       toast({ title: "Failed to start county indexing", description: err.message, variant: "destructive" })
     } finally {
       setLoading(false)
