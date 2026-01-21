@@ -5,13 +5,11 @@
  * - Non-admin users can only access data tied to their own profiles/organizations.
  * - Admin users can access everything.
  *
- * Notes:
- * - This codebase has a few different "admin" representations (role, is_admin, email allowlist).
- *   We keep backward compatibility by treating any of them as admin.
+ * IMPORTANT: Admin status MUST be resolved via DB (users.is_admin).
+ * The email substring allowlist has been REMOVED to enforce DB-backed authority.
+ * Use req.ctx.isAdmin for authorization decisions (set by requestContext middleware).
  */
 import crypto from 'crypto'
-
-const ADMIN_EMAIL_ALLOWLIST_SUBSTRING = 'buckeye7066'
 
 function normalizeEmail(email = '') {
   const v = String(email || '').trim().toLowerCase()
@@ -28,33 +26,31 @@ function collectUserEmails(user) {
 }
 
 /**
- * Check if user is admin - backward compatible with multiple representations.
- * This is the fast-path check using token claims only.
- * For DB-backed admin detection, use isAdminUserWithDb.
+ * Check if user is admin based on token claims only (fast path).
+ * 
+ * DEPRECATED: Use req.ctx.isAdmin instead, which is DB-backed.
+ * This function is kept for backward compatibility in non-critical paths.
+ * 
+ * For authorization decisions, ALWAYS use isAdminUserWithDb or req.ctx.isAdmin.
  */
 export function isAdminUser(user) {
-  const email = String(user?.primary_email || user?.email || '').toLowerCase()
   return Boolean(
     user?.role === 'admin' ||
       user?.is_admin === true ||
       user?.is_admin === 1 ||
-      (Array.isArray(user?.roles) && user.roles.includes('admin')) ||
-      (email && email.includes(ADMIN_EMAIL_ALLOWLIST_SUBSTRING)),
+      (Array.isArray(user?.roles) && user.roles.includes('admin')),
   )
 }
 
 /**
- * Robust admin detection that resolves via DB when token claims are insufficient.
- * Use this for authorization decisions to prevent relying solely on fragile token claims.
+ * Robust admin detection that resolves via DB.
+ * This is the CANONICAL way to check admin privileges.
  * 
  * @param {object} db - Database connection
  * @param {object} user - User object from request (req.user)
  * @returns {Promise<boolean>} true if user is admin
  */
 export async function isAdminUserWithDb(db, user) {
-  // Fast path: check token claims first
-  if (isAdminUser(user)) return true
-
   // Some tokens are profile-scoped and don't carry email/is_admin.
   // Resolve the associated user_id from the profile and re-check admin status.
   try {
@@ -69,22 +65,23 @@ export async function isAdminUserWithDb(db, user) {
       resolvedUserId = profileRow?.user_id
     }
 
-    if (!resolvedUserId) return false
+    if (!resolvedUserId) {
+      // No user ID - check token claims as fallback
+      return isAdminUser(user)
+    }
 
-    // Check DB for admin status
-    const row = await db.prepare('SELECT is_admin, primary_email FROM users WHERE id = ?').get(resolvedUserId)
-    if (!row) return false
+    // Check DB for admin status (SOURCE OF TRUTH)
+    const row = await db.prepare('SELECT is_admin FROM users WHERE id = ?').get(resolvedUserId)
+    if (!row) {
+      // User not found in DB - fall back to token claims
+      return isAdminUser(user)
+    }
     
-    if (row.is_admin === true || row.is_admin === 1) return true
-    
-    const email = String(row.primary_email || '').toLowerCase()
-    if (email && email.includes(ADMIN_EMAIL_ALLOWLIST_SUBSTRING)) return true
-    
-    return false
+    return Boolean(row.is_admin === true || row.is_admin === 1)
   } catch (error) {
     // Best-effort: if DB check fails, fall back to token-only check
     console.warn('[accessControl] isAdminUserWithDb DB check failed, falling back to token-only:', error?.message)
-    return false
+    return isAdminUser(user)
   }
 }
 
@@ -280,10 +277,25 @@ export async function ensureProfileAccess(req, res, profileId) {
     return false
   }
 
-  if (isAdminUser(user)) return true
+  // Use req.ctx if available (preferred)
+  if (req.ctx) {
+    if (req.ctx.isAdmin) return true
+    
+    if (req.ctx.accessibleProfileIds === null) {
+      // null means all profiles accessible (admin)
+      return true
+    }
+    
+    if (req.ctx.accessibleProfileIds && req.ctx.accessibleProfileIds.has(profileId)) {
+      return true
+    }
+  } else {
+    // Fallback to legacy check if req.ctx not available
+    if (isAdminUser(user)) return true
 
-  const accessible = await getAccessibleProfileIds(req.db, user)
-  if (accessible && accessible.has(profileId)) return true
+    const accessible = await getAccessibleProfileIds(req.db, user)
+    if (accessible && accessible.has(profileId)) return true
+  }
 
   res.status(403).json({ error: 'Not authorized to access this profile' })
   return false
@@ -298,10 +310,25 @@ export async function ensureOrganizationAccess(req, res, organizationId) {
     return false
   }
 
-  if (isAdminUser(user)) return true
+  // Use req.ctx if available (preferred)
+  if (req.ctx) {
+    if (req.ctx.isAdmin) return true
+    
+    if (req.ctx.accessibleOrgIds === null) {
+      // null means all orgs accessible (admin)
+      return true
+    }
+    
+    if (req.ctx.accessibleOrgIds && req.ctx.accessibleOrgIds.has(organizationId)) {
+      return true
+    }
+  } else {
+    // Fallback to legacy check if req.ctx not available
+    if (isAdminUser(user)) return true
 
-  const orgIds = await getAccessibleOrganizationIds(req.db, user)
-  if (orgIds && orgIds.has(organizationId)) return true
+    const orgIds = await getAccessibleOrganizationIds(req.db, user)
+    if (orgIds && orgIds.has(organizationId)) return true
+  }
 
   res.status(403).json({ error: 'Not authorized to access this organization' })
   return false
@@ -317,11 +344,26 @@ export async function ensureGrantAccess(req, res, grantId) {
     return null
   }
 
-  if (isAdminUser(user)) return grant
+  // Use req.ctx if available (preferred)
+  if (req.ctx) {
+    if (req.ctx.isAdmin) return grant
+    
+    if (req.ctx.accessibleOrgIds === null) {
+      // null means all accessible (admin)
+      return grant
+    }
+    
+    if (grant.organization_id && req.ctx.accessibleOrgIds && req.ctx.accessibleOrgIds.has(grant.organization_id)) {
+      return grant
+    }
+  } else {
+    // Fallback to legacy check if req.ctx not available
+    if (isAdminUser(user)) return grant
 
-  const orgIds = await getAccessibleOrganizationIds(req.db, user)
-  if (orgIds && grant.organization_id && orgIds.has(grant.organization_id)) {
-    return grant
+    const orgIds = await getAccessibleOrganizationIds(req.db, user)
+    if (orgIds && grant.organization_id && orgIds.has(grant.organization_id)) {
+      return grant
+    }
   }
 
   res.status(403).json({ error: 'Not authorized to access this grant' })
@@ -330,7 +372,8 @@ export async function ensureGrantAccess(req, res, grantId) {
 
 /**
  * Middleware-style admin check using DB-backed admin detection.
- * Use this for route authorization to prevent relying solely on token claims.
+ * Prefers req.ctx.isAdmin (set by requestContext middleware) for consistency.
+ * Falls back to isAdminUserWithDb if req.ctx is not available.
  * 
  * @param {object} req - Express request
  * @param {object} res - Express response
@@ -344,7 +387,15 @@ export async function ensureAdminUser(req, res) {
     return false
   }
 
-  const isAdmin = await isAdminUserWithDb(req.db, user)
+  // Prefer req.ctx.isAdmin (canonical, set by requestContext middleware)
+  let isAdmin = false
+  if (req.ctx && typeof req.ctx.isAdmin === 'boolean') {
+    isAdmin = req.ctx.isAdmin
+  } else {
+    // Fallback to DB check if req.ctx not available
+    isAdmin = await isAdminUserWithDb(req.db, user)
+  }
+
   if (!isAdmin) {
     res.status(403).json({
       error: 'Access denied',

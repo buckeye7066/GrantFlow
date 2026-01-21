@@ -99,6 +99,139 @@ export async function loadProfileContext(db, profileId) {
   }
 }
 
+/**
+ * Build canonical, deterministic profile context for crawlers, matching, and Anya.
+ * This is the ONLY function crawlers/matching/Anya should use to access profile data.
+ * 
+ * Returns a complete, immutable snapshot including:
+ * - Base profile row
+ * - All profile sections and fields
+ * - Derived signals (mission, geography, focus areas, populations served)
+ * - Attached documents metadata (file_url, mime_type, extracted_text if available)
+ * - Organization data if linked
+ * 
+ * The output is deterministic JSON suitable for storage in crawler_jobs.profile_context_snapshot.
+ * 
+ * @param {object} db - Database connection
+ * @param {string} profileId - Profile ID
+ * @returns {Promise<object>} Complete profile context
+ */
+export async function buildProfileContext(db, profileId) {
+  // Get base profile
+  const profile = await db
+    .prepare('SELECT * FROM profiles WHERE id = ? LIMIT 1')
+    .get(profileId)
+  
+  if (!profile) {
+    throw new Error(`Profile ${profileId} not found`)
+  }
+
+  // Get all profile sections
+  const sectionRows = await db
+    .prepare(
+      `
+      SELECT section_key, data, created_at, updated_at
+      FROM profile_sections
+      WHERE profile_id = ?
+      ORDER BY section_key
+    `,
+    )
+    .all(profileId)
+  
+  const sections = {}
+  const sectionsMeta = []
+  
+  for (const row of sectionRows) {
+    sections[row.section_key] = safeParseJSON(row.data, {})
+    sectionsMeta.push({
+      key: row.section_key,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    })
+  }
+
+  // Parse array fields
+  const tags = safeParseArrayField(profile.tags, [])
+  const interests = safeParseArrayField(profile.interests, [])
+
+  // Get organization if linked
+  let organization = null
+  if (profile.organization_id) {
+    try {
+      organization = await db
+        .prepare('SELECT * FROM organizations WHERE id = ? LIMIT 1')
+        .get(profile.organization_id)
+    } catch (error) {
+      console.warn('[buildProfileContext] Failed to load organization:', error?.message)
+      organization = null
+    }
+  }
+
+  // Get documents with metadata and extracted text
+  const documents = []
+  try {
+    const docRows = await db
+      .prepare(
+        `
+        SELECT 
+          d.id, d.name, d.type, d.file_url, d.file_path, 
+          d.file_size, d.mime_type, d.extracted_text,
+          d.created_at, d.updated_at
+        FROM documents d
+        WHERE d.profile_id = ?
+        ORDER BY d.created_at DESC
+      `,
+      )
+      .all(profileId)
+    
+    for (const doc of docRows) {
+      documents.push({
+        id: doc.id,
+        name: doc.name,
+        type: doc.type,
+        file_url: doc.file_url,
+        file_path: doc.file_path,
+        file_size: doc.file_size,
+        mime_type: doc.mime_type,
+        extracted_text: doc.extracted_text || null,
+        created_at: doc.created_at,
+        updated_at: doc.updated_at,
+      })
+    }
+  } catch (error) {
+    console.warn('[buildProfileContext] Failed to load documents:', error?.message)
+  }
+
+  // Build merged profile with location fallbacks
+  const mergedProfile = {
+    ...profile,
+    tags,
+    interests,
+    postal_code: profile.postal_code || organization?.zip || organization?.postal_code || null,
+    state: profile.state || organization?.state || null,
+    city: profile.city || organization?.city || null,
+  }
+
+  // Build signals (keywords, demographics, location, etc.)
+  const signals = buildProfileSignals({ 
+    profile: mergedProfile, 
+    sections 
+  })
+
+  // Return deterministic context
+  return {
+    version: '2.0', // Version for future compatibility
+    profile_id: profileId,
+    generated_at: new Date().toISOString(),
+    profile: mergedProfile,
+    sections,
+    sections_meta: sectionsMeta,
+    signals,
+    organization: organization || null,
+    documents,
+  }
+}
+
 export function extractZipFromContext({ profile, sections, jobParameters = {} }) {
   const candidates = [
     jobParameters.zip,

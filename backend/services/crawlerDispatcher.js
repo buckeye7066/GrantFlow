@@ -8,7 +8,7 @@ import { runComprehensiveCrawler as processComprehensiveCrawlerJob } from './com
 import { processItemCrawlerJob } from './itemCrawler.js'
 import { processDocumentIngestionJob } from './documentIngestion.js'
 import { processPipelineAutomationJob } from './pipelineAutomation.js'
-import { loadProfileContext } from './profileHelpers.js'
+import { buildProfileContext } from './profileHelpers.js'
 import { processProfileEnrichmentJob } from './profileEnrichment.js'
 import { processNationalJob } from './nationalJobRouter.js'
 
@@ -71,10 +71,17 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       WHERE id = ?
     `).run(jobId)
 
+    // CRITICAL: Use snapshot if available, never load live profile data
     let profileContext = null
     try {
-      if (job.profile_id) {
-        profileContext = await loadProfileContext(db, job.profile_id)
+      if (job.profile_context_snapshot) {
+        // Use stored snapshot (deterministic)
+        profileContext = parseJSON(job.profile_context_snapshot)
+        console.log('[crawlerDispatcher] Using stored profile snapshot for job', jobId)
+      } else if (job.profile_id) {
+        // Legacy fallback: build snapshot now (non-deterministic, but maintain backward compatibility)
+        console.warn('[crawlerDispatcher] Job missing snapshot, building now (non-deterministic):', jobId)
+        profileContext = await buildProfileContext(db, job.profile_id)
       }
     } catch (error) {
       await db.prepare(`

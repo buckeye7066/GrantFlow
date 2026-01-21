@@ -568,10 +568,34 @@ export async function invokeTool(name, params, context) {
 
   const tool = tools.get(name)
 
-  // Check admin access
+  // Check admin access using DB-backed verification
   if (tool.requiresAdmin) {
     const user = context?.user
-    if (!user || user.role !== 'admin') {
+    const db = context?.db
+    
+    if (!user) {
+      const error = new Error(`Tool "${name}" requires admin privileges`)
+      error.status = 403
+      throw error
+    }
+
+    // Prefer DB-backed admin check for reliability
+    let isAdmin = false
+    if (db) {
+      // Import at function scope to avoid circular dependency
+      const { isAdminUserWithDb } = await import('../utils/accessControl.js')
+      try {
+        isAdmin = await isAdminUserWithDb(db, user)
+      } catch (error) {
+        console.warn('[anyaToolRegistry] DB admin check failed, falling back to token:', error?.message)
+        isAdmin = user.role === 'admin' || user.is_admin === true
+      }
+    } else {
+      // Fallback to token-based check if no DB available
+      isAdmin = user.role === 'admin' || user.is_admin === true
+    }
+
+    if (!isAdmin) {
       const error = new Error(`Tool "${name}" requires admin privileges`)
       error.status = 403
       throw error
