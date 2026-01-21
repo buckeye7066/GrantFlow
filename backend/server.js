@@ -36,6 +36,7 @@ import jwt from 'jsonwebtoken';
 import crawlerV2Router from './routes/crawlerV2.js';
 import nfProgramsRouter from './routes/nfPrograms.js';
 import nofoRouter from './routes/nofo.js';
+import healthRouter from './routes/health.js';
 import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
@@ -203,6 +204,16 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json({ limit: MAX_JSON_BODY_SIZE }));
+
+// Mount health check routes EARLY to ensure they're always available
+// Attach db and uploadsDir to req for health check handlers
+app.use((req, res, next) => {
+  req.db = db;
+  req.uploadsDir = uploadsDir;
+  next();
+});
+app.use(healthRouter);
+
 try {
   if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
@@ -925,44 +936,6 @@ app.use(async (req, _res, next) => {
 
 // Health check with dependency checks
 // Health check endpoint (v3.0 - complete county data)
-app.get('/health', async (req, res) => {
-  const health = {
-    status: 'healthy',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    dependencies: {
-      database: 'unknown',
-      openai: 'unknown',
-      anthropic: 'unknown',
-    }
-  };
-  
-  // Check database connection
-  try {
-    if (db.healthcheck) {
-      const hc = await db.healthcheck();
-      if (!hc?.ok) throw new Error(hc?.error || 'Database healthcheck failed')
-    } else {
-      await db.prepare('SELECT 1').get();
-    }
-    health.dependencies.database = 'healthy';
-  } catch (error) {
-    health.dependencies.database = 'unhealthy';
-    health.status = 'degraded';
-  }
-  
-  // Check if OpenAI API key is configured
-  const hasOpenAIKey = Boolean(String(process.env.OPENAI_API_KEY || '').trim())
-  const hasAnthropicKey = Boolean(String(process.env.ANTHROPIC_API_KEY || '').trim())
-  health.dependencies.openai = hasOpenAIKey
-    ? 'configured'
-    : hasAnthropicKey
-      ? 'fallback_anthropic_configured'
-      : 'not configured';
-  
-  const statusCode = health.status === 'healthy' ? 200 : 503;
-  res.status(statusCode).json(health);
-});
 
 // Authentication diagnostics endpoint
 app.get('/api/auth/diagnostics', async (req, res) => {
@@ -1532,97 +1505,6 @@ app.get('/api/meta/dedupe', async (_req, res) => {
     return res.json({ ok: false, error: error?.message || String(error) })
   }
 })
-
-// Public health endpoint - safe for non-admin users
-app.get('/api/health', async (req, res) => {
-  try {
-    const healthSummary = await getSafeHealthSummary(db)
-    // Contract: public health endpoints must use { ok, warning, error } for status.
-    // Some internal helpers may return { healthy, degraded, unhealthy } — normalize here.
-    const rawStatus = String(healthSummary?.status ?? 'error').toLowerCase()
-    const status =
-      rawStatus === 'healthy'
-        ? 'ok'
-        : rawStatus === 'degraded'
-          ? 'warning'
-          : rawStatus === 'unhealthy'
-            ? 'error'
-            : rawStatus || 'error'
-
-    // Treat "warning" as healthy for platform checks (Railway healthchecks, Docker HEALTHCHECK, etc.)
-    // Only fail hard when the normalized status indicates a real error.
-    const statusCode = status === 'error' ? 500 : 200
-    const body =
-      rawStatus === status
-        ? healthSummary
-        : { ...healthSummary, status, legacy_status: rawStatus }
-
-    res.status(statusCode).json(body)
-  } catch (error) {
-    console.error('[/api/health] Error:', error);
-    res.status(500).json({
-      timestamp: new Date().toISOString(),
-      status: 'error',
-      counts: { opportunities: 0, recentFailures: 0 },
-      summary: 'Failed to retrieve health information'
-    });
-  }
-});
-
-// Platform health aliases (k8s-style)
-app.get('/healthz', async (_req, res) => {
-  try {
-    const healthSummary = await getSafeHealthSummary(db)
-    const rawStatus = healthSummary?.status ?? 'error'
-    const status =
-      rawStatus === 'healthy'
-        ? 'ok'
-        : rawStatus === 'degraded'
-          ? 'warning'
-          : rawStatus === 'unhealthy'
-            ? 'error'
-            : rawStatus
-
-    const statusCode = status === 'error' ? 500 : 200
-    const body =
-      rawStatus === status
-        ? healthSummary
-        : { ...healthSummary, status, legacy_status: rawStatus }
-
-    res.status(statusCode).json(body)
-  } catch (error) {
-    console.error('[/healthz] Error:', error);
-    res.status(500).json({ status: 'error', summary: 'Failed to retrieve health information' });
-  }
-});
-
-app.get('/readyz', async (_req, res) => {
-  try {
-    if (db.healthcheck) {
-      const hc = await db.healthcheck();
-      if (!hc?.ok) throw new Error(hc?.error || 'Database healthcheck failed')
-    } else {
-      await db.prepare('SELECT 1 as ok').get();
-    }
-    // Ensure uploads dir is present and writable (production requires a volume).
-    try {
-      fs.mkdirSync(uploadsDir, { recursive: true });
-      fs.accessSync(uploadsDir, fs.constants.R_OK | fs.constants.W_OK);
-    } catch (e) {
-      return res.status(503).json({
-        status: 'not_ready',
-        reason: 'uploads_dir_unwritable',
-        uploads_dir: uploadsDir,
-        message: e?.message || String(e),
-        timestamp: new Date().toISOString(),
-      });
-    }
-    res.status(200).json({ status: 'ready', dialect: db.dialect, timestamp: new Date().toISOString() });
-  } catch (error) {
-    console.error('[/readyz] Not ready:', error);
-    res.status(503).json({ status: 'not_ready', reason: 'database_unreachable', timestamp: new Date().toISOString() });
-  }
-});
 
 app.use('/api/admin', adminRouter);
 app.use('/api', discoveryRouter); // Discovery endpoints (comprehensiveMatch, searchOpportunities, etc.)
