@@ -44,6 +44,7 @@ import { runStartupOperations } from './services/anyaStartupOperations.js';
 import ensureMinimumNationalOpportunities from './utils/ensureMinimumNationalOpportunities.js';
 import seedAssistanceDirectories from './utils/seedAssistanceDirectories.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { attachRequestContext } from './middleware/requestContext.js';
 import { MAX_JSON_BODY_SIZE } from './config/constants.js';
 import { getSafeHealthSummary } from './services/diagnosticsService.js';
 import { initializeFeatureFlags } from './services/featureFlagService.js';
@@ -728,27 +729,27 @@ function resolveJwtSecret() {
 
   if (!raw) {
     if (isProd) {
-      // NOTE: Railway outages are worse than a temporary auth secret.
-      // We still emit a loud error so the operator sets a real secret ASAP.
-      const generated = crypto.randomBytes(48).toString('base64url')
+      // FAIL FAST in production - do not generate ephemeral secrets
       console.error(
-        'ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET). Using an EPHEMERAL secret to avoid startup crash.\n' +
-          'Set a strong random secret (recommended: 32+ bytes) and redeploy to avoid logouts on restart.\n' +
-          '  AUTH_JWT_SECRET="..."\n',
+        'FATAL ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET) in production.\n' +
+          'Set a strong random secret (recommended: 32+ bytes) and redeploy.\n' +
+          '  AUTH_JWT_SECRET="..."\n' +
+          'The application cannot start without a stable JWT secret.',
       );
-      return generated
+      process.exit(1);
     }
     console.warn('[startup] AUTH_JWT_SECRET not set; using insecure development default (DO NOT use in production).');
     return 'grantflow-dev-secret';
   }
 
   if (isProd && raw === 'grantflow-dev-secret') {
-    const generated = crypto.randomBytes(48).toString('base64url')
+    // FAIL FAST in production - do not use insecure defaults
     console.error(
-      'ERROR: AUTH_JWT_SECRET is set to the insecure development default. Using an EPHEMERAL secret to avoid startup crash.\n' +
-        'Generate a strong random secret and redeploy.',
+      'FATAL ERROR: AUTH_JWT_SECRET is set to the insecure development default in production.\n' +
+        'Generate a strong random secret and redeploy.\n' +
+        'Example: openssl rand -base64 48',
     );
-    return generated
+    process.exit(1);
   }
 
   return raw;
@@ -933,6 +934,10 @@ app.use(async (req, _res, next) => {
 
   return next()
 })
+
+// Attach canonical request context (MUST run after auth middleware)
+// This provides req.ctx with userId, email, isAdmin (DB-backed), accessible profiles/orgs
+app.use(attachRequestContext())
 
 // Health check with dependency checks
 // Health check endpoint (v3.0 - complete county data)
