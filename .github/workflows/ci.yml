@@ -16,6 +16,8 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 20
+    strategy:
+      fail-fast: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,8 +31,52 @@ jobs:
       - name: Install system deps (pdf text extraction)
         run: sudo apt-get update && sudo apt-get install -y poppler-utils
 
-      - name: Install
+      - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
-      - name: Test
-        run: npm test
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm run unit
+
+      - name: Build
+        run: npm run build
+
+      - name: Backend boot smoke test
+        run: |
+          # Start backend in background
+          npm run backend &
+          BACKEND_PID=$!
+          
+          # Wait for backend to be ready (max 60 seconds)
+          echo "Waiting for backend to start..."
+          for i in {1..60}; do
+            if curl -f http://localhost:3000/readyz > /dev/null 2>&1; then
+              echo "Backend is ready!"
+              break
+            fi
+            if [ $i -eq 60 ]; then
+              echo "Backend failed to start within 60 seconds"
+              kill $BACKEND_PID 2>/dev/null || true
+              exit 1
+            fi
+            sleep 1
+          done
+          
+          # Test health endpoints
+          echo "Testing /api/health endpoint..."
+          curl -f http://localhost:3000/api/health || { echo "/api/health failed"; kill $BACKEND_PID; exit 1; }
+          
+          echo "Testing /readyz endpoint..."
+          curl -f http://localhost:3000/readyz || { echo "/readyz failed"; kill $BACKEND_PID; exit 1; }
+          
+          echo "All health endpoints passed!"
+          kill $BACKEND_PID 2>/dev/null || true
+        env:
+          NODE_ENV: test
+          PORT: 3000
+          DATABASE_URL: ":memory:"
