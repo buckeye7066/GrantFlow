@@ -27,6 +27,11 @@ function collectUserEmails(user) {
   return Array.from(emails)
 }
 
+/**
+ * Check if user is admin - backward compatible with multiple representations.
+ * This is the fast-path check using token claims only.
+ * For DB-backed admin detection, use isAdminUserWithDb.
+ */
 export function isAdminUser(user) {
   const email = String(user?.primary_email || user?.email || '').toLowerCase()
   return Boolean(
@@ -36,6 +41,51 @@ export function isAdminUser(user) {
       (Array.isArray(user?.roles) && user.roles.includes('admin')) ||
       (email && email.includes(ADMIN_EMAIL_ALLOWLIST_SUBSTRING)),
   )
+}
+
+/**
+ * Robust admin detection that resolves via DB when token claims are insufficient.
+ * Use this for authorization decisions to prevent relying solely on fragile token claims.
+ * 
+ * @param {object} db - Database connection
+ * @param {object} user - User object from request (req.user)
+ * @returns {Promise<boolean>} true if user is admin
+ */
+export async function isAdminUserWithDb(db, user) {
+  // Fast path: check token claims first
+  if (isAdminUser(user)) return true
+
+  // Some tokens are profile-scoped and don't carry email/is_admin.
+  // Resolve the associated user_id from the profile and re-check admin status.
+  try {
+    const userId = getAuthUserId(user)
+    const profileId = getAuthProfileId(user)
+    
+    let resolvedUserId = userId
+    
+    // If we only have profileId, resolve to user_id via DB
+    if (!resolvedUserId && profileId) {
+      const profileRow = await db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
+      resolvedUserId = profileRow?.user_id
+    }
+
+    if (!resolvedUserId) return false
+
+    // Check DB for admin status
+    const row = await db.prepare('SELECT is_admin, primary_email FROM users WHERE id = ?').get(resolvedUserId)
+    if (!row) return false
+    
+    if (row.is_admin === true || row.is_admin === 1) return true
+    
+    const email = String(row.primary_email || '').toLowerCase()
+    if (email && email.includes(ADMIN_EMAIL_ALLOWLIST_SUBSTRING)) return true
+    
+    return false
+  } catch (error) {
+    // Best-effort: if DB check fails, fall back to token-only check
+    console.warn('[accessControl] isAdminUserWithDb DB check failed, falling back to token-only:', error?.message)
+    return false
+  }
 }
 
 export async function ensureProfileEmailSchema(db) {
@@ -124,9 +174,10 @@ export async function getAccessibleProfileIds(db, user) {
     }
   }
 
-  // Only trust token-scoped profileId if it is ALSO authorized via user_id or profile_emails.
+  // Token-scoped profileId is always treated as accessible for the session.
+  // This prevents lockouts for legacy/Base44 profiles that lack user_id/profile_emails mappings.
   const tokenProfileId = getAuthProfileId(user)
-  if (tokenProfileId && ids.has(tokenProfileId)) {
+  if (tokenProfileId) {
     ids.add(tokenProfileId)
   }
 
@@ -272,5 +323,33 @@ export async function ensureGrantAccess(req, res, grantId) {
 
   res.status(403).json({ error: 'Not authorized to access this grant' })
   return null
+}
+
+/**
+ * Middleware-style admin check using DB-backed admin detection.
+ * Use this for route authorization to prevent relying solely on token claims.
+ * 
+ * @param {object} req - Express request
+ * @param {object} res - Express response
+ * @returns {Promise<boolean>} true if user is admin
+ */
+export async function ensureAdminUser(req, res) {
+  const user = req.user ?? { role: 'guest' }
+  
+  if (!user || user.role === 'guest') {
+    res.status(401).json({ error: 'Authentication required' })
+    return false
+  }
+
+  const isAdmin = await isAdminUserWithDb(req.db, user)
+  if (!isAdmin) {
+    res.status(403).json({
+      error: 'Access denied',
+      message: 'This endpoint is restricted to administrators only'
+    })
+    return false
+  }
+
+  return true
 }
 
