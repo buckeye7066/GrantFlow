@@ -4,6 +4,7 @@
  */
 import express from 'express';
 import fs from 'fs';
+import { getSafeHealthSummary } from '../services/diagnosticsService.js';
 
 const router = express.Router();
 
@@ -16,9 +17,7 @@ router.get('/api/health', async (req, res) => {
   const db = req.db;
   
   try {
-    const healthSummary = req.getSafeHealthSummary 
-      ? await req.getSafeHealthSummary(db)
-      : { status: 'healthy', timestamp: new Date().toISOString() };
+    const healthSummary = await getSafeHealthSummary(db);
     
     // Contract: public health endpoints must use { ok, warning, error } for status.
     // Some internal helpers may return { healthy, degraded, unhealthy } — normalize here.
@@ -154,9 +153,7 @@ router.get('/healthz', async (req, res) => {
   const db = req.db;
   
   try {
-    const healthSummary = req.getSafeHealthSummary 
-      ? await req.getSafeHealthSummary(db)
-      : { status: 'healthy', timestamp: new Date().toISOString() };
+    const healthSummary = await getSafeHealthSummary(db);
       
     const rawStatus = healthSummary?.status ?? 'error';
     const status =
