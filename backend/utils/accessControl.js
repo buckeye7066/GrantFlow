@@ -176,6 +176,9 @@ export async function getAccessibleProfileIds(db, user) {
 
   // Token-scoped profileId is always treated as accessible for the session.
   // This prevents lockouts for legacy/Base44 profiles that lack user_id/profile_emails mappings.
+  // Security note: This is intentional per product requirements to maintain backward compatibility.
+  // Tokens are already validated by auth middleware, so compromised tokens are a separate concern
+  // that should be addressed via token rotation, expiry, and monitoring rather than here.
   const tokenProfileId = getAuthProfileId(user)
   if (tokenProfileId) {
     ids.add(tokenProfileId)

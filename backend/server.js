@@ -206,11 +206,10 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: MAX_JSON_BODY_SIZE }));
 
 // Mount health check routes EARLY to ensure they're always available
-// Attach dependencies to req for health check handlers
+// Attach db and uploadsDir to req for health check handlers
 app.use((req, res, next) => {
   req.db = db;
   req.uploadsDir = uploadsDir;
-  req.getSafeHealthSummary = getSafeHealthSummary;
   next();
 });
 app.use(healthRouter);
