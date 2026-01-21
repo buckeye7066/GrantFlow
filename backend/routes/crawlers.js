@@ -1085,7 +1085,7 @@ router.post('/jobs', async (req, res) => {
       organizationId,
       parametersJson,
       profileContextSnapshot,
-      idempotency_key,
+      idempotencyKey,
       admin ? 'admin' : (auth.userId ?? auth.email ?? targetProfileId ?? 'user'),
     )
 
