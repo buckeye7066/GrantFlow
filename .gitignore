@@ -47,3 +47,8 @@ public/*.mp4
 public/*mp4
 public/*mp4*
 
+# Duplicate directories that should not be committed
+# The root of the repository is authoritative
+GrantFlow-main/
+repo/
+
