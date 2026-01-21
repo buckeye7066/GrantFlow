@@ -739,6 +739,8 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
   organization_id TEXT REFERENCES organizations(id) ON DELETE SET NULL,
   
   parameters TEXT DEFAULT '{}',
+  profile_context_snapshot TEXT, -- JSON snapshot of complete profile context at dispatch time
+  idempotency_key TEXT, -- Prevents duplicate runs of the same job
   result_count INTEGER DEFAULT 0,
   result_meta TEXT,
   error TEXT,
@@ -750,6 +752,7 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_status ON crawler_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_profile ON crawler_jobs(profile_id);
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_type ON crawler_jobs(type);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_crawler_jobs_idempotency ON crawler_jobs(idempotency_key) WHERE idempotency_key IS NOT NULL;
 
 -- Geo Crawl progress tracking (legacy table name: national_zip_progress)
 CREATE TABLE IF NOT EXISTS national_zip_progress (
