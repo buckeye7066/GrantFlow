@@ -18,7 +18,10 @@ import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js
 import {
   ensureProfileAccess as ensureProfileAccessByEmail,
   isAdminUser,
+  isAdminUserWithDb,
   isProfileOwner,
+  getAuthUserId,
+  getAuthProfileId,
   listProfileEmails,
   addProfileEmails,
   removeProfileEmail,
@@ -39,7 +42,8 @@ router.param('id', async (req, res, id, next) => {
     // Fall back to a minimal owner check so users aren't blocked by schema drift/migration timing.
     try {
       const user = req.user ?? { role: 'guest' }
-      if (isAdmin(user) || isAdminUser(user)) return next()
+      const isAdmin = await isAdminUserWithDb(req.db, user)
+      if (isAdmin) return next()
 
       const authUserId = getAuthUserId(user)
       const authProfileId = getAuthProfileId(user)
@@ -61,58 +65,9 @@ router.param('id', async (req, res, id, next) => {
   }
 })
 
-// Admin configuration
-const ADMIN_EMAIL = 'buckeye7066@gmail.com'
-
-/**
- * Check if user is admin
- * Checks both is_admin flag and primary_email match
- */
-function isAdmin(user) {
-  return Boolean(user?.is_admin) || 
-         user?.primary_email === ADMIN_EMAIL || 
-         user?.email === ADMIN_EMAIL || 
-         user?.role === 'admin'
-}
-
-async function isAdminRequest(req) {
-  const auth = req.user ?? {}
-  if (isAdmin(auth) || isAdminUser(auth)) return true
-
-  // Some tokens are profile-scoped and don't carry email/is_admin.
-  // Resolve the associated user_id from the profile and re-check admin status.
-  try {
-    const db = req.db
-    const resolvedUserId = auth?.userId
-      ? auth.userId
-      : auth?.profileId
-        ? (await db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(auth.profileId))?.user_id
-        : null
-
-    if (!resolvedUserId) return false
-
-    const row = await db.prepare('SELECT is_admin, primary_email FROM users WHERE id = ?').get(resolvedUserId)
-    const email = String(row?.primary_email || '').toLowerCase()
-    if (row?.is_admin === true || row?.is_admin === 1) return true
-    if (email && email.includes('buckeye7066')) return true
-  } catch {
-    // best-effort
-  }
-
-  return false
-}
-
-function getAuthUserId(user) {
-  return user?.userId ?? user?.id ?? user?.user_id ?? null
-}
-
-function getAuthProfileId(user) {
-  return user?.profileId ?? user?.profile_id ?? null
-}
-
 function canAccessProfile({ auth, profileRow }) {
   if (!profileRow) return false
-  if (isAdmin(auth)) return true
+  if (isAdminUser(auth)) return true
   const authProfileId = getAuthProfileId(auth)
   if (authProfileId && authProfileId === profileRow.id) return true
   const authUserId = getAuthUserId(auth)
@@ -291,14 +246,14 @@ router.get('/', async (req, res) => {
   // This prevents "missing profiles" in the UI when admins expect to see everything.
   const paginationQuery = { ...req.query }
   const limitProvided = Object.prototype.hasOwnProperty.call(req.query ?? {}, 'limit')
-  if (isAdmin(user) && !limitProvided) {
+  if (isAdminUser(user) && !limitProvided) {
     paginationQuery.limit = 1000
     paginationQuery.offset = 0
   }
   const { limit, offset } = validatePagination(paginationQuery);
 
   // Check if user is admin
-  if (!isAdmin(user)) {
+  if (!isAdminUser(user)) {
     // Enduser: return only profiles where profiles.user_id = user.id
     if (!userId) {
       return res.status(401).json({ error: 'Authentication required' })
@@ -434,7 +389,7 @@ router.post('/', async (req, res) => {
   }
 
   // Check permissions
-  if (!isAdmin(user)) {
+  if (!isAdminUser(user)) {
     // Enduser can only create profiles for themselves
     if (!userId) {
       return res.status(401).json({ error: 'Authentication required' })
@@ -461,7 +416,7 @@ router.post('/', async (req, res) => {
   }
 
   // Determine user_id for the new profile
-  const profileUserId = isAdmin(user) ? (user_id || userId) : userId
+  const profileUserId = isAdminUser(user) ? (user_id || userId) : userId
 
   const profileId = crypto.randomUUID()
   // Ensure every newly created profile starts with all canonical sections + canonical keys.
@@ -520,7 +475,7 @@ router.get('/:id', async (req, res) => {
   }
 
   // Check access permissions
-  if (!isAdmin(user)) {
+  if (!isAdminUser(user)) {
     // Enduser: can only access profiles where user_id matches
     if (!userId || row.user_id !== userId) {
       return res.status(403).json({ error: 'Access denied' })
@@ -578,10 +533,10 @@ router.put('/:id', async (req, res) => {
   }
 
   // Allow: admins (including admin-email allowlist), profile-scoped tokens for the profile, or session owners (userId match)
-  const isAdminUser = isAdmin(auth)
+  const userIsAdmin = isAdminUser(auth)
   const matchesProfileId = authProfileId === id
   const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
-  if (!isAdminUser && !matchesProfileId && !matchesUserId) {
+  if (!userIsAdmin && !matchesProfileId && !matchesUserId) {
     return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to update this profile' })
   }
 
@@ -646,7 +601,7 @@ router.delete('/:id', async (req, res) => {
     return res.status(404).json({ error: 'Profile not found' })
   }
 
-  const admin = await isAdminRequest(req)
+  const admin = await isAdminUserWithDb(req.db, auth)
   if (!admin) {
     const matchesProfileId = authProfileId === id
     const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
@@ -767,11 +722,11 @@ router.post('/:id/avatar', runUploadSingle('avatar'), async (req, res, next) => 
     return res.status(404).json({ error: 'Profile not found' })
   }
 
-  const isAdminUser = isAdmin(auth)
+  const userIsAdmin = isAdminUser(auth)
   const matchesProfileId = authProfileId === id
   const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
 
-  if (!isAdminUser && !matchesProfileId && !matchesUserId) {
+  if (!userIsAdmin && !matchesProfileId && !matchesUserId) {
     if (req.file) fs.unlink(join(uploadDir, req.file.filename), () => {})
     return res.status(403).json({ error: 'Not authorized to update this profile' })
   }
@@ -814,10 +769,10 @@ router.post('/:id/avatar/ai', async (req, res) => {
     return res.status(404).json({ error: 'Profile not found' })
   }
 
-  const isAdminUser = isAdmin(auth)
+  const userIsAdmin = isAdminUser(auth)
   const matchesProfileId = authProfileId === id
   const matchesUserId = authUserId && profileRow.user_id && authUserId === profileRow.user_id
-  if (!isAdminUser && !matchesProfileId && !matchesUserId) {
+  if (!userIsAdmin && !matchesProfileId && !matchesUserId) {
     return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to update this profile' })
   }
 
