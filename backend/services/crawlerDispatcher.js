@@ -11,6 +11,7 @@ import { processPipelineAutomationJob } from './pipelineAutomation.js'
 import { buildProfileContext } from './profileHelpers.js'
 import { processProfileEnrichmentJob } from './profileEnrichment.js'
 import { processNationalJob } from './nationalJobRouter.js'
+import { logFailedJob, determineSeverity } from './deadLetterQueue.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -52,13 +53,24 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
 
     const handler = HANDLERS[job.type]
     if (!handler) {
+      const errorMsg = `Unhandled crawler type "${job.type}"`
       await db.prepare(`
         UPDATE crawler_jobs
         SET status = 'failed',
             completed_at = CURRENT_TIMESTAMP,
             error = ?
         WHERE id = ?
-      `).run(`Unhandled crawler type "${job.type}"`, jobId)
+      `).run(errorMsg, jobId)
+      
+      // Log to dead letter queue
+      await logFailedJob(db, {
+        jobId,
+        jobType: job.type,
+        profileId: job.profile_id,
+        error: errorMsg,
+        jobParameters: parseJSON(job.parameters),
+        severity: 'high',
+      })
       return
     }
 
@@ -84,16 +96,24 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         profileContext = await buildProfileContext(db, job.profile_id)
       }
     } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error)
       await db.prepare(`
         UPDATE crawler_jobs
         SET status = 'failed',
             completed_at = CURRENT_TIMESTAMP,
             error = ?
         WHERE id = ?
-      `).run(
-        error instanceof Error ? error.message : String(error),
+      `).run(errorMsg, jobId)
+      
+      // Log to dead letter queue
+      await logFailedJob(db, {
         jobId,
-      )
+        jobType: job.type,
+        profileId: job.profile_id,
+        error,
+        jobParameters: parseJSON(job.parameters),
+        severity: determineSeverity(error, job.type),
+      })
       return
     }
 
@@ -167,6 +187,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         error: error instanceof Error ? error.message : String(error),
       }
 
+      const errorMsg = error instanceof Error ? error.message : String(error)
       await db.prepare(`
         UPDATE crawler_jobs
         SET status = 'failed',
@@ -174,11 +195,18 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
             error = ?,
             result_meta = COALESCE(?, result_meta)
         WHERE id = ?
-      `).run(
-        error instanceof Error ? error.message : String(error),
-        JSON.stringify(finalResultMeta),
+      `).run(errorMsg, JSON.stringify(finalResultMeta), jobId)
+      
+      // Log to dead letter queue for durable failure tracking
+      await logFailedJob(db, {
         jobId,
-      )
+        jobType: job.type,
+        profileId: job.profile_id,
+        error,
+        jobParameters: parseJSON(job.parameters),
+        profileContextSnapshot: profileContext,
+        severity: determineSeverity(error, job.type),
+      })
     }
   }
 
