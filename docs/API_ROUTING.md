@@ -25,8 +25,10 @@ GrantFlow uses a split deployment architecture:
 **CRITICAL: Auth and email logic runs on Railway, NOT Vercel.**
 
 - Email-based OTP login (`/api/auth/email/start`, `/api/auth/email/verify`) runs on Railway
-- **Resend email service** is configured and runs on Railway
-- Environment variables for email (`RESEND_API_KEY`, `FROM_EMAIL`) **must be set in Railway**
+- **Email delivery is optional** - OTP codes are returned directly for authorized users
+- In production, only emails matching existing profiles can log in (profile-email gated access)
+- Admins can always log in (emails in `ADMIN_EMAIL` or `ADMIN_EMAILS`)
+- Environment variables for email (`RESEND_API_KEY`, `FROM_EMAIL`) **must be set in Railway** if you want email notifications
 - Setting these in Vercel does nothing, because Vercel only serves static assets
 
 ### Request Flow for Email OTP Login
@@ -39,9 +41,10 @@ Vercel (sees request to /api/*)
   ↓ (rewrites via vercel.json)
   ↓
 Railway Backend (backend/routes/auth.js)
-  ↓ calls backend/services/email.js
-  ↓
-Resend API (sends email)
+  ↓ checks if email matches existing profile (production only)
+  ↓ generates OTP code and stores in DB
+  ↓ returns previewCode directly (no email required)
+  ↓ optionally attempts to send email (non-blocking)
 ```
 
 ## Development
@@ -61,10 +64,28 @@ In local development:
 
 ## Troubleshooting
 
-### Email OTP not working in production?
+### Production Login Requirements
 
-1. **Check Railway environment variables** (not Vercel):
-   - `RESEND_API_KEY` - Must be set
+**In production, only authorized emails can log in:**
+
+1. **Authorized emails** are:
+   - Emails that match a profile in the database (stored in `profile_sections` with `section_key='basic_information'` and `email` field)
+   - Admin emails (configured in `ADMIN_EMAIL` or `ADMIN_EMAILS` environment variables)
+
+2. **Unauthorized emails** will receive a 403 error with message "Access denied. This email is not authorized for login."
+
+3. **To authorize a new email for production login:**
+   - Create a profile in the database with a `profile_sections` entry that includes the email in the `basic_information` section
+   - OR add the email to `ADMIN_EMAIL` or `ADMIN_EMAILS` environment variable
+
+### Email OTP not sending emails?
+
+**Email delivery is optional** - users can log in with the `previewCode` returned in the response.
+
+If you want to enable email notifications:
+
+1. **Set Railway environment variables**:
+   - `RESEND_API_KEY` - Your Resend API key
    - `FROM_EMAIL` or `EMAIL_FROM` - Must be a verified domain in Resend
    - `AUTH_JWT_SECRET` - Required for auth tokens
 
@@ -84,19 +105,13 @@ In local development:
 3. Check the request to `/api/auth/email/start`
    - Should be same-origin (no CORS preflight)
    - Response should come from Railway (check response headers)
-
-### Admin failsafe for email failures
-
-If email delivery fails and you need to log in as admin:
-
-1. Set `AUTH_ALLOW_ADMIN_PREVIEW_CODE=true` in Railway
-2. Login will return `previewCode` in response for admin users only
-3. This does NOT weaken security for non-admin users
-4. Only works for emails in `ADMIN_EMAIL` or `ADMIN_EMAILS` env var
+   - In production, should return `previewCode` for authorized emails
 
 ## Security Notes
 
-- OTP codes are never returned in production responses (except admin failsafe)
+- In production, only authorized emails (matching profiles or admin emails) can initiate login
+- OTP codes are returned directly via `previewCode` for authorized users
+- Email delivery is optional and non-blocking
 - Email logic runs server-side on Railway (not client-side on Vercel)
 - Same-origin proxy prevents CORS attacks
 - JWT tokens are signed with `AUTH_JWT_SECRET` on Railway backend
