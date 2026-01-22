@@ -564,14 +564,12 @@ async function assignProfileToUser(db, userId, email) {
           await db
             .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
             .run(userId, designatedProfileId)
-          // TODO: Remove debug log - console.log(`[auth] Assigned designated profile ${designatedProfileId} to user ${userId} (${email})`)
           return designatedProfileId
         }
         if (await isAdminUserId(db, designatedProfile.user_id)) {
           await db
             .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
             .run(userId, designatedProfileId)
-          // TODO: Remove debug log - console.log(`[auth] Reassigned designated profile ${designatedProfileId} from admin to user ${userId} (${email})`)
           return designatedProfileId
         }
         console.warn(`[auth] Designated profile ${designatedProfileId} already linked to another user`)
@@ -605,12 +603,9 @@ async function assignProfileToUser(db, userId, email) {
 
 async function ensureAdminStatus(db, userId, email) {
   if (isAdminEmail(email)) {
-    const result = await db
+    await db
       .prepare('UPDATE users SET is_admin = TRUE WHERE id = ? AND COALESCE(is_admin, FALSE) = FALSE')
       .run(userId)
-    if (result.changes > 0) {
-      // TODO: Remove debug log - console.log(`[auth] Set admin status for user ${userId} (${email})`)
-    }
   }
 }
 
@@ -1728,11 +1723,15 @@ router.post('/email/verify', async (req, res) => {
   
   // Trigger Anya's autonomous operations for admin login if configured
   if (req.db?.dialect !== 'postgres' && user.role === 'admin' && process.env.ANYA_RUN_ON_ADMIN_LOGIN === 'true') {
-    import('../services/anyaAutonomousScheduler.js').then(({ runOnAdminLogin }) => {
-      runOnAdminLogin(req.db, user.id).catch(err => {
-        console.error('[Anya] Failed to run admin login operations:', err)
+    import('../services/anyaAutonomousScheduler.js')
+      .then(({ runOnAdminLogin }) => {
+        runOnAdminLogin(req.db, user.id).catch(err => {
+          console.error('[Anya] Failed to run admin login operations:', err)
+        })
       })
-    })
+      .catch((err) => {
+        console.error('[Anya] Failed to import autonomous scheduler:', err?.message || err);
+      })
   }
 
   // Admin notice on successful sign-in (post-verify)
