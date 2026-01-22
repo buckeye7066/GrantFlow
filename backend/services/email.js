@@ -221,3 +221,14 @@ export async function sendApplicationEmail(toEmail, applicationData) {
     throw new Error(`Failed to send application email: ${error.message}`)
   }
 }
+
+/**
+ * Send service application email (alias for sendApplicationEmail)
+ * Used by service application forms
+ * @param {string} toEmail - Recipient email
+ * @param {Object} applicationData - Application details
+ * @returns {Promise<boolean>}
+ */
+export async function sendServiceApplicationEmail(toEmail, applicationData) {
+  return sendApplicationEmail(toEmail, applicationData)
+}
