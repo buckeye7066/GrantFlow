@@ -38,6 +38,15 @@ This document is the **single source of truth** for environment variables requir
 
 ## Backend (Railway)
 
+**IMPORTANT: All backend environment variables must be set in Railway, NOT Vercel.**
+
+The architecture works as follows:
+- **Frontend** is deployed on Vercel and serves static assets (HTML, JS, CSS)
+- **Backend** API runs on Railway (Express server on Node.js)
+- `vercel.json` rewrites all `/api/*` requests to Railway backend URL
+- **Auth and email logic runs on Railway**, not Vercel
+- Email delivery uses **Resend** and must be configured in Railway environment
+
 ### Required (always)
 
 - **`NODE_ENV`**
@@ -68,18 +77,22 @@ This document is the **single source of truth** for environment variables requir
 - **`AUTH_JWT_SECRET`** (or `JWT_SECRET`)
   - Example: `super-long-random-string`
   - Required for secure session signing.
+  - **Set in Railway only**
 
 - **`CORS_ORIGIN`**
   - Example: `https://app.axiombiolabs.org,https://www.axiombiolabs.org`
   - Comma-separated list of allowed origins.
+  - **Set in Railway only**
 
 ### Admin (Required for admin access)
 
 - **`ADMIN_TOKEN`** (or `ANYA_ADMIN_TOKEN`)
   - Required to access admin-only endpoints/tools.
+  - **Set in Railway only**
 
 - **`ADMIN_EMAIL`**
   - Used for admin notifications and admin identification defaults.
+  - **Set in Railway only**
 
 ### Optional integrations (feature-gated — do NOT block boot)
 
@@ -91,9 +104,19 @@ This document is the **single source of truth** for environment variables requir
   - **`ANTHROPIC_API_KEY`**
   - Used by Anya status/tools. Core flows must still work without it.
 
-- **Email (Resend)**
-  - **`RESEND_API_KEY`**
-  - **`FROM_EMAIL`**
+- **Email (Resend)** - Required for email-based OTP login
+  - **`RESEND_API_KEY`** - API key from resend.com dashboard
+    - **MUST be set in Railway** (backend runtime, not Vercel)
+  - **`FROM_EMAIL`** (or `EMAIL_FROM`) - Verified sender email address
+    - Example: `noreply@yourdomain.com`
+    - Domain must be verified in Resend dashboard
+    - **MUST be set in Railway** (backend runtime, not Vercel)
+    - Do NOT use `@resend.dev` test addresses in production
+  - **`AUTH_ALLOW_ADMIN_PREVIEW_CODE`** - Optional failsafe for admin lockout
+    - Set to `"true"` to enable preview codes for admin users when email fails
+    - Only affects admin users (as defined in `ADMIN_EMAIL`/`ADMIN_EMAILS`)
+    - Does NOT weaken security for non-admin users
+    - Useful for production troubleshooting but should be disabled normally
 
 - **SMS (Twilio)**
   - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_MESSAGING_SERVICE_SID` (or `TWILIO_FROM_NUMBER`)

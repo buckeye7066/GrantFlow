@@ -1445,6 +1445,18 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       responseData.previewCode = code
     }
 
+    // FAILSAFE: Admin preview code when email fails in production
+    // If email sending failed AND AUTH_ALLOW_ADMIN_PREVIEW_CODE is enabled,
+    // return the OTP code for admin users ONLY to prevent lockout.
+    // This does NOT weaken security for non-admin users.
+    if (isProd && !emailSent && process.env.AUTH_ALLOW_ADMIN_PREVIEW_CODE === 'true') {
+      if (isAdminEmail(email)) {
+        console.warn('[auth/email/start] FAILSAFE: Returning preview code for admin user due to email failure:', email)
+        responseData.previewCode = code
+        responseData.preview_reason = 'admin_failsafe_email_failed'
+      }
+    }
+
     console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent)
     return res.status(202).json(responseData)
     
