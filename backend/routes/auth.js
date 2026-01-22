@@ -1438,6 +1438,28 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       process.env.RAILWAY_ENVIRONMENT === 'production' ||
       process.env.VERCEL_ENV === 'production'
 
+    // Check if preview codes are explicitly allowed in production
+    const allowPreviewInProd = String(
+      process.env.AUTH_ALLOW_PREVIEW_CODE_IN_PROD ||
+      process.env.AUTH_ALLOW_PREVIEW_CODE ||
+      ''
+    ).toLowerCase() === 'true'
+
+    // Check if admin failsafe applies
+    const isAdminFailsafeEnabled = process.env.AUTH_ALLOW_ADMIN_PREVIEW_CODE === 'true'
+    const shouldAllowAdminFailsafe = isProd && !emailSent && isAdminFailsafeEnabled && isAdminEmail(email)
+
+    // In production: if email delivery fails and preview codes are not explicitly allowed,
+    // return 503 to prevent silent failures that cause login lockouts.
+    // Exception: allow admin failsafe to proceed if AUTH_ALLOW_ADMIN_PREVIEW_CODE is enabled.
+    if (isProd && !emailSent && !allowPreviewInProd && !shouldAllowAdminFailsafe) {
+      console.error('[auth/email/start] Email delivery failed in production without preview code allowance for:', email)
+      return res.status(503).json({
+        error: 'Email delivery is unavailable. Please try again later or contact support.',
+        error_type: 'email_delivery_unavailable'
+      })
+    }
+
     // Developer experience: in non-production, return a preview code so local/test flows can proceed
     // even when email delivery is not configured.
     if (!isProd) {
@@ -1445,16 +1467,21 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       responseData.previewCode = code
     }
 
+    // Production preview code: when explicitly enabled, return preview code for all users
+    // This is useful for testing/development in production-like environments
+    if (isProd && allowPreviewInProd) {
+      responseData.previewCode = code
+      responseData.preview_reason = 'preview_enabled_in_prod'
+    }
+
     // FAILSAFE: Admin preview code when email fails in production
     // If email sending failed AND AUTH_ALLOW_ADMIN_PREVIEW_CODE is enabled,
     // return the OTP code for admin users ONLY to prevent lockout.
     // This does NOT weaken security for non-admin users.
-    if (isProd && !emailSent && process.env.AUTH_ALLOW_ADMIN_PREVIEW_CODE === 'true') {
-      if (isAdminEmail(email)) {
-        console.warn('[auth/email/start] FAILSAFE: Returning preview code for admin user due to email failure:', email)
-        responseData.previewCode = code
-        responseData.preview_reason = 'admin_failsafe_email_failed'
-      }
+    if (shouldAllowAdminFailsafe) {
+      console.warn('[auth/email/start] FAILSAFE: Returning preview code for admin user due to email failure:', email)
+      responseData.previewCode = code
+      responseData.preview_reason = 'admin_failsafe_email_failed'
     }
 
     console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent)
