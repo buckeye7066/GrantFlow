@@ -36,30 +36,38 @@ function getOpenAI() {
   return openai
 }
 
+/**
+ * Resolve JWT secret from environment variables.
+ * CRITICAL: Must match server.js implementation to ensure consistency.
+ * Production requires a stable, secure secret - NO runtime generation.
+ */
 function resolveJwtSecret() {
   const raw = String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || '').trim()
   const isProd = process.env.NODE_ENV === 'production'
 
   if (!raw) {
-    // Production safety: do not hard-exit. A missing JWT secret otherwise causes a perpetual 502 on Railway.
-    // We generate an ephemeral secret so the service can boot; all sessions will be invalidated on restart.
     if (isProd) {
+      // FAIL FAST in production - do not generate ephemeral secrets
       console.error(
-        'ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET). Generating ephemeral secret so the service can start.\n' +
-          'Fix: set AUTH_JWT_SECRET in Railway/Vercel env vars to a strong random secret (recommended: 32+ bytes).',
+        'FATAL ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET) in production.\n' +
+          'Set a strong random secret (recommended: 32+ bytes) and redeploy.\n' +
+          '  AUTH_JWT_SECRET="..."\n' +
+          'The application cannot start without a stable JWT secret.',
       )
-      return crypto.randomBytes(32).toString('base64url')
+      process.exit(1)
     }
     console.warn('[auth] AUTH_JWT_SECRET not set; using insecure development default (DO NOT use in production).')
     return 'grantflow-dev-secret'
   }
 
   if (isProd && raw === 'grantflow-dev-secret') {
+    // FAIL FAST in production - do not use insecure defaults
     console.error(
-      'ERROR: AUTH_JWT_SECRET is set to the insecure development default. Generating ephemeral secret so the service can start.\n' +
-        'Fix: set AUTH_JWT_SECRET in Railway/Vercel env vars to a strong random secret (recommended: 32+ bytes).',
+      'FATAL ERROR: AUTH_JWT_SECRET is set to the insecure development default in production.\n' +
+        'Generate a strong random secret and redeploy.\n' +
+        'Example: openssl rand -base64 48',
     )
-    return crypto.randomBytes(32).toString('base64url')
+    process.exit(1)
   }
 
   return raw
