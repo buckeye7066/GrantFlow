@@ -1706,12 +1706,16 @@ server.on('listening', () => {
     setTimeout(() => {
       if (process.env.ANYA_RUN_ON_STARTUP === 'true') {
         // Run full autonomous operations (code scan, tests, crawlers)
-        import('./services/anyaAutonomousScheduler.js').then(({ runOnStartup }) => {
-          console.log('[Anya] Starting autonomous operations on server startup...');
-          runOnStartup(db).catch(err => {
-            console.error('[Anya] Failed to complete autonomous operations:', err);
+        import('./services/anyaAutonomousScheduler.js')
+          .then(({ runOnStartup }) => {
+            console.log('[Anya] Starting autonomous operations on server startup...');
+            runOnStartup(db).catch(err => {
+              console.error('[Anya] Failed to complete autonomous operations:', err);
+            });
+          })
+          .catch((err) => {
+            console.error('[Anya] Failed to import autonomous scheduler:', err?.message || err);
           });
-        });
       } else {
         // Run original crawler operations only
         runStartupOperations(db).catch(err => {
