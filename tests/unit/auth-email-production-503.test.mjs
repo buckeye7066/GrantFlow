@@ -140,8 +140,8 @@ test('auth: email start returns 202 with preview code for authorized emails in p
     const db = new Database(srv.dbPath)
     const profileId = '00000000-0000-0000-0000-000000000001'
     db.exec(`
-      INSERT INTO profiles (id, user_id, created_at, updated_at)
-      VALUES ('${profileId}', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+      INSERT INTO profiles (id, user_id, display_name, created_at, updated_at)
+      VALUES ('${profileId}', NULL, 'Test User', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
 
       INSERT INTO profile_sections (id, profile_id, section_key, data, created_at, updated_at)
       VALUES ('00000000-0000-0000-0000-000000000002', '${profileId}', 'basic_information', '{"email":"${email}","name":"Test User"}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
