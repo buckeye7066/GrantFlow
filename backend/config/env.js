@@ -38,6 +38,7 @@ const EnvSchema = z
     AUTH_NOTIFY_ON_LOGIN: z.string().optional(),
     AUTH_NOTIFY_EMAIL: z.string().optional(),
     AUTH_ALLOW_PREVIEW_CODE_IN_PROD: z.string().optional(),
+    AUTH_ALLOW_ADMIN_PREVIEW_CODE: z.string().optional(), // Failsafe for admin users when email fails
 
     // Frontend base path (used for SPA static hosting under subpaths like /grantflow)
     AUTH_FRONTEND_APP_BASE: z.string().optional(),
