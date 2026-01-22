@@ -9,22 +9,28 @@ function startServer(extraEnv = {}) {
   const tmp = mkdtempSync(path.join(tmpdir(), 'grantflow-auth-503-test-'))
   const dbPath = path.join(tmp, 'test.db')
 
+  // Start with a clean environment for email service configuration
+  const baseEnv = {
+    ...process.env,
+    NODE_ENV: 'production', // Force production mode
+    PORT: '0',
+    DB_PROVIDER: 'sqlite',
+    SQLITE_DB_PATH: dbPath,
+    DB_AUTO_MIGRATE: 'true',
+    AUTH_JWT_SECRET: 'test-secret-prod',
+    ALLOW_SQLITE_IN_PROD: 'true', // Allow SQLite in production for testing
+    ALLOW_EPHEMERAL_SQLITE: 'true', // Allow ephemeral SQLite paths for testing
+  }
+
+  // Remove email service configuration to simulate email failure
+  delete baseEnv.RESEND_API_KEY
+  delete baseEnv.FROM_EMAIL
+  delete baseEnv.EMAIL_FROM
+
   const child = spawn(process.execPath, ['backend/server.js'], {
     cwd: path.resolve('.'),
     env: {
-      ...process.env,
-      NODE_ENV: 'production', // Force production mode
-      PORT: '0',
-      DB_PROVIDER: 'sqlite',
-      SQLITE_DB_PATH: dbPath,
-      DB_AUTO_MIGRATE: 'true',
-      AUTH_JWT_SECRET: 'test-secret-prod',
-      ALLOW_SQLITE_IN_PROD: 'true', // Allow SQLite in production for testing
-      ALLOW_EPHEMERAL_SQLITE: 'true', // Allow ephemeral SQLite paths for testing
-      // Don't set RESEND_API_KEY or FROM_EMAIL to simulate email failure
-      RESEND_API_KEY: undefined,
-      FROM_EMAIL: undefined,
-      EMAIL_FROM: undefined,
+      ...baseEnv,
       ...extraEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -91,13 +97,16 @@ async function fetchJson(url, init) {
 }
 
 test('auth: email start returns 503 when email fails in production without preview code enabled', async () => {
-  const srv = startServer({
+  // Start with a clean environment - explicitly unset preview code flags
+  const env = {
     NODE_ENV: 'production',
-    // Explicitly disable preview codes and admin failsafe
-    AUTH_ALLOW_PREVIEW_CODE_IN_PROD: undefined,
-    AUTH_ALLOW_PREVIEW_CODE: undefined,
-    AUTH_ALLOW_ADMIN_PREVIEW_CODE: undefined,
-  })
+  }
+  // Explicitly delete any preview code flags from the environment
+  delete env.AUTH_ALLOW_PREVIEW_CODE_IN_PROD
+  delete env.AUTH_ALLOW_PREVIEW_CODE
+  delete env.AUTH_ALLOW_ADMIN_PREVIEW_CODE
+  
+  const srv = startServer(env)
   const { port } = await srv.ready
 
   try {
