@@ -22,7 +22,7 @@ function startServer(extraEnv = {}) {
     ALLOW_EPHEMERAL_SQLITE: 'true', // Allow ephemeral SQLite paths for testing
   }
 
-  // Remove email service configuration to simulate email failure
+  // Remove email service configuration to simulate unconfigured email service
   delete baseEnv.RESEND_API_KEY
   delete baseEnv.FROM_EMAIL
   delete baseEnv.EMAIL_FROM
@@ -31,7 +31,10 @@ function startServer(extraEnv = {}) {
     cwd: path.resolve('.'),
     env: {
       ...baseEnv,
-      ...extraEnv,
+      // Merge extraEnv, filtering out undefined values to ensure they're truly unset
+      ...Object.fromEntries(
+        Object.entries(extraEnv).filter(([_, value]) => value !== undefined)
+      ),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -97,16 +100,13 @@ async function fetchJson(url, init) {
 }
 
 test('auth: email start returns 503 when email fails in production without preview code enabled', async () => {
-  // Start with a clean environment - explicitly unset preview code flags
-  const env = {
+  const srv = startServer({
     NODE_ENV: 'production',
-  }
-  // Explicitly delete any preview code flags from the environment
-  delete env.AUTH_ALLOW_PREVIEW_CODE_IN_PROD
-  delete env.AUTH_ALLOW_PREVIEW_CODE
-  delete env.AUTH_ALLOW_ADMIN_PREVIEW_CODE
-  
-  const srv = startServer(env)
+    // Ensure preview code flags are not set by explicitly removing them from parent env
+    AUTH_ALLOW_PREVIEW_CODE_IN_PROD: undefined,
+    AUTH_ALLOW_PREVIEW_CODE: undefined,
+    AUTH_ALLOW_ADMIN_PREVIEW_CODE: undefined,
+  })
   const { port } = await srv.ready
 
   try {
