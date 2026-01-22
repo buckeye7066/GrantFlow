@@ -7,6 +7,7 @@
 
 import crypto from 'crypto'
 import { buildProfileContext } from './profileHelpers.js'
+import { validateJobStatus, validateZipCode, validateStateCode, validateUuid } from '../utils/dbValidation.js'
 
 /**
  * Generate idempotency key for a crawler job
@@ -65,6 +66,9 @@ export async function createCrawlerJob(db, options) {
   if (!VALID_TYPES.includes(type)) {
     throw new Error(`Invalid crawler job type: ${type}`)
   }
+
+  // Validate and normalize status
+  const normalizedStatus = validateJobStatus(status)
 
   // Generate idempotency key
   const idempotencyKey = generateIdempotencyKey(type, profileId, parameters)
@@ -128,7 +132,7 @@ export async function createCrawlerJob(db, options) {
     .run(
       jobId,
       type,
-      status,
+      normalizedStatus,
       profileId,
       organizationId,
       parametersJson,
@@ -187,15 +191,11 @@ export function validateJobParameters(type, parameters = {}) {
       if (!validated.zip && !validated.state) {
         throw new Error('Local crawler requires zip or state parameter')
       }
-      if (validated.zip && !/^\d{5}$/.test(validated.zip)) {
-        throw new Error('Invalid zip code format (must be 5 digits)')
+      if (validated.zip) {
+        validated.zip = validateZipCode(validated.zip)
       }
-      if (validated.state && !/^[A-Z]{2}$/.test(validated.state?.toUpperCase())) {
-        throw new Error('Invalid state code (must be 2 letters)')
-      }
-      // Normalize state to uppercase
       if (validated.state) {
-        validated.state = validated.state.toUpperCase()
+        validated.state = validateStateCode(validated.state)
       }
       break
 
@@ -250,9 +250,7 @@ export function validateJobParameters(type, parameters = {}) {
       if (!validated.zip) {
         throw new Error('National zip scan requires zip parameter')
       }
-      if (!/^\d{5}$/.test(validated.zip)) {
-        throw new Error('Invalid zip code format (must be 5 digits)')
-      }
+      validated.zip = validateZipCode(validated.zip)
       break
 
     default:
@@ -270,12 +268,5 @@ export function validateJobParameters(type, parameters = {}) {
  * @throws {Error} If status is invalid
  */
 export function normalizeJobStatus(status) {
-  const VALID_STATUSES = ['queued', 'running', 'completed', 'failed', 'cancelled']
-  const normalized = String(status || 'queued').toLowerCase()
-  
-  if (!VALID_STATUSES.includes(normalized)) {
-    throw new Error(`Invalid job status: ${status}. Must be one of: ${VALID_STATUSES.join(', ')}`)
-  }
-  
-  return normalized
+  return validateJobStatus(status)
 }
