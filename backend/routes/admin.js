@@ -2241,4 +2241,38 @@ router.post('/profiles/merge', async (req, res, next) => {
   }
 })
 
+// Dead Letter Queue Management
+router.get('/dead-letter-queue', async (req, res) => {
+  try {
+    const { getUnresolvedFailures, getFailureStatistics } = await import('../services/deadLetterQueue.js');
+    const { jobType, limit = 100 } = req.query;
+    
+    if (jobType) {
+      const failures = await getUnresolvedFailures(req.db, jobType, parseInt(limit, 10));
+      res.json({ failures, count: failures.length });
+    } else {
+      const stats = await getFailureStatistics(req.db);
+      res.json({ statistics: stats });
+    }
+  } catch (error) {
+    console.error('[admin] Error fetching dead letter queue:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/dead-letter-queue/:id/resolve', async (req, res) => {
+  try {
+    const { resolveFailure } = await import('../services/deadLetterQueue.js');
+    const { id } = req.params;
+    const { notes } = req.body;
+    const userId = req.user?.userId || req.user?.id || 'system';
+    
+    await resolveFailure(req.db, id, userId, notes);
+    res.json({ success: true, message: 'Dead letter entry resolved' });
+  } catch (error) {
+    console.error('[admin] Error resolving dead letter entry:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;
