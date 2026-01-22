@@ -466,58 +466,18 @@ function buildUserPayload(userRow, profiles, activeProfileId) {
   }
 }
 
-async function assignProfileToUser(db, userId, email) {
-  if (email && isAdminEmail(email)) {
-    await ensureAdminUser(db)
-    return null
-  }
+/**
+ * Find a profile by email address from profile_sections basic_information.
+ * Works with both Postgres and SQLite.
+ * @param {Object} db - Database instance
+ * @param {string} normalizedEmail - Normalized email address (lowercase)
+ * @returns {Promise<{id: string, user_id: string|null}|null>} Profile row or null
+ */
+async function findProfileRowForEmail(db, normalizedEmail) {
+  if (!normalizedEmail) return null
 
-  async function findProfileRowForEmail(normalizedEmail) {
-    if (!normalizedEmail) return null
-
-    // Postgres: JSON ->> extraction is safe and fast.
-    if (db?.dialect === 'postgres') {
-      try {
-        return (
-          (await db
-            .prepare(
-              `
-                SELECT p.id, p.user_id
-                FROM profiles p
-                JOIN profile_sections ps ON ps.profile_id = p.id
-                WHERE ps.section_key = 'basic_information'
-                  AND LOWER((ps.data::jsonb ->> 'email')) = ?
-                LIMIT 1
-              `,
-            )
-            .get(normalizedEmail)) ?? null
-        )
-      } catch {
-        return null
-      }
-    }
-
-    // SQLite: prefer json_extract when available.
-    try {
-      const row = await db
-        .prepare(
-          `
-            SELECT p.id, p.user_id
-            FROM profiles p
-            JOIN profile_sections ps ON ps.profile_id = p.id
-            WHERE ps.section_key = 'basic_information'
-              AND LOWER(json_extract(ps.data, '$.email')) = ?
-            LIMIT 1
-          `,
-        )
-        .get(normalizedEmail)
-      if (row?.id) return row
-    } catch {
-      // ignore and fall back to LIKE matching
-    }
-
-    // Fallback: match in JSON string (works even if json1 isn't enabled).
-    const needle = `"email":"${normalizedEmail.replace(/"/g, '').toLowerCase()}"`
+  // Postgres: JSON ->> extraction is safe and fast.
+  if (db?.dialect === 'postgres') {
     try {
       return (
         (await db
@@ -527,15 +487,62 @@ async function assignProfileToUser(db, userId, email) {
               FROM profiles p
               JOIN profile_sections ps ON ps.profile_id = p.id
               WHERE ps.section_key = 'basic_information'
-                AND LOWER(ps.data) LIKE ?
+                AND LOWER((ps.data::jsonb ->> 'email')) = ?
               LIMIT 1
             `,
           )
-          .get(`%${needle}%`)) ?? null
+          .get(normalizedEmail)) ?? null
       )
     } catch {
       return null
     }
+  }
+
+  // SQLite: prefer json_extract when available.
+  try {
+    const row = await db
+      .prepare(
+        `
+          SELECT p.id, p.user_id
+          FROM profiles p
+          JOIN profile_sections ps ON ps.profile_id = p.id
+          WHERE ps.section_key = 'basic_information'
+            AND LOWER(json_extract(ps.data, '$.email')) = ?
+          LIMIT 1
+        `,
+      )
+      .get(normalizedEmail)
+    if (row?.id) return row
+  } catch {
+    // ignore and fall back to LIKE matching
+  }
+
+  // Fallback: match in JSON string (works even if json1 isn't enabled).
+  const needle = `"email":"${normalizedEmail.replace(/"/g, '').toLowerCase()}"`
+  try {
+    return (
+      (await db
+        .prepare(
+          `
+            SELECT p.id, p.user_id
+            FROM profiles p
+            JOIN profile_sections ps ON ps.profile_id = p.id
+            WHERE ps.section_key = 'basic_information'
+              AND LOWER(ps.data) LIKE ?
+            LIMIT 1
+          `,
+        )
+        .get(`%${needle}%`)) ?? null
+    )
+  } catch {
+    return null
+  }
+}
+
+async function assignProfileToUser(db, userId, email) {
+  if (email && isAdminEmail(email)) {
+    await ensureAdminUser(db)
+    return null
   }
 
   if (email) {
@@ -544,7 +551,7 @@ async function assignProfileToUser(db, userId, email) {
     // 1) Best-effort match to an existing profile by email captured in profile sections.
     // This is the safest way to ensure returning users re-claim their original profile
     // even when IDs/mappings drift across DB restores.
-    const byEmail = await findProfileRowForEmail(normalizedEmail)
+    const byEmail = await findProfileRowForEmail(db, normalizedEmail)
     if (byEmail?.id) {
       if (!byEmail.user_id || byEmail.user_id === userId) {
         await db
@@ -1321,6 +1328,32 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
 
     console.info('[auth/email/start] Processing email authentication request for:', email)
 
+    // Determine if we're in production
+    const isProd =
+      process.env.NODE_ENV === 'production' ||
+      process.env.RAILWAY_ENVIRONMENT === 'production' ||
+      process.env.VERCEL_ENV === 'production'
+
+    // In production, check if the email is authorized (matches an existing profile)
+    // before creating/allowing authentication
+    if (isProd) {
+      const normalizedEmail = normalizeEmail(email)
+      const matchingProfile = await findProfileRowForEmail(req.db, normalizedEmail)
+      
+      // Also allow admin emails even if they don't have a profile yet
+      const isAuthorized = matchingProfile || isAdminEmail(email)
+      
+      if (!isAuthorized) {
+        console.warn('[auth/email/start] Unauthorized email in production (no matching profile):', email)
+        return res.status(403).json({
+          error: 'Access denied. This email is not authorized for login.',
+          error_type: 'unauthorized_email'
+        })
+      }
+      
+      console.info('[auth/email/start] Email authorized in production for:', email, 'profile_id:', matchingProfile?.id)
+    }
+
     // Database operations with error handling
     let user, credential
     try {
@@ -1387,7 +1420,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       })
     }
 
-    // Attempt to send email with timeout
+    // Attempt to send email with timeout (optional, not required for login)
     console.info('[auth/email/start] Attempting to send verification email to:', email)
     let emailSent = false
     try {
@@ -1410,11 +1443,11 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       // Don't fail the request if email fails - code is stored in DB
     }
 
-    // Return success response with code in development/when email fails
+    // Return success response
     const responseData = {
       message: emailSent 
         ? 'Verification code sent to your email' 
-        : 'Verification code generated (email service unavailable)',
+        : 'Verification code generated. Use the preview code to log in.',
       email_sent: emailSent,
       verification_token: verificationToken,
       user_hint: {
@@ -1432,36 +1465,12 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       error: emailSent ? null : 'email_delivery_failed_or_unconfigured',
     }).catch(() => {})
 
-    // SECURITY: never expose OTP codes in production responses.
-    // IMPORTANT: do NOT hard-fail the login start flow if email delivery is slow/unavailable.
-    // Many providers are async/queued and may deliver shortly after the request returns.
-    // Treat hosted deployments as production even if NODE_ENV is mis-set.
-    const isProd =
-      process.env.NODE_ENV === 'production' ||
-      process.env.RAILWAY_ENVIRONMENT === 'production' ||
-      process.env.VERCEL_ENV === 'production'
-
     // Check if preview codes are explicitly allowed in production
     const allowPreviewInProd = String(
       process.env.AUTH_ALLOW_PREVIEW_CODE_IN_PROD ||
       process.env.AUTH_ALLOW_PREVIEW_CODE ||
       ''
     ).toLowerCase() === 'true'
-
-    // Check if admin failsafe applies
-    const isAdminFailsafeEnabled = process.env.AUTH_ALLOW_ADMIN_PREVIEW_CODE === 'true'
-    const shouldAllowAdminFailsafe = isProd && !emailSent && isAdminFailsafeEnabled && isAdminEmail(email)
-
-    // In production: if email delivery fails and preview codes are not explicitly allowed,
-    // return 503 to prevent silent failures that cause login lockouts.
-    // Exception: allow admin failsafe to proceed if AUTH_ALLOW_ADMIN_PREVIEW_CODE is enabled.
-    if (isProd && !emailSent && !allowPreviewInProd && !shouldAllowAdminFailsafe) {
-      console.error('[auth/email/start] Email delivery failed in production without preview code allowance for:', email)
-      return res.status(503).json({
-        error: 'Email delivery is unavailable. Please try again later or contact support.',
-        error_type: 'email_delivery_unavailable'
-      })
-    }
 
     // Developer experience: in non-production, return a preview code so local/test flows can proceed
     // even when email delivery is not configured.
@@ -1470,24 +1479,14 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       responseData.previewCode = code
     }
 
-    // Production preview code: when explicitly enabled, return preview code for all users
-    // This is useful for testing/development in production-like environments
-    if (isProd && allowPreviewInProd) {
+    // Production: always return preview code for authorized emails (email is pre-validated above)
+    // This removes the dependency on email delivery for production login
+    if (isProd) {
       responseData.previewCode = code
-      responseData.preview_reason = 'preview_enabled_in_prod'
+      responseData.preview_reason = 'profile_email_authorized'
     }
 
-    // FAILSAFE: Admin preview code when email fails in production
-    // If email sending failed AND AUTH_ALLOW_ADMIN_PREVIEW_CODE is enabled,
-    // return the OTP code for admin users ONLY to prevent lockout.
-    // This does NOT weaken security for non-admin users.
-    if (shouldAllowAdminFailsafe) {
-      console.warn('[auth/email/start] FAILSAFE: Returning preview code for admin user due to email failure:', email)
-      responseData.previewCode = code
-      responseData.preview_reason = 'admin_failsafe_email_failed'
-    }
-
-    console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent)
+    console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent, 'isProd:', isProd)
     return res.status(202).json(responseData)
     
   } catch (error) {

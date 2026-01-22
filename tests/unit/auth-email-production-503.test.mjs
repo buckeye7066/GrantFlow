@@ -99,7 +99,7 @@ async function fetchJson(url, init) {
   return { status: res.status, json }
 }
 
-test('auth: email start returns 503 when email fails in production without preview code enabled', async () => {
+test('auth: email start returns 403 for unauthorized emails in production (no matching profile)', async () => {
   const srv = startServer({
     NODE_ENV: 'production',
     // Ensure preview code flags are not set by explicitly removing them from parent env
@@ -116,71 +116,56 @@ test('auth: email start returns 503 when email fails in production without previ
       body: JSON.stringify({ email }),
     })
 
-    assert.equal(start.status, 503, 'Expected 503 status code when email fails in production')
+    assert.equal(start.status, 403, 'Expected 403 status code for unauthorized email in production')
     assert.ok(start.json)
-    assert.equal(start.json.error_type, 'email_delivery_unavailable')
-    assert.ok(start.json.error.includes('Email delivery is unavailable'))
+    assert.equal(start.json.error_type, 'unauthorized_email')
+    assert.ok(start.json.error.includes('not authorized'))
     assert.equal(start.json.previewCode, undefined, 'Preview code should not be returned')
   } finally {
     await srv.stop()
   }
 })
 
-test('auth: email start returns preview code when AUTH_ALLOW_PREVIEW_CODE_IN_PROD is enabled', async () => {
+test('auth: email start returns 202 with preview code for authorized emails in production (matching profile)', async () => {
   const srv = startServer({
     NODE_ENV: 'production',
-    AUTH_ALLOW_PREVIEW_CODE_IN_PROD: 'true',
   })
   const { port } = await srv.ready
 
   try {
-    const email = 'test@example.com'
+    const email = 'authorized@example.com'
+    
+    // Set up a profile with matching email in the database
+    const Database = (await import('better-sqlite3')).default
+    const db = new Database(srv.dbPath)
+    const profileId = '00000000-0000-0000-0000-000000000001'
+    db.exec(`
+      INSERT INTO profiles (id, user_id, created_at, updated_at)
+      VALUES ('${profileId}', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+
+      INSERT INTO profile_sections (id, profile_id, section_key, data, created_at, updated_at)
+      VALUES ('00000000-0000-0000-0000-000000000002', '${profileId}', 'basic_information', '{"email":"${email}","name":"Test User"}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+    `)
+    db.close()
+
     const start = await fetchJson(`http://127.0.0.1:${port}/api/auth/email/start`, {
       method: 'POST',
       body: JSON.stringify({ email }),
     })
 
-    // With AUTH_ALLOW_PREVIEW_CODE_IN_PROD enabled, we should get 202 with preview code
-    assert.equal(start.status, 202, 'Expected 202 status code when preview code is allowed')
+    assert.equal(start.status, 202, 'Expected 202 status code for authorized email')
     assert.ok(start.json)
-    assert.equal(start.json.email_sent, false)
-    assert.equal(typeof start.json.previewCode, 'string', 'Preview code should be returned when explicitly allowed')
+    assert.equal(typeof start.json.previewCode, 'string', 'Preview code should be returned for authorized email')
     assert.equal(start.json.previewCode.length, 6)
-    assert.equal(start.json.preview_reason, 'preview_enabled_in_prod')
+    assert.equal(start.json.preview_reason, 'profile_email_authorized')
   } finally {
     await srv.stop()
   }
 })
 
-test('auth: email start returns preview code when AUTH_ALLOW_PREVIEW_CODE is enabled', async () => {
+test('auth: admin email is authorized even without matching profile in production', async () => {
   const srv = startServer({
     NODE_ENV: 'production',
-    AUTH_ALLOW_PREVIEW_CODE: 'true',
-  })
-  const { port } = await srv.ready
-
-  try {
-    const email = 'test@example.com'
-    const start = await fetchJson(`http://127.0.0.1:${port}/api/auth/email/start`, {
-      method: 'POST',
-      body: JSON.stringify({ email }),
-    })
-
-    assert.equal(start.status, 202, 'Expected 202 status code when preview code is allowed')
-    assert.ok(start.json)
-    assert.equal(start.json.email_sent, false)
-    assert.equal(typeof start.json.previewCode, 'string', 'Preview code should be returned when explicitly allowed')
-    assert.equal(start.json.previewCode.length, 6)
-    assert.equal(start.json.preview_reason, 'preview_enabled_in_prod')
-  } finally {
-    await srv.stop()
-  }
-})
-
-test('auth: admin user gets preview code via AUTH_ALLOW_ADMIN_PREVIEW_CODE failsafe', async () => {
-  const srv = startServer({
-    NODE_ENV: 'production',
-    AUTH_ALLOW_ADMIN_PREVIEW_CODE: 'true',
     ADMIN_EMAIL: 'admin@example.com',
   })
   const { port } = await srv.ready
@@ -192,35 +177,11 @@ test('auth: admin user gets preview code via AUTH_ALLOW_ADMIN_PREVIEW_CODE fails
       body: JSON.stringify({ email }),
     })
 
-    assert.equal(start.status, 202, 'Expected 202 status code for admin with failsafe')
+    assert.equal(start.status, 202, 'Expected 202 status code for admin email')
     assert.ok(start.json)
     assert.equal(typeof start.json.previewCode, 'string', 'Admin should get preview code')
     assert.equal(start.json.previewCode.length, 6)
-    assert.equal(start.json.preview_reason, 'admin_failsafe_email_failed')
-  } finally {
-    await srv.stop()
-  }
-})
-
-test('auth: non-admin user gets 503 even when AUTH_ALLOW_ADMIN_PREVIEW_CODE is enabled', async () => {
-  const srv = startServer({
-    NODE_ENV: 'production',
-    AUTH_ALLOW_ADMIN_PREVIEW_CODE: 'true',
-    ADMIN_EMAIL: 'admin@example.com',
-  })
-  const { port } = await srv.ready
-
-  try {
-    const email = 'user@example.com' // Not an admin
-    const start = await fetchJson(`http://127.0.0.1:${port}/api/auth/email/start`, {
-      method: 'POST',
-      body: JSON.stringify({ email }),
-    })
-
-    assert.equal(start.status, 503, 'Non-admin should get 503 when email fails')
-    assert.ok(start.json)
-    assert.equal(start.json.error_type, 'email_delivery_unavailable')
-    assert.equal(start.json.previewCode, undefined, 'Non-admin should not get preview code')
+    assert.equal(start.json.preview_reason, 'profile_email_authorized')
   } finally {
     await srv.stop()
   }
