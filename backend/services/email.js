@@ -12,144 +12,125 @@
 
 import { Resend } from 'resend'
 
-// Resolve FROM address with fallback chain
-const FROM_EMAIL = process.env.FROM_EMAIL || process.env.EMAIL_FROM || 'noreply@grantflow.app'
+const RESEND_API_KEY = process.env.RESEND_API_KEY || null
+const FROM_EMAIL = process.env.FROM_EMAIL || process.env.EMAIL_FROM || null
 
-/**
- * Check if email service is properly configured
- * @returns {boolean}
- */
+// Resolve sender address for Resend.
+// In production-like environments, a missing/invalid sender should be treated as "not configured"
+// to avoid silent delivery failures.
+function resolveFromEmail() {
+  const raw = FROM_EMAIL
+  if (!raw) return null
+  const v = String(raw).trim()
+  if (!v) return null
+
+  // Common misconfiguration: users paste KEY=VALUE into the value field.
+  if (v.includes('FROM_EMAIL=')) return null
+
+  // Resend's onboarding sender is only for examples; do not use it as a fallback in production.
+  if (v.toLowerCase().includes('onboarding@resend.dev')) return null
+
+  return v
+}
+
+// Create a shared Resend client instance.
+let resendClient = null
+
 export function isEmailServiceConfigured() {
-  const hasApiKey = Boolean(process.env.RESEND_API_KEY)
-  const hasFromEmail = Boolean(process.env.FROM_EMAIL || process.env.EMAIL_FROM)
-  return hasApiKey && hasFromEmail
+  // Require api key. Also require a from email address.
+  // Without a real sender, most providers will reject or silently drop messages.
+  return Boolean(RESEND_API_KEY && resolveFromEmail())
 }
 
-/**
- * Get or create Resend client instance
- * @returns {Resend|null}
- */
-function getResendClient() {
-  const apiKey = process.env.RESEND_API_KEY
-  
-  if (!apiKey) {
-    console.error('[email] RESEND_API_KEY not configured (provider: resend, runtime: railway)')
+function getResend() {
+  if (!RESEND_API_KEY) {
     return null
   }
-  
-  try {
-    return new Resend(apiKey)
-  } catch (error) {
-    console.error('[email] Failed to initialize Resend client:', error.message, '(provider: resend, runtime: railway)')
-    return null
+
+  if (resendClient) {
+    return resendClient
   }
+
+  resendClient = new Resend(RESEND_API_KEY)
+  return resendClient
 }
 
-/**
- * Send verification email with 6-digit OTP code
- * @param {string} email - Recipient email address
- * @param {string} code - 6-digit verification code
- * @returns {Promise<boolean>} true if sent successfully, false otherwise
- */
 export async function sendVerificationEmail(email, code) {
-  const resend = getResendClient()
-  
-  if (!resend) {
-    console.warn('[email/sendVerificationEmail] Resend not configured - email not sent (provider: resend, runtime: railway)')
-    return false
-  }
-  
-  const fromAddress = FROM_EMAIL
-  
-  console.info('[email/sendVerificationEmail] Attempting to send verification email', {
-    to: email,
-    from: fromAddress,
-    provider: 'resend',
-    runtime: 'railway',
-    codeLength: code?.length || 0
-  })
-  
+  if (!email) return false
+  if (!code) return false
+  if (!isEmailServiceConfigured()) return false
+
   try {
-    const result = await resend.emails.send({
-      from: fromAddress,
-      to: email,
-      subject: 'Your GrantFlow Verification Code',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2>GrantFlow Login Verification</h2>
-          <p>Your verification code is:</p>
-          <div style="background-color: #f5f5f5; padding: 20px; text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 8px; margin: 20px 0;">
-            ${code}
-          </div>
-          <p>This code will expire in 10 minutes.</p>
-          <p>If you didn't request this code, you can safely ignore this email.</p>
+    const resend = getResend()
+    if (!resend) return false
+
+    const from = resolveFromEmail()
+    if (!from) return false
+
+    const subject = 'Your GrantFlow Verification Code'
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2>GrantFlow Login Verification</h2>
+        <p>Your verification code is:</p>
+        <div style="background-color: #f5f5f5; padding: 20px; text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 8px; margin: 20px 0;">
+          ${code}
         </div>
-      `,
-      text: `Your GrantFlow verification code is: ${code}\n\nThis code will expire in 10 minutes.\n\nIf you didn't request this code, you can safely ignore this email.`
+        <p>This code will expire in 10 minutes.</p>
+        <p>If you didn't request this code, you can safely ignore this email.</p>
+      </div>
+    `
+    const text = `Your GrantFlow verification code is: ${code}\n\nThis code will expire in 10 minutes.\n\nIf you didn't request this code, you can safely ignore this email.`
+
+    const result = await resend.emails.send({
+      from,
+      to: email,
+      subject,
+      html,
+      text,
     })
-    
-    if (result.error) {
+
+    if (result?.error) {
       console.error('[email/sendVerificationEmail] Resend API error:', {
         error: result.error,
         to: email,
         provider: 'resend',
-        runtime: 'railway'
+        runtime: 'railway',
       })
       return false
     }
-    
-    console.info('[email/sendVerificationEmail] Email sent successfully', {
-      id: result.data?.id,
-      to: email,
-      provider: 'resend',
-      runtime: 'railway'
-    })
-    
+
     return true
   } catch (error) {
-    console.error('[email/sendVerificationEmail] Failed to send email:', {
-      error: error.message,
-      stack: error.stack,
-      to: email,
-      provider: 'resend',
-      runtime: 'railway'
-    })
-    
-    // Propagate error for caller to handle
-    throw new Error(`Email delivery failed: ${error.message}`)
+    console.error('[email] Failed to send verification email:', error?.message)
+    return false
   }
 }
 
-/**
- * Send notification about authentication attempt
- * Used for admin monitoring/alerting
- * @param {Object} params - Notification parameters
- * @param {string} params.event - Event type (email_start, email_verify, etc)
- * @param {string} params.identifier - User identifier (email/phone)
- * @param {boolean} params.success - Whether the attempt succeeded
- * @param {string|null} params.error - Error message if failed
- * @returns {Promise<boolean>}
- */
 export async function sendAuthAttemptNotification({ event, identifier, success, error }) {
   // Only send notifications if explicitly enabled and admin email is configured
   const shouldNotify = process.env.AUTH_NOTIFY_ON_LOGIN === 'true'
   const notifyEmail = process.env.AUTH_NOTIFY_EMAIL || process.env.ADMIN_EMAIL
-  
+
   if (!shouldNotify || !notifyEmail) {
     return false
   }
-  
-  const resend = getResendClient()
-  if (!resend) {
+
+  if (!isEmailServiceConfigured()) {
     return false
   }
-  
+
   try {
+    const resend = getResend()
+    if (!resend) return false
+
+    const from = resolveFromEmail()
+    if (!from) return false
+
     const statusEmoji = success ? '✅' : '❌'
     const subject = `${statusEmoji} Auth Event: ${event}`
-    
+
     await resend.emails.send({
-      from: FROM_EMAIL,
+      from,
       to: notifyEmail,
       subject,
       html: `
@@ -164,34 +145,35 @@ export async function sendAuthAttemptNotification({ event, identifier, success, 
           </ul>
         </div>
       `,
-      text: `Auth Event: ${event}\nIdentifier: ${identifier}\nSuccess: ${success}${error ? `\nError: ${error}` : ''}\nTime: ${new Date().toISOString()}`
+      text: `Auth Event: ${event}\nIdentifier: ${identifier}\nSuccess: ${success}${error ? `\nError: ${error}` : ''}\nTime: ${new Date().toISOString()}`,
     })
-    
+
     return true
-  } catch (error) {
-    console.warn('[email/sendAuthAttemptNotification] Failed to send notification:', error.message)
+  } catch (e) {
+    console.warn('[email/sendAuthAttemptNotification] Failed to send notification:', e?.message || e)
     return false
   }
 }
 
-/**
- * Send application submission email
- * @param {string} toEmail - Recipient email
- * @param {Object} applicationData - Application details
- * @returns {Promise<boolean>}
- */
 export async function sendApplicationEmail(toEmail, applicationData) {
-  const resend = getResendClient()
-  
+  const resend = getResend()
+
   if (!resend) {
     const errorMsg = 'Email service not available. Cannot send application email without Resend configuration.'
     console.error('[email/sendApplicationEmail]', errorMsg, '(provider: resend, runtime: railway)')
     throw new Error(errorMsg)
   }
-  
+
+  const from = resolveFromEmail()
+  if (!from) {
+    const errorMsg = 'Email service not configured. Missing/invalid FROM_EMAIL (or EMAIL_FROM).'
+    console.error('[email/sendApplicationEmail]', errorMsg)
+    throw new Error(errorMsg)
+  }
+
   try {
     await resend.emails.send({
-      from: FROM_EMAIL,
+      from,
       to: toEmail,
       subject: 'GrantFlow Application Submitted',
       html: `
@@ -201,34 +183,27 @@ export async function sendApplicationEmail(toEmail, applicationData) {
           <pre>${JSON.stringify(applicationData, null, 2)}</pre>
         </div>
       `,
-      text: `Your GrantFlow application has been submitted.\n\n${JSON.stringify(applicationData, null, 2)}`
+      text: `Your GrantFlow application has been submitted.\n\n${JSON.stringify(applicationData, null, 2)}`,
     })
-    
+
     console.info('[email/sendApplicationEmail] Application email sent', {
       to: toEmail,
       provider: 'resend',
-      runtime: 'railway'
+      runtime: 'railway',
     })
-    
+
     return true
   } catch (error) {
     console.error('[email/sendApplicationEmail] Failed to send:', {
       error: error.message,
       to: toEmail,
       provider: 'resend',
-      runtime: 'railway'
+      runtime: 'railway',
     })
     throw new Error(`Failed to send application email: ${error.message}`)
   }
 }
 
-/**
- * Send service application email (alias for sendApplicationEmail)
- * Used by service application forms
- * @param {string} toEmail - Recipient email
- * @param {Object} applicationData - Application details
- * @returns {Promise<boolean>}
- */
 export async function sendServiceApplicationEmail(toEmail, applicationData) {
   return sendApplicationEmail(toEmail, applicationData)
 }
