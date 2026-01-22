@@ -138,14 +138,25 @@ test('auth: email start returns 202 with preview code for authorized emails in p
     // Set up a profile with matching email in the database
     const Database = (await import('better-sqlite3')).default
     const db = new Database(srv.dbPath)
-    const profileId = '00000000-0000-0000-0000-000000000001'
-    db.exec(`
+    
+    // Use test fixtures with known safe values (not user input)
+    const TEST_PROFILE_ID = '00000000-0000-0000-0000-000000000001'
+    const TEST_SECTION_ID = '00000000-0000-0000-0000-000000000002'
+    const TEST_DISPLAY_NAME = 'Test User'
+    
+    // Insert profile using parameterized queries
+    const insertProfile = db.prepare(`
       INSERT INTO profiles (id, user_id, display_name, created_at, updated_at)
-      VALUES ('${profileId}', NULL, 'Test User', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
-
-      INSERT INTO profile_sections (id, profile_id, section_key, data, created_at, updated_at)
-      VALUES ('00000000-0000-0000-0000-000000000002', '${profileId}', 'basic_information', '{"email":"${email}","name":"Test User"}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+      VALUES (?, NULL, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `)
+    insertProfile.run(TEST_PROFILE_ID, TEST_DISPLAY_NAME)
+    
+    const insertSection = db.prepare(`
+      INSERT INTO profile_sections (id, profile_id, section_key, data, created_at, updated_at)
+      VALUES (?, ?, 'basic_information', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `)
+    insertSection.run(TEST_SECTION_ID, TEST_PROFILE_ID, JSON.stringify({ email, name: TEST_DISPLAY_NAME }))
+    
     db.close()
 
     const start = await fetchJson(`http://127.0.0.1:${port}/api/auth/email/start`, {

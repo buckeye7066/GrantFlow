@@ -518,7 +518,11 @@ async function findProfileRowForEmail(db, normalizedEmail) {
   }
 
   // Fallback: match in JSON string (works even if json1 isn't enabled).
-  const needle = `"email":"${normalizedEmail.replace(/"/g, '').toLowerCase()}"`
+  // Properly escape the email for safe JSON string matching
+  const escapedEmail = normalizedEmail
+    .replace(/\\/g, '\\\\')  // Escape backslashes first
+    .replace(/"/g, '\\"')     // Escape quotes
+  const needle = `"email":"${escapedEmail.toLowerCase()}"`
   try {
     return (
       (await db
