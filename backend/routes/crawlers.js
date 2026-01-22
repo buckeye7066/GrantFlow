@@ -4,6 +4,7 @@ import crypto from 'crypto'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
+import { createCrawlerJob, validateJobParameters } from '../services/crawlerJobCreation.js'
 import { buildProfileContext } from '../services/profileHelpers.js'
 import { validatePagination } from '../utils/validation.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'
@@ -1025,71 +1026,29 @@ router.post('/jobs', async (req, res) => {
       if (!(await requireTierCapability(req, res, targetProfileId, requiredCapability))) return
     }
 
-    // Build profile context snapshot if profile is present
-    let profileContextSnapshot = null
-    if (targetProfileId) {
-      try {
-        const context = await buildProfileContext(req.db, targetProfileId)
-        profileContextSnapshot = JSON.stringify(context)
-      } catch (error) {
-        console.warn('[crawlers] Failed to build profile context snapshot:', error?.message)
-        // Continue without snapshot for backward compatibility
-      }
-    }
-
-    // Generate idempotency key to prevent duplicate runs
-    // Key is based on: type + profile_id + normalized parameters
-    const idempotencyKey = crypto
-      .createHash('sha256')
-      .update(
-        JSON.stringify({
-          type,
-          profile_id: targetProfileId,
-          parameters: parameters ?? {},
-        })
-      )
-      .digest('hex')
-      .substring(0, 32)
-
-    const parametersJson = JSON.stringify(parameters ?? {})
-    const jobId = crypto.randomUUID()
+    // Validate and normalize parameters
+    const validatedParameters = validateJobParameters(type, parameters)
     
-    // Check for existing job with same idempotency key
-    const existingJob = await req.db
-      .prepare('SELECT * FROM crawler_jobs WHERE idempotency_key = ? AND status IN (?, ?)')
-      .get(idempotencyKey, 'queued', 'running')
+    // Create job with automatic idempotency, validation, and snapshot
+    const result = await createCrawlerJob(req.db, {
+      type,
+      profileId: targetProfileId,
+      organizationId,
+      parameters: validatedParameters,
+      requestedBy: admin ? 'admin' : (auth.userId ?? auth.email ?? targetProfileId ?? 'user'),
+      status: 'queued',
+      buildSnapshot: true,
+    })
     
-    if (existingJob) {
-      console.log('[crawlers] Duplicate job detected, returning existing job:', existingJob.id)
+    // If existing job found, return it
+    if (result.existing) {
+      console.log('[crawlers] Duplicate job detected, returning existing job:', result.jobId)
+      const existingJob = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(result.jobId)
       return res.status(200).json(mapJob(existingJob))
     }
     
-    const insert = req.db.prepare(`
-      INSERT INTO crawler_jobs (
-        id,
-        type,
-        status,
-        profile_id,
-        organization_id,
-        parameters,
-        profile_context_snapshot,
-        idempotency_key,
-        requested_by
-      ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?)
-    `)
-
-    await insert.run(
-      jobId,
-      type,
-      targetProfileId,
-      organizationId,
-      parametersJson,
-      profileContextSnapshot,
-      idempotencyKey,
-      admin ? 'admin' : (auth.userId ?? auth.email ?? targetProfileId ?? 'user'),
-    )
-
-    const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
+    // Dispatch the newly created job
+    const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(result.jobId)
 
     dispatchCrawlerJob({
       db: req.db,
