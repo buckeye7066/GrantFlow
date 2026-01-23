@@ -1433,10 +1433,25 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
     // IMPORTANT: do NOT hard-fail the login start flow if email delivery is slow/unavailable.
     // Many providers are async/queued and may deliver shortly after the request returns.
     // Treat hosted deployments as production even if NODE_ENV is mis-set.
+    // SECURITY: if we can't confidently identify "non-prod", we default to production behavior
+    // (meaning: never return OTP codes in responses).
+    const nodeEnv = String(process.env.NODE_ENV || '').trim().toLowerCase()
+    const railwayEnv = String(process.env.RAILWAY_ENVIRONMENT || '').trim().toLowerCase()
+    const vercelEnv = String(process.env.VERCEL_ENV || '').trim().toLowerCase()
+    const isHosted = Boolean(
+      process.env.RAILWAY_PROJECT_ID ||
+        process.env.RAILWAY_SERVICE_ID ||
+        process.env.RAILWAY_ENVIRONMENT ||
+        process.env.VERCEL ||
+        process.env.VERCEL_ENV,
+    )
+    const isExplicitDev = nodeEnv === 'development' || nodeEnv === 'test'
     const isProd =
-      process.env.NODE_ENV === 'production' ||
-      process.env.RAILWAY_ENVIRONMENT === 'production' ||
-      process.env.VERCEL_ENV === 'production'
+      (!isExplicitDev && isHosted) ||
+      nodeEnv === 'production' ||
+      railwayEnv === 'production' ||
+      railwayEnv === 'prod' ||
+      vercelEnv === 'production'
 
     // Developer experience: in non-production, return a preview code so local/test flows can proceed
     // even when email delivery is not configured.
