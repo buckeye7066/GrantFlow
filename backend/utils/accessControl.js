@@ -31,11 +31,24 @@ export function isAdminUser(user) {
   const email = String(user?.primary_email || user?.email || '').toLowerCase()
   return Boolean(
     user?.role === 'admin' ||
+      user?.isAdmin === true ||
       user?.is_admin === true ||
       user?.is_admin === 1 ||
       (Array.isArray(user?.roles) && user.roles.includes('admin')) ||
       (email && email.includes(ADMIN_EMAIL_ALLOWLIST_SUBSTRING)),
   )
+}
+
+async function resolveIsAdminFromDb(db, user) {
+  try {
+    const userId = getAuthUserId(user)
+    if (!userId) return false
+    const row = await db.prepare('SELECT is_admin, primary_email FROM users WHERE id = ?').get(userId)
+    const email = String(row?.primary_email || '').toLowerCase()
+    return Boolean(row?.is_admin === true || row?.is_admin === 1 || (email && email.includes(ADMIN_EMAIL_ALLOWLIST_SUBSTRING)))
+  } catch {
+    return false
+  }
 }
 
 export async function ensureProfileEmailSchema(db) {
@@ -90,7 +103,7 @@ export function getAuthProfileId(user) {
 }
 
 export async function getAccessibleProfileIds(db, user) {
-  if (isAdminUser(user)) return null
+  if (isAdminUser(user) || (await resolveIsAdminFromDb(db, user))) return null
 
   const ids = new Set()
   const userId = getAuthUserId(user)
@@ -200,7 +213,7 @@ export async function removeProfileEmail(db, { profileId, emailId }) {
 }
 
 export async function getAccessibleOrganizationIds(db, user) {
-  if (isAdminUser(user)) return null
+  if (isAdminUser(user) || (await resolveIsAdminFromDb(db, user))) return null
 
   const profileIds = await getAccessibleProfileIds(db, user)
   if (!profileIds || profileIds.size === 0) return new Set()
@@ -226,7 +239,7 @@ export async function ensureProfileAccess(req, res, profileId) {
     return false
   }
 
-  if (isAdminUser(user)) return true
+  if (isAdminUser(user) || (await resolveIsAdminFromDb(req.db, user))) return true
 
   const accessible = await getAccessibleProfileIds(req.db, user)
   if (accessible && accessible.has(profileId)) return true
@@ -244,7 +257,7 @@ export async function ensureOrganizationAccess(req, res, organizationId) {
     return false
   }
 
-  if (isAdminUser(user)) return true
+  if (isAdminUser(user) || (await resolveIsAdminFromDb(req.db, user))) return true
 
   const orgIds = await getAccessibleOrganizationIds(req.db, user)
   if (orgIds && orgIds.has(organizationId)) return true

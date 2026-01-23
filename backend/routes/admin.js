@@ -2264,15 +2264,29 @@ router.post('/profiles/merge', async (req, res, next) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return
 
-    const winnerId = req.body?.winnerId
-    const loserIds = req.body?.loserIds
+    const winnerId = typeof req.body?.winnerId === 'string' ? req.body.winnerId.trim() : ''
+    const loserIdsRaw = req.body?.loserIds
     const dryRun = req.body?.dryRun !== false
+
+    const loserIds = Array.isArray(loserIdsRaw)
+      ? loserIdsRaw.map((v) => (typeof v === 'string' ? v.trim() : '')).filter(Boolean)
+      : []
+
+    if (!winnerId) {
+      return res.status(400).json({ ok: false, error: 'winnerId is required' })
+    }
+    if (loserIds.length === 0) {
+      return res.status(400).json({ ok: false, error: 'loserIds must be a non-empty array' })
+    }
+    if (loserIds.includes(winnerId)) {
+      return res.status(400).json({ ok: false, error: 'winnerId cannot be included in loserIds' })
+    }
 
     const result = await mergeProfiles(req.db, {
       winnerId,
       loserIds,
       dryRun,
-      actorUserId: req.user?.userId ?? null,
+      actorUserId: req.ctx?.userId ?? req.user?.userId ?? null,
     })
 
     return res.json({ ok: true, ...result })
