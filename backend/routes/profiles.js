@@ -17,6 +17,7 @@ import { formatError } from '../middleware/errorHandler.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import {
   ensureProfileAccess as ensureProfileAccessByEmail,
+  getAccessibleProfileIds,
   isAdminUser,
   isProfileOwner,
   listProfileEmails,
@@ -69,10 +70,14 @@ const ADMIN_EMAIL = 'buckeye7066@gmail.com'
  * Checks both is_admin flag and primary_email match
  */
 function isAdmin(user) {
-  return Boolean(user?.is_admin) || 
-         user?.primary_email === ADMIN_EMAIL || 
-         user?.email === ADMIN_EMAIL || 
-         user?.role === 'admin'
+  // Backwards compatible: accept role/is_admin/roles/email-allowlist.
+  return Boolean(isAdminUser(user)) ||
+    Boolean(
+      user?.is_admin ||
+        user?.primary_email === ADMIN_EMAIL ||
+        user?.email === ADMIN_EMAIL ||
+        user?.role === 'admin',
+    )
 }
 
 function getAuthUserId(user) {
@@ -255,7 +260,6 @@ function extractAnthropicText(response) {
 
 router.get('/', async (req, res) => {
   const user = req.user
-  const userId = getAuthUserId(user)
   const includeSummary = req.query.summary === 'true'
   
   // Validate pagination parameters.
@@ -269,17 +273,18 @@ router.get('/', async (req, res) => {
   }
   const { limit, offset } = validatePagination(paginationQuery);
 
-  // Check if user is admin
   if (!isAdmin(user)) {
-    // Enduser: return only profiles where profiles.user_id = user.id
-    if (!userId) {
-      return res.status(401).json({ error: 'Authentication required' })
+    // Enduser: return profiles they can access (owner OR email-linked via profile_emails).
+    const accessible = await getAccessibleProfileIds(req.db, user)
+    if (!accessible || accessible.size === 0) {
+      return res.json([])
     }
 
-    // Get all profiles linked to this user (with pagination)
-    const rows = await req.db.prepare(
-      `${profileSelect} WHERE p.user_id = ? ORDER BY p.created_at ASC LIMIT ? OFFSET ?`
-    ).all(userId, limit, offset)
+    const ids = Array.from(accessible)
+    const placeholders = ids.map(() => '?').join(',')
+    const rows = await req.db
+      .prepare(`${profileSelect} WHERE p.id IN (${placeholders}) ORDER BY p.created_at ASC LIMIT ? OFFSET ?`)
+      .all(...ids, limit, offset)
     
     const profiles = rows.map(mapProfile)
     if (includeSummary) {
@@ -492,9 +497,14 @@ router.get('/:id', async (req, res) => {
 
   // Check access permissions
   if (!isAdmin(user)) {
-    // Enduser: can only access profiles where user_id matches
-    if (!userId || row.user_id !== userId) {
-      return res.status(403).json({ error: 'Access denied' })
+    // Allow: owner OR email-linked via profile_emails (board members/collaborators)
+    if (userId && row.user_id && String(row.user_id) === String(userId)) {
+      // owner ok
+    } else {
+      const accessible = await getAccessibleProfileIds(req.db, user)
+      if (!accessible || !accessible.has(id)) {
+        return res.status(403).json({ error: 'Access denied' })
+      }
     }
   }
 
