@@ -138,6 +138,8 @@ export function attachRequestContext() {
   return async (req, res, next) => {
     try {
       req.ctx = await buildRequestContext(req.db, req.user)
+      // Attach db reference to ctx for convenience (single accessor pattern)
+      req.ctx.db = req.db
       next()
     } catch (error) {
       console.error('[requestContext] Failed to build request context:', error)
@@ -149,6 +151,7 @@ export function attachRequestContext() {
         activeProfileId: null,
         accessibleProfileIds: new Set(),
         accessibleOrgIds: new Set(),
+        db: req.db, // Ensure db is always available
       }
       next()
     }

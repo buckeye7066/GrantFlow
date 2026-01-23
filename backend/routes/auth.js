@@ -2269,8 +2269,22 @@ router.get('/me', async (req, res) => {
     }
     
     const activeProfileId = req.user.profileId || null
+    
+    // Use req.ctx if available for canonical admin status (from requestContext middleware)
+    const isAdmin = req.ctx?.isAdmin ?? Boolean(user.is_admin === true || user.is_admin === 1)
+    
+    // Count accessible resources for frontend
+    const accessibleProfileCount = req.ctx?.accessibleProfileIds === null ? profiles.length : (req.ctx?.accessibleProfileIds?.size ?? profiles.length)
+    const accessibleOrgCount = req.ctx?.accessibleOrgIds === null ? 0 : (req.ctx?.accessibleOrgIds?.size ?? 0)
 
     return res.json({
+      userId: user.id,
+      email: user.primary_email || user.email || null,
+      isAdmin,
+      activeProfileId,
+      accessibleProfileCount,
+      accessibleOrgCount,
+      // Legacy payload for backward compatibility
       user: buildUserPayload(user, profiles, activeProfileId),
     })
   } catch (error) {
