@@ -125,47 +125,13 @@ async function withTimeout(promise, ms, label) {
 }
 
 async function ensureAdminRequest(req, res) {
-  const user = req.user ?? {};
-
-  // Fast path: middleware already marked admin.
-  if (user?.is_admin === true || user?.role === 'admin') {
-    return true;
-  }
-
-  // Resolve the authenticated user from DB when middleware can't determine admin status
-  // (e.g., profile-scoped tokens that only carry profileId).
-  try {
-    const db = req.db;
-    const resolvedUserId = user?.userId
-      ? user.userId
-      : user?.profileId
-        ? (await db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(user.profileId))?.user_id
-        : null;
-
-    if (resolvedUserId) {
-      const row = await db
-        .prepare('SELECT is_admin, primary_email FROM users WHERE id = ?')
-        .get(resolvedUserId);
-      const email = String(row?.primary_email || '').toLowerCase();
-
-      if (row?.is_admin === true || row?.is_admin === 1) {
-        return true;
-      }
-
-      // Backwards-compatible admin allow-list.
-      if (email && email.includes('buckeye7066')) {
-        return true;
-      }
-    }
-  } catch (error) {
-    // fall through to 403
-  }
+  if (req.ctx?.isAdmin) return true
 
   res.status(403).json({
     error: 'Access denied',
     message: 'This endpoint is restricted to administrators only',
-  });
-  return false;
+  })
+  return false
 }
 
 function loadZipCoordinates() {
@@ -702,7 +668,7 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
     const user = req.user;
     const userEmail = user?.primary_email || user?.email || '';
     const isAdmin = user?.is_admin === true || user?.role === 'admin' || 
-                    (userEmail && userEmail.toLowerCase().includes('buckeye7066'));
+                    false;
     
     if (!isAdmin) {
       // Clean up uploaded file
@@ -966,7 +932,7 @@ router.post('/reattach-users', async (req, res) => {
     const adminUser = await db.prepare(`
       SELECT id, display_name, primary_email
       FROM users
-      WHERE is_admin = TRUE OR LOWER(primary_email) LIKE '%buckeye7066%'
+      WHERE is_admin = TRUE
       LIMIT 1
     `).get();
     

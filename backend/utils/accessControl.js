@@ -6,12 +6,9 @@
  * - Admin users can access everything.
  *
  * Notes:
- * - This codebase has a few different "admin" representations (role, is_admin, email allowlist).
- *   We keep backward compatibility by treating any of them as admin.
+ * - Admin is canonical: users.is_admin in the database.
  */
 import crypto from 'crypto'
-
-const ADMIN_EMAIL_ALLOWLIST_SUBSTRING = 'buckeye7066'
 
 function normalizeEmail(email = '') {
   const v = String(email || '').trim().toLowerCase()
@@ -28,14 +25,7 @@ function collectUserEmails(user) {
 }
 
 export function isAdminUser(user) {
-  const email = String(user?.primary_email || user?.email || '').toLowerCase()
-  return Boolean(
-    user?.role === 'admin' ||
-      user?.is_admin === true ||
-      user?.is_admin === 1 ||
-      (Array.isArray(user?.roles) && user.roles.includes('admin')) ||
-      (email && email.includes(ADMIN_EMAIL_ALLOWLIST_SUBSTRING)),
-  )
+  return Boolean(user?.is_admin === true || user?.is_admin === 1)
 }
 
 export async function ensureProfileEmailSchema(db) {

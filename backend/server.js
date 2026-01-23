@@ -734,7 +734,11 @@ app.use(async (req, res, next) => {
   ) {
     user = {
       role: 'admin',
+      // Canonical admin is DB-backed via req.ctx. We still mark this token flow as admin,
+      // but requestContext will resolve the final answer from users.is_admin.
       is_admin: true,
+      // Deterministic userId so we can back it with a real DB user row (users.is_admin = true).
+      userId: 'system_admin_token',
       profileId: null,
       full_name: ADMIN_NAME,
       email: ADMIN_EMAIL,
@@ -744,7 +748,13 @@ app.use(async (req, res, next) => {
 
   // 2. Check X-Anya-Token (autonomous bot)
   if (!handled && xAnyaToken && process.env.ANYA_API_KEY && xAnyaToken === process.env.ANYA_API_KEY) {
-    user = { role: 'admin', is_admin: true, full_name: 'Anya Assistant', email: 'anya@grantflow.app' };
+    user = {
+      role: 'admin',
+      is_admin: true,
+      userId: 'system_anya_token',
+      full_name: 'Anya Assistant',
+      email: 'anya@grantflow.app',
+    };
     handled = true;
   }
 
@@ -758,20 +768,18 @@ app.use(async (req, res, next) => {
         // is not shared across instances). If the token is correctly signed and unexpired, trust its claims.
         // We still try to validate against DB sessions when available, but we do not require it.
         let tokenRoles = []
-        let tokenIsAdmin = false
         let tokenEmail = null
         let tokenName = null
 
         if (payload && typeof payload === 'object') {
           tokenRoles = Array.isArray(payload.roles) ? payload.roles : []
-          tokenIsAdmin = tokenRoles.includes('admin')
           tokenEmail = payload.email ?? null
           tokenName = payload.name ?? null
 
           if (payload.sub) {
             user = {
-              role: tokenIsAdmin ? 'admin' : 'user',
-              is_admin: tokenIsAdmin,
+              role: 'user',
+              is_admin: false,
               userId: payload.sub,
               profileId: payload.profile_id ?? null,
               sessionId: payload.sid ?? null,
@@ -800,13 +808,8 @@ app.use(async (req, res, next) => {
             !sessionRow.revoked_at &&
             (!sessionRow.refresh_expires_at || new Date(sessionRow.refresh_expires_at) > new Date())
           ) {
-            // IMPORTANT:
-            // - Never downgrade admin privileges based on DB session enrichment.
-            //   Tokens may already carry `roles: ['admin']` even if the DB `users.is_admin`
-            //   is out of sync (or the join omits the flag).
-            // - Preserve JWT-provided email so profile email links work reliably.
-            const sessionIsAdmin = Boolean(sessionRow.is_admin)
-            const effectiveIsAdmin = Boolean(tokenIsAdmin || sessionIsAdmin)
+            // Admin is DB-backed: users.is_admin.
+            const effectiveIsAdmin = Boolean(sessionRow.is_admin)
             user = {
               role: effectiveIsAdmin ? 'admin' : 'user',
               is_admin: effectiveIsAdmin,
@@ -829,6 +832,7 @@ app.use(async (req, res, next) => {
       user = {
         role: 'admin',
         is_admin: true,
+        userId: 'system_admin_token',
         profileId: null,
         full_name: ADMIN_NAME,
         email: ADMIN_EMAIL,
