@@ -223,7 +223,7 @@ export async function removeProfileEmail(db, { profileId, emailId }) {
 }
 
 export async function getAccessibleOrganizationIds(db, user) {
-  if (isAdminUser(user) || (await resolveIsAdminFromDb(db, user))) return null
+  if (await isAdminUserWithDb(db, user)) return null
 
   const profileIds = await getAccessibleProfileIds(db, user)
   if (!profileIds || profileIds.size === 0) return new Set()
@@ -249,7 +249,8 @@ export async function ensureProfileAccess(req, res, profileId) {
     return false
   }
 
-  if (isAdminUser(user) || (await resolveIsAdminFromDb(req.db, user))) return true
+  if (req.ctx?.isAdmin === true) return true
+  if (await isAdminUserWithDb(req.db, user)) return true
 
   const accessible = await getAccessibleProfileIds(req.db, user)
   if (accessible && accessible.has(profileId)) return true
@@ -267,7 +268,8 @@ export async function ensureOrganizationAccess(req, res, organizationId) {
     return false
   }
 
-  if (isAdminUser(user) || (await resolveIsAdminFromDb(req.db, user))) return true
+  if (req.ctx?.isAdmin === true) return true
+  if (await isAdminUserWithDb(req.db, user)) return true
 
   const orgIds = await getAccessibleOrganizationIds(req.db, user)
   if (orgIds && orgIds.has(organizationId)) return true
