@@ -7,14 +7,14 @@ import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
 import { validatePagination } from '../utils/validation.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'
 import { formatError } from '../middleware/errorHandler.js'
-import { DEFAULT_PAGE_LIMIT, CRAWLER_JOB_TYPES } from '../config/constants.js'
+import { DEFAULT_PAGE_LIMIT, CRAWLER_JOB_TYPES, CRAWLER_JOB_STATUSES } from '../config/constants.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
 
 const router = express.Router()
 
 const ALLOWED_TYPES = new Set(CRAWLER_JOB_TYPES)
-const ALLOWED_STATUS = new Set(['queued', 'running', 'completed', 'failed', 'cancelled'])
+const ALLOWED_STATUS = new Set(CRAWLER_JOB_STATUSES)
 const MAX_LINEAGE_DEPTH = 15
 
 function stableStringify(value) {
