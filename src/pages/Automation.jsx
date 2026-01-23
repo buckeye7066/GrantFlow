@@ -1432,7 +1432,7 @@ export default function Automation() {
     activeProfileId: state.activeProfileId,
   }))
 
-  const isAdmin = Boolean(user?.is_admin || user?.id === "admin")
+  const isAdmin = Boolean(user?.is_admin) || user?.role === "admin" || user?.id === "admin"
   const [jobTypeFilter, setJobTypeFilter] = useState("all")
   const [jobStatusFilter, setJobStatusFilter] = useState("all")
   const [profileFilter, setProfileFilter] = useState(isAdmin ? "all" : activeProfileId ?? "all")
@@ -1769,6 +1769,40 @@ export default function Automation() {
         </div>
       </header>
 
+      {isAdmin ? (
+        <Card className="border border-slate-200 bg-white/80 shadow-sm">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <UserCircle2 className="h-4 w-4 text-blue-600" />
+              Run automations as profile
+            </CardTitle>
+            <CardDescription>
+              Choose which profile the crawlers should use. Most automations require a profile; “Org-wide” is only valid for pipeline automation.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <Select value={selectedProfile} onValueChange={setSelectedProfile}>
+              <SelectTrigger className="max-w-[420px]">
+                <SelectValue placeholder="Select profile" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Org-wide (pipeline automation only)</SelectItem>
+                {(profilesQuery.data ?? []).map((profile) => (
+                  <SelectItem key={profile.id} value={profile.id}>
+                    {profile.display_name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {selectedProfile === "none" ? (
+              <p className="text-xs text-amber-700">
+                Select a specific profile to run crawlers like Local Sweep, Scholarship match, Geo Crawl, and Profile enrichment.
+              </p>
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
+
       <section className="grid gap-4 lg:grid-cols-3">
         <QuickActionCard
           icon={Rocket}
@@ -2078,21 +2112,6 @@ export default function Automation() {
               <CardDescription>Advance grants, record AI reasoning, and capture human handoffs.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
-              {isAdmin ? (
-                <Select value={selectedProfile} onValueChange={setSelectedProfile}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select profile to run automation" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">Use organization grants</SelectItem>
-                    {(profilesQuery.data ?? []).map((profile) => (
-                      <SelectItem key={profile.id} value={profile.id}>
-                        {profile.display_name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : null}
                 <PipelineAutomationPanel
                   organizationId={profileDetailQuery.data?.organization_id ?? selectedProfileEntity?.organization_id ?? null}
                   profileId={isAdmin ? (selectedProfile && selectedProfile !== "none" ? selectedProfile : undefined) : activeProfileId}
