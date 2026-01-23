@@ -822,18 +822,20 @@ app.use(async (req, res, next) => {
         // is not shared across instances). If the token is correctly signed and unexpired, trust its claims.
         // We still try to validate against DB sessions when available, but we do not require it.
         let tokenRoles = []
+        let tokenIsAdmin = false
         let tokenEmail = null
         let tokenName = null
 
         if (payload && typeof payload === 'object') {
           tokenRoles = Array.isArray(payload.roles) ? payload.roles : []
+          tokenIsAdmin = tokenRoles.includes('admin')
           tokenEmail = payload.email ?? null
           tokenName = payload.name ?? null
 
           if (payload.sub) {
             user = {
-              role: 'user',
-              is_admin: false,
+              role: tokenIsAdmin ? 'admin' : 'user',
+              is_admin: Boolean(tokenIsAdmin),
               userId: payload.sub,
               profileId: payload.profile_id ?? null,
               sessionId: payload.sid ?? null,
@@ -863,7 +865,8 @@ app.use(async (req, res, next) => {
             (!sessionRow.refresh_expires_at || new Date(sessionRow.refresh_expires_at) > new Date())
           ) {
             // Admin is DB-backed: users.is_admin.
-            const effectiveIsAdmin = Boolean(sessionRow.is_admin)
+            // Never downgrade admin if the token already claims it (e.g. admin token, DB lag).
+            const effectiveIsAdmin = Boolean(tokenIsAdmin || sessionRow.is_admin)
             user = {
               role: effectiveIsAdmin ? 'admin' : 'user',
               is_admin: effectiveIsAdmin,
