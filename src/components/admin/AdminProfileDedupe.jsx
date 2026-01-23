@@ -47,6 +47,36 @@ export default function AdminProfileDedupe() {
     refresh()
   }, [refresh])
 
+  const runDedupeAll = async ({ dryRun }) => {
+    try {
+      setLoading(true)
+      const res = await post('/api/admin/profiles/deduplicate', {
+        strategy,
+        dryRun: Boolean(dryRun),
+        // Be generous: users asked to delete duplicates globally.
+        limitGroups: 2000,
+        minGroupSize: 2,
+      })
+      setOutput(res)
+      if (dryRun) {
+        toast({ title: 'Preview ready', description: `Prepared ${res?.merged_groups ?? 0} group(s)` })
+      } else {
+        toast({ title: 'Done', description: `Merged ${res?.merged_groups ?? 0} group(s)` })
+        await refresh()
+      }
+    } catch (err) {
+      const requestId = err?.requestId || err?.details?.request_id || null
+      toast({
+        title: 'Bulk merge failed',
+        description: requestId ? `${err.message} (request_id=${requestId})` : err.message,
+        variant: 'destructive',
+      })
+      setOutput({ ok: false, error: err.message, request_id: requestId })
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const runMerge = async ({ winnerId, loserIds, dryRun }) => {
     try {
       setLoading(true)
@@ -100,6 +130,7 @@ export default function AdminProfileDedupe() {
             <AlertCircle className="w-4 h-4" />
             <AlertDescription>
               This tool merges duplicate profiles by moving linked data (sections, documents, crawler history, Anya state) into a single “winner” profile and deleting the duplicates.
+              The bulk merge button keeps the profile owned by the real (non-admin) user whose email matches the profile email when possible.
             </AlertDescription>
           </Alert>
 
@@ -122,6 +153,22 @@ export default function AdminProfileDedupe() {
             <Button variant="outline" onClick={refresh} disabled={loading}>
               <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
               Refresh
+            </Button>
+
+            <Button
+              variant="destructive"
+              onClick={() => {
+                const ok = window.confirm(
+                  `Merge & delete ALL duplicates for strategy "${strategy}"?\n\n` +
+                    `This will pick the best winner per group and delete the rest.`,
+                )
+                if (!ok) return
+                runDedupeAll({ dryRun: false })
+              }}
+              disabled={loading}
+            >
+              <Trash2 className="w-4 h-4 mr-2" />
+              Merge & delete ALL duplicates
             </Button>
 
             <div className="ml-auto text-sm text-slate-600">
