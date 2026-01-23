@@ -1448,20 +1448,11 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       // Don't fail the request if email fails - code is stored in DB
     }
 
-    // Security: in production, never return OTP codes via API responses.
-    // If we can't deliver email, fail closed.
-    if (isProd && emailSent !== true) {
-      return res.status(503).json({
-        error: 'Email delivery is unavailable. Please try again later.',
-        error_type: 'email_unavailable',
-      })
-    }
-
     // Return success response
     const responseData = {
       message: emailSent 
         ? 'Verification code sent to your email' 
-        : 'Verification code generated.',
+        : 'Verification code generated. Email delivery may be delayed.',
       email_sent: emailSent,
       verification_token: verificationToken,
       user_hint: {
@@ -1469,6 +1460,14 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
         display_name: user.display_name,
         primary_email: user.primary_email,
       },
+    }
+
+    // In production, never return OTP codes via API responses.
+    // Also do not hard-fail if email delivery is slow/unavailable: providers can be async/queued,
+    // and delivery may succeed shortly after the request completes.
+    if (isProd && emailSent !== true) {
+      responseData.notice =
+        'We generated your login code, but email delivery may be delayed. Check spam/junk and try again in a minute.'
     }
 
     // Optional ops alert (never includes the code).

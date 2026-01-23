@@ -72,10 +72,13 @@ export default function EmailSignInForm({ onComplete }) {
       setResendCountdown(45)
       setCopyFeedback(null)
       const previewCode = response?.previewCode ?? null
+      const emailSent = response?.email_sent === true
       const notice =
         response?.notice ??
         (previewCode
           ? 'Email delivery is not configured for this environment. Use the generated code below to continue.'
+          : !emailSent
+            ? 'Email delivery may be delayed. Check spam/junk and try again in a minute if you don’t receive a code.'
           : null)
       // Never log OTP codes in production consoles.
       if (previewCode && import.meta?.env?.DEV) {
@@ -85,7 +88,9 @@ export default function EmailSignInForm({ onComplete }) {
         type: 'success',
         message: previewCode
           ? 'A verification code has been generated for you.'
-          : `We sent a 6-digit code to ${maskedEmail ?? cleanedEmail}. Enter it below to continue.`,
+          : emailSent
+            ? `We sent a 6-digit code to ${maskedEmail ?? cleanedEmail}. Enter it below to continue.`
+            : 'We generated a 6-digit code. Enter it below once it arrives in your email.',
         previewCode,
         notice,
       })
@@ -169,16 +174,21 @@ export default function EmailSignInForm({ onComplete }) {
       setResendCountdown(45)
       setCopyFeedback(null)
       const previewCode = response?.previewCode ?? null
+      const emailSent = response?.email_sent === true
       const notice =
         response?.notice ??
         (previewCode
           ? 'Email delivery is not configured for this environment. Use the generated code below to continue.'
+          : !emailSent
+            ? 'Email delivery may be delayed. Check spam/junk and try again in a minute if you don’t receive a code.'
           : null)
       setStatus({
         type: 'success',
         message: previewCode
           ? 'A verification code has been generated for you.'
-          : `We sent a 6-digit code to ${maskedEmail ?? email}. Enter it below to continue.`,
+          : emailSent
+            ? `We sent a 6-digit code to ${maskedEmail ?? email}. Enter it below to continue.`
+            : 'We generated a 6-digit code. Enter it below once it arrives in your email.',
         previewCode,
         notice,
       })
