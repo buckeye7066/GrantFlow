@@ -13,6 +13,7 @@ import {
   updateTask,
   listProfileTasks,
 } from '../services/anyaOrchestrator.js'
+import { createAnyaRun, appendAnyaRunLog, completeAnyaRun } from '../services/anyaRuns.js'
 
 const router = express.Router()
 
@@ -108,7 +109,7 @@ router.get('/status', adminAuth, async (_req, res) => {
 
 router.get('/sessions', async (req, res) => {
   try {
-    const sessions = await listSessions(req.db, req.user, {
+    const sessions = await listSessions(req.db, req.ctx, {
       limit: req.query.limit,
     })
     res.json({ sessions })
@@ -119,7 +120,7 @@ router.get('/sessions', async (req, res) => {
 
 router.post('/sessions', async (req, res) => {
   try {
-    const session = await createSession(req.db, req.user, {
+    const session = await createSession(req.db, req.ctx, {
       profileId: req.body?.profile_id,
       title: req.body?.title,
       metadata: req.body?.metadata,
@@ -132,7 +133,7 @@ router.post('/sessions', async (req, res) => {
 
 router.get('/sessions/:sessionId', async (req, res) => {
   try {
-    const session = await getSession(req.db, req.user, req.params.sessionId)
+    const session = await getSession(req.db, req.ctx, req.params.sessionId)
     res.json(session)
   } catch (error) {
     handleError(res, error)
@@ -141,7 +142,7 @@ router.get('/sessions/:sessionId', async (req, res) => {
 
 router.get('/sessions/:sessionId/messages', async (req, res) => {
   try {
-    const messages = await getMessages(req.db, req.user, req.params.sessionId, {
+    const messages = await getMessages(req.db, req.ctx, req.params.sessionId, {
       limit: req.query.limit,
       direction: req.query.direction === 'latest' ? 'latest' : 'asc',
     })
@@ -152,45 +153,69 @@ router.get('/sessions/:sessionId/messages', async (req, res) => {
 })
 
 router.post('/sessions/:sessionId/messages', async (req, res) => {
+  let runId = null
   try {
     const content = req.body?.message ?? req.body?.content
+    const mode = (req.body?.mode ?? 'copilot') || 'copilot'
+    if (mode === 'admin_ops' && !req.ctx?.isAdmin) {
+      return res.status(403).json({ error: 'Admin privileges required' })
+    }
     if (!content || typeof content !== 'string') {
       return res.status(400).json({ error: 'Message content is required' })
     }
 
-    const userMessage = await addMessage(req.db, req.user, req.params.sessionId, {
+    runId = await createAnyaRun(req.db, {
+      mode,
+      kind: 'assistant_message',
+      sessionId: req.params.sessionId,
+      userId: req.ctx?.userId ?? null,
+      profileId: req.ctx?.activeProfileId ?? null,
+      request: { content },
+    })
+
+    const userMessage = await addMessage(req.db, req.ctx, req.params.sessionId, {
       role: 'user',
       content,
     })
 
     let assistantText
     try {
-      assistantText = await generateAssistantResponse(req.db, req.user, req.params.sessionId, {
+      assistantText = await generateAssistantResponse(req.db, req.ctx, req.params.sessionId, {
         content,
       })
     } catch (assistantError) {
       console.error('[anya] Unable to generate assistant reply:', assistantError)
+      await appendAnyaRunLog(req.db, runId, 'error', 'assistant_generation_failed', {
+        message: assistantError?.message || String(assistantError),
+      })
       assistantText =
         "I hit a snag while reaching the AI service. Try again in a moment or share more details so I can help manually."
     }
 
-    const assistantMessage = await addMessage(req.db, req.user, req.params.sessionId, {
+    const assistantMessage = await addMessage(req.db, req.ctx, req.params.sessionId, {
       role: 'assistant',
       content: assistantText,
     })
+
+    await completeAnyaRun(req.db, runId, { status: 'completed', response: { assistantText } })
 
     res.status(201).json({
       session_id: req.params.sessionId,
       messages: [userMessage, assistantMessage],
     })
   } catch (error) {
+    try {
+      await completeAnyaRun(req.db, runId, { status: 'failed', error: error?.message || String(error) })
+    } catch {
+      // ignore
+    }
     handleError(res, error)
   }
 })
 
 router.get('/sessions/:sessionId/tasks', async (req, res) => {
   try {
-    const tasks = await listTasks(req.db, req.user, req.params.sessionId)
+    const tasks = await listTasks(req.db, req.ctx, req.params.sessionId)
     res.json({ tasks })
   } catch (error) {
     handleError(res, error)
@@ -199,7 +224,7 @@ router.get('/sessions/:sessionId/tasks', async (req, res) => {
 
 router.post('/sessions/:sessionId/tasks', async (req, res) => {
   try {
-    const task = await createTask(req.db, req.user, req.params.sessionId, {
+    const task = await createTask(req.db, req.ctx, req.params.sessionId, {
       title: req.body?.title,
       notes: req.body?.notes,
       status: req.body?.status,
@@ -215,7 +240,7 @@ router.post('/sessions/:sessionId/tasks', async (req, res) => {
         task.priority && task.priority !== 'normal' ? `priority ${task.priority}` : null,
       ].filter(Boolean)
       if (summaryParts.length > 0) {
-        await addMessage(req.db, req.user, req.params.sessionId, {
+        await addMessage(req.db, req.ctx, req.params.sessionId, {
           role: 'assistant',
           content: summaryParts.join(' · '),
         })
@@ -233,7 +258,7 @@ router.post('/sessions/:sessionId/tasks', async (req, res) => {
 router.patch('/sessions/:sessionId/tasks/:taskId', (req, res) => {
   Promise.resolve()
     .then(async () => {
-      const task = await updateTask(req.db, req.user, req.params.sessionId, req.params.taskId, {
+      const task = await updateTask(req.db, req.ctx, req.params.sessionId, req.params.taskId, {
         title: req.body?.title,
         notes: req.body?.notes,
         status: req.body?.status,
@@ -251,7 +276,7 @@ router.get('/profiles/:profileId/tasks', async (req, res) => {
     const requestedProfileId = req.params.profileId?.toLowerCase()
     const resolvedProfileId =
       requestedProfileId === 'me' || requestedProfileId === 'current'
-        ? req.user?.profileId ?? null
+        ? req.ctx?.activeProfileId ?? null
         : req.params.profileId
 
     const status =
@@ -259,7 +284,7 @@ router.get('/profiles/:profileId/tasks', async (req, res) => {
         ? req.query.status.trim()
         : 'active'
 
-    const tasks = await listProfileTasks(req.db, req.user, resolvedProfileId, { status })
+    const tasks = await listProfileTasks(req.db, req.ctx, resolvedProfileId, { status })
     res.json({ tasks })
   } catch (error) {
     handleError(res, error)
@@ -268,7 +293,7 @@ router.get('/profiles/:profileId/tasks', async (req, res) => {
 
 router.get('/tools', (req, res) => {
   try {
-    const tools = listTools(req.user)
+    const tools = listTools(req.ctx)
     res.json({ tools })
   } catch (error) {
     handleError(res, error)
@@ -276,19 +301,46 @@ router.get('/tools', (req, res) => {
 })
 
 router.post('/tools/:toolName/invoke', async (req, res) => {
+  let runId = null
   try {
     const sessionId = req.body?.session_id ?? req.body?.sessionId ?? null
+    const mode = (req.body?.mode ?? 'copilot') || 'copilot'
+    if (mode === 'admin_ops' && !req.ctx?.isAdmin) {
+      return res.status(403).json({ error: 'Admin privileges required' })
+    }
+    if (mode === 'code_advisor') {
+      // Code advisor is strictly non-destructive: only allow code.* tools that return patch text.
+      if (!String(req.params.toolName || '').startsWith('code.')) {
+        return res.status(403).json({ error: 'Tool not allowed in code_advisor mode' })
+      }
+    }
     const params =
       (req.body && typeof req.body === 'object' && 'parameters' in req.body
         ? req.body.parameters
         : req.body) ?? {}
 
-    const result = await invokeTool(req.db, req.user, req.params.toolName, params, {
+    runId = await createAnyaRun(req.db, {
+      mode,
+      kind: 'tool_invoke',
+      sessionId,
+      userId: req.ctx?.userId ?? null,
+      profileId: req.ctx?.activeProfileId ?? null,
+      toolName: req.params.toolName,
+      request: { params },
+    })
+
+    const result = await invokeTool(req.db, req.ctx, req.params.toolName, params, {
       sessionId,
     })
 
+    await completeAnyaRun(req.db, runId, { status: 'completed', response: result })
     res.status(201).json({ result })
   } catch (error) {
+    try {
+      await completeAnyaRun(req.db, runId, { status: 'failed', error: error?.message || String(error) })
+    } catch {
+      // ignore
+    }
     handleError(res, error)
   }
 })
@@ -299,7 +351,7 @@ router.post('/tools/:toolName/invoke', async (req, res) => {
 
 router.post('/autonomous/code', adminAuth, async (req, res) => {
   try {
-    const result = await invokeTool(req.db, req.user, 'admin.anya.runAutonomous', req.body, {})
+    const result = await invokeTool(req.db, req.ctx, 'admin.anya.runAutonomous', req.body, {})
     res.status(201).json(result)
   } catch (error) {
     handleError(res, error)
@@ -308,7 +360,7 @@ router.post('/autonomous/code', adminAuth, async (req, res) => {
 
 router.post('/autonomous/crawlers', adminAuth, async (req, res) => {
   try {
-    const result = await invokeTool(req.db, req.user, 'admin.anya.runCrawlers', req.body, {})
+    const result = await invokeTool(req.db, req.ctx, 'admin.anya.runCrawlers', req.body, {})
     res.status(201).json(result)
   } catch (error) {
     handleError(res, error)
@@ -317,7 +369,7 @@ router.post('/autonomous/crawlers', adminAuth, async (req, res) => {
 
 router.post('/autonomous/functions', adminAuth, async (req, res) => {
   try {
-    const result = await invokeTool(req.db, req.user, 'admin.anya.testFunctions', req.body, {})
+    const result = await invokeTool(req.db, req.ctx, 'admin.anya.testFunctions', req.body, {})
     res.status(201).json(result)
   } catch (error) {
     handleError(res, error)
@@ -326,7 +378,7 @@ router.post('/autonomous/functions', adminAuth, async (req, res) => {
 
 router.post('/autonomous/buttons', adminAuth, async (req, res) => {
   try {
-    const result = await invokeTool(req.db, req.user, 'admin.anya.testButtons', req.body, {})
+    const result = await invokeTool(req.db, req.ctx, 'admin.anya.testButtons', req.body, {})
     res.status(201).json(result)
   } catch (error) {
     handleError(res, error)
@@ -336,7 +388,7 @@ router.post('/autonomous/buttons', adminAuth, async (req, res) => {
 router.get('/autonomous/status', adminAuth, async (req, res) => {
   try {
     const operationType = req.query.type || 'all'
-    const result = await invokeTool(req.db, req.user, 'admin.anya.getStatus', { operationType }, {})
+    const result = await invokeTool(req.db, req.ctx, 'admin.anya.getStatus', { operationType }, {})
     res.json(result)
   } catch (error) {
     handleError(res, error)

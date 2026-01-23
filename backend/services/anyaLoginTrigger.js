@@ -7,14 +7,12 @@
 import { randomUUID } from 'crypto'
 import { dispatchCrawlerJob } from './crawlerDispatcher.js'
 
-const ADMIN_EMAIL = 'buckeye7066@gmail.com'
-
 /**
  * Check if user is the admin
  * Checks both primary_email (from database) and email (for compatibility)
  */
 function isAdmin(user) {
-  return Boolean(user?.is_admin) || user?.primary_email === ADMIN_EMAIL || user?.email === ADMIN_EMAIL || user?.role === 'admin'
+  return Boolean(user?.is_admin === true || user?.is_admin === 1)
 }
 
 /**
