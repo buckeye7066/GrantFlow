@@ -6,9 +6,8 @@
  * Ensure user is authenticated
  */
 export function ensureAuth(req, res, next) {
-  const user = req.user ?? { role: 'guest' };
-  
-  if (user.role === 'guest') {
+  const userId = req.ctx?.userId ?? req.user?.userId ?? null
+  if (!userId) {
     return res.status(401).json({ error: 'Authentication required' });
   }
   
@@ -19,9 +18,7 @@ export function ensureAuth(req, res, next) {
  * Ensure user is an admin
  */
 export function ensureAdmin(req, res, next) {
-  const user = req.user ?? { role: 'guest' };
-  
-  if (user.role !== 'admin') {
+  if (!req.ctx?.isAdmin) {
     return res.status(403).json({ error: 'Admin privileges required' });
   }
   
