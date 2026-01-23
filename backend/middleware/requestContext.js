@@ -49,66 +49,33 @@ export async function buildRequestContext(db, user) {
   ctx.email = user.email || user.primary_email || null
   ctx.activeProfileId = getAuthProfileId(user)
 
-  // CRITICAL: Admin status MUST be resolved via DB, not token claims alone
-  // This is the canonical source of truth for admin privileges
-  let isAdminResolved = false
-
-  // Step 1: Check if token already claims admin
-  if (user.role === 'admin' || user.is_admin === true || user.is_admin === 1) {
-    // Fast path: token claims admin, but we still verify against DB when possible
-    isAdminResolved = true
-  }
-
-  // Step 2: If we have a userId, verify admin status in DB
-  if (ctx.userId) {
-    try {
-      const row = await db
-        .prepare('SELECT is_admin, primary_email FROM users WHERE id = ?')
-        .get(ctx.userId)
-      
-      if (row) {
-        // DB is the source of truth
-        ctx.isAdmin = Boolean(row.is_admin === true || row.is_admin === 1)
-        if (row.primary_email && !ctx.email) {
-          ctx.email = row.primary_email
-        }
-        isAdminResolved = true
-      }
-    } catch (error) {
-      console.warn('[requestContext] Failed to resolve admin status from DB:', error?.message)
-    }
-  }
-
-  // Step 3: If no userId but we have profileId, resolve via profile -> user
-  if (!isAdminResolved && ctx.activeProfileId) {
-    try {
+  // CRITICAL: Admin status is DB-backed ONLY (users.is_admin).
+  // Never trust token claims for admin authority.
+  try {
+    // If we only have a profileId, resolve its owning user first.
+    if (!ctx.userId && ctx.activeProfileId) {
       const profileRow = await db
         .prepare('SELECT user_id FROM profiles WHERE id = ?')
         .get(ctx.activeProfileId)
-      
-      if (profileRow?.user_id) {
-        const userRow = await db
-          .prepare('SELECT is_admin, primary_email FROM users WHERE id = ?')
-          .get(profileRow.user_id)
-        
-        if (userRow) {
-          ctx.userId = profileRow.user_id
-          ctx.isAdmin = Boolean(userRow.is_admin === true || userRow.is_admin === 1)
-          if (userRow.primary_email && !ctx.email) {
-            ctx.email = userRow.primary_email
-          }
-          isAdminResolved = true
-        }
-      }
-    } catch (error) {
-      console.warn('[requestContext] Failed to resolve user from profile:', error?.message)
+      if (profileRow?.user_id) ctx.userId = profileRow.user_id
     }
-  }
 
-  // Step 4: If still not resolved, fall back to token claim (for backward compatibility)
-  // This handles cases like admin tokens without userId
-  if (!isAdminResolved) {
-    ctx.isAdmin = Boolean(user.role === 'admin' || user.is_admin === true || user.is_admin === 1)
+    if (ctx.userId) {
+      const row = await db
+        .prepare('SELECT is_admin, primary_email FROM users WHERE id = ?')
+        .get(ctx.userId)
+      if (row) {
+        ctx.isAdmin = Boolean(row.is_admin === true || row.is_admin === 1)
+        if (row.primary_email && !ctx.email) ctx.email = row.primary_email
+      } else {
+        ctx.isAdmin = false
+      }
+    } else {
+      ctx.isAdmin = false
+    }
+  } catch (error) {
+    console.warn('[requestContext] Failed to resolve admin status from DB:', error?.message)
+    ctx.isAdmin = false
   }
 
   // Step 5: Compute accessible profiles and orgs

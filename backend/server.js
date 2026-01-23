@@ -333,20 +333,6 @@ const shouldAutoMigrate =
   String(process.env.DB_AUTO_MIGRATE || '').toLowerCase() === 'true' ||
   (db.dialect === 'sqlite' && process.env.NODE_ENV !== 'production');
 
-if (shouldAutoMigrate) {
-  const schemaPath = join(__dirname, 'db', 'schema.sql');
-  if (fs.existsSync(schemaPath)) {
-    try {
-      const schema = fs.readFileSync(schemaPath, 'utf8');
-      await db.exec(schema);
-      console.info('[database] Schema applied (auto-migrate enabled)', { dialect: db.dialect });
-    } catch (schemaError) {
-      console.error('[database] Error running schema migrations:', schemaError);
-      // Do not hard-exit; keep the service reachable for diagnostics.
-    }
-  }
-}
-
 // Load persisted runtime secrets (encrypted) if missing from environment.
 // This is intended as an emergency stopgap for hosted environments where env var updates are delayed.
 try {
@@ -391,6 +377,11 @@ const allowedMigrations = [
   { table: 'crawler_jobs', column: 'result_meta', type: 'TEXT' },
   { table: 'crawler_jobs', column: 'retry_count', type: 'INTEGER DEFAULT 0' },
   { table: 'crawler_jobs', column: 'last_retry_at', type: 'DATETIME' },
+  // Crawler stability metadata (idempotency + snapshots + dispatch backpressure)
+  { table: 'crawler_jobs', column: 'profile_context_snapshot', type: 'TEXT' },
+  { table: 'crawler_jobs', column: 'idempotency_key', type: 'TEXT' },
+  { table: 'crawler_jobs', column: 'dispatch_attempts', type: 'INTEGER DEFAULT 0' },
+  { table: 'crawler_jobs', column: 'next_dispatch_at', type: 'DATETIME' },
   // Positive classification for "REAL" opportunity invariants
   { table: 'funding_opportunities', column: 'record_origin', type: "TEXT DEFAULT 'live_crawl'" },
   { table: 'funding_opportunities', column: 'evidence_url', type: 'TEXT' },
@@ -425,8 +416,25 @@ if (db.dialect === 'sqlite') {
   console.info('[database] Skipping legacy column auto-migrations (dialect != sqlite)');
 }
 
+// Apply full schema only AFTER SQLite column migrations.
+// This prevents schema/index DDL from failing when new columns (e.g. crawler job idempotency)
+// are referenced by indexes but not yet present in older local DBs.
+if (shouldAutoMigrate) {
+  const schemaPath = join(__dirname, 'db', 'schema.sql');
+  if (fs.existsSync(schemaPath)) {
+    try {
+      const schema = fs.readFileSync(schemaPath, 'utf8');
+      await db.exec(schema);
+      console.info('[database] Schema applied (auto-migrate enabled)', { dialect: db.dialect });
+    } catch (schemaError) {
+      console.error('[database] Error running schema migrations:', schemaError);
+      // Do not hard-exit; keep the service reachable for diagnostics.
+    }
+  }
+}
+
 function ensureCrawlerJobsSupportsAllTypes() {
-  const testTypes = ['profile_enrichment', 'national']
+  const testTypes = ['profile_enrichment', 'national', 'national_zip_scan']
   let needsRebuild = false
 
   for (const type of testTypes) {
@@ -471,7 +479,8 @@ function ensureCrawlerJobsSupportsAllTypes() {
             'avatar_lookup',
             'document_ingest',
             'pipeline_automation',
-            'profile_enrichment'
+            'profile_enrichment',
+            'national_zip_scan'
           )),
           status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
             'queued',
@@ -483,10 +492,14 @@ function ensureCrawlerJobsSupportsAllTypes() {
           profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
           organization_id TEXT REFERENCES organizations(id) ON DELETE SET NULL,
           parameters TEXT DEFAULT '{}',
+          profile_context_snapshot TEXT,
+          idempotency_key TEXT,
           result_count INTEGER DEFAULT 0,
           result_meta TEXT,
           error TEXT,
           requested_by TEXT,
+          dispatch_attempts INTEGER DEFAULT 0,
+          next_dispatch_at DATETIME,
           retry_count INTEGER DEFAULT 0,
           last_retry_at DATETIME
         )
@@ -505,10 +518,14 @@ function ensureCrawlerJobsSupportsAllTypes() {
           profile_id,
           organization_id,
           parameters,
+          profile_context_snapshot,
+          idempotency_key,
           result_count,
           result_meta,
           error,
           requested_by,
+          dispatch_attempts,
+          next_dispatch_at,
           retry_count,
           last_retry_at
         )
@@ -522,10 +539,14 @@ function ensureCrawlerJobsSupportsAllTypes() {
           profile_id,
           organization_id,
           parameters,
+          NULL as profile_context_snapshot,
+          NULL as idempotency_key,
           result_count,
           result_meta,
           error,
           requested_by,
+          0 as dispatch_attempts,
+          NULL as next_dispatch_at,
           COALESCE(retry_count, 0),
           last_retry_at
         FROM crawler_jobs
@@ -537,6 +558,7 @@ function ensureCrawlerJobsSupportsAllTypes() {
     db.prepare('CREATE INDEX IF NOT EXISTS idx_crawler_jobs_status ON crawler_jobs(status)').run()
     db.prepare('CREATE INDEX IF NOT EXISTS idx_crawler_jobs_profile ON crawler_jobs(profile_id)').run()
     db.prepare('CREATE INDEX IF NOT EXISTS idx_crawler_jobs_type ON crawler_jobs(type)').run()
+    db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_crawler_jobs_idempotency ON crawler_jobs(idempotency_key) WHERE idempotency_key IS NOT NULL').run()
   })
 
   rebuild()
