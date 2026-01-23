@@ -18,21 +18,30 @@ const MAX_GLOBAL_CONCURRENT_CRAWLERS = parseInt(process.env.MAX_CONCURRENT_CRAWL
  * @param {string} profileId - Profile ID
  * @returns {Promise<boolean>} True if profile has running crawler
  */
-export async function hasRunningCrawler(db, profileId) {
+export async function hasRunningCrawler(db, profileId, { excludeJobId } = {}) {
   if (!profileId) return false
   
-  const running = await db
-    .prepare(
-      `
+  const hasExclude = Boolean(excludeJobId)
+  const sql = hasExclude
+    ? `
         SELECT id, type, created_at
         FROM crawler_jobs
         WHERE profile_id = ?
-          AND status IN ('queued', 'running')
+          AND status = 'running'
+          AND id <> ?
         ORDER BY created_at DESC
         LIMIT 1
       `
-    )
-    .get(profileId)
+    : `
+        SELECT id, type, created_at
+        FROM crawler_jobs
+        WHERE profile_id = ?
+          AND status = 'running'
+        ORDER BY created_at DESC
+        LIMIT 1
+      `
+
+  const running = await db.prepare(sql).get(profileId, ...(hasExclude ? [excludeJobId] : []))
   
   return !!running
 }
@@ -48,7 +57,7 @@ export async function getRunningCrawlerCount(db) {
       `
         SELECT COUNT(*) as count
         FROM crawler_jobs
-        WHERE status IN ('queued', 'running')
+        WHERE status = 'running'
       `
     )
     .get()
@@ -66,20 +75,29 @@ export async function getRunningCrawlerCount(db) {
  * @param {string} jobType - Type of crawler job
  * @returns {Promise<object|null>} { allowed: boolean, reason?: string, existingJobId?: string }
  */
-export async function acquireCrawlerLock(db, profileId, jobType) {
+export async function acquireCrawlerLock(db, profileId, jobType, { jobId } = {}) {
   // Check profile-level concurrency
-  const existingJob = await db
-    .prepare(
-      `
+  const hasJobId = Boolean(jobId)
+  const sql = hasJobId
+    ? `
         SELECT id, type, status, created_at
         FROM crawler_jobs
         WHERE profile_id = ?
-          AND status IN ('queued', 'running')
+          AND status = 'running'
+          AND id <> ?
         ORDER BY created_at DESC
         LIMIT 1
       `
-    )
-    .get(profileId)
+    : `
+        SELECT id, type, status, created_at
+        FROM crawler_jobs
+        WHERE profile_id = ?
+          AND status = 'running'
+        ORDER BY created_at DESC
+        LIMIT 1
+      `
+
+  const existingJob = await db.prepare(sql).get(profileId, ...(hasJobId ? [jobId] : []))
   
   if (existingJob) {
     console.log('[crawler-concurrency] Profile already has running crawler', {
@@ -87,6 +105,7 @@ export async function acquireCrawlerLock(db, profileId, jobType) {
       existingJobId: existingJob.id,
       existingType: existingJob.type,
       requestedType: jobType,
+      requestedJobId: jobId ?? null,
     })
     return {
       allowed: false,
