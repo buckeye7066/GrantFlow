@@ -566,10 +566,13 @@ router.post('/from-opportunity', async (req, res) => {
         throw new Error('Organization ID or Profile ID is required');
       }
 
-      // Re-check access after auto-linking (use original req.db for access control checks)
-      if (!(await ensureOrganizationAccess(req, res, String(finalOrgId)))) {
-        throw new Error('Access denied to organization');
-      }
+      // Re-check access after auto-linking.
+      //
+      // IMPORTANT (Postgres): perform this check against the *transaction* connection so it can see
+      // uncommitted `profiles.organization_id` updates made above. Using `req.db` (pool) can hit a
+      // different connection and incorrectly fail access checks, surfacing as a 500.
+      const accessReq = { user: req.user, ctx: req.ctx, db: tx }
+      if (!(await ensureOrganizationAccess(accessReq, res, String(finalOrgId)))) return null
       
       // Check for duplicate grants by title for this organization
       const existingGrant = await tx.prepare(
