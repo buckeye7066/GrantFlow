@@ -11,8 +11,20 @@ const REPO_ROOT = path.resolve(process.cwd())
 // Admin Role Enforcement (canonical: req.ctx.isAdmin / users.is_admin)
 // ============================================================================
 
+/**
+ * Check if user is admin (DB-backed)
+ * CRITICAL: This should match the logic in requestContext.js and accessControl.js
+ * @param {Object} user - User object with is_admin flag
+ * @returns {boolean} True if user is admin
+ */
 export function isAdmin(user) {
-  return Boolean(user?.isAdmin)
+  if (!user) {
+    return false;
+  }
+  
+  // Use DB-backed admin flag (set by auth middleware from database)
+  // No email substring checks - DB is the source of truth
+  return Boolean(user.role === 'admin' || user.is_admin === true || user.is_admin === 1);
 }
 
 /**
@@ -22,7 +34,7 @@ export function isAdmin(user) {
  */
 export function requireAdmin(user) {
   if (!isAdmin(user)) {
-    throw new Error('Admin access required.')
+    throw new Error('Admin access required. Admin privileges are managed via database.');
   }
 }
 

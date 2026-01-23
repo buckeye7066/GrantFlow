@@ -8,11 +8,12 @@ import { randomUUID } from 'crypto'
 import { dispatchCrawlerJob } from './crawlerDispatcher.js'
 
 /**
- * Check if user is the admin
- * Checks both primary_email (from database) and email (for compatibility)
+ * Check if user is admin (DB-backed)
+ * CRITICAL: This should match the logic in requestContext.js and accessControl.js
+ * No email substring checks - DB is the source of truth
  */
 function isAdmin(user) {
-  return Boolean(user?.is_admin === true || user?.is_admin === 1)
+  return Boolean(user?.role === 'admin' || user?.is_admin === true || user?.is_admin === 1)
 }
 
 /**

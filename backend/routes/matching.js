@@ -175,6 +175,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
     // Candidate set: prioritize upcoming deadlines first, then recently updated.
     const deadlineNullSort =
       req.db?.dialect === 'postgres' ? 'deadline IS NULL' : "deadline IS NULL OR deadline = ''"
+
     const candidates = await req.db
       .prepare(
         `

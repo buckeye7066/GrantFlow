@@ -28,11 +28,12 @@ function startServer(extraEnv = {}) {
   let stderr = ''
   child.stdout.setEncoding('utf8')
   child.stderr.setEncoding('utf8')
-  child.stdout.on('data', (d) => (stdout += d))
   child.stderr.on('data', (d) => (stderr += d))
 
   const ready = new Promise((resolve, reject) => {
+    let resolved = false
     const timeout = setTimeout(() => {
+      if (resolved) return
       try {
         child.kill('SIGTERM')
       } catch {
@@ -41,22 +42,33 @@ function startServer(extraEnv = {}) {
       reject(new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`))
     }, 60_000)
 
-    const onData = () => {
-      const match = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
+    const checkReady = (newChunk) => {
+      if (resolved) return true
+      // Check both the accumulated stdout and the new chunk
+      const textToCheck = stdout + (newChunk || '')
+      const match = textToCheck.match(/\[Server\] Ready on port\s+(\d+)/)
       if (match) {
+        resolved = true
         clearTimeout(timeout)
         resolve({ port: Number(match[1]) })
+        return true
       }
+      return false
     }
 
-    child.stdout.on('data', onData)
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk
+      checkReady(chunk)
+    })
 
     child.on('error', (err) => {
+      if (resolved) return
       clearTimeout(timeout)
       reject(new Error(`server failed to spawn: ${String(err?.message || err)}\nstdout:\n${stdout}\nstderr:\n${stderr}`))
     })
 
     child.on('exit', (code) => {
+      if (resolved) return
       if (stdout.includes('[Server] Ready on port')) return
       clearTimeout(timeout)
       reject(new Error(`server exited before ready (code=${code})\nstdout:\n${stdout}\nstderr:\n${stderr}`))
