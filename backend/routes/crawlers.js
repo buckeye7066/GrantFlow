@@ -1,7 +1,6 @@
 import express from 'express'
 import crypto from 'crypto'
 import fs from 'fs'
-import crypto from 'crypto'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
@@ -1018,6 +1017,15 @@ router.post('/jobs', async (req, res) => {
         return res.status(400).json({ error: 'Profile not found for crawler job' })
       }
       organizationId = profileRow.organization_id ?? null
+
+      // Production safety: tolerate legacy profiles that reference a missing organization row.
+      // Postgres enforces FK on crawler_jobs.organization_id, so we must null this out if it doesn't exist.
+      if (organizationId) {
+        const org = await req.db
+          .prepare('SELECT id FROM organizations WHERE id = ? LIMIT 1')
+          .get(organizationId)
+        if (!org?.id) organizationId = null
+      }
     }
 
     // Tier gating (enforced server-side; UI gating is not sufficient).
@@ -1042,9 +1050,10 @@ router.post('/jobs', async (req, res) => {
       profileId: targetProfileId,
       organizationId,
       parameters: validatedParameters,
-      requestedBy: admin ? 'admin' : (auth.userId ?? auth.email ?? targetProfileId ?? 'user'),
+      requestedBy: ctx.isAdmin ? 'admin' : (ctx.userId ?? ctx.email ?? targetProfileId ?? 'user'),
       status: 'queued',
       buildSnapshot: true,
+      skipIdempotencyCheck: Boolean(force),
     })
     
     // If existing job found, return it

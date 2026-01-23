@@ -138,7 +138,7 @@ export function getAuthProfileId(user) {
 }
 
 export async function getAccessibleProfileIds(db, user) {
-  if (isAdminUser(user) || (await resolveIsAdminFromDb(db, user))) return null
+  if (await isAdminUserWithDb(db, user)) return null
 
   const ids = new Set()
   const userId = getAuthUserId(user)
@@ -252,7 +252,7 @@ export async function removeProfileEmail(db, { profileId, emailId }) {
 }
 
 export async function getAccessibleOrganizationIds(db, user) {
-  if (isAdminUser(user) || (await resolveIsAdminFromDb(db, user))) return null
+  if (await isAdminUserWithDb(db, user)) return null
 
   const profileIds = await getAccessibleProfileIds(db, user)
   if (!profileIds || profileIds.size === 0) return new Set()
@@ -407,4 +407,3 @@ export async function ensureAdminUser(req, res) {
 
   return true
 }
-

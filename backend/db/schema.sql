@@ -740,13 +740,12 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
   
   parameters TEXT DEFAULT '{}',
   profile_context_snapshot TEXT, -- JSON snapshot of complete profile context at dispatch time
-  idempotency_key TEXT, -- Prevents duplicate runs of the same job
+  -- Client-/server-provided idempotency key to prevent duplicate dispatch.
+  idempotency_key TEXT,
   result_count INTEGER DEFAULT 0,
   result_meta TEXT,
   error TEXT,
   requested_by TEXT,
-  -- Client-/server-provided idempotency key to prevent duplicate dispatch.
-  idempotency_key TEXT,
   -- Dispatcher backpressure / retry tracking (separate from manual retry_count).
   dispatch_attempts INTEGER DEFAULT 0,
   next_dispatch_at DATETIME,

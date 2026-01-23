@@ -153,11 +153,20 @@ export function loadEnv({ mode = process.env.NODE_ENV } = {}) {
       }
     }
     if (env.PORT === 0) {
+      const allowEphemeralPort =
+        String(env.ALLOW_EPHEMERAL_PORT || '').trim().toLowerCase() === 'true' ||
+        String(env.SMOKE_MODE || '').trim().toLowerCase() === 'true' ||
+        String(env.ALLOW_EPHEMERAL_SQLITE || '').trim().toLowerCase() === 'true'
+
+      if (allowEphemeralPort) {
+        warnings.push('PORT=0 accepted in production for ephemeral/test harness use (ALLOW_EPHEMERAL_PORT/SMOKE_MODE).')
+      } else {
       return {
         ok: false,
         issues: ['PORT must be >= 1 in production (PORT=0 is only valid for local/ephemeral use)'],
         env: null,
         warnings: [],
+      }
       }
     }
 
