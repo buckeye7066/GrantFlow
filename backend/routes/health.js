@@ -27,6 +27,8 @@ async function checkRequiredTables(db) {
     'crawler_jobs',
     'user_sessions',
     'funding_opportunities',
+    'anya_runs',
+    'anya_run_logs',
   ]
 
   const missing = []

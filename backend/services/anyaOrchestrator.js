@@ -69,7 +69,7 @@ function coerceProfileId(requestedProfileId) {
 }
 
 function assertAuthenticated(user) {
-  if (!user || user.role === 'guest') {
+  if (!user || !user.userId) {
     const error = new Error('Authentication required')
     error.status = 401
     throw error
@@ -90,8 +90,9 @@ async function resolveExistingUserId(db, user) {
 
 function assertProfileAccess(user, profileId) {
   if (!profileId) return
-  if (user.role === 'admin') return
-  if (user.profileId && user.profileId === profileId) return
+  if (user.isAdmin) return
+  if (user.accessibleProfileIds instanceof Set && user.accessibleProfileIds.has(String(profileId))) return
+  if (user.activeProfileId && String(user.activeProfileId) === String(profileId)) return
   const error = new Error('Not authorized to access this profile')
   error.status = 403
   throw error
@@ -103,9 +104,12 @@ function assertSessionAccess(user, session) {
     error.status = 404
     throw error
   }
-  if (user.role === 'admin') return
+  if (user.isAdmin) return
   if (session.user_id && user.userId && session.user_id === user.userId) return
-  if (session.profile_id && user.profileId && session.profile_id === user.profileId) return
+  if (user.accessibleProfileIds instanceof Set && session.profile_id && user.accessibleProfileIds.has(String(session.profile_id))) {
+    return
+  }
+  if (session.profile_id && user.activeProfileId && String(session.profile_id) === String(user.activeProfileId)) return
   const error = new Error('Not authorized to access this session')
   error.status = 403
   throw error
@@ -205,7 +209,7 @@ function normalizeDate(value) {
 
 export async function createSession(db, user, { profileId, title, metadata } = {}) {
   assertAuthenticated(user)
-  const normalizedProfileId = coerceProfileId(profileId ?? user.profileId ?? null)
+  const normalizedProfileId = coerceProfileId(profileId ?? user.activeProfileId ?? null)
   assertProfileAccess(user, normalizedProfileId)
 
   // Validate profile existence up-front to avoid FK explosions.
@@ -310,7 +314,7 @@ export async function listSessions(db, user, { limit = 20 } = {}) {
   const safeLimit = Math.max(1, Math.min(Number(limit) || 20, 100))
 
   let rows = []
-  if (user.role === 'admin') {
+  if (user.isAdmin) {
     rows = await db
       .prepare(
         `
@@ -333,7 +337,7 @@ export async function listSessions(db, user, { limit = 20 } = {}) {
           LIMIT ?
         `,
       )
-      .all(user.userId, user.profileId ?? null, safeLimit)
+      .all(user.userId, user.activeProfileId ?? null, safeLimit)
   } else {
     rows = await db
       .prepare(
@@ -345,7 +349,7 @@ export async function listSessions(db, user, { limit = 20 } = {}) {
           LIMIT ?
         `,
       )
-      .all(user.profileId ?? null, safeLimit)
+      .all(user.activeProfileId ?? null, safeLimit)
   }
 
   return rows.map(mapSession)
@@ -434,7 +438,7 @@ export async function listTasks(db, user, sessionId) {
 
 export async function listProfileTasks(db, user, profileId, { status } = {}) {
   assertAuthenticated(user)
-  const normalizedProfileId = coerceProfileId(profileId ?? user.profileId ?? null)
+  const normalizedProfileId = coerceProfileId(profileId ?? user.activeProfileId ?? null)
   assertProfileAccess(user, normalizedProfileId)
 
   if (!normalizedProfileId) {
@@ -669,7 +673,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
   // Extract user context for personalization
   const userName = user?.display_name || user?.full_name || user?.profileName || 'there'
   const userEmail = user?.primary_email || user?.email || ''
-  const isAdmin = Boolean(user?.is_admin || user?.role === 'admin')
+  const isAdmin = Boolean(user?.isAdmin)
   // Check if this is the primary admin (configured via ADMIN_EMAIL env var)
   // This provides special recognition for the main system administrator
   const isPrimaryAdmin = isAdmin && userEmail === ADMIN_EMAIL
@@ -1056,6 +1060,7 @@ export async function invokeTool(db, user, toolName, params, { sessionId } = {})
   }
 
   const result = await invokeRegisteredTool(toolName, params, {
+    ctx: user,
     user,
     db,
     sessionId,
