@@ -29,8 +29,8 @@ export async function ensureAdmin(req, res, next) {
   }
   
   try {
-    // Use DB-backed admin detection to avoid relying solely on token claims
-    const isAdmin = await isAdminUserWithDb(req.db, user);
+    // Use req.ctx.isAdmin if available (canonical from requestContext middleware)
+    const isAdmin = req.ctx?.isAdmin ?? (await isAdminUserWithDb(req.db, user));
     if (!isAdmin) {
       return res.status(403).json({ error: 'Admin privileges required' });
     }
@@ -55,9 +55,19 @@ export function ensureProfileAccess(profileIdParam = 'id') {
     }
     
     try {
-      // Use DB-backed admin detection
-      const isAdmin = await isAdminUserWithDb(req.db, user);
+      // ADMIN BYPASS: Use req.ctx if available (canonical), fallback to DB check
+      const isAdmin = req.ctx?.isAdmin ?? (await isAdminUserWithDb(req.db, user));
       if (isAdmin) {
+        return next();
+      }
+      
+      // Check if profile is in user's accessible set (from req.ctx)
+      if (req.ctx?.accessibleProfileIds === null) {
+        // null means admin (all access) - already handled above
+        return next();
+      }
+      
+      if (req.ctx?.accessibleProfileIds?.has(profileId)) {
         return next();
       }
       
