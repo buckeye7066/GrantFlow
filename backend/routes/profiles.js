@@ -77,6 +77,9 @@ router.param('id', async (req, res, id, next) => {
 
 function canAccessProfile({ auth, profileRow }) {
   if (!profileRow) return false
+  // Prefer requestContext-derived admin (req.ctx.isAdmin) when provided by caller.
+  if (auth?.ctxIsAdmin === true) return true
+  // Back-compat fallback for older callsites.
   if (isAdminUser(auth)) return true
   const authProfileId = getAuthProfileId(auth)
   if (authProfileId && authProfileId === profileRow.id) return true
@@ -837,7 +840,7 @@ router.post('/:id/avatar/ai', async (req, res) => {
 
 router.get('/:id/sections', async (req, res) => {
   const { id } = req.params
-  const auth = req.user ?? { role: 'guest' }
+  const auth = { ...(req.user ?? { role: 'guest' }), ctxIsAdmin: req.ctx?.isAdmin === true }
 
   const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!profile) {
@@ -870,7 +873,7 @@ router.get('/:id/sections', async (req, res) => {
 
 router.get('/:id/sections/:sectionKey', async (req, res) => {
   const { id, sectionKey } = req.params
-  const auth = req.user ?? { role: 'guest' }
+  const auth = { ...(req.user ?? { role: 'guest' }), ctxIsAdmin: req.ctx?.isAdmin === true }
 
   const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!profile) {
@@ -906,7 +909,7 @@ router.get('/:id/sections/:sectionKey', async (req, res) => {
 router.put('/:id/sections/:sectionKey', async (req, res) => {
   const { id, sectionKey } = req.params
   const { data, updated_by } = req.body ?? {}
-  const auth = req.user ?? { role: 'guest' }
+  const auth = { ...(req.user ?? { role: 'guest' }), ctxIsAdmin: req.ctx?.isAdmin === true }
 
   const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!profile) {
