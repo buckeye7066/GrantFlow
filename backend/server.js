@@ -53,23 +53,11 @@ import { assertFundingApiKeys, getFundingApiKeyPresence } from './src/config/api
 import { ensureProfileEmailSchema } from './utils/accessControl.js';
 import { dispatchCrawlerJob } from './services/crawlerDispatcher.js';
 import { findDuplicateProfileGroups, mergeProfiles } from './services/profileDedupeService.js'
+import { assertEnv, getJwtSecretOrThrow } from './config/env.js'
+import healthRouter from './routes/health.js'
 
-// Validate critical environment variables at startup.
-// NOTE: OpenAI is intentionally OPTIONAL for core app flows (auth/profile/opportunities).
-// The server can restore OPENAI_API_KEY from app_runtime_secrets later (hosted emergency stopgap),
-// and even without OpenAI the app should still boot and allow login.
-const requiredEnvVars = [];
-const missingEnvVars = requiredEnvVars.filter((varName) => !process.env[varName]);
-
-if (missingEnvVars.length > 0) {
-  console.error('ERROR: Missing required environment variables:', missingEnvVars.join(', '));
-  console.error('Please check your environment variables and redeploy.');
-  if (process.env.NODE_ENV === 'production') {
-    process.exit(1);
-  } else {
-    console.warn('WARNING: Running in non-production mode without all required environment variables.');
-  }
-}
+// Validate environment variables early (fail-fast in production).
+const { env: ENV } = assertEnv()
 
 // Funding API keys (safe presence only). Never print key values.
 try {
@@ -100,7 +88,7 @@ const distPath = join(__dirname, '..', 'dist');
 
 const app = express();
 app.set('trust proxy', 1);
-const PORT = process.env.PORT || 8080;
+const PORT = ENV?.PORT ?? process.env.PORT ?? 8080;
 
 // CORS configuration
 const defaultCorsOrigins = [
@@ -111,9 +99,7 @@ const defaultCorsOrigins = [
   'https://www.axiombiolabs.org',
   'https://grantflow-production.up.railway.app',
 ];
-const configuredCorsOrigins = process.env.CORS_ORIGIN
-  ? process.env.CORS_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean)
-  : null;
+const configuredCorsOrigins = Array.isArray(ENV?.corsOrigins) && ENV.corsOrigins.length > 0 ? ENV.corsOrigins : null;
 
 const corsOptions = {
   origin: configuredCorsOrigins && configuredCorsOrigins.length > 0 ? configuredCorsOrigins : defaultCorsOrigins,
@@ -294,7 +280,7 @@ async function repairInvalidDocumentStatuses(db) {
 // Serve static files from Vite build
 app.use(express.static(distPath));
 // Serve the SPA under the configured base path so production builds (base=/grantflow) work locally.
-const APP_BASE_PATH = process.env.AUTH_FRONTEND_APP_BASE || process.env.VITE_APP_BASE || '/grantflow';
+const APP_BASE_PATH = ENV?.appBase || process.env.AUTH_FRONTEND_APP_BASE || process.env.VITE_APP_BASE || '/grantflow';
 if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
   const normalizedBase = String(APP_BASE_PATH).replace(/\/+$/, '');
   // Expose uploads under the same base path (common when reverse proxies only route /grantflow/*).
@@ -711,40 +697,17 @@ try {
   console.warn('[startup] Failed to seed assistance directories:', error?.message || error)
 }
 
-function resolveJwtSecret() {
-  const raw = String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || '').trim();
-  const isProd = process.env.NODE_ENV === 'production';
-
-  if (!raw) {
-    if (isProd) {
-      // NOTE: Railway outages are worse than a temporary auth secret.
-      // We still emit a loud error so the operator sets a real secret ASAP.
-      const generated = crypto.randomBytes(48).toString('base64url')
-      console.error(
-        'ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET). Using an EPHEMERAL secret to avoid startup crash.\n' +
-          'Set a strong random secret (recommended: 32+ bytes) and redeploy to avoid logouts on restart.\n' +
-          '  AUTH_JWT_SECRET="..."\n',
-      );
-      return generated
-    }
-    console.warn('[startup] AUTH_JWT_SECRET not set; using insecure development default (DO NOT use in production).');
-    return 'grantflow-dev-secret';
+const isProd = ENV?.isProd ?? process.env.NODE_ENV === 'production'
+// Stable JWT secret: never generate at runtime.
+const EFFECTIVE_JWT_SECRET = (() => {
+  try {
+    return getJwtSecretOrThrow(ENV || {})
+  } catch {
+    // In production assertEnv() already exited; in non-prod use dev default.
+    console.warn('[auth] Using development JWT secret fallback (non-production only).')
+    return 'grantflow-dev-secret'
   }
-
-  if (isProd && raw === 'grantflow-dev-secret') {
-    const generated = crypto.randomBytes(48).toString('base64url')
-    console.error(
-      'ERROR: AUTH_JWT_SECRET is set to the insecure development default. Using an EPHEMERAL secret to avoid startup crash.\n' +
-        'Generate a strong random secret and redeploy.',
-    );
-    return generated
-  }
-
-  return raw;
-}
-
-const EFFECTIVE_JWT_SECRET = resolveJwtSecret();
-const isProd = process.env.NODE_ENV === 'production'
+})()
 
 // Make db available to routes
 app.use((req, res, next) => {
@@ -1570,59 +1533,7 @@ app.get('/api/health', async (req, res) => {
 });
 
 // Platform health aliases (k8s-style)
-app.get('/healthz', async (_req, res) => {
-  try {
-    const healthSummary = await getSafeHealthSummary(db)
-    const rawStatus = healthSummary?.status ?? 'error'
-    const status =
-      rawStatus === 'healthy'
-        ? 'ok'
-        : rawStatus === 'degraded'
-          ? 'warning'
-          : rawStatus === 'unhealthy'
-            ? 'error'
-            : rawStatus
-
-    const statusCode = status === 'error' ? 500 : 200
-    const body =
-      rawStatus === status
-        ? healthSummary
-        : { ...healthSummary, status, legacy_status: rawStatus }
-
-    res.status(statusCode).json(body)
-  } catch (error) {
-    console.error('[/healthz] Error:', error);
-    res.status(500).json({ status: 'error', summary: 'Failed to retrieve health information' });
-  }
-});
-
-app.get('/readyz', async (_req, res) => {
-  try {
-    if (db.healthcheck) {
-      const hc = await db.healthcheck();
-      if (!hc?.ok) throw new Error(hc?.error || 'Database healthcheck failed')
-    } else {
-      await db.prepare('SELECT 1 as ok').get();
-    }
-    // Ensure uploads dir is present and writable (production requires a volume).
-    try {
-      fs.mkdirSync(uploadsDir, { recursive: true });
-      fs.accessSync(uploadsDir, fs.constants.R_OK | fs.constants.W_OK);
-    } catch (e) {
-      return res.status(503).json({
-        status: 'not_ready',
-        reason: 'uploads_dir_unwritable',
-        uploads_dir: uploadsDir,
-        message: e?.message || String(e),
-        timestamp: new Date().toISOString(),
-      });
-    }
-    res.status(200).json({ status: 'ready', dialect: db.dialect, timestamp: new Date().toISOString() });
-  } catch (error) {
-    console.error('[/readyz] Not ready:', error);
-    res.status(503).json({ status: 'not_ready', reason: 'database_unreachable', timestamp: new Date().toISOString() });
-  }
-});
+app.use(healthRouter({ db, uploadsDir, env: ENV }))
 
 app.use('/api/admin', adminRouter);
 app.use('/api', discoveryRouter); // Discovery endpoints (comprehensiveMatch, searchOpportunities, etc.)

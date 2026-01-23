@@ -8,6 +8,7 @@ import { dirname, join } from 'path'
 import { initializeAnyaForAdmin } from '../services/anyaLoginTrigger.js'
 import { recordClientSignInEvent } from '../services/adminLoginEventStore.js'
 import { getOpenAIOptional } from '../utils/aiProviders.js'
+import { loadEnv, getJwtSecretOrThrow } from '../config/env.js'
 
 // Import email service (with fallback if main service fails to load)
 import { sendVerificationEmail as mainSendEmail, sendAuthAttemptNotification as mainAuthNotify } from '../services/email.js'
@@ -36,36 +37,14 @@ function getOpenAI() {
   return openai
 }
 
-function resolveJwtSecret() {
-  const raw = String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || '').trim()
-  const isProd = process.env.NODE_ENV === 'production'
-
-  if (!raw) {
-    // Production safety: do not hard-exit. A missing JWT secret otherwise causes a perpetual 502 on Railway.
-    // We generate an ephemeral secret so the service can boot; all sessions will be invalidated on restart.
-    if (isProd) {
-      console.error(
-        'ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET). Generating ephemeral secret so the service can start.\n' +
-          'Fix: set AUTH_JWT_SECRET in Railway/Vercel env vars to a strong random secret (recommended: 32+ bytes).',
-      )
-      return crypto.randomBytes(32).toString('base64url')
-    }
-    console.warn('[auth] AUTH_JWT_SECRET not set; using insecure development default (DO NOT use in production).')
-    return 'grantflow-dev-secret'
+const JWT_SECRET = (() => {
+  const parsed = loadEnv({ mode: process.env.NODE_ENV })
+  if (parsed?.ok && parsed.env) {
+    return getJwtSecretOrThrow(parsed.env)
   }
-
-  if (isProd && raw === 'grantflow-dev-secret') {
-    console.error(
-      'ERROR: AUTH_JWT_SECRET is set to the insecure development default. Generating ephemeral secret so the service can start.\n' +
-        'Fix: set AUTH_JWT_SECRET in Railway/Vercel env vars to a strong random secret (recommended: 32+ bytes).',
-    )
-    return crypto.randomBytes(32).toString('base64url')
-  }
-
-  return raw
-}
-
-const JWT_SECRET = resolveJwtSecret()
+  // Non-prod fallback only (must never be random).
+  return String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret').trim()
+})()
 
 function parseSeconds(value, fallback) {
   if (value === undefined || value === null) {
