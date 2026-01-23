@@ -318,9 +318,14 @@ export async function findDuplicateProfileGroups(db, {
 
 async function tableExists(tx, tableName) {
   const name = String(tableName)
-  if (tx.dialect === 'postgres') {
+  // Dialect detection must not rely on tx.dialect because some transaction wrappers
+  // return a client without custom properties. Try Postgres first, then fall back to SQLite.
+  try {
     const row = await tx.prepare('SELECT to_regclass(?) as reg').get(name)
+    // If this query succeeded, we are on Postgres.
     return Boolean(row?.reg)
+  } catch {
+    // fall through to SQLite detection
   }
 
   const row = await tx
@@ -341,7 +346,8 @@ async function columnExists(tx, tableName, columnName) {
   const col = String(columnName)
   if (!table || !col) return false
 
-  if (tx.dialect === 'postgres') {
+  // Same as tableExists: do not assume tx.dialect exists.
+  try {
     const row = await tx
       .prepare(
         `
@@ -355,6 +361,8 @@ async function columnExists(tx, tableName, columnName) {
       )
       .get(table, col)
     return Boolean(row)
+  } catch {
+    // fall through to SQLite PRAGMA
   }
 
   // SQLite: PRAGMA table_info doesn't accept bound params, so we must validate the identifier.
@@ -474,7 +482,8 @@ export async function mergeProfiles(db, {
       if (!(await tableExists(tx, 'profile_documents'))) {
         return { type: 'profile_documents.repoint', from: loserId, to: winnerId, skipped: true, reason: 'profile_documents table missing' }
       }
-      if (tx.dialect === 'postgres') {
+      const isPostgres = String(tx?.dialect || db?.dialect || '').toLowerCase() === 'postgres'
+      if (isPostgres) {
         await tx
           .prepare(
             `
