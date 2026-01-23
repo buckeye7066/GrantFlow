@@ -8,6 +8,7 @@ import { dirname, join } from 'path'
 import { initializeAnyaForAdmin } from '../services/anyaLoginTrigger.js'
 import { recordClientSignInEvent } from '../services/adminLoginEventStore.js'
 import { getOpenAIOptional } from '../utils/aiProviders.js'
+import { loadEnv, getJwtSecretOrThrow } from '../config/env.js'
 
 // Import email service (with fallback if main service fails to load)
 import { sendVerificationEmail as mainSendEmail, sendAuthAttemptNotification as mainAuthNotify } from '../services/email.js'
@@ -69,11 +70,9 @@ function resolveJwtSecret() {
     )
     process.exit(1)
   }
-
-  return raw
-}
-
-const JWT_SECRET = resolveJwtSecret()
+  // Non-prod fallback only (must never be random).
+  return String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret').trim()
+})()
 
 function parseSeconds(value, fallback) {
   if (value === undefined || value === null) {

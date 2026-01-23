@@ -55,23 +55,12 @@ import { assertFundingApiKeys, getFundingApiKeyPresence } from './src/config/api
 import { ensureProfileEmailSchema } from './utils/accessControl.js';
 import { dispatchCrawlerJob } from './services/crawlerDispatcher.js';
 import { findDuplicateProfileGroups, mergeProfiles } from './services/profileDedupeService.js'
+import { assertEnv, getJwtSecretOrThrow } from './config/env.js'
+import healthRouter from './routes/health.js'
+import requestContext from './middleware/requestContext.js'
 
-// Validate critical environment variables at startup.
-// NOTE: OpenAI is intentionally OPTIONAL for core app flows (auth/profile/opportunities).
-// The server can restore OPENAI_API_KEY from app_runtime_secrets later (hosted emergency stopgap),
-// and even without OpenAI the app should still boot and allow login.
-const requiredEnvVars = [];
-const missingEnvVars = requiredEnvVars.filter((varName) => !process.env[varName]);
-
-if (missingEnvVars.length > 0) {
-  console.error('ERROR: Missing required environment variables:', missingEnvVars.join(', '));
-  console.error('Please check your environment variables and redeploy.');
-  if (process.env.NODE_ENV === 'production') {
-    process.exit(1);
-  } else {
-    console.warn('WARNING: Running in non-production mode without all required environment variables.');
-  }
-}
+// Validate environment variables early (fail-fast in production).
+const { env: ENV } = assertEnv()
 
 // Funding API keys (safe presence only). Never print key values.
 try {
@@ -102,7 +91,7 @@ const distPath = join(__dirname, '..', 'dist');
 
 const app = express();
 app.set('trust proxy', 1);
-const PORT = process.env.PORT || 8080;
+const PORT = ENV?.PORT ?? process.env.PORT ?? 8080;
 
 // CORS configuration
 const defaultCorsOrigins = [
@@ -113,9 +102,7 @@ const defaultCorsOrigins = [
   'https://www.axiombiolabs.org',
   'https://grantflow-production.up.railway.app',
 ];
-const configuredCorsOrigins = process.env.CORS_ORIGIN
-  ? process.env.CORS_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean)
-  : null;
+const configuredCorsOrigins = Array.isArray(ENV?.corsOrigins) && ENV.corsOrigins.length > 0 ? ENV.corsOrigins : null;
 
 const corsOptions = {
   origin: configuredCorsOrigins && configuredCorsOrigins.length > 0 ? configuredCorsOrigins : defaultCorsOrigins,
@@ -306,7 +293,7 @@ async function repairInvalidDocumentStatuses(db) {
 // Serve static files from Vite build
 app.use(express.static(distPath));
 // Serve the SPA under the configured base path so production builds (base=/grantflow) work locally.
-const APP_BASE_PATH = process.env.AUTH_FRONTEND_APP_BASE || process.env.VITE_APP_BASE || '/grantflow';
+const APP_BASE_PATH = ENV?.appBase || process.env.AUTH_FRONTEND_APP_BASE || process.env.VITE_APP_BASE || '/grantflow';
 if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
   const normalizedBase = String(APP_BASE_PATH).replace(/\/+$/, '');
   // Expose uploads under the same base path (common when reverse proxies only route /grantflow/*).
@@ -751,12 +738,7 @@ function resolveJwtSecret() {
     );
     process.exit(1);
   }
-
-  return raw;
-}
-
-const EFFECTIVE_JWT_SECRET = resolveJwtSecret();
-const isProd = process.env.NODE_ENV === 'production'
+})()
 
 // Make db available to routes
 app.use((req, res, next) => {
@@ -782,7 +764,11 @@ app.use(async (req, res, next) => {
   ) {
     user = {
       role: 'admin',
+      // Canonical admin is DB-backed via req.ctx. We still mark this token flow as admin,
+      // but requestContext will resolve the final answer from users.is_admin.
       is_admin: true,
+      // Deterministic userId so we can back it with a real DB user row (users.is_admin = true).
+      userId: 'system_admin_token',
       profileId: null,
       full_name: ADMIN_NAME,
       email: ADMIN_EMAIL,
@@ -792,7 +778,13 @@ app.use(async (req, res, next) => {
 
   // 2. Check X-Anya-Token (autonomous bot)
   if (!handled && xAnyaToken && process.env.ANYA_API_KEY && xAnyaToken === process.env.ANYA_API_KEY) {
-    user = { role: 'admin', is_admin: true, full_name: 'Anya Assistant', email: 'anya@grantflow.app' };
+    user = {
+      role: 'admin',
+      is_admin: true,
+      userId: 'system_anya_token',
+      full_name: 'Anya Assistant',
+      email: 'anya@grantflow.app',
+    };
     handled = true;
   }
 
@@ -805,21 +797,27 @@ app.use(async (req, res, next) => {
         // Stateless JWT acceptance (important for multi-instance deployments where SQLite session storage
         // is not shared across instances). If the token is correctly signed and unexpired, trust its claims.
         // We still try to validate against DB sessions when available, but we do not require it.
+        let tokenRoles = []
+        let tokenEmail = null
+        let tokenName = null
+
         if (payload && typeof payload === 'object') {
-          const roles = Array.isArray(payload.roles) ? payload.roles : [];
-          const isAdmin = roles.includes('admin');
+          tokenRoles = Array.isArray(payload.roles) ? payload.roles : []
+          tokenEmail = payload.email ?? null
+          tokenName = payload.name ?? null
+
           if (payload.sub) {
             user = {
-              role: isAdmin ? 'admin' : 'user',
-              is_admin: isAdmin,
+              role: 'user',
+              is_admin: false,
               userId: payload.sub,
               profileId: payload.profile_id ?? null,
               sessionId: payload.sid ?? null,
-              full_name: payload.name ?? null,
-              email: payload.email ?? null,
-              roles,
-            };
-            handled = true;
+              full_name: tokenName,
+              email: tokenEmail,
+              roles: tokenRoles,
+            }
+            handled = true
           }
         }
 
@@ -840,15 +838,18 @@ app.use(async (req, res, next) => {
             !sessionRow.revoked_at &&
             (!sessionRow.refresh_expires_at || new Date(sessionRow.refresh_expires_at) > new Date())
           ) {
+            // Admin is DB-backed: users.is_admin.
+            const effectiveIsAdmin = Boolean(sessionRow.is_admin)
             user = {
-              role: sessionRow.is_admin ? 'admin' : 'user',
-              is_admin: Boolean(sessionRow.is_admin),
+              role: effectiveIsAdmin ? 'admin' : 'user',
+              is_admin: effectiveIsAdmin,
               userId: sessionRow.user_id,
               profileId: payload.profile_id ?? sessionRow.profile_id ?? null,
               sessionId: sessionRow.id,
-              full_name: sessionRow.display_name,
-              email: sessionRow.primary_email,
-            };
+              full_name: sessionRow.display_name ?? tokenName ?? null,
+              email: sessionRow.primary_email ?? tokenEmail ?? null,
+              roles: tokenRoles,
+            }
             handled = true;
           }
         }
@@ -861,6 +862,7 @@ app.use(async (req, res, next) => {
       user = {
         role: 'admin',
         is_admin: true,
+        userId: 'system_admin_token',
         profileId: null,
         full_name: ADMIN_NAME,
         email: ADMIN_EMAIL,

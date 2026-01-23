@@ -17,6 +17,7 @@ import { formatError } from '../middleware/errorHandler.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import {
   ensureProfileAccess as ensureProfileAccessByEmail,
+  getAccessibleProfileIds,
   isAdminUser,
   isAdminUserWithDb,
   isProfileOwner,
@@ -29,6 +30,10 @@ import {
 } from '../utils/accessControl.js'
 
 const router = express.Router()
+
+function isAdmin(user) {
+  return Boolean(isAdminUser(user)) || user?.role === 'admin' || user?.is_admin === true
+}
 
 // Central enforcement: any route that includes a `:id` param in this router refers to a profile id.
 // This prevents profile “bleed” from stale token claims; access is always re-validated.
@@ -237,7 +242,7 @@ function extractAnthropicText(response) {
 
 router.get('/', async (req, res) => {
   const user = req.user
-  const userId = getAuthUserId(user)
+  const isAdmin = req.ctx?.isAdmin === true
   const includeSummary = req.query.summary === 'true'
   const includeDeleted = req.query.includeDeleted === 'true'
   
@@ -381,7 +386,8 @@ router.delete('/:id/emails/:emailId', async (req, res) => {
 
 router.post('/', async (req, res) => {
   const user = req.user
-  const userId = getAuthUserId(user)
+  const isAdmin = req.ctx?.isAdmin === true
+  const userId = req.ctx?.userId ?? getAuthUserId(user)
   const { display_name, primary_type, organization_id, user_id, created_by, status = 'active', tags = [] } = req.body ?? {}
 
   if (!display_name || typeof display_name !== 'string') {
@@ -460,7 +466,8 @@ router.post('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   const { id } = req.params
   const user = req.user
-  const userId = getAuthUserId(user)
+  const isAdmin = req.ctx?.isAdmin === true
+  const userId = req.ctx?.userId ?? getAuthUserId(user)
 
   let row = null
   try {
@@ -524,7 +531,8 @@ router.put('/:id', async (req, res) => {
   const { id } = req.params
   const { display_name, primary_type, organization_id, status, tags } = req.body ?? {}
   const auth = req.user ?? { role: 'guest' }
-  const authUserId = getAuthUserId(auth)
+  const isAdmin = req.ctx?.isAdmin === true
+  const authUserId = req.ctx?.userId ?? getAuthUserId(auth)
   const authProfileId = getAuthProfileId(auth)
 
   const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
@@ -592,7 +600,7 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
-  const authUserId = getAuthUserId(auth)
+  const authUserId = req.ctx?.userId ?? getAuthUserId(auth)
   const authProfileId = getAuthProfileId(auth)
 
   // Check authorization - user must be admin or the profile must belong to them
@@ -713,7 +721,7 @@ router.delete('/:id', async (req, res) => {
 router.post('/:id/avatar', runUploadSingle('avatar'), async (req, res, next) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
-  const authUserId = getAuthUserId(auth)
+  const authUserId = req.ctx?.userId ?? getAuthUserId(auth)
   const authProfileId = getAuthProfileId(auth)
 
   const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
@@ -761,7 +769,7 @@ router.post('/:id/avatar', runUploadSingle('avatar'), async (req, res, next) => 
 router.post('/:id/avatar/ai', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
-  const authUserId = getAuthUserId(auth)
+  const authUserId = req.ctx?.userId ?? getAuthUserId(auth)
   const authProfileId = getAuthProfileId(auth)
 
   const profileRow = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
