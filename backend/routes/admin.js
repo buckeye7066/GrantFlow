@@ -2292,7 +2292,11 @@ router.post('/profiles/merge', async (req, res, next) => {
     return res.json({ ok: true, ...result })
   } catch (error) {
     console.error('[admin/profiles/merge] Error:', error)
-    return next(error)
+    return res.status(500).json({
+      ok: false,
+      error: error?.message || String(error),
+      error_type: 'merge_failed',
+    })
   }
 })
 
