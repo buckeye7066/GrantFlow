@@ -164,11 +164,10 @@ test('auth: email start returns 202 with preview code for authorized emails in p
       body: JSON.stringify({ email }),
     })
 
-    assert.equal(start.status, 202, 'Expected 202 status code for authorized email')
+    assert.equal(start.status, 503, 'Expected 503 when email delivery is unconfigured in production')
     assert.ok(start.json)
-    assert.equal(typeof start.json.previewCode, 'string', 'Preview code should be returned for authorized email')
-    assert.equal(start.json.previewCode.length, 6)
-    assert.equal(start.json.preview_reason, 'profile_email_authorized')
+    assert.equal(start.json.error_type, 'email_unavailable')
+    assert.equal(start.json.previewCode, undefined, 'Preview code must not be returned in production')
   } finally {
     await srv.stop()
   }
@@ -188,11 +187,10 @@ test('auth: admin email is authorized even without matching profile in productio
       body: JSON.stringify({ email }),
     })
 
-    assert.equal(start.status, 202, 'Expected 202 status code for admin email')
+    assert.equal(start.status, 503, 'Expected 503 when email delivery is unconfigured in production')
     assert.ok(start.json)
-    assert.equal(typeof start.json.previewCode, 'string', 'Admin should get preview code')
-    assert.equal(start.json.previewCode.length, 6)
-    assert.equal(start.json.preview_reason, 'profile_email_authorized')
+    assert.equal(start.json.error_type, 'email_unavailable')
+    assert.equal(start.json.previewCode, undefined, 'Preview code must not be returned in production')
   } finally {
     await srv.stop()
   }
