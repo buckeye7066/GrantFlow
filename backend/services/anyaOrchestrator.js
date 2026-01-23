@@ -2,6 +2,8 @@ import { randomUUID } from 'crypto'
 import { listToolMetadata, invokeTool as invokeRegisteredTool } from './anyaToolRegistry.js'
 import { createCircuitBreaker } from '../utils/circuitBreaker.js'
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
+import path from 'path'
+import { promises as fs } from 'fs'
 
 const TASK_STATUSES = new Set(['open', 'in_progress', 'completed', 'cancelled'])
 const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent'])
@@ -1035,10 +1037,30 @@ export function listTools(user) {
 
 export async function invokeTool(db, user, toolName, params, { sessionId } = {}) {
   assertAuthenticated(user)
+  // Provide runtime context that some tools (crawlers, documents, avatars) expect.
+  const uploadDir =
+    process.env.UPLOADS_DIR || path.join(path.resolve(process.cwd()), 'backend', 'uploads')
+  try {
+    await fs.mkdir(uploadDir, { recursive: true })
+  } catch {
+    // best-effort only
+  }
+
+  const getOpenAI = () => {
+    try {
+      const { openai } = createOpenAIClient({ allowMissing: true })
+      return openai
+    } catch {
+      return null
+    }
+  }
+
   const result = await invokeRegisteredTool(toolName, params, {
     user,
     db,
     sessionId,
+    uploadDir,
+    getOpenAI,
   })
 
   if (sessionId) {
