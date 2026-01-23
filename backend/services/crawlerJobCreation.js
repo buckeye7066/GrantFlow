@@ -184,39 +184,50 @@ export async function createCrawlerJobs(db, jobs) {
  */
 export function validateJobParameters(type, parameters = {}) {
   const validated = { ...parameters }
+  const badRequest = (message) => {
+    const err = new Error(message)
+    err.statusCode = 400
+    return err
+  }
 
   switch (type) {
     case 'local':
-      // Requires zip or state
-      if (!validated.zip && !validated.state) {
-        throw new Error('Local crawler requires zip or state parameter')
-      }
+      // zip/state are OPTIONAL.
+      // If omitted, the local crawler derives state/zip from the linked profile/organization signals.
       if (validated.zip) {
-        validated.zip = validateZipCode(validated.zip)
+        try {
+          validated.zip = validateZipCode(validated.zip)
+        } catch (error) {
+          throw badRequest(error?.message || 'Invalid ZIP code')
+        }
       }
       if (validated.state) {
-        validated.state = validateStateCode(validated.state)
+        try {
+          validated.state = validateStateCode(validated.state)
+        } catch (error) {
+          throw badRequest(error?.message || 'Invalid state code')
+        }
       }
       break
 
     case 'scholarship':
       // Optional filters
       if (validated.gpa && (validated.gpa < 0 || validated.gpa > 4.0)) {
-        throw new Error('GPA must be between 0 and 4.0')
+        throw badRequest('GPA must be between 0 and 4.0')
       }
       break
 
     case 'item_search':
       // Requires item description
       if (!validated.item) {
-        throw new Error('Item search requires item parameter')
+        throw badRequest('Item search requires item parameter')
       }
       break
 
     case 'document_ingest':
       // Requires document ID
       if (!validated.documentId && !validated.document_id) {
-        throw new Error('Document ingest requires documentId parameter')
+        throw badRequest('Document ingest requires documentId parameter')
       }
       // Normalize to documentId
       if (validated.document_id && !validated.documentId) {
@@ -248,9 +259,13 @@ export function validateJobParameters(type, parameters = {}) {
     case 'national_zip_scan':
       // Requires zip
       if (!validated.zip) {
-        throw new Error('National zip scan requires zip parameter')
+        throw badRequest('National zip scan requires zip parameter')
       }
-      validated.zip = validateZipCode(validated.zip)
+      try {
+        validated.zip = validateZipCode(validated.zip)
+      } catch (error) {
+        throw badRequest(error?.message || 'Invalid ZIP code')
+      }
       break
 
     default:

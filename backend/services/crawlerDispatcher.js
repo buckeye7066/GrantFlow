@@ -54,28 +54,39 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
     
     // Check concurrency limits before starting job
     if (job.profile_id) {
-      const lockResult = await acquireCrawlerLock(db, job.profile_id, job.type)
+      const lockResult = await acquireCrawlerLock(db, job.profile_id, job.type, { jobId })
       if (!lockResult.allowed) {
-        const errorMsg = lockResult.reason === 'profile_has_running_crawler'
-          ? `Profile already has a running crawler (job ${lockResult.existingJobId})`
-          : `Global crawler limit reached (${lockResult.runningCount}/${lockResult.limit} running)`
-        
         console.warn('[crawlerDispatcher] Concurrency limit reached', {
           jobId,
           profileId: job.profile_id,
           reason: lockResult.reason,
+          existingJobId: lockResult.existingJobId ?? null,
+          runningCount: lockResult.runningCount ?? null,
+          limit: lockResult.limit ?? null,
         })
-        
-        // Mark job as failed with clear reason
-        await db.prepare(`
-          UPDATE crawler_jobs
-          SET status = 'failed',
-              completed_at = CURRENT_TIMESTAMP,
-              error = ?
-          WHERE id = ?
-        `).run(errorMsg, jobId)
-        
-        // Don't log to dead letter queue - this is expected behavior, not a failure
+
+        // IMPORTANT: This is expected behavior, not a "failure".
+        // Do NOT mark the job failed (it pollutes diagnostics and blocks queues).
+        // Instead keep it queued and retry shortly.
+        try {
+          await db
+            .prepare(
+              `
+                UPDATE crawler_jobs
+                SET error = NULL
+                WHERE id = ?
+                  AND status = 'queued'
+              `,
+            )
+            .run(jobId)
+        } catch {
+          // ignore best-effort cleanup
+        }
+
+        setTimeout(() => {
+          dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(() => {})
+        }, 12_000)
+
         return
       }
     }

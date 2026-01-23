@@ -1060,7 +1060,8 @@ router.post('/jobs', async (req, res) => {
     res.status(201).json(mapJob(job))
   } catch (error) {
     console.error('Error creating crawler job:', error)
-    res.status(500).json(formatError(error))
+    const status = Number(error?.statusCode || error?.status || 500)
+    res.status(status).json(formatError(error))
   }
 })
 
