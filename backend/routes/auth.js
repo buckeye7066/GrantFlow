@@ -1667,7 +1667,7 @@ router.post('/email/verify', async (req, res) => {
   }
   
   // Trigger Anya's autonomous operations for admin login if configured
-  if (req.db?.dialect !== 'postgres' && user.role === 'admin' && process.env.ANYA_RUN_ON_ADMIN_LOGIN === 'true') {
+  if (req.db?.dialect !== 'postgres' && req.ctx?.isAdmin && process.env.ANYA_RUN_ON_ADMIN_LOGIN === 'true') {
     import('../services/anyaAutonomousScheduler.js').then(({ runOnAdminLogin }) => {
       runOnAdminLogin(req.db, user.id).catch(err => {
         console.error('[Anya] Failed to run admin login operations:', err)

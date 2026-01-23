@@ -789,7 +789,7 @@ router.post('/:id/avatar/ai', async (req, res) => {
     profileRow.id,
     profileRow.organization_id ?? null,
     JSON.stringify(parameters),
-    auth.role === 'admin' ? 'admin' : profileRow.id,
+    req.ctx?.isAdmin ? 'admin' : profileRow.id,
   )
 
   const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
