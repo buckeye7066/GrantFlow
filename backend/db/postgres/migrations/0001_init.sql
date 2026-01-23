@@ -746,6 +746,9 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
   result_meta TEXT,
   error TEXT,
   requested_by TEXT,
+  idempotency_key TEXT,
+  dispatch_attempts INTEGER DEFAULT 0,
+  next_dispatch_at TIMESTAMPTZ,
   retry_count INTEGER DEFAULT 0,
   last_retry_at TIMESTAMPTZ
 );
@@ -753,6 +756,10 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_status ON crawler_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_profile ON crawler_jobs(profile_id);
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_type ON crawler_jobs(type);
+CREATE INDEX IF NOT EXISTS idx_crawler_jobs_next_dispatch ON crawler_jobs(next_dispatch_at);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_crawler_jobs_idempotency_key
+  ON crawler_jobs(idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
 
 -- Geo Crawl progress tracking (legacy table name: national_zip_progress)
 CREATE TABLE IF NOT EXISTS national_zip_progress (
@@ -820,6 +827,38 @@ CREATE TABLE IF NOT EXISTS anya_tasks (
 
 CREATE INDEX IF NOT EXISTS idx_anya_tasks_session ON anya_tasks(session_id);
 CREATE INDEX IF NOT EXISTS idx_anya_tasks_status ON anya_tasks(status);
+
+-- Anya runs + logs (operational audit trail)
+CREATE TABLE IF NOT EXISTS anya_runs (
+  id TEXT PRIMARY KEY DEFAULT (gen_random_uuid()::text),
+  created_at TIMESTAMPTZ DEFAULT now(),
+  completed_at TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running', 'completed', 'failed')),
+  mode TEXT NOT NULL DEFAULT 'copilot' CHECK(mode IN ('copilot', 'admin_ops', 'code_advisor')),
+  kind TEXT NOT NULL CHECK(kind IN ('assistant_message', 'tool_invoke')),
+  session_id TEXT REFERENCES anya_sessions(id) ON DELETE SET NULL,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+  tool_name TEXT,
+  request_json TEXT DEFAULT '{}',
+  response_json TEXT,
+  error TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_anya_runs_session ON anya_runs(session_id);
+CREATE INDEX IF NOT EXISTS idx_anya_runs_user ON anya_runs(user_id);
+CREATE INDEX IF NOT EXISTS idx_anya_runs_status ON anya_runs(status);
+
+CREATE TABLE IF NOT EXISTS anya_run_logs (
+  id TEXT PRIMARY KEY DEFAULT (gen_random_uuid()::text),
+  run_id TEXT NOT NULL REFERENCES anya_runs(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  level TEXT NOT NULL DEFAULT 'info' CHECK(level IN ('debug', 'info', 'warn', 'error')),
+  message TEXT NOT NULL,
+  meta_json TEXT DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_anya_run_logs_run ON anya_run_logs(run_id);
 
 -- User Preferences
 CREATE TABLE IF NOT EXISTS user_preferences (

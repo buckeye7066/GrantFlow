@@ -36,8 +36,8 @@ export default function ProfileSelect({
   disabled = false,
 }) {
   const user = useAuthStore((state) => state.user)
-  // Use Boolean coercion to align with backend truthy checks - not strict equality
-  const isAdmin = Boolean(user?.is_admin) || user?.role === 'admin'
+  // Canonical admin truth is server-backed (/api/auth/me).
+  const isAdmin = Boolean(user?.is_admin)
 
   // Fetch profiles from API
   const { data: profiles = [], isLoading } = useQuery({
@@ -46,10 +46,8 @@ export default function ProfileSelect({
     staleTime: 60_000, // 1 minute
   })
 
-  // Filter profiles based on user role - memoized for performance
-  const availableProfiles = React.useMemo(() => {
-    return isAdmin ? profiles : profiles.filter(p => p.user_id === user?.id)
-  }, [isAdmin, profiles, user?.id])
+  // Backend already scopes /api/profiles for non-admin users; do not re-filter client-side.
+  const availableProfiles = profiles
 
   if (isLoading) {
     return (
@@ -61,7 +59,7 @@ export default function ProfileSelect({
     )
   }
 
-  if (availableProfiles.length === 0) {
+  if (!Array.isArray(availableProfiles) || availableProfiles.length === 0) {
     return (
       <Select disabled>
         <SelectTrigger className={className}>

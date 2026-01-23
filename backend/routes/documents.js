@@ -13,7 +13,6 @@ import fetch from 'node-fetch';
 import { extractTextFromFile } from '../services/documentTextExtraction.js';
 import { classifyUniversityApplicationForDocument, loadUniversityApplicationsForProfile } from '../services/universityDocumentClassifier.js';
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
-import { getAccessibleProfileIds, isAdminUser } from '../utils/accessControl.js'
 
 // OpenAI client helper
 function getOpenAI() {
@@ -248,19 +247,23 @@ async function downloadRemoteFileToUploads({ url, req }) {
 }
 
 async function buildAccessContext(req) {
-  const user = req.user ?? { role: 'guest' };
-  const isAdmin = isAdminUser(user) || user.role === 'admin';
-
-  if (isAdmin) {
-    return { user, isAdmin: true, accessibleProfiles: new Set() };
+  const ctx = req.ctx ?? {
+    userId: null,
+    email: null,
+    isAdmin: false,
+    activeProfileId: null,
+    accessibleProfileIds: new Set(),
   }
 
-  const ids = await getAccessibleProfileIds(req.db, user);
-  return { user, isAdmin: false, accessibleProfiles: ids || new Set() };
+  const isAdmin = Boolean(ctx.isAdmin)
+  const accessibleProfiles =
+    isAdmin ? new Set() : ctx.accessibleProfileIds instanceof Set ? ctx.accessibleProfileIds : new Set()
+
+  return { ctx, isAdmin, accessibleProfiles }
 }
 
 function ensureAuthenticated(res, context) {
-  if (!context.user || context.user.role === 'guest') {
+  if (!context.ctx?.userId) {
     res.status(401).json({ error: 'Not authenticated' });
     return false;
   }
@@ -577,7 +580,7 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
       if (profileId) {
         if (!(await requireTierCapability(req, res, profileId, TIER_CAPABILITIES.DOCUMENT_AI))) return
       }
-      const requestedBy = context.user?.profileId ?? context.user?.userId ?? 'system';
+      const requestedBy = context.ctx?.userId ?? context.ctx?.activeProfileId ?? 'system';
       const jobId = crypto.randomUUID();
       await req.db
         .prepare(`
@@ -676,7 +679,7 @@ router.post('/:id/parse', async (req, res) => {
     if (!ensureDocumentAccess(res, context, document)) return;
 
     const profileId = normalizeProfileId(document.profile_id);
-    const requestedBy = context.user?.profileId ?? context.user?.userId ?? 'system';
+    const requestedBy = context.ctx?.userId ?? context.ctx?.activeProfileId ?? 'system';
 
     if (profileId) {
       if (!(await requireTierCapability(req, res, profileId, TIER_CAPABILITIES.DOCUMENT_AI))) return
@@ -764,7 +767,7 @@ router.post('/parse-all', async (req, res) => {
       if (!(await requireTierCapability(req, res, profileId, TIER_CAPABILITIES.DOCUMENT_AI))) return
     }
 
-    const requestedBy = context.user?.profileId ?? context.user?.userId ?? 'system';
+    const requestedBy = context.ctx?.userId ?? context.ctx?.activeProfileId ?? 'system';
 
     const docs = await req.db
       .prepare(

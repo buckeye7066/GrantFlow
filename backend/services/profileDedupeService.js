@@ -318,11 +318,11 @@ export async function findDuplicateProfileGroups(db, {
 
 async function tableExists(tx, tableName) {
   const name = String(tableName)
-  // Dialect detection must not rely solely on tx.dialect. Some wrappers pass a client
-  // without custom properties; in that case, probe Postgres first and fall back to SQLite.
+  // Dialect detection must not rely on tx.dialect because some transaction wrappers
+  // return a client without custom properties. Try Postgres first, then fall back to SQLite.
   try {
     const row = await tx.prepare('SELECT to_regclass(?) as reg').get(name)
-    // If this query succeeds, we are on Postgres.
+    // If this query succeeded, we are on Postgres.
     return Boolean(row?.reg)
   } catch {
     // fall through to SQLite detection
@@ -346,7 +346,7 @@ async function columnExists(tx, tableName, columnName) {
   const col = String(columnName)
   if (!table || !col) return false
 
-  // Same approach as tableExists: probe Postgres and fall back to SQLite PRAGMA.
+  // Same as tableExists: do not assume tx.dialect exists.
   try {
     const row = await tx
       .prepare(

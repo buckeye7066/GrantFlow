@@ -67,16 +67,15 @@ function mapPreferencesRow(row) {
 
 // Get user preferences (or create with defaults if not exists)
 router.get('/', async (req, res) => {
-  const auth = req.user ?? { role: 'guest' }
-  
-  if (auth.role === 'guest' || !auth.userId) {
+  const userId = req.ctx?.userId ?? null
+  if (!userId) {
     return res.status(401).json({ error: 'Authentication required' })
   }
   
   try {
     let preferences = await req.db
       .prepare('SELECT * FROM user_preferences WHERE user_id = ?')
-      .get(auth.userId)
+      .get(userId)
     
     if (!preferences) {
       // Create default preferences for user
@@ -84,7 +83,7 @@ router.get('/', async (req, res) => {
       await req.db.prepare(`
         INSERT INTO user_preferences (id, user_id, custom_preferences)
         VALUES (?, ?, ?)
-      `).run(id, auth.userId, JSON.stringify({}))
+      `).run(id, userId, JSON.stringify({}))
       
       preferences = await req.db
         .prepare('SELECT * FROM user_preferences WHERE id = ?')
@@ -100,9 +99,8 @@ router.get('/', async (req, res) => {
 
 // Update user preferences
 router.put('/', async (req, res) => {
-  const auth = req.user ?? { role: 'guest' }
-  
-  if (auth.role === 'guest' || !auth.userId) {
+  const userId = req.ctx?.userId ?? null
+  if (!userId) {
     return res.status(401).json({ error: 'Authentication required' })
   }
   
@@ -130,7 +128,7 @@ router.put('/', async (req, res) => {
       return res.status(400).json({ error: 'No valid preferences to update' })
     }
     
-    values.push(auth.userId)
+    values.push(userId)
     
     await req.db.prepare(`
       UPDATE user_preferences 
@@ -140,7 +138,7 @@ router.put('/', async (req, res) => {
     
     const updated = await req.db
       .prepare('SELECT * FROM user_preferences WHERE user_id = ?')
-      .get(auth.userId)
+      .get(userId)
     
     res.json(mapPreferencesRow(updated))
   } catch (error) {
@@ -151,20 +149,19 @@ router.put('/', async (req, res) => {
 
 // Reset preferences to defaults
 router.post('/reset', async (req, res) => {
-  const auth = req.user ?? { role: 'guest' }
-  
-  if (auth.role === 'guest' || !auth.userId) {
+  const userId = req.ctx?.userId ?? null
+  if (!userId) {
     return res.status(401).json({ error: 'Authentication required' })
   }
   
   try {
-    await req.db.prepare('DELETE FROM user_preferences WHERE user_id = ?').run(auth.userId)
+    await req.db.prepare('DELETE FROM user_preferences WHERE user_id = ?').run(userId)
     
     const id = `pref-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
     await req.db.prepare(`
       INSERT INTO user_preferences (id, user_id, custom_preferences)
       VALUES (?, ?, ?)
-    `).run(id, auth.userId, JSON.stringify({}))
+    `).run(id, userId, JSON.stringify({}))
     
     const preferences = await req.db
       .prepare('SELECT * FROM user_preferences WHERE id = ?')

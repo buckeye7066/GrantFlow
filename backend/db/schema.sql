@@ -739,10 +739,17 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
   organization_id TEXT REFERENCES organizations(id) ON DELETE SET NULL,
   
   parameters TEXT DEFAULT '{}',
+  profile_context_snapshot TEXT, -- JSON snapshot of complete profile context at dispatch time
+  idempotency_key TEXT, -- Prevents duplicate runs of the same job
   result_count INTEGER DEFAULT 0,
   result_meta TEXT,
   error TEXT,
   requested_by TEXT,
+  -- Client-/server-provided idempotency key to prevent duplicate dispatch.
+  idempotency_key TEXT,
+  -- Dispatcher backpressure / retry tracking (separate from manual retry_count).
+  dispatch_attempts INTEGER DEFAULT 0,
+  next_dispatch_at DATETIME,
   retry_count INTEGER DEFAULT 0,
   last_retry_at DATETIME
 );
@@ -750,6 +757,46 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_status ON crawler_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_profile ON crawler_jobs(profile_id);
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_type ON crawler_jobs(type);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_crawler_jobs_idempotency ON crawler_jobs(idempotency_key) WHERE idempotency_key IS NOT NULL;
+
+-- Dead Letter Queue for persistent failure tracking and recovery
+CREATE TABLE IF NOT EXISTS dead_letter_queue (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  
+  -- Job context
+  job_id TEXT NOT NULL,
+  job_type TEXT NOT NULL,
+  profile_id TEXT,
+  
+  -- Failure details
+  error_message TEXT NOT NULL,
+  error_stack TEXT,
+  error_code TEXT,
+  
+  -- Retry information
+  retry_count INTEGER DEFAULT 0,
+  last_retry_at DATETIME,
+  next_retry_at DATETIME,
+  
+  -- Job state snapshot
+  job_parameters TEXT, -- JSON snapshot of job parameters
+  profile_context_snapshot TEXT, -- JSON snapshot of profile context
+  
+  -- Metadata
+  severity TEXT CHECK(severity IN ('low', 'medium', 'high', 'critical')) DEFAULT 'medium',
+  resolved BOOLEAN DEFAULT FALSE,
+  resolved_at DATETIME,
+  resolved_by TEXT,
+  resolution_notes TEXT,
+  
+  FOREIGN KEY (job_id) REFERENCES crawler_jobs(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_dead_letter_queue_job_type ON dead_letter_queue(job_type, resolved);
+CREATE INDEX IF NOT EXISTS idx_dead_letter_queue_profile_id ON dead_letter_queue(profile_id) WHERE profile_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_dead_letter_queue_unresolved ON dead_letter_queue(created_at) WHERE resolved = FALSE;
+CREATE INDEX IF NOT EXISTS idx_dead_letter_queue_retry ON dead_letter_queue(next_retry_at) WHERE next_retry_at IS NOT NULL AND resolved = FALSE;
 
 -- Geo Crawl progress tracking (legacy table name: national_zip_progress)
 CREATE TABLE IF NOT EXISTS national_zip_progress (
@@ -817,6 +864,38 @@ CREATE TABLE IF NOT EXISTS anya_tasks (
 
 CREATE INDEX IF NOT EXISTS idx_anya_tasks_session ON anya_tasks(session_id);
 CREATE INDEX IF NOT EXISTS idx_anya_tasks_status ON anya_tasks(status);
+
+-- Anya runs + logs (operational audit trail)
+CREATE TABLE IF NOT EXISTS anya_runs (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  completed_at DATETIME,
+  status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running', 'completed', 'failed')),
+  mode TEXT NOT NULL DEFAULT 'copilot' CHECK(mode IN ('copilot', 'admin_ops', 'code_advisor')),
+  kind TEXT NOT NULL CHECK(kind IN ('assistant_message', 'tool_invoke')),
+  session_id TEXT REFERENCES anya_sessions(id) ON DELETE SET NULL,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+  tool_name TEXT,
+  request_json TEXT DEFAULT '{}',
+  response_json TEXT,
+  error TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_anya_runs_session ON anya_runs(session_id);
+CREATE INDEX IF NOT EXISTS idx_anya_runs_user ON anya_runs(user_id);
+CREATE INDEX IF NOT EXISTS idx_anya_runs_status ON anya_runs(status);
+
+CREATE TABLE IF NOT EXISTS anya_run_logs (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  run_id TEXT NOT NULL REFERENCES anya_runs(id) ON DELETE CASCADE,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  level TEXT NOT NULL DEFAULT 'info' CHECK(level IN ('debug', 'info', 'warn', 'error')),
+  message TEXT NOT NULL,
+  meta_json TEXT DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_anya_run_logs_run ON anya_run_logs(run_id);
 
 -- User Preferences
 CREATE TABLE IF NOT EXISTS user_preferences (

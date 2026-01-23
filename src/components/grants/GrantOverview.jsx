@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -10,6 +10,7 @@ import { DollarSign, Calendar, Percent, Building2, Heart, GraduationCap, FileChe
 import { base44 } from '@/api/base44Client';
 import { useToast } from '@/components/ui/use-toast';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useAuthStore } from '@/stores/authStore';
 
 const StatCard = ({ icon: Icon, label, value, color }) => (
     <div className="flex flex-col p-4 rounded-lg bg-slate-50 border border-slate-200">
@@ -71,6 +72,13 @@ export default function GrantOverview({ grant, organization, onUpdate }) {
     const [isVerifying, setIsVerifying] = useState(false);
     const [showContactNotes, setShowContactNotes] = useState(false);
     const [contactNotes, setContactNotes] = useState(grant?.contact_notes || '');
+    const { profiles, activeProfileId } = useAuthStore();
+
+    const activeProfile = useMemo(() => {
+        const id = activeProfileId ? String(activeProfileId) : null;
+        if (!id) return null;
+        return (profiles || []).find((p) => String(p?.id) === id) || null;
+    }, [profiles, activeProfileId]);
 
     const updateGrantMutation = useMutation({
         mutationFn: (data) => base44.entities.Grant.update(grant.id, data),
@@ -203,8 +211,17 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                                     </div>
                                 </div>
                                 <p className="text-sm opacity-80 max-w-2xl">
-                                    This opportunity was scored based on alignment with {organization?.name || 'your profile'}'s 
-                                    mission, eligibility, location, and key focus areas.
+                                    This opportunity was scored based on alignment with{' '}
+                                    <span className="font-semibold">
+                                        {activeProfile?.display_name || organization?.name || 'your selected profile'}
+                                    </span>
+                                    ’s mission, eligibility, location, and key focus areas.
+                                </p>
+                                <p className="text-xs opacity-75 mt-2">
+                                    Scored against profile:{' '}
+                                    <span className="font-semibold">
+                                        {activeProfile?.display_name || (activeProfileId ? String(activeProfileId) : 'Unknown')}
+                                    </span>
                                 </p>
                             </div>
                             <div className="text-center">
