@@ -28,6 +28,10 @@ import {
 
 const router = express.Router()
 
+function isAdmin(user) {
+  return Boolean(isAdminUser(user)) || user?.role === 'admin' || user?.is_admin === true
+}
+
 // Central enforcement: any route that includes a `:id` param in this router refers to a profile id.
 // This prevents profile “bleed” from stale token claims; access is always re-validated.
 router.param('id', async (req, res, id, next) => {
@@ -40,7 +44,7 @@ router.param('id', async (req, res, id, next) => {
     // Fall back to a minimal owner check so users aren't blocked by schema drift/migration timing.
     try {
       const user = req.user ?? { role: 'guest' }
-      if (isAdmin(user) || isAdminUser(user)) return next()
+      if (req.ctx?.isAdmin === true || isAdminUser(user)) return next()
 
       const authUserId = getAuthUserId(user)
       const authProfileId = getAuthProfileId(user)
@@ -62,22 +66,8 @@ router.param('id', async (req, res, id, next) => {
   }
 })
 
-// Admin configuration
-const ADMIN_EMAIL = 'buckeye7066@gmail.com'
-
-/**
- * Check if user is admin
- * Checks both is_admin flag and primary_email match
- */
-function isAdmin(user) {
-  // Backwards compatible: accept role/is_admin/roles/email-allowlist.
-  return Boolean(isAdminUser(user)) ||
-    Boolean(
-      user?.is_admin ||
-        user?.primary_email === ADMIN_EMAIL ||
-        user?.email === ADMIN_EMAIL ||
-        user?.role === 'admin',
-    )
+function isAdminReq(req) {
+  return Boolean(req.ctx?.isAdmin)
 }
 
 function getAuthUserId(user) {
@@ -90,7 +80,8 @@ function getAuthProfileId(user) {
 
 function canAccessProfile({ auth, profileRow }) {
   if (!profileRow) return false
-  if (isAdmin(auth)) return true
+  // Canonical admin: req.ctx.isAdmin (DB-backed)
+  if (auth?.ctx?.isAdmin === true) return true
   const authProfileId = getAuthProfileId(auth)
   if (authProfileId && authProfileId === profileRow.id) return true
   const authUserId = getAuthUserId(auth)
@@ -260,6 +251,7 @@ function extractAnthropicText(response) {
 
 router.get('/', async (req, res) => {
   const user = req.user
+  const isAdmin = req.ctx?.isAdmin === true
   const includeSummary = req.query.summary === 'true'
   
   // Validate pagination parameters.
@@ -267,13 +259,13 @@ router.get('/', async (req, res) => {
   // This prevents "missing profiles" in the UI when admins expect to see everything.
   const paginationQuery = { ...req.query }
   const limitProvided = Object.prototype.hasOwnProperty.call(req.query ?? {}, 'limit')
-  if (isAdmin(user) && !limitProvided) {
+  if (isAdmin && !limitProvided) {
     paginationQuery.limit = 1000
     paginationQuery.offset = 0
   }
   const { limit, offset } = validatePagination(paginationQuery);
 
-  if (!isAdmin(user)) {
+  if (!isAdmin) {
     // Enduser: return profiles they can access (owner OR email-linked via profile_emails).
     const accessible = await getAccessibleProfileIds(req.db, user)
     if (!accessible || accessible.size === 0) {
@@ -402,7 +394,8 @@ router.delete('/:id/emails/:emailId', async (req, res) => {
 
 router.post('/', async (req, res) => {
   const user = req.user
-  const userId = getAuthUserId(user)
+  const isAdmin = req.ctx?.isAdmin === true
+  const userId = req.ctx?.userId ?? getAuthUserId(user)
   const { display_name, primary_type, organization_id, user_id, created_by, status = 'active', tags = [] } = req.body ?? {}
 
   if (!display_name || typeof display_name !== 'string') {
@@ -410,7 +403,7 @@ router.post('/', async (req, res) => {
   }
 
   // Check permissions
-  if (!isAdmin(user)) {
+  if (!isAdmin) {
     // Enduser can only create profiles for themselves
     if (!userId) {
       return res.status(401).json({ error: 'Authentication required' })
@@ -437,7 +430,7 @@ router.post('/', async (req, res) => {
   }
 
   // Determine user_id for the new profile
-  const profileUserId = isAdmin(user) ? (user_id || userId) : userId
+  const profileUserId = isAdmin ? (user_id || userId) : userId
 
   const profileId = crypto.randomUUID()
   // Ensure every newly created profile starts with all canonical sections + canonical keys.
@@ -481,7 +474,8 @@ router.post('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   const { id } = req.params
   const user = req.user
-  const userId = getAuthUserId(user)
+  const isAdmin = req.ctx?.isAdmin === true
+  const userId = req.ctx?.userId ?? getAuthUserId(user)
 
   let row = null
   try {
@@ -496,7 +490,7 @@ router.get('/:id', async (req, res) => {
   }
 
   // Check access permissions
-  if (!isAdmin(user)) {
+  if (!isAdmin) {
     // Allow: owner OR email-linked via profile_emails (board members/collaborators)
     if (userId && row.user_id && String(row.user_id) === String(userId)) {
       // owner ok
@@ -550,7 +544,8 @@ router.put('/:id', async (req, res) => {
   const { id } = req.params
   const { display_name, primary_type, organization_id, status, tags } = req.body ?? {}
   const auth = req.user ?? { role: 'guest' }
-  const authUserId = getAuthUserId(auth)
+  const isAdmin = req.ctx?.isAdmin === true
+  const authUserId = req.ctx?.userId ?? getAuthUserId(auth)
   const authProfileId = getAuthProfileId(auth)
 
   const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
@@ -559,7 +554,7 @@ router.put('/:id', async (req, res) => {
   }
 
   // Allow: admins (including admin-email allowlist), profile-scoped tokens for the profile, or session owners (userId match)
-  const isAdminUser = isAdmin(auth)
+  const isAdminUser = isAdmin
   const matchesProfileId = authProfileId === id
   const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
   if (!isAdminUser && !matchesProfileId && !matchesUserId) {
@@ -618,7 +613,7 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
-  const authUserId = getAuthUserId(auth)
+  const authUserId = req.ctx?.userId ?? getAuthUserId(auth)
   const authProfileId = getAuthProfileId(auth)
 
   // Check authorization - user must be admin or the profile must belong to them
@@ -627,7 +622,7 @@ router.delete('/:id', async (req, res) => {
     return res.status(404).json({ error: 'Profile not found' })
   }
 
-  const admin = isAdmin(auth)
+  const admin = req.ctx?.isAdmin === true
   if (!admin) {
     const matchesProfileId = authProfileId === id
     const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
@@ -710,7 +705,7 @@ router.delete('/:id', async (req, res) => {
 router.post('/:id/avatar', runUploadSingle('avatar'), async (req, res, next) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
-  const authUserId = getAuthUserId(auth)
+  const authUserId = req.ctx?.userId ?? getAuthUserId(auth)
   const authProfileId = getAuthProfileId(auth)
 
   const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
@@ -719,7 +714,7 @@ router.post('/:id/avatar', runUploadSingle('avatar'), async (req, res, next) => 
     return res.status(404).json({ error: 'Profile not found' })
   }
 
-  const isAdminUser = isAdmin(auth)
+  const isAdminUser = req.ctx?.isAdmin === true
   const matchesProfileId = authProfileId === id
   const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
 
@@ -758,7 +753,7 @@ router.post('/:id/avatar', runUploadSingle('avatar'), async (req, res, next) => 
 router.post('/:id/avatar/ai', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
-  const authUserId = getAuthUserId(auth)
+  const authUserId = req.ctx?.userId ?? getAuthUserId(auth)
   const authProfileId = getAuthProfileId(auth)
 
   const profileRow = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
@@ -766,7 +761,7 @@ router.post('/:id/avatar/ai', async (req, res) => {
     return res.status(404).json({ error: 'Profile not found' })
   }
 
-  const isAdminUser = isAdmin(auth)
+  const isAdminUser = req.ctx?.isAdmin === true
   const matchesProfileId = authProfileId === id
   const matchesUserId = authUserId && profileRow.user_id && authUserId === profileRow.user_id
   if (!isAdminUser && !matchesProfileId && !matchesUserId) {
