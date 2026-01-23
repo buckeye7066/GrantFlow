@@ -47,6 +47,13 @@ export default function AdminDiagnostics() {
   const [openaiKeyLoading, setOpenaiKeyLoading] = useState(false);
   const [openaiKeyResult, setOpenaiKeyResult] = useState(null);
   const [openaiKeyError, setOpenaiKeyError] = useState(null);
+  const [envEditOpen, setEnvEditOpen] = useState(false);
+  const [envEditKey, setEnvEditKey] = useState('');
+  const [envEditValue, setEnvEditValue] = useState('');
+  const [envEditPersist, setEnvEditPersist] = useState(false);
+  const [envEditLoading, setEnvEditLoading] = useState(false);
+  const [envEditError, setEnvEditError] = useState(null);
+  const [envEditResult, setEnvEditResult] = useState(null);
   const [crawlerAuditLoading, setCrawlerAuditLoading] = useState(false);
   const [crawlerAuditError, setCrawlerAuditError] = useState(null);
   const [crawlerAuditResult, setCrawlerAuditResult] = useState(null);
@@ -316,6 +323,112 @@ export default function AdminDiagnostics() {
       title: title || 'Details',
       description: description || null,
     });
+  };
+
+  const flagToEnvTarget = (flagKey) => {
+    const k = String(flagKey || '').trim();
+    if (!k) return { ok: false, reason: 'missing_key' };
+
+    // Known multi-var flags
+    if (k === 'TWILIO_configured') {
+      return {
+        ok: false,
+        reason: 'multi_var',
+        message: 'TWILIO requires both TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN.',
+      };
+    }
+
+    // Prefer canonical env keys where diagnostics supports legacy fallbacks.
+    const explicitMap = {
+      AUTH_PUBLIC_URL_set: 'AUTH_PUBLIC_URL',
+      AUTH_FRONTEND_URL_set: 'AUTH_FRONTEND_URL',
+      FROM_EMAIL_set: 'FROM_EMAIL',
+      AUTH_NOTIFY_ON_LOGIN_enabled: 'AUTH_NOTIFY_ON_LOGIN',
+      AUTH_NOTIFY_EMAIL_set: 'AUTH_NOTIFY_EMAIL',
+      ANYA_ADMIN_TOKEN_present: 'ANYA_ADMIN_TOKEN',
+      SAM_GOV_PUBLIC_API_KEY_present: 'SAM_GOV_PUBLIC_API_KEY',
+    };
+
+    const mapped = explicitMap[k];
+    if (mapped) return { ok: true, envKey: mapped };
+
+    // Generic suffix stripping.
+    const suffixes = ['_present', '_set', '_enabled'];
+    for (const suffix of suffixes) {
+      if (k.endsWith(suffix)) {
+        return { ok: true, envKey: k.slice(0, -suffix.length) };
+      }
+    }
+
+    // Non-flag keys (e.g. NODE_ENV) - not editable here.
+    return { ok: false, reason: 'not_editable', message: 'This flag is not editable from the UI.' };
+  };
+
+  const ENV_EDIT_ALLOWLIST = new Set([
+    'OPENAI_API_KEY',
+    'ANTHROPIC_API_KEY',
+    'RESEND_API_KEY',
+    'FROM_EMAIL',
+    'AUTH_NOTIFY_ON_LOGIN',
+    'AUTH_NOTIFY_EMAIL',
+    'ANYA_ADMIN_TOKEN',
+    'SAM_GOV_PUBLIC_API_KEY',
+    'GRANTS_GOV_API_KEY',
+    'SIMPLER_GRANTS_API_KEY',
+    'API_DATA_GOV_KEY',
+    'AUTH_PUBLIC_URL',
+    'AUTH_FRONTEND_URL',
+  ]);
+
+  const ENV_SECRET_KEYS = new Set(['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'RESEND_API_KEY', 'ANYA_ADMIN_TOKEN']);
+
+  const openEnvEditor = (flagKey) => {
+    const target = flagToEnvTarget(flagKey);
+    if (!target.ok) {
+      openInspect({
+        title: `Env flag: ${flagKey}`,
+        description: target?.message || 'This flag cannot be edited directly. Showing details instead.',
+        data: { flagKey, target },
+      });
+      return;
+    }
+
+    setEnvEditOpen(true);
+    setEnvEditError(null);
+    setEnvEditResult(null);
+    setEnvEditKey(target.envKey);
+    setEnvEditValue('');
+    setEnvEditPersist(ENV_SECRET_KEYS.has(target.envKey));
+  };
+
+  const applyEnvVar = async () => {
+    try {
+      setEnvEditLoading(true);
+      setEnvEditError(null);
+      setEnvEditResult(null);
+
+      const key = String(envEditKey || '').trim();
+      const value = String(envEditValue ?? '');
+
+      if (!ENV_EDIT_ALLOWLIST.has(key)) {
+        throw new Error(`Editing ${key} is not allowed from the UI (safety allowlist).`);
+      }
+
+      const data = await apiFetch('/api/admin/env/apply', {
+        method: 'POST',
+        body: JSON.stringify({
+          key,
+          value,
+          persist: Boolean(envEditPersist && ENV_SECRET_KEYS.has(key)),
+        }),
+      });
+      setEnvEditResult(data);
+      await loadDiagnostics();
+    } catch (err) {
+      setEnvEditError(err?.message || 'Failed to apply env var');
+    } finally {
+      setEnvEditLoading(false);
+    }
   };
 
   const verifyProvidedOpenAIKey = async () => {
@@ -799,21 +912,22 @@ export default function AdminDiagnostics() {
                   className="flex items-center justify-between p-3 bg-slate-50 rounded cursor-pointer hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-300"
                   role="button"
                   tabIndex={0}
-                  onClick={() =>
-                    openInspect({
-                      title: `Env flag: ${key}`,
-                      description: 'These flags indicate whether key environment variables are configured (values are not exposed).',
-                      data: { key, value },
-                    })
-                  }
+                  onClick={(e) => {
+                    if (e?.shiftKey) {
+                      openInspect({
+                        title: `Env flag: ${key}`,
+                        description:
+                          'These flags indicate whether key environment variables are configured (values are not exposed).',
+                        data: { key, value },
+                      });
+                      return;
+                    }
+                    openEnvEditor(key);
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
-                      openInspect({
-                        title: `Env flag: ${key}`,
-                        description: 'These flags indicate whether key environment variables are configured (values are not exposed).',
-                        data: { key, value },
-                      });
+                      openEnvEditor(key);
                     }
                   }}
                 >
@@ -997,6 +1111,80 @@ export default function AdminDiagnostics() {
               Copy JSON
             </Button>
             <Button onClick={() => setInspectOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={envEditOpen} onOpenChange={setEnvEditOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Set environment variable (in-memory)</DialogTitle>
+            <DialogDescription>
+              Applies to the running backend process immediately. It will reset on restart unless persisted (secrets only).
+              Hold <strong>Shift</strong> while clicking a flag to view details instead.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Variable</div>
+              <Input value={envEditKey} readOnly />
+              {!ENV_EDIT_ALLOWLIST.has(envEditKey) ? (
+                <div className="text-xs text-amber-700">
+                  This variable isn’t on the editable allowlist. Add it in code if you really need it.
+                </div>
+              ) : null}
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Value</div>
+              <Input
+                type={ENV_SECRET_KEYS.has(envEditKey) ? 'password' : 'text'}
+                value={envEditValue}
+                onChange={(e) => setEnvEditValue(e.target.value)}
+                placeholder={ENV_SECRET_KEYS.has(envEditKey) ? '••••••••' : 'value'}
+                autoComplete="off"
+              />
+              <div className="text-xs text-slate-600">
+                Tip: use an empty value to clear the variable.
+              </div>
+            </div>
+
+            {ENV_SECRET_KEYS.has(envEditKey) ? (
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={Boolean(envEditPersist)}
+                  onChange={(e) => setEnvEditPersist(e.target.checked)}
+                />
+                Persist encrypted to DB (emergency; survives restart if runtime-secret restore is enabled)
+              </label>
+            ) : null}
+
+            {envEditError ? (
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{envEditError}</AlertDescription>
+              </Alert>
+            ) : null}
+
+            {envEditResult ? (
+              <pre className="max-h-[240px] overflow-auto rounded bg-slate-950 p-3 text-xs text-slate-100">
+                {JSON.stringify(envEditResult, null, 2)}
+              </pre>
+            ) : null}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEnvEditOpen(false)} disabled={envEditLoading}>
+              Close
+            </Button>
+            <Button
+              onClick={applyEnvVar}
+              disabled={envEditLoading || !ENV_EDIT_ALLOWLIST.has(envEditKey)}
+            >
+              {envEditLoading ? 'Applying…' : 'Apply'}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

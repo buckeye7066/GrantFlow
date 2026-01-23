@@ -556,6 +556,99 @@ router.post('/openai/apply-key', async (req, res) => {
   }
 });
 
+// POST /api/admin/env/apply
+// Applies an allowlisted env var to the *running process* (in-memory).
+// Optionally persists encrypted values for secret keys into DB (emergency override; not a replacement for real env config).
+// Body: { "key": "RESEND_API_KEY", "value": "...", "persist": true|false }
+router.post('/env/apply', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return;
+
+  const key = typeof req.body?.key === 'string' ? req.body.key.trim() : '';
+  const valueRaw = req.body?.value;
+  const value = valueRaw == null ? '' : String(valueRaw);
+  const persist = Boolean(req.body?.persist);
+
+  if (!key || !/^[A-Z0-9_]+$/.test(key)) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Invalid key',
+      message: 'key must be a non-empty string matching /^[A-Z0-9_]+$/',
+    });
+  }
+
+  const ALLOWLIST = new Set([
+    'OPENAI_API_KEY',
+    'ANTHROPIC_API_KEY',
+    'RESEND_API_KEY',
+    'FROM_EMAIL',
+    'AUTH_NOTIFY_ON_LOGIN',
+    'AUTH_NOTIFY_EMAIL',
+    'ANYA_ADMIN_TOKEN',
+    'SAM_GOV_PUBLIC_API_KEY',
+    'GRANTS_GOV_API_KEY',
+    'SIMPLER_GRANTS_API_KEY',
+    'API_DATA_GOV_KEY',
+    'AUTH_PUBLIC_URL',
+    'AUTH_FRONTEND_URL',
+  ]);
+
+  const SECRET_KEYS = new Set(['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'RESEND_API_KEY', 'ANYA_ADMIN_TOKEN']);
+
+  if (!ALLOWLIST.has(key)) {
+    return res.status(403).json({
+      ok: false,
+      error: 'Key not allowed',
+      message: `Editing ${key} is not permitted from this endpoint.`,
+    });
+  }
+
+  // Apply to process env (in-memory). Empty string clears.
+  if (value.trim() === '') {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
+
+  let persisted = false;
+  if (persist && SECRET_KEYS.has(key)) {
+    try {
+      if (value.trim() === '') {
+        await req.db.prepare(`DELETE FROM app_runtime_secrets WHERE key = ?`).run(key);
+        persisted = true;
+      } else {
+        const encrypted = encryptRuntimeSecret(value);
+        await req.db
+          .prepare(
+            `
+              INSERT INTO app_runtime_secrets (key, value_ciphertext, iv, tag, updated_at)
+              VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+              ON CONFLICT(key) DO UPDATE SET
+                value_ciphertext = excluded.value_ciphertext,
+                iv = excluded.iv,
+                tag = excluded.tag,
+                updated_at = CURRENT_TIMESTAMP
+            `,
+          )
+          .run(key, encrypted.value_ciphertext, encrypted.iv, encrypted.tag);
+        persisted = true;
+      }
+    } catch (e) {
+      console.warn('[admin/env/apply] Failed to persist runtime secret:', e?.message || e);
+    }
+  }
+
+  res.json({
+    ok: true,
+    key,
+    applied: true,
+    cleared: value.trim() === '',
+    persisted,
+    note: persisted
+      ? 'Applied to running process and persisted (encrypted) to DB for emergency restart recovery.'
+      : 'Applied to running process only (not persisted). For permanent config, set it in your host environment.',
+  });
+});
+
 // GET /api/admin/openai/runtime-secret-status
 // Shows whether an encrypted runtime key is persisted in DB (never returns the key).
 router.get('/openai/runtime-secret-status', async (req, res) => {
