@@ -2,28 +2,26 @@ import express from 'express'
 import { formatError } from '../middleware/errorHandler.js'
 import { calculateMatchScore } from '../services/matchingEngine.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
-import { ensureProfileAccess, isAdminUser } from '../utils/accessControl.js'
+import { ensureProfileAccess } from '../utils/accessControl.js'
 
 const router = express.Router()
 
 function requireAuth(req, res) {
-  const auth = req.user ?? { role: 'guest' }
-  if (auth.role === 'guest') {
+  if (!req.ctx?.userId) {
     res.status(401).json({ error: 'Authentication required' })
     return null
   }
-  return auth
+  return req.ctx
 }
 
 async function requireProfileAccess(req, res, profileId) {
-  const auth = requireAuth(req, res)
-  if (!auth) return null
-
-  if (isAdminUser(auth) || auth.role === 'admin') return auth
+  const ctx = requireAuth(req, res)
+  if (!ctx) return null
+  if (ctx.isAdmin) return ctx
 
   const ok = await ensureProfileAccess(req, res, profileId)
   if (!ok) return null
-  return auth
+  return ctx
 }
 
 /**

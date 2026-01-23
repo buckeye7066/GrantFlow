@@ -8,7 +8,7 @@ const __dirname = dirname(__filename)
 const REPO_ROOT = path.resolve(process.cwd())
 
 // ============================================================================
-// Admin Role Enforcement
+// Admin Role Enforcement (canonical: req.ctx.isAdmin / users.is_admin)
 // ============================================================================
 
 /**
@@ -60,7 +60,7 @@ export function canAccessProfile(user, profileId, db) {
     return false;
   }
   
-  return profile.user_id === user.id;
+  return profile.user_id === (user.userId ?? user.id);
 }
 
 /**
@@ -434,6 +434,17 @@ export async function adminCodeEdit({ filePath, changes, save = false }, context
   }
   if (!Array.isArray(changes) || changes.length === 0) {
     throw new Error('changes array is required')
+  }
+
+  if (save) {
+    const allowEdits =
+      String(process.env.ANYA_ALLOW_CODE_EDIT || '').trim().toLowerCase() === 'true' &&
+      String(process.env.NODE_ENV || '').trim().toLowerCase() !== 'production'
+    if (!allowEdits) {
+      const error = new Error('Code edits are disabled. Use code.suggestPatch to generate a diff instead.')
+      error.status = 403
+      throw error
+    }
   }
 
   const resolvedPath = path.resolve(REPO_ROOT, filePath)

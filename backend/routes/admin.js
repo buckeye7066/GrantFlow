@@ -2223,9 +2223,17 @@ router.post('/profiles/merge', async (req, res, next) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return
 
-    const winnerId = req.body?.winnerId
-    const loserIds = req.body?.loserIds
+    const winnerId = typeof req.body?.winnerId === 'string' ? req.body.winnerId : null
+    const loserIds = Array.isArray(req.body?.loserIds) ? req.body.loserIds : null
     const dryRun = req.body?.dryRun !== false
+
+    if (!winnerId || !loserIds || loserIds.length === 0) {
+      return res.status(400).json({
+        ok: false,
+        error: 'winnerId (string) and loserIds (non-empty array) are required',
+        error_type: 'invalid_input',
+      })
+    }
 
     const result = await mergeProfiles(req.db, {
       winnerId,
@@ -2237,7 +2245,11 @@ router.post('/profiles/merge', async (req, res, next) => {
     return res.json({ ok: true, ...result })
   } catch (error) {
     console.error('[admin/profiles/merge] Error:', error)
-    return next(error)
+    return res.status(500).json({
+      ok: false,
+      error: error?.message || String(error),
+      error_type: 'merge_failed',
+    })
   }
 })
 
