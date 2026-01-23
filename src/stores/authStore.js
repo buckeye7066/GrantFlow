@@ -144,6 +144,7 @@ export const useAuthStore = create((set, get) => ({
     if (typeof window === 'undefined') return
     const accessToken = localStorage.getItem('grantflow:access-token')
     const refreshToken = localStorage.getItem('grantflow:refresh-token')
+    const storedActiveProfileId = localStorage.getItem('grantflow:active-profile-id')
     const storedMethod = localStorage.getItem('grantflow:auth-method')
     const hasSeenOnboarding = localStorage.getItem('grantflow:onboarding-complete') === 'true'
     const storedExpiry = localStorage.getItem(ACCESS_EXPIRY_STORAGE_KEY)
@@ -155,6 +156,10 @@ export const useAuthStore = create((set, get) => ({
     if (refreshToken) {
       base44.setRefreshToken?.(refreshToken)
       updates.refreshToken = refreshToken
+    }
+    if (storedActiveProfileId) {
+      base44.setActiveProfileId?.(storedActiveProfileId)
+      updates.activeProfileId = normalizeId(storedActiveProfileId)
     }
     if (storedMethod && AUTH_METHODS.has(storedMethod)) {
       updates.preferredAuthMethod = storedMethod
@@ -178,6 +183,7 @@ export const useAuthStore = create((set, get) => ({
     clearRefreshTimer()
     clearAccessExpiry()
     base44.clearToken()
+    base44.setActiveProfileId?.(null)
     set({ ...initialState, preferredAuthMethod })
   },
 
@@ -186,6 +192,38 @@ export const useAuthStore = create((set, get) => ({
       const preferredAuthMethod = get().preferredAuthMethod
       const hasSeenOnboarding = get().hasSeenOnboarding
       set({ ...initialState, preferredAuthMethod, hasSeenOnboarding })
+      return
+    }
+
+    // Canonical auth bootstrap (`GET /api/auth/me`) shape:
+    // { userId, email, isAdmin, activeProfileId, accessibleProfileCount, accessibleOrgCount }
+    if (payload.userId) {
+      const activeProfileId = normalizeId(payload.activeProfileId ?? null)
+      const isAdmin = Boolean(payload.isAdmin)
+      const accessibleProfileCount = Number(payload.accessibleProfileCount ?? 0) || 0
+
+      const needsProfileCreation =
+        !isAdmin && accessibleProfileCount === 0 && !get().hasSeenOnboarding
+
+      const user = {
+        id: payload.userId,
+        primary_email: payload.email ?? null,
+        email: payload.email ?? null,
+        is_admin: isAdmin,
+      }
+
+      base44.setActiveProfileId?.(activeProfileId)
+
+      set((state) => ({
+        ...state,
+        user,
+        activeProfileId,
+        isAuthenticated: true,
+        error: null,
+        sessionExpired: false,
+        sessionMessage: null,
+        needsProfileCreation,
+      }))
       return
     }
 
@@ -202,6 +240,8 @@ export const useAuthStore = create((set, get) => ({
       const activeProfileId = normalizeId(
         payload.active_profile_id ?? payload.user?.active_profile_id ?? profiles[0]?.id ?? null,
       )
+
+      base44.setActiveProfileId?.(activeProfileId)
       
       // Check if this is an admin user
       if (user.is_admin) {
@@ -533,7 +573,11 @@ export const useAuthStore = create((set, get) => ({
     }
   },
 
-  setActiveProfileId: (profileId) => set({ activeProfileId: normalizeId(profileId) }),
+  setActiveProfileId: (profileId) => {
+    const normalized = normalizeId(profileId)
+    base44.setActiveProfileId?.(normalized)
+    set({ activeProfileId: normalized })
+  },
 
   setPreferredAuthMethod: (method) => {
     if (!AUTH_METHODS.has(method)) return

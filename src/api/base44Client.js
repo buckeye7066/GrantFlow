@@ -26,6 +26,8 @@ export const base44 = {
   clearToken: bind(client.clearToken),
   getRefreshToken: bind(client.getRefreshToken),
   setRefreshToken: bind(client.setRefreshToken),
+  setActiveProfileId: bind(client.setActiveProfileId),
+  getActiveProfileId: bind(client.getActiveProfileId),
   setAuthFailureHandler: bind(client.setAuthFailureHandler),
 
   // Namespaces
