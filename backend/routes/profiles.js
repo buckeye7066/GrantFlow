@@ -248,14 +248,14 @@ router.get('/', async (req, res) => {
   // This prevents "missing profiles" in the UI when admins expect to see everything.
   const paginationQuery = { ...req.query }
   const limitProvided = Object.prototype.hasOwnProperty.call(req.query ?? {}, 'limit')
-  if (isAdminUser(user) && !limitProvided) {
+  if (isAdmin && !limitProvided) {
     paginationQuery.limit = 1000
     paginationQuery.offset = 0
   }
   const { limit, offset } = validatePagination(paginationQuery);
 
   // Check if user is admin
-  if (!isAdminUser(user)) {
+  if (!isAdmin) {
     // Enduser: return only profiles where profiles.user_id = user.id
     if (!userId) {
       return res.status(401).json({ error: 'Authentication required' })
@@ -316,7 +316,7 @@ router.get('/:id/emails', async (req, res) => {
     if (!user) return
     const profileId = String(req.params.id)
 
-    const canManage = isAdminUser(user) || (await isProfileOwner(req.db, user, profileId))
+    const canManage = req.ctx?.isAdmin === true || (await isProfileOwner(req.db, user, profileId))
     if (!canManage) {
       return res.status(403).json({ error: 'Not authorized to manage profile emails' })
     }
@@ -334,7 +334,7 @@ router.post('/:id/emails', async (req, res) => {
     if (!user) return
     const profileId = String(req.params.id)
 
-    const canManage = isAdminUser(user) || (await isProfileOwner(req.db, user, profileId))
+    const canManage = req.ctx?.isAdmin === true || (await isProfileOwner(req.db, user, profileId))
     if (!canManage) {
       return res.status(403).json({ error: 'Not authorized to manage profile emails' })
     }
@@ -368,7 +368,7 @@ router.delete('/:id/emails/:emailId', async (req, res) => {
     if (!user) return
     const profileId = String(req.params.id)
 
-    const canManage = isAdminUser(user) || (await isProfileOwner(req.db, user, profileId))
+    const canManage = req.ctx?.isAdmin === true || (await isProfileOwner(req.db, user, profileId))
     if (!canManage) {
       return res.status(403).json({ error: 'Not authorized to manage profile emails' })
     }
@@ -392,7 +392,7 @@ router.post('/', async (req, res) => {
   }
 
   // Check permissions
-  if (!isAdminUser(user)) {
+  if (!isAdmin) {
     // Enduser can only create profiles for themselves
     if (!userId) {
       return res.status(401).json({ error: 'Authentication required' })
@@ -419,7 +419,7 @@ router.post('/', async (req, res) => {
   }
 
   // Determine user_id for the new profile
-  const profileUserId = isAdminUser(user) ? (user_id || userId) : userId
+  const profileUserId = isAdmin ? (user_id || userId) : userId
 
   const profileId = crypto.randomUUID()
   // Ensure every newly created profile starts with all canonical sections + canonical keys.
@@ -479,7 +479,7 @@ router.get('/:id', async (req, res) => {
   }
 
   // Check access permissions
-  if (!isAdminUser(user)) {
+  if (!isAdmin) {
     // Enduser: can only access profiles where user_id matches
     if (!userId || row.user_id !== userId) {
       return res.status(403).json({ error: 'Access denied' })
@@ -538,7 +538,7 @@ router.put('/:id', async (req, res) => {
   }
 
   // Allow: admins (including admin-email allowlist), profile-scoped tokens for the profile, or session owners (userId match)
-  const userIsAdmin = isAdminUser(auth)
+  const userIsAdmin = Boolean(isAdmin)
   const matchesProfileId = authProfileId === id
   const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
   if (!userIsAdmin && !matchesProfileId && !matchesUserId) {

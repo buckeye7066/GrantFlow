@@ -19,6 +19,7 @@ import {
   getAccessibleProfileIds,
   getAccessibleOrganizationIds,
 } from '../utils/accessControl.js'
+import { isAdminEmail } from '../config/constants.js'
 
 /**
  * Build canonical request context from authenticated user.
@@ -52,6 +53,8 @@ export async function buildRequestContext(db, user) {
   // CRITICAL: Admin status is DB-backed ONLY (users.is_admin).
   // Never trust token claims for admin authority.
   try {
+    const emailIsConfiguredAdmin = Boolean(ctx.email && isAdminEmail(ctx.email))
+
     // If we only have a profileId, resolve its owning user first.
     if (!ctx.userId && ctx.activeProfileId) {
       const profileRow = await db
@@ -67,11 +70,24 @@ export async function buildRequestContext(db, user) {
       if (row) {
         ctx.isAdmin = Boolean(row.is_admin === true || row.is_admin === 1)
         if (row.primary_email && !ctx.email) ctx.email = row.primary_email
+
+        // If this request belongs to a configured admin email but the DB flag wasn't set yet,
+        // upgrade it (best-effort) so future requests are consistent.
+        if (!ctx.isAdmin && emailIsConfiguredAdmin) {
+          ctx.isAdmin = true
+          try {
+            await db
+              .prepare('UPDATE users SET is_admin = TRUE WHERE id = ? AND COALESCE(is_admin, FALSE) = FALSE')
+              .run(ctx.userId)
+          } catch (error) {
+            console.warn('[requestContext] Failed to persist is_admin upgrade:', error?.message)
+          }
+        }
       } else {
-        ctx.isAdmin = false
+        ctx.isAdmin = Boolean(emailIsConfiguredAdmin)
       }
     } else {
-      ctx.isAdmin = false
+      ctx.isAdmin = Boolean(emailIsConfiguredAdmin)
     }
   } catch (error) {
     console.warn('[requestContext] Failed to resolve admin status from DB:', error?.message)
