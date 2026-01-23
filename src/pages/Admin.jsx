@@ -9,6 +9,7 @@ import AdminAnyaConsole from '@/components/admin/AdminAnyaConsole';
 import AdminServiceApplications from '@/components/admin/AdminServiceApplications';
 import AdminLoginNotifications from '@/components/admin/AdminLoginNotifications.jsx';
 import AdminProfileDedupe from '@/components/admin/AdminProfileDedupe.jsx';
+import AdminKnowledgeBase from '@/components/admin/AdminKnowledgeBase.jsx'
 import Billing from '@/pages/Billing';
 import Automation from '@/pages/Automation';
 import { useAuthStore } from '@/stores/authStore';
@@ -65,6 +66,7 @@ export default function Admin() {
               <Activity className="w-4 h-4 mr-2" />
               Diagnostics
             </TabsTrigger>
+            <TabsTrigger value="knowledge">Knowledge Base</TabsTrigger>
             <TabsTrigger value="upload">Upload Profile Document</TabsTrigger>
             <TabsTrigger value="geo">Geo Crawl</TabsTrigger>
             <TabsTrigger value="automation">
@@ -99,6 +101,10 @@ export default function Admin() {
 
           <TabsContent value="diagnostics" className="mt-6">
             <AdminDiagnostics />
+          </TabsContent>
+
+          <TabsContent value="knowledge" className="mt-6">
+            <AdminKnowledgeBase />
           </TabsContent>
           
           <TabsContent value="upload" className="mt-6">
