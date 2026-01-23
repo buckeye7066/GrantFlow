@@ -35,6 +35,15 @@ const router = express.Router()
 // This prevents profile “bleed” from stale token claims; access is always re-validated.
 router.param('id', async (req, res, id, next) => {
   try {
+    // Fast path: prefer the canonical requestContext computation.
+    // This avoids recomputing access sets (and avoids 403s when DB checks are transiently failing).
+    if (req.ctx?.isAdmin === true) return next()
+    if (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === String(id)) return next()
+    if (req.ctx?.accessibleProfileIds === null) return next() // null => all profiles (admin)
+    if (req.ctx?.accessibleProfileIds instanceof Set && req.ctx.accessibleProfileIds.has(String(id))) {
+      return next()
+    }
+
     const ok = await ensureProfileAccessByEmail(req, res, String(id))
     if (!ok) return
     next()
