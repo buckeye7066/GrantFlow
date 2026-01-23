@@ -1,218 +1,159 @@
-function normalizeId(value) {
-  if (value == null) return null
-  const trimmed = String(value).trim()
-  return trimmed ? trimmed : null
-}
+/**
+ * Request Context Middleware
+ * 
+ * Canonical source of truth for identity and authority.
+ * This middleware MUST run early in the pipeline, after auth token parsing.
+ * 
+ * Produces req.ctx with:
+ * - userId: stable user ID
+ * - email: primary email
+ * - isAdmin: DB-backed admin status (NOT token-only)
+ * - activeProfileId: current profile context
+ * - accessibleProfileIds: Set of profile IDs user can access
+ * - accessibleOrgIds: Set of org IDs user can access
+ */
 
-function normalizeEmail(value) {
-  if (value == null) return null
-  const trimmed = String(value).trim().toLowerCase()
-  return trimmed ? trimmed : null
-}
+import { 
+  getAuthUserId, 
+  getAuthProfileId,
+  getAccessibleProfileIds,
+  getAccessibleOrganizationIds,
+} from '../utils/accessControl.js'
 
-async function tryGetUserRow(db, userId) {
-  if (!userId) return null
-  try {
-    return (
-      (await db
-        .prepare(
-          `
-            SELECT id, primary_email, is_admin
-            FROM users
-            WHERE id = ?
-            LIMIT 1
-          `,
-        )
-        .get(userId)) ?? null
-    )
-  } catch {
-    return null
+/**
+ * Build canonical request context from authenticated user.
+ * This is the ONLY place where admin status should be resolved.
+ * All other code must use req.ctx.isAdmin.
+ * 
+ * @param {object} db - Database connection
+ * @param {object} user - User object from req.user (after auth middleware)
+ * @returns {Promise<object>} Request context
+ */
+export async function buildRequestContext(db, user) {
+  const ctx = {
+    userId: null,
+    email: null,
+    isAdmin: false,
+    activeProfileId: null,
+    accessibleProfileIds: null, // null = all (for admin), Set = specific IDs
+    accessibleOrgIds: null, // null = all (for admin), Set = specific IDs
   }
-}
 
-async function tryGetProfileUserId(db, profileId) {
-  if (!profileId) return null
-  try {
-    const row = await db
-      .prepare(
-        `
-          SELECT user_id
-          FROM profiles
-          WHERE id = ?
-          LIMIT 1
-        `,
-      )
-      .get(profileId)
-    return normalizeId(row?.user_id)
-  } catch {
-    return null
+  // Guest user - return empty context
+  if (!user || user.role === 'guest') {
+    return ctx
   }
-}
 
-async function supportsProfileEmails(db) {
-  try {
-    await db.prepare('SELECT 1 FROM profile_emails LIMIT 1').get()
-    return true
-  } catch {
-    return false
+  // Extract user ID
+  ctx.userId = getAuthUserId(user)
+  ctx.email = user.email || user.primary_email || null
+  ctx.activeProfileId = getAuthProfileId(user)
+
+  // CRITICAL: Admin status MUST be resolved via DB, not token claims alone
+  // This is the canonical source of truth for admin privileges
+  let isAdminResolved = false
+
+  // Step 1: Check if token already claims admin
+  if (user.role === 'admin' || user.is_admin === true || user.is_admin === 1) {
+    // Fast path: token claims admin, but we still verify against DB when possible
+    isAdminResolved = true
   }
-}
 
-async function computeAccessibleProfileIds({ db, userId, emails }) {
-  const ids = new Set()
-
-  if (userId) {
-    const rows = await db
-      .prepare(
-        `
-          SELECT id
-          FROM profiles
-          WHERE user_id = ?
-        `,
-      )
-      .all(userId)
-    for (const row of rows || []) {
-      if (row?.id) ids.add(String(row.id))
+  // Step 2: If we have a userId, verify admin status in DB
+  if (ctx.userId) {
+    try {
+      const row = await db
+        .prepare('SELECT is_admin, primary_email FROM users WHERE id = ?')
+        .get(ctx.userId)
+      
+      if (row) {
+        // DB is the source of truth
+        ctx.isAdmin = Boolean(row.is_admin === true || row.is_admin === 1)
+        if (row.primary_email && !ctx.email) {
+          ctx.email = row.primary_email
+        }
+        isAdminResolved = true
+      }
+    } catch (error) {
+      console.warn('[requestContext] Failed to resolve admin status from DB:', error?.message)
     }
   }
 
-  if (emails.length > 0 && (await supportsProfileEmails(db))) {
-    const placeholders = emails.map(() => '?').join(', ')
-    const rows = await db
-      .prepare(
-        `
-          SELECT DISTINCT profile_id
-          FROM profile_emails
-          WHERE lower(email) IN (${placeholders})
-        `,
-      )
-      .all(...emails)
-    for (const row of rows || []) {
-      if (row?.profile_id) ids.add(String(row.profile_id))
+  // Step 3: If no userId but we have profileId, resolve via profile -> user
+  if (!isAdminResolved && ctx.activeProfileId) {
+    try {
+      const profileRow = await db
+        .prepare('SELECT user_id FROM profiles WHERE id = ?')
+        .get(ctx.activeProfileId)
+      
+      if (profileRow?.user_id) {
+        const userRow = await db
+          .prepare('SELECT is_admin, primary_email FROM users WHERE id = ?')
+          .get(profileRow.user_id)
+        
+        if (userRow) {
+          ctx.userId = profileRow.user_id
+          ctx.isAdmin = Boolean(userRow.is_admin === true || userRow.is_admin === 1)
+          if (userRow.primary_email && !ctx.email) {
+            ctx.email = userRow.primary_email
+          }
+          isAdminResolved = true
+        }
+      }
+    } catch (error) {
+      console.warn('[requestContext] Failed to resolve user from profile:', error?.message)
     }
   }
 
-  return ids
-}
-
-async function computeAccessibleOrgIds({ db, accessibleProfileIds }) {
-  if (!accessibleProfileIds || accessibleProfileIds.size === 0) return new Set()
-  const ids = Array.from(accessibleProfileIds)
-  const placeholders = ids.map(() => '?').join(', ')
-  const rows = await db
-    .prepare(
-      `
-        SELECT DISTINCT organization_id
-        FROM profiles
-        WHERE id IN (${placeholders})
-          AND organization_id IS NOT NULL
-      `,
-    )
-    .all(...ids)
-  const orgIds = new Set()
-  for (const row of rows || []) {
-    if (row?.organization_id) orgIds.add(String(row.organization_id))
+  // Step 4: If still not resolved, fall back to token claim (for backward compatibility)
+  // This handles cases like admin tokens without userId
+  if (!isAdminResolved) {
+    ctx.isAdmin = Boolean(user.role === 'admin' || user.is_admin === true || user.is_admin === 1)
   }
-  return orgIds
+
+  // Step 5: Compute accessible profiles and orgs
+  if (ctx.isAdmin) {
+    // Admin can access everything
+    ctx.accessibleProfileIds = null
+    ctx.accessibleOrgIds = null
+  } else {
+    // Regular user - compute accessible resources
+    try {
+      ctx.accessibleProfileIds = await getAccessibleProfileIds(db, user)
+      ctx.accessibleOrgIds = await getAccessibleOrganizationIds(db, user)
+    } catch (error) {
+      console.warn('[requestContext] Failed to compute accessible resources:', error?.message)
+      ctx.accessibleProfileIds = new Set()
+      ctx.accessibleOrgIds = new Set()
+    }
+  }
+
+  return ctx
 }
 
-function resolveRequestedProfileId(req) {
-  // Allow clients to explicitly set active profile (admin/user).
-  const header =
-    req.headers['x-profile-id'] ||
-    req.headers['x-active-profile-id'] ||
-    req.headers['x-profile'] ||
-    null
-  if (typeof header === 'string' && header.trim()) return header.trim()
-  if (Array.isArray(header) && typeof header[0] === 'string' && header[0].trim()) return header[0].trim()
-
-  // Legacy: bearer JWT may contain a profile_id claim exposed via req.user.profileId
-  const fromUser = req.user?.profileId ?? req.user?.profile_id ?? null
-  return normalizeId(fromUser)
-}
-
-export default function requestContext() {
+/**
+ * Express middleware to attach request context to req.ctx
+ */
+export function attachRequestContext() {
   return async (req, res, next) => {
     try {
-      const db = req.db
-      if (!db) {
-        req.ctx = {
-          db: null,
-          userId: null,
-          email: null,
-          isAdmin: false,
-          activeProfileId: null,
-          accessibleProfileIds: new Set(),
-          accessibleOrgIds: new Set(),
-        }
-        return next()
-      }
-
-      const authUser = req.user ?? { role: 'guest' }
-
-      // Derive userId from req.user first, but fall back to profile->user_id when needed.
-      const initialUserId = normalizeId(authUser.userId ?? authUser.id ?? authUser.user_id ?? null)
-      const requestedProfileId = resolveRequestedProfileId(req)
-      const fallbackUserId = initialUserId ? null : await tryGetProfileUserId(db, requestedProfileId)
-      const userId = initialUserId ?? fallbackUserId
-
-      const userRow = await tryGetUserRow(db, userId)
-      const email = normalizeEmail(userRow?.primary_email) ?? normalizeEmail(authUser.email ?? authUser.primary_email ?? null)
-
-      // Canonical admin: ONLY from DB users.is_admin.
-      const isAdmin = Boolean(userRow?.is_admin)
-
-      const emails = Array.from(new Set([email].filter(Boolean)))
-
-      const accessibleProfileIds = isAdmin
-        ? null
-        : await computeAccessibleProfileIds({
-            db,
-            userId,
-            emails,
-          })
-
-      const accessibleOrgIds = isAdmin
-        ? null
-        : await computeAccessibleOrgIds({
-            db,
-            accessibleProfileIds,
-          })
-
-      // Active profile:
-      // - Admin: allow any selected profile without 403 (admin bypass).
-      // - Non-admin: only allow if in accessibleProfileIds.
-      let activeProfileId = null
-      if (isAdmin) {
-        activeProfileId = requestedProfileId
-      } else if (requestedProfileId && accessibleProfileIds?.has(String(requestedProfileId))) {
-        activeProfileId = String(requestedProfileId)
-      } else {
-        activeProfileId = accessibleProfileIds && accessibleProfileIds.size > 0 ? Array.from(accessibleProfileIds)[0] : null
-      }
-
-      req.ctx = {
-        db,
-        userId,
-        email,
-        isAdmin,
-        activeProfileId,
-        accessibleProfileIds: accessibleProfileIds ?? null,
-        accessibleOrgIds: accessibleOrgIds ?? null,
-      }
-
-      // Back-compat: keep req.db canonicalized to ctx.db.
-      req.db = db
-
-      return next()
+      req.ctx = await buildRequestContext(req.db, req.user)
+      // Attach db reference to ctx for convenience (single accessor pattern)
+      req.ctx.db = req.db
+      next()
     } catch (error) {
-      console.error('[requestContext] failed:', error?.message || String(error))
-      return res.status(503).json({
-        error: 'Request context unavailable',
-        error_type: 'request_context_unavailable',
-        request_id: req.requestId || null,
-      })
+      console.error('[requestContext] Failed to build request context:', error)
+      // Fail safe: provide guest context to avoid breaking the request
+      req.ctx = {
+        userId: null,
+        email: null,
+        isAdmin: false,
+        activeProfileId: null,
+        accessibleProfileIds: new Set(),
+        accessibleOrgIds: new Set(),
+        db: req.db, // Ensure db is always available
+      }
+      next()
     }
   }
 }
-
