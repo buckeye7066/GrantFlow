@@ -2205,25 +2205,31 @@ router.get('/:provider/callback', async (req, res) => {
 
 router.get('/me', async (req, res) => {
   try {
-    // Canonical auth truth: req.ctx (resolved per request from DB).
-    if (!req.ctx?.userId) {
+    // Canonical auth truth is req.ctx (DB-backed), but harden against any transient ctx-building issues.
+    // This endpoint must never 401 if the auth middleware already verified a token/admin header.
+    const fallbackUserId = req.user?.userId ?? req.user?.id ?? req.user?.user_id ?? null
+    const fallbackEmail = req.user?.email ?? req.user?.primary_email ?? null
+    const fallbackIsAdmin = Boolean(req.user?.role === 'admin' || req.user?.is_admin === true || req.user?.is_admin === 1)
+    const fallbackActiveProfileId = req.user?.profileId ?? req.user?.profile_id ?? null
+
+    const userId = req.ctx?.userId ?? fallbackUserId
+    if (!userId) {
       return res.status(401).json({ error: 'Not authenticated' })
     }
 
-    const userId = req.ctx.userId
-    const email = req.ctx.email ?? null
-    const isAdmin = Boolean(req.ctx.isAdmin)
-    const activeProfileId = req.ctx.activeProfileId ?? null
+    const email = req.ctx?.email ?? fallbackEmail
+    const isAdmin = typeof req.ctx?.isAdmin === 'boolean' ? Boolean(req.ctx.isAdmin) : fallbackIsAdmin
+    const activeProfileId = req.ctx?.activeProfileId ?? fallbackActiveProfileId
 
     // Count accessible resources for UI gating. For admins, return total counts.
     let accessibleProfileCount = 0
     let accessibleOrgCount = 0
 
     try {
-      if (req.ctx.accessibleProfileIds === null) {
+      if (req.ctx?.accessibleProfileIds === null) {
         const row = await req.db.prepare('SELECT COUNT(*) as c FROM profiles').get()
         accessibleProfileCount = Number(row?.c ?? row?.count ?? 0)
-      } else if (req.ctx.accessibleProfileIds instanceof Set) {
+      } else if (req.ctx?.accessibleProfileIds instanceof Set) {
         accessibleProfileCount = req.ctx.accessibleProfileIds.size
       }
     } catch (dbError) {
@@ -2231,10 +2237,10 @@ router.get('/me', async (req, res) => {
     }
 
     try {
-      if (req.ctx.accessibleOrgIds === null) {
+      if (req.ctx?.accessibleOrgIds === null) {
         const row = await req.db.prepare('SELECT COUNT(*) as c FROM organizations').get()
         accessibleOrgCount = Number(row?.c ?? row?.count ?? 0)
-      } else if (req.ctx.accessibleOrgIds instanceof Set) {
+      } else if (req.ctx?.accessibleOrgIds instanceof Set) {
         accessibleOrgCount = req.ctx.accessibleOrgIds.size
       }
     } catch (dbError) {

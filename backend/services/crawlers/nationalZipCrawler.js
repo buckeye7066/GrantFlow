@@ -462,7 +462,8 @@ async function saveOpportunity(db, opp) {
             requires_match, match_percentage,
             last_verified_at,
             created_at, updated_at
-          ) VALUES (
+          )
+          SELECT
             gen_random_uuid()::text,
             ?, ?, ?,
             ?, ?, ?,
@@ -473,8 +474,12 @@ async function saveOpportunity(db, opp) {
             ?, ?,
             ?,
             CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+          WHERE NOT EXISTS (
+            SELECT 1
+            FROM funding_opportunities
+            WHERE source = ?
+              AND source_id = ?
           )
-          ON CONFLICT (source, source_id) DO NOTHING
         `
       : `
           INSERT OR IGNORE INTO funding_opportunities (
@@ -528,6 +533,9 @@ async function saveOpportunity(db, opp) {
       requiresMatch,
       matchPct,
       lastVerifiedAt,
+      // De-dupe keys (no unique index required)
+      String(opp.source),
+      String(opp.source_id),
     )
     return result?.changes ?? 0
   } else {
