@@ -31,10 +31,6 @@ import {
 
 const router = express.Router()
 
-function isAdmin(user) {
-  return Boolean(isAdminUser(user)) || user?.role === 'admin' || user?.is_admin === true
-}
-
 // Central enforcement: any route that includes a `:id` param in this router refers to a profile id.
 // This prevents profile “bleed” from stale token claims; access is always re-validated.
 router.param('id', async (req, res, id, next) => {
@@ -809,7 +805,7 @@ router.post('/:id/avatar/ai', async (req, res) => {
     profileRow.id,
     profileRow.organization_id ?? null,
     JSON.stringify(parameters),
-    auth.role === 'admin' ? 'admin' : profileRow.id,
+    req.ctx?.isAdmin ? 'admin' : profileRow.id,
   )
 
   const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)

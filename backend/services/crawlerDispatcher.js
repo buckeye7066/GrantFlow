@@ -40,6 +40,28 @@ function parseJSON(value) {
   }
 }
 
+function clampInt(value, { min, max, fallback }) {
+  const n = Number.parseInt(String(value ?? ''), 10)
+  if (!Number.isFinite(n)) return fallback
+  return Math.max(min, Math.min(max, n))
+}
+
+function getMaxGlobalConcurrency() {
+  return clampInt(process.env.CRAWLER_MAX_CONCURRENCY, { min: 1, max: 50, fallback: 6 })
+}
+
+function getDispatchMaxAttempts() {
+  return clampInt(process.env.CRAWLER_DISPATCH_MAX_ATTEMPTS, { min: 1, max: 200, fallback: 30 })
+}
+
+function computeBackoffMs(attempt) {
+  const base = clampInt(process.env.CRAWLER_DISPATCH_BASE_DELAY_MS, { min: 250, max: 60_000, fallback: 1_500 })
+  const cap = clampInt(process.env.CRAWLER_DISPATCH_MAX_DELAY_MS, { min: 1_000, max: 10 * 60_000, fallback: 60_000 })
+  const exp = Math.min(16, Math.max(0, attempt - 1))
+  const jitter = Math.floor(Math.random() * 250)
+  return Math.min(cap, base * (2 ** exp) + jitter)
+}
+
 export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
   const handle = async () => {
     const job = await db.prepare('SELECT * FROM crawler_jobs WHERE id = ? LIMIT 1').get(jobId)
@@ -91,6 +113,20 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       }
     }
 
+    // If a previous dispatcher pass scheduled this job in the future, respect it.
+    if (job.next_dispatch_at) {
+      const nextAt = new Date(job.next_dispatch_at)
+      if (!Number.isNaN(nextAt.getTime())) {
+        const waitMs = nextAt.getTime() - Date.now()
+        if (waitMs > 250) {
+          setTimeout(() => {
+            dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(() => {})
+          }, Math.min(waitMs, 60_000))
+          return
+        }
+      }
+    }
+
     const handler = HANDLERS[job.type]
     if (!handler) {
       const errorMsg = `Unhandled crawler type "${job.type}"`
@@ -114,6 +150,8 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       return
     }
 
+    const maxGlobalConcurrency = getMaxGlobalConcurrency()
+
     // Concurrency control (per-profile):
     // If a profile-scoped job is queued while another job for that profile is already running,
     // do NOT fail the job (that pollutes diagnostics). Instead keep it queued and retry soon.
@@ -124,9 +162,11 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
           SET status = 'running',
               started_at = CURRENT_TIMESTAMP,
               error = NULL,
-              parameters = COALESCE(parameters, '{}')
+              parameters = COALESCE(parameters, '{}'),
+              next_dispatch_at = NULL
           WHERE id = ?
             AND status = 'queued'
+            AND (SELECT COUNT(*) FROM crawler_jobs WHERE status = 'running') < ?
             AND NOT EXISTS (
               SELECT 1
               FROM crawler_jobs
@@ -140,21 +180,72 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
           SET status = 'running',
               started_at = CURRENT_TIMESTAMP,
               error = NULL,
-              parameters = COALESCE(parameters, '{}')
+              parameters = COALESCE(parameters, '{}'),
+              next_dispatch_at = NULL
           WHERE id = ?
             AND status = 'queued'
+            AND (SELECT COUNT(*) FROM crawler_jobs WHERE status = 'running') < ?
         `
 
     const startRes = profileId
-      ? await db.prepare(startSql).run(jobId, profileId, jobId)
-      : await db.prepare(startSql).run(jobId)
+      ? await db.prepare(startSql).run(jobId, maxGlobalConcurrency, profileId, jobId)
+      : await db.prepare(startSql).run(jobId, maxGlobalConcurrency)
 
     const startedCount = Number(startRes?.changes ?? startRes?.rowCount ?? 0)
     if (startedCount === 0) {
-      // Another job is already running for this profile (or the job was picked up elsewhere).
+      // Another job is already running for this profile, or we hit the global concurrency cap.
+      // Apply bounded backoff and eventually dead-letter to prevent runaway retries.
+      const attempts = Number(job.dispatch_attempts ?? 0) + 1
+      const maxAttempts = getDispatchMaxAttempts()
+
+      if (attempts > maxAttempts) {
+        const deadLetter = {
+          reason: 'dispatch_exhausted',
+          attempts,
+          max_attempts: maxAttempts,
+          profile_id: profileId,
+          max_global_concurrency: maxGlobalConcurrency,
+          last_attempt_at: new Date().toISOString(),
+        }
+
+        await db.prepare(
+          `
+            UPDATE crawler_jobs
+            SET status = 'failed',
+                completed_at = CURRENT_TIMESTAMP,
+                error = ?,
+                result_meta = COALESCE(?, result_meta)
+            WHERE id = ?
+          `,
+        ).run(
+          'Crawler dispatch exhausted due to concurrency limits',
+          JSON.stringify({ dead_letter: deadLetter }),
+          jobId,
+        )
+        return
+      }
+
+      const delayMs = computeBackoffMs(attempts)
+      const nextAtIso = new Date(Date.now() + delayMs).toISOString()
+      try {
+        await db.prepare(
+          `
+            UPDATE crawler_jobs
+            SET dispatch_attempts = ?,
+                next_dispatch_at = ?,
+                error = NULL
+            WHERE id = ?
+              AND status = 'queued'
+          `,
+        ).run(attempts, nextAtIso, jobId)
+      } catch (error) {
+        // best-effort; continue with in-process backoff anyway
+        console.warn('[crawlerDispatcher] Failed to persist dispatch backoff metadata', error)
+      }
+
       setTimeout(() => {
         dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(() => {})
-      }, 12_000)
+      }, delayMs)
       return
     }
 

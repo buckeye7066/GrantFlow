@@ -3,8 +3,7 @@ import express from 'express'
 const router = express.Router()
 
 function requireAdminOrToken(req, res) {
-  const user = req.user ?? { role: 'guest' }
-  if (user.role === 'admin') return true
+  if (req.ctx?.isAdmin) return true
   const bulkKey = req.headers['x-bulk-key'] || req.headers['x-admin-token'] || null
   const expectedKey = process.env.BULK_POPULATE_KEY || null
   if (bulkKey && expectedKey && bulkKey === expectedKey) return true

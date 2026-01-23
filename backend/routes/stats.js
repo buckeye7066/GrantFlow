@@ -18,11 +18,7 @@ const MARKETING_STATS = {
  */
 router.get('/dashboard', async (req, res) => {
   try {
-    const auth = req.user ?? { role: 'guest' }
-    const isAdmin =
-      auth.role === 'admin' ||
-      auth.is_admin === true ||
-      (Array.isArray(auth.roles) && auth.roles.includes('admin'))
+    const isAdmin = Boolean(req.ctx?.isAdmin)
 
     if (isAdmin) {
       if (!req.db) {

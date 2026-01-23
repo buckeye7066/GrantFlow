@@ -483,7 +483,7 @@ router.post('/from-opportunity', async (req, res) => {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return
 
-    let { 
+    let {
       opportunity_id, 
       organization_id, 
       profile_id, 
