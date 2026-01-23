@@ -757,21 +757,29 @@ app.use(async (req, res, next) => {
         // Stateless JWT acceptance (important for multi-instance deployments where SQLite session storage
         // is not shared across instances). If the token is correctly signed and unexpired, trust its claims.
         // We still try to validate against DB sessions when available, but we do not require it.
+        let tokenRoles = []
+        let tokenIsAdmin = false
+        let tokenEmail = null
+        let tokenName = null
+
         if (payload && typeof payload === 'object') {
-          const roles = Array.isArray(payload.roles) ? payload.roles : [];
-          const isAdmin = roles.includes('admin');
+          tokenRoles = Array.isArray(payload.roles) ? payload.roles : []
+          tokenIsAdmin = tokenRoles.includes('admin')
+          tokenEmail = payload.email ?? null
+          tokenName = payload.name ?? null
+
           if (payload.sub) {
             user = {
-              role: isAdmin ? 'admin' : 'user',
-              is_admin: isAdmin,
+              role: tokenIsAdmin ? 'admin' : 'user',
+              is_admin: tokenIsAdmin,
               userId: payload.sub,
               profileId: payload.profile_id ?? null,
               sessionId: payload.sid ?? null,
-              full_name: payload.name ?? null,
-              email: payload.email ?? null,
-              roles,
-            };
-            handled = true;
+              full_name: tokenName,
+              email: tokenEmail,
+              roles: tokenRoles,
+            }
+            handled = true
           }
         }
 
@@ -792,15 +800,23 @@ app.use(async (req, res, next) => {
             !sessionRow.revoked_at &&
             (!sessionRow.refresh_expires_at || new Date(sessionRow.refresh_expires_at) > new Date())
           ) {
+            // IMPORTANT:
+            // - Never downgrade admin privileges based on DB session enrichment.
+            //   Tokens may already carry `roles: ['admin']` even if the DB `users.is_admin`
+            //   is out of sync (or the join omits the flag).
+            // - Preserve JWT-provided email so profile email links work reliably.
+            const sessionIsAdmin = Boolean(sessionRow.is_admin)
+            const effectiveIsAdmin = Boolean(tokenIsAdmin || sessionIsAdmin)
             user = {
-              role: sessionRow.is_admin ? 'admin' : 'user',
-              is_admin: Boolean(sessionRow.is_admin),
+              role: effectiveIsAdmin ? 'admin' : 'user',
+              is_admin: effectiveIsAdmin,
               userId: sessionRow.user_id,
               profileId: payload.profile_id ?? sessionRow.profile_id ?? null,
               sessionId: sessionRow.id,
-              full_name: sessionRow.display_name,
-              email: sessionRow.primary_email,
-            };
+              full_name: sessionRow.display_name ?? tokenName ?? null,
+              email: sessionRow.primary_email ?? tokenEmail ?? null,
+              roles: tokenRoles,
+            }
             handled = true;
           }
         }

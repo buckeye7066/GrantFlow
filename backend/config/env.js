@@ -238,11 +238,14 @@ export function assertEnv({ mode } = {}) {
 // NOTE: This must never generate random secrets.
 export function getJwtSecretOrThrow(env = {}) {
   const secret = normalizeMaybeSecret(env.AUTH_JWT_SECRET) || normalizeMaybeSecret(env.JWT_SECRET)
+  const isProd = Boolean(env.isProd) || String(env.NODE_ENV || '').toLowerCase() === 'production'
   if (!secret) {
+    // Unit tests and local dev shouldn't require configuring secrets.
+    // IMPORTANT: This must never be random; tests require deterministic behavior.
+    if (!isProd) return 'grantflow-dev-secret'
     throw new Error('Missing AUTH_JWT_SECRET (or JWT_SECRET)')
   }
 
-  const isProd = Boolean(env.isProd) || String(env.NODE_ENV || '').toLowerCase() === 'production'
   if (isProd && looksUnsafeJwtSecret(secret)) {
     throw new Error('AUTH_JWT_SECRET/JWT_SECRET is set to insecure placeholder value')
   }

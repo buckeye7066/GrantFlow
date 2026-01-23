@@ -175,6 +175,8 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
 
     // Candidate set: prioritize upcoming deadlines first, then recently updated.
+    const deadlineNullSort =
+      req.db?.dialect === 'postgres' ? 'deadline IS NULL' : "deadline IS NULL OR deadline = ''"
     const candidates = await req.db
       .prepare(
         `
@@ -182,7 +184,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
           FROM funding_opportunities
           ${where}
           ORDER BY
-            CASE WHEN deadline IS NULL OR deadline = '' THEN 1 ELSE 0 END,
+            CASE WHEN ${deadlineNullSort} THEN 1 ELSE 0 END,
             deadline ASC,
             updated_at DESC
           LIMIT ?
