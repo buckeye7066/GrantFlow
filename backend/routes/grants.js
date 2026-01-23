@@ -483,7 +483,7 @@ router.post('/from-opportunity', async (req, res) => {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return
 
-    let { 
+    let {
       opportunity_id, 
       organization_id, 
       profile_id, 
@@ -500,102 +500,110 @@ router.post('/from-opportunity', async (req, res) => {
       if (!(await ensureOrganizationAccess(req, res, String(organization_id)))) return
     }
     
-    // Try to get opportunity from database first
-    let opportunity = null;
-    if (opportunity_id) {
-      opportunity = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunity_id);
-    }
-    
-    // If not found in DB, use provided opportunity_data
-    if (!opportunity && opportunity_data) {
-      opportunity = {
-        title: opportunity_data.title,
-        sponsor: opportunity_data.sponsor,
-        deadline: opportunity_data.deadline || opportunity_data.deadlineAt,
-        application_url: opportunity_data.url || opportunity_data.application_url,
-        amount_min: opportunity_data.awardMin || opportunity_data.amount_min,
-        amount_max: opportunity_data.awardMax || opportunity_data.amount_max,
-        description: opportunity_data.descriptionMd || opportunity_data.description,
-        eligibility_bullets: JSON.stringify(opportunity_data.eligibilityBullets || []),
-        source: opportunity_data.source || 'discovery'
-      };
-      console.log('[grants] Using direct opportunity data for:', opportunity.title);
-    }
-    
-    if (!opportunity) {
-      return res.status(404).json({ error: 'Opportunity not found and no opportunity_data provided' });
-    }
-    
-    // If no organization_id but profile_id provided, auto-create organization
-    if (!organization_id && profile_id) {
-      const profile = await req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profile_id);
-      if (profile) {
-        if (profile.organization_id) {
-          // Profile already has an organization
-          organization_id = profile.organization_id;
-        } else {
-          // Create organization for this profile
-          const orgId = crypto.randomUUID();
-          await req.db.prepare(`
-            INSERT INTO organizations (id, name, applicant_type, created_at, updated_at)
-            VALUES (?, ?, 'individual', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-          `).run(orgId, profile.display_name || 'My Organization');
-          
-          // Link profile to organization
-          await req.db.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile_id);
-          
-          organization_id = orgId;
-          console.log(`[grants] Auto-created organization ${orgId} for profile ${profile_id}`);
+    let response = null
+
+    await req.db.withTransaction(async (tx) => {
+      // Try to get opportunity from database first
+      let opportunity = null;
+      if (opportunity_id) {
+        opportunity = await tx.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunity_id);
+      }
+
+      // If not found in DB, use provided opportunity_data
+      if (!opportunity && opportunity_data) {
+        opportunity = {
+          title: opportunity_data.title,
+          sponsor: opportunity_data.sponsor,
+          deadline: opportunity_data.deadline || opportunity_data.deadlineAt,
+          application_url: opportunity_data.url || opportunity_data.application_url,
+          amount_min: opportunity_data.awardMin || opportunity_data.amount_min,
+          amount_max: opportunity_data.awardMax || opportunity_data.amount_max,
+          description: opportunity_data.descriptionMd || opportunity_data.description,
+          eligibility_bullets: JSON.stringify(opportunity_data.eligibilityBullets || []),
+          source: opportunity_data.source || 'discovery'
+        };
+      }
+
+      if (!opportunity) {
+        response = { status: 404, body: { error: 'Opportunity not found and no opportunity_data provided' } }
+        return
+      }
+
+      // If no organization_id but profile_id provided, auto-create organization
+      if (!organization_id && profile_id) {
+        const profile = await tx.prepare('SELECT * FROM profiles WHERE id = ?').get(profile_id);
+        if (profile) {
+          if (profile.organization_id) {
+            organization_id = profile.organization_id;
+          } else {
+            const orgId = crypto.randomUUID();
+            await tx.prepare(`
+              INSERT INTO organizations (id, name, applicant_type, created_at, updated_at)
+              VALUES (?, ?, 'individual', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            `).run(orgId, profile.display_name || 'My Organization');
+
+            await tx.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile_id);
+            organization_id = orgId;
+          }
         }
       }
-    }
-    
-    if (!organization_id) {
-      return res.status(400).json({ error: 'Organization ID or Profile ID is required' });
-    }
 
-    // Re-check access after auto-linking.
-    if (!(await ensureOrganizationAccess(req, res, String(organization_id)))) return
-    
-    // Check for duplicate grants by title for this organization
-    const existingGrant = await req.db.prepare(
-      'SELECT id, title FROM grants WHERE organization_id = ? AND title = ?'
-    ).get(organization_id, opportunity.title);
-    
-    if (existingGrant) {
-      return res.status(200).json({ 
-        ...existingGrant, 
-        organization_id,
-        already_exists: true,
-        message: 'Grant already in pipeline'
-      });
+      if (!organization_id) {
+        response = { status: 400, body: { error: 'Organization ID or Profile ID is required' } }
+        return
+      }
+
+      // If the client provided an organization_id, we already did an access check above.
+      // If we derived/created the org via profile ownership, profile access is the authoritative check.
+
+      const existingGrant = await tx
+        .prepare('SELECT id, title FROM grants WHERE organization_id = ? AND title = ?')
+        .get(organization_id, opportunity.title);
+
+      if (existingGrant) {
+        response = {
+          status: 200,
+          body: {
+            ...existingGrant,
+            organization_id,
+            already_exists: true,
+            message: 'Grant already in pipeline',
+          },
+        }
+        return
+      }
+
+      const id = crypto.randomUUID();
+
+      await tx.prepare(`
+        INSERT INTO grants (
+          id, organization_id, funding_opportunity_id, title, funder, 
+          deadline, status, match_score, match_reasons, application_url,
+          amount_requested, notes
+        )
+        VALUES (?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?)
+      `).run(
+        id, 
+        organization_id, 
+        opportunity_id || null,
+        opportunity.title,
+        opportunity.sponsor,
+        opportunity.deadline,
+        match_score || null,
+        JSON.stringify(match_reasons || []),
+        opportunity.application_url,
+        opportunity.amount_max || opportunity.amount_min || null,
+        opportunity.description ? opportunity.description.substring(0, 500) : null
+      );
+
+      const grant = await tx.prepare('SELECT * FROM grants WHERE id = ?').get(id);
+      response = { status: 201, body: { ...grant, organization_id } }
+    })
+
+    if (!response) {
+      return res.status(500).json({ error: 'Failed to create grant' })
     }
-    
-    const id = crypto.randomUUID();
-    
-    await req.db.prepare(`
-      INSERT INTO grants (
-        id, organization_id, funding_opportunity_id, title, funder, 
-        deadline, status, match_score, match_reasons, application_url,
-        amount_requested, notes
-      )
-      VALUES (?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?)
-    `).run(
-      id, 
-      organization_id, 
-      opportunity_id || null,
-      opportunity.title,
-      opportunity.sponsor,
-      opportunity.deadline,
-      match_score || null,
-      JSON.stringify(match_reasons || []),
-      opportunity.application_url,
-      opportunity.amount_max || opportunity.amount_min || null,
-      opportunity.description ? opportunity.description.substring(0, 500) : null
-    );
-    
-    const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(id);
-    res.status(201).json({ ...grant, organization_id });
+    return res.status(response.status).json(response.body)
   } catch (error) {
     console.error('Error creating grant from opportunity:', error);
     res.status(500).json(formatError(error));
