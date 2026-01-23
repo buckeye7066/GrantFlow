@@ -70,12 +70,6 @@ export default function NOFOParser() {
   };
 
   const handleProcess = async () => {
-    if (!selectedOrgId) {
-      setError("Please select a profile to associate this grant with.");
-      setStatus('error');
-      return;
-    }
-
     if (inputMode === 'file' && !file) {
       setError("Please select a file to process.");
       setStatus('error');
@@ -164,6 +158,14 @@ export default function NOFOParser() {
 
   const handleSaveToPipeline = async () => {
     if (!extractedData) return;
+    if (!selectedOrgId) {
+      toast({
+        variant: 'destructive',
+        title: 'Select a profile to save',
+        description: 'You can process a document without a profile, but saving into the pipeline requires selecting one.',
+      });
+      return;
+    }
     setIsSavingGrant(true);
     setError(null);
 
@@ -214,10 +216,8 @@ export default function NOFOParser() {
 
   // Determine if button should be enabled
   const isProcessing = status === 'uploading' || status === 'processing';
-  const canProcess = selectedOrgId && (
-    (inputMode === 'file' && file) || 
-    (inputMode === 'url' && url.trim())
-  ) && !isProcessing;
+  const canProcess =
+    ((inputMode === 'file' && file) || (inputMode === 'url' && url.trim())) && !isProcessing;
 
   return (
     <div className="p-6 md:p-8">
@@ -234,10 +234,10 @@ export default function NOFOParser() {
           </CardHeader>
           <CardContent className="space-y-6">
             <div>
-              <Label className="text-base font-semibold mb-2 block">Link to Profile</Label>
+              <Label className="text-base font-semibold mb-2 block">Link to Profile (optional)</Label>
               <Select value={selectedOrgId} onValueChange={setSelectedOrgId} disabled={isProcessing}>
                 <SelectTrigger className="text-base h-12 mt-2">
-                  <SelectValue placeholder="Select a profile to associate this grant with..." />
+                  <SelectValue placeholder="Optional: select a profile to save into its pipeline..." />
                 </SelectTrigger>
                 <SelectContent>
                   {isLoadingOrgs ? (
