@@ -743,6 +743,11 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
   result_meta TEXT,
   error TEXT,
   requested_by TEXT,
+  -- Client-/server-provided idempotency key to prevent duplicate dispatch.
+  idempotency_key TEXT,
+  -- Dispatcher backpressure / retry tracking (separate from manual retry_count).
+  dispatch_attempts INTEGER DEFAULT 0,
+  next_dispatch_at DATETIME,
   retry_count INTEGER DEFAULT 0,
   last_retry_at DATETIME
 );
@@ -750,6 +755,10 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_status ON crawler_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_profile ON crawler_jobs(profile_id);
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_type ON crawler_jobs(type);
+CREATE INDEX IF NOT EXISTS idx_crawler_jobs_next_dispatch ON crawler_jobs(next_dispatch_at);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_crawler_jobs_idempotency_key
+  ON crawler_jobs(idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
 
 -- Geo Crawl progress tracking (legacy table name: national_zip_progress)
 CREATE TABLE IF NOT EXISTS national_zip_progress (
