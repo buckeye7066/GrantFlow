@@ -26,6 +26,7 @@ class APIClient {
     this.baseUrl = API_URL;
     this.token = null;
     this.refreshToken = null;
+    this.activeProfileId = null;
     this.refreshPromise = null; // Single-flight refresh promise
     this.onAuthFailure = null;
     this.entityResourceMap = {
@@ -42,6 +43,12 @@ class APIClient {
     this.stubWarnings = new Set();
     this.isDev = import.meta.env?.DEV ?? false;
     this.entities = {};
+
+    // Persisted active profile context for profile-scoped requests.
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('grantflow:active-profile-id')
+      this.activeProfileId = stored && String(stored).trim() ? String(stored).trim() : null
+    }
   }
 
   getRequestId() {
@@ -73,6 +80,27 @@ class APIClient {
     }
   }
 
+  setActiveProfileId(profileId) {
+    const normalized = profileId ? String(profileId).trim() : ''
+    this.activeProfileId = normalized ? normalized : null
+    if (typeof window !== 'undefined') {
+      if (this.activeProfileId) {
+        localStorage.setItem('grantflow:active-profile-id', this.activeProfileId)
+      } else {
+        localStorage.removeItem('grantflow:active-profile-id')
+      }
+    }
+  }
+
+  getActiveProfileId() {
+    if (this.activeProfileId) return this.activeProfileId
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('grantflow:active-profile-id')
+      return stored && String(stored).trim() ? String(stored).trim() : null
+    }
+    return null
+  }
+
   getToken() {
     if (this.token) return this.token;
     if (typeof window !== 'undefined') {
@@ -93,9 +121,11 @@ class APIClient {
     this.token = null;
     this.refreshToken = null;
     this.refreshPromise = null; // Clear any pending refresh
+    this.activeProfileId = null;
     if (typeof window !== 'undefined') {
       localStorage.removeItem('grantflow:access-token');
       localStorage.removeItem('grantflow:refresh-token');
+      localStorage.removeItem('grantflow:active-profile-id');
     }
   }
 
@@ -265,6 +295,11 @@ class APIClient {
 
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const activeProfileId = this.getActiveProfileId?.()
+    if (activeProfileId) {
+      headers['X-Profile-Id'] = headers['X-Profile-Id'] || activeProfileId
     }
 
     headers['X-Request-Id'] = headers['X-Request-Id'] || requestId;
@@ -508,7 +543,7 @@ class APIClient {
         return await this.fetch('/api/auth/me');
       } catch (error) {
         // If it's an auth error (401 or session expired), return null gracefully
-        if (error.status === 401 || error.isAuthError) {
+        if (error.status === 401 || error.status === 403 || error.isAuthError) {
           console.log('[APIClient] Auth check failed, user needs to sign in');
           this.clearToken();
           return null;
