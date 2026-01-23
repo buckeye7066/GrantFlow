@@ -5,7 +5,7 @@
  * Uses database-backed locking to ensure reliable concurrency control.
  */
 
-import { createDeadLetterEntry } from './deadLetterQueue.js'
+import { logFailedJob } from './deadLetterQueue.js'
 
 /**
  * Maximum concurrent crawlers globally (prevent system overload)
@@ -159,11 +159,11 @@ export async function cleanupStaleCrawlers(db, staleThresholdMs = 30 * 60 * 1000
         .run(errorMessage, job.id)
       
       // Log to dead letter queue
-      await createDeadLetterEntry(db, {
+      await logFailedJob(db, {
         jobId: job.id,
         jobType: job.type,
         profileId: job.profile_id,
-        errorMessage,
+        error: errorMessage,
         severity: 'medium',
       }).catch(err => {
         console.warn('[crawler-concurrency] Failed to create dead letter entry:', err?.message)
