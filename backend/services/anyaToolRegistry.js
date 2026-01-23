@@ -273,11 +273,14 @@ function daysUntil(deadline) {
   return Math.round(diffMs / (1000 * 60 * 60 * 24))
 }
 
-function ensureProfileAccess(user, profileId) {
+function ensureProfileAccess(ctx, profileId) {
   if (!profileId) return false
-  if (!user || user.role === 'guest') return false
-  if (user.role === 'admin') return true
-  return user.profileId && user.profileId === profileId
+  if (!ctx || !ctx.userId) return false
+  if (ctx.isAdmin) return true
+  if (ctx.accessibleProfileIds instanceof Set) {
+    return ctx.accessibleProfileIds.has(String(profileId))
+  }
+  return ctx.activeProfileId && String(ctx.activeProfileId) === String(profileId)
 }
 
 async function safeStat(targetPath) {
@@ -485,15 +488,15 @@ function formatGrantSummaries(opportunities, profile = null) {
 }
 
 function summarizeGrants(db, params, context) {
-  const user = context?.user
+  const ctx = context?.ctx
   const profileId =
     (params?.profile_id && String(params.profile_id).trim()) ||
-    (user?.profileId ? String(user.profileId).trim() : '')
+    (ctx?.activeProfileId ? String(ctx.activeProfileId).trim() : '')
 
   if (!profileId) {
     throw new Error('profile_id is required to summarize grants')
   }
-  if (!ensureProfileAccess(user, profileId)) {
+  if (!ensureProfileAccess(ctx, profileId)) {
     const error = new Error('Not authorized to view grants for this profile')
     error.status = 403
     throw error
@@ -547,8 +550,8 @@ export function registerTool({ name, description, schema, handler, requiresAdmin
   })
 }
 
-export function listToolMetadata(user = null) {
-  const isAdmin = user?.role === 'admin'
+export function listToolMetadata(ctx = null) {
+  const isAdmin = Boolean(ctx?.isAdmin)
   return Array.from(tools.values())
     .filter((tool) => !tool.requiresAdmin || isAdmin)
     .map(({ name, description, schema, requiresAdmin }) => ({
@@ -568,10 +571,34 @@ export async function invokeTool(name, params, context) {
 
   const tool = tools.get(name)
 
-  // Check admin access
+  // Check admin access using DB-backed verification
   if (tool.requiresAdmin) {
     const user = context?.user
-    if (!user || user.role !== 'admin') {
+    const db = context?.db
+    
+    if (!user) {
+      const error = new Error(`Tool "${name}" requires admin privileges`)
+      error.status = 403
+      throw error
+    }
+
+    // Prefer DB-backed admin check for reliability
+    let isAdmin = false
+    if (db) {
+      // Import at function scope to avoid circular dependency
+      const { isAdminUserWithDb } = await import('../utils/accessControl.js')
+      try {
+        isAdmin = await isAdminUserWithDb(db, user)
+      } catch (error) {
+        console.warn('[anyaToolRegistry] DB admin check failed, falling back to token:', error?.message)
+        isAdmin = user.role === 'admin' || user.is_admin === true
+      }
+    } else {
+      // Fallback to token-based check if no DB available
+      isAdmin = user.role === 'admin' || user.is_admin === true
+    }
+
+    if (!isAdmin) {
       const error = new Error(`Tool "${name}" requires admin privileges`)
       error.status = 403
       throw error
@@ -629,6 +656,80 @@ registerTool({
       scopePath: scope,
       maxResults: max_results,
     }),
+})
+
+registerTool({
+  name: 'code.suggestPatch',
+  description:
+    'Generate a unified diff patch suggestion for a file. This tool does NOT apply changes; it only returns patch text.',
+  schema: {
+    type: 'object',
+    properties: {
+      file: { type: 'string', description: 'Relative path under backend/, src/, or scripts/.' },
+      instructions: { type: 'string', description: 'What you want changed and why.' },
+      max_input_chars: { type: 'integer', minimum: 500, maximum: 50000 },
+    },
+    required: ['file', 'instructions'],
+  },
+  handler: async ({ file, instructions, max_input_chars }, context) => {
+    const filePath = String(file || '').trim()
+    if (!filePath) throw new Error('file is required')
+    const resolved = path.resolve(REPO_ROOT, filePath)
+    if (!isUnderAllowedRoots(resolved)) {
+      const error = new Error('File path is outside of permitted directories')
+      error.status = 400
+      throw error
+    }
+    const stats = await safeStat(resolved)
+    if (!stats || !stats.isFile()) {
+      const error = new Error('File not found')
+      error.status = 404
+      throw error
+    }
+
+    const maxChars = Math.max(500, Math.min(Number(max_input_chars) || 12000, 50000))
+    const original = await fs.readFile(resolved, 'utf8')
+    const truncated = original.length > maxChars ? `${original.slice(0, maxChars)}\n/* ... truncated ... */\n` : original
+
+    const getOpenAI = context?.getOpenAI
+    const openai = typeof getOpenAI === 'function' ? getOpenAI() : null
+    if (!openai) {
+      const error = new Error('OpenAI client not configured for code.suggestPatch')
+      error.status = 503
+      throw error
+    }
+
+    const system = [
+      'You are a code advisor.',
+      'Return ONLY a unified diff patch (no markdown, no explanations).',
+      'The diff must apply cleanly to the provided file and include correct file paths.',
+      `Target file: ${filePath}`,
+    ].join('\n')
+
+    const userPrompt = [
+      `Instructions:\n${String(instructions || '').trim()}`,
+      '',
+      'Current file contents:',
+      truncated,
+    ].join('\n')
+
+    const response = await openai.chat.completions.create({
+      model: process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini',
+      temperature: 0.2,
+      max_tokens: 1200,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: userPrompt },
+      ],
+    })
+
+    const patch = response?.choices?.[0]?.message?.content ?? ''
+    return {
+      file: filePath,
+      patch: String(patch || '').trim(),
+      truncated: original.length > maxChars,
+    }
+  },
 })
 
 registerTool({
@@ -1083,7 +1184,7 @@ registerTool({
     properties: {},
   },
   handler: async (_params, context) => {
-    const { db, user } = context
+    const { db } = context
     if (!db) {
       return {
         status: 'ERROR',
@@ -1093,7 +1194,7 @@ registerTool({
     }
 
     // For non-admin users, return safe summary only
-    const isAdmin = user?.is_admin || user?.role === 'admin'
+    const isAdmin = Boolean(context?.ctx?.isAdmin)
     
     if (!isAdmin) {
       try {
@@ -1682,7 +1783,7 @@ registerTool({
     }
     
     if (operationType === 'crawlers' || operationType === 'all') {
-      status.crawlers = await getAutonomousCrawlersStatus()
+      status.crawlers = await getAutonomousCrawlersStatus(context?.db ?? null)
     }
     
     if (operationType === 'functions' || operationType === 'all') {

@@ -346,12 +346,15 @@ function buildCandidateOpportunityQuery({ crawlerType, profileContext, tokens, i
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
   // Prefer recent/updated opportunities so we don’t “drift” back into 2024-only data.
+  // IMPORTANT: Postgres `deadline` is a DATE column; comparing it to '' throws:
+  // "invalid input syntax for type date: \"\"".
+  const deadlineNullSort = isPostgres ? 'deadline IS NULL' : "deadline IS NULL OR deadline = ''"
   const sql = `
     SELECT *
     FROM funding_opportunities
     ${where}
     ORDER BY
-      CASE WHEN deadline IS NULL OR deadline = '' THEN 1 ELSE 0 END,
+      CASE WHEN ${deadlineNullSort} THEN 1 ELSE 0 END,
       deadline ASC,
       updated_at DESC
     LIMIT 1500

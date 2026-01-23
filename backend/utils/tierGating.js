@@ -13,9 +13,7 @@ export async function getProfileBillingAccount(db, profileId) {
 }
 
 export async function requireTierCapability(req, res, profileId, capabilityKey) {
-  const user = req.user ?? { role: 'guest' }
-  const isAdmin = user?.role === 'admin' || user?.is_admin === true || user?.is_admin === 1
-  if (isAdmin) return true
+  if (req.ctx?.isAdmin) return true
 
   const billing = await getProfileBillingAccount(req.db, profileId)
   const allowed = Boolean(billing?.tier?.[capabilityKey])

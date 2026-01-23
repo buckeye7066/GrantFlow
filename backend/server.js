@@ -36,6 +36,7 @@ import jwt from 'jsonwebtoken';
 import crawlerV2Router from './routes/crawlerV2.js';
 import nfProgramsRouter from './routes/nfPrograms.js';
 import nofoRouter from './routes/nofo.js';
+import healthRouter from './routes/health.js';
 import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
@@ -43,6 +44,7 @@ import { runStartupOperations } from './services/anyaStartupOperations.js';
 import ensureMinimumNationalOpportunities from './utils/ensureMinimumNationalOpportunities.js';
 import seedAssistanceDirectories from './utils/seedAssistanceDirectories.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { attachRequestContext } from './middleware/requestContext.js';
 import { MAX_JSON_BODY_SIZE } from './config/constants.js';
 import { getSafeHealthSummary } from './services/diagnosticsService.js';
 import { initializeFeatureFlags } from './services/featureFlagService.js';
@@ -53,23 +55,12 @@ import { assertFundingApiKeys, getFundingApiKeyPresence } from './src/config/api
 import { ensureProfileEmailSchema } from './utils/accessControl.js';
 import { dispatchCrawlerJob } from './services/crawlerDispatcher.js';
 import { findDuplicateProfileGroups, mergeProfiles } from './services/profileDedupeService.js'
+import { assertEnv, getJwtSecretOrThrow } from './config/env.js'
+import healthRouter from './routes/health.js'
+import requestContext from './middleware/requestContext.js'
 
-// Validate critical environment variables at startup.
-// NOTE: OpenAI is intentionally OPTIONAL for core app flows (auth/profile/opportunities).
-// The server can restore OPENAI_API_KEY from app_runtime_secrets later (hosted emergency stopgap),
-// and even without OpenAI the app should still boot and allow login.
-const requiredEnvVars = [];
-const missingEnvVars = requiredEnvVars.filter((varName) => !process.env[varName]);
-
-if (missingEnvVars.length > 0) {
-  console.error('ERROR: Missing required environment variables:', missingEnvVars.join(', '));
-  console.error('Please check your environment variables and redeploy.');
-  if (process.env.NODE_ENV === 'production') {
-    process.exit(1);
-  } else {
-    console.warn('WARNING: Running in non-production mode without all required environment variables.');
-  }
-}
+// Validate environment variables early (fail-fast in production).
+const { env: ENV } = assertEnv()
 
 // Funding API keys (safe presence only). Never print key values.
 try {
@@ -100,7 +91,7 @@ const distPath = join(__dirname, '..', 'dist');
 
 const app = express();
 app.set('trust proxy', 1);
-const PORT = process.env.PORT || 8080;
+const PORT = ENV?.PORT ?? process.env.PORT ?? 8080;
 
 // CORS configuration
 const defaultCorsOrigins = [
@@ -111,9 +102,7 @@ const defaultCorsOrigins = [
   'https://www.axiombiolabs.org',
   'https://grantflow-production.up.railway.app',
 ];
-const configuredCorsOrigins = process.env.CORS_ORIGIN
-  ? process.env.CORS_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean)
-  : null;
+const configuredCorsOrigins = Array.isArray(ENV?.corsOrigins) && ENV.corsOrigins.length > 0 ? ENV.corsOrigins : null;
 
 const corsOptions = {
   origin: configuredCorsOrigins && configuredCorsOrigins.length > 0 ? configuredCorsOrigins : defaultCorsOrigins,
@@ -203,6 +192,16 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json({ limit: MAX_JSON_BODY_SIZE }));
+
+// Mount health check routes EARLY to ensure they're always available
+// Attach db and uploadsDir to req for health check handlers
+app.use((req, res, next) => {
+  req.db = db;
+  req.uploadsDir = uploadsDir;
+  next();
+});
+app.use(healthRouter);
+
 try {
   if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
@@ -294,7 +293,7 @@ async function repairInvalidDocumentStatuses(db) {
 // Serve static files from Vite build
 app.use(express.static(distPath));
 // Serve the SPA under the configured base path so production builds (base=/grantflow) work locally.
-const APP_BASE_PATH = process.env.AUTH_FRONTEND_APP_BASE || process.env.VITE_APP_BASE || '/grantflow';
+const APP_BASE_PATH = ENV?.appBase || process.env.AUTH_FRONTEND_APP_BASE || process.env.VITE_APP_BASE || '/grantflow';
 if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
   const normalizedBase = String(APP_BASE_PATH).replace(/\/+$/, '');
   // Expose uploads under the same base path (common when reverse proxies only route /grantflow/*).
@@ -717,34 +716,29 @@ function resolveJwtSecret() {
 
   if (!raw) {
     if (isProd) {
-      // NOTE: Railway outages are worse than a temporary auth secret.
-      // We still emit a loud error so the operator sets a real secret ASAP.
-      const generated = crypto.randomBytes(48).toString('base64url')
+      // FAIL FAST in production - do not generate ephemeral secrets
       console.error(
-        'ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET). Using an EPHEMERAL secret to avoid startup crash.\n' +
-          'Set a strong random secret (recommended: 32+ bytes) and redeploy to avoid logouts on restart.\n' +
-          '  AUTH_JWT_SECRET="..."\n',
+        'FATAL ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET) in production.\n' +
+          'Set a strong random secret (recommended: 32+ bytes) and redeploy.\n' +
+          '  AUTH_JWT_SECRET="..."\n' +
+          'The application cannot start without a stable JWT secret.',
       );
-      return generated
+      process.exit(1);
     }
     console.warn('[startup] AUTH_JWT_SECRET not set; using insecure development default (DO NOT use in production).');
     return 'grantflow-dev-secret';
   }
 
   if (isProd && raw === 'grantflow-dev-secret') {
-    const generated = crypto.randomBytes(48).toString('base64url')
+    // FAIL FAST in production - do not use insecure defaults
     console.error(
-      'ERROR: AUTH_JWT_SECRET is set to the insecure development default. Using an EPHEMERAL secret to avoid startup crash.\n' +
-        'Generate a strong random secret and redeploy.',
+      'FATAL ERROR: AUTH_JWT_SECRET is set to the insecure development default in production.\n' +
+        'Generate a strong random secret and redeploy.\n' +
+        'Example: openssl rand -base64 48',
     );
-    return generated
+    process.exit(1);
   }
-
-  return raw;
-}
-
-const EFFECTIVE_JWT_SECRET = resolveJwtSecret();
-const isProd = process.env.NODE_ENV === 'production'
+})()
 
 // Make db available to routes
 app.use((req, res, next) => {
@@ -770,7 +764,11 @@ app.use(async (req, res, next) => {
   ) {
     user = {
       role: 'admin',
+      // Canonical admin is DB-backed via req.ctx. We still mark this token flow as admin,
+      // but requestContext will resolve the final answer from users.is_admin.
       is_admin: true,
+      // Deterministic userId so we can back it with a real DB user row (users.is_admin = true).
+      userId: 'system_admin_token',
       profileId: null,
       full_name: ADMIN_NAME,
       email: ADMIN_EMAIL,
@@ -780,7 +778,13 @@ app.use(async (req, res, next) => {
 
   // 2. Check X-Anya-Token (autonomous bot)
   if (!handled && xAnyaToken && process.env.ANYA_API_KEY && xAnyaToken === process.env.ANYA_API_KEY) {
-    user = { role: 'admin', is_admin: true, full_name: 'Anya Assistant', email: 'anya@grantflow.app' };
+    user = {
+      role: 'admin',
+      is_admin: true,
+      userId: 'system_anya_token',
+      full_name: 'Anya Assistant',
+      email: 'anya@grantflow.app',
+    };
     handled = true;
   }
 
@@ -794,28 +798,26 @@ app.use(async (req, res, next) => {
         // is not shared across instances). If the token is correctly signed and unexpired, trust its claims.
         // We still try to validate against DB sessions when available, but we do not require it.
         let tokenRoles = []
-        let tokenIsAdmin = false
         let tokenEmail = null
         let tokenName = null
 
         if (payload && typeof payload === 'object') {
           tokenRoles = Array.isArray(payload.roles) ? payload.roles : []
-          tokenIsAdmin = tokenRoles.includes('admin')
           tokenEmail = payload.email ?? null
           tokenName = payload.name ?? null
 
           if (payload.sub) {
             user = {
-              role: tokenIsAdmin ? 'admin' : 'user',
-              is_admin: tokenIsAdmin,
+              role: 'user',
+              is_admin: false,
               userId: payload.sub,
               profileId: payload.profile_id ?? null,
               sessionId: payload.sid ?? null,
               full_name: tokenName,
               email: tokenEmail,
               roles: tokenRoles,
-            };
-            handled = true;
+            }
+            handled = true
           }
         }
 
@@ -836,10 +838,8 @@ app.use(async (req, res, next) => {
             !sessionRow.revoked_at &&
             (!sessionRow.refresh_expires_at || new Date(sessionRow.refresh_expires_at) > new Date())
           ) {
-            // IMPORTANT:
-            // Never downgrade admin privileges during DB session enrichment.
-            // Some tokens carry admin roles even when users.is_admin is not populated consistently.
-            const effectiveIsAdmin = Boolean(tokenIsAdmin || sessionRow.is_admin)
+            // Admin is DB-backed: users.is_admin.
+            const effectiveIsAdmin = Boolean(sessionRow.is_admin)
             user = {
               role: effectiveIsAdmin ? 'admin' : 'user',
               is_admin: effectiveIsAdmin,
@@ -849,7 +849,7 @@ app.use(async (req, res, next) => {
               full_name: sessionRow.display_name ?? tokenName ?? null,
               email: sessionRow.primary_email ?? tokenEmail ?? null,
               roles: tokenRoles,
-            };
+            }
             handled = true;
           }
         }
@@ -862,6 +862,7 @@ app.use(async (req, res, next) => {
       user = {
         role: 'admin',
         is_admin: true,
+        userId: 'system_admin_token',
         profileId: null,
         full_name: ADMIN_NAME,
         email: ADMIN_EMAIL,
@@ -936,46 +937,12 @@ app.use(async (req, _res, next) => {
   return next()
 })
 
+// Attach canonical request context (MUST run after auth middleware)
+// This provides req.ctx with userId, email, isAdmin (DB-backed), accessible profiles/orgs
+app.use(attachRequestContext())
+
 // Health check with dependency checks
 // Health check endpoint (v3.0 - complete county data)
-app.get('/health', async (req, res) => {
-  const health = {
-    status: 'healthy',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    dependencies: {
-      database: 'unknown',
-      openai: 'unknown',
-      anthropic: 'unknown',
-    }
-  };
-  
-  // Check database connection
-  try {
-    if (db.healthcheck) {
-      const hc = await db.healthcheck();
-      if (!hc?.ok) throw new Error(hc?.error || 'Database healthcheck failed')
-    } else {
-      await db.prepare('SELECT 1').get();
-    }
-    health.dependencies.database = 'healthy';
-  } catch (error) {
-    health.dependencies.database = 'unhealthy';
-    health.status = 'degraded';
-  }
-  
-  // Check if OpenAI API key is configured
-  const hasOpenAIKey = Boolean(String(process.env.OPENAI_API_KEY || '').trim())
-  const hasAnthropicKey = Boolean(String(process.env.ANTHROPIC_API_KEY || '').trim())
-  health.dependencies.openai = hasOpenAIKey
-    ? 'configured'
-    : hasAnthropicKey
-      ? 'fallback_anthropic_configured'
-      : 'not configured';
-  
-  const statusCode = health.status === 'healthy' ? 200 : 503;
-  res.status(statusCode).json(health);
-});
 
 // Authentication diagnostics endpoint
 app.get('/api/auth/diagnostics', async (req, res) => {
@@ -1546,97 +1513,6 @@ app.get('/api/meta/dedupe', async (_req, res) => {
   }
 })
 
-// Public health endpoint - safe for non-admin users
-app.get('/api/health', async (req, res) => {
-  try {
-    const healthSummary = await getSafeHealthSummary(db)
-    // Contract: public health endpoints must use { ok, warning, error } for status.
-    // Some internal helpers may return { healthy, degraded, unhealthy } — normalize here.
-    const rawStatus = String(healthSummary?.status ?? 'error').toLowerCase()
-    const status =
-      rawStatus === 'healthy'
-        ? 'ok'
-        : rawStatus === 'degraded'
-          ? 'warning'
-          : rawStatus === 'unhealthy'
-            ? 'error'
-            : rawStatus || 'error'
-
-    // Treat "warning" as healthy for platform checks (Railway healthchecks, Docker HEALTHCHECK, etc.)
-    // Only fail hard when the normalized status indicates a real error.
-    const statusCode = status === 'error' ? 500 : 200
-    const body =
-      rawStatus === status
-        ? healthSummary
-        : { ...healthSummary, status, legacy_status: rawStatus }
-
-    res.status(statusCode).json(body)
-  } catch (error) {
-    console.error('[/api/health] Error:', error);
-    res.status(500).json({
-      timestamp: new Date().toISOString(),
-      status: 'error',
-      counts: { opportunities: 0, recentFailures: 0 },
-      summary: 'Failed to retrieve health information'
-    });
-  }
-});
-
-// Platform health aliases (k8s-style)
-app.get('/healthz', async (_req, res) => {
-  try {
-    const healthSummary = await getSafeHealthSummary(db)
-    const rawStatus = healthSummary?.status ?? 'error'
-    const status =
-      rawStatus === 'healthy'
-        ? 'ok'
-        : rawStatus === 'degraded'
-          ? 'warning'
-          : rawStatus === 'unhealthy'
-            ? 'error'
-            : rawStatus
-
-    const statusCode = status === 'error' ? 500 : 200
-    const body =
-      rawStatus === status
-        ? healthSummary
-        : { ...healthSummary, status, legacy_status: rawStatus }
-
-    res.status(statusCode).json(body)
-  } catch (error) {
-    console.error('[/healthz] Error:', error);
-    res.status(500).json({ status: 'error', summary: 'Failed to retrieve health information' });
-  }
-});
-
-app.get('/readyz', async (_req, res) => {
-  try {
-    if (db.healthcheck) {
-      const hc = await db.healthcheck();
-      if (!hc?.ok) throw new Error(hc?.error || 'Database healthcheck failed')
-    } else {
-      await db.prepare('SELECT 1 as ok').get();
-    }
-    // Ensure uploads dir is present and writable (production requires a volume).
-    try {
-      fs.mkdirSync(uploadsDir, { recursive: true });
-      fs.accessSync(uploadsDir, fs.constants.R_OK | fs.constants.W_OK);
-    } catch (e) {
-      return res.status(503).json({
-        status: 'not_ready',
-        reason: 'uploads_dir_unwritable',
-        uploads_dir: uploadsDir,
-        message: e?.message || String(e),
-        timestamp: new Date().toISOString(),
-      });
-    }
-    res.status(200).json({ status: 'ready', dialect: db.dialect, timestamp: new Date().toISOString() });
-  } catch (error) {
-    console.error('[/readyz] Not ready:', error);
-    res.status(503).json({ status: 'not_ready', reason: 'database_unreachable', timestamp: new Date().toISOString() });
-  }
-});
-
 app.use('/api/admin', adminRouter);
 app.use('/api', discoveryRouter); // Discovery endpoints (comprehensiveMatch, searchOpportunities, etc.)
 app.use('/api/crawler-v2', crawlerV2Router);
@@ -1832,12 +1708,16 @@ server.on('listening', () => {
     setTimeout(() => {
       if (process.env.ANYA_RUN_ON_STARTUP === 'true') {
         // Run full autonomous operations (code scan, tests, crawlers)
-        import('./services/anyaAutonomousScheduler.js').then(({ runOnStartup }) => {
-          console.log('[Anya] Starting autonomous operations on server startup...');
-          runOnStartup(db).catch(err => {
-            console.error('[Anya] Failed to complete autonomous operations:', err);
+        import('./services/anyaAutonomousScheduler.js')
+          .then(({ runOnStartup }) => {
+            console.log('[Anya] Starting autonomous operations on server startup...');
+            runOnStartup(db).catch(err => {
+              console.error('[Anya] Failed to complete autonomous operations:', err);
+            });
+          })
+          .catch((err) => {
+            console.error('[Anya] Failed to import autonomous scheduler:', err?.message || err);
           });
-        });
       } else {
         // Run original crawler operations only
         runStartupOperations(db).catch(err => {

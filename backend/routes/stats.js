@@ -16,13 +16,9 @@ const MARKETING_STATS = {
  * - Admin users see real database stats
  * - Regular users see marketing stats
  */
-router.get('/dashboard', (req, res) => {
+router.get('/dashboard', async (req, res) => {
   try {
-    const auth = req.user ?? { role: 'guest' }
-    const isAdmin =
-      auth.role === 'admin' ||
-      auth.is_admin === true ||
-      (Array.isArray(auth.roles) && auth.roles.includes('admin'))
+    const isAdmin = Boolean(req.ctx?.isAdmin)
 
     if (isAdmin) {
       if (!req.db) {
@@ -37,24 +33,24 @@ router.get('/dashboard', (req, res) => {
       }
 
       // Return real database stats for admin
-      const profilesCount = req.db
+      const profilesCount = await req.db
         .prepare('SELECT COUNT(*) as count FROM profiles')
         .get()
       
-      const organizationsCount = req.db
+      const organizationsCount = await req.db
         .prepare('SELECT COUNT(*) as count FROM organizations')
         .get()
       
-      const grantsCount = req.db
+      const grantsCount = await req.db
         .prepare('SELECT COUNT(*) as count FROM grants')
         .get()
       
       const activePredicate = req.db?.dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1'
-      const opportunitiesCount = req.db
+      const opportunitiesCount = await req.db
         .prepare(`SELECT COUNT(*) as count FROM funding_opportunities WHERE ${activePredicate}`)
         .get()
       
-      const awardedGrants = req.db
+      const awardedGrants = await req.db
         .prepare(`
           SELECT COALESCE(SUM(amount_awarded), 0) as total
           FROM grants
@@ -62,7 +58,7 @@ router.get('/dashboard', (req, res) => {
         `)
         .get()
       
-      const pipelineTotal = req.db
+      const pipelineTotal = await req.db
         .prepare(`
           SELECT COALESCE(SUM(amount_requested), 0) as total
           FROM grants

@@ -8,6 +8,7 @@ import { dirname, join } from 'path'
 import { initializeAnyaForAdmin } from '../services/anyaLoginTrigger.js'
 import { recordClientSignInEvent } from '../services/adminLoginEventStore.js'
 import { getOpenAIOptional } from '../utils/aiProviders.js'
+import { loadEnv, getJwtSecretOrThrow } from '../config/env.js'
 
 // Import email service (with fallback if main service fails to load)
 import { sendVerificationEmail as mainSendEmail, sendAuthAttemptNotification as mainAuthNotify } from '../services/email.js'
@@ -36,36 +37,42 @@ function getOpenAI() {
   return openai
 }
 
+/**
+ * Resolve JWT secret from environment variables.
+ * CRITICAL: Must match server.js implementation to ensure consistency.
+ * Production requires a stable, secure secret - NO runtime generation.
+ */
 function resolveJwtSecret() {
   const raw = String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || '').trim()
   const isProd = process.env.NODE_ENV === 'production'
 
   if (!raw) {
-    // Production safety: do not hard-exit. A missing JWT secret otherwise causes a perpetual 502 on Railway.
-    // We generate an ephemeral secret so the service can boot; all sessions will be invalidated on restart.
     if (isProd) {
+      // FAIL FAST in production - do not generate ephemeral secrets
       console.error(
-        'ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET). Generating ephemeral secret so the service can start.\n' +
-          'Fix: set AUTH_JWT_SECRET in Railway/Vercel env vars to a strong random secret (recommended: 32+ bytes).',
+        'FATAL ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET) in production.\n' +
+          'Set a strong random secret (recommended: 32+ bytes) and redeploy.\n' +
+          '  AUTH_JWT_SECRET="..."\n' +
+          'The application cannot start without a stable JWT secret.',
       )
-      return crypto.randomBytes(32).toString('base64url')
+      process.exit(1)
     }
     console.warn('[auth] AUTH_JWT_SECRET not set; using insecure development default (DO NOT use in production).')
     return 'grantflow-dev-secret'
   }
 
   if (isProd && raw === 'grantflow-dev-secret') {
+    // FAIL FAST in production - do not use insecure defaults
     console.error(
-      'ERROR: AUTH_JWT_SECRET is set to the insecure development default. Generating ephemeral secret so the service can start.\n' +
-        'Fix: set AUTH_JWT_SECRET in Railway/Vercel env vars to a strong random secret (recommended: 32+ bytes).',
+      'FATAL ERROR: AUTH_JWT_SECRET is set to the insecure development default in production.\n' +
+        'Generate a strong random secret and redeploy.\n' +
+        'Example: openssl rand -base64 48',
     )
-    return crypto.randomBytes(32).toString('base64url')
+    process.exit(1)
   }
-
-  return raw
-}
-
-const JWT_SECRET = resolveJwtSecret()
+  // Non-prod fallback only (must never be random).
+  return String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret').trim()
+})()
 
 function parseSeconds(value, fallback) {
   if (value === undefined || value === null) {
@@ -458,58 +465,18 @@ function buildUserPayload(userRow, profiles, activeProfileId) {
   }
 }
 
-async function assignProfileToUser(db, userId, email) {
-  if (email && isAdminEmail(email)) {
-    await ensureAdminUser(db)
-    return null
-  }
+/**
+ * Find a profile by email address from profile_sections basic_information.
+ * Works with both Postgres and SQLite.
+ * @param {Object} db - Database instance
+ * @param {string} normalizedEmail - Normalized email address (lowercase)
+ * @returns {Promise<{id: string, user_id: string|null}|null>} Profile row or null
+ */
+async function findProfileRowForEmail(db, normalizedEmail) {
+  if (!normalizedEmail) return null
 
-  async function findProfileRowForEmail(normalizedEmail) {
-    if (!normalizedEmail) return null
-
-    // Postgres: JSON ->> extraction is safe and fast.
-    if (db?.dialect === 'postgres') {
-      try {
-        return (
-          (await db
-            .prepare(
-              `
-                SELECT p.id, p.user_id
-                FROM profiles p
-                JOIN profile_sections ps ON ps.profile_id = p.id
-                WHERE ps.section_key = 'basic_information'
-                  AND LOWER((ps.data::jsonb ->> 'email')) = ?
-                LIMIT 1
-              `,
-            )
-            .get(normalizedEmail)) ?? null
-        )
-      } catch {
-        return null
-      }
-    }
-
-    // SQLite: prefer json_extract when available.
-    try {
-      const row = await db
-        .prepare(
-          `
-            SELECT p.id, p.user_id
-            FROM profiles p
-            JOIN profile_sections ps ON ps.profile_id = p.id
-            WHERE ps.section_key = 'basic_information'
-              AND LOWER(json_extract(ps.data, '$.email')) = ?
-            LIMIT 1
-          `,
-        )
-        .get(normalizedEmail)
-      if (row?.id) return row
-    } catch {
-      // ignore and fall back to LIKE matching
-    }
-
-    // Fallback: match in JSON string (works even if json1 isn't enabled).
-    const needle = `"email":"${normalizedEmail.replace(/"/g, '').toLowerCase()}"`
+  // Postgres: JSON ->> extraction is safe and fast.
+  if (db?.dialect === 'postgres') {
     try {
       return (
         (await db
@@ -519,15 +486,66 @@ async function assignProfileToUser(db, userId, email) {
               FROM profiles p
               JOIN profile_sections ps ON ps.profile_id = p.id
               WHERE ps.section_key = 'basic_information'
-                AND LOWER(ps.data) LIKE ?
+                AND LOWER((ps.data::jsonb ->> 'email')) = ?
               LIMIT 1
             `,
           )
-          .get(`%${needle}%`)) ?? null
+          .get(normalizedEmail)) ?? null
       )
     } catch {
       return null
     }
+  }
+
+  // SQLite: prefer json_extract when available.
+  try {
+    const row = await db
+      .prepare(
+        `
+          SELECT p.id, p.user_id
+          FROM profiles p
+          JOIN profile_sections ps ON ps.profile_id = p.id
+          WHERE ps.section_key = 'basic_information'
+            AND LOWER(json_extract(ps.data, '$.email')) = ?
+          LIMIT 1
+        `,
+      )
+      .get(normalizedEmail)
+    if (row?.id) return row
+  } catch {
+    // ignore and fall back to LIKE matching
+  }
+
+  // Fallback: match in JSON string (works even if json1 isn't enabled).
+  // Properly escape the email for safe JSON string matching
+  const escapedEmail = normalizedEmail
+    .replace(/\\/g, '\\\\')  // Escape backslashes first
+    .replace(/"/g, '\\"')     // Escape quotes
+  const needle = `"email":"${escapedEmail.toLowerCase()}"`
+  try {
+    return (
+      (await db
+        .prepare(
+          `
+            SELECT p.id, p.user_id
+            FROM profiles p
+            JOIN profile_sections ps ON ps.profile_id = p.id
+            WHERE ps.section_key = 'basic_information'
+              AND LOWER(ps.data) LIKE ?
+            LIMIT 1
+          `,
+        )
+        .get(`%${needle}%`)) ?? null
+    )
+  } catch {
+    return null
+  }
+}
+
+async function assignProfileToUser(db, userId, email) {
+  if (email && isAdminEmail(email)) {
+    await ensureAdminUser(db)
+    return null
   }
 
   if (email) {
@@ -536,7 +554,7 @@ async function assignProfileToUser(db, userId, email) {
     // 1) Best-effort match to an existing profile by email captured in profile sections.
     // This is the safest way to ensure returning users re-claim their original profile
     // even when IDs/mappings drift across DB restores.
-    const byEmail = await findProfileRowForEmail(normalizedEmail)
+    const byEmail = await findProfileRowForEmail(db, normalizedEmail)
     if (byEmail?.id) {
       if (!byEmail.user_id || byEmail.user_id === userId) {
         await db
@@ -564,14 +582,12 @@ async function assignProfileToUser(db, userId, email) {
           await db
             .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
             .run(userId, designatedProfileId)
-          // TODO: Remove debug log - console.log(`[auth] Assigned designated profile ${designatedProfileId} to user ${userId} (${email})`)
           return designatedProfileId
         }
         if (await isAdminUserId(db, designatedProfile.user_id)) {
           await db
             .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
             .run(userId, designatedProfileId)
-          // TODO: Remove debug log - console.log(`[auth] Reassigned designated profile ${designatedProfileId} from admin to user ${userId} (${email})`)
           return designatedProfileId
         }
         console.warn(`[auth] Designated profile ${designatedProfileId} already linked to another user`)
@@ -605,12 +621,9 @@ async function assignProfileToUser(db, userId, email) {
 
 async function ensureAdminStatus(db, userId, email) {
   if (isAdminEmail(email)) {
-    const result = await db
+    await db
       .prepare('UPDATE users SET is_admin = TRUE WHERE id = ? AND COALESCE(is_admin, FALSE) = FALSE')
       .run(userId)
-    if (result.changes > 0) {
-      // TODO: Remove debug log - console.log(`[auth] Set admin status for user ${userId} (${email})`)
-    }
   }
 }
 
@@ -1318,6 +1331,32 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
 
     console.info('[auth/email/start] Processing email authentication request for:', email)
 
+    // Determine if we're in production
+    const isProd =
+      process.env.NODE_ENV === 'production' ||
+      process.env.RAILWAY_ENVIRONMENT === 'production' ||
+      process.env.VERCEL_ENV === 'production'
+
+    // In production, check if the email is authorized (matches an existing profile)
+    // before creating/allowing authentication
+    if (isProd) {
+      const normalizedEmail = normalizeEmail(email)
+      const matchingProfile = await findProfileRowForEmail(req.db, normalizedEmail)
+      
+      // Also allow admin emails even if they don't have a profile yet
+      const isAuthorized = matchingProfile || isAdminEmail(email)
+      
+      if (!isAuthorized) {
+        console.warn('[auth/email/start] Unauthorized email in production (no matching profile):', email)
+        return res.status(403).json({
+          error: 'Access denied. This email is not authorized for login.',
+          error_type: 'unauthorized_email'
+        })
+      }
+      
+      console.info('[auth/email/start] Email authorized in production for:', email, 'profile_id:', matchingProfile?.id)
+    }
+
     // Database operations with error handling
     let user, credential
     try {
@@ -1384,7 +1423,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       })
     }
 
-    // Attempt to send email with timeout
+    // Attempt to send email with timeout (optional, not required for login)
     console.info('[auth/email/start] Attempting to send verification email to:', email)
     let emailSent = false
     try {
@@ -1407,11 +1446,11 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       // Don't fail the request if email fails - code is stored in DB
     }
 
-    // Return success response with code in development/when email fails
+    // Return success response
     const responseData = {
       message: emailSent 
         ? 'Verification code sent to your email' 
-        : 'Verification code generated (email service unavailable)',
+        : 'Verification code generated. Use the preview code to log in.',
       email_sent: emailSent,
       verification_token: verificationToken,
       user_hint: {
@@ -1429,29 +1468,12 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       error: emailSent ? null : 'email_delivery_failed_or_unconfigured',
     }).catch(() => {})
 
-    // SECURITY: never expose OTP codes in production responses.
-    // IMPORTANT: do NOT hard-fail the login start flow if email delivery is slow/unavailable.
-    // Many providers are async/queued and may deliver shortly after the request returns.
-    // Treat hosted deployments as production even if NODE_ENV is mis-set.
-    // SECURITY: if we can't confidently identify "non-prod", we default to production behavior
-    // (meaning: never return OTP codes in responses).
-    const nodeEnv = String(process.env.NODE_ENV || '').trim().toLowerCase()
-    const railwayEnv = String(process.env.RAILWAY_ENVIRONMENT || '').trim().toLowerCase()
-    const vercelEnv = String(process.env.VERCEL_ENV || '').trim().toLowerCase()
-    const isHosted = Boolean(
-      process.env.RAILWAY_PROJECT_ID ||
-        process.env.RAILWAY_SERVICE_ID ||
-        process.env.RAILWAY_ENVIRONMENT ||
-        process.env.VERCEL ||
-        process.env.VERCEL_ENV,
-    )
-    const isExplicitDev = nodeEnv === 'development' || nodeEnv === 'test'
-    const isProd =
-      (!isExplicitDev && isHosted) ||
-      nodeEnv === 'production' ||
-      railwayEnv === 'production' ||
-      railwayEnv === 'prod' ||
-      vercelEnv === 'production'
+    // Check if preview codes are explicitly allowed in production
+    const allowPreviewInProd = String(
+      process.env.AUTH_ALLOW_PREVIEW_CODE_IN_PROD ||
+      process.env.AUTH_ALLOW_PREVIEW_CODE ||
+      ''
+    ).toLowerCase() === 'true'
 
     // Developer experience: in non-production, return a preview code so local/test flows can proceed
     // even when email delivery is not configured.
@@ -1460,7 +1482,14 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       responseData.previewCode = code
     }
 
-    console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent)
+    // Production: always return preview code for authorized emails (email is pre-validated above)
+    // This removes the dependency on email delivery for production login
+    if (isProd) {
+      responseData.previewCode = code
+      responseData.preview_reason = 'profile_email_authorized'
+    }
+
+    console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent, 'isProd:', isProd)
     return res.status(202).json(responseData)
     
   } catch (error) {
@@ -1704,11 +1733,15 @@ router.post('/email/verify', async (req, res) => {
   
   // Trigger Anya's autonomous operations for admin login if configured
   if (req.db?.dialect !== 'postgres' && user.role === 'admin' && process.env.ANYA_RUN_ON_ADMIN_LOGIN === 'true') {
-    import('../services/anyaAutonomousScheduler.js').then(({ runOnAdminLogin }) => {
-      runOnAdminLogin(req.db, user.id).catch(err => {
-        console.error('[Anya] Failed to run admin login operations:', err)
+    import('../services/anyaAutonomousScheduler.js')
+      .then(({ runOnAdminLogin }) => {
+        runOnAdminLogin(req.db, user.id).catch(err => {
+          console.error('[Anya] Failed to run admin login operations:', err)
+        })
       })
-    })
+      .catch((err) => {
+        console.error('[Anya] Failed to import autonomous scheduler:', err?.message || err);
+      })
   }
 
   // Admin notice on successful sign-in (post-verify)
@@ -2176,67 +2209,59 @@ router.get('/:provider/callback', async (req, res) => {
 
 router.get('/me', async (req, res) => {
   try {
-    // Return current user information based on the JWT token
-    // The server middleware populates req.user from the Authorization header
-    if (!req.user || !req.user.userId) {
+    // Canonical auth truth: req.ctx (resolved per request from DB).
+    if (!req.ctx?.userId) {
       return res.status(401).json({ error: 'Not authenticated' })
     }
 
-    let user, profiles
-    
+    const userId = req.ctx.userId
+    const email = req.ctx.email ?? null
+    const isAdmin = Boolean(req.ctx.isAdmin)
+    const activeProfileId = req.ctx.activeProfileId ?? null
+
+    // Count accessible resources for UI gating. For admins, return total counts.
+    let accessibleProfileCount = 0
+    let accessibleOrgCount = 0
+
     try {
-      user = await getUserById(req.db, req.user.userId)
+      if (req.ctx.accessibleProfileIds === null) {
+        const row = await req.db.prepare('SELECT COUNT(*) as c FROM profiles').get()
+        accessibleProfileCount = Number(row?.c ?? row?.count ?? 0)
+      } else if (req.ctx.accessibleProfileIds instanceof Set) {
+        accessibleProfileCount = req.ctx.accessibleProfileIds.size
+      }
     } catch (dbError) {
-      console.error('[auth/me] Database error fetching user:', dbError)
-      return res.status(500).json({ 
-        error: 'Database error occurred',
-        error_type: 'database_error',
-        details: process.env.NODE_ENV !== 'production' ? dbError.message : undefined
-      })
-    }
-    
-    if (!user) {
-      // Self-heal for hosted environments where the SQLite file can reset between deploys/restarts.
-      // If the request is authenticated (signed JWT), recreate a minimal user record so sessions
-      // and admin tools don't become brittle.
-      try {
-        const userId = req.user.userId
-        const email = typeof req.user.email === 'string' ? req.user.email : null
-        const displayName = typeof req.user.full_name === 'string' ? req.user.full_name : null
-        const isAdmin = req.user.role === 'admin' || req.user.is_admin === true
-
-        await req.db.prepare(
-          `
-            INSERT INTO users (id, display_name, primary_email, is_admin)
-            VALUES (?, ?, ?, ?)
-          `,
-        ).run(userId, displayName, email, isAdmin)
-
-        if (email) {
-          await ensureAdminStatus(req.db, userId, normalizeEmail(email))
-        }
-
-        user = await getUserById(req.db, userId)
-      } catch (repairError) {
-        console.error('[auth/me] Unable to self-heal missing user:', repairError)
-      }
-
-      if (!user) {
-        return res.status(404).json({ error: 'User not found' })
-      }
+      console.error('[auth/me] Database error fetching profile count:', dbError)
     }
 
     try {
-      profiles = await getUserProfiles(req.db, user.id)
+      if (req.ctx.accessibleOrgIds === null) {
+        const row = await req.db.prepare('SELECT COUNT(*) as c FROM organizations').get()
+        accessibleOrgCount = Number(row?.c ?? row?.count ?? 0)
+      } else if (req.ctx.accessibleOrgIds instanceof Set) {
+        accessibleOrgCount = req.ctx.accessibleOrgIds.size
+      }
     } catch (dbError) {
-      console.error('[auth/me] Database error fetching profiles:', dbError)
-      // Return user data without profiles if profiles query fails
-      profiles = []
+      console.error('[auth/me] Database error fetching org count:', dbError)
     }
     
     const activeProfileId = req.user.profileId || null
+    
+    // Use req.ctx if available for canonical admin status (from requestContext middleware)
+    const isAdmin = req.ctx?.isAdmin ?? Boolean(user.is_admin === true || user.is_admin === 1)
+    
+    // Count accessible resources for frontend
+    const accessibleProfileCount = req.ctx?.accessibleProfileIds === null ? profiles.length : (req.ctx?.accessibleProfileIds?.size ?? profiles.length)
+    const accessibleOrgCount = req.ctx?.accessibleOrgIds === null ? 0 : (req.ctx?.accessibleOrgIds?.size ?? 0)
 
     return res.json({
+      userId: user.id,
+      email: user.primary_email || user.email || null,
+      isAdmin,
+      activeProfileId,
+      accessibleProfileCount,
+      accessibleOrgCount,
+      // Legacy payload for backward compatibility
       user: buildUserPayload(user, profiles, activeProfileId),
     })
   } catch (error) {

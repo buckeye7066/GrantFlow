@@ -17,8 +17,12 @@ import { formatError } from '../middleware/errorHandler.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import {
   ensureProfileAccess as ensureProfileAccessByEmail,
+  getAccessibleProfileIds,
   isAdminUser,
+  isAdminUserWithDb,
   isProfileOwner,
+  getAuthUserId,
+  getAuthProfileId,
   listProfileEmails,
   addProfileEmails,
   removeProfileEmail,
@@ -39,7 +43,8 @@ router.param('id', async (req, res, id, next) => {
     // Fall back to a minimal owner check so users aren't blocked by schema drift/migration timing.
     try {
       const user = req.user ?? { role: 'guest' }
-      if (isAdmin(user) || isAdminUser(user)) return next()
+      const isAdmin = await isAdminUserWithDb(req.db, user)
+      if (isAdmin) return next()
 
       const authUserId = getAuthUserId(user)
       const authProfileId = getAuthProfileId(user)
@@ -61,31 +66,9 @@ router.param('id', async (req, res, id, next) => {
   }
 })
 
-// Admin configuration
-const ADMIN_EMAIL = 'buckeye7066@gmail.com'
-
-/**
- * Check if user is admin
- * Checks both is_admin flag and primary_email match
- */
-function isAdmin(user) {
-  return Boolean(user?.is_admin) || 
-         user?.primary_email === ADMIN_EMAIL || 
-         user?.email === ADMIN_EMAIL || 
-         user?.role === 'admin'
-}
-
-function getAuthUserId(user) {
-  return user?.userId ?? user?.id ?? user?.user_id ?? null
-}
-
-function getAuthProfileId(user) {
-  return user?.profileId ?? user?.profile_id ?? null
-}
-
 function canAccessProfile({ auth, profileRow }) {
   if (!profileRow) return false
-  if (isAdmin(auth)) return true
+  if (isAdminUser(auth)) return true
   const authProfileId = getAuthProfileId(auth)
   if (authProfileId && authProfileId === profileRow.id) return true
   const authUserId = getAuthUserId(auth)
@@ -255,22 +238,23 @@ function extractAnthropicText(response) {
 
 router.get('/', async (req, res) => {
   const user = req.user
-  const userId = getAuthUserId(user)
+  const isAdmin = req.ctx?.isAdmin === true
   const includeSummary = req.query.summary === 'true'
+  const includeDeleted = req.query.includeDeleted === 'true'
   
   // Validate pagination parameters.
   // For admins, default to the max page size unless a limit is explicitly provided.
   // This prevents "missing profiles" in the UI when admins expect to see everything.
   const paginationQuery = { ...req.query }
   const limitProvided = Object.prototype.hasOwnProperty.call(req.query ?? {}, 'limit')
-  if (isAdmin(user) && !limitProvided) {
+  if (isAdminUser(user) && !limitProvided) {
     paginationQuery.limit = 1000
     paginationQuery.offset = 0
   }
   const { limit, offset } = validatePagination(paginationQuery);
 
   // Check if user is admin
-  if (!isAdmin(user)) {
+  if (!isAdminUser(user)) {
     // Enduser: return only profiles where profiles.user_id = user.id
     if (!userId) {
       return res.status(401).json({ error: 'Authentication required' })
@@ -278,7 +262,7 @@ router.get('/', async (req, res) => {
 
     // Get all profiles linked to this user (with pagination)
     const rows = await req.db.prepare(
-      `${profileSelect} WHERE p.user_id = ? ORDER BY p.created_at ASC LIMIT ? OFFSET ?`
+      `${profileSelect} WHERE p.user_id = ? AND (p.status IS NULL OR p.status <> 'deleted') ORDER BY p.created_at ASC LIMIT ? OFFSET ?`
     ).all(userId, limit, offset)
     
     const profiles = rows.map(mapProfile)
@@ -291,7 +275,8 @@ router.get('/', async (req, res) => {
   }
 
   // Admin: return ALL profiles with pagination
-  const stmt = req.db.prepare(`${profileSelect} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`)
+  const adminWhere = includeDeleted ? '' : "WHERE (p.status IS NULL OR p.status <> 'deleted')"
+  const stmt = req.db.prepare(`${profileSelect} ${adminWhere} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`)
   const profiles = (await stmt.all(limit, offset)).map(mapProfile)
   
   if (includeSummary) {
@@ -397,7 +382,8 @@ router.delete('/:id/emails/:emailId', async (req, res) => {
 
 router.post('/', async (req, res) => {
   const user = req.user
-  const userId = getAuthUserId(user)
+  const isAdmin = req.ctx?.isAdmin === true
+  const userId = req.ctx?.userId ?? getAuthUserId(user)
   const { display_name, primary_type, organization_id, user_id, created_by, status = 'active', tags = [] } = req.body ?? {}
 
   if (!display_name || typeof display_name !== 'string') {
@@ -405,7 +391,7 @@ router.post('/', async (req, res) => {
   }
 
   // Check permissions
-  if (!isAdmin(user)) {
+  if (!isAdminUser(user)) {
     // Enduser can only create profiles for themselves
     if (!userId) {
       return res.status(401).json({ error: 'Authentication required' })
@@ -432,7 +418,7 @@ router.post('/', async (req, res) => {
   }
 
   // Determine user_id for the new profile
-  const profileUserId = isAdmin(user) ? (user_id || userId) : userId
+  const profileUserId = isAdminUser(user) ? (user_id || userId) : userId
 
   const profileId = crypto.randomUUID()
   // Ensure every newly created profile starts with all canonical sections + canonical keys.
@@ -476,7 +462,8 @@ router.post('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   const { id } = req.params
   const user = req.user
-  const userId = getAuthUserId(user)
+  const isAdmin = req.ctx?.isAdmin === true
+  const userId = req.ctx?.userId ?? getAuthUserId(user)
 
   let row = null
   try {
@@ -491,7 +478,7 @@ router.get('/:id', async (req, res) => {
   }
 
   // Check access permissions
-  if (!isAdmin(user)) {
+  if (!isAdminUser(user)) {
     // Enduser: can only access profiles where user_id matches
     if (!userId || row.user_id !== userId) {
       return res.status(403).json({ error: 'Access denied' })
@@ -540,7 +527,8 @@ router.put('/:id', async (req, res) => {
   const { id } = req.params
   const { display_name, primary_type, organization_id, status, tags } = req.body ?? {}
   const auth = req.user ?? { role: 'guest' }
-  const authUserId = getAuthUserId(auth)
+  const isAdmin = req.ctx?.isAdmin === true
+  const authUserId = req.ctx?.userId ?? getAuthUserId(auth)
   const authProfileId = getAuthProfileId(auth)
 
   const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
@@ -549,10 +537,10 @@ router.put('/:id', async (req, res) => {
   }
 
   // Allow: admins (including admin-email allowlist), profile-scoped tokens for the profile, or session owners (userId match)
-  const isAdminUser = isAdmin(auth)
+  const userIsAdmin = isAdminUser(auth)
   const matchesProfileId = authProfileId === id
   const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
-  if (!isAdminUser && !matchesProfileId && !matchesUserId) {
+  if (!userIsAdmin && !matchesProfileId && !matchesUserId) {
     return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to update this profile' })
   }
 
@@ -608,7 +596,7 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
-  const authUserId = getAuthUserId(auth)
+  const authUserId = req.ctx?.userId ?? getAuthUserId(auth)
   const authProfileId = getAuthProfileId(auth)
 
   // Check authorization - user must be admin or the profile must belong to them
@@ -617,7 +605,7 @@ router.delete('/:id', async (req, res) => {
     return res.status(404).json({ error: 'Profile not found' })
   }
 
-  const admin = isAdmin(auth)
+  const admin = await isAdminUserWithDb(req.db, auth)
   if (!admin) {
     const matchesProfileId = authProfileId === id
     const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
@@ -626,61 +614,90 @@ router.delete('/:id', async (req, res) => {
     }
   }
 
-  // Delete the profile. Prefer a straight delete (CASCADE/SET NULL), but if the DB is in a mixed
-  // migration state, fall back to a best-effort cleanup.
+  // Delete the profile.
+  //
+  // IMPORTANT (Postgres):
+  // Hard DELETE can fail due to FK RESTRICT constraints, and setting profile_id = NULL during cleanup
+  // can also fail when those columns are NOT NULL. To avoid 500s, fall back to a reliable soft-delete.
   try {
     const stmt = req.db.prepare('DELETE FROM profiles WHERE id = ?')
     await stmt.run(id)
   } catch (error) {
-    console.warn('[profiles] DELETE failed, attempting best-effort cleanup:', id, error?.message || error)
-    await req.db.transaction(async (tx) => {
-      try {
-        await tx.prepare('UPDATE documents SET profile_id = NULL WHERE profile_id = ?').run(id)
-      } catch {
-        // best-effort cleanup only
-      }
-      try {
-        await tx.prepare('UPDATE crawler_jobs SET profile_id = NULL WHERE profile_id = ?').run(id)
-      } catch {
-        // best-effort cleanup only
-      }
-      try {
-        await tx.prepare('UPDATE anya_sessions SET profile_id = NULL WHERE profile_id = ?').run(id)
-      } catch {
-        // best-effort cleanup only
-      }
-      try {
-        await tx.prepare('UPDATE anya_tasks SET profile_id = NULL WHERE profile_id = ?').run(id)
-      } catch {
-        // best-effort cleanup only
-      }
-      try {
-        await tx.prepare('DELETE FROM profile_documents WHERE profile_id = ?').run(id)
-      } catch {
-        // best-effort cleanup only
-      }
-      try {
-        await tx.prepare('DELETE FROM profile_sections WHERE profile_id = ?').run(id)
-      } catch {
-        // best-effort cleanup only
-      }
-      try {
-        await tx
-          .prepare(
-            `
-              DELETE FROM billing_account_events
-              WHERE account_id IN (SELECT id FROM billing_accounts WHERE profile_id = ?)
-            `,
-          )
-          .run(id)
-        await tx.prepare('DELETE FROM billing_accounts WHERE profile_id = ?').run(id)
-      } catch {
-        // best-effort cleanup only
-      }
+    console.warn('[profiles] Hard DELETE failed; soft-deleting profile:', id, error?.message || error)
 
-      const stmt = tx.prepare('DELETE FROM profiles WHERE id = ?')
-      await stmt.run(id)
-    })
+    // Best-effort cleanup of rows owned by the profile. Do NOT attempt `SET profile_id = NULL`.
+    try {
+      await req.db.transaction(async (tx) => {
+        try {
+          await tx.prepare('DELETE FROM profile_documents WHERE profile_id = ?').run(id)
+        } catch {
+          // ignore best-effort cleanup errors
+        }
+        try {
+          await tx.prepare('DELETE FROM profile_sections WHERE profile_id = ?').run(id)
+        } catch {
+          // ignore best-effort cleanup errors
+        }
+        try {
+          await tx.prepare('DELETE FROM crawler_jobs WHERE profile_id = ?').run(id)
+        } catch {
+          // ignore best-effort cleanup errors
+        }
+        try {
+          await tx.prepare('DELETE FROM crawler_schedules WHERE profile_id = ?').run(id)
+        } catch {
+          // ignore best-effort cleanup errors
+        }
+        try {
+          await tx.prepare('DELETE FROM anya_tool_usage WHERE profile_id = ?').run(id)
+        } catch {
+          // ignore best-effort cleanup errors
+        }
+        try {
+          await tx.prepare('DELETE FROM anya_tasks WHERE profile_id = ?').run(id)
+        } catch {
+          // ignore best-effort cleanup errors
+        }
+        try {
+          await tx.prepare('DELETE FROM anya_sessions WHERE profile_id = ?').run(id)
+        } catch {
+          // ignore best-effort cleanup errors
+        }
+        try {
+          await tx.prepare('DELETE FROM service_applications WHERE profile_id = ?').run(id)
+        } catch {
+          // ignore best-effort cleanup errors
+        }
+        try {
+          await tx.prepare('DELETE FROM funding_opportunities WHERE profile_id = ?').run(id)
+        } catch {
+          // ignore best-effort cleanup errors
+        }
+        try {
+          await tx
+            .prepare(
+              `
+                DELETE FROM billing_account_events
+                WHERE account_id IN (SELECT id FROM billing_accounts WHERE profile_id = ?)
+              `,
+            )
+            .run(id)
+          await tx.prepare('DELETE FROM billing_accounts WHERE profile_id = ?').run(id)
+        } catch {
+          // ignore best-effort cleanup errors
+        }
+
+        await tx
+          .prepare("UPDATE profiles SET status = 'deleted', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+          .run(id)
+      })
+    } catch (softDeleteError) {
+      // If the transaction fails (schema drift, missing tables, etc.), still attempt a direct soft delete.
+      console.warn('[profiles] Soft-delete transaction failed; attempting direct soft-delete:', id, softDeleteError?.message || softDeleteError)
+      await req.db
+        .prepare("UPDATE profiles SET status = 'deleted', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+        .run(id)
+    }
   }
 
   // Clean up avatar file if it exists
@@ -700,7 +717,7 @@ router.delete('/:id', async (req, res) => {
 router.post('/:id/avatar', runUploadSingle('avatar'), async (req, res, next) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
-  const authUserId = getAuthUserId(auth)
+  const authUserId = req.ctx?.userId ?? getAuthUserId(auth)
   const authProfileId = getAuthProfileId(auth)
 
   const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
@@ -709,11 +726,11 @@ router.post('/:id/avatar', runUploadSingle('avatar'), async (req, res, next) => 
     return res.status(404).json({ error: 'Profile not found' })
   }
 
-  const isAdminUser = isAdmin(auth)
+  const userIsAdmin = isAdminUser(auth)
   const matchesProfileId = authProfileId === id
   const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
 
-  if (!isAdminUser && !matchesProfileId && !matchesUserId) {
+  if (!userIsAdmin && !matchesProfileId && !matchesUserId) {
     if (req.file) fs.unlink(join(uploadDir, req.file.filename), () => {})
     return res.status(403).json({ error: 'Not authorized to update this profile' })
   }
@@ -748,7 +765,7 @@ router.post('/:id/avatar', runUploadSingle('avatar'), async (req, res, next) => 
 router.post('/:id/avatar/ai', async (req, res) => {
   const { id } = req.params
   const auth = req.user ?? { role: 'guest' }
-  const authUserId = getAuthUserId(auth)
+  const authUserId = req.ctx?.userId ?? getAuthUserId(auth)
   const authProfileId = getAuthProfileId(auth)
 
   const profileRow = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
@@ -756,10 +773,10 @@ router.post('/:id/avatar/ai', async (req, res) => {
     return res.status(404).json({ error: 'Profile not found' })
   }
 
-  const isAdminUser = isAdmin(auth)
+  const userIsAdmin = isAdminUser(auth)
   const matchesProfileId = authProfileId === id
   const matchesUserId = authUserId && profileRow.user_id && authUserId === profileRow.user_id
-  if (!isAdminUser && !matchesProfileId && !matchesUserId) {
+  if (!userIsAdmin && !matchesProfileId && !matchesUserId) {
     return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to update this profile' })
   }
 
@@ -788,7 +805,7 @@ router.post('/:id/avatar/ai', async (req, res) => {
     profileRow.id,
     profileRow.organization_id ?? null,
     JSON.stringify(parameters),
-    auth.role === 'admin' ? 'admin' : profileRow.id,
+    req.ctx?.isAdmin ? 'admin' : profileRow.id,
   )
 
   const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)

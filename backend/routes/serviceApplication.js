@@ -198,12 +198,7 @@ router.post('/submit', async (req, res) => {
  */
 router.get('/list', async (req, res) => {
   try {
-    // Check admin access
-    const user = req.user
-    const isAdmin = Boolean(user?.is_admin) || user?.role === 'admin' ||
-      (user?.primary_email && user.primary_email.toLowerCase().includes('buckeye7066'))
-    
-    if (!isAdmin) {
+    if (!req.ctx?.isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Admin access required',
@@ -262,12 +257,8 @@ router.get('/list', async (req, res) => {
  */
 router.patch('/:id', async (req, res) => {
   try {
-    // Check admin access
-    const user = req.user
-    const isAdmin = Boolean(user?.is_admin) || user?.role === 'admin' ||
-      (user?.primary_email && user.primary_email.toLowerCase().includes('buckeye7066'))
-    
-    if (!isAdmin) {
+    // Check admin access (canonical)
+    if (!req.ctx?.isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Admin access required',
@@ -286,7 +277,7 @@ router.patch('/:id', async (req, res) => {
       
       if (status === 'reviewed') {
         updates.push('reviewed_by = ?', 'reviewed_at = CURRENT_TIMESTAMP')
-        params.push(user?.userId || user?.id || null)
+        params.push(req.ctx?.userId || null)
       }
     }
     

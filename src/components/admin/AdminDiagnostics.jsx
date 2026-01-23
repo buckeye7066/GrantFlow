@@ -743,7 +743,13 @@ export default function AdminDiagnostics() {
                 </div>
               </div>
 
-              <div className="flex flex-col gap-2">
+              <form
+                className="flex flex-col gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  verifyProvidedOpenAIKey()
+                }}
+              >
                 <Input
                   type="password"
                   placeholder="sk-..."
@@ -755,13 +761,14 @@ export default function AdminDiagnostics() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={verifyProvidedOpenAIKey}
+                    type="submit"
                     disabled={openaiKeyLoading || !openaiKey.trim()}
                   >
                     {openaiKeyLoading ? 'Working…' : 'Verify key'}
                   </Button>
                   <Button
                     size="sm"
+                    type="button"
                     onClick={applyProvidedOpenAIKey}
                     disabled={openaiKeyLoading || !openaiKey.trim()}
                   >
@@ -770,6 +777,7 @@ export default function AdminDiagnostics() {
                   <Button
                     variant="outline"
                     size="sm"
+                    type="button"
                     onClick={persistCurrentOpenAIKey}
                     disabled={openaiKeyLoading}
                   >
@@ -789,7 +797,7 @@ export default function AdminDiagnostics() {
                     {JSON.stringify(openaiKeyResult, null, 2)}
                   </pre>
                 ) : null}
-              </div>
+              </form>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">

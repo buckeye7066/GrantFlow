@@ -89,6 +89,14 @@ export const CRAWLER_JOB_TYPES = [
   'profile_enrichment'
 ];
 
+export const CRAWLER_JOB_STATUSES = [
+  'queued',
+  'running',
+  'completed',
+  'failed',
+  'cancelled',
+]
+
 // Grant statuses
 export const GRANT_STATUSES = [
   'discovered',

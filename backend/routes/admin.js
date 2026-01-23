@@ -28,6 +28,7 @@ import { crawlSpecialNeeds } from '../services/crawlers/specialNeedsCrawler.js';
 import { crawlItemFunding } from '../services/crawlers/itemFundingCrawler.js';
 import { crawlECFBenefits } from '../services/crawlers/ecfBenefitsCrawler.js';
 import { findDuplicateProfileGroups, mergeProfiles } from '../services/profileDedupeService.js'
+import { ensureAdminUser, isAdminUser } from '../utils/accessControl.js'
 import zipcodes from 'zipcodes';
 
 const router = express.Router();
@@ -124,49 +125,9 @@ async function withTimeout(promise, ms, label) {
   }
 }
 
-async function ensureAdminRequest(req, res) {
-  const user = req.user ?? {};
-
-  // Fast path: middleware already marked admin.
-  if (user?.is_admin === true || user?.role === 'admin') {
-    return true;
-  }
-
-  // Resolve the authenticated user from DB when middleware can't determine admin status
-  // (e.g., profile-scoped tokens that only carry profileId).
-  try {
-    const db = req.db;
-    const resolvedUserId = user?.userId
-      ? user.userId
-      : user?.profileId
-        ? (await db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(user.profileId))?.user_id
-        : null;
-
-    if (resolvedUserId) {
-      const row = await db
-        .prepare('SELECT is_admin, primary_email FROM users WHERE id = ?')
-        .get(resolvedUserId);
-      const email = String(row?.primary_email || '').toLowerCase();
-
-      if (row?.is_admin === true || row?.is_admin === 1) {
-        return true;
-      }
-
-      // Backwards-compatible admin allow-list.
-      if (email && email.includes('buckeye7066')) {
-        return true;
-      }
-    }
-  } catch (error) {
-    // fall through to 403
-  }
-
-  res.status(403).json({
-    error: 'Access denied',
-    message: 'This endpoint is restricted to administrators only',
-  });
-  return false;
-}
+// Use centralized admin enforcement from accessControl.js
+// This is now just an alias for consistency with existing code
+const ensureAdminRequest = ensureAdminUser;
 
 function loadZipCoordinates() {
   if (zipCoordinatesCache) return zipCoordinatesCache;
@@ -698,13 +659,11 @@ Be conservative - only include information you are confident about from the docu
 // Upload a PDF document, extract text, use AI to parse it, and create a profile
 router.post('/upload-profile-document', upload.single('document'), async (req, res) => {
   try {
-    // Check admin access - use consistent admin enforcement (is_admin flag or email-based)
+    // Check admin access using centralized admin enforcement
     const user = req.user;
-    const userEmail = user?.primary_email || user?.email || '';
-    const isAdmin = user?.is_admin === true || user?.role === 'admin' || 
-                    (userEmail && userEmail.toLowerCase().includes('buckeye7066'));
+    const adminCheck = isAdminUser(user);
     
-    if (!isAdmin) {
+    if (!adminCheck) {
       // Clean up uploaded file
       if (req.file) {
         try {
@@ -966,7 +925,7 @@ router.post('/reattach-users', async (req, res) => {
     const adminUser = await db.prepare(`
       SELECT id, display_name, primary_email
       FROM users
-      WHERE is_admin = TRUE OR LOWER(primary_email) LIKE '%buckeye7066%'
+      WHERE is_admin = TRUE
       LIMIT 1
     `).get();
     
@@ -1899,11 +1858,11 @@ router.get('/feature-flags/:key/check', async (req, res) => {
     const { key } = req.params;
     const { userId, profileId } = req.query;
     
-    const isAdmin = Boolean(req.user?.is_admin || req.user?.role === 'admin');
+    const adminCheck = isAdminUser(req.user);
     const enabled = isFeatureEnabled(req.db, key, {
       userId: userId || req.user?.userId,
       profileId: profileId || req.user?.profileId,
-      isAdmin,
+      isAdmin: adminCheck,
     });
     
     res.json({ key, enabled });
@@ -2264,22 +2223,16 @@ router.post('/profiles/merge', async (req, res, next) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return
 
-    const winnerId = typeof req.body?.winnerId === 'string' ? req.body.winnerId.trim() : ''
-    const loserIdsRaw = req.body?.loserIds
+    const winnerId = typeof req.body?.winnerId === 'string' ? req.body.winnerId : null
+    const loserIds = Array.isArray(req.body?.loserIds) ? req.body.loserIds : null
     const dryRun = req.body?.dryRun !== false
 
-    const loserIds = Array.isArray(loserIdsRaw)
-      ? loserIdsRaw.map((v) => (typeof v === 'string' ? v.trim() : '')).filter(Boolean)
-      : []
-
-    if (!winnerId) {
-      return res.status(400).json({ ok: false, error: 'winnerId is required' })
-    }
-    if (loserIds.length === 0) {
-      return res.status(400).json({ ok: false, error: 'loserIds must be a non-empty array' })
-    }
-    if (loserIds.includes(winnerId)) {
-      return res.status(400).json({ ok: false, error: 'winnerId cannot be included in loserIds' })
+    if (!winnerId || !loserIds || loserIds.length === 0) {
+      return res.status(400).json({
+        ok: false,
+        error: 'winnerId (string) and loserIds (non-empty array) are required',
+        error_type: 'invalid_input',
+      })
     }
 
     const result = await mergeProfiles(req.db, {
@@ -2299,5 +2252,39 @@ router.post('/profiles/merge', async (req, res, next) => {
     })
   }
 })
+
+// Dead Letter Queue Management
+router.get('/dead-letter-queue', async (req, res) => {
+  try {
+    const { getUnresolvedFailures, getFailureStatistics } = await import('../services/deadLetterQueue.js');
+    const { jobType, limit = 100 } = req.query;
+    
+    if (jobType) {
+      const failures = await getUnresolvedFailures(req.db, jobType, parseInt(limit, 10));
+      res.json({ failures, count: failures.length });
+    } else {
+      const stats = await getFailureStatistics(req.db);
+      res.json({ statistics: stats });
+    }
+  } catch (error) {
+    console.error('[admin] Error fetching dead letter queue:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/dead-letter-queue/:id/resolve', async (req, res) => {
+  try {
+    const { resolveFailure } = await import('../services/deadLetterQueue.js');
+    const { id } = req.params;
+    const { notes } = req.body;
+    const userId = req.user?.userId || req.user?.id || 'system';
+    
+    await resolveFailure(req.db, id, userId, notes);
+    res.json({ success: true, message: 'Dead letter entry resolved' });
+  } catch (error) {
+    console.error('[admin] Error resolving dead letter entry:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 export default router;

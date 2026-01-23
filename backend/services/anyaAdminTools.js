@@ -8,14 +8,13 @@ const __dirname = dirname(__filename)
 const REPO_ROOT = path.resolve(process.cwd())
 
 // ============================================================================
-// Admin Role Enforcement
+// Admin Role Enforcement (canonical: req.ctx.isAdmin / users.is_admin)
 // ============================================================================
 
-const ADMIN_EMAIL = 'buckeye7066@gmail.com';
-
 /**
- * Check if user is admin
- * @param {Object} user - User object with email/role
+ * Check if user is admin (DB-backed)
+ * CRITICAL: This should match the logic in requestContext.js and accessControl.js
+ * @param {Object} user - User object with is_admin flag
  * @returns {boolean} True if user is admin
  */
 export function isAdmin(user) {
@@ -23,18 +22,9 @@ export function isAdmin(user) {
     return false;
   }
   
-  // Check explicit admin flags first (set by auth middleware)
-  if (user.role === 'admin' || user.is_admin === true) {
-    return true;
-  }
-  
-  // Fall back to email check (supports both property names)
-  const email = user.primary_email || user.email;
-  if (email && email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
-    return true;
-  }
-  
-  return false;
+  // Use DB-backed admin flag (set by auth middleware from database)
+  // No email substring checks - DB is the source of truth
+  return Boolean(user.role === 'admin' || user.is_admin === true || user.is_admin === 1);
 }
 
 /**
@@ -44,7 +34,7 @@ export function isAdmin(user) {
  */
 export function requireAdmin(user) {
   if (!isAdmin(user)) {
-    throw new Error('Admin access required. Contact buckeye7066@gmail.com for assistance.');
+    throw new Error('Admin access required. Admin privileges are managed via database.');
   }
 }
 
@@ -70,7 +60,7 @@ export function canAccessProfile(user, profileId, db) {
     return false;
   }
   
-  return profile.user_id === user.id;
+  return profile.user_id === (user.userId ?? user.id);
 }
 
 /**
@@ -444,6 +434,17 @@ export async function adminCodeEdit({ filePath, changes, save = false }, context
   }
   if (!Array.isArray(changes) || changes.length === 0) {
     throw new Error('changes array is required')
+  }
+
+  if (save) {
+    const allowEdits =
+      String(process.env.ANYA_ALLOW_CODE_EDIT || '').trim().toLowerCase() === 'true' &&
+      String(process.env.NODE_ENV || '').trim().toLowerCase() !== 'production'
+    if (!allowEdits) {
+      const error = new Error('Code edits are disabled. Use code.suggestPatch to generate a diff instead.')
+      error.status = 403
+      throw error
+    }
   }
 
   const resolvedPath = path.resolve(REPO_ROOT, filePath)

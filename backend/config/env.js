@@ -12,6 +12,33 @@ function looksLikePostgresUrl(value) {
   return /^postgres(ql)?:\/\//i.test(String(value || '').trim())
 }
 
+function normalizeMaybeSecret(value) {
+  const raw = typeof value === 'string' ? value : value == null ? '' : String(value)
+  const trimmed = raw.trim()
+  return trimmed || null
+}
+
+function looksUnsafeJwtSecret(value) {
+  const v = String(value || '').trim()
+  if (!v) return true
+  const lowered = v.toLowerCase()
+  return (
+    lowered === 'grantflow-dev-secret' ||
+    lowered === 'dev' ||
+    lowered === 'development' ||
+    lowered === 'secret' ||
+    lowered === 'changeme' ||
+    lowered === 'change-me' ||
+    lowered === 'your_jwt_secret' ||
+    lowered === 'your-jwt-secret' ||
+    lowered === 'your jwt secret'
+  )
+}
+
+function containsCorsWildcard(origins) {
+  return Array.isArray(origins) && origins.some((o) => String(o || '').trim() === '*')
+}
+
 const EnvSchema = z
   .object({
     NODE_ENV: z.string().optional().default('development'),
@@ -38,6 +65,7 @@ const EnvSchema = z
     AUTH_NOTIFY_ON_LOGIN: z.string().optional(),
     AUTH_NOTIFY_EMAIL: z.string().optional(),
     AUTH_ALLOW_PREVIEW_CODE_IN_PROD: z.string().optional(),
+    AUTH_ALLOW_ADMIN_PREVIEW_CODE: z.string().optional(), // Failsafe for admin users when email fails
 
     // Frontend base path (used for SPA static hosting under subpaths like /grantflow)
     AUTH_FRONTEND_APP_BASE: z.string().optional(),
@@ -105,10 +133,21 @@ export function loadEnv({ mode = process.env.NODE_ENV } = {}) {
   }
 
   if (isProd) {
-    if (!(env.AUTH_JWT_SECRET || env.JWT_SECRET)) {
+    const jwtSecret = normalizeMaybeSecret(env.AUTH_JWT_SECRET) || normalizeMaybeSecret(env.JWT_SECRET)
+    if (!jwtSecret) {
       return {
         ok: false,
         issues: ['AUTH_JWT_SECRET (or JWT_SECRET) is required in production for secure auth tokens'],
+        env: null,
+        warnings: [],
+      }
+    }
+    if (looksUnsafeJwtSecret(jwtSecret)) {
+      return {
+        ok: false,
+        issues: [
+          'AUTH_JWT_SECRET/JWT_SECRET is set to an insecure placeholder value. Set a strong random secret (recommended: 32+ bytes).',
+        ],
         env: null,
         warnings: [],
       }
@@ -150,6 +189,16 @@ export function loadEnv({ mode = process.env.NODE_ENV } = {}) {
   }
 
   const corsOrigins = env.CORS_ORIGIN ? splitCsv(env.CORS_ORIGIN) : []
+  if (isProd && env.CORS_ORIGIN && containsCorsWildcard(corsOrigins)) {
+    return {
+      ok: false,
+      issues: [
+        'CORS_ORIGIN must not include "*" in production when credentials are enabled. Provide explicit origins (comma-separated).',
+      ],
+      env: null,
+      warnings: [],
+    }
+  }
   const appBase =
     (env.AUTH_FRONTEND_APP_BASE || env.VITE_APP_BASE || '/grantflow').replace(/\/+$/, '') || '/grantflow'
 
@@ -184,5 +233,24 @@ export function assertEnv({ mode } = {}) {
   }
 
   return { env: result.env, warnings: result.warnings }
+}
+
+// Centralized JWT secret resolution for server/routes/tests.
+// NOTE: This must never generate random secrets.
+export function getJwtSecretOrThrow(env = {}) {
+  const secret = normalizeMaybeSecret(env.AUTH_JWT_SECRET) || normalizeMaybeSecret(env.JWT_SECRET)
+  const isProd = Boolean(env.isProd) || String(env.NODE_ENV || '').toLowerCase() === 'production'
+  if (!secret) {
+    // Unit tests and local dev shouldn't require configuring secrets.
+    // IMPORTANT: This must never be random; tests require deterministic behavior.
+    if (!isProd) return 'grantflow-dev-secret'
+    throw new Error('Missing AUTH_JWT_SECRET (or JWT_SECRET)')
+  }
+
+  if (isProd && looksUnsafeJwtSecret(secret)) {
+    throw new Error('AUTH_JWT_SECRET/JWT_SECRET is set to insecure placeholder value')
+  }
+
+  return secret
 }
 
