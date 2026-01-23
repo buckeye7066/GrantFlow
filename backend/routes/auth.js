@@ -2140,68 +2140,49 @@ router.get('/:provider/callback', async (req, res) => {
 
 router.get('/me', async (req, res) => {
   try {
-    // Return current user information based on the JWT token
-    // The server middleware populates req.user from the Authorization header
-    if (!req.user || !req.user.userId) {
+    // Canonical auth truth: req.ctx (resolved per request from DB).
+    if (!req.ctx?.userId) {
       return res.status(401).json({ error: 'Not authenticated' })
     }
 
-    let user, profiles
-    
+    const userId = req.ctx.userId
+    const email = req.ctx.email ?? null
+    const isAdmin = Boolean(req.ctx.isAdmin)
+    const activeProfileId = req.ctx.activeProfileId ?? null
+
+    // Count accessible resources for UI gating. For admins, return total counts.
+    let accessibleProfileCount = 0
+    let accessibleOrgCount = 0
+
     try {
-      user = await getUserById(req.db, req.user.userId)
+      if (req.ctx.accessibleProfileIds === null) {
+        const row = await req.db.prepare('SELECT COUNT(*) as c FROM profiles').get()
+        accessibleProfileCount = Number(row?.c ?? row?.count ?? 0)
+      } else if (req.ctx.accessibleProfileIds instanceof Set) {
+        accessibleProfileCount = req.ctx.accessibleProfileIds.size
+      }
     } catch (dbError) {
-      console.error('[auth/me] Database error fetching user:', dbError)
-      return res.status(500).json({ 
-        error: 'Database error occurred',
-        error_type: 'database_error',
-        details: process.env.NODE_ENV !== 'production' ? dbError.message : undefined
-      })
-    }
-    
-    if (!user) {
-      // Self-heal for hosted environments where the SQLite file can reset between deploys/restarts.
-      // If the request is authenticated (signed JWT), recreate a minimal user record so sessions
-      // and admin tools don't become brittle.
-      try {
-        const userId = req.user.userId
-        const email = typeof req.user.email === 'string' ? req.user.email : null
-        const displayName = typeof req.user.full_name === 'string' ? req.user.full_name : null
-        const isAdmin = req.user.role === 'admin' || req.user.is_admin === true
-
-        await req.db.prepare(
-          `
-            INSERT INTO users (id, display_name, primary_email, is_admin)
-            VALUES (?, ?, ?, ?)
-          `,
-        ).run(userId, displayName, email, isAdmin)
-
-        if (email) {
-          await ensureAdminStatus(req.db, userId, normalizeEmail(email))
-        }
-
-        user = await getUserById(req.db, userId)
-      } catch (repairError) {
-        console.error('[auth/me] Unable to self-heal missing user:', repairError)
-      }
-
-      if (!user) {
-        return res.status(404).json({ error: 'User not found' })
-      }
+      console.error('[auth/me] Database error fetching profile count:', dbError)
     }
 
     try {
-      profiles = await getUserProfiles(req.db, user.id)
+      if (req.ctx.accessibleOrgIds === null) {
+        const row = await req.db.prepare('SELECT COUNT(*) as c FROM organizations').get()
+        accessibleOrgCount = Number(row?.c ?? row?.count ?? 0)
+      } else if (req.ctx.accessibleOrgIds instanceof Set) {
+        accessibleOrgCount = req.ctx.accessibleOrgIds.size
+      }
     } catch (dbError) {
-      console.error('[auth/me] Database error fetching profiles:', dbError)
-      // Return user data without profiles if profiles query fails
-      profiles = []
+      console.error('[auth/me] Database error fetching org count:', dbError)
     }
-    
-    const activeProfileId = req.user.profileId || null
 
     return res.json({
-      user: buildUserPayload(user, profiles, activeProfileId),
+      userId,
+      email,
+      isAdmin,
+      activeProfileId,
+      accessibleProfileCount,
+      accessibleOrgCount,
     })
   } catch (error) {
     console.error('[auth/me] Unexpected error:', error)
