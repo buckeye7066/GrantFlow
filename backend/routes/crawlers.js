@@ -1017,13 +1017,10 @@ router.post('/jobs', async (req, res) => {
         return res.status(400).json({ error: 'Profile not found for crawler job' })
       }
       organizationId = profileRow.organization_id ?? null
-
       // Production safety: tolerate legacy profiles that reference a missing organization row.
       // Postgres enforces FK on crawler_jobs.organization_id, so we must null this out if it doesn't exist.
       if (organizationId) {
-        const org = await req.db
-          .prepare('SELECT id FROM organizations WHERE id = ? LIMIT 1')
-          .get(organizationId)
+        const org = await req.db.prepare('SELECT id FROM organizations WHERE id = ? LIMIT 1').get(organizationId)
         if (!org?.id) organizationId = null
       }
     }

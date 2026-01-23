@@ -5,9 +5,9 @@
  * - Non-admin users can only access data tied to their own profiles/organizations.
  * - Admin users can access everything.
  *
- * IMPORTANT: Admin status MUST be resolved via DB (users.is_admin).
- * The email substring allowlist has been REMOVED to enforce DB-backed authority.
- * Use req.ctx.isAdmin for authorization decisions (set by requestContext middleware).
+ * IMPORTANT:
+ * - Canonical admin truth is DB-backed: users.is_admin.
+ * - Email-substring allowlists must not participate in authorization decisions.
  */
 import crypto from 'crypto'
 
@@ -43,44 +43,27 @@ export function isAdminUser(user) {
   )
 }
 
-/**
- * Robust admin detection that resolves via DB.
- * This is the CANONICAL way to check admin privileges.
- * 
- * @param {object} db - Database connection
- * @param {object} user - User object from request (req.user)
- * @returns {Promise<boolean>} true if user is admin
- */
 export async function isAdminUserWithDb(db, user) {
-  // Some tokens are profile-scoped and don't carry email/is_admin.
-  // Resolve the associated user_id from the profile and re-check admin status.
+  // Some tokens are profile-scoped and don't carry userId.
+  // Resolve user_id via profile when needed, then check users.is_admin.
   try {
     const userId = getAuthUserId(user)
     const profileId = getAuthProfileId(user)
-    
+
     let resolvedUserId = userId
-    
-    // If we only have profileId, resolve to user_id via DB
     if (!resolvedUserId && profileId) {
       const profileRow = await db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
       resolvedUserId = profileRow?.user_id
     }
 
-    if (!resolvedUserId) {
-      // No resolvable user ID -> cannot prove admin via DB.
-      return false
-    }
+    if (!resolvedUserId) return false
 
-    // Check DB for admin status (SOURCE OF TRUTH)
     const row = await db.prepare('SELECT is_admin FROM users WHERE id = ?').get(resolvedUserId)
-    if (!row) {
-      // User not found in DB -> cannot prove admin.
-      return false
-    }
-    
+    if (!row) return false
+
     return Boolean(row.is_admin === true || row.is_admin === 1)
   } catch (error) {
-    // Fail closed: do not grant admin on DB errors.
+    // Fail closed: never grant admin on DB errors.
     console.warn('[accessControl] isAdminUserWithDb DB check failed:', error?.message)
     return false
   }
@@ -278,25 +261,11 @@ export async function ensureProfileAccess(req, res, profileId) {
     return false
   }
 
-  // Use req.ctx if available (preferred)
-  if (req.ctx) {
-    if (req.ctx.isAdmin) return true
-    
-    if (req.ctx.accessibleProfileIds === null) {
-      // null means all profiles accessible (admin)
-      return true
-    }
-    
-    if (req.ctx.accessibleProfileIds && req.ctx.accessibleProfileIds.has(profileId)) {
-      return true
-    }
-  } else {
-    // Fallback to legacy check if req.ctx not available
-    if (isAdminUser(user)) return true
+  if (req.ctx?.isAdmin === true) return true
+  if (await isAdminUserWithDb(req.db, user)) return true
 
-    const accessible = await getAccessibleProfileIds(req.db, user)
-    if (accessible && accessible.has(profileId)) return true
-  }
+  const accessible = await getAccessibleProfileIds(req.db, user)
+  if (accessible && accessible.has(profileId)) return true
 
   res.status(403).json({ error: 'Not authorized to access this profile' })
   return false
@@ -311,25 +280,11 @@ export async function ensureOrganizationAccess(req, res, organizationId) {
     return false
   }
 
-  // Use req.ctx if available (preferred)
-  if (req.ctx) {
-    if (req.ctx.isAdmin) return true
-    
-    if (req.ctx.accessibleOrgIds === null) {
-      // null means all orgs accessible (admin)
-      return true
-    }
-    
-    if (req.ctx.accessibleOrgIds && req.ctx.accessibleOrgIds.has(organizationId)) {
-      return true
-    }
-  } else {
-    // Fallback to legacy check if req.ctx not available
-    if (isAdminUser(user)) return true
+  if (req.ctx?.isAdmin === true) return true
+  if (await isAdminUserWithDb(req.db, user)) return true
 
-    const orgIds = await getAccessibleOrganizationIds(req.db, user)
-    if (orgIds && orgIds.has(organizationId)) return true
-  }
+  const orgIds = await getAccessibleOrganizationIds(req.db, user)
+  if (orgIds && orgIds.has(organizationId)) return true
 
   res.status(403).json({ error: 'Not authorized to access this organization' })
   return false
