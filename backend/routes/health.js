@@ -54,11 +54,12 @@ router.get('/api/health', async (req, res) => {
 /**
  * GET /readyz
  * Docker HEALTHCHECK endpoint - returns 200 only when service is ready.
- * Checks DB reachability and uploads directory writability.
+ * Checks DB reachability, uploads directory writability, and required secrets in production.
  */
 router.get('/readyz', async (req, res) => {
   const db = req.db;
   const uploadsDir = req.uploadsDir;
+  const isProd = process.env.NODE_ENV === 'production';
   
   try {
     // Check database reachability
@@ -67,6 +68,33 @@ router.get('/readyz', async (req, res) => {
       if (!hc?.ok) throw new Error(hc?.error || 'Database healthcheck failed');
     } else {
       await db.prepare('SELECT 1 as ok').get();
+    }
+    
+    // Check required tables exist
+    try {
+      await db.prepare('SELECT 1 FROM users LIMIT 1').get();
+      await db.prepare('SELECT 1 FROM profiles LIMIT 1').get();
+      await db.prepare('SELECT 1 FROM opportunities LIMIT 1').get();
+    } catch (tableError) {
+      return res.status(503).json({
+        status: 'not_ready',
+        reason: 'required_tables_missing',
+        message: 'Database schema incomplete - run migrations',
+        timestamp: new Date().toISOString(),
+      });
+    }
+    
+    // In production, verify required secrets are configured
+    if (isProd) {
+      const jwtSecret = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET;
+      if (!jwtSecret || jwtSecret === 'grantflow-dev-secret') {
+        return res.status(503).json({
+          status: 'not_ready',
+          reason: 'missing_jwt_secret',
+          message: 'AUTH_JWT_SECRET (or JWT_SECRET) is required in production',
+          timestamp: new Date().toISOString(),
+        });
+      }
     }
     
     // Ensure uploads dir is present and writable (production requires a volume).
@@ -85,7 +113,9 @@ router.get('/readyz', async (req, res) => {
     
     res.status(200).json({ 
       status: 'ready', 
-      dialect: db.dialect, 
+      dialect: db.dialect,
+      tables_ok: true,
+      secrets_ok: true,
       timestamp: new Date().toISOString() 
     });
   } catch (error) {
