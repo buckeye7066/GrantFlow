@@ -1,4 +1,5 @@
 import express from 'express'
+import crypto from 'crypto'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
@@ -8,13 +9,25 @@ import { createOpenAIClient } from '../utils/openaiClient.js'
 import { formatError } from '../middleware/errorHandler.js'
 import { DEFAULT_PAGE_LIMIT, CRAWLER_JOB_TYPES } from '../config/constants.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
-import { ensureProfileAccess, getAccessibleProfileIds, isAdminUser } from '../utils/accessControl.js'
+import { ensureProfileAccess } from '../utils/accessControl.js'
 
 const router = express.Router()
 
 const ALLOWED_TYPES = new Set(CRAWLER_JOB_TYPES)
 const ALLOWED_STATUS = new Set(['queued', 'running', 'completed', 'failed', 'cancelled'])
 const MAX_LINEAGE_DEPTH = 15
+
+function stableStringify(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map((v) => stableStringify(v)).join(',')}]`
+  const keys = Object.keys(value).sort()
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`
+}
+
+function computeIdempotencyKey({ type, profileId, organizationId, parameters }) {
+  const payload = `${type}|${profileId || ''}|${organizationId || ''}|${stableStringify(parameters ?? {})}`
+  return crypto.createHash('sha256').update(payload).digest('hex')
+}
 
 // Some crawler types are explicitly profile-scoped and cannot run without a profile context.
 // Enforce this at request time so we don't create guaranteed-to-fail jobs that pollute diagnostics.
@@ -973,7 +986,7 @@ router.post('/jobs', async (req, res) => {
   if (!ctx) return
 
   try {
-    const { type, profile_id: bodyProfileId, parameters = {} } = req.body ?? {}
+    const { type, profile_id: bodyProfileId, parameters = {}, force = false } = req.body ?? {}
 
     if (!type || !ALLOWED_TYPES.has(type)) {
       return res.status(400).json({ error: 'Invalid crawler type' })
@@ -1017,6 +1030,42 @@ router.post('/jobs', async (req, res) => {
       if (!(await requireTierCapability(req, res, targetProfileId, requiredCapability))) return
     }
 
+    const rawIdempotency =
+      req.headers['idempotency-key'] ||
+      req.headers['x-idempotency-key'] ||
+      req.body?.idempotency_key ||
+      null
+
+    const idempotencyKey =
+      force
+        ? null
+        : typeof rawIdempotency === 'string' && rawIdempotency.trim()
+          ? rawIdempotency.trim().slice(0, 200)
+          : computeIdempotencyKey({
+              type,
+              profileId: targetProfileId,
+              organizationId,
+              parameters,
+            })
+
+    if (idempotencyKey) {
+      const existing = await req.db
+        .prepare(
+          `
+            SELECT *
+            FROM crawler_jobs
+            WHERE idempotency_key = ?
+              AND status IN ('queued', 'running')
+            ORDER BY created_at DESC
+            LIMIT 1
+          `,
+        )
+        .get(idempotencyKey)
+      if (existing) {
+        return res.status(200).json(mapJob(existing))
+      }
+    }
+
     const parametersJson = JSON.stringify(parameters ?? {})
     const jobId = crypto.randomUUID()
     const insert = req.db.prepare(`
@@ -1027,8 +1076,9 @@ router.post('/jobs', async (req, res) => {
         profile_id,
         organization_id,
         parameters,
-        requested_by
-      ) VALUES (?, ?, 'queued', ?, ?, ?, ?)
+        requested_by,
+        idempotency_key
+      ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?)
     `)
 
     await insert.run(
@@ -1038,6 +1088,7 @@ router.post('/jobs', async (req, res) => {
       organizationId,
       parametersJson,
       ctx.userId ?? ctx.email ?? targetProfileId ?? 'user',
+      idempotencyKey,
     )
 
     const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)

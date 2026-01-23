@@ -47,6 +47,12 @@ async function checkRequiredTables(db) {
   } catch {
     missingColumns.push('users.is_admin')
   }
+  try {
+    await db.prepare('SELECT idempotency_key, dispatch_attempts FROM crawler_jobs LIMIT 1').get()
+  } catch {
+    missingColumns.push('crawler_jobs.idempotency_key')
+    missingColumns.push('crawler_jobs.dispatch_attempts')
+  }
   if (missingColumns.length > 0) return { ok: false, missing_columns: missingColumns }
 
   return { ok: true }
