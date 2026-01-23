@@ -1,3 +1,4 @@
+import crypto from 'crypto'
 import { safeParseJSON } from '../utils/safeJson.js'
 
 function normalizeWhitespace(value) {
@@ -389,6 +390,72 @@ async function safeRepointProfileId(tx, {
   return { skipped: false }
 }
 
+async function mergeProfileEmails(tx, { winnerId, loserId, dryRun }) {
+  // Merge `profile_emails` (additional access emails) if present.
+  if (!(await tableExists(tx, 'profile_emails'))) {
+    return { type: 'profile_emails.merge', from: loserId, to: winnerId, skipped: true, reason: 'profile_emails table missing' }
+  }
+  const okCols =
+    (await columnExists(tx, 'profile_emails', 'profile_id')) &&
+    (await columnExists(tx, 'profile_emails', 'email'))
+  if (!okCols) {
+    return { type: 'profile_emails.merge', from: loserId, to: winnerId, skipped: true, reason: 'profile_emails schema missing' }
+  }
+
+  if (dryRun) {
+    return { type: 'profile_emails.merge', from: loserId, to: winnerId }
+  }
+
+  const rows = await tx
+    .prepare(
+      `
+        SELECT email
+        FROM profile_emails
+        WHERE profile_id = ?
+      `,
+    )
+    .all(loserId)
+
+  const emails = Array.from(new Set((rows || [])
+    .map((r) => String(r?.email || '').trim().toLowerCase())
+    .filter(Boolean)))
+
+  if (emails.length === 0) {
+    await tx.prepare('DELETE FROM profile_emails WHERE profile_id = ?').run(loserId)
+    return { type: 'profile_emails.merge', from: loserId, to: winnerId, skipped: true, reason: 'no emails to merge' }
+  }
+
+  // Dialect-specific ignore/upsert.
+  const isPostgres = String(tx?.dialect || '').toLowerCase() === 'postgres'
+  if (isPostgres) {
+    for (const email of emails) {
+      await tx
+        .prepare(
+          `
+            INSERT INTO profile_emails (id, profile_id, email, added_by)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT (profile_id, email) DO NOTHING
+          `,
+        )
+        .run(crypto.randomUUID(), winnerId, email, 'profile_merge')
+    }
+  } else {
+    for (const email of emails) {
+      await tx
+        .prepare(
+          `
+            INSERT OR IGNORE INTO profile_emails (id, profile_id, email, added_by)
+            VALUES (?, ?, ?, ?)
+          `,
+        )
+        .run(crypto.randomUUID(), winnerId, email, 'profile_merge')
+    }
+  }
+
+  await tx.prepare('DELETE FROM profile_emails WHERE profile_id = ?').run(loserId)
+  return { type: 'profile_emails.merge', from: loserId, to: winnerId, count: emails.length }
+}
+
 export async function mergeProfiles(db, {
   winnerId,
   loserIds,
@@ -555,6 +622,19 @@ export async function mergeProfiles(db, {
 
       const profileFieldUpdate = await ensureProfileFields(loser)
       if (profileFieldUpdate) changes.push(profileFieldUpdate)
+
+      // Preserve access emails (board members, alternates, etc.) by merging `profile_emails` first.
+      try {
+        changes.push(await mergeProfileEmails(tx, { winnerId, loserId, dryRun }))
+      } catch (e) {
+        changes.push({
+          type: 'profile_emails.merge',
+          from: loserId,
+          to: winnerId,
+          skipped: true,
+          reason: e?.message || String(e),
+        })
+      }
 
       const sectionOps = await mergeSectionsFromLoser(loserId)
       changes.push({ type: 'profile_sections.merge', from: loserId, to: winnerId, ops: sectionOps })
