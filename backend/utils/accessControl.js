@@ -36,6 +36,7 @@ function collectUserEmails(user) {
 export function isAdminUser(user) {
   return Boolean(
     user?.role === 'admin' ||
+      user?.isAdmin === true ||
       user?.is_admin === true ||
       user?.is_admin === 1 ||
       (Array.isArray(user?.roles) && user.roles.includes('admin')),
@@ -137,7 +138,7 @@ export function getAuthProfileId(user) {
 }
 
 export async function getAccessibleProfileIds(db, user) {
-  if (isAdminUser(user)) return null
+  if (isAdminUser(user) || (await resolveIsAdminFromDb(db, user))) return null
 
   const ids = new Set()
   const userId = getAuthUserId(user)
@@ -251,7 +252,7 @@ export async function removeProfileEmail(db, { profileId, emailId }) {
 }
 
 export async function getAccessibleOrganizationIds(db, user) {
-  if (isAdminUser(user)) return null
+  if (isAdminUser(user) || (await resolveIsAdminFromDb(db, user))) return null
 
   const profileIds = await getAccessibleProfileIds(db, user)
   if (!profileIds || profileIds.size === 0) return new Set()
