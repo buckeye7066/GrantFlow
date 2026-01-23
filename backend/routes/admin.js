@@ -2,6 +2,7 @@ import express from 'express';
 import crypto from 'crypto';
 import multer from 'multer';
 import fs from 'fs';
+import net from 'net'
 import { promises as fsp } from 'fs';
 import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
@@ -21,6 +22,7 @@ import { logAuditEvent, queryAuditLogs, getAuditSummary, cleanupAuditLogs, AUDIT
 import { initializeFeatureFlags, isFeatureEnabled, getAllFlags, updateFlag, createFlagOverride, removeFlagOverride, getFlagOverrides, cleanupExpiredOverrides } from '../services/featureFlagService.js';
 import { getProfileWithLocation } from '../services/crawlers/crawlerHelpers.js';
 import { getRequestError } from '../services/requestIdErrorStore.js';
+import { extractTextFromFile } from '../services/documentTextExtraction.js'
 import { crawlLocalFunding } from '../services/crawlers/localFundingCrawler.js';
 import { crawlGovernmentFunding } from '../services/crawlers/governmentFundingCrawler.js';
 import { crawlStudentGrants } from '../services/crawlers/studentGrantsCrawler.js';
@@ -256,6 +258,63 @@ const upload = multer({
   },
 });
 
+// Knowledge Base uploads (global reference docs; not tied to a profile).
+const KB_MAX_FILE_BYTES = 50 * 1024 * 1024
+const KB_ALLOWED_MIME_TYPES = new Set([
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'text/plain',
+  'application/rtf',
+  'text/rtf',
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'image/bmp',
+  'image/tiff',
+  'image/heic',
+  'image/heif',
+])
+
+function kbMulterFileFilter(_req, file, cb) {
+  const extension = (file?.originalname?.split('.').pop() || '').toLowerCase()
+  const allowedExt = new Set([
+    'pdf',
+    'doc',
+    'docx',
+    'txt',
+    'rtf',
+    'jpg',
+    'jpeg',
+    'png',
+    'webp',
+    'gif',
+    'bmp',
+    'tif',
+    'tiff',
+    'heic',
+    'heif',
+  ])
+  const ok = KB_ALLOWED_MIME_TYPES.has(file?.mimetype) || allowedExt.has(extension)
+  if (!ok) return cb(new Error('Unsupported file type'))
+  return cb(null, true)
+}
+
+const knowledgeUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, uploadDir),
+    filename: (_req, file, cb) => {
+      const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`
+      const extension = file.originalname.includes('.') ? `.${file.originalname.split('.').pop()}` : ''
+      cb(null, `kb-${unique}${extension}`)
+    },
+  }),
+  fileFilter: kbMulterFileFilter,
+  limits: { fileSize: KB_MAX_FILE_BYTES },
+})
+
 // Helper function to extract text from PDF
 async function extractTextFromPDF(filePath) {
   try {
@@ -295,6 +354,111 @@ function extractAnthropicText(response) {
     .filter(Boolean)
     .join('\n')
     .trim()
+}
+
+function isPrivateIpAddress(ip) {
+  // IPv4 private ranges: 10/8, 172.16/12, 192.168/16, 127/8, 169.254/16
+  const v = net.isIP(ip)
+  if (v === 4) {
+    const parts = ip.split('.').map((n) => Number(n))
+    if (parts.length !== 4 || parts.some((n) => Number.isNaN(n))) return true
+    const [a, b] = parts
+    if (a === 10) return true
+    if (a === 127) return true
+    if (a === 0) return true
+    if (a === 169 && b === 254) return true
+    if (a === 192 && b === 168) return true
+    if (a === 172 && b >= 16 && b <= 31) return true
+    return false
+  }
+
+  // IPv6 loopback/link-local/ULA
+  if (v === 6) {
+    const lower = ip.toLowerCase()
+    if (lower === '::1') return true // loopback
+    if (lower.startsWith('fe80:')) return true // link-local
+    if (lower.startsWith('fc') || lower.startsWith('fd')) return true // unique local
+    return false
+  }
+
+  return true
+}
+
+function assertRemoteUrlAllowed(rawUrl) {
+  let parsed
+  try {
+    parsed = new URL(String(rawUrl))
+  } catch {
+    throw new Error('Invalid URL')
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('Only http(s) URLs are supported')
+  }
+
+  const hostname = (parsed.hostname || '').toLowerCase().trim()
+  if (!hostname) throw new Error('Invalid URL host')
+  if (hostname === 'localhost' || hostname === '0.0.0.0' || hostname.endsWith('.local')) {
+    throw new Error('URL host is not allowed')
+  }
+  if (net.isIP(hostname)) {
+    if (isPrivateIpAddress(hostname)) throw new Error('URL host is not allowed')
+  }
+
+  return parsed
+}
+
+async function downloadRemoteFileToUploads({ url }) {
+  const initial = assertRemoteUrlAllowed(url)
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 20_000)
+  try {
+    const resp = await fetch(initial.toString(), { signal: controller.signal })
+    if (!resp.ok) throw new Error(`Unable to download file (${resp.status})`)
+    try {
+      if (resp.url) assertRemoteUrlAllowed(resp.url)
+    } catch {
+      throw new Error('Final URL host is not allowed')
+    }
+
+    const contentType = resp.headers.get('content-type') || 'application/octet-stream'
+    const contentLength = Number(resp.headers.get('content-length') || '0')
+    if (contentLength && contentLength > KB_MAX_FILE_BYTES) {
+      throw new Error('Remote file is too large (max 50MB).')
+    }
+
+    const fileNameFromUrl = (() => {
+      try {
+        const parsed = new URL(url)
+        return parsed.pathname.split('/').pop() || 'remote-upload'
+      } catch {
+        return 'remote-upload'
+      }
+    })()
+
+    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`
+    const extension = fileNameFromUrl.includes('.') ? `.${fileNameFromUrl.split('.').pop()}` : ''
+    const filename = `kb-${unique}${extension}`
+    const absPath = join(uploadDir, filename)
+
+    const buf = Buffer.from(await resp.arrayBuffer())
+    if (buf.length > KB_MAX_FILE_BYTES) {
+      throw new Error('Remote file is too large (max 50MB).')
+    }
+    await fsp.writeFile(absPath, buf)
+
+    return {
+      file: {
+        path: absPath,
+        size: buf.length,
+        mimetype: contentType,
+        originalname: fileNameFromUrl,
+        filename,
+      },
+      publicUrl: `/uploads/${filename}`,
+    }
+  } finally {
+    clearTimeout(timeoutId)
+  }
 }
 
 function tryExtractFirstJson(text) {
@@ -609,6 +773,246 @@ router.post('/env/apply', async (req, res) => {
       : 'Applied to running process only (not persisted). For permanent config, set it in your host environment.',
   });
 });
+
+// ----------------------------
+// Knowledge Base (global docs)
+// ----------------------------
+const KB_DOCUMENT_TYPE = 'knowledge'
+
+function clampInt(value, { min, max, fallback }) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return fallback
+  const i = Math.floor(n)
+  return Math.max(min, Math.min(max, i))
+}
+
+function safeTrim(value) {
+  const s = value == null ? '' : String(value)
+  const t = s.trim()
+  return t ? t : ''
+}
+
+function safeDeleteFile(filePath) {
+  try {
+    const raw = safeTrim(filePath)
+    if (!raw) return false
+    const resolved = resolve(raw)
+    const base = resolve(uploadDir)
+    if (!resolved.startsWith(base)) return false
+    if (!fs.existsSync(resolved)) return false
+    fs.unlinkSync(resolved)
+    return true
+  } catch {
+    return false
+  }
+}
+
+// GET /api/admin/knowledge
+// Query params: q, limit, offset
+router.get('/knowledge', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  try {
+    const q = safeTrim(req.query?.q)
+    const limit = clampInt(req.query?.limit, { min: 1, max: 200, fallback: 50 })
+    const offset = clampInt(req.query?.offset, { min: 0, max: 50_000, fallback: 0 })
+
+    const isPg = req.db?.dialect === 'postgres'
+    const like = isPg ? 'ILIKE' : 'LIKE'
+    const where = [`type = ?`]
+    const params = [KB_DOCUMENT_TYPE]
+
+    if (q) {
+      where.push(`(name ${like} ? OR notes ${like} ? OR extracted_text ${like} ?)`)
+      const needle = `%${q}%`
+      params.push(needle, needle, needle)
+    }
+
+    const rows = await req.db
+      .prepare(
+        `
+          SELECT id, created_at, updated_at, name, type, file_url, file_size, mime_type, processing_status, notes
+          FROM documents
+          WHERE ${where.join(' AND ')}
+          ORDER BY created_at DESC
+          LIMIT ?
+          OFFSET ?
+        `,
+      )
+      .all(...params, limit, offset)
+
+    res.json({ ok: true, q: q || null, limit, offset, items: rows || [] })
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message || String(error) })
+  }
+})
+
+// GET /api/admin/knowledge/:id
+router.get('/knowledge/:id', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  try {
+    const id = safeTrim(req.params?.id)
+    const doc = await req.db
+      .prepare(`SELECT * FROM documents WHERE id = ? AND type = ? LIMIT 1`)
+      .get(id, KB_DOCUMENT_TYPE)
+    if (!doc) return res.status(404).json({ ok: false, error: 'Not found' })
+    res.json({ ok: true, document: doc })
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message || String(error) })
+  }
+})
+
+// POST /api/admin/knowledge/upload
+// multipart/form-data: document=<file>, name?, notes?, ocr?, handwriting?, ocr_language?
+router.post('/knowledge/upload', knowledgeUpload.single('document'), async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) {
+    if (req.file?.path) safeDeleteFile(req.file.path)
+    return
+  }
+  try {
+    const file = req.file
+    if (!file) return res.status(400).json({ ok: false, error: 'document file is required' })
+
+    const name = safeTrim(req.body?.name) || safeTrim(file.originalname) || 'Knowledge Document'
+    const notes = safeTrim(req.body?.notes) || null
+
+    let extractedText = null
+    try {
+      const ocr = req.body?.ocr === 'true' || req.body?.ocr === true
+      const handwriting = req.body?.handwriting === 'true' || req.body?.handwriting === true
+      const ocrLanguage = safeTrim(req.body?.ocr_language) || 'eng'
+      const result = await extractTextFromFile({
+        filePath: file.path,
+        mimeType: file.mimetype,
+        fileName: file.originalname,
+        ocr,
+        handwriting,
+        ocrLanguage,
+      })
+      extractedText = result?.text ?? null
+    } catch {
+      extractedText = null
+    }
+
+    const docId = crypto.randomUUID()
+    const publicUrl = `/uploads/${file.filename}`
+    const processingStatus = extractedText ? 'completed' : 'pending'
+
+    await req.db
+      .prepare(
+        `
+          INSERT INTO documents (
+            id, organization_id, grant_id, profile_id, name, type,
+            file_url, file_path, file_size, mime_type,
+            extracted_text, processing_status, notes
+          ) VALUES (?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+      )
+      .run(
+        docId,
+        name,
+        KB_DOCUMENT_TYPE,
+        publicUrl,
+        file.path || null,
+        file.size || null,
+        file.mimetype || null,
+        extractedText,
+        processingStatus,
+        notes,
+      )
+
+    const doc = await req.db.prepare(`SELECT * FROM documents WHERE id = ? LIMIT 1`).get(docId)
+    res.status(201).json({ ok: true, document: doc })
+  } catch (error) {
+    if (req.file?.path) safeDeleteFile(req.file.path)
+    res.status(500).json({ ok: false, error: error?.message || String(error) })
+  }
+})
+
+// POST /api/admin/knowledge/ingest-url
+// Body: { url, name?, notes?, ocr?, handwriting?, ocr_language? }
+router.post('/knowledge/ingest-url', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  let downloaded = null
+  try {
+    const url = safeTrim(req.body?.url)
+    if (!url) return res.status(400).json({ ok: false, error: 'url is required' })
+
+    downloaded = await downloadRemoteFileToUploads({ url })
+    const file = downloaded.file
+
+    const name = safeTrim(req.body?.name) || safeTrim(file.originalname) || 'Knowledge Document'
+    const notes = safeTrim(req.body?.notes) || null
+
+    let extractedText = null
+    try {
+      const ocr = req.body?.ocr === 'true' || req.body?.ocr === true
+      const handwriting = req.body?.handwriting === 'true' || req.body?.handwriting === true
+      const ocrLanguage = safeTrim(req.body?.ocr_language) || 'eng'
+      const result = await extractTextFromFile({
+        filePath: file.path,
+        mimeType: file.mimetype,
+        fileName: file.originalname,
+        ocr,
+        handwriting,
+        ocrLanguage,
+      })
+      extractedText = result?.text ?? null
+    } catch {
+      extractedText = null
+    }
+
+    const docId = crypto.randomUUID()
+    const processingStatus = extractedText ? 'completed' : 'pending'
+
+    await req.db
+      .prepare(
+        `
+          INSERT INTO documents (
+            id, organization_id, grant_id, profile_id, name, type,
+            file_url, file_path, file_size, mime_type,
+            extracted_text, processing_status, notes
+          ) VALUES (?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+      )
+      .run(
+        docId,
+        name,
+        KB_DOCUMENT_TYPE,
+        downloaded.publicUrl,
+        file.path || null,
+        file.size || null,
+        file.mimetype || null,
+        extractedText,
+        processingStatus,
+        notes,
+      )
+
+    const doc = await req.db.prepare(`SELECT * FROM documents WHERE id = ? LIMIT 1`).get(docId)
+    res.status(201).json({ ok: true, document: doc })
+  } catch (error) {
+    if (downloaded?.file?.path) safeDeleteFile(downloaded.file.path)
+    res.status(500).json({ ok: false, error: error?.message || String(error) })
+  }
+})
+
+// DELETE /api/admin/knowledge/:id
+router.delete('/knowledge/:id', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  try {
+    const id = safeTrim(req.params?.id)
+    const doc = await req.db
+      .prepare(`SELECT id, file_path FROM documents WHERE id = ? AND type = ? LIMIT 1`)
+      .get(id, KB_DOCUMENT_TYPE)
+    if (!doc) return res.status(404).json({ ok: false, error: 'Not found' })
+
+    await req.db.prepare(`DELETE FROM documents WHERE id = ?`).run(id)
+    const deletedFile = doc.file_path ? safeDeleteFile(doc.file_path) : false
+
+    res.json({ ok: true, deleted: true, deleted_file: deletedFile })
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message || String(error) })
+  }
+})
 
 // GET /api/admin/openai/runtime-secret-status
 // Shows whether an encrypted runtime key is persisted in DB (never returns the key).
