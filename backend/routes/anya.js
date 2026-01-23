@@ -19,22 +19,8 @@ const router = express.Router()
 const resolveAdminToken = () => process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null
 
 function adminAuth(req, res, next) {
-  if (req.user?.role === 'admin') return next()
-  const configuredToken = resolveAdminToken()
-  if (!configuredToken) {
-    return res.status(401).json({ error: 'Admin token not configured' })
-  }
-  const headerToken =
-    req.headers.authorization?.replace('Bearer ', '') ||
-    req.headers['x-admin-token'] ||
-    req.headers['x-anya-token']
-  if (!headerToken) {
-    return res.status(401).json({ error: 'Missing admin credentials' })
-  }
-  if (headerToken !== configuredToken) {
-    return res.status(403).json({ error: 'Invalid admin credentials' })
-  }
-  return next()
+  if (req.ctx?.isAdmin) return next()
+  return res.status(403).json({ error: 'Admin privileges required' })
 }
 
 function handleError(res, error) {
