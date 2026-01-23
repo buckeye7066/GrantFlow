@@ -11,11 +11,10 @@ const REPO_ROOT = path.resolve(process.cwd())
 // Admin Role Enforcement
 // ============================================================================
 
-const ADMIN_EMAIL = 'buckeye7066@gmail.com';
-
 /**
- * Check if user is admin
- * @param {Object} user - User object with email/role
+ * Check if user is admin (DB-backed)
+ * CRITICAL: This should match the logic in requestContext.js and accessControl.js
+ * @param {Object} user - User object with is_admin flag
  * @returns {boolean} True if user is admin
  */
 export function isAdmin(user) {
@@ -23,18 +22,9 @@ export function isAdmin(user) {
     return false;
   }
   
-  // Check explicit admin flags first (set by auth middleware)
-  if (user.role === 'admin' || user.is_admin === true) {
-    return true;
-  }
-  
-  // Fall back to email check (supports both property names)
-  const email = user.primary_email || user.email;
-  if (email && email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
-    return true;
-  }
-  
-  return false;
+  // Use DB-backed admin flag (set by auth middleware from database)
+  // No email substring checks - DB is the source of truth
+  return Boolean(user.role === 'admin' || user.is_admin === true || user.is_admin === 1);
 }
 
 /**
@@ -44,7 +34,7 @@ export function isAdmin(user) {
  */
 export function requireAdmin(user) {
   if (!isAdmin(user)) {
-    throw new Error('Admin access required. Contact buckeye7066@gmail.com for assistance.');
+    throw new Error('Admin access required. Admin privileges are managed via database.');
   }
 }
 
