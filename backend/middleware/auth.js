@@ -31,31 +31,22 @@ export function ensureAdmin(req, res, next) {
  */
 export function ensureProfileAccess(profileIdParam = 'id') {
   return (req, res, next) => {
-    const user = req.user ?? { role: 'guest' };
     const profileId = req.params[profileIdParam];
     
     if (!profileId) {
       return res.status(400).json({ error: 'Profile ID required' });
     }
     
-    // Admin can access all profiles
-    if (user.role === 'admin') {
+    // Canonical admin bypass (DB-backed via req.ctx)
+    if (req.ctx?.isAdmin) {
       return next();
     }
-    
-    // User must match profile or user ID
-    if (user.profileId === profileId) {
+
+    // Canonical access set (resolved once in req.ctx)
+    if (req.ctx?.accessibleProfileIds instanceof Set && req.ctx.accessibleProfileIds.has(String(profileId))) {
       return next();
     }
-    
-    // Check if profile belongs to user via user_id
-    if (user.userId) {
-      const profile = req.db.prepare('SELECT id, user_id FROM profiles WHERE id = ?').get(profileId);
-      if (profile && profile.user_id === user.userId) {
-        return next();
-      }
-    }
-    
+
     return res.status(403).json({ error: 'Not authorized to access this profile' });
   };
 }

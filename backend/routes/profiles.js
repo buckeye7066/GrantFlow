@@ -28,10 +28,6 @@ import {
 
 const router = express.Router()
 
-function isAdmin(user) {
-  return Boolean(isAdminUser(user)) || user?.role === 'admin' || user?.is_admin === true
-}
-
 // Central enforcement: any route that includes a `:id` param in this router refers to a profile id.
 // This prevents profile “bleed” from stale token claims; access is always re-validated.
 router.param('id', async (req, res, id, next) => {
