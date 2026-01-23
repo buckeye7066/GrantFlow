@@ -216,9 +216,13 @@ export async function ensureProfileAccess(req, res, profileId) {
     return false
   }
 
+  if (req.ctx?.isAdmin === true) return true
   if (isAdminUser(user)) return true
 
-  const accessible = await getAccessibleProfileIds(req.db, user)
+  const accessible =
+    req.ctx?.accessibleProfileIds instanceof Set
+      ? req.ctx.accessibleProfileIds
+      : await getAccessibleProfileIds(req.db, user)
   if (accessible && accessible.has(profileId)) return true
 
   res.status(403).json({ error: 'Not authorized to access this profile' })
@@ -234,9 +238,13 @@ export async function ensureOrganizationAccess(req, res, organizationId) {
     return false
   }
 
+  if (req.ctx?.isAdmin === true) return true
   if (isAdminUser(user)) return true
 
-  const orgIds = await getAccessibleOrganizationIds(req.db, user)
+  const orgIds =
+    req.ctx?.accessibleOrgIds instanceof Set
+      ? req.ctx.accessibleOrgIds
+      : await getAccessibleOrganizationIds(req.db, user)
   if (orgIds && orgIds.has(organizationId)) return true
 
   res.status(403).json({ error: 'Not authorized to access this organization' })
@@ -253,9 +261,13 @@ export async function ensureGrantAccess(req, res, grantId) {
     return null
   }
 
+  if (req.ctx?.isAdmin === true) return grant
   if (isAdminUser(user)) return grant
 
-  const orgIds = await getAccessibleOrganizationIds(req.db, user)
+  const orgIds =
+    req.ctx?.accessibleOrgIds instanceof Set
+      ? req.ctx.accessibleOrgIds
+      : await getAccessibleOrganizationIds(req.db, user)
   if (orgIds && grant.organization_id && orgIds.has(grant.organization_id)) {
     return grant
   }
