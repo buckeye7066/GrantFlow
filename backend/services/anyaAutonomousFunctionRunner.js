@@ -167,6 +167,34 @@ export async function runAutonomousCrawlers(options, context) {
       Promise.all(dispatchPromises).catch(err => {
         console.error('[autonomous] Background dispatch batch error:', err)
       })
+
+      // Quick status snapshot so callers don't see everything stuck in "queued".
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 250))
+        const ids = report.jobs.map((j) => j.job_id)
+        if (ids.length > 0) {
+          const placeholders = ids.map(() => '?').join(',')
+          const rows = await db
+            .prepare(`SELECT id, status, error FROM crawler_jobs WHERE id IN (${placeholders})`)
+            .all(...ids)
+
+          const counts = { queued: 0, running: 0, completed: 0, failed: 0, cancelled: 0 }
+          rows.forEach((row) => {
+            const status = row?.status || 'queued'
+            if (counts[status] === undefined) counts[status] = 0
+            counts[status] += 1
+            const reportJob = report.jobs.find((j) => j.job_id === row.id)
+            if (reportJob) {
+              reportJob.status = status
+              if (row.error) reportJob.error = row.error
+            }
+          })
+
+          report.initial_status_counts = counts
+        }
+      } catch (error) {
+        report.initial_status_counts = { error: error?.message || String(error) }
+      }
     } else {
       // Wait for initial dispatch to complete before monitoring
       await Promise.all(dispatchPromises)
@@ -637,7 +665,7 @@ export async function saveCrawlerResultsToGlobal(options, context) {
 /**
  * Get status of autonomous crawler operations
  */
-export async function getAutonomousCrawlersStatus() {
+export async function getAutonomousCrawlersStatus(db = null) {
   const auditDir = path.join(REPO_ROOT, 'backend', 'data', 'audit')
   const logFile = path.join(auditDir, 'autonomous-crawlers.log')
   
@@ -654,18 +682,74 @@ export async function getAutonomousCrawlersStatus() {
 
     const lastRun = recentLogs.reverse().find(log => log.action === 'autonomous_crawlers_complete')
 
-    return {
+    const base = {
       last_run: lastRun || null,
       recent_operations: recentLogs.length,
       audit_log_path: path.relative(REPO_ROOT, logFile),
     }
+
+    if (!db) return base
+
+    try {
+      const rows = await db
+        .prepare(
+          `
+            SELECT status, COUNT(*) as count
+            FROM crawler_jobs
+            GROUP BY status
+          `,
+        )
+        .all()
+      const byStatus = (rows || []).reduce((acc, row) => {
+        acc[row.status] = Number(row.count || 0)
+        return acc
+      }, {})
+      base.job_status_counts = {
+        queued: byStatus.queued || 0,
+        running: byStatus.running || 0,
+        completed: byStatus.completed || 0,
+        failed: byStatus.failed || 0,
+        cancelled: byStatus.cancelled || 0,
+      }
+    } catch (error) {
+      base.job_status_counts = { error: error?.message || String(error) }
+    }
+
+    return base
   } catch (error) {
     if (error.code === 'ENOENT') {
-      return {
+      const base = {
         last_run: null,
         recent_operations: 0,
         message: 'No autonomous crawler operations have been run yet',
       }
+      if (db) {
+        try {
+          const rows = await db
+            .prepare(
+              `
+                SELECT status, COUNT(*) as count
+                FROM crawler_jobs
+                GROUP BY status
+              `,
+            )
+            .all()
+          const byStatus = (rows || []).reduce((acc, row) => {
+            acc[row.status] = Number(row.count || 0)
+            return acc
+          }, {})
+          base.job_status_counts = {
+            queued: byStatus.queued || 0,
+            running: byStatus.running || 0,
+            completed: byStatus.completed || 0,
+            failed: byStatus.failed || 0,
+            cancelled: byStatus.cancelled || 0,
+          }
+        } catch (metricsError) {
+          base.job_status_counts = { error: metricsError?.message || String(metricsError) }
+        }
+      }
+      return base
     }
     throw error
   }
