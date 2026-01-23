@@ -44,12 +44,12 @@ function getOpenAI() {
 }
 
 function ensureAuth(req, res) {
-  const auth = req.user ?? { role: 'guest' }
-  if (auth.role === 'guest') {
+  const ctx = req.ctx
+  if (!ctx?.userId) {
     res.status(401).json({ error: 'Authentication required' })
     return null
   }
-  return auth
+  return ctx
 }
 
 function mapJob(row) {
@@ -79,11 +79,11 @@ function mapJob(row) {
   return job
 }
 
-function buildJobFilter(auth, { profileId, organizationId, type, status, accessibleProfileIds } = {}) {
+function buildJobFilter(ctx, { profileId, organizationId, type, status, accessibleProfileIds } = {}) {
   const clauses = []
   const params = []
 
-  const admin = auth.role === 'admin' || isAdminUser(auth)
+  const admin = Boolean(ctx?.isAdmin)
 
   if (!admin) {
     const accessible = accessibleProfileIds instanceof Set ? Array.from(accessibleProfileIds) : []
@@ -378,8 +378,8 @@ function deriveJobSummary(type, job) {
 }
 
 router.get('/jobs', async (req, res) => {
-  const auth = ensureAuth(req, res)
-  if (!auth) return
+  const ctx = ensureAuth(req, res)
+  if (!ctx) return
 
   try {
     const limit = Number.parseInt(req.query.limit ?? 100, 10)
@@ -389,14 +389,13 @@ router.get('/jobs', async (req, res) => {
     const profileFilter = typeof req.query.profile_id === 'string' ? req.query.profile_id : null
 
     const organizationFilter =
-      auth.role === 'admin' && typeof req.query.organization_id === 'string'
+      ctx.isAdmin && typeof req.query.organization_id === 'string'
         ? req.query.organization_id
         : null
 
-    const admin = auth.role === 'admin' || isAdminUser(auth)
-    const accessibleProfileIds = admin ? null : await getAccessibleProfileIds(req.db, auth)
+    const accessibleProfileIds = ctx.isAdmin ? null : ctx.accessibleProfileIds
 
-    const { clause, params } = buildJobFilter(auth, {
+    const { clause, params } = buildJobFilter(ctx, {
       profileId: profileFilter,
       organizationId: organizationFilter,
       type: typeFilter,
@@ -427,20 +426,19 @@ router.get('/jobs', async (req, res) => {
 })
 
 router.get('/jobs/metrics', async (req, res) => {
-  const auth = ensureAuth(req, res)
-  if (!auth) return
+  const ctx = ensureAuth(req, res)
+  if (!ctx) return
 
   try {
     const profileFilter = typeof req.query.profile_id === 'string' ? req.query.profile_id : null
     const organizationFilter =
-      auth.role === 'admin' && typeof req.query.organization_id === 'string'
+      ctx.isAdmin && typeof req.query.organization_id === 'string'
         ? req.query.organization_id
         : null
 
-    const admin = auth.role === 'admin' || isAdminUser(auth)
-    const accessibleProfileIds = admin ? null : await getAccessibleProfileIds(req.db, auth)
+    const accessibleProfileIds = ctx.isAdmin ? null : ctx.accessibleProfileIds
 
-    const { clause, params } = buildJobFilter(auth, {
+    const { clause, params } = buildJobFilter(ctx, {
       profileId: profileFilter,
       organizationId: organizationFilter,
       accessibleProfileIds,
@@ -941,8 +939,8 @@ router.get('/jobs/metrics', async (req, res) => {
 })
 
 router.get('/jobs/:id', async (req, res) => {
-  const auth = ensureAuth(req, res)
-  if (!auth) return
+  const ctx = ensureAuth(req, res)
+  if (!ctx) return
 
   try {
     const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(req.params.id)
@@ -950,8 +948,7 @@ router.get('/jobs/:id', async (req, res) => {
       return res.status(404).json({ error: 'Job not found' })
     }
 
-    const admin = auth.role === 'admin' || isAdminUser(auth)
-    if (!admin) {
+    if (!ctx.isAdmin) {
       if (!job.profile_id) {
         return res.status(403).json({ error: 'Not authorized to access this job' })
       }
@@ -972,8 +969,8 @@ router.get('/jobs/:id', async (req, res) => {
 })
 
 router.post('/jobs', async (req, res) => {
-  const auth = ensureAuth(req, res)
-  if (!auth) return
+  const ctx = ensureAuth(req, res)
+  if (!ctx) return
 
   try {
     const { type, profile_id: bodyProfileId, parameters = {} } = req.body ?? {}
@@ -983,14 +980,11 @@ router.post('/jobs', async (req, res) => {
     }
 
     let targetProfileId = null
-    const admin = auth.role === 'admin' || isAdminUser(auth)
-    if (admin) {
-      targetProfileId = bodyProfileId ?? null
-    } else if (auth.role === 'user') {
-      targetProfileId = bodyProfileId ?? auth.profileId ?? null
-      if (targetProfileId) {
-        if (!(await ensureProfileAccess(req, res, String(targetProfileId)))) return
-      }
+    if (ctx.isAdmin) {
+      targetProfileId = bodyProfileId ?? ctx.activeProfileId ?? null
+    } else {
+      targetProfileId = bodyProfileId ?? ctx.activeProfileId ?? null
+      if (targetProfileId && !(await ensureProfileAccess(req, res, String(targetProfileId)))) return
     }
 
     if (TYPES_REQUIRING_PROFILE.has(type) && !targetProfileId) {
@@ -1043,7 +1037,7 @@ router.post('/jobs', async (req, res) => {
       targetProfileId,
       organizationId,
       parametersJson,
-      admin ? 'admin' : (auth.userId ?? auth.email ?? targetProfileId ?? 'user'),
+      ctx.userId ?? ctx.email ?? targetProfileId ?? 'user',
     )
 
     const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
@@ -1063,8 +1057,8 @@ router.post('/jobs', async (req, res) => {
 })
 
 router.post('/jobs/:id/retry', async (req, res) => {
-  const auth = ensureAuth(req, res)
-  if (!auth) return
+  const ctx = ensureAuth(req, res)
+  if (!ctx) return
 
   try {
     const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(req.params.id)
@@ -1072,8 +1066,7 @@ router.post('/jobs/:id/retry', async (req, res) => {
       return res.status(404).json({ error: 'Job not found' })
     }
 
-    const admin = auth.role === 'admin' || isAdminUser(auth)
-    if (!admin) {
+    if (!ctx.isAdmin) {
       if (!job.profile_id) return res.status(403).json({ error: 'Not authorized to retry this job' })
       if (!(await ensureProfileAccess(req, res, String(job.profile_id)))) return
     }
@@ -1107,12 +1100,11 @@ router.post('/jobs/:id/retry', async (req, res) => {
       retried_from_job_id: job.id,
     }
 
-    const requestedBy =
-      admin
-        ? 'admin'
-        : job.profile_id
+    const requestedBy = ctx.isAdmin
+      ? 'admin'
+      : job.profile_id
         ? job.profile_id
-        : auth.userId ?? auth.email ?? 'system'
+        : ctx.userId ?? ctx.email ?? 'system'
 
     const newJobId = crypto.randomUUID()
     await req.db
@@ -1170,8 +1162,8 @@ router.post('/jobs/:id/retry', async (req, res) => {
 })
 
 router.post('/jobs/:id/cancel', async (req, res) => {
-  const auth = ensureAuth(req, res)
-  if (!auth) return
+  const ctx = ensureAuth(req, res)
+  if (!ctx) return
 
   try {
     const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(req.params.id)
@@ -1179,8 +1171,7 @@ router.post('/jobs/:id/cancel', async (req, res) => {
       return res.status(404).json({ error: 'Job not found' })
     }
 
-    const admin = auth.role === 'admin' || isAdminUser(auth)
-    if (!admin) {
+    if (!ctx.isAdmin) {
       if (!job.profile_id) return res.status(403).json({ error: 'Not authorized to cancel this job' })
       if (!(await ensureProfileAccess(req, res, String(job.profile_id)))) return
     }
@@ -1213,10 +1204,10 @@ router.post('/jobs/:id/cancel', async (req, res) => {
 })
 
 router.patch('/jobs/:id', async (req, res) => {
-  const auth = ensureAuth(req, res)
-  if (!auth) return
+  const ctx = ensureAuth(req, res)
+  if (!ctx) return
 
-  if (auth.role !== 'admin') {
+  if (!ctx.isAdmin) {
     return res.status(403).json({ error: 'Only admin can update job status' })
   }
 
@@ -1280,8 +1271,8 @@ router.patch('/jobs/:id', async (req, res) => {
 
 // Get auto-discovery status for a profile
 router.get('/auto-discovery-status/:profileId', async (req, res) => {
-  const auth = ensureAuth(req, res)
-  if (!auth) return
+  const ctx = ensureAuth(req, res)
+  if (!ctx) return
 
   try {
     const { profileId } = req.params
@@ -1290,8 +1281,7 @@ router.get('/auto-discovery-status/:profileId', async (req, res) => {
       return res.status(400).json({ error: 'profileId is required' })
     }
 
-    const admin = auth.role === 'admin' || isAdminUser(auth)
-    if (!admin) {
+    if (!ctx.isAdmin) {
       if (!(await ensureProfileAccess(req, res, String(profileId)))) return
     }
 
@@ -1323,11 +1313,10 @@ router.get('/auto-discovery-status/:profileId', async (req, res) => {
 // Admin-only endpoint to generate funding opportunities for all ZIP codes
 router.post('/bulk-populate', async (req, res) => {
   // Allow admin auth OR a special bulk key for automated population
-  const auth = req.user ?? { role: 'guest' }
   const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
   const expectedKey = process.env.BULK_POPULATE_KEY || null
   
-  const isAdmin = auth.role === 'admin'
+  const isAdmin = Boolean(req.ctx?.isAdmin)
   const hasValidKey = Boolean(expectedKey) && bulkKey === expectedKey
   
   if (!isAdmin && !hasValidKey) {
@@ -1403,11 +1392,10 @@ router.post('/bulk-populate', async (req, res) => {
 
 // Crawl all counties for local funding sources (background job)
 router.post('/crawl-all-counties', async (req, res) => {
-  const auth = req.user ?? { role: 'guest' }
   const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
   const expectedKey = process.env.BULK_POPULATE_KEY || null
   
-  if (auth.role !== 'admin' && !(expectedKey && bulkKey === expectedKey)) {
+  if (!req.ctx?.isAdmin && !(expectedKey && bulkKey === expectedKey)) {
     return res.status(403).json({ error: 'Admin access or valid bulk key required' })
   }
   
@@ -1441,11 +1429,10 @@ router.post('/crawl-all-counties', async (req, res) => {
 
 // Crawl counties for a specific state
 router.post('/crawl-state-counties/:state', async (req, res) => {
-  const auth = req.user ?? { role: 'guest' }
   const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
   const expectedKey = process.env.BULK_POPULATE_KEY || null
   
-  if (auth.role !== 'admin' && !(expectedKey && bulkKey === expectedKey)) {
+  if (!req.ctx?.isAdmin && !(expectedKey && bulkKey === expectedKey)) {
     return res.status(403).json({ error: 'Admin access or valid bulk key required' })
   }
   
@@ -1493,11 +1480,10 @@ router.get('/county-status', async (req, res) => {
 
 // Seed local assistance networks (food banks, community agencies, etc.)
 router.post('/seed-local-networks', async (req, res) => {
-  const auth = req.user ?? { role: 'guest' }
   const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
   const expectedKey = process.env.BULK_POPULATE_KEY || null
   
-  if (auth.role !== 'admin' && !(expectedKey && bulkKey === expectedKey)) {
+  if (!req.ctx?.isAdmin && !(expectedKey && bulkKey === expectedKey)) {
     return res.status(403).json({ error: 'Admin access or valid bulk key required' })
   }
   
@@ -1589,11 +1575,10 @@ router.post('/seed-local-networks', async (req, res) => {
 
 // Seed state assistance programs (211, SNAP, etc.)
 router.post('/seed-state-assistance', async (req, res) => {
-  const auth = req.user ?? { role: 'guest' }
   const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
   const expectedKey = process.env.BULK_POPULATE_KEY || null
   
-  if (auth.role !== 'admin' && !(expectedKey && bulkKey === expectedKey)) {
+  if (!req.ctx?.isAdmin && !(expectedKey && bulkKey === expectedKey)) {
     return res.status(403).json({ error: 'Admin access or valid bulk key required' })
   }
   
@@ -1689,11 +1674,10 @@ router.post('/seed-state-assistance', async (req, res) => {
 
 // Crawl Grants.gov for REAL federal funding opportunities
 router.post('/crawl-grants-gov', async (req, res) => {
-  const auth = req.user ?? { role: 'guest' }
   const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
   const expectedKey = process.env.BULK_POPULATE_KEY || null
   
-  if (auth.role !== 'admin' && !(expectedKey && bulkKey === expectedKey)) {
+  if (!req.ctx?.isAdmin && !(expectedKey && bulkKey === expectedKey)) {
     return res.status(403).json({ error: 'Admin access or valid bulk key required' })
   }
   
@@ -1726,11 +1710,10 @@ router.post('/crawl-grants-gov', async (req, res) => {
 
 // Remove all loans and matching-fund opportunities from the database
 router.post('/remove-loans', async (req, res) => {
-  const auth = req.user ?? { role: 'guest' }
   const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
   const expectedKey = process.env.BULK_POPULATE_KEY || null
   
-  if (auth.role !== 'admin' && !(expectedKey && bulkKey === expectedKey)) {
+  if (!req.ctx?.isAdmin && !(expectedKey && bulkKey === expectedKey)) {
     return res.status(403).json({ error: 'Admin access or valid bulk key required' })
   }
   
@@ -1771,11 +1754,10 @@ router.post('/remove-loans', async (req, res) => {
 
 // Seed ALL real funding opportunities - national + state programs
 router.post('/seed-all-real', async (req, res) => {
-  const auth = req.user ?? { role: 'guest' }
   const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
   const expectedKey = process.env.BULK_POPULATE_KEY || null
   
-  if (auth.role !== 'admin' && !(expectedKey && bulkKey === expectedKey)) {
+  if (!req.ctx?.isAdmin && !(expectedKey && bulkKey === expectedKey)) {
     return res.status(403).json({ error: 'Admin access or valid bulk key required' })
   }
   
@@ -1807,11 +1789,10 @@ router.post('/seed-all-real', async (req, res) => {
 
 // Seed verified real funding opportunities from curated JSON file
 router.post('/seed-real-opportunities', async (req, res) => {
-  const auth = req.user ?? { role: 'guest' }
   const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
   const expectedKey = process.env.BULK_POPULATE_KEY || null
   
-  const isAdmin = auth.role === 'admin'
+  const isAdmin = Boolean(req.ctx?.isAdmin)
   const hasValidKey = Boolean(expectedKey) && bulkKey === expectedKey
   
   if (!isAdmin && !hasValidKey) {
@@ -2028,11 +2009,10 @@ router.get('/health', async (req, res) => {
 // Real funding opportunity crawler - fetches actual grants from real databases
 router.post('/real-crawl', async (req, res) => {
   // Allow admin auth OR bulk key for automated crawling
-  const auth = req.user ?? { role: 'guest' }
   const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
   const expectedKey = process.env.BULK_POPULATE_KEY || null
   
-  const isAdmin = auth.role === 'admin'
+  const isAdmin = Boolean(req.ctx?.isAdmin)
   const hasValidKey = Boolean(expectedKey) && bulkKey === expectedKey
   
   if (!isAdmin && !hasValidKey) {
