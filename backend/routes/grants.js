@@ -508,10 +508,19 @@ router.post('/from-opportunity', async (req, res) => {
     
     // If not found in DB, use provided opportunity_data
     if (!opportunity && opportunity_data) {
+      // Postgres safety: `grants.deadline` is a DATE; empty strings (and some ISO timestamps)
+      // will hard-fail inserts. Normalize to YYYY-MM-DD or NULL.
+      let normalizedDeadline = opportunity_data.deadline || opportunity_data.deadlineAt || null
+      if (typeof normalizedDeadline === 'string') {
+        const s = normalizedDeadline.trim()
+        if (!s) normalizedDeadline = null
+        else if (/^\d{4}-\d{2}-\d{2}T/.test(s)) normalizedDeadline = s.slice(0, 10)
+      }
+
       opportunity = {
         title: opportunity_data.title,
         sponsor: opportunity_data.sponsor,
-        deadline: opportunity_data.deadline || opportunity_data.deadlineAt,
+        deadline: normalizedDeadline,
         application_url: opportunity_data.url || opportunity_data.application_url,
         amount_min: opportunity_data.awardMin || opportunity_data.amount_min,
         amount_max: opportunity_data.awardMax || opportunity_data.amount_max,
@@ -577,6 +586,14 @@ router.post('/from-opportunity', async (req, res) => {
       }
       
       const id = crypto.randomUUID();
+
+      // Postgres safety: reject empty deadline strings
+      let insertDeadline = opportunity.deadline ?? null
+      if (typeof insertDeadline === 'string') {
+        const s = insertDeadline.trim()
+        if (!s) insertDeadline = null
+        else if (/^\d{4}-\d{2}-\d{2}T/.test(s)) insertDeadline = s.slice(0, 10)
+      }
       
       await tx.prepare(`
         INSERT INTO grants (
@@ -591,7 +608,7 @@ router.post('/from-opportunity', async (req, res) => {
         opportunity_id || null,
         opportunity.title,
         opportunity.sponsor,
-        opportunity.deadline,
+        insertDeadline,
         match_score || null,
         JSON.stringify(match_reasons || []),
         opportunity.application_url,
