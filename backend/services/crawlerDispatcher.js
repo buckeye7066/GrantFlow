@@ -12,6 +12,7 @@ import { buildProfileContext } from './profileHelpers.js'
 import { processProfileEnrichmentJob } from './profileEnrichment.js'
 import { processNationalJob } from './nationalJobRouter.js'
 import { logFailedJob, determineSeverity } from './deadLetterQueue.js'
+import { acquireCrawlerLock } from './crawlerConcurrencyGuard.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -49,6 +50,34 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
 
     if (job.status && job.status !== 'queued') {
       return
+    }
+    
+    // Check concurrency limits before starting job
+    if (job.profile_id) {
+      const lockResult = await acquireCrawlerLock(db, job.profile_id, job.type)
+      if (!lockResult.allowed) {
+        const errorMsg = lockResult.reason === 'profile_has_running_crawler'
+          ? `Profile already has a running crawler (job ${lockResult.existingJobId})`
+          : `Global crawler limit reached (${lockResult.runningCount}/${lockResult.limit} running)`
+        
+        console.warn('[crawlerDispatcher] Concurrency limit reached', {
+          jobId,
+          profileId: job.profile_id,
+          reason: lockResult.reason,
+        })
+        
+        // Mark job as failed with clear reason
+        await db.prepare(`
+          UPDATE crawler_jobs
+          SET status = 'failed',
+              completed_at = CURRENT_TIMESTAMP,
+              error = ?
+          WHERE id = ?
+        `).run(errorMsg, jobId)
+        
+        // Don't log to dead letter queue - this is expected behavior, not a failure
+        return
+      }
     }
 
     const handler = HANDLERS[job.type]

@@ -30,14 +30,19 @@ export function validateJobStatus(status) {
  */
 export function validateGrantStatus(status) {
   const VALID_STATUSES = [
-    'not_started',
-    'in_progress',
+    'discovered',
+    'interested',
+    'drafting',
+    'app_prep',
+    'revision',
+    'submission_ready',
     'submitted',
+    'under_review',
     'awarded',
     'rejected',
     'withdrawn',
   ]
-  const normalized = String(status || 'not_started').toLowerCase().trim()
+  const normalized = String(status || 'interested').toLowerCase().trim()
   
   if (!VALID_STATUSES.includes(normalized)) {
     throw new Error(`Invalid grant status: ${status}. Must be one of: ${VALID_STATUSES.join(', ')}`)
