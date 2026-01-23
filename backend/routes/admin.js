@@ -2256,6 +2256,7 @@ router.post('/profiles/merge', async (req, res, next) => {
 // Dead Letter Queue Management
 router.get('/dead-letter-queue', async (req, res) => {
   try {
+    if (!(await ensureAdminRequest(req, res))) return
     const { getUnresolvedFailures, getFailureStatistics } = await import('../services/deadLetterQueue.js');
     const { jobType, limit = 100 } = req.query;
     
@@ -2274,6 +2275,7 @@ router.get('/dead-letter-queue', async (req, res) => {
 
 router.post('/dead-letter-queue/:id/resolve', async (req, res) => {
   try {
+    if (!(await ensureAdminRequest(req, res))) return
     const { resolveFailure } = await import('../services/deadLetterQueue.js');
     const { id } = req.params;
     const { notes } = req.body;
