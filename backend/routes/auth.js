@@ -1448,11 +1448,20 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       // Don't fail the request if email fails - code is stored in DB
     }
 
+    // Security: in production, never return OTP codes via API responses.
+    // If we can't deliver email, fail closed.
+    if (isProd && emailSent !== true) {
+      return res.status(503).json({
+        error: 'Email delivery is unavailable. Please try again later.',
+        error_type: 'email_unavailable',
+      })
+    }
+
     // Return success response
     const responseData = {
       message: emailSent 
         ? 'Verification code sent to your email' 
-        : 'Verification code generated. Use the preview code to log in.',
+        : 'Verification code generated.',
       email_sent: emailSent,
       verification_token: verificationToken,
       user_hint: {
@@ -1470,25 +1479,11 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       error: emailSent ? null : 'email_delivery_failed_or_unconfigured',
     }).catch(() => {})
 
-    // Check if preview codes are explicitly allowed in production
-    const allowPreviewInProd = String(
-      process.env.AUTH_ALLOW_PREVIEW_CODE_IN_PROD ||
-      process.env.AUTH_ALLOW_PREVIEW_CODE ||
-      ''
-    ).toLowerCase() === 'true'
-
     // Developer experience: in non-production, return a preview code so local/test flows can proceed
     // even when email delivery is not configured.
     if (!isProd) {
       // Non-production only: useful for local/dev and automated tests.
       responseData.previewCode = code
-    }
-
-    // Production: always return preview code for authorized emails (email is pre-validated above)
-    // This removes the dependency on email delivery for production login
-    if (isProd) {
-      responseData.previewCode = code
-      responseData.preview_reason = 'profile_email_authorized'
     }
 
     console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent, 'isProd:', isProd)
