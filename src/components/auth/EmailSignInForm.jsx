@@ -77,7 +77,8 @@ export default function EmailSignInForm({ onComplete }) {
         (previewCode
           ? 'Email delivery is not configured for this environment. Use the generated code below to continue.'
           : null)
-      if (previewCode) {
+      // Never log OTP codes in production consoles.
+      if (previewCode && import.meta?.env?.DEV) {
         console.info('[auth] preview email code:', previewCode)
       }
       setStatus({

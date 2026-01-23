@@ -2239,7 +2239,7 @@ router.post('/profiles/merge', async (req, res, next) => {
       winnerId,
       loserIds,
       dryRun,
-      actorUserId: req.user?.userId ?? null,
+      actorUserId: req.ctx?.userId ?? req.user?.userId ?? null,
     })
 
     return res.json({ ok: true, ...result })
