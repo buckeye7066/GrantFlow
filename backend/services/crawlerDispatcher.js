@@ -114,14 +114,49 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       return
     }
 
-    await db.prepare(`
-      UPDATE crawler_jobs
-      SET status = 'running',
-          started_at = CURRENT_TIMESTAMP,
-          error = NULL,
-          parameters = COALESCE(parameters, '{}')
-      WHERE id = ?
-    `).run(jobId)
+    // Concurrency control (per-profile):
+    // If a profile-scoped job is queued while another job for that profile is already running,
+    // do NOT fail the job (that pollutes diagnostics). Instead keep it queued and retry soon.
+    const profileId = job.profile_id ?? null
+    const startSql = profileId
+      ? `
+          UPDATE crawler_jobs
+          SET status = 'running',
+              started_at = CURRENT_TIMESTAMP,
+              error = NULL,
+              parameters = COALESCE(parameters, '{}')
+          WHERE id = ?
+            AND status = 'queued'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM crawler_jobs
+              WHERE profile_id = ?
+                AND status = 'running'
+                AND id <> ?
+            )
+        `
+      : `
+          UPDATE crawler_jobs
+          SET status = 'running',
+              started_at = CURRENT_TIMESTAMP,
+              error = NULL,
+              parameters = COALESCE(parameters, '{}')
+          WHERE id = ?
+            AND status = 'queued'
+        `
+
+    const startRes = profileId
+      ? await db.prepare(startSql).run(jobId, profileId, jobId)
+      : await db.prepare(startSql).run(jobId)
+
+    const startedCount = Number(startRes?.changes ?? startRes?.rowCount ?? 0)
+    if (startedCount === 0) {
+      // Another job is already running for this profile (or the job was picked up elsewhere).
+      setTimeout(() => {
+        dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(() => {})
+      }, 12_000)
+      return
+    }
 
     // CRITICAL: Use snapshot if available, never load live profile data
     let profileContext = null

@@ -8,9 +8,8 @@ import { isAdminUserWithDb } from '../utils/accessControl.js'
  * Ensure user is authenticated
  */
 export function ensureAuth(req, res, next) {
-  const user = req.user ?? { role: 'guest' };
-  
-  if (user.role === 'guest') {
+  const userId = req.ctx?.userId ?? req.user?.userId ?? null
+  if (!userId) {
     return res.status(401).json({ error: 'Authentication required' });
   }
   

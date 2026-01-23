@@ -3,23 +3,12 @@ import crypto from 'crypto'
 import { formatError } from '../middleware/errorHandler.js'
 
 const router = express.Router()
-
-function isAdminUser(user) {
-  const userEmail = user?.primary_email || user?.email || ''
-  return (
-    user?.is_admin === true ||
-    user?.role === 'admin' ||
-    (userEmail && String(userEmail).toLowerCase().includes('buckeye7066'))
-  )
-}
-
 function requireAdmin(req, res) {
-  const user = req.user
-  if (!user) {
+  if (!req.ctx?.userId) {
     res.status(401).json({ error: 'Authentication required' })
     return false
   }
-  if (!isAdminUser(user)) {
+  if (!req.ctx?.isAdmin) {
     res.status(403).json({ error: 'Access denied' })
     return false
   }

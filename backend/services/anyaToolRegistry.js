@@ -1706,7 +1706,7 @@ registerTool({
     }
     
     if (operationType === 'crawlers' || operationType === 'all') {
-      status.crawlers = await getAutonomousCrawlersStatus()
+      status.crawlers = await getAutonomousCrawlersStatus(context?.db ?? null)
     }
     
     if (operationType === 'functions' || operationType === 'all') {

@@ -925,7 +925,7 @@ router.post('/reattach-users', async (req, res) => {
     const adminUser = await db.prepare(`
       SELECT id, display_name, primary_email
       FROM users
-      WHERE is_admin = TRUE OR LOWER(primary_email) LIKE '%buckeye7066%'
+      WHERE is_admin = TRUE
       LIMIT 1
     `).get();
     
