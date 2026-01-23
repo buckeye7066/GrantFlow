@@ -241,6 +241,7 @@ router.get('/', async (req, res) => {
   const isAdmin = req.ctx?.isAdmin === true
   const includeSummary = req.query.summary === 'true'
   const includeDeleted = req.query.includeDeleted === 'true'
+  const userId = user?.userId ?? user?.id ?? null
   
   // Validate pagination parameters.
   // For admins, default to the max page size unless a limit is explicitly provided.

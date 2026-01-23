@@ -72,7 +72,9 @@ function resolveJwtSecret() {
   }
   // Non-prod fallback only (must never be random).
   return String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret').trim()
-})()
+}
+
+const JWT_SECRET = resolveJwtSecret()
 
 function parseSeconds(value, fallback) {
   if (value === undefined || value === null) {
@@ -2244,25 +2246,14 @@ router.get('/me', async (req, res) => {
     } catch (dbError) {
       console.error('[auth/me] Database error fetching org count:', dbError)
     }
-    
-    const activeProfileId = req.user.profileId || null
-    
-    // Use req.ctx if available for canonical admin status (from requestContext middleware)
-    const isAdmin = req.ctx?.isAdmin ?? Boolean(user.is_admin === true || user.is_admin === 1)
-    
-    // Count accessible resources for frontend
-    const accessibleProfileCount = req.ctx?.accessibleProfileIds === null ? profiles.length : (req.ctx?.accessibleProfileIds?.size ?? profiles.length)
-    const accessibleOrgCount = req.ctx?.accessibleOrgIds === null ? 0 : (req.ctx?.accessibleOrgIds?.size ?? 0)
 
     return res.json({
-      userId: user.id,
-      email: user.primary_email || user.email || null,
+      userId,
+      email,
       isAdmin,
       activeProfileId,
       accessibleProfileCount,
       accessibleOrgCount,
-      // Legacy payload for backward compatibility
-      user: buildUserPayload(user, profiles, activeProfileId),
     })
   } catch (error) {
     console.error('[auth/me] Unexpected error:', error)

@@ -56,8 +56,6 @@ import { ensureProfileEmailSchema } from './utils/accessControl.js';
 import { dispatchCrawlerJob } from './services/crawlerDispatcher.js';
 import { findDuplicateProfileGroups, mergeProfiles } from './services/profileDedupeService.js'
 import { assertEnv, getJwtSecretOrThrow } from './config/env.js'
-import healthRouter from './routes/health.js'
-import requestContext from './middleware/requestContext.js'
 
 // Validate environment variables early (fail-fast in production).
 const { env: ENV } = assertEnv()
@@ -738,7 +736,11 @@ function resolveJwtSecret() {
     );
     process.exit(1);
   }
-})()
+  return String(raw || '').trim()
+}
+
+const EFFECTIVE_JWT_SECRET = resolveJwtSecret()
+const isProd = process.env.NODE_ENV === 'production'
 
 // Make db available to routes
 app.use((req, res, next) => {
