@@ -5,13 +5,11 @@
  * - Non-admin users can only access data tied to their own profiles/organizations.
  * - Admin users can access everything.
  *
- * Notes:
- * - This codebase has a few different "admin" representations (role, is_admin, email allowlist).
- *   We keep backward compatibility by treating any of them as admin.
+ * IMPORTANT:
+ * - Canonical admin truth is DB-backed: users.is_admin.
+ * - Email-substring allowlists must not participate in authorization decisions.
  */
 import crypto from 'crypto'
-
-const ADMIN_EMAIL_ALLOWLIST_SUBSTRING = 'buckeye7066'
 
 function normalizeEmail(email = '') {
   const v = String(email || '').trim().toLowerCase()
@@ -28,25 +26,37 @@ function collectUserEmails(user) {
 }
 
 export function isAdminUser(user) {
-  const email = String(user?.primary_email || user?.email || '').toLowerCase()
   return Boolean(
     user?.role === 'admin' ||
       user?.isAdmin === true ||
       user?.is_admin === true ||
       user?.is_admin === 1 ||
-      (Array.isArray(user?.roles) && user.roles.includes('admin')) ||
-      (email && email.includes(ADMIN_EMAIL_ALLOWLIST_SUBSTRING)),
+      (Array.isArray(user?.roles) && user.roles.includes('admin')),
   )
 }
 
-async function resolveIsAdminFromDb(db, user) {
+export async function isAdminUserWithDb(db, user) {
+  // Some tokens are profile-scoped and don't carry userId.
+  // Resolve user_id via profile when needed, then check users.is_admin.
   try {
     const userId = getAuthUserId(user)
-    if (!userId) return false
-    const row = await db.prepare('SELECT is_admin, primary_email FROM users WHERE id = ?').get(userId)
-    const email = String(row?.primary_email || '').toLowerCase()
-    return Boolean(row?.is_admin === true || row?.is_admin === 1 || (email && email.includes(ADMIN_EMAIL_ALLOWLIST_SUBSTRING)))
-  } catch {
+    const profileId = getAuthProfileId(user)
+
+    let resolvedUserId = userId
+    if (!resolvedUserId && profileId) {
+      const profileRow = await db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
+      resolvedUserId = profileRow?.user_id
+    }
+
+    if (!resolvedUserId) return false
+
+    const row = await db.prepare('SELECT is_admin FROM users WHERE id = ?').get(resolvedUserId)
+    if (!row) return false
+
+    return Boolean(row.is_admin === true || row.is_admin === 1)
+  } catch (error) {
+    // Fail closed: never grant admin on DB errors.
+    console.warn('[accessControl] isAdminUserWithDb DB check failed:', error?.message)
     return false
   }
 }
@@ -103,7 +113,7 @@ export function getAuthProfileId(user) {
 }
 
 export async function getAccessibleProfileIds(db, user) {
-  if (isAdminUser(user) || (await resolveIsAdminFromDb(db, user))) return null
+  if (await isAdminUserWithDb(db, user)) return null
 
   const ids = new Set()
   const userId = getAuthUserId(user)
