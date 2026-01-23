@@ -67,22 +67,22 @@ export async function isAdminUserWithDb(db, user) {
     }
 
     if (!resolvedUserId) {
-      // No user ID - check token claims as fallback
-      return isAdminUser(user)
+      // No resolvable user ID -> cannot prove admin via DB.
+      return false
     }
 
     // Check DB for admin status (SOURCE OF TRUTH)
     const row = await db.prepare('SELECT is_admin FROM users WHERE id = ?').get(resolvedUserId)
     if (!row) {
-      // User not found in DB - fall back to token claims
-      return isAdminUser(user)
+      // User not found in DB -> cannot prove admin.
+      return false
     }
     
     return Boolean(row.is_admin === true || row.is_admin === 1)
   } catch (error) {
-    // Best-effort: if DB check fails, fall back to token-only check
-    console.warn('[accessControl] isAdminUserWithDb DB check failed, falling back to token-only:', error?.message)
-    return isAdminUser(user)
+    // Fail closed: do not grant admin on DB errors.
+    console.warn('[accessControl] isAdminUserWithDb DB check failed:', error?.message)
+    return false
   }
 }
 

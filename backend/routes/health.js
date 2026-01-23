@@ -1,191 +1,91 @@
-/**
- * Health check endpoints for Railway healthcheck, Docker HEALTHCHECK, and monitoring.
- * These endpoints are mounted early in server setup to ensure they're always available.
- */
-import express from 'express';
-import fs from 'fs';
-import { getSafeHealthSummary } from '../services/diagnosticsService.js';
+import express from 'express'
+import fs from 'fs'
+import { getSafeHealthSummary } from '../services/diagnosticsService.js'
 
-const router = express.Router();
+const router = express.Router()
 
-/**
- * GET /api/health
- * Railway healthcheck endpoint - must return 200 when service is up.
- * Returns safe, minimal diagnostics without exposing secrets.
- */
-router.get('/api/health', async (req, res) => {
-  const db = req.db;
-  
+async function checkDb(db) {
+  if (!db) return { ok: false, reason: 'db_missing' }
   try {
-    const healthSummary = await getSafeHealthSummary(db);
-    
-    // Contract: public health endpoints must use { ok, warning, error } for status.
-    // Some internal helpers may return { healthy, degraded, unhealthy } — normalize here.
-    const rawStatus = String(healthSummary?.status ?? 'error').toLowerCase();
-    const status =
-      rawStatus === 'healthy'
-        ? 'ok'
-        : rawStatus === 'degraded'
-          ? 'warning'
-          : rawStatus === 'unhealthy'
-            ? 'error'
-            : rawStatus || 'error';
-
-    // Treat "warning" as healthy for platform checks (Railway healthchecks, Docker HEALTHCHECK, etc.)
-    // Only fail hard when the normalized status indicates a real error.
-    const statusCode = status === 'error' ? 500 : 200;
-    const body =
-      rawStatus === status
-        ? healthSummary
-        : { ...healthSummary, status, legacy_status: rawStatus };
-
-    res.status(statusCode).json(body);
-  } catch (error) {
-    console.error('[/api/health] Error:', error);
-    res.status(500).json({
-      timestamp: new Date().toISOString(),
-      status: 'error',
-      counts: { opportunities: 0, recentFailures: 0 },
-      summary: 'Failed to retrieve health information'
-    });
-  }
-});
-
-/**
- * GET /readyz
- * Docker HEALTHCHECK endpoint - returns 200 only when service is ready.
- * Checks DB reachability, uploads directory writability, and required secrets in production.
- */
-router.get('/readyz', async (req, res) => {
-  const db = req.db;
-  const uploadsDir = req.uploadsDir;
-  const isProd = process.env.NODE_ENV === 'production';
-  
-  try {
-    // Check database reachability
-    if (db.healthcheck) {
-      const hc = await db.healthcheck();
-      if (!hc?.ok) throw new Error(hc?.error || 'Database healthcheck failed');
+    if (typeof db.healthcheck === 'function') {
+      const hc = await db.healthcheck()
+      if (!hc?.ok) return { ok: false, reason: 'db_healthcheck_failed', error: hc?.error || null }
     } else {
-      await db.prepare('SELECT 1 as ok').get();
+      await db.prepare('SELECT 1 as ok').get()
     }
-    
-    // Check required tables exist
-    try {
-      await db.prepare('SELECT 1 FROM users LIMIT 1').get();
-      await db.prepare('SELECT 1 FROM profiles LIMIT 1').get();
-      await db.prepare('SELECT 1 FROM opportunities LIMIT 1').get();
-    } catch (tableError) {
-      return res.status(503).json({
-        status: 'not_ready',
-        reason: 'required_tables_missing',
-        message: 'Database schema incomplete - run migrations',
-        timestamp: new Date().toISOString(),
-      });
-    }
-    
-    // In production, verify required secrets are configured
-    if (isProd) {
-      const jwtSecret = process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET;
-      if (!jwtSecret || jwtSecret === 'grantflow-dev-secret') {
-        return res.status(503).json({
-          status: 'not_ready',
-          reason: 'missing_jwt_secret',
-          message: 'AUTH_JWT_SECRET (or JWT_SECRET) is required in production',
-          timestamp: new Date().toISOString(),
-        });
+    return { ok: true, dialect: db.dialect ?? null }
+  } catch (error) {
+    return { ok: false, reason: 'db_unreachable', error: error?.message || String(error) }
+  }
+}
+
+function checkJwtSecret() {
+  const isProd = String(process.env.NODE_ENV || '').toLowerCase() === 'production'
+  const secret = String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || '').trim()
+  if (!isProd) return { ok: true, configured: Boolean(secret) }
+  if (!secret) return { ok: false, reason: 'missing_auth_jwt_secret' }
+  if (secret === 'grantflow-dev-secret') return { ok: false, reason: 'insecure_auth_jwt_secret' }
+  return { ok: true, configured: true }
+}
+
+async function checkRequiredSchema(db) {
+  const required = [
+    { table: 'users', column: 'is_admin' },
+    { table: 'crawler_jobs', column: 'idempotency_key' },
+    { table: 'crawler_jobs', column: 'dispatch_attempts' },
+    { table: 'crawler_jobs', column: 'next_dispatch_at' },
+    { table: 'crawler_jobs', column: 'profile_context_snapshot' },
+    { table: 'dead_letter_queue', column: 'job_id' },
+    { table: 'anya_runs', column: 'status' },
+    { table: 'anya_run_logs', column: 'run_id' },
+  ]
+
+  try {
+    for (const item of required) {
+      if (db?.dialect === 'postgres') {
+        const row = await db
+          .prepare(
+            `
+              SELECT 1
+              FROM information_schema.columns
+              WHERE table_schema = current_schema()
+                AND table_name = ?
+                AND column_name = ?
+              LIMIT 1
+            `,
+          )
+          .get(item.table, item.column)
+        if (!row) return { ok: false, reason: 'missing_schema', missing: item }
+      } else {
+        if (!/^[a-zA-Z0-9_]+$/.test(item.table)) return { ok: false, reason: 'invalid_table_identifier', table: item.table }
+        const rows = await db.prepare(`PRAGMA table_info(${item.table})`).all()
+        const has = (rows || []).some((r) => String(r?.name || '') === item.column)
+        if (!has) return { ok: false, reason: 'missing_schema', missing: item }
       }
     }
-    
-    // Ensure uploads dir is present and writable (production requires a volume).
-    try {
-      fs.mkdirSync(uploadsDir, { recursive: true });
-      fs.accessSync(uploadsDir, fs.constants.R_OK | fs.constants.W_OK);
-    } catch (e) {
-      return res.status(503).json({
-        status: 'not_ready',
-        reason: 'uploads_dir_unwritable',
-        uploads_dir: uploadsDir,
-        message: e?.message || String(e),
-        timestamp: new Date().toISOString(),
-      });
-    }
-    
-    res.status(200).json({ 
-      status: 'ready', 
-      dialect: db.dialect,
-      tables_ok: true,
-      secrets_ok: true,
-      timestamp: new Date().toISOString() 
-    });
+    return { ok: true }
   } catch (error) {
-    console.error('[/readyz] Not ready:', error);
-    res.status(503).json({ 
-      status: 'not_ready', 
-      reason: 'database_unreachable', 
-      timestamp: new Date().toISOString() 
-    });
+    return { ok: false, reason: 'schema_check_failed', error: error?.message || String(error) }
   }
-});
+}
 
-/**
- * GET /health
- * Legacy health endpoint - alias for /api/health.
- * Kept for backward compatibility.
- */
-router.get('/health', async (req, res) => {
-  const db = req.db;
-  
-  const health = {
-    status: 'healthy',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    dependencies: {
-      database: 'unknown',
-      openai: 'unknown',
-      anthropic: 'unknown',
-    }
-  };
-  
-  // Check database connection
+function checkUploadsDir(req) {
+  const uploadsDir = req.uploadsDir
+  if (!uploadsDir) return { ok: true, configured: false }
   try {
-    if (db.healthcheck) {
-      const hc = await db.healthcheck();
-      if (!hc?.ok) throw new Error(hc?.error || 'Database healthcheck failed');
-    } else {
-      await db.prepare('SELECT 1').get();
-    }
-    health.dependencies.database = 'healthy';
+    fs.mkdirSync(uploadsDir, { recursive: true })
+    fs.accessSync(uploadsDir, fs.constants.R_OK | fs.constants.W_OK)
+    return { ok: true, path: uploadsDir }
   } catch (error) {
-    health.dependencies.database = 'unhealthy';
-    health.status = 'degraded';
+    return { ok: false, reason: 'uploads_unwritable', path: uploadsDir, error: error?.message || String(error) }
   }
-  
-  // Check if OpenAI API key is configured (safe check - no key exposure)
-  const hasOpenAIKey = Boolean(String(process.env.OPENAI_API_KEY || '').trim());
-  const hasAnthropicKey = Boolean(String(process.env.ANTHROPIC_API_KEY || '').trim());
-  health.dependencies.openai = hasOpenAIKey
-    ? 'configured'
-    : hasAnthropicKey
-      ? 'fallback_anthropic_configured'
-      : 'not configured';
-  
-  const statusCode = health.status === 'healthy' ? 200 : 503;
-  res.status(statusCode).json(health);
-});
+}
 
-/**
- * GET /healthz
- * Kubernetes-style health endpoint - alias for /api/health.
- * Kept for compatibility with k8s-style monitoring.
- */
-router.get('/healthz', async (req, res) => {
-  const db = req.db;
-  
+// Public health summary (safe, non-admin)
+router.get('/api/health', async (req, res) => {
   try {
-    const healthSummary = await getSafeHealthSummary(db);
-      
-    const rawStatus = healthSummary?.status ?? 'error';
+    const healthSummary = await getSafeHealthSummary(req.db)
+    const rawStatus = String(healthSummary?.status ?? 'error').toLowerCase()
     const status =
       rawStatus === 'healthy'
         ? 'ok'
@@ -193,24 +93,86 @@ router.get('/healthz', async (req, res) => {
           ? 'warning'
           : rawStatus === 'unhealthy'
             ? 'error'
-            : rawStatus;
+            : rawStatus || 'error'
 
-    const statusCode = status === 'error' ? 500 : 200;
+    const statusCode = status === 'error' ? 500 : 200
     const body =
       rawStatus === status
         ? healthSummary
-        : { ...healthSummary, status, legacy_status: rawStatus };
+        : { ...healthSummary, status, legacy_status: rawStatus }
 
-    res.status(statusCode).json(body);
+    return res.status(statusCode).json(body)
   } catch (error) {
-    console.error('[/healthz] Error:', error);
-    res.status(500).json({
-      timestamp: new Date().toISOString(),
+    return res.status(500).json({
+      ok: false,
       status: 'error',
-      counts: { opportunities: 0, recentFailures: 0 },
-      summary: 'Failed to retrieve health information'
-    });
+      summary: 'Failed to retrieve health information',
+      error: error?.message || String(error),
+      timestamp: new Date().toISOString(),
+    })
   }
-});
+})
 
-export default router;
+// Liveness only
+router.get('/healthz', (_req, res) => {
+  res.status(200).json({ ok: true, status: 'ok', timestamp: new Date().toISOString() })
+})
+
+// Readiness checks DB + schema + secrets + uploads volume
+router.get('/readyz', async (req, res) => {
+  const jwt = checkJwtSecret()
+  const dbCheck = await checkDb(req.db)
+
+  if (!dbCheck.ok) {
+    return res.status(503).json({
+      ok: false,
+      status: 'not_ready',
+      reason: dbCheck.reason,
+      error: dbCheck.error || null,
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  const schema = await checkRequiredSchema(req.db)
+  if (!schema.ok) {
+    return res.status(503).json({
+      ok: false,
+      status: 'not_ready',
+      reason: schema.reason,
+      missing: schema.missing || null,
+      error: schema.error || null,
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  if (!jwt.ok) {
+    return res.status(503).json({
+      ok: false,
+      status: 'not_ready',
+      reason: jwt.reason,
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  const uploads = checkUploadsDir(req)
+  if (!uploads.ok) {
+    return res.status(503).json({
+      ok: false,
+      status: 'not_ready',
+      reason: uploads.reason,
+      uploads_dir: uploads.path,
+      error: uploads.error || null,
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  return res.status(200).json({
+    ok: true,
+    status: 'ready',
+    dialect: dbCheck.dialect ?? null,
+    timestamp: new Date().toISOString(),
+  })
+})
+
+export default router
+
