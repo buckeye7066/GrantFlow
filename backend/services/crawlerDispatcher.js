@@ -8,9 +8,11 @@ import { runComprehensiveCrawler as processComprehensiveCrawlerJob } from './com
 import { processItemCrawlerJob } from './itemCrawler.js'
 import { processDocumentIngestionJob } from './documentIngestion.js'
 import { processPipelineAutomationJob } from './pipelineAutomation.js'
-import { loadProfileContext } from './profileHelpers.js'
+import { buildProfileContext } from './profileHelpers.js'
 import { processProfileEnrichmentJob } from './profileEnrichment.js'
 import { processNationalJob } from './nationalJobRouter.js'
+import { logFailedJob, determineSeverity } from './deadLetterQueue.js'
+import { acquireCrawlerLock } from './crawlerConcurrencyGuard.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -71,6 +73,45 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
     if (job.status && job.status !== 'queued') {
       return
     }
+    
+    // Check concurrency limits before starting job
+    if (job.profile_id) {
+      const lockResult = await acquireCrawlerLock(db, job.profile_id, job.type, { jobId })
+      if (!lockResult.allowed) {
+        console.warn('[crawlerDispatcher] Concurrency limit reached', {
+          jobId,
+          profileId: job.profile_id,
+          reason: lockResult.reason,
+          existingJobId: lockResult.existingJobId ?? null,
+          runningCount: lockResult.runningCount ?? null,
+          limit: lockResult.limit ?? null,
+        })
+
+        // IMPORTANT: This is expected behavior, not a "failure".
+        // Do NOT mark the job failed (it pollutes diagnostics and blocks queues).
+        // Instead keep it queued and retry shortly.
+        try {
+          await db
+            .prepare(
+              `
+                UPDATE crawler_jobs
+                SET error = NULL
+                WHERE id = ?
+                  AND status = 'queued'
+              `,
+            )
+            .run(jobId)
+        } catch {
+          // ignore best-effort cleanup
+        }
+
+        setTimeout(() => {
+          dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(() => {})
+        }, 12_000)
+
+        return
+      }
+    }
 
     // If a previous dispatcher pass scheduled this job in the future, respect it.
     if (job.next_dispatch_at) {
@@ -88,13 +129,24 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
 
     const handler = HANDLERS[job.type]
     if (!handler) {
+      const errorMsg = `Unhandled crawler type "${job.type}"`
       await db.prepare(`
         UPDATE crawler_jobs
         SET status = 'failed',
             completed_at = CURRENT_TIMESTAMP,
             error = ?
         WHERE id = ?
-      `).run(`Unhandled crawler type "${job.type}"`, jobId)
+      `).run(errorMsg, jobId)
+      
+      // Log to dead letter queue
+      await logFailedJob(db, {
+        jobId,
+        jobType: job.type,
+        profileId: job.profile_id,
+        error: errorMsg,
+        jobParameters: parseJSON(job.parameters),
+        severity: 'high',
+      })
       return
     }
 
@@ -197,22 +249,37 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       return
     }
 
+    // CRITICAL: Use snapshot if available, never load live profile data
     let profileContext = null
     try {
-      if (job.profile_id) {
-        profileContext = await loadProfileContext(db, job.profile_id)
+      if (job.profile_context_snapshot) {
+        // Use stored snapshot (deterministic)
+        profileContext = parseJSON(job.profile_context_snapshot)
+        console.log('[crawlerDispatcher] Using stored profile snapshot for job', jobId)
+      } else if (job.profile_id) {
+        // Legacy fallback: build snapshot now (non-deterministic, but maintain backward compatibility)
+        console.warn('[crawlerDispatcher] Job missing snapshot, building now (non-deterministic):', jobId)
+        profileContext = await buildProfileContext(db, job.profile_id)
       }
     } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error)
       await db.prepare(`
         UPDATE crawler_jobs
         SET status = 'failed',
             completed_at = CURRENT_TIMESTAMP,
             error = ?
         WHERE id = ?
-      `).run(
-        error instanceof Error ? error.message : String(error),
+      `).run(errorMsg, jobId)
+      
+      // Log to dead letter queue
+      await logFailedJob(db, {
         jobId,
-      )
+        jobType: job.type,
+        profileId: job.profile_id,
+        error,
+        jobParameters: parseJSON(job.parameters),
+        severity: determineSeverity(error, job.type),
+      })
       return
     }
 
@@ -286,6 +353,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         error: error instanceof Error ? error.message : String(error),
       }
 
+      const errorMsg = error instanceof Error ? error.message : String(error)
       await db.prepare(`
         UPDATE crawler_jobs
         SET status = 'failed',
@@ -293,11 +361,18 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
             error = ?,
             result_meta = COALESCE(?, result_meta)
         WHERE id = ?
-      `).run(
-        error instanceof Error ? error.message : String(error),
-        JSON.stringify(finalResultMeta),
+      `).run(errorMsg, JSON.stringify(finalResultMeta), jobId)
+      
+      // Log to dead letter queue for durable failure tracking
+      await logFailedJob(db, {
         jobId,
-      )
+        jobType: job.type,
+        profileId: job.profile_id,
+        error,
+        jobParameters: parseJSON(job.parameters),
+        profileContextSnapshot: profileContext,
+        severity: determineSeverity(error, job.type),
+      })
     }
   }
 

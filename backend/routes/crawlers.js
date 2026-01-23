@@ -1,9 +1,12 @@
 import express from 'express'
 import crypto from 'crypto'
 import fs from 'fs'
+import crypto from 'crypto'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
+import { createCrawlerJob, validateJobParameters } from '../services/crawlerJobCreation.js'
+import { buildProfileContext } from '../services/profileHelpers.js'
 import { validatePagination } from '../utils/validation.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'
 import { formatError } from '../middleware/errorHandler.js'
@@ -1030,68 +1033,29 @@ router.post('/jobs', async (req, res) => {
       if (!(await requireTierCapability(req, res, targetProfileId, requiredCapability))) return
     }
 
-    const rawIdempotency =
-      req.headers['idempotency-key'] ||
-      req.headers['x-idempotency-key'] ||
-      req.body?.idempotency_key ||
-      null
-
-    const idempotencyKey =
-      force
-        ? null
-        : typeof rawIdempotency === 'string' && rawIdempotency.trim()
-          ? rawIdempotency.trim().slice(0, 200)
-          : computeIdempotencyKey({
-              type,
-              profileId: targetProfileId,
-              organizationId,
-              parameters,
-            })
-
-    if (idempotencyKey) {
-      const existing = await req.db
-        .prepare(
-          `
-            SELECT *
-            FROM crawler_jobs
-            WHERE idempotency_key = ?
-              AND status IN ('queued', 'running')
-            ORDER BY created_at DESC
-            LIMIT 1
-          `,
-        )
-        .get(idempotencyKey)
-      if (existing) {
-        return res.status(200).json(mapJob(existing))
-      }
-    }
-
-    const parametersJson = JSON.stringify(parameters ?? {})
-    const jobId = crypto.randomUUID()
-    const insert = req.db.prepare(`
-      INSERT INTO crawler_jobs (
-        id,
-        type,
-        status,
-        profile_id,
-        organization_id,
-        parameters,
-        requested_by,
-        idempotency_key
-      ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?)
-    `)
-
-    await insert.run(
-      jobId,
+    // Validate and normalize parameters
+    const validatedParameters = validateJobParameters(type, parameters)
+    
+    // Create job with automatic idempotency, validation, and snapshot
+    const result = await createCrawlerJob(req.db, {
       type,
-      targetProfileId,
+      profileId: targetProfileId,
       organizationId,
-      parametersJson,
-      ctx.userId ?? ctx.email ?? targetProfileId ?? 'user',
-      idempotencyKey,
-    )
-
-    const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
+      parameters: validatedParameters,
+      requestedBy: admin ? 'admin' : (auth.userId ?? auth.email ?? targetProfileId ?? 'user'),
+      status: 'queued',
+      buildSnapshot: true,
+    })
+    
+    // If existing job found, return it
+    if (result.existing) {
+      console.log('[crawlers] Duplicate job detected, returning existing job:', result.jobId)
+      const existingJob = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(result.jobId)
+      return res.status(200).json(mapJob(existingJob))
+    }
+    
+    // Dispatch the newly created job
+    const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(result.jobId)
 
     dispatchCrawlerJob({
       db: req.db,
@@ -1103,7 +1067,8 @@ router.post('/jobs', async (req, res) => {
     res.status(201).json(mapJob(job))
   } catch (error) {
     console.error('Error creating crawler job:', error)
-    res.status(500).json(formatError(error))
+    const status = Number(error?.statusCode || error?.status || 500)
+    res.status(status).json(formatError(error))
   }
 })
 
@@ -1157,6 +1122,33 @@ router.post('/jobs/:id/retry', async (req, res) => {
         ? job.profile_id
         : ctx.userId ?? ctx.email ?? 'system'
 
+    // Build fresh profile context snapshot for retry
+    let profileContextSnapshot = null
+    if (job.profile_id) {
+      try {
+        const context = await buildProfileContext(req.db, job.profile_id)
+        profileContextSnapshot = JSON.stringify(context)
+      } catch (error) {
+        console.warn('[crawlers] Failed to build profile context snapshot for retry:', error?.message)
+        // Try to reuse old snapshot if available
+        profileContextSnapshot = job.profile_context_snapshot || null
+      }
+    }
+
+    // Generate new idempotency key for retry (different from original)
+    const idempotencyKey = crypto
+      .createHash('sha256')
+      .update(
+        JSON.stringify({
+          type: job.type,
+          profile_id: job.profile_id,
+          parameters,
+          retry_at: Date.now(),
+        })
+      )
+      .digest('hex')
+      .substring(0, 32)
+
     const newJobId = crypto.randomUUID()
     await req.db
       .prepare(
@@ -1168,8 +1160,10 @@ router.post('/jobs/:id/retry', async (req, res) => {
             profile_id,
             organization_id,
             parameters,
+            profile_context_snapshot,
+            idempotency_key,
             requested_by
-          ) VALUES (?, ?, 'queued', ?, ?, ?, ?)
+          ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
@@ -1178,6 +1172,8 @@ router.post('/jobs/:id/retry', async (req, res) => {
         job.profile_id ?? null,
         job.organization_id ?? null,
         JSON.stringify(parameters),
+        profileContextSnapshot,
+        idempotencyKey,
         requestedBy,
       )
 

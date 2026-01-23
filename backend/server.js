@@ -36,6 +36,7 @@ import jwt from 'jsonwebtoken';
 import crawlerV2Router from './routes/crawlerV2.js';
 import nfProgramsRouter from './routes/nfPrograms.js';
 import nofoRouter from './routes/nofo.js';
+import healthRouter from './routes/health.js';
 import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
@@ -43,6 +44,7 @@ import { runStartupOperations } from './services/anyaStartupOperations.js';
 import ensureMinimumNationalOpportunities from './utils/ensureMinimumNationalOpportunities.js';
 import seedAssistanceDirectories from './utils/seedAssistanceDirectories.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { attachRequestContext } from './middleware/requestContext.js';
 import { MAX_JSON_BODY_SIZE } from './config/constants.js';
 import { getSafeHealthSummary } from './services/diagnosticsService.js';
 import { initializeFeatureFlags } from './services/featureFlagService.js';
@@ -190,6 +192,16 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json({ limit: MAX_JSON_BODY_SIZE }));
+
+// Mount health check routes EARLY to ensure they're always available
+// Attach db and uploadsDir to req for health check handlers
+app.use((req, res, next) => {
+  req.db = db;
+  req.uploadsDir = uploadsDir;
+  next();
+});
+app.use(healthRouter);
+
 try {
   if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
@@ -698,15 +710,33 @@ try {
   console.warn('[startup] Failed to seed assistance directories:', error?.message || error)
 }
 
-const isProd = ENV?.isProd ?? process.env.NODE_ENV === 'production'
-// Stable JWT secret: never generate at runtime.
-const EFFECTIVE_JWT_SECRET = (() => {
-  try {
-    return getJwtSecretOrThrow(ENV || {})
-  } catch {
-    // In production assertEnv() already exited; in non-prod use dev default.
-    console.warn('[auth] Using development JWT secret fallback (non-production only).')
-    return 'grantflow-dev-secret'
+function resolveJwtSecret() {
+  const raw = String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || '').trim();
+  const isProd = process.env.NODE_ENV === 'production';
+
+  if (!raw) {
+    if (isProd) {
+      // FAIL FAST in production - do not generate ephemeral secrets
+      console.error(
+        'FATAL ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET) in production.\n' +
+          'Set a strong random secret (recommended: 32+ bytes) and redeploy.\n' +
+          '  AUTH_JWT_SECRET="..."\n' +
+          'The application cannot start without a stable JWT secret.',
+      );
+      process.exit(1);
+    }
+    console.warn('[startup] AUTH_JWT_SECRET not set; using insecure development default (DO NOT use in production).');
+    return 'grantflow-dev-secret';
+  }
+
+  if (isProd && raw === 'grantflow-dev-secret') {
+    // FAIL FAST in production - do not use insecure defaults
+    console.error(
+      'FATAL ERROR: AUTH_JWT_SECRET is set to the insecure development default in production.\n' +
+        'Generate a strong random secret and redeploy.\n' +
+        'Example: openssl rand -base64 48',
+    );
+    process.exit(1);
   }
 })()
 
@@ -907,49 +937,12 @@ app.use(async (req, _res, next) => {
   return next()
 })
 
-// Canonical request context for all downstream route handlers.
-app.use(requestContext())
+// Attach canonical request context (MUST run after auth middleware)
+// This provides req.ctx with userId, email, isAdmin (DB-backed), accessible profiles/orgs
+app.use(attachRequestContext())
 
 // Health check with dependency checks
 // Health check endpoint (v3.0 - complete county data)
-app.get('/health', async (req, res) => {
-  const health = {
-    status: 'healthy',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    dependencies: {
-      database: 'unknown',
-      openai: 'unknown',
-      anthropic: 'unknown',
-    }
-  };
-  
-  // Check database connection
-  try {
-    if (db.healthcheck) {
-      const hc = await db.healthcheck();
-      if (!hc?.ok) throw new Error(hc?.error || 'Database healthcheck failed')
-    } else {
-      await db.prepare('SELECT 1').get();
-    }
-    health.dependencies.database = 'healthy';
-  } catch (error) {
-    health.dependencies.database = 'unhealthy';
-    health.status = 'degraded';
-  }
-  
-  // Check if OpenAI API key is configured
-  const hasOpenAIKey = Boolean(String(process.env.OPENAI_API_KEY || '').trim())
-  const hasAnthropicKey = Boolean(String(process.env.ANTHROPIC_API_KEY || '').trim())
-  health.dependencies.openai = hasOpenAIKey
-    ? 'configured'
-    : hasAnthropicKey
-      ? 'fallback_anthropic_configured'
-      : 'not configured';
-  
-  const statusCode = health.status === 'healthy' ? 200 : 503;
-  res.status(statusCode).json(health);
-});
 
 // Authentication diagnostics endpoint
 app.get('/api/auth/diagnostics', async (req, res) => {
@@ -1520,45 +1513,6 @@ app.get('/api/meta/dedupe', async (_req, res) => {
   }
 })
 
-// Public health endpoint - safe for non-admin users
-app.get('/api/health', async (req, res) => {
-  try {
-    const healthSummary = await getSafeHealthSummary(db)
-    // Contract: public health endpoints must use { ok, warning, error } for status.
-    // Some internal helpers may return { healthy, degraded, unhealthy } — normalize here.
-    const rawStatus = String(healthSummary?.status ?? 'error').toLowerCase()
-    const status =
-      rawStatus === 'healthy'
-        ? 'ok'
-        : rawStatus === 'degraded'
-          ? 'warning'
-          : rawStatus === 'unhealthy'
-            ? 'error'
-            : rawStatus || 'error'
-
-    // Treat "warning" as healthy for platform checks (Railway healthchecks, Docker HEALTHCHECK, etc.)
-    // Only fail hard when the normalized status indicates a real error.
-    const statusCode = status === 'error' ? 500 : 200
-    const body =
-      rawStatus === status
-        ? healthSummary
-        : { ...healthSummary, status, legacy_status: rawStatus }
-
-    res.status(statusCode).json(body)
-  } catch (error) {
-    console.error('[/api/health] Error:', error);
-    res.status(500).json({
-      timestamp: new Date().toISOString(),
-      status: 'error',
-      counts: { opportunities: 0, recentFailures: 0 },
-      summary: 'Failed to retrieve health information'
-    });
-  }
-});
-
-// Platform health aliases (k8s-style)
-app.use(healthRouter({ db, uploadsDir, env: ENV }))
-
 app.use('/api/admin', adminRouter);
 app.use('/api', discoveryRouter); // Discovery endpoints (comprehensiveMatch, searchOpportunities, etc.)
 app.use('/api/crawler-v2', crawlerV2Router);
@@ -1754,12 +1708,16 @@ server.on('listening', () => {
     setTimeout(() => {
       if (process.env.ANYA_RUN_ON_STARTUP === 'true') {
         // Run full autonomous operations (code scan, tests, crawlers)
-        import('./services/anyaAutonomousScheduler.js').then(({ runOnStartup }) => {
-          console.log('[Anya] Starting autonomous operations on server startup...');
-          runOnStartup(db).catch(err => {
-            console.error('[Anya] Failed to complete autonomous operations:', err);
+        import('./services/anyaAutonomousScheduler.js')
+          .then(({ runOnStartup }) => {
+            console.log('[Anya] Starting autonomous operations on server startup...');
+            runOnStartup(db).catch(err => {
+              console.error('[Anya] Failed to complete autonomous operations:', err);
+            });
+          })
+          .catch((err) => {
+            console.error('[Anya] Failed to import autonomous scheduler:', err?.message || err);
           });
-        });
       } else {
         // Run original crawler operations only
         runStartupOperations(db).catch(err => {
