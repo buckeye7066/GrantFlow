@@ -7,6 +7,7 @@ console.log('Profile                          | Type         | Sections | Docs |
 console.log('---------------------------------|--------------|----------|------|------------');
 
 const profiles = db.prepare('SELECT id, display_name, primary_type FROM profiles ORDER BY display_name').all();
+let sectionJsonParseErrors = 0
 
 profiles.forEach(p => {
   const sections = db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(p.id);
@@ -17,7 +18,9 @@ profiles.forEach(p => {
     try {
       const data = JSON.parse(s.data || '{}');
       totalFields += Object.values(data).filter(v => v && v !== '' && (!Array.isArray(v) || v.length > 0)).length;
-    } catch(e) {}
+    } catch (e) {
+      sectionJsonParseErrors += 1
+    }
   });
   
   const name = p.display_name.substring(0, 32).padEnd(32);
@@ -29,5 +32,9 @@ console.log('\n=== TOTAL ===');
 console.log(`Profiles: ${profiles.length}`);
 const totalDocs = db.prepare('SELECT COUNT(*) as c FROM documents').get().c;
 console.log(`Documents: ${totalDocs}`);
+
+if (sectionJsonParseErrors > 0) {
+  console.warn(`⚠ ${sectionJsonParseErrors} profile section(s) contained invalid JSON and were skipped in field counting.`)
+}
 
 db.close();

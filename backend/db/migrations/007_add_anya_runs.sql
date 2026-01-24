@@ -1,53 +1,22 @@
--- Migration: Add anya_runs table for operational logging
--- Purpose: Track Anya autonomous operations with run_id, mode, and tool usage
+-- SQLite migration 007: Compatibility patch for anya_runs
+--
+-- Background:
+-- Earlier migrations (006_*) create an `anya_runs` table used by the runtime code.
+-- This 007 migration previously attempted to create a *different* anya_runs schema
+-- and then created an index on `run_id`, which fails when the table already exists.
+--
+-- Goal:
+-- Keep migrations idempotent and ensure this file never breaks fresh installs.
+--
+-- NOTE:
+-- SQLite does not support conditional DDL in plain SQL. This migration assumes
+-- `anya_runs` already exists (created by 006_*). If you have an older database
+-- where `anya_runs` doesn't exist, run the earlier migrations first.
 
--- Create anya_runs table for tracking autonomous operations
-CREATE TABLE IF NOT EXISTS anya_runs (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  completed_at DATETIME,
-  
-  -- Run context
-  run_id TEXT NOT NULL,
-  user_id TEXT,
-  profile_id TEXT,
-  
-  -- Anya mode
-  mode TEXT CHECK(mode IN ('copilot', 'admin_ops', 'code_advisor')) NOT NULL DEFAULT 'copilot',
-  
-  -- Operation details
-  operation_type TEXT NOT NULL,
-  status TEXT CHECK(status IN ('queued', 'running', 'completed', 'failed', 'cancelled')) NOT NULL DEFAULT 'queued',
-  
-  -- Results
-  tools_used TEXT, -- JSON array of tool names
-  error_message TEXT,
-  error_stack TEXT,
-  
-  -- Metadata
-  input_tokens INTEGER DEFAULT 0,
-  output_tokens INTEGER DEFAULT 0,
-  duration_ms INTEGER,
-  
-  -- Audit trail
-  requested_by TEXT,
-  authorized BOOLEAN DEFAULT FALSE,
-  
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-  FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
-);
+-- Add correlation column used by some operational tooling (nullable for compatibility).
+-- NOTE: SQLite doesn't support ADD COLUMN IF NOT EXISTS in all builds; the migration runner
+-- treats "duplicate column name" as idempotent and will record this migration as applied.
+ALTER TABLE anya_runs ADD COLUMN run_id TEXT;
 
--- Index for querying runs by user
-CREATE INDEX IF NOT EXISTS idx_anya_runs_user_id ON anya_runs(user_id);
-
--- Index for querying runs by profile
-CREATE INDEX IF NOT EXISTS idx_anya_runs_profile_id ON anya_runs(profile_id);
-
--- Index for querying runs by status
-CREATE INDEX IF NOT EXISTS idx_anya_runs_status ON anya_runs(status, created_at);
-
--- Index for querying runs by mode
-CREATE INDEX IF NOT EXISTS idx_anya_runs_mode ON anya_runs(mode, created_at);
-
--- Index for querying runs by run_id (for correlation)
+-- Index for querying runs by run_id (for correlation).
 CREATE INDEX IF NOT EXISTS idx_anya_runs_run_id ON anya_runs(run_id);

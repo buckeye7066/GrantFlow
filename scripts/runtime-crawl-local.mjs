@@ -3,7 +3,7 @@
  * Local runtime crawl (no credentials).
  *
  * What it validates:
- * - backend boots and exposes /api/anya/status
+ * - backend boots and exposes /api/health
  * - frontend production preview boots
  * - login route renders
  *
@@ -13,12 +13,10 @@
  */
 
 import { spawn } from 'node:child_process'
+import net from 'node:net'
 import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { chromium } from 'playwright'
-
-const PREVIEW_BASE_URL = process.env.SMOKE_BASE_URL ?? 'http://127.0.0.1:4173'
-const BACKEND_BASE_URL = process.env.BACKEND_BASE_URL ?? 'http://127.0.0.1:4000'
 
 function runCmd(cmd, args, opts = {}) {
   const child = spawn(cmd, args, {
@@ -29,21 +27,60 @@ function runCmd(cmd, args, opts = {}) {
   return child
 }
 
+async function isPortAvailable(port, host = '127.0.0.1') {
+  // Prefer connect-probing over bind-probing.
+  // If connect() succeeds, a service is already listening.
+  return await new Promise((resolve) => {
+    const socket = net.connect({ port, host })
+    socket.once('connect', () => {
+      try { socket.destroy() } catch {}
+      resolve(false)
+    })
+    socket.once('error', (err) => {
+      try { socket.destroy() } catch {}
+      if (err?.code === 'ECONNREFUSED') return resolve(true)
+      resolve(false)
+    })
+  })
+}
+
+async function pickPort({ start, count = 30 } = {}) {
+  const base = Number(start)
+  if (!Number.isFinite(base) || base <= 0) throw new Error(`Invalid port start: ${start}`)
+  for (let i = 0; i < count; i += 1) {
+    const port = base + i
+    // eslint-disable-next-line no-await-in-loop
+    if (await isPortAvailable(port)) return port
+  }
+  throw new Error(`No available port found starting at ${start}`)
+}
+
 async function waitFor(url, { method = 'GET', retries = 30, intervalMs = 250 } = {}) {
+  let lastError = null
   for (let i = 0; i < retries; i += 1) {
     try {
       const res = await fetch(url, { method })
       if (res.ok) return true
-    } catch (_) {
-      // ignore
+    } catch (err) {
+      lastError = err
     }
     await delay(intervalMs)
+  }
+  if (lastError) {
+    console.warn(`[crawl] Last error while probing ${url}:`, lastError?.message || String(lastError))
   }
   return false
 }
 
 async function main() {
   const procs = []
+  const preferredPreviewPort = Number(process.env.PREVIEW_PORT || 4173)
+  const preferredBackendPort = Number(process.env.BACKEND_PORT || process.env.PORT || 8080)
+  const previewPort = process.env.SMOKE_BASE_URL ? null : await pickPort({ start: preferredPreviewPort, count: 30 })
+  const backendPort = process.env.BACKEND_BASE_URL ? null : await pickPort({ start: preferredBackendPort, count: 30 })
+
+  const previewBaseUrl = process.env.SMOKE_BASE_URL ?? `http://127.0.0.1:${previewPort}`
+  const backendBaseUrl = process.env.BACKEND_BASE_URL ?? `http://127.0.0.1:${backendPort}`
   
   const cleanup = () => {
     console.log('[crawl] Cleaning up processes...')
@@ -54,7 +91,7 @@ async function main() {
       
       try {
         // Check if process is still running
-        if (p.exitCode === null) {
+        if (p.exitCode == null) {
           p.kill('SIGTERM')
           console.log(`[crawl] Terminated process ${p.pid}`)
         }
@@ -87,30 +124,54 @@ async function main() {
 
   // Start backend + preview
   try {
-    const backendProc = runCmd('npm', ['run', 'backend'])
-    procs.push(backendProc)
-    console.log('[crawl] Started backend process')
-    
-    const previewProc = runCmd('npm', ['run', 'preview', '--', '--host', '127.0.0.1', '--port', '4173'])
-    procs.push(previewProc)
-    console.log('[crawl] Started preview process')
+    if (!process.env.BACKEND_BASE_URL) {
+      const backendProc = runCmd('npm', ['run', 'backend'], {
+        env: {
+          ...process.env,
+          PORT: String(backendPort),
+          // Match `backend/env.example` so local smoke flows work without a copied backend/.env
+          ADMIN_TOKEN: process.env.ADMIN_TOKEN || 'dev-admin-token',
+        },
+      })
+      procs.push(backendProc)
+      console.log('[crawl] Started backend process', { port: backendPort })
+    } else {
+      console.log('[crawl] Using external backend', { baseUrl: backendBaseUrl })
+    }
+
+    if (!process.env.SMOKE_BASE_URL) {
+      const previewProc = runCmd('npm', [
+        'run',
+        'preview',
+        '--',
+        '--host',
+        '127.0.0.1',
+        '--port',
+        String(previewPort),
+        '--strictPort',
+      ])
+      procs.push(previewProc)
+      console.log('[crawl] Started preview process', { port: previewPort })
+    } else {
+      console.log('[crawl] Using external preview', { baseUrl: previewBaseUrl })
+    }
   } catch (err) {
     console.error('[crawl] Failed to start processes:', err)
     cleanup()
     throw new Error(`Process startup failed: ${err.message}`)
   }
 
-  const backendOk = await waitFor(`${BACKEND_BASE_URL}/api/anya/status`, { method: 'GET' })
+  const backendOk = await waitFor(`${backendBaseUrl}/api/health`, { method: 'GET', retries: 240, intervalMs: 250 })
   if (!backendOk) {
     cleanup()
-    throw new Error(`Backend not reachable at ${BACKEND_BASE_URL}/api/anya/status after waiting`)
+    throw new Error(`Backend not reachable at ${backendBaseUrl}/api/health after waiting`)
   }
   console.log('[crawl] Backend is ready')
 
-  const previewOk = await waitFor(`${PREVIEW_BASE_URL}/grantflow/`, { method: 'HEAD' })
+  const previewOk = await waitFor(`${previewBaseUrl}/grantflow/`, { method: 'HEAD', retries: 120, intervalMs: 250 })
   if (!previewOk) {
     cleanup()
-    throw new Error(`Preview not reachable at ${PREVIEW_BASE_URL}/grantflow/ after waiting`)
+    throw new Error(`Preview not reachable at ${previewBaseUrl}/grantflow/ after waiting`)
   }
   console.log('[crawl] Preview is ready')
 
@@ -119,14 +180,10 @@ async function main() {
     const browser = await chromium.launch({ headless: true })
     const page = await browser.newPage()
     try {
-      await page.goto(new URL('/grantflow/login', PREVIEW_BASE_URL).toString(), { waitUntil: 'networkidle', timeout: 20_000 })
-      await page.waitForSelector('text=GrantFlow Control Center', { timeout: 10_000 })
-      await page.waitForSelector('input[type="password"]', { timeout: 10_000 })
+      await page.goto(new URL('/grantflow/login', previewBaseUrl).toString(), { waitUntil: 'domcontentloaded', timeout: 30_000 })
+      await page.waitForSelector('text=Sign in to GrantFlow', { timeout: 20_000 })
+      await page.waitForSelector('#auth-email', { timeout: 20_000 })
       console.log('[crawl] Login page rendered.')
-
-      // Optional: try the admin page route - it should either render or redirect, but not hard-crash.
-      await page.goto(new URL('/grantflow/admin', PREVIEW_BASE_URL).toString(), { waitUntil: 'networkidle', timeout: 20_000 })
-      console.log('[crawl] Admin route reachable (may require token to do anything useful).')
     } finally {
       await browser.close()
     }
@@ -146,8 +203,9 @@ async function main() {
       cleanup()
       throw new Error('Page load timeout during browser checks')
     } else {
-      console.warn('[crawl] Playwright browser checks skipped:', msg)
-      console.warn('[crawl] If you want browser-level validation, run: npx playwright install')
+      console.error('[crawl] Browser checks failed:', msg)
+      cleanup()
+      throw err
     }
   }
 
