@@ -51,7 +51,8 @@
     "opps:check-national-minimum": "node ./scripts/opportunities-national-minimum.mjs check",
     "opps:ensure-national-minimum": "node ./scripts/opportunities-national-minimum.mjs ensure",
     "migrate:data": "node backend/scripts/migrate-sqlite-to-postgres.mjs",
-    "test:keys": "node backend/scripts/test-keys.js"
+    "test:keys": "node backend/scripts/test-keys.js",
+    "test:auto-merge": "node ./scripts/test-auto-merge-workflow.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.1",

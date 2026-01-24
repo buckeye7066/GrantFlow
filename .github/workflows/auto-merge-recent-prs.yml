@@ -1,0 +1,165 @@
+name: Auto-Merge Recent Pull Requests
+
+on:
+  # Run daily at 2 AM UTC
+  schedule:
+    - cron: '0 2 * * *'
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      hours_lookback:
+        description: 'Number of hours to look back for PRs (default: 48)'
+        required: false
+        default: '48'
+        type: string
+      dry_run:
+        description: 'Dry run mode (no actual merges)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for all branches
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Fetch all branches
+        run: |
+          git fetch --all --prune
+          echo "Fetched all remote branches"
+
+      - name: Get recent pull requests
+        id: get-prs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Calculate the date 48 hours ago (or custom hours from input)
+          HOURS_LOOKBACK="${{ inputs.hours_lookback || '48' }}"
+          SINCE_DATE=$(date -u -d "${HOURS_LOOKBACK} hours ago" +"%Y-%m-%dT%H:%M:%SZ")
+
+          echo "Looking for PRs updated since: $SINCE_DATE"
+
+          # Get all open PRs updated in the last N hours
+          gh pr list \
+            --state open \
+            --json number,title,updatedAt,headRefName,mergeable,statusCheckRollup \
+            --jq "[.[] | select(.updatedAt >= \"$SINCE_DATE\")]" > recent_prs.json
+
+          cat recent_prs.json
+
+          # Count PRs found
+          PR_COUNT=$(jq length recent_prs.json)
+          echo "Found $PR_COUNT pull request(s) updated in the last $HOURS_LOOKBACK hours"
+          echo "pr_count=$PR_COUNT" >> $GITHUB_OUTPUT
+
+      - name: Process and merge qualifying PRs
+        if: steps.get-prs.outputs.pr_count > 0
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: |
+          echo "Processing pull requests..."
+
+          # Read the PRs from the JSON file
+          MERGE_COUNT=0
+          SKIP_COUNT=0
+          FAIL_COUNT=0
+
+          while IFS= read -r pr; do
+            PR_NUMBER=$(echo "$pr" | jq -r '.number')
+            PR_TITLE=$(echo "$pr" | jq -r '.title')
+            PR_BRANCH=$(echo "$pr" | jq -r '.headRefName')
+            MERGEABLE=$(echo "$pr" | jq -r '.mergeable')
+
+            echo ""
+            echo "=========================================="
+            echo "Processing PR #$PR_NUMBER: $PR_TITLE"
+            echo "Branch: $PR_BRANCH"
+            echo "=========================================="
+
+            # Check if PR is mergeable
+            if [ "$MERGEABLE" != "MERGEABLE" ]; then
+              echo "⚠️  PR #$PR_NUMBER is not mergeable (status: $MERGEABLE). Skipping."
+              SKIP_COUNT=$((SKIP_COUNT + 1))
+              continue
+            fi
+
+            # Check CI status
+            STATUS_CHECKS=$(echo "$pr" | jq -r '.statusCheckRollup // [] | map(select(.conclusion != null)) | map(.conclusion) | join(",")')
+
+            if echo "$STATUS_CHECKS" | grep -q "FAILURE"; then
+              echo "❌ PR #$PR_NUMBER has failing checks. Skipping."
+              SKIP_COUNT=$((SKIP_COUNT + 1))
+              continue
+            fi
+
+            # Check if all required checks have passed
+            PENDING_CHECKS=$(echo "$pr" | jq -r '.statusCheckRollup // [] | map(select(.status == "IN_PROGRESS" or .status == "QUEUED")) | length')
+            if [ "$PENDING_CHECKS" -gt 0 ]; then
+              echo "⏳ PR #$PR_NUMBER has $PENDING_CHECKS pending checks. Skipping for now."
+              SKIP_COUNT=$((SKIP_COUNT + 1))
+              continue
+            fi
+
+            # Check for required approvals (get PR details)
+            APPROVALS=$(gh pr view "$PR_NUMBER" --json reviews --jq '[.reviews[] | select(.state == "APPROVED")] | length')
+
+            if [ "$APPROVALS" -eq 0 ]; then
+              echo "⏸️  PR #$PR_NUMBER has no approvals yet. Skipping."
+              SKIP_COUNT=$((SKIP_COUNT + 1))
+              continue
+            fi
+
+            # All checks passed - merge the PR
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "🔍 [DRY RUN] Would merge PR #$PR_NUMBER: $PR_TITLE"
+              MERGE_COUNT=$((MERGE_COUNT + 1))
+            else
+              echo "✅ Merging PR #$PR_NUMBER: $PR_TITLE"
+
+              if gh pr merge "$PR_NUMBER" --auto --squash --delete-branch; then
+                echo "✅ Successfully queued PR #$PR_NUMBER for auto-merge"
+                MERGE_COUNT=$((MERGE_COUNT + 1))
+
+                # Add a comment to the PR
+                gh pr comment "$PR_NUMBER" --body "🤖 This PR has been queued for auto-merge by the automated workflow. It was updated within the last 48 hours and meets all merge criteria (passing CI, approved, no conflicts). The PR will be automatically merged once all branch protection requirements are satisfied."
+              else
+                echo "❌ Failed to merge PR #$PR_NUMBER"
+                FAIL_COUNT=$((FAIL_COUNT + 1))
+              fi
+            fi
+
+          done < <(jq -c '.[]' recent_prs.json)
+
+          echo ""
+          echo "=========================================="
+          echo "📊 Summary:"
+          echo "   Merged/Queued: $MERGE_COUNT"
+          echo "   Skipped: $SKIP_COUNT"
+          echo "   Failed: $FAIL_COUNT"
+          echo "=========================================="
+
+          if [ "$FAIL_COUNT" -gt 0 ]; then
+            echo "::warning::$FAIL_COUNT PR(s) failed to merge"
+          fi
+
+      - name: No PRs found
+        if: steps.get-prs.outputs.pr_count == 0
+        run: |
+          echo "ℹ️  No pull requests found that were updated in the specified time window."
