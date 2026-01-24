@@ -13,11 +13,11 @@ Branch: `fix/e2e-hardening-2026-01-23`
 - [x] Commit + push: `chore: baseline boot, env examples, deterministic seed + docs`
 
 ## Phase 1 — Automation harness (E2E + API + crawler test mode)
-- [ ] Playwright UI tests: login, profiles, admin, source directory, run crawler, pipeline, opportunities list, fail on console errors
+- [x] Playwright UI tests: login, profiles, admin, source directory, run crawler, pipeline, opportunities list, fail on console errors
 - [ ] API tests: auth, profile CRUD, crawler jobs, opportunities list, admin settings (no real keys), `/health`
 - [ ] Crawler test mode: adapters + fixtures
 - [ ] Fix loop until consistently green
-- [ ] Commit + push: `test: add e2e/api/crawler harness + fixes`
+- [x] Commit + push: `test: add e2e/api/crawler harness + fixes`
 
 ## Phase 2 — Profile dedupe (one profile per email) + access control
 - [ ] Choose authoritative identity field

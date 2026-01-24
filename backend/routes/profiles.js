@@ -33,7 +33,7 @@ const router = express.Router()
 
 // Central enforcement: any route that includes a `:id` param in this router refers to a profile id.
 // This prevents profile “bleed” from stale token claims; access is always re-validated.
-router.param('id', async (req, res, id, next) => {
+router.param('id', async (req, res, next, id) => {
   try {
     // Fast path: prefer the canonical requestContext computation.
     // This avoids recomputing access sets (and avoids 403s when DB checks are transiently failing).

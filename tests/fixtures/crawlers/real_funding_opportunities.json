@@ -1,0 +1,27 @@
+{
+  "federal_grants": [
+    {
+      "id": "fixture-fed-1",
+      "title": "Federal Community Resilience Grant",
+      "sponsor": "Example Federal Agency",
+      "description": "Supports resilience planning and implementation for eligible applicants nationwide.",
+      "source": "fixture_federal",
+      "source_url": "https://example.org/federal-resilience",
+      "application_url": "https://example.org/federal-resilience/apply",
+      "state": "nationwide",
+      "categories": ["federal_grants", "resilience"],
+      "keywords": ["resilience", "planning"],
+      "eligibility_bullets": ["Eligible nonprofits or public entities", "Nationwide"],
+      "requires_501c3": false,
+      "requires_match": false,
+      "is_active": true,
+      "record_origin": "curated_verified"
+    }
+  ],
+  "foundation_grants": [],
+  "state_programs": [],
+  "disability_assistance": [],
+  "veteran_assistance": [],
+  "nonprofit_grants": []
+}
+
