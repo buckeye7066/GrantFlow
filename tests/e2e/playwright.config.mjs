@@ -1,0 +1,59 @@
+import { defineConfig } from 'playwright/test'
+import path from 'node:path'
+
+const port = Number.parseInt(process.env.E2E_PORT || '18081', 10)
+const baseURL =
+  process.env.E2E_BASE_URL ||
+  process.env.SMOKE_BASE_URL ||
+  process.env.API_BASE_URL ||
+  `http://127.0.0.1:${port}`
+const basePath = process.env.E2E_BASE_PATH || process.env.SMOKE_BASE_PATH || process.env.VITE_APP_BASE || '/grantflow'
+const crawlerDataDir = process.env.CRAWLER_DATA_DIR || path.resolve(process.cwd(), 'tests', 'fixtures', 'crawlers')
+
+export default defineConfig({
+  testDir: path.resolve(process.cwd(), 'tests', 'e2e'),
+  timeout: 120_000,
+  expect: { timeout: 20_000 },
+  fullyParallel: false,
+  retries: process.env.CI ? 1 : 0,
+  reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : [['list']],
+  // Self-start the app server for local + CI e2e runs.
+  // Ensure DB migrations + deterministic seed run first so UI flows are reproducible.
+  webServer: {
+    command:
+      'node backend/db/migrate.js && node backend/scripts/seed-deterministic.mjs --reset && node backend/start.js',
+    cwd: process.cwd(),
+    port,
+    reuseExistingServer: !process.env.CI,
+    timeout: 180_000,
+    env: {
+      ...process.env,
+      PORT: String(port),
+      NODE_ENV: process.env.NODE_ENV || (process.env.CI ? 'test' : 'development'),
+      // Ensure deterministic seed aligns with backend admin defaults.
+      ADMIN_EMAIL: process.env.ADMIN_EMAIL || 'buckeye7066@gmail.com',
+      ADMIN_NAME: process.env.ADMIN_NAME || 'Admin User',
+      CRAWLER_DATA_DIR: crawlerDataDir,
+      // Hint to frontend + backend to suppress noisy background behavior during automation.
+      SMOKE_MODE: process.env.SMOKE_MODE || 'true',
+      VITE_SMOKE_MODE: process.env.VITE_SMOKE_MODE || 'true',
+    },
+  },
+  use: {
+    baseURL,
+    headless: true,
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
+    video: 'retain-on-failure',
+  },
+  metadata: { baseURL, basePath },
+  projects: [
+    {
+      name: 'chromium',
+      use: { browserName: 'chromium' },
+    },
+  ],
+})
+
+export { baseURL, basePath }
+
