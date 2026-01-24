@@ -28,11 +28,11 @@ Branch: `fix/e2e-hardening-2026-01-23`
 - [x] Commit + push: `feat: profile dedupe + strict profile access control`
 
 ## Phase 3 — Anya tools stabilization
-- [ ] Identify Anya endpoints/modules
-- [ ] Define expected behavior via tests
-- [ ] Add harness with mocks
-- [ ] Fix until green
-- [ ] Commit + push: `fix: stabilize Anya tools with test harness`
+- [x] Identify Anya endpoints/modules
+- [x] Define expected behavior via tests
+- [x] Add harness with mocks
+- [x] Fix until green
+- [x] Commit + push: `fix: stabilize Anya tools with test harness`
 
 ## Phase 4 — Source API stubs (integration-ready, no key scraping)
 - [ ] Enumerate Admin source registry
