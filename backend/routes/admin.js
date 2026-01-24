@@ -15,6 +15,7 @@ import { ensureDesignatedProfiles } from '../utils/ensureDesignatedProfiles.js';
 import { seedBaselineFromRepo } from '../utils/seedBaselineFromRepo.js';
 import { buildProfileSignals, calculateMatchScore } from '../services/profileHelpers.js';
 import { getSystemDiagnostics } from '../services/diagnosticsService.js';
+import { getFundingSourceStatus } from '../src/config/fundingSources.js'
 import { listClientSignInEvents } from '../services/adminLoginEventStore.js'
 import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js';
@@ -130,6 +131,14 @@ async function withTimeout(promise, ms, label) {
 // Use centralized admin enforcement from accessControl.js
 // This is now just an alias for consistency with existing code
 const ensureAdminRequest = ensureAdminUser;
+
+// ----------------------------
+// Funding Providers (no secrets)
+// ----------------------------
+router.get('/funding-sources', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  res.json({ sources: getFundingSourceStatus() })
+})
 
 function loadZipCoordinates() {
   if (zipCoordinatesCache) return zipCoordinatesCache;
@@ -1744,6 +1753,94 @@ router.get('/geo/crawl/status', async (req, res) => {
   }
 });
 
+// Summary: counts per state + last geo run (admin-only)
+router.get('/geo/summary', async (req, res) => {
+  try {
+    if (!(await ensureAdminRequest(req, res))) return;
+
+    // Counts per state from funding_opportunities
+    const counts = await req.db
+      .prepare(
+        `
+          SELECT state, COUNT(*) as count
+          FROM funding_opportunities
+          WHERE state IS NOT NULL
+            AND length(state) = 2
+          GROUP BY state
+          ORDER BY state ASC
+        `,
+      )
+      .all()
+
+    const countMap = new Map((counts || []).map((r) => [String(r.state || '').toUpperCase(), Number(r.count || 0)]))
+
+    // Last run per state (dialect-specific best-effort)
+    const lastRuns =
+      req.db?.dialect === 'postgres'
+        ? await req.db
+            .prepare(
+              `
+                SELECT DISTINCT ON (state)
+                  state,
+                  status,
+                  started_at,
+                  completed_at,
+                  processed_zips,
+                  sources_inserted,
+                  failed_zips,
+                  skipped_zips,
+                  error
+                FROM geo_state_runs
+                ORDER BY state, started_at DESC
+              `,
+            )
+            .all()
+        : await req.db
+            .prepare(
+              `
+                SELECT r.*
+                FROM geo_state_runs r
+                JOIN (
+                  SELECT state, MAX(started_at) AS started_at
+                  FROM geo_state_runs
+                  GROUP BY state
+                ) latest
+                ON latest.state = r.state AND latest.started_at = r.started_at
+                ORDER BY r.state ASC
+              `,
+            )
+            .all()
+
+    const lastRunMap = new Map(
+      (lastRuns || []).map((r) => [
+        String(r.state || '').toUpperCase(),
+        {
+          status: r.status ?? null,
+          started_at: r.started_at ?? null,
+          completed_at: r.completed_at ?? null,
+          processed_zips: Number(r.processed_zips || 0),
+          sources_inserted: Number(r.sources_inserted || 0),
+          failed_zips: Number(r.failed_zips || 0),
+          skipped_zips: Number(r.skipped_zips || 0),
+          error: r.error ?? null,
+        },
+      ]),
+    )
+
+    const stateKeys = Array.from(US_STATE_CODES).slice().sort()
+    const summary = stateKeys.map((st) => ({
+      state: st,
+      opportunity_count: countMap.get(st) ?? 0,
+      last_run: lastRunMap.get(st) ?? null,
+    }))
+
+    res.json({ states: summary })
+  } catch (error) {
+    console.error('[admin/geo/summary] Error:', error)
+    res.status(500).json({ error: error?.message || String(error) })
+  }
+})
+
 router.post('/geo/crawl/start', async (req, res) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return;
@@ -1767,6 +1864,9 @@ router.post('/geo/crawl/start', async (req, res) => {
     const parameters = {
       ...incoming,
       mode: 'geo',
+      run_all_states:
+        incoming.run_all_states ?? incoming.runAllStates ?? undefined,
+      states: Array.isArray(incoming.states) ? incoming.states : undefined,
       zip_list: zipList ?? undefined,
       max_zips:
         zipList && zipList.length > 0

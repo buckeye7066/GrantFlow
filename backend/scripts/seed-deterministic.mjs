@@ -124,6 +124,42 @@ async function main() {
     },
   ]
 
+  async function wipeAllDataSqlite(sqliteDb) {
+    // NOTE: PRAGMA foreign_keys cannot be reliably toggled inside a transaction.
+    // Do the destructive wipe outside the seed transaction to avoid FK failures.
+    try {
+      await sqliteDb.exec('PRAGMA foreign_keys = OFF;')
+    } catch {
+      // ignore
+    }
+
+    const rows = await sqliteDb
+      .prepare(
+        `
+          SELECT name
+          FROM sqlite_master
+          WHERE type = 'table'
+        `,
+      )
+      .all()
+
+    const tables = (rows || [])
+      .map((r) => r?.name)
+      .filter(Boolean)
+      .filter((name) => name !== '_migrations' && name !== 'sqlite_sequence')
+
+    for (const table of tables) {
+      // eslint-disable-next-line no-await-in-loop
+      await sqliteDb.exec(`DELETE FROM "${table}";`)
+    }
+
+    try {
+      await sqliteDb.exec('PRAGMA foreign_keys = ON;')
+    } catch {
+      // ignore
+    }
+  }
+
   async function wipeAllData(tx) {
     if (tx.dialect === 'postgres') {
       const rows = await tx
@@ -148,44 +184,14 @@ async function main() {
       await tx.exec(`TRUNCATE TABLE ${tables.map((t) => `"${t}"`).join(', ')} RESTART IDENTITY CASCADE;`)
       return
     }
+  }
 
-    // sqlite: delete from every user table except migrations bookkeeping.
-    // Temporarily disable FK enforcement so ordering doesn't matter.
-    try {
-      await tx.exec('PRAGMA foreign_keys = OFF;')
-    } catch {
-      // ignore
-    }
-
-    const rows = await tx
-      .prepare(
-        `
-          SELECT name
-          FROM sqlite_master
-          WHERE type = 'table'
-        `,
-      )
-      .all()
-
-    const tables = (rows || [])
-      .map((r) => r?.name)
-      .filter(Boolean)
-      .filter((name) => name !== '_migrations' && name !== 'sqlite_sequence')
-
-    for (const table of tables) {
-      // eslint-disable-next-line no-await-in-loop
-      await tx.exec(`DELETE FROM "${table}";`)
-    }
-
-    try {
-      await tx.exec('PRAGMA foreign_keys = ON;')
-    } catch {
-      // ignore
-    }
+  if (reset && db.dialect === 'sqlite') {
+    await wipeAllDataSqlite(db)
   }
 
   await db.withTransaction(async (tx) => {
-    if (reset) {
+    if (reset && tx.dialect === 'postgres') {
       await wipeAllData(tx)
     }
 

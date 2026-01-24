@@ -1,0 +1,37 @@
+[
+  {
+    "id": "fixture-local-oh-1",
+    "title": "Ohio Community Foundation Mini-Grant",
+    "sponsor": "Ohio Community Foundation",
+    "description": "Small grants for nonprofit capacity building and community programs in Ohio.",
+    "source": "fixture_local",
+    "source_url": "https://example.org/oh-mini-grant",
+    "application_url": "https://example.org/oh-mini-grant/apply",
+    "state": "OH",
+    "categories": ["nonprofit", "community"],
+    "keywords": ["nonprofit", "capacity building"],
+    "eligibility_bullets": ["Registered 501(c)(3)", "Ohio-based organization"],
+    "requires_501c3": true,
+    "requires_match": false,
+    "is_active": true,
+    "record_origin": "curated_verified"
+  },
+  {
+    "id": "fixture-local-ca-1",
+    "title": "California Local Impact Grant",
+    "sponsor": "CA Impact Fund",
+    "description": "Community impact funding for small organizations serving California residents.",
+    "source": "fixture_local",
+    "source_url": "https://example.org/ca-impact-grant",
+    "application_url": "https://example.org/ca-impact-grant/apply",
+    "state": "CA",
+    "categories": ["community", "small_business"],
+    "keywords": ["community", "small business"],
+    "eligibility_bullets": ["California-based applicant", "Community benefit focus"],
+    "requires_501c3": false,
+    "requires_match": false,
+    "is_active": true,
+    "record_origin": "curated_verified"
+  }
+]
+

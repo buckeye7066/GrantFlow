@@ -1,5 +1,6 @@
 import crypto from 'crypto'
 import { ADMIN_EMAIL, isAdminEmail } from '../config/constants.js'
+import { ensureProfileEmailSchema } from './accessControl.js'
 
 function nowISOString() {
   return new Date().toISOString()
@@ -53,37 +54,62 @@ export async function ensureAdminUser(db) {
 
 export async function linkProfileToAdmin(db, profileId) {
   if (!profileId) return
-  const admin = await ensureAdminUser(db)
-  const existing = await db
+  // Phase 2: never "take ownership" of profiles by setting user_id to the admin.
+  // Admin access is granted via users.is_admin, and (optionally) via profile_emails mapping
+  // so admin UIs can enumerate legacy profiles without violating unique profile ownership.
+  try {
+    await ensureProfileEmailSchema(db)
+  } catch {
+    return
+  }
+
+  const dialect = db?.dialect || 'sqlite'
+  const normalized = String(ADMIN_EMAIL || '').trim().toLowerCase()
+  if (!normalized) return
+
+  if (dialect === 'postgres') {
+    await db
+      .prepare(
+        `
+          INSERT INTO profile_emails (id, profile_id, email, added_by)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT (profile_id, email) DO NOTHING
+        `,
+      )
+      .run(crypto.randomUUID(), profileId, normalized, 'system-admin-link')
+    return
+  }
+
+  // sqlite
+  await db
     .prepare(
       `
-        SELECT user_id
-        FROM profiles
-        WHERE id = ?
+        INSERT OR IGNORE INTO profile_emails (id, profile_id, email, added_by)
+        VALUES (?, ?, ?, ?)
       `,
     )
-    .get(profileId)
-  if (!existing) return
-  if (!existing.user_id) {
-    await db.prepare(
-      `
-        UPDATE profiles
-        SET user_id = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `,
-    ).run(admin.id, profileId)
-  }
+    .run(crypto.randomUUID(), profileId, normalized, 'system-admin-link')
 }
 
 export async function linkAllProfilesToAdmin(db) {
-  const admin = await ensureAdminUser(db)
-  await db.prepare(
-    `
-      UPDATE profiles
-      SET user_id = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE user_id IS NULL
-    `,
-  ).run(admin.id)
+  // Phase 2: do not mutate profiles.user_id en masse (breaks unique ownership).
+  // Instead, attach ADMIN_EMAIL as an access email for profiles that have no owner.
+  try {
+    await ensureProfileEmailSchema(db)
+  } catch {
+    return
+  }
+
+  const normalized = String(ADMIN_EMAIL || '').trim().toLowerCase()
+  if (!normalized) return
+
+  const rows = await db.prepare('SELECT id FROM profiles WHERE user_id IS NULL').all()
+  const profileIds = (rows || []).map((r) => r?.id).filter(Boolean)
+  if (profileIds.length === 0) return
+
+  for (const profileId of profileIds) {
+    await linkProfileToAdmin(db, profileId)
+  }
 }
 
 export async function isAdminUserId(db, userId) {

@@ -309,6 +309,10 @@ export async function ensureGrantAccess(req, res, grantId) {
       return grant
     }
     
+    if (grant.profile_id && req.ctx.accessibleProfileIds instanceof Set && req.ctx.accessibleProfileIds.has(grant.profile_id)) {
+      return grant
+    }
+
     if (grant.organization_id && req.ctx.accessibleOrgIds && req.ctx.accessibleOrgIds.has(grant.organization_id)) {
       return grant
     }

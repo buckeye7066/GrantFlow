@@ -6,6 +6,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { createPageUrl } from '@/utils';
 import {
   Dialog,
@@ -61,6 +62,8 @@ export default function AdminDiagnostics() {
   const [crawlerAuditTimeout, setCrawlerAuditTimeout] = useState(20000);
   const [crawlerAuditMinScore, setCrawlerAuditMinScore] = useState(50);
   const [crawlerAuditItemRequest, setCrawlerAuditItemRequest] = useState('');
+  const [fundingSources, setFundingSources] = useState([]);
+  const [fundingSourcesError, setFundingSourcesError] = useState(null);
 
   const loadDiagnostics = async () => {
     try {
@@ -69,6 +72,15 @@ export default function AdminDiagnostics() {
       // Use apiFetch as required
       const data = await apiFetch('/api/admin/diagnostics');
       setDiagnostics(data);
+
+      try {
+        const fsRes = await apiFetch('/api/admin/funding-sources');
+        setFundingSources(Array.isArray(fsRes?.sources) ? fsRes.sources : []);
+        setFundingSourcesError(null);
+      } catch (e) {
+        setFundingSources([]);
+        setFundingSourcesError(e?.message || 'Failed to load funding provider status');
+      }
     } catch (err) {
       // Build comprehensive error information
       const errorInfo = {
@@ -296,6 +308,18 @@ export default function AdminDiagnostics() {
     };
     return statusMap[status] || <Badge variant="secondary">{status}</Badge>;
   };
+
+  const getFundingStatusBadge = (source) => {
+    const configured = Boolean(source?.configured)
+    const required = Boolean(source?.key_required)
+    const label = configured ? 'configured' : required ? 'missing key' : 'optional'
+    const cls = configured
+      ? 'bg-green-100 text-green-800 border-green-300'
+      : required
+        ? 'bg-red-100 text-red-800 border-red-300'
+        : 'bg-slate-100 text-slate-800 border-slate-300'
+    return <Badge className={cls}>{label}</Badge>
+  }
 
   const handleNavigate = (url) => {
     if (!url) return;
@@ -955,6 +979,73 @@ export default function AdminDiagnostics() {
           </CardContent>
         </Card>
       )}
+
+      {/* Funding provider key status (safe presence only) */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Key className="w-5 h-5" />
+            Funding provider keys
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {fundingSourcesError ? (
+            <Alert className="border-amber-300 bg-amber-50 mb-4">
+              <AlertTriangle className="h-4 w-4 text-amber-600" />
+              <AlertTitle className="text-amber-900">Unable to load provider status</AlertTitle>
+              <AlertDescription className="text-amber-800">{fundingSourcesError}</AlertDescription>
+            </Alert>
+          ) : null}
+
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Provider</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Env vars</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(fundingSources || []).map((src) => (
+                  <TableRow key={src.id}>
+                    <TableCell className="font-medium">
+                      <div className="flex items-center gap-2">
+                        <span>{src.name}</span>
+                        {src.docs_url ? (
+                          <a
+                            href={src.docs_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs text-blue-600 hover:underline"
+                          >
+                            docs
+                          </a>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                    <TableCell>{getFundingStatusBadge(src)}</TableCell>
+                    <TableCell className="text-sm text-slate-700">
+                      {(src.env_vars || []).length === 0 ? (
+                        <span className="text-slate-500">none</span>
+                      ) : (
+                        (src.env_vars || []).join(', ')
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {(!fundingSources || fundingSources.length === 0) && (
+                  <TableRow>
+                    <TableCell colSpan={3} className="text-sm text-slate-600">
+                      No funding providers returned.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Recent Errors */}
       <Card>

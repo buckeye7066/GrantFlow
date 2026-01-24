@@ -1,0 +1,20 @@
+[
+  {
+    "title": "CA Local Impact Grant (SF Bay)",
+    "sponsor": "California Impact Fund",
+    "description": "Community impact funding for organizations serving California residents.",
+    "source": "fixture_geo",
+    "source_id": "fixture-geo-ca-94105-1",
+    "source_url": "https://example.org/ca/94105/impact",
+    "application_url": "https://example.org/ca/94105/impact/apply",
+    "evidence_url": "https://example.org/ca/94105/impact",
+    "state": "CA",
+    "is_national": false,
+    "categories": ["community", "local"],
+    "keywords": ["california", "community"],
+    "opportunity_type": "grant",
+    "requires_match": false,
+    "match_percentage": 0
+  }
+]
+

@@ -26,8 +26,12 @@ function loadJSON(filePath) {
  * Load real funding opportunities from verified data files
  */
 function loadRealOpportunities() {
-  const dataPath = join(__dirname, '../data/crawlers/real_funding_opportunities.json')
-  const data = loadJSON(dataPath)
+  const defaultPath = join(__dirname, '../data/crawlers/real_funding_opportunities.json')
+  const overrideDir = process.env.CRAWLER_DATA_DIR ? String(process.env.CRAWLER_DATA_DIR) : null
+  const overridePath = overrideDir ? join(overrideDir, 'real_funding_opportunities.json') : null
+
+  // Prefer the test/automation fixture dir when configured.
+  const data = overridePath ? (loadJSON(overridePath) ?? loadJSON(defaultPath)) : loadJSON(defaultPath)
   
   if (!data) {
     console.warn('[comprehensiveCrawler] No real opportunities data found')
@@ -158,6 +162,10 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
     // This is used by the Geo Crawl admin UI. It is intentionally separate from profile matching.
     if (String(params.mode || '').toLowerCase() === 'geo') {
       const state = params.state ? String(params.state).toUpperCase() : null
+      const runAllStates =
+        params.run_all_states === true ||
+        String(params.run_all_states || '').toLowerCase() === 'true' ||
+        String(params.runAllStates || '').toLowerCase() === 'true'
       const maxZips = Number(params.max_zips ?? params.maxZips ?? 50)
       const batchSize = Number(params.batch_size ?? Math.min(50, Math.max(1, maxZips || 50)))
       const rateLimitMs = Number(params.rate_limit_ms ?? 250)
@@ -173,19 +181,82 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
       const overpassRadiusKm = Number(params.overpass_radius_km ?? 12)
       const overpassMaxResults = Number(params.overpass_max_results ?? 60)
 
+      const jobId = contextOrDb?.job?.id ?? null
+
+      const runOnce = async (stateArg) => {
+        return await runNationalZipCrawl(db, {
+          state: stateArg && /^[A-Z]{2}$/.test(stateArg) ? stateArg : undefined,
+          zip_list: zipList || undefined,
+          max_zips: Number.isFinite(maxZips) ? maxZips : 50,
+          batch_size: Number.isFinite(batchSize) ? batchSize : 25,
+          rate_limit_ms: Number.isFinite(rateLimitMs) ? rateLimitMs : 250,
+          min_sources_per_zip: Number.isFinite(minSources) ? minSources : 1,
+          discover_local_resources: Boolean(discoverLocal),
+          overpass_radius_km: Number.isFinite(overpassRadiusKm) ? overpassRadiusKm : 12,
+          overpass_max_results: Number.isFinite(overpassMaxResults) ? overpassMaxResults : 60,
+          resume: false,
+          job_id: jobId,
+          fixtures_dir: process.env.GEO_CRAWL_FIXTURES_DIR || undefined,
+        })
+      }
+
+      if (runAllStates) {
+        const stateList = Array.isArray(params.states) ? params.states : null
+        const normalizedStates = (stateList || []).map((s) => String(s || '').toUpperCase()).filter((s) => /^[A-Z]{2}$/.test(s))
+        const statesToRun = normalizedStates.length > 0
+          ? normalizedStates
+          : [
+              'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA',
+              'HI','ID','IL','IN','IA','KS','KY','LA','ME','MD',
+              'MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ',
+              'NM','NY','NC','ND','OH','OK','OR','PA','RI','SC',
+              'SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC',
+            ]
+
+        console.log('[comprehensiveCrawler] GEO mode starting: all states', { states: statesToRun.length, maxZips, batchSize })
+
+        let totalProcessed = 0
+        let totalSources = 0
+        let totalFailed = 0
+        let totalSkipped = 0
+        /** @type {Array<any>} */
+        const perState = []
+
+        for (const st of statesToRun) {
+          const r = await runOnce(st)
+          totalProcessed += Number(r?.processed ?? 0)
+          totalSources += Number(r?.sources ?? 0)
+          totalFailed += Number(r?.failed ?? 0)
+          totalSkipped += Number(r?.skipped ?? 0)
+          // Keep payload reasonably small
+          perState.push({
+            state: st,
+            processed: Number(r?.processed ?? 0),
+            sources: Number(r?.sources ?? 0),
+            failed: Number(r?.failed ?? 0),
+            skipped: Number(r?.skipped ?? 0),
+          })
+        }
+
+        return {
+          success: true,
+          inserted: totalSources,
+          evaluated: totalProcessed,
+          result_meta: {
+            mode: 'geo',
+            run_all_states: true,
+            processed: totalProcessed,
+            sources: totalSources,
+            failed: totalFailed,
+            skipped: totalSkipped,
+            states: perState,
+          },
+          message: `Geo crawl completed: processed ${totalProcessed} ZIPs across ${statesToRun.length} states`,
+        }
+      }
+
       console.log('[comprehensiveCrawler] GEO mode starting', { state, maxZips, batchSize })
-      const result = await runNationalZipCrawl(db, {
-        state: state && /^[A-Z]{2}$/.test(state) ? state : undefined,
-        zip_list: zipList || undefined,
-        max_zips: Number.isFinite(maxZips) ? maxZips : 50,
-        batch_size: Number.isFinite(batchSize) ? batchSize : 25,
-        rate_limit_ms: Number.isFinite(rateLimitMs) ? rateLimitMs : 250,
-        min_sources_per_zip: Number.isFinite(minSources) ? minSources : 1,
-        discover_local_resources: Boolean(discoverLocal),
-        overpass_radius_km: Number.isFinite(overpassRadiusKm) ? overpassRadiusKm : 12,
-        overpass_max_results: Number.isFinite(overpassMaxResults) ? overpassMaxResults : 60,
-        resume: false,
-      })
+      const result = await runOnce(state)
 
       return {
         success: true,

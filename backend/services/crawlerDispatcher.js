@@ -1,6 +1,6 @@
 import fs from 'fs'
 import { fileURLToPath } from 'url'
-import { dirname, join } from 'path'
+import { dirname, join, resolve } from 'path'
 import { processAvatarLookupJob } from './avatarCrawler.js'
 import { processLocalCrawlerJob } from './localCrawler.js'
 import { processScholarshipCrawlerJob } from './scholarshipCrawler.js'
@@ -16,7 +16,9 @@ import { acquireCrawlerLock } from './crawlerConcurrencyGuard.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
-const dataDir = join(__dirname, '..', 'data', 'crawlers')
+const dataDir = process.env.CRAWLER_DATA_DIR
+  ? resolve(String(process.env.CRAWLER_DATA_DIR))
+  : join(__dirname, '..', 'data', 'crawlers')
 
 const HANDLERS = {
   avatar_lookup: processAvatarLookupJob,

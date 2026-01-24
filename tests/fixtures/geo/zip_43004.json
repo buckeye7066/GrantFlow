@@ -1,0 +1,20 @@
+[
+  {
+    "title": "OH Community Resilience Micro-Grant",
+    "sponsor": "Ohio Example Foundation",
+    "description": "Small grant funding for community resilience planning in Ohio.",
+    "source": "fixture_geo",
+    "source_id": "fixture-geo-oh-43004-1",
+    "source_url": "https://example.org/oh/43004/resilience",
+    "application_url": "https://example.org/oh/43004/resilience/apply",
+    "evidence_url": "https://example.org/oh/43004/resilience",
+    "state": "OH",
+    "is_national": false,
+    "categories": ["community", "resilience"],
+    "keywords": ["ohio", "resilience", "community"],
+    "opportunity_type": "grant",
+    "requires_match": false,
+    "match_percentage": 0
+  }
+]
+
