@@ -10,7 +10,7 @@ Branch: `fix/e2e-hardening-2026-01-23`
 - [x] Generate `.env.example` + `backend/.env.example` from code references
 - [x] Add `/docs/TESTING.md` (install/migrate/seed/start/tests)
 - [x] Verify: `npm run db:setup`, `npm run dev:all`, `npm run test:all`
-- [ ] Commit + push: `chore: baseline boot, env examples, deterministic seed + docs`
+- [x] Commit + push: `chore: baseline boot, env examples, deterministic seed + docs`
 
 ## Phase 1 — Automation harness (E2E + API + crawler test mode)
 - [ ] Playwright UI tests: login, profiles, admin, source directory, run crawler, pipeline, opportunities list, fail on console errors
