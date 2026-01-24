@@ -20,12 +20,12 @@ Branch: `fix/e2e-hardening-2026-01-23`
 - [x] Commit + push: `test: add e2e/api/crawler harness + fixes`
 
 ## Phase 2 — Profile dedupe (one profile per email) + access control
-- [ ] Choose authoritative identity field
-- [ ] DB constraint + migration to merge duplicates deterministically
-- [ ] Enforce profile access (owner email or admin) across all profile-scoped endpoints
+- [x] Choose authoritative identity field
+- [x] DB constraint + migration to merge duplicates deterministically
+- [x] Enforce profile access (owner email or admin) across all profile-scoped endpoints
 - [ ] Frontend cannot enumerate/switch to others
-- [ ] Tests for merge + 403 + admin override + URL tampering
-- [ ] Commit + push: `feat: profile dedupe + strict profile access control`
+- [x] Tests for merge + 403 + admin override + URL tampering
+- [x] Commit + push: `feat: profile dedupe + strict profile access control`
 
 ## Phase 3 — Anya tools stabilization
 - [ ] Identify Anya endpoints/modules
