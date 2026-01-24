@@ -211,10 +211,37 @@ Refer to the QA checklist in [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_RE
 | `npm run seed:profiles` | Rehydrate the 11 curated profiles/sections into an existing DB (`--force` to reset) |
 | `npm run seed:demo` | Seed demo data (development only, uses bundled JSON files) |
 | `npm run build` / `npm run preview` | Build and preview the production frontend |
+| `npm run test:auto-merge` | Test auto-merge workflow logic locally (shows which PRs would be merged) |
 
 See `package.json` for the full script catalogue.
 
 ---
+
+## GitHub Actions & Automation
+
+### Auto-Merge Recent Pull Requests
+
+The repository includes an automated workflow that merges pull requests updated within the last 48 hours if they meet specific criteria.
+
+**Workflow:** `.github/workflows/auto-merge-recent-prs.yml`
+
+**Schedule:** Daily at 2:00 AM UTC (can also be triggered manually)
+
+**Merge Criteria:**
+- PR was updated in the last 48 hours
+- PR is in open state with no merge conflicts
+- All CI checks are passing
+- At least one approval from a reviewer
+
+**Test locally:**
+```bash
+npm run test:auto-merge
+```
+
+This script simulates the workflow's logic and shows which PRs would be automatically merged without actually performing any merges.
+
+**Documentation:** See [`docs/AUTO_MERGE_WORKFLOW.md`](docs/AUTO_MERGE_WORKFLOW.md) for detailed information about customization, security considerations, and troubleshooting.
+
 ---
 
 ## Crawler Matrix Test
