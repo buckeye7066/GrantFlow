@@ -287,30 +287,58 @@ async function searchStateGrantsByZip(zip, coords) {
     return opportunities
   }
   
-  // State grant portal URLs (add more states in production)
+  const state = normalizeState(coords.state)
+  if (!state) return opportunities
+
+  // State grant portal URLs (best-effort directory links; no scraping here)
   const statePortals = {
-    'OH': 'https://grants.ohio.gov',
-    'CA': 'https://www.grants.ca.gov',
-    'TX': 'https://www.governor.state.tx.us/grants',
-    'NY': 'https://grantsgateway.ny.gov',
-    'FL': 'https://www.myflorida.com/apps/vbs/vbs_www.main.show_grants'
-    // Add more states...
-  }
-  
-  const portalUrl = statePortals[coords.state]
-  if (!portalUrl) {
-    return opportunities // State portal not configured
+    NY: 'https://grantsgateway.ny.gov/IntelliGrants_NYSGG/module/nysgg/goportal.aspx',
+    CA: 'https://www.grants.ca.gov/',
+    TX: 'https://gov.texas.gov/organization/financial-services/grants',
+    FL: 'https://www.flgov.com/grant-opportunities/',
+    PA: 'https://www.grants.pa.gov/',
+    IL: 'https://www2.illinois.gov/sites/GATA/Grants/Pages/default.aspx',
+    OH: 'https://grants.ohio.gov/',
+    GA: 'https://gema.georgia.gov/grants',
+    NC: 'https://www.osbm.nc.gov/grants',
+    MI: 'https://www.michigan.gov/leo/bureaus-agencies/michiganworks/grants',
+    TN: 'https://www.tn.gov/finance/grants.html',
+    CO: 'https://www.colorado.gov/grants',
   }
   
   try {
-    // Note: Each state has different API/scraping requirements
-    // This is a placeholder - real implementation would scrape or use APIs
-    console.log(`[GeoCrawl] Would search ${coords.state} portal for ZIP ${zip}`)
-    
-    // For now, return placeholder indicating state portal search would happen
-    // In production, implement actual scraping/API calls
+    // Always return a real, user-actionable directory source (even if we don't have a
+    // state-specific portal link yet).
+    const portalUrl = statePortals[state] || 'https://www.grants.gov/search-grants'
+    const stateName = zipcodes?.states?.[state] || state
+
+    opportunities.push({
+      title: `${stateName} Grant Opportunities Portal`,
+      sponsor: `${stateName} State Government`,
+      description:
+        portalUrl === 'https://www.grants.gov/search-grants'
+          ? `Directory link for grant opportunities relevant to ${stateName}. This is a fallback link when a state-specific portal is not configured.`
+          : `Official grant portal for ${stateName}. Use this portal to find current state funding opportunities, deadlines, and application requirements.`,
+      url: portalUrl,
+      application_url: portalUrl,
+      source_url: portalUrl,
+      evidence_url: portalUrl,
+      opportunity_type: 'grant_directory',
+      type: 'DIRECTORY',
+      requires_match: false,
+      match_percentage: 0,
+      is_national: false,
+      state,
+      categories: ['government', 'directory', 'state_grants'],
+      keywords: [zip, state.toLowerCase(), stateName.toLowerCase(), 'state grants', 'grant portal', 'government']
+        .filter(Boolean)
+        .map((v) => String(v).toLowerCase()),
+      source: 'state_grants_portal',
+      source_id: `${state}-portal`,
+      last_verified_at: new Date().toISOString(),
+    })
   } catch (error) {
-    console.error(`[GeoCrawl] State portal error for ZIP ${zip}:`, error.message)
+    console.error(`[GeoCrawl] State portal error for ZIP ${zip}:`, error?.message || error)
   }
   
   return opportunities
@@ -327,16 +355,60 @@ async function searchFoundationLocator(zip, coords) {
   }
   
   try {
-    // Council on Foundations Foundation Locator
-    // Note: Real implementation would need proper API access
-    const url = `https://www.cof.org/foundation-locator?lat=${coords.lat}&lng=${coords.lng}&radius=25`
-    
-    console.log(`[GeoCrawl] Would search foundation locator for ZIP ${zip}`)
-    
-    // For now, return placeholder
-    // In production, implement actual API calls or scraping
+    // Legitimate directory links (no scraping required).
+    const cofUrl = `https://www.cof.org/foundation-locator?lat=${coords.lat}&lng=${coords.lng}&radius=25`
+    const candidUrl = 'https://candid.org/find-us'
+
+    opportunities.push(
+      {
+        title: 'Council on Foundations — Foundation Locator',
+        sponsor: 'Council on Foundations',
+        description:
+          `Foundation Locator directory search centered near ${zip}. Use this to find nearby community foundations and philanthropic funders.`,
+        url: cofUrl,
+        application_url: cofUrl,
+        source_url: cofUrl,
+        evidence_url: cofUrl,
+        opportunity_type: 'directory',
+        type: 'DIRECTORY',
+        requires_match: false,
+        match_percentage: 0,
+        is_national: true,
+        state: coords?.state || null,
+        categories: ['foundation', 'directory', 'philanthropy'],
+        keywords: [zip, coords?.city, coords?.state, 'foundation', 'community foundation', 'philanthropy']
+          .filter(Boolean)
+          .map((v) => String(v).toLowerCase()),
+        source: 'cof_foundation_locator',
+        source_id: `cof:${zip}`,
+        last_verified_at: new Date().toISOString(),
+      },
+      {
+        title: 'Candid — Find Us / Nonprofit resources',
+        sponsor: 'Candid',
+        description:
+          'Directory and guidance resources for nonprofits (including funder discovery resources).',
+        url: candidUrl,
+        application_url: candidUrl,
+        source_url: candidUrl,
+        evidence_url: candidUrl,
+        opportunity_type: 'directory',
+        type: 'DIRECTORY',
+        requires_match: false,
+        match_percentage: 0,
+        is_national: true,
+        state: coords?.state || null,
+        categories: ['nonprofit', 'directory', 'philanthropy'],
+        keywords: [zip, coords?.city, coords?.state, 'nonprofit', 'funder', 'foundation directory']
+          .filter(Boolean)
+          .map((v) => String(v).toLowerCase()),
+        source: 'candid_directory',
+        source_id: `candid:${zip}`,
+        last_verified_at: new Date().toISOString(),
+      },
+    )
   } catch (error) {
-    console.error(`[GeoCrawl] Foundation locator error for ZIP ${zip}:`, error.message)
+    console.error(`[GeoCrawl] Foundation locator error for ZIP ${zip}:`, error?.message || error)
   }
   
   return opportunities

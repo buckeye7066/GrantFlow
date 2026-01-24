@@ -567,39 +567,48 @@ function ensureCrawlerJobsSupportsAllTypes() {
 if (db.dialect === 'sqlite') {
   ensureCrawlerJobsSupportsAllTypes()
 }
+
+const IS_SMOKE_MODE = String(process.env.SMOKE_MODE || '').trim().toLowerCase() === 'true'
+
 // Restore baseline data (profiles + sections, plus other seed tables if DB appears empty).
 // This makes the app self-heal after an ephemeral DB reset, so "real profiles" reappear on next login.
-try {
-  const mode = String(process.env.BASELINE_SEED_MODE || '').trim().toLowerCase() || 'auto'
-  const result = await seedBaselineFromRepo(db, {
-    mode: mode === 'force' ? 'force' : mode === 'off' ? 'off' : 'auto',
-  })
-  console.info('[startup] baseline seed', {
-    ok: result.ok,
-    skipped: result.skipped,
-    reason: result.reason ?? null,
-    seed_path: result.seed_path ?? null,
-    exported_at: result.exported_at ?? null,
-    before: result.before ?? null,
-    after: result.after ?? null,
-    decisions: result.decisions ?? null,
-  })
-} catch (error) {
-  // Fallback to designated profiles so the server can still boot, but log loudly.
-  console.error('[startup] Failed to seed baseline from repo. Falling back to designated profiles.', {
-    error: error?.message || String(error),
-  })
+if (IS_SMOKE_MODE) {
+  // Contract/unit tests start the backend in "smoke" mode and only need a fast, deterministic boot.
+  // Heavy boot tasks (baseline seeding, network-dependent backfills, large DB scans) must not block PORT binding.
+  console.info('[startup] SMOKE_MODE enabled; skipping baseline seed + heavy startup tasks')
+} else {
+  try {
+    const mode = String(process.env.BASELINE_SEED_MODE || '').trim().toLowerCase() || 'auto'
+    const result = await seedBaselineFromRepo(db, {
+      mode: mode === 'force' ? 'force' : mode === 'off' ? 'off' : 'auto',
+    })
+    console.info('[startup] baseline seed', {
+      ok: result.ok,
+      skipped: result.skipped,
+      reason: result.reason ?? null,
+      seed_path: result.seed_path ?? null,
+      exported_at: result.exported_at ?? null,
+      before: result.before ?? null,
+      after: result.after ?? null,
+      decisions: result.decisions ?? null,
+    })
+  } catch (error) {
+    // Fallback to designated profiles so the server can still boot, but log loudly.
+    console.error('[startup] Failed to seed baseline from repo. Falling back to designated profiles.', {
+      error: error?.message || String(error),
+    })
+    await ensureDesignatedProfiles(db)
+  }
+  // Always ensure designated profiles exist (idempotent); baseline seed may not include newer fixtures.
   await ensureDesignatedProfiles(db)
+  await linkAllProfilesToAdmin(db)
+  await ensureUserPreferencesTable(db)
+  await repairInvalidDocumentStatuses(db)
+  await repairMissingUploadAvatars({ db, uploadsDir })
 }
-// Always ensure designated profiles exist (idempotent); baseline seed may not include newer fixtures.
-await ensureDesignatedProfiles(db)
-await linkAllProfilesToAdmin(db)
-await ensureUserPreferencesTable(db)
-await repairInvalidDocumentStatuses(db)
-await repairMissingUploadAvatars({ db, uploadsDir })
 
 // Check funding opportunities count and provide guidance
-if (db.dialect === 'sqlite') {
+if (!IS_SMOKE_MODE && db.dialect === 'sqlite') {
   try {
     const oppCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get();
     if (oppCount && oppCount.count === 0) {
@@ -619,7 +628,7 @@ if (db.dialect === 'sqlite') {
     console.warn('[startup] Error checking opportunities count:', error.message);
   }
 } else {
-  console.info('[startup] Skipping SQLite-only opportunity seeding checks (dialect != sqlite)')
+  console.info('[startup] Skipping SQLite-only opportunity seeding checks', { smoke: IS_SMOKE_MODE, dialect: db.dialect })
 }
 
 function parseBoolEnv(value) {
@@ -634,6 +643,9 @@ function parseBoolEnv(value) {
 // - Non-prod: default ON (local reliability).
 // - Prod: default OFF unless first-boot (no opportunities at all) or explicitly enabled.
 try {
+  if (IS_SMOKE_MODE) {
+    console.info('[startup]', JSON.stringify({ event: 'min_national_ensure', enabled_by: 'smoke_mode', minimum: null, skipped: true }))
+  } else {
   const minimum = Number.parseInt(process.env.MIN_NATIONAL_OPPORTUNITIES || '3', 10)
   const min = Number.isFinite(minimum) ? minimum : 3
 
@@ -690,6 +702,7 @@ try {
       console.info('[startup]', JSON.stringify({ event: 'min_national_ensure', enabled_by: enabledBy, minimum: min, skipped: true }))
     }
   }
+  }
 } catch (error) {
   console.warn('[startup] Failed to ensure national minimum opportunities:', error?.message || error)
 }
@@ -697,8 +710,10 @@ try {
 // Ensure curated assistance directories are available even when the DB already has many county_crawler records.
 // This increases "real & relevant" coverage for special needs / emergency assistance matching without fabricating data.
 try {
-  // This helper is SQLite-only today (sync calls + local JSON files). Skip on Postgres until refactored.
-  if (db.dialect !== 'sqlite') {
+  if (IS_SMOKE_MODE) {
+    console.info('[startup] Skipping assistance directory seeding (SMOKE_MODE)')
+  } else if (db.dialect !== 'sqlite') {
+    // This helper is SQLite-only today (sync calls + local JSON files). Skip on Postgres until refactored.
     console.info('[startup] Skipping assistance directory seeding (dialect != sqlite)')
   } else {
     const existing = db
@@ -816,8 +831,38 @@ app.use(async (req, res, next) => {
   if (!handled && authHeader.startsWith('Bearer ')) {
     const token = authHeader.slice(7).trim();
     if (token) {
-      try {
-        const payload = jwt.verify(token, EFFECTIVE_JWT_SECRET);
+      // Accept admin/bulk tokens via Authorization header for frontend/dev compatibility.
+      // This does NOT expand the trust boundary; these same tokens are already accepted via X-Admin-Token.
+      if (
+        (expectedAdminToken && token === expectedAdminToken) ||
+        (expectedBulkKey && token === expectedBulkKey)
+      ) {
+        user = {
+          role: 'admin',
+          is_admin: true,
+          userId: 'system_admin_token',
+          profileId: null,
+          full_name: ADMIN_NAME,
+          email: ADMIN_EMAIL,
+        }
+        handled = true
+      }
+
+      // Allow the Anya API key to authenticate via Authorization bearer as well.
+      if (!handled && process.env.ANYA_API_KEY && token === process.env.ANYA_API_KEY) {
+        user = {
+          role: 'admin',
+          is_admin: true,
+          userId: 'system_anya_token',
+          full_name: 'Anya Assistant',
+          email: 'anya@grantflow.app',
+        }
+        handled = true
+      }
+
+      if (!handled) {
+        try {
+          const payload = jwt.verify(token, EFFECTIVE_JWT_SECRET);
         // Stateless JWT acceptance (important for multi-instance deployments where SQLite session storage
         // is not shared across instances). If the token is correctly signed and unexpired, trust its claims.
         // We still try to validate against DB sessions when available, but we do not require it.
@@ -880,8 +925,9 @@ app.use(async (req, res, next) => {
             handled = true;
           }
         }
-      } catch (error) {
-        // fall through to legacy handling
+        } catch (error) {
+          // fall through to legacy handling
+        }
       }
     }
 
