@@ -18,6 +18,9 @@
  */
 
 import axios from 'axios'
+import crypto from 'crypto'
+import fs from 'fs'
+import path from 'path'
 import Database from 'better-sqlite3'
 import zipcodes from 'zipcodes'
 
@@ -99,6 +102,59 @@ function resolveZipList({ zip_list, state, max_zips } = {}) {
   }
 
   return list
+}
+
+function resolveFixturesDir(options = {}) {
+  const candidate =
+    options.fixtures_dir ||
+    options.fixturesDir ||
+    process.env.GEO_CRAWL_FIXTURES_DIR ||
+    null
+  if (!candidate) return null
+  const p = path.resolve(String(candidate))
+  try {
+    if (fs.existsSync(p) && fs.statSync(p).isDirectory()) return p
+  } catch {
+    // ignore
+  }
+  return null
+}
+
+function readZipFixture(fixturesDir, zip) {
+  if (!fixturesDir) return null
+  const candidates = [
+    path.join(fixturesDir, `zip_${zip}.json`),
+    path.join(fixturesDir, `zip-${zip}.json`),
+    path.join(fixturesDir, `${zip}.json`),
+  ]
+  for (const p of candidates) {
+    try {
+      if (!fs.existsSync(p)) continue
+      const raw = fs.readFileSync(p, 'utf8')
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) return parsed
+      if (parsed && Array.isArray(parsed.opportunities)) return parsed.opportunities
+    } catch {
+      // ignore invalid fixture
+    }
+  }
+  return null
+}
+
+function deriveZipMeta(zip) {
+  try {
+    const row = zipcodes.lookup(zip)
+    if (!row) return null
+    return {
+      zip: normalizeZip(row?.zip) || zip,
+      city: row?.city ?? null,
+      state: normalizeState(row?.state) ?? null,
+      lat: typeof row?.latitude === 'number' ? row.latitude : null,
+      lng: typeof row?.longitude === 'number' ? row.longitude : null,
+    }
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -463,6 +519,29 @@ async function processZip(zip, db, config) {
   let status = 'completed'
   
   try {
+    const fixturesDir = resolveFixturesDir(config)
+    if (fixturesDir) {
+      const fixture = readZipFixture(fixturesDir, zip) || []
+      const meta = deriveZipMeta(zip)
+      const inferredState = meta?.state ?? null
+      sources = Array.isArray(fixture) ? fixture : []
+
+      for (const opp of sources) {
+        if (!opp) continue
+        if (opp.state == null && inferredState) opp.state = inferredState
+        if (opp.is_national == null && inferredState) opp.is_national = false
+        if (opp.keywords == null && inferredState) {
+          opp.keywords = [zip, inferredState].filter(Boolean)
+        }
+        if (isLoanOrMatchingFund(opp)) continue
+        const changes = await saveOpportunity(db, opp)
+        if (Number(changes) > 0) inserted += Number(changes)
+      }
+
+      console.log(`  [fixtures] Inserted ${inserted} sources for ZIP ${zip}`)
+      return { zip, status: 'completed', sources_found: inserted, duration: Date.now() - startTime }
+    }
+
     // Get coordinates
     const coords = await getZipCoordinates(zip)
     
@@ -511,6 +590,67 @@ async function processZip(zip, db, config) {
     error,
     duration: Date.now() - startTime
   }
+}
+
+async function createStateRunRow(db, { state, jobId }) {
+  const st = normalizeState(state)
+  if (!st) return null
+  const id = crypto.randomUUID()
+  const sql =
+    db?.dialect === 'postgres'
+      ? `
+          INSERT INTO geo_state_runs (id, state, job_id, status, started_at, created_at, updated_at)
+          VALUES (?, ?, ?, 'running', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `
+      : `
+          INSERT INTO geo_state_runs (id, state, job_id, status, started_at, created_at, updated_at)
+          VALUES (?, ?, ?, 'running', datetime('now'), datetime('now'), datetime('now'))
+        `
+  await db.prepare(sql).run(id, st, jobId ?? null)
+  return { id, state: st }
+}
+
+async function completeStateRunRow(db, runRow, { status, processed, sources, failed, skipped, error }) {
+  if (!runRow?.id) return
+  const st = normalizeState(runRow.state)
+  if (!st) return
+  const sql =
+    db?.dialect === 'postgres'
+      ? `
+          UPDATE geo_state_runs
+          SET status = ?,
+              completed_at = CURRENT_TIMESTAMP,
+              processed_zips = ?,
+              sources_inserted = ?,
+              failed_zips = ?,
+              skipped_zips = ?,
+              error = ?,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `
+      : `
+          UPDATE geo_state_runs
+          SET status = ?,
+              completed_at = datetime('now'),
+              processed_zips = ?,
+              sources_inserted = ?,
+              failed_zips = ?,
+              skipped_zips = ?,
+              error = ?,
+              updated_at = datetime('now')
+          WHERE id = ?
+        `
+  await db
+    .prepare(sql)
+    .run(
+      status,
+      Number(processed ?? 0),
+      Number(sources ?? 0),
+      Number(failed ?? 0),
+      Number(skipped ?? 0),
+      error ?? null,
+      runRow.id,
+    )
 }
 
 /**
@@ -754,45 +894,62 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   let failedCount = 0
   let skippedCount = 0
   const startTime = Date.now()
+
+  // Per-state run tracking (Phase 6). Only persists when a valid state is provided.
+  const stateRun =
+    options.state && normalizeState(options.state) ? await createStateRunRow(db, { state: options.state, jobId: options.job_id ?? null }) : null
   
   // Process in batches
-  for (let i = startIndex; i < totalZips; i += config.batch_size) {
-    const batchEnd = Math.min(i + config.batch_size, totalZips)
-    const batch = zipList.slice(i, batchEnd)
-    
-    console.log(`Processing batch ${Math.floor(i / config.batch_size) + 1}: ZIPs ${i} - ${batchEnd}`)
-    
-    for (const zip of batch) {
-      const result = await processZip(zip, db, config)
+  try {
+    for (let i = startIndex; i < totalZips; i += config.batch_size) {
+      const batchEnd = Math.min(i + config.batch_size, totalZips)
+      const batch = zipList.slice(i, batchEnd)
       
-      // Update progress in database
-      await updateZipProgress(db, result.zip, result.status, result.sources_found, result.error)
+      console.log(`Processing batch ${Math.floor(i / config.batch_size) + 1}: ZIPs ${i} - ${batchEnd}`)
       
-      processedCount++
-      totalSources += result.sources_found
-      if (result.status === 'failed') failedCount += 1
-      if (result.status === 'skipped') skippedCount += 1
-      
-      // Rate limiting
-      if (Number(config.rate_limit_ms) > 0) {
-        await new Promise(resolve => setTimeout(resolve, config.rate_limit_ms))
-      }
-      
-      // Memory management
-      if (processedCount % 100 === 0) {
-        const elapsed = Date.now() - startTime
-        const rate = (processedCount / elapsed) * 1000 * 60 // per minute
-        console.log(`  Progress: ${processedCount}/${remainingZips} ZIPs (${rate.toFixed(1)}/min), ${totalSources} sources found`)
+      for (const zip of batch) {
+        const result = await processZip(zip, db, config)
         
-        // Force garbage collection if available
-        if (global.gc) {
-          global.gc()
+        // Update progress in database
+        await updateZipProgress(db, result.zip, result.status, result.sources_found, result.error)
+        
+        processedCount++
+        totalSources += result.sources_found
+        if (result.status === 'failed') failedCount += 1
+        if (result.status === 'skipped') skippedCount += 1
+        
+        // Rate limiting
+        if (Number(config.rate_limit_ms) > 0) {
+          await new Promise(resolve => setTimeout(resolve, config.rate_limit_ms))
+        }
+        
+        // Memory management
+        if (processedCount % 100 === 0) {
+          const elapsed = Date.now() - startTime
+          const rate = (processedCount / elapsed) * 1000 * 60 // per minute
+          console.log(`  Progress: ${processedCount}/${remainingZips} ZIPs (${rate.toFixed(1)}/min), ${totalSources} sources found`)
+          
+          // Force garbage collection if available
+          if (global.gc) {
+            global.gc()
+          }
         }
       }
+      
+      console.log(`  Batch complete, checkpointing...`)
+      console.log()
     }
-    
-    console.log(`  Batch complete, checkpointing...`)
-    console.log()
+  } finally {
+    if (stateRun) {
+      await completeStateRunRow(db, stateRun, {
+        status: 'completed',
+        processed: processedCount,
+        sources: totalSources,
+        failed: failedCount,
+        skipped: skippedCount,
+        error: null,
+      })
+    }
   }
   
   const totalDuration = Date.now() - startTime
