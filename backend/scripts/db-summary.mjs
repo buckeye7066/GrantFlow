@@ -35,6 +35,7 @@ console.log('║                         PROFILES                               
 console.log('╠════════════════════════════════════════════════════════════════╣');
 
 const profiles = db.prepare('SELECT id, display_name, primary_type FROM profiles ORDER BY display_name').all();
+let sectionJsonParseErrors = 0
 
 for (const p of profiles) {
   const secs = db.prepare('SELECT COUNT(*) as c FROM profile_sections WHERE profile_id = ?').get(p.id).c;
@@ -47,7 +48,9 @@ for (const p of profiles) {
     try {
       const data = JSON.parse(s.data || '{}');
       fields += Object.values(data).filter(v => v && v !== '' && (!Array.isArray(v) || v.length > 0)).length;
-    } catch (e) {}
+    } catch (e) {
+      sectionJsonParseErrors += 1
+    }
   }
   
   const name = p.display_name.substring(0, 28).padEnd(28);
@@ -96,6 +99,10 @@ if (issues.length === 0) {
   console.log('✓ All checks passed!');
 } else {
   issues.forEach(i => console.log('⚠ ' + i));
+}
+
+if (sectionJsonParseErrors > 0) {
+  console.warn(`⚠ ${sectionJsonParseErrors} profile section(s) contained invalid JSON and were skipped in field counting.`)
 }
 
 db.close();

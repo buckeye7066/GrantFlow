@@ -53,7 +53,13 @@ function calculateMatchScore(profile, organization, opportunity, profileSections
         else if (data.geographic_focus && data.geographic_focus.includes(',')) {
           entityState = data.geographic_focus.split(',').pop().trim()
         }
-      } catch (e) {}
+      } catch (e) {
+        const profileLabel = profile?.id || profile?.display_name || profile?.full_name || 'unknown-profile'
+        console.warn(
+          `[prepopulate-profile-grants] Failed to parse location_focus JSON for ${profileLabel}:`,
+          e?.message || e,
+        )
+      }
     }
   }
 

@@ -23,6 +23,44 @@ const migrationsDir =
     ? path.join(__dirname, 'postgres', 'migrations')
     : path.join(__dirname, 'migrations');
 
+async function ensureSqliteBaseSchema() {
+  if (db.dialect !== 'sqlite') return
+
+  // For a fresh SQLite DB file, migrations are ALTER/CREATE statements that assume base tables exist.
+  // Bootstrap the base schema from `backend/db/schema.sql` exactly once (idempotent CREATE TABLEs).
+  try {
+    const row = await db
+      .prepare(
+        `
+          SELECT name
+          FROM sqlite_master
+          WHERE type = 'table' AND name = 'profiles'
+        `,
+      )
+      .get()
+
+    if (row?.name === 'profiles') return
+  } catch {
+    // If probing fails, we still try to apply schema to self-heal.
+  }
+
+  const schemaPath = path.join(__dirname, 'schema.sql')
+  if (!fs.existsSync(schemaPath)) {
+    console.error('[migrate] ERROR: schema.sql not found at', schemaPath)
+    process.exit(1)
+  }
+
+  console.log('[migrate] Bootstrapping base SQLite schema from schema.sql')
+  const sql = fs.readFileSync(schemaPath, 'utf8')
+  try {
+    await db.exec(sql)
+    console.log('[migrate] ✓ Base schema applied')
+  } catch (error) {
+    console.error('[migrate] ✗ Failed to apply base schema:', error?.message || String(error))
+    process.exit(1)
+  }
+}
+
 function ensureDirExists(dir) {
   if (!fs.existsSync(dir)) return false;
   return fs.statSync(dir).isDirectory();
@@ -110,6 +148,7 @@ async function main() {
     process.exit(1);
   }
 
+  await ensureSqliteBaseSchema()
   await ensureMigrationsTable();
 
   const applied = await getAppliedSet();
