@@ -25,6 +25,7 @@ import { getProfile, listProfiles } from "@/api/profiles";
 import { listDocuments, deleteDocument, ingestDocument, parseAllProfileDocuments } from "@/api/documents";
 import { listCrawlerJobs, triggerProfileEnrichment } from "@/api/crawlers";
 import { useAuthStore } from "@/stores/authStore";
+import { canUseFeature } from "@/utils/tier";
 
 export default function Documents() {
   const { user, activeProfileId } = useAuthStore((state) => ({
@@ -78,7 +79,7 @@ export default function Documents() {
   });
 
   const tier = profileDetailQuery.data?.billing?.tier ?? null;
-  const canDocumentAI = isAdmin || Boolean(tier?.enable_document_ai);
+  const canDocumentAI = isAdmin || canUseFeature(profileDetailQuery.data?.billing, "enable_document_ai");
 
   const { data: documents = [], isLoading: isLoadingDocuments } = useQuery({
     queryKey: ['documents', selectedProfileId],
@@ -99,6 +100,8 @@ export default function Documents() {
       const formData = new FormData();
       formData.append('profile_id', profileId);
       formData.append('document', file);
+      // Baseline ingest is available to all tiers; AI parsing is gated server-side by enable_ai.
+      formData.append('enable_ai', canDocumentAI ? 'true' : 'false');
       // Enable OCR for images (and optionally handwriting) during ingest.
       formData.append('ocr', 'true');
       formData.append('handwriting', handwritingOcr ? 'true' : 'false');
@@ -114,7 +117,9 @@ export default function Documents() {
       }
       toast({
         title: "Document uploaded",
-        description: "We're parsing the file and will update the profile shortly.",
+        description: canDocumentAI
+          ? "We're parsing the file and will update the profile shortly."
+          : "Upload complete. AI document enrichment is disabled for your tier.",
       });
     },
     onError: (error) => {

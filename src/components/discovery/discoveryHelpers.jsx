@@ -1,4 +1,5 @@
 import { base44 } from "@/api/base44Client";
+import { createLogger } from "@/utils/logger";
 
 /**
  * Helper functions for discovery operations
@@ -52,7 +53,8 @@ function extractStateList(selectedOrg) {
 }
 
 export async function runComprehensiveMatch(selectedOrg, searchFilters) {
-  console.log('[runComprehensiveMatch] Starting comprehensive search');
+  const log = createLogger('runComprehensiveMatch')
+  log.debug('starting comprehensive search')
   if (!selectedOrg) {
     throw new Error('Profile data is required to run comprehensive match.')
   }
@@ -94,11 +96,15 @@ export async function runComprehensiveMatch(selectedOrg, searchFilters) {
   // Filter to only show 80%+ matches as requested
   const highMatchOpportunities = allOpportunities.filter(opp => {
     const matchScore = typeof opp.match === 'number' ? opp.match : 0;
-    console.log(`[runComprehensiveMatch] ${opp.title}: ${matchScore}% match`);
+    log.debug('match score', { title: opp.title, matchScore })
     return matchScore >= 80;
   });
 
-  console.log(`[runComprehensiveMatch] Filtered ${allOpportunities.length} opportunities to ${highMatchOpportunities.length} with 80%+ match`);
+  log.debug('filtered matches', {
+    total: allOpportunities.length,
+    kept: highMatchOpportunities.length,
+    threshold: 80,
+  })
 
   return {
     opportunities: highMatchOpportunities,
@@ -111,7 +117,8 @@ export async function runComprehensiveMatch(selectedOrg, searchFilters) {
  * Run ECF CHOICES service discovery
  */
 export async function runECFServiceSearch(selectedOrgId, queryClient) {
-  console.log('[runECFServiceSearch] Starting ECF service discovery');
+  const log = createLogger('runECFServiceSearch')
+  log.debug('starting ECF service discovery')
   
   // First, invoke the ECF discovery function
   const discoverResponse = await base44.functions.invoke('discoverECFServices', {
@@ -151,7 +158,8 @@ export async function runECFServiceSearch(selectedOrgId, queryClient) {
  * Run standard search with template
  */
 export async function runStandardSearch(template, selectedOrgId, searchFilters) {
-  console.log('[runStandardSearch] Starting standard search');
+  const log = createLogger('runStandardSearch')
+  log.debug('starting standard search', { template: template?.id || template?.name || null })
   
   let searchParams = {
     profile_id: selectedOrgId,

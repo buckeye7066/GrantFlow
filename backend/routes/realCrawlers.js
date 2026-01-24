@@ -15,6 +15,8 @@ import { crawlStudentGrants } from '../services/crawlers/studentGrantsCrawler.js
 import { crawlSpecialNeeds } from '../services/crawlers/specialNeedsCrawler.js'
 import { crawlItemFunding } from '../services/crawlers/itemFundingCrawler.js'
 import { crawlECFBenefits } from '../services/crawlers/ecfBenefitsCrawler.js'
+import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
+import { ensureProfileAccess } from '../utils/accessControl.js'
 
 const router = express.Router()
 
@@ -392,6 +394,14 @@ router.post('/run', ensureAuth, async (req, res) => {
       message: 'Crawler runs require a profile_id so we can use 100% of the profile sections/signals.',
     })
   }
+
+  // Enforce profile access (prevents running crawlers for arbitrary profiles via direct API calls).
+  if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
+
+  // Tier gating: item matching is a paid feature (ITEM_FUNDING).
+  if (crawler_type === 'item_matching') {
+    if (!(await requireTierCapability(req, res, String(profile_id), TIER_CAPABILITIES.ITEM_FUNDING))) return
+  }
   
   try {
     const db = req.db
@@ -676,6 +686,14 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
       error: 'Profile ID required',
       message: 'profile_id is required for running multiple crawlers'
     })
+  }
+
+  // Enforce profile access (prevents bypass via direct API calls).
+  if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
+
+  // Tier gating: item matching is a paid feature (ITEM_FUNDING).
+  if (Array.isArray(crawler_types) && crawler_types.includes('item_matching')) {
+    if (!(await requireTierCapability(req, res, String(profile_id), TIER_CAPABILITIES.ITEM_FUNDING))) return
   }
   
   if (!crawler_types || !Array.isArray(crawler_types)) {

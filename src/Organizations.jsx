@@ -106,8 +106,6 @@ export default function Organizations() {
   };
 
   const handleUploadSuccess = async (organization) => {
-    // TODO: Remove debug log - console.log('[Organizations] Upload success, received organization:', organization);
-    
     if (!organization || !organization.id) {
       console.error('[Organizations] No organization ID returned from upload');
       showErrorToast(
@@ -127,7 +125,6 @@ export default function Organizations() {
     );
     
     // Verify access using utility function
-    // TODO: Remove debug log - console.log('[Organizations] Verifying user can access the new profile...');
     const canAccess = await verifyOrganizationAccess(organization.id, 5);
     
     if (!canAccess) {
@@ -152,7 +149,6 @@ export default function Organizations() {
     );
     
     setTimeout(() => {
-      // TODO: Remove debug log - console.log('[Organizations] Navigating to profile:', organization.id);
       navigate(createPageUrl("OrganizationProfile", { id: organization.id }));
     }, 500);
   };

@@ -45,6 +45,7 @@ import {
   testButtonFunctionality,
   getAutonomousFunctionTestsStatus,
 } from './anyaAutonomousFunctionTesting.js'
+import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 
 const tools = new Map()
 
@@ -575,6 +576,7 @@ export async function invokeTool(name, params, context) {
   if (tool.requiresAdmin) {
     const user = context?.user
     const db = context?.db
+    const req = context?.req
     
     if (!user) {
       const error = new Error(`Tool "${name}" requires admin privileges`)
@@ -605,11 +607,29 @@ export async function invokeTool(name, params, context) {
     }
 
     // Log admin tool invocation for audit
-    // TODO: Remove debug log
-    //   tool: name,
-    //   user: user.userId ?? user.id ?? 'unknown',
-    //   timestamp: new Date().toISOString(),
-    // })
+    try {
+      const userId = user?.userId ?? user?.id ?? null
+      const profileId = context?.profile_id ?? context?.profileId ?? null
+      logAuditEvent(db, {
+        category: AUDIT_CATEGORIES.ANYA,
+        action: 'tool.invoke',
+        severity: SEVERITY.INFO,
+        userId,
+        profileId,
+        resourceType: 'anya_tool',
+        resourceId: String(name),
+        details: {
+          tool: String(name),
+          requires_admin: true,
+          params: params ?? {},
+        },
+        ipAddress: req?.ip ?? req?.headers?.['x-forwarded-for'] ?? null,
+        userAgent: req?.headers?.['user-agent'] ?? null,
+      })
+    } catch (error) {
+      // Never block tool execution on audit failures.
+      console.warn('[anyaToolRegistry] failed to write audit log:', error?.message || error)
+    }
   }
 
   const result = await tool.handler(params ?? {}, context ?? {})

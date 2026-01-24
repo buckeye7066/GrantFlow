@@ -37,6 +37,14 @@ import crawlerV2Router from './routes/crawlerV2.js';
 import nfProgramsRouter from './routes/nfPrograms.js';
 import nofoRouter from './routes/nofo.js';
 import healthRouter from './routes/health.js';
+import crawlLogsRouter from './routes/crawlLogs.js'
+import legacyFunctionsRouter from './routes/legacyFunctions.js'
+import sourceDirectoryRouter from './routes/sourceDirectory.js'
+import budgetsRouter from './routes/budgets.js'
+import contactsRouter from './routes/contacts.js'
+import applicationDraftsRouter from './routes/applicationDrafts.js'
+import billingSettingsRouter from './routes/billingSettings.js'
+import contactMethodsRouter from './routes/contactMethods.js'
 import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
@@ -1245,6 +1253,12 @@ app.use('/api/programs', programsRouter);
 app.use('/api/milestones', milestonesRouter);
 app.use('/api/documents', documentsRouter);
 app.use('/api/expenses', expensesRouter);
+app.use('/api/budgets', budgetsRouter);
+app.use('/api/contacts', contactsRouter);
+app.use('/api/application-drafts', applicationDraftsRouter);
+app.use('/api/billing-settings', billingSettingsRouter);
+app.use('/api/contact-methods', contactMethodsRouter);
+app.use('/api/source-directory', sourceDirectoryRouter);
 app.use('/api/ai', aiRouter);
 app.use('/api/anya', anyaRouter); // Keep existing Anya routes for compatibility
 app.use('/api/profiles', profilesRouter);
@@ -1256,6 +1270,10 @@ app.use('/api/real-crawlers', realCrawlersRouter);
 app.use('/api/preferences', preferencesRouter);
 // Base44 function-style endpoints (used by NOFO Parser + Diagnostics)
 app.use('/api', nofoRouter);
+// Base44 legacy function-style endpoints (legacy UI flows: DataSources/SourceDirectory)
+app.use('/api', legacyFunctionsRouter);
+// Base44 legacy entity endpoints
+app.use('/api/crawl-logs', crawlLogsRouter);
 
 function resolveBuildSha() {
   return (

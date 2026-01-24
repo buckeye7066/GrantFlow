@@ -11,8 +11,9 @@ import axios from 'axios';
 import { upsertFundingOpportunity } from './opportunityInserter.js';
 
 // Grants.gov API endpoints
-const GRANTS_GOV_API = 'https://www.grants.gov/grantsws/rest/opportunities/search/';
-const GRANTS_GOV_DETAIL = 'https://www.grants.gov/grantsws/rest/opportunity/details/';
+// NOTE: The legacy `grantsws/rest/opportunities/search/` endpoint does not accept GET (405).
+// Use the public REST API `search2` endpoint (POST JSON).
+const GRANTS_GOV_SEARCH2 = 'https://api.grants.gov/v1/api/search2';
 const GRANTS_GOV_VIEW = 'https://www.grants.gov/search-results-detail/';
 
 /**
@@ -28,27 +29,40 @@ async function fetchGrantsGov(params = {}) {
   } = params;
 
   try {
-    const searchParams = new URLSearchParams({
-      oppStatuses: oppStatus,
-      rows: rows.toString(),
-      startRecordNum: startRow.toString(),
-    });
-    
-    if (keyword) {
-      searchParams.append('keyword', keyword);
-    }
+    const payload = {
+      rows: Number(rows) || 100,
+      // Grants.gov supports multiple statuses; string delimiter is accepted by their docs.
+      // Keep it simple for now.
+      oppStatuses: String(oppStatus || 'posted'),
+      keyword: String(keyword || ''),
+      startRecordNum: Number(startRow) || 0,
+      // Optional fields (safe defaults)
+      agencies: '',
+      fundingCategories: Array.isArray(fundingCategories) ? fundingCategories.join('|') : '',
+      aln: '',
+      oppNum: '',
+    };
 
-    const response = await axios.get(`${GRANTS_GOV_API}?${searchParams}`, {
+    const response = await axios.post(GRANTS_GOV_SEARCH2, payload, {
       timeout: 30000,
       headers: {
         'Accept': 'application/json',
+        'Content-Type': 'application/json',
         'User-Agent': 'GrantFlow/1.0 (grant-matching-platform)',
       }
     });
 
-    return response.data;
+    const body = response?.data ?? null
+    if (!body) return null
+    if (typeof body.errorcode === 'number' && body.errorcode !== 0) {
+      console.error('[GrantsGov] API error:', `errorcode=${body.errorcode}`, body.msg || '')
+      return null
+    }
+    return body.data ?? body
   } catch (error) {
-    console.error('[GrantsGov] API error:', error.message);
+    const status = error?.response?.status;
+    const detail = error?.response?.data ? JSON.stringify(error.response.data).slice(0, 400) : null;
+    console.error('[GrantsGov] API error:', status ? `${status}` : error.message, detail || '');
     return null;
   }
 }
@@ -57,17 +71,18 @@ async function fetchGrantsGov(params = {}) {
  * Transform Grants.gov opportunity to our format
  */
 function transformGrantsGovOpportunity(opp) {
-  const id = `grants-gov-${opp.id || opp.opportunityId}`;
-  const oppNumber = opp.number || opp.opportunityNumber || '';
+  const rawId = opp?.id ?? opp?.opportunityId ?? opp?.oppId ?? opp?.opportunity_id ?? null
+  const id = `grants-gov-${rawId || cryptoSafeId(opp)}`;
+  const oppNumber = opp.number || opp.opportunityNumber || opp.oppNum || '';
   
   return {
     id,
-    title: opp.title || opp.opportunityTitle || 'Federal Grant Opportunity',
-    sponsor: opp.agencyName || opp.agency || 'Federal Agency',
+    title: opp.title || opp.opportunityTitle || opp.oppTitle || 'Federal Grant Opportunity',
+    sponsor: opp.agencyName || opp.agency || opp.agencyCode || 'Federal Agency',
     source: 'grants.gov',
-    source_id: opp.id || opp.opportunityId,
-    source_url: `${GRANTS_GOV_VIEW}${opp.id || opp.opportunityId}`,
-    application_url: `${GRANTS_GOV_VIEW}${opp.id || opp.opportunityId}`,
+    source_id: rawId || null,
+    source_url: rawId ? `${GRANTS_GOV_VIEW}${rawId}` : null,
+    application_url: rawId ? `${GRANTS_GOV_VIEW}${rawId}` : null,
     description: opp.synopsis || opp.description || `Federal funding opportunity: ${oppNumber}`,
     amount_min: parseAmount(opp.awardFloor) || null,
     amount_max: parseAmount(opp.awardCeiling) || null,
@@ -82,6 +97,19 @@ function transformGrantsGovOpportunity(opp) {
     requires_match: opp.costSharing === 'Yes',
     eligibility_bullets: buildEligibility(opp),
   };
+}
+
+function cryptoSafeId(opp) {
+  try {
+    const text = JSON.stringify(opp ?? {});
+    let hash = 0;
+    for (let i = 0; i < text.length; i += 1) {
+      hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+    }
+    return String(hash);
+  } catch {
+    return String(Date.now());
+  }
 }
 
 function parseAmount(val) {

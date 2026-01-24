@@ -13,6 +13,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Label } from '@/components/ui/label';
 import { useAuthStore } from '@/stores/authStore';
+import { createLogger } from '@/utils/logger'
 
 
 
@@ -22,6 +23,7 @@ export default function DiscoverGrants() {
   
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const log = React.useMemo(() => createLogger('DiscoverGrantsPage'), [])
   const { isAuthenticated, accessToken, sessionExpired } = useAuthStore((state) => ({
     isAuthenticated: state.isAuthenticated,
     accessToken: state.accessToken,
@@ -80,7 +82,7 @@ export default function DiscoverGrants() {
       selectedOrg?.medicaid_waiver_program === 'ecf_choices');
 
   const handleCrawlerResults = async (opportunities) => {
-    console.log('[DiscoverGrants] Processing crawler results:', opportunities.length);
+    log.debug('processing crawler results', { count: opportunities.length })
     
     // Add all 50%+ matches to pipeline automatically
     let addedCount = 0;
@@ -107,7 +109,7 @@ export default function DiscoverGrants() {
   };
 
   const handleAddToPipeline = async (opportunity) => {
-    console.log('[DiscoverGrants] Adding to pipeline:', opportunity);
+    log.debug('add to pipeline requested')
     if (!authReady) {
       toast({
         variant: 'destructive',
