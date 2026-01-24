@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils"
 import { formatDistanceToNow } from "date-fns"
 import { toast } from "@/components/ui/use-toast"
 import { useAuthStore } from "@/stores/authStore"
+import { createLogger } from "@/utils/logger"
 import {
   getAnyaSessions,
   createAnyaSession,
@@ -77,6 +78,7 @@ export default function AnyaChat({ profileId }) {
   const isAdmin = Boolean(user?.is_admin)
   const effectiveProfileId = profileId ?? null
   const [isUnavailable, setIsUnavailable] = useState(false)
+  const log = useMemo(() => createLogger("AnyaChat"), [])
   
   const [sessionId, setSessionId] = useState(null)
   const [messages, setMessages] = useState([])
@@ -297,13 +299,12 @@ export default function AnyaChat({ profileId }) {
 
   async function handleSend() {
     const trimmed = input.trim()
-    console.log('[AnyaChat] handleSend called', { trimmed, isDisabled, sessionId, isLoading, input })
     if (!trimmed || isDisabled) {
-      console.warn('[AnyaChat] handleSend returning early', { trimmed: !!trimmed, isDisabled })
+      log.debug('handleSend returning early', { hasText: Boolean(trimmed), isDisabled })
       return
     }
     setIsSending(true)
-    console.log('[AnyaChat] Sending message to session', sessionId)
+    log.debug('sending message', { sessionId })
     let optimisticId = null
     try {
       optimisticId = uuid()
@@ -317,11 +318,9 @@ export default function AnyaChat({ profileId }) {
       setMessages((prev) => [...prev, optimisticMessage])
       setInput("")
 
-      console.log('[AnyaChat] Calling postAnyaMessage...')
       await postAnyaMessage(sessionId, trimmed)
-      console.log('[AnyaChat] postAnyaMessage completed, refreshing messages...')
       await refreshMessages(sessionId)
-      console.log('[AnyaChat] Messages refreshed successfully')
+      log.debug('messages refreshed')
     } catch (error) {
       console.error("[AnyaChat] send failed:", error)
       if (optimisticId) {

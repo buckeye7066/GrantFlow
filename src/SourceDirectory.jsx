@@ -63,6 +63,8 @@ import AddSourceForm from '@/components/sources/AddSourceForm';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import { listProfiles } from '@/api/profiles';
+import { useCrawlJobTracker } from '@/hooks/useCrawlJobTracker'
+import { createLogger } from '@/utils/logger'
 
 export default function SourceDirectory() {
   const [searchQuery, setSearchQuery] = useState('');
@@ -81,10 +83,13 @@ export default function SourceDirectory() {
   const [expandedSourceId, setExpandedSourceId] = useState(null);
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const log = React.useMemo(() => createLogger('SourceDirectory'), [])
+  const tracker = useCrawlJobTracker({ pollMs: 5000 })
 
   const { data: sources = [], isLoading: isLoadingSources } = useQuery({
     queryKey: ['sourceDirectory'],
     queryFn: () => base44.entities.SourceDirectory.list(),
+    refetchInterval: crawlingInBackground.length > 0 ? 5000 : false,
   });
 
   const { data: profiles = [], isLoading: isLoadingProfiles } = useQuery({
@@ -118,15 +123,10 @@ export default function SourceDirectory() {
     queryFn: () => base44.entities.Grant.list(),
   });
 
-  // Auto-refresh every 10 seconds if there are background crawls
-  useEffect(() => {
-    if (crawlingInBackground.length > 0) {
-      const interval = setInterval(() => {
-        queryClient.invalidateQueries({ queryKey: ['sourceDirectory'] });
-      }, 10000);
-      return () => clearInterval(interval);
-    }
-  }, [crawlingInBackground, queryClient]);
+  async function fetchSourceById(sourceId) {
+    const rows = await base44.entities.SourceDirectory.filter({ id: sourceId })
+    return Array.isArray(rows) ? rows[0] : null
+  }
 
   // Auto-select first organization if none selected
   useEffect(() => {
@@ -152,37 +152,62 @@ export default function SourceDirectory() {
 
   const crawlMutation = useMutation({
     mutationFn: async (sourceId) => {
-      base44.functions.invoke('crawlSourceDirectory', { source_id: sourceId }).catch(err => {
-        console.error('Background crawl error:', err);
-      });
-      return { sourceId };
+      await base44.functions.invoke('crawlSourceDirectory', { source_id: sourceId })
+      return { sourceId, startedAt: Date.now() };
     },
     onSuccess: (data) => {
-      setCrawlingInBackground(prev => [...prev, data.sourceId]);
+      const sourceId = String(data.sourceId)
+      const startedAt = Number(data.startedAt || Date.now())
+      const baseline = sources.find((s) => String(s?.id) === sourceId)?.last_crawled ?? null
+
+      setCrawlingInBackground(prev => [...prev, sourceId]);
       toast({
         title: '🚀 Crawl Started',
         description: 'Crawling in background. Page will auto-refresh when complete.',
         duration: 3000,
       });
 
-      setTimeout(() => {
-        setCrawlingInBackground(prev => prev.filter(id => id !== data.sourceId));
-        queryClient.invalidateQueries({ queryKey: ['sourceDirectory'] });
-      }, 120000);
+      tracker.track({
+        key: `source-crawl:${sourceId}:${startedAt}`,
+        timeoutMs: 4 * 60 * 1000,
+        poll: async () => {
+          const row = await fetchSourceById(sourceId)
+          if (!row) return { done: false }
+          const last = row.last_crawled ? Date.parse(String(row.last_crawled)) : null
+          const base = baseline ? Date.parse(String(baseline)) : null
+          if (last && (!base || last > base) && last >= startedAt - 10_000) {
+            return { done: true, status: 'completed' }
+          }
+          return { done: false }
+        },
+        onDone: (res) => {
+          setCrawlingInBackground((prev) => prev.filter((id) => id !== sourceId))
+          queryClient.invalidateQueries({ queryKey: ['sourceDirectory'] })
+          if (res?.status === 'failed') {
+            toast({ variant: 'destructive', title: 'Crawl timed out', description: 'Check logs and try again.' })
+          } else {
+            toast({ title: '✅ Crawl complete', description: 'Source updated.' })
+          }
+        },
+      })
+    },
+    onError: (error) => {
+      log.error('failed to start crawlSourceDirectory', error)
+      toast({ variant: 'destructive', title: 'Crawl Failed', description: error?.message || 'Failed to start crawl.' })
     },
   });
 
   const bulkCrawlMutation = useMutation({
     mutationFn: async (sourceIds) => {
+      // Start all crawls sequentially to avoid spamming the function runtime.
       for (const sourceId of sourceIds) {
-        base44.functions.invoke('crawlSourceDirectory', { source_id: sourceId }).catch(err => {
-          console.error('Background crawl error:', err);
-        });
+        await base44.functions.invoke('crawlSourceDirectory', { source_id: sourceId })
       }
-      return { sourceIds, count: sourceIds.length };
+      return { sourceIds, count: sourceIds.length, startedAt: Date.now() };
     },
     onSuccess: (data) => {
-      setCrawlingInBackground(prev => [...prev, ...data.sourceIds]);
+      const startedAt = Number(data.startedAt || Date.now())
+      setCrawlingInBackground(prev => [...prev, ...data.sourceIds.map(String)]);
       setSelectedSources([]);
       toast({
         title: '🚀 Bulk Crawl Started',
@@ -190,10 +215,31 @@ export default function SourceDirectory() {
         duration: 4000,
       });
 
-      setTimeout(() => {
-        setCrawlingInBackground(prev => prev.filter(id => !data.sourceIds.includes(id)));
-        queryClient.invalidateQueries({ queryKey: ['sourceDirectory'] });
-      }, 300000);
+      for (const id of data.sourceIds) {
+        const sourceId = String(id)
+        const baseline = sources.find((s) => String(s?.id) === sourceId)?.last_crawled ?? null
+        tracker.track({
+          key: `source-crawl:${sourceId}:${startedAt}`,
+          timeoutMs: 6 * 60 * 1000,
+          poll: async () => {
+            const row = await fetchSourceById(sourceId)
+            if (!row) return { done: false }
+            const last = row.last_crawled ? Date.parse(String(row.last_crawled)) : null
+            const base = baseline ? Date.parse(String(baseline)) : null
+            if (last && (!base || last > base) && last >= startedAt - 10_000) {
+              return { done: true, status: 'completed' }
+            }
+            return { done: false }
+          },
+          onDone: () => {
+            setCrawlingInBackground((prev) => prev.filter((x) => x !== sourceId))
+          },
+        })
+      }
+    },
+    onError: (error) => {
+      log.error('bulk crawl failed to start', error)
+      toast({ variant: 'destructive', title: 'Bulk crawl failed', description: error?.message || 'Failed to start bulk crawl.' })
     },
   });
 
@@ -213,8 +259,6 @@ export default function SourceDirectory() {
         );
         sourceIdsToDelete = typeSources.map(s => s.id);
       }
-
-      // TODO: Remove debug log - console.log('[SourceDirectory] Calling backend to delete sources:', sourceIdsToDelete);
 
       // Call backend function to handle cascade deletion with service role
       const response = await base44.functions.invoke('deleteSourceWithCascade', {
@@ -257,12 +301,13 @@ export default function SourceDirectory() {
 
   const discoverMutation = useMutation({
     mutationFn: async (orgId) => {
-      base44.functions.invoke('discoverLocalSources', { organization_id: orgId }).catch(err => {
-        console.error('Background discovery error:', err);
-      });
-      return { orgId };
+      await base44.functions.invoke('discoverLocalSources', { organization_id: orgId })
+      return { orgId, startedAt: Date.now() };
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      const orgId = String(data.orgId)
+      const startedAt = Number(data.startedAt || Date.now())
+      const baselineCount = sources.filter((s) => String(s?.discovered_for_organization_id || '') === orgId).length
       setIsDiscoverOpen(false);
       toast({
         title: '✨ Discovery Started',
@@ -270,13 +315,34 @@ export default function SourceDirectory() {
         duration: 5000,
       });
 
-      setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: ['sourceDirectory'] });
-        toast({
-          title: '✅ Discovery Complete',
-          description: 'Check the source list for new discoveries!',
-        });
-      }, 180000);
+      tracker.track({
+        key: `discover:${orgId}:${startedAt}`,
+        timeoutMs: 4 * 60 * 1000,
+        poll: async () => {
+          // When discovery writes new sources, the list for this org should grow.
+          const rows = await base44.entities.SourceDirectory.list()
+          const count = Array.isArray(rows)
+            ? rows.filter((s) => String(s?.discovered_for_organization_id || '') === orgId).length
+            : 0
+          if (count > baselineCount) return { done: true, status: 'completed' }
+          return { done: false }
+        },
+        onDone: (res) => {
+          queryClient.invalidateQueries({ queryKey: ['sourceDirectory'] })
+          toast({
+            title: res?.status === 'failed' ? 'Discovery timed out' : '✅ Discovery complete',
+            description:
+              res?.status === 'failed'
+                ? 'Discovery may still be running. Refresh later to see new sources.'
+                : 'Check the source list for new discoveries!',
+            variant: res?.status === 'failed' ? 'destructive' : 'default',
+          })
+        },
+      })
+    },
+    onError: (error) => {
+      log.error('failed to start discovery', error)
+      toast({ variant: 'destructive', title: 'Discovery failed', description: error?.message || 'Failed to start discovery.' })
     },
   });
 

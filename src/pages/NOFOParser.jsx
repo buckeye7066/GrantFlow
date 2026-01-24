@@ -1,7 +1,8 @@
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
+import { createLogger } from '@/utils/logger';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -35,6 +36,7 @@ const grantSchemaForExtraction = {
 };
 
 export default function NOFOParser() {
+  const log = useMemo(() => createLogger('NOFOParser'), []);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -91,31 +93,31 @@ export default function NOFOParser() {
       let fileUrl;
       
       if (inputMode === 'file') {
-        console.log('[NOFOParser] Uploading file:', file.name);
+        log.debug('Uploading file', file?.name);
         const { file_url } = await base44.integrations.Core.UploadFile({ file });
         fileUrl = file_url;
-        console.log('[NOFOParser] File uploaded:', fileUrl);
+        log.debug('File uploaded', fileUrl);
       } else {
         // URL mode - validate URL format
         const trimmedUrl = url.trim();
         if (!trimmedUrl.startsWith('http://') && !trimmedUrl.startsWith('https://')) {
           throw new Error('Please enter a valid URL starting with http:// or https://');
         }
-        console.log('[NOFOParser] Using URL:', trimmedUrl);
+        log.debug('Using URL', trimmedUrl);
         fileUrl = trimmedUrl;
       }
 
       setStatus('processing');
 
       // Use custom parseNOFO function
-      console.log('[NOFOParser] Invoking parseNOFO function...');
+      log.debug('Invoking parseNOFO');
       const response = await base44.functions.invoke('parseNOFO', {
         file_url: fileUrl,
         json_schema: grantSchemaForExtraction,
         is_url: inputMode === 'url'
       });
 
-      console.log('[NOFOParser] Response:', response.data);
+      log.debug('parseNOFO response received', { success: response?.data?.success });
 
       if (response.data.success && response.data.output) {
         setExtractedData(response.data.output);

@@ -1,16 +1,15 @@
 import { apiFetch } from './client'
+import { createLogger } from '@/utils/logger'
+
+const log = createLogger('auth')
 
 export async function startEmailSignIn(email) {
-  if (import.meta.env.DEV) {
-    console.log('[auth] Starting email sign in')
-  }
+  log.debug('starting email sign in')
   const response = await apiFetch('/api/auth/email/start', {
     method: 'POST',
     body: JSON.stringify({ email }),
   })
-  if (import.meta.env.DEV) {
-    console.log('[auth] Email sign in response received')
-  }
+  log.debug('email sign in response received')
   return response
 }
 

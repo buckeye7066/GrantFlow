@@ -1,6 +1,7 @@
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { base44 } from '@/api/base44Client';
+import { createLogger } from '@/utils/logger';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -15,6 +16,7 @@ import { useToast } from '@/components/ui/use-toast';
 
 export default function OrganizationProfileDetails({ organization, contactMethods = [], onUpdate, isUpdating, taxonomyItems = [] }) {
   const { toast } = useToast();
+  const log = useMemo(() => createLogger('OrganizationProfileDetails'), []);
   const [editingSection, setEditingSection] = useState(null);
   const [tempData, setTempData] = useState({});
   const [isGeneratingKeywords, setIsGeneratingKeywords] = useState(false);
@@ -29,7 +31,7 @@ export default function OrganizationProfileDetails({ organization, contactMethod
 
   // Helper function to handle updates
   const handleUpdate = (fieldName, value) => {
-    console.log('[OrganizationProfileDetails] Updating field:', fieldName, 'with value:', value);
+    log.debug('Updating field', fieldName);
     if (!onUpdate) {
       console.error('[OrganizationProfileDetails] onUpdate handler is missing!');
       return;

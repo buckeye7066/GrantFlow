@@ -59,7 +59,6 @@ export default function Login() {
 
   const handleErrorReset = () => {
     // Optional: Add any cleanup or state reset logic here
-    console.log('[Login] Error boundary reset')
   }
 
   const handleDevAdminLogin = async () => {

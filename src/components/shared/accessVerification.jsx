@@ -1,4 +1,5 @@
 import { base44 } from "@/api/base44Client";
+import { createLogger } from "@/utils/logger";
 
 /**
  * Verify that a newly created organization is accessible by the current user
@@ -7,13 +8,14 @@ import { base44 } from "@/api/base44Client";
  * @returns {Promise<boolean>} - True if access is verified, false otherwise
  */
 export async function verifyOrganizationAccess(organizationId, maxAttempts = 5) {
-  console.log('[verifyOrganizationAccess] Starting verification for:', organizationId);
+  const log = createLogger('verifyOrganizationAccess')
+  log.debug('starting verification', { organizationId })
   
   let attempts = 0;
   
   while (attempts < maxAttempts) {
     attempts++;
-    console.log(`[verifyOrganizationAccess] Attempt ${attempts}/${maxAttempts}`);
+    log.debug(`attempt ${attempts}/${maxAttempts}`)
     
     // Wait progressively longer between attempts (300ms, 600ms, 900ms, 1.2s, 1.5s)
     const waitTime = 300 * attempts;
@@ -22,7 +24,7 @@ export async function verifyOrganizationAccess(organizationId, maxAttempts = 5) 
     try {
       const testFetch = await base44.entities.Organization.get(organizationId);
       if (testFetch && testFetch.id === organizationId) {
-        console.log('[verifyOrganizationAccess] ✅ Access verified');
+        log.debug('access verified')
         return true;
       }
     } catch (err) {

@@ -9,12 +9,16 @@ import { Loader2, Play, CheckCircle, AlertCircle, Database, TrendingUp, Building
 import { useToast } from '@/components/ui/use-toast';
 import { format } from 'date-fns';
 import { listProfiles } from '@/api/profiles';
+import { useCrawlJobTracker } from '@/hooks/useCrawlJobTracker'
+import { createLogger } from '@/utils/logger'
 
 export default function DataSources() {
   const [selectedProfileId, setSelectedProfileId] = useState(null);
   const [crawlingInBackground, setCrawlingInBackground] = useState([]);
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const log = React.useMemo(() => createLogger('DataSources'), [])
+  const tracker = useCrawlJobTracker({ pollMs: 5000 })
 
   const { data: profiles = [], isLoading: isLoadingProfiles } = useQuery({
     queryKey: ['profiles'],
@@ -25,6 +29,8 @@ export default function DataSources() {
   const { data: crawlLogs = [], isLoading: isLoadingLogs } = useQuery({
     queryKey: ['crawlLogs'],
     queryFn: () => base44.entities.CrawlLog.list('-created_date', 50),
+    // Only poll when we have active background work.
+    refetchInterval: crawlingInBackground.length > 0 ? 5000 : false,
   });
 
   const { data: opportunities = [], isLoading: isLoadingOpportunities } = useQuery({
@@ -32,16 +38,9 @@ export default function DataSources() {
     queryFn: () => base44.entities.FundingOpportunity.list('-created_date', 100),
   });
 
-  // Auto-refresh every 10 seconds if there are background crawls
-  useEffect(() => {
-    if (crawlingInBackground.length > 0) {
-      const interval = setInterval(() => {
-        queryClient.invalidateQueries({ queryKey: ['crawlLogs'] });
-        queryClient.invalidateQueries({ queryKey: ['fundingOpportunities'] });
-      }, 10000);
-      return () => clearInterval(interval);
-    }
-  }, [crawlingInBackground, queryClient]);
+  function normalizeLogSource(name) {
+    return String(name || '').toLowerCase().replace(/\./g, '_')
+  }
 
   // Auto-select first organization if none selected
   useEffect(() => {
@@ -60,36 +59,66 @@ export default function DataSources() {
   }, [profiles]);
 
   const crawlMutation = useMutation({
-    mutationFn: async ({ crawlerName, payload }) => {
-      // TODO: Remove debug log - console.log(`[DataSources] Starting ${crawlerName} with payload:`, payload);
-      
-      // Fire and forget - don't wait for response
-      base44.functions.invoke(crawlerName, payload).catch(err => {
-        console.error(`Background crawl error for ${crawlerName}:`, err);
-      });
-      
-      return { crawlerName };
+    mutationFn: async ({ crawlerName, logSource, payload }) => {
+      // Start the crawl (returns once enqueued/accepted by the function runtime).
+      await base44.functions.invoke(crawlerName, payload)
+      return { crawlerName, logSource, startedAt: Date.now() };
     },
     onSuccess: (data) => {
-      setCrawlingInBackground(prev => [...prev, data.crawlerName]);
+      const jobKey = String(data.crawlerName)
+      const logSource = String(data.logSource || '')
+      const startedAt = Number(data.startedAt || Date.now())
+      const baseline = logSource ? (crawlLogs.find((l) => String(l?.source || '') === logSource)?.id ?? null) : null
+
+      setCrawlingInBackground(prev => [...prev, jobKey]);
       toast({
         title: '🚀 Crawler Started',
         description: `${data.crawlerName} is running in the background. Check back in 1-2 minutes.`,
         duration: 4000,
       });
 
-      // Remove from background list after 2 minutes and refresh
-      setTimeout(() => {
-        setCrawlingInBackground(prev => prev.filter(name => name !== data.crawlerName));
-        queryClient.invalidateQueries({ queryKey: ['crawlLogs'] });
-        queryClient.invalidateQueries({ queryKey: ['fundingOpportunities'] });
-        toast({
-          title: '✅ Crawler Complete',
-          description: 'Check the results below!',
-        });
-      }, 120000);
+      tracker.track({
+        key: `crawl:${jobKey}:${startedAt}`,
+        timeoutMs: 4 * 60 * 1000,
+        poll: async () => {
+          const logs = await base44.entities.CrawlLog.list('-created_date', 50)
+          const src = logSource || normalizeLogSource(jobKey)
+          const latest = Array.isArray(logs) ? logs.find((l) => String(l?.source || '') === src) : null
+          if (!latest || !latest.id) return { done: false }
+
+          // If we had a baseline log, only treat a *new* entry as the completion signal.
+          if (baseline && String(latest.id) === String(baseline)) return { done: false }
+
+          const status = String(latest.status || '').toLowerCase()
+          if (status === 'completed') {
+            return { done: true, status: 'completed' }
+          }
+          if (status === 'failed') {
+            return { done: true, status: 'failed', message: latest.errorMessage || 'Crawler failed' }
+          }
+          return { done: false }
+        },
+        onDone: (res) => {
+          setCrawlingInBackground((prev) => prev.filter((name) => name !== jobKey))
+          queryClient.invalidateQueries({ queryKey: ['crawlLogs'] })
+          queryClient.invalidateQueries({ queryKey: ['fundingOpportunities'] })
+          if (res?.status === 'failed') {
+            toast({
+              variant: 'destructive',
+              title: 'Crawler failed',
+              description: res?.message || 'Check the crawl log for details.',
+            })
+          } else {
+            toast({
+              title: '✅ Crawler complete',
+              description: 'Results are now available.',
+            })
+          }
+        },
+      })
     },
     onError: (error, variables) => {
+      log.error('failed to start crawler', variables?.crawlerName, error)
       toast({
         variant: "destructive",
         title: "Crawl Failed",
@@ -102,6 +131,7 @@ export default function DataSources() {
     {
       name: 'Grants.gov',
       function: 'crawlGrantsGov',
+      logSource: 'grants_gov',
       description: 'Federal grants database - comprehensive government funding',
       icon: '🏛️',
       needsProfile: false,
@@ -109,14 +139,16 @@ export default function DataSources() {
     {
       name: 'Benefits.gov',
       function: 'crawlBenefitsGov',
+      logSource: 'benefits_gov',
       description: 'Government benefits and assistance programs',
       icon: '🏥',
       needsProfile: true,
     },
   ];
 
-  const getLatestLog = (source) => {
-    return crawlLogs.find(log => log.source === source.toLowerCase().replace('.', '_'));
+  const getLatestLog = (crawler) => {
+    const src = crawler?.logSource ? String(crawler.logSource) : normalizeLogSource(crawler?.name)
+    return crawlLogs.find((log) => String(log?.source || '') === src);
   };
 
   const handleRunCrawler = (crawler) => {
@@ -143,6 +175,7 @@ export default function DataSources() {
 
     crawlMutation.mutate({ 
       crawlerName: crawler.function,
+      logSource: crawler.logSource,
       payload 
     });
   };
@@ -291,7 +324,7 @@ export default function DataSources() {
 
             <div className="grid md:grid-cols-2 gap-6">
               {crawlers.map(crawler => {
-                const latestLog = getLatestLog(crawler.name);
+                const latestLog = getLatestLog(crawler);
                 const isCrawling = crawlingInBackground.includes(crawler.function);
 
                 return (

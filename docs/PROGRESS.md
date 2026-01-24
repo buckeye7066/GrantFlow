@@ -57,3 +57,6 @@ Branch: `fix/e2e-hardening-2026-01-23`
 - [ ] Full test run green on branch
 - [ ] Open PR with required title/body/checklist
 
+## QA Sweep (manual button testing)
+- [ ] Maintain master list: `docs/QA_MASTER_LEDGER.md`
+

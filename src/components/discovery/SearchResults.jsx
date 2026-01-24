@@ -53,18 +53,7 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  // Debug logging
-  React.useEffect(() => {
-    console.log('[SearchResults] Component mounted/updated');
-    console.log('[SearchResults] Results count:', results.length);
-    console.log('[SearchResults] Selected opportunities:', selectedOpportunities.size, Array.from(selectedOpportunities));
-    // Check if this component is actually being rendered
-    const bulkBar = document.querySelector('.bulk-action-bar-debug');
-    console.log('[SearchResults] Bulk action bar in DOM:', !!bulkBar);
-  }, [selectedOpportunities, results]);
-
   const handleToggleSelection = (opportunityId) => {
-    console.log('[SearchResults] Toggling selection for:', opportunityId);
     setSelectedOpportunities(prev => {
       const newSet = new Set(Array.from(prev)); // Create proper new Set from array
       if (newSet.has(opportunityId)) {
@@ -72,19 +61,15 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
       } else {
         newSet.add(opportunityId);
       }
-      console.log('[SearchResults] New selection size:', newSet.size);
       return newSet;
     });
   };
 
   const handleSelectAll = () => {
-    console.log('[SearchResults] Handle select all, current size:', selectedOpportunities.size, 'results:', results.length);
     if (selectedOpportunities.size === results.length && results.length > 0) {
-      console.log('[SearchResults] Deselecting all');
       setSelectedOpportunities(new Set());
     } else {
       const allIds = results.map(opp => opp.id || opp.source_id);
-      console.log('[SearchResults] Selecting all:', allIds);
       setSelectedOpportunities(new Set(allIds));
     }
   };

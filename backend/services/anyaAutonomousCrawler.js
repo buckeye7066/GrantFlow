@@ -1,13 +1,36 @@
 import path from 'path'
 import { promises as fs } from 'fs'
 import { adminCodeCrawl, adminCodeAnalyze, adminCodeEdit } from './anyaAdminTools.js'
+import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 
 const REPO_ROOT = path.resolve(process.cwd())
 
 /**
  * Create audit log entry for autonomous operations
  */
-async function auditLog(entry) {
+async function auditLog(entry, context) {
+  const db = context?.db
+  if (db) {
+    try {
+      logAuditEvent(db, {
+        category: AUDIT_CATEGORIES.ANYA,
+        action: `autonomous.${String(entry?.action || 'event')}`,
+        severity: SEVERITY.INFO,
+        userId: context?.user?.userId ?? context?.user?.id ?? null,
+        profileId: context?.profile_id ?? context?.profileId ?? null,
+        resourceType: 'anya_autonomous_crawler',
+        resourceId: null,
+        details: entry ?? null,
+        ipAddress: context?.req?.ip ?? null,
+        userAgent: context?.req?.headers?.['user-agent'] ?? null,
+      })
+      return
+    } catch (error) {
+      // Fall back to file sink below.
+      console.warn('[anyaAutonomousCrawler] audit db write failed:', error?.message || error)
+    }
+  }
+
   const auditDir = path.join(REPO_ROOT, 'backend', 'data', 'audit')
   await fs.mkdir(auditDir, { recursive: true })
   
@@ -73,7 +96,7 @@ export async function runAutonomousCodeCrawl(options, context) {
     action: 'autonomous_crawl_start',
     options,
     dry_run: dryRun,
-  })
+  }, context)
 
   try {
     // Step 1: Crawl codebase for issues
@@ -141,7 +164,8 @@ export async function runAutonomousCodeCrawl(options, context) {
             changes.push({
               line: issue.line,
               oldText: actualLine.trim(),
-              newText: '// ' + actualLine.trim() + ' // Disabled by auto-fix',
+              // Remove the noisy debug line entirely (avoid comment spam in production code).
+              newText: '',
             })
           }
         }
@@ -176,7 +200,7 @@ export async function runAutonomousCodeCrawl(options, context) {
             line: issue.line,
             content: issue.preview,
             tracked: true,
-          })
+          }, context)
         }
       }
 
@@ -208,7 +232,7 @@ export async function runAutonomousCodeCrawl(options, context) {
               changes_count: changes.length,
               backup: editResult.backup_created,
               dry_run: dryRun,
-            })
+            }, context)
           }
         } catch (error) {
           report.errors.push({
@@ -227,14 +251,14 @@ export async function runAutonomousCodeCrawl(options, context) {
     await auditLog({
       action: 'autonomous_crawl_complete',
       report,
-    })
+    }, context)
 
     return report
   } catch (error) {
     await auditLog({
       action: 'autonomous_crawl_error',
       error: error.message,
-    })
+    }, context)
     throw error
   }
 }

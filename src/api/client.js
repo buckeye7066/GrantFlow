@@ -1,4 +1,6 @@
 import { env } from '@/config/env.js'
+import { createLogger } from '@/utils/logger'
+import { toast as showToast } from '@/components/ui/use-toast'
 
 // API Client - Replaces Base44 SDK
 // This file provides the same interface as base44Client but uses your own backend
@@ -21,6 +23,8 @@ if (import.meta.env.DEV) {
   console.warn('[env] VITE_API_URL is ignored in production (same-origin /api via Vercel rewrites).')
 }
 
+const log = createLogger('APIClient')
+
 class APIClient {
   constructor() {
     this.baseUrl = API_URL;
@@ -38,6 +42,13 @@ class APIClient {
       Document: 'documents',
       Expense: 'expenses',
       Profile: 'profiles',
+      CrawlLog: 'crawl-logs',
+      SourceDirectory: 'source-directory',
+      Budget: 'budgets',
+      Contact: 'contacts',
+      ContactMethod: 'contact-methods',
+      ApplicationDraft: 'application-drafts',
+      BillingSettings: 'billing-settings',
     };
     this.stubStores = new Map();
     this.stubWarnings = new Set();
@@ -161,11 +172,11 @@ class APIClient {
     
     // Single-flight refresh: if a refresh is already in progress, await it
     if (this.refreshPromise) {
-      console.log('[APIClient] Refresh already in progress, waiting...');
+      log.debug('refresh already in progress; waiting')
       try {
         await this.refreshPromise;
         // After the refresh completes, retry the original request
-        console.log('[APIClient] Refresh complete, retrying original request');
+        log.debug('refresh complete; retrying original request')
         return this.fetch(originalRequest.endpoint, originalRequest.options);
       } catch (error) {
         console.error('[APIClient] Refresh failed while waiting:', error.message);
@@ -174,7 +185,7 @@ class APIClient {
     }
     
     // Start a new refresh
-    console.log('[APIClient] Starting token refresh...');
+    log.debug('starting token refresh')
     this.refreshPromise = (async () => {
       try {
         const response = await fetch(`${this.baseUrl}/api/auth/refresh`, {
@@ -198,7 +209,7 @@ class APIClient {
         }
         
         const data = await response.json();
-        console.log('[APIClient] Refresh successful, updating tokens');
+        log.debug('refresh successful; updating tokens')
         
         if (data?.accessToken) {
           this.setToken(data.accessToken);
@@ -234,7 +245,7 @@ class APIClient {
     
     await this.refreshPromise;
     // Retry the original request with new token
-    console.log('[APIClient] Retrying original request after refresh');
+    log.debug('retrying original request after refresh')
     return this.fetch(originalRequest.endpoint, originalRequest.options);
   }
 
@@ -356,6 +367,24 @@ class APIClient {
 
       if (!response.ok) {
         const errorBody = await response.json().catch(() => ({ error: response.statusText }));
+
+        // Consistent UX for backend-authoritative tier denials.
+        if (response.status === 403 && errorBody?.error === 'Tier upgrade required') {
+          try {
+            if (typeof window !== 'undefined') {
+              showToast({
+                title: 'Tier upgrade required',
+                description:
+                  typeof errorBody?.message === 'string' && errorBody.message.trim()
+                    ? errorBody.message
+                    : 'Your current billing tier does not include this feature.',
+              })
+            }
+          } catch {
+            // Non-blocking: never fail a request due to toast rendering.
+          }
+        }
+
         const err = new Error(errorBody.error || errorBody.message || 'Request failed');
         err.status = response.status;
         err.requestId = errorBody.request_id || headers['X-Request-Id'] || null;
@@ -544,7 +573,7 @@ class APIClient {
       } catch (error) {
         // If it's an auth error (401 or session expired), return null gracefully
         if (error.status === 401 || error.status === 403 || error.isAuthError) {
-          console.log('[APIClient] Auth check failed, user needs to sign in');
+          log.debug('auth check failed; user needs to sign in')
           this.clearToken();
           return null;
         }
