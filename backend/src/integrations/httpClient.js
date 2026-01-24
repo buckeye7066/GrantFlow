@@ -15,6 +15,18 @@ const DEFAULT_BASE_BACKOFF_MS = 400
 
 export const GRANTFLOW_USER_AGENT = 'GrantFlow (Axiom BioLabs)'
 
+// Allow unit tests to mock outbound HTTP without patching module loaders.
+// This is intentionally not exported as part of the public app API surface.
+let axiosClient = axios
+
+export function __setAxiosForTests(mockImpl) {
+  axiosClient = mockImpl
+}
+
+export function __resetAxiosForTests() {
+  axiosClient = axios
+}
+
 /**
  * @typedef {Object} HttpRequestOptions
  * @property {string} url
@@ -106,7 +118,7 @@ export async function requestJson(options) {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const isLast = attempt === maxRetries
     try {
-      const res = await axios(config)
+      const res = await axiosClient(config)
       const status = Number(res.status)
 
       if (status >= 200 && status < 300) {
