@@ -70,8 +70,12 @@ export async function createCrawlerJob(db, options) {
   // Validate and normalize status
   const normalizedStatus = validateJobStatus(status)
 
-  // Generate idempotency key
-  const idempotencyKey = generateIdempotencyKey(type, profileId, parameters)
+  // Generate idempotency key.
+  //
+  // IMPORTANT:
+  // When callers explicitly skip idempotency (force-rerun), we must not reuse the same key,
+  // otherwise the UNIQUE index on crawler_jobs.idempotency_key will throw and the job can't be created.
+  const idempotencyKey = skipIdempotencyCheck ? null : generateIdempotencyKey(type, profileId, parameters)
 
   // Check for existing job with same idempotency key (unless explicitly skipped)
   if (!skipIdempotencyCheck) {
