@@ -7,6 +7,10 @@ build/
 coverage/
 test-results/
 artifacts/
+playwright-report/
+blob-report/
+traces/
+.nyc_output/
 
 # Local env files
 .env
