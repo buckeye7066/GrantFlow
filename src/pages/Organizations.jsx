@@ -18,6 +18,7 @@ import { listProfiles } from "@/api/profiles"
 import { createPageUrl } from "@/utils"
 import { useAuthStore } from "@/stores/authStore"
 import { apiFetch } from "@/api/client"
+import { createLogger } from "@/utils/logger"
 
 function mapProfileToOrganization(profile) {
   return {
@@ -40,8 +41,7 @@ export default function Organizations() {
   const queryClient = useQueryClient()
   const user = useAuthStore((state) => state.user)
   const isAdmin = user?.is_admin ?? false
-
-  console.log('[Organizations] User:', user, 'isAdmin:', isAdmin)
+  const log = React.useMemo(() => createLogger("OrganizationsPage"), [])
 
   const {
     data: profiles = [],
@@ -50,9 +50,9 @@ export default function Organizations() {
   } = useQuery({
     queryKey: ['profiles', isAdmin],
     queryFn: async () => {
-      console.log('[Organizations] Fetching profiles, isAdmin:', isAdmin)
+      log.debug('fetching profiles', { isAdmin: Boolean(isAdmin) })
       const result = await listProfiles(isAdmin ? { admin: true } : {})
-      console.log('[Organizations] Profiles fetched:', result?.length, 'profiles')
+      log.debug('profiles fetched', { count: Array.isArray(result) ? result.length : null })
       return result
     },
   })

@@ -12,6 +12,7 @@ import { formatError } from '../middleware/errorHandler.js'
 import { DEFAULT_PAGE_LIMIT, CRAWLER_JOB_TYPES, CRAWLER_JOB_STATUSES } from '../config/constants.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
+import { enforceCrawlerJobTier, getCrawlerJobCapability } from '../middleware/entitlements.js'
 
 const router = express.Router()
 
@@ -983,7 +984,7 @@ router.get('/jobs/:id', async (req, res) => {
   }
 })
 
-router.post('/jobs', async (req, res) => {
+router.post('/jobs', enforceCrawlerJobTier(), async (req, res) => {
   const ctx = ensureAuth(req, res)
   if (!ctx) return
 
@@ -1025,18 +1026,7 @@ router.post('/jobs', async (req, res) => {
       }
     }
 
-    // Tier gating (enforced server-side; UI gating is not sufficient).
-    const tierRequirementByType = {
-      pipeline_automation: TIER_CAPABILITIES.PIPELINE_AUTOMATION,
-      item_search: TIER_CAPABILITIES.ITEM_FUNDING,
-      document_ingest: TIER_CAPABILITIES.DOCUMENT_AI,
-      profile_enrichment: TIER_CAPABILITIES.DOCUMENT_AI,
-      avatar_lookup: TIER_CAPABILITIES.DOCUMENT_AI,
-    }
-    const requiredCapability = tierRequirementByType[type] ?? null
-    if (requiredCapability && targetProfileId) {
-      if (!(await requireTierCapability(req, res, targetProfileId, requiredCapability))) return
-    }
+    // Tier gating is enforced by `enforceCrawlerJobTier` middleware.
 
     // Validate and normalize parameters
     const validatedParameters = validateJobParameters(type, parameters)
@@ -1098,14 +1088,7 @@ router.post('/jobs/:id/retry', async (req, res) => {
     }
 
     // Tier gating applies to retries too (prevents bypass via retry endpoints).
-    const tierRequirementByType = {
-      pipeline_automation: TIER_CAPABILITIES.PIPELINE_AUTOMATION,
-      item_search: TIER_CAPABILITIES.ITEM_FUNDING,
-      document_ingest: TIER_CAPABILITIES.DOCUMENT_AI,
-      profile_enrichment: TIER_CAPABILITIES.DOCUMENT_AI,
-      avatar_lookup: TIER_CAPABILITIES.DOCUMENT_AI,
-    }
-    const requiredCapability = tierRequirementByType[job.type] ?? null
+    const requiredCapability = getCrawlerJobCapability(job.type) ?? null
     if (requiredCapability && job.profile_id) {
       if (!(await requireTierCapability(req, res, job.profile_id, requiredCapability))) return
     }

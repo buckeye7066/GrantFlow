@@ -1,5 +1,8 @@
 import { useState } from 'react';
 import { base44 } from '@/api/base44Client';
+import { createLogger } from '@/utils/logger'
+
+const log = createLogger('useDiscoverSearch')
 
 export function useDiscoverSearch() {
   const [state, set] = useState({
@@ -33,7 +36,7 @@ export function useDiscoverSearch() {
   };
 
   const startSearch = async (payload) => {
-    console.log('[useDiscoverSearch] Starting search with payload:', payload);
+    log.debug('starting search')
     set({ phase: 'loading', results: [], progress: 0, error: null, nextCursor: null });
     
     try {
@@ -42,21 +45,18 @@ export function useDiscoverSearch() {
         throw new Error('profile_id is required in payload');
       }
 
-      console.log('[useDiscoverSearch] Profile ID:', payload.profile_id);
+      log.debug('profile id present')
       
       // Start polling
       set(s => ({ ...s, phase: 'polling', progress: 0.1 }));
 
       // Invoke the search function
-      console.log('[useDiscoverSearch] Invoking searchOpportunities with:', payload);
       const response = await base44.functions.invoke('searchOpportunities', payload);
-
-      console.log('[useDiscoverSearch] Search function response:', response);
 
       // Check if the function succeeded
       if (response.status === 200 && response.data?.success) {
         const results = response.data.results || [];
-        console.log('[useDiscoverSearch] Search complete with', results.length, 'results');
+        log.debug('search complete', { results: results.length })
         
         set({
           phase: 'done',

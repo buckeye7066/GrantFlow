@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { apiFetch } from '@/api/client';
+import { createLogger } from '@/utils/logger'
 
 const CRAWLER_CONFIGS = [
   {
@@ -74,6 +75,7 @@ export default function CrawlerSelection({
   const [errors, setErrors] = useState({});
   const [minMatchScore, setMinMatchScore] = useState(50); // Lowered to 50 to show more results; crawlers now use 100% of profile signals for scoring
   const { toast } = useToast();
+  const log = React.useMemo(() => createLogger('CrawlerSelection'), [])
 
   const handleToggleCrawler = (crawlerId) => {
     setSelectedCrawlers(prev => {
@@ -111,7 +113,7 @@ export default function CrawlerSelection({
     setErrors({});
 
     const crawlersToRun = Array.from(selectedCrawlers);
-    console.log(`[CrawlerSelection] Running ${crawlersToRun.length} crawlers for profile ${profileId}`);
+    log.debug('running crawlers', { count: crawlersToRun.length, profileId })
 
     // Initialize progress
     crawlersToRun.forEach(id => {
@@ -173,7 +175,7 @@ export default function CrawlerSelection({
 
     const failedResults = allResults.filter(r => !r.success);
 
-    console.log(`[CrawlerSelection] Found ${successfulResults.length} total opportunities (minMatchScore=${minMatchScore})`);
+    log.debug('crawler results', { opportunities: successfulResults.length, minMatchScore })
 
     // Add to pipeline if callback provided
     if (onCrawlComplete && successfulResults.length > 0) {

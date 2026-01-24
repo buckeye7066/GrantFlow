@@ -8,12 +8,14 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { base44 } from '@/api/base44Client';
 import { Upload, FileText, Loader2, CheckCircle2, X } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
+import { createLogger } from '@/utils/logger'
 
 export default function UploadApplicationForm({ onSuccess, onCancel, existingOrganizationId = null }) {
   const [file, setFile] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const { toast } = useToast();
+  const log = React.useMemo(() => createLogger('UploadApplicationForm'), [])
 
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0];
@@ -87,7 +89,7 @@ export default function UploadApplicationForm({ onSuccess, onCancel, existingOrg
         organization_id: existingOrganizationId,
       });
 
-      console.log('[UploadApplicationForm] Function response:', response);
+      log.debug('processScannedApplication response received')
 
       if (response.data.success) {
         toast({
@@ -124,14 +126,6 @@ export default function UploadApplicationForm({ onSuccess, onCancel, existingOrg
       } else if (error.message) {
         errorMessage = error.message;
       }
-      
-      // Log full error for debugging
-      console.error('[UploadApplicationForm] Full error object:', {
-        message: errorMessage,
-        details: errorDetails,
-        response: error.response?.data,
-        stack: error.stack
-      });
       
       toast({
         variant: 'destructive',

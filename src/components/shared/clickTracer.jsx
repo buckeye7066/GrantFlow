@@ -1,5 +1,12 @@
 // Global click tracer for debugging click interception issues
 export function installClickTracer() {
+  const enabled =
+    (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.DEV === true) ||
+    String(typeof import.meta !== "undefined" && import.meta.env ? import.meta.env.VITE_ENABLE_CLICK_TRACER : "").toLowerCase() === "true";
+
+  // Never install noisy tracing in production unless explicitly enabled.
+  if (!enabled) return;
+
   if (window.__clickTracerInstalled) return;
   window.__clickTracerInstalled = true;
 
@@ -16,8 +23,8 @@ export function installClickTracer() {
         return `${n.tagName.toLowerCase()}${id}${cls}`;
       })
       .join(" > ");
-    console.log("[TRACE click]", chain);
+    console.debug("[TRACE click]", chain);
   }, { capture: true });
   
-  console.log("[Click Tracer] Installed successfully");
+  console.debug("[Click Tracer] Installed successfully");
 }

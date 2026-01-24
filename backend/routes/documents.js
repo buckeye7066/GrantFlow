@@ -451,6 +451,7 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
       notes: rawNotes,
       source = null,
       skip_parsing: rawSkipParsing,
+      enable_ai: rawEnableAi,
     } = req.body ?? {};
 
     let file = req.file;
@@ -500,7 +501,23 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
       extractedText = result?.text ?? null;
     }
 
-    const skipParsing = rawSkipParsing === 'true' || rawSkipParsing === true;
+    const hasEnableAiField = rawEnableAi !== undefined;
+    const hasSkipParsingField = rawSkipParsing !== undefined;
+    const enableAiRequested = rawEnableAi === 'true' || rawEnableAi === true;
+    const skipParsingRequested = rawSkipParsing === 'true' || rawSkipParsing === true;
+
+    // DOCUMENT_AI gating is enforced only when AI-dependent parsing is requested.
+    // Baseline ingest (upload + text extraction) is allowed for all tiers by default.
+    const shouldRunAi =
+      hasEnableAiField
+        ? enableAiRequested && !skipParsingRequested
+        : hasSkipParsingField
+          ? !skipParsingRequested
+          : context.isAdmin
+            ? true
+            : false;
+
+    const skipParsing = !shouldRunAi;
     const processingStatus = skipParsing || extractedText ? 'completed' : 'pending';
 
     // Auto-classify to a university application when possible (if caller didn't specify one).
@@ -595,6 +612,7 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
             document_id: docId,
             source,
             handwriting: req.body?.handwriting === 'true' || req.body?.handwriting === true,
+            enable_ai: true,
           }),
           requestedBy,
         );
@@ -615,7 +633,8 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
       success: true,
       id: docId,
       profile_id: profileId,
-      processing_status: processingStatus
+      processing_status: processingStatus,
+      enable_ai: !skipParsing,
     });
   } catch (error) {
     console.error('Ingest failed:', error);

@@ -350,8 +350,6 @@ export default function DiscoverGrants() {
   };
 
   const handleAddToPipeline = async (opportunity) => {
-    // TODO: Remove debug log - console.log('[DiscoverGrants] Adding to pipeline:', opportunity);
-    
     // Check for duplicates
     if (opportunity.url) {
       const existingGrants = await base44.entities.Grant.filter({
