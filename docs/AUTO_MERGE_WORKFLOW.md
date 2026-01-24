@@ -36,9 +36,11 @@ A pull request will be automatically merged if it meets ALL of the following cri
 1. **Fetch Branches**: Fetches all remote branches to ensure up-to-date information
 2. **Query PRs**: Uses GitHub CLI to find all open PRs updated in the specified time window
 3. **Filter PRs**: Evaluates each PR against the merge criteria
-4. **Auto-Merge**: Queues qualifying PRs for automatic merge using squash merge strategy
-5. **Branch Cleanup**: Automatically deletes the source branch after merge
-6. **Notification**: Adds a comment to merged PRs explaining the automated action
+4. **Queue for Auto-Merge**: Queues qualifying PRs for automatic merge using squash merge strategy
+5. **Branch Cleanup**: Automatically deletes the source branch after merge completes
+6. **Notification**: Adds a comment to queued PRs explaining the automated action
+
+**Note:** The workflow uses GitHub's auto-merge feature (`--auto` flag), which queues PRs for merge. The actual merge happens automatically once all branch protection requirements are satisfied (not immediately). This ensures compliance with branch protection rules even if they change between queueing and merging.
 
 ## Output Summary
 

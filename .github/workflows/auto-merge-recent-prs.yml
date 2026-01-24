@@ -134,11 +134,11 @@ jobs:
               echo "✅ Merging PR #$PR_NUMBER: $PR_TITLE"
 
               if gh pr merge "$PR_NUMBER" --auto --squash --delete-branch; then
-                echo "✅ Successfully set PR #$PR_NUMBER to auto-merge"
+                echo "✅ Successfully queued PR #$PR_NUMBER for auto-merge"
                 MERGE_COUNT=$((MERGE_COUNT + 1))
 
                 # Add a comment to the PR
-                gh pr comment "$PR_NUMBER" --body "🤖 This PR was automatically queued for merge by the auto-merge workflow as it was updated within the last 48 hours and meets all merge criteria."
+                gh pr comment "$PR_NUMBER" --body "🤖 This PR has been queued for auto-merge by the automated workflow. It was updated within the last 48 hours and meets all merge criteria (passing CI, approved, no conflicts). The PR will be automatically merged once all branch protection requirements are satisfied."
               else
                 echo "❌ Failed to merge PR #$PR_NUMBER"
                 FAIL_COUNT=$((FAIL_COUNT + 1))
