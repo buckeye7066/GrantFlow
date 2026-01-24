@@ -42,9 +42,9 @@ Branch: `fix/e2e-hardening-2026-01-23`
 - [x] Commit + push: `feat: source API client stubs + key validation + docs`
 
 ## Phase 5 — Per-profile crawler runs + pipeline persistence
-- [ ] Ensure opportunity persistence is profile-scoped (or link table) + idempotent reruns
-- [ ] Integration tests with two profiles running all crawlers in test mode
-- [ ] Commit + push: `feat: per-profile crawler runs + pipeline persistence + idempotency`
+- [x] Ensure opportunity persistence is profile-scoped (or link table) + idempotent reruns
+- [x] Integration tests with two profiles running all crawlers in test mode
+- [x] Commit + push: `feat: per-profile crawler runs + pipeline persistence + idempotency`
 
 ## Phase 6 — Geo crawler full run + state indexing
 - [ ] Geo rules tests
