@@ -26,8 +26,12 @@ function loadJSON(filePath) {
  * Load real funding opportunities from verified data files
  */
 function loadRealOpportunities() {
-  const dataPath = join(__dirname, '../data/crawlers/real_funding_opportunities.json')
-  const data = loadJSON(dataPath)
+  const defaultPath = join(__dirname, '../data/crawlers/real_funding_opportunities.json')
+  const overrideDir = process.env.CRAWLER_DATA_DIR ? String(process.env.CRAWLER_DATA_DIR) : null
+  const overridePath = overrideDir ? join(overrideDir, 'real_funding_opportunities.json') : null
+
+  // Prefer the test/automation fixture dir when configured.
+  const data = overridePath ? (loadJSON(overridePath) ?? loadJSON(defaultPath)) : loadJSON(defaultPath)
   
   if (!data) {
     console.warn('[comprehensiveCrawler] No real opportunities data found')
