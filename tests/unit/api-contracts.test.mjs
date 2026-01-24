@@ -74,7 +74,9 @@ async function startBackend({ rootDir, port }) {
     AUTH_FRONTEND_APP_BASE: process.env.VITE_APP_BASE || '/grantflow',
   }
 
-  const proc = spawn(process.execPath, ['backend/server.js'], {
+  // IMPORTANT: Use backend/start.js so dotenv is loaded consistently before server boot.
+  // Running server.js directly can miss env initialization and cause flaky health readiness.
+  const proc = spawn(process.execPath, ['backend/start.js'], {
     cwd: rootDir,
     env,
     shell: false,
@@ -86,11 +88,25 @@ async function startBackend({ rootDir, port }) {
   const stderrChunks = []
   proc.stdout?.on('data', (buf) => stdoutChunks.push(String(buf)))
   proc.stderr?.on('data', (buf) => stderrChunks.push(String(buf)))
+  let spawnError = null
+  proc.once('error', (err) => {
+    spawnError = err
+  })
 
   const start = Date.now()
-  const timeoutMs = 30_000
+  const timeoutMs = 60_000
   // eslint-disable-next-line no-constant-condition
   while (true) {
+    if (spawnError) {
+      const stdout = stdoutChunks.join('')
+      const stderr = stderrChunks.join('')
+      throw new Error(
+        `Backend failed to spawn for contract tests.\n` +
+          `--- error ---\n${spawnError?.message || String(spawnError)}\n` +
+          `--- stdout ---\n${stdout || '(empty)'}\n` +
+          `--- stderr ---\n${stderr || '(empty)'}\n`,
+      )
+    }
     if (proc.exitCode != null) {
       const stdout = stdoutChunks.join('')
       const stderr = stderrChunks.join('')
@@ -129,7 +145,7 @@ test('backend /api/health contract + request id header', async () => {
   const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
   const port = await pickPort()
 
-  const entry = path.join(rootDir, 'backend', 'server.js')
+  const entry = path.join(rootDir, 'backend', 'start.js')
   assert.ok(fs.existsSync(entry), `expected backend entry to exist at ${entry}`)
 
   const proc = await startBackend({ rootDir, port })
