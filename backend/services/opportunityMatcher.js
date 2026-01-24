@@ -209,23 +209,34 @@ export async function saveToProfilePipeline(db, opportunity, profileId, profileC
       }
     }
     
-    // Get organization_id for this profile
-    const profile = await db.prepare(`
-      SELECT organization_id FROM profiles WHERE id = ?
-    `).get(profileId)
-    
-    if (!profile?.organization_id) {
-      return {
-        saved: false,
-        reason: 'Profile has no organization'
-      }
+    // Resolve profile context (organization is optional; profile-scoped pipeline is canonical).
+    const profile = await db
+      .prepare(
+        `
+          SELECT id, organization_id
+          FROM profiles
+          WHERE id = ?
+          LIMIT 1
+        `,
+      )
+      .get(profileId)
+
+    if (!profile?.id) {
+      return { saved: false, reason: 'Profile not found' }
     }
-    
-    // Check if already in pipeline
-    const existing = await db.prepare(`
-      SELECT id FROM grants
-      WHERE organization_id = ? AND funding_opportunity_id = ?
-    `).get(profile.organization_id, opportunity.id)
+
+    // Check if already in pipeline (profile-scoped idempotency).
+    const existing = await db
+      .prepare(
+        `
+          SELECT id
+          FROM grants
+          WHERE profile_id = ?
+            AND funding_opportunity_id = ?
+          LIMIT 1
+        `,
+      )
+      .get(profileId, opportunity.id)
     
     if (existing) {
       return {
@@ -236,27 +247,37 @@ export async function saveToProfilePipeline(db, opportunity, profileId, profileC
     
     // Add to pipeline
     const grantId = crypto.randomUUID()
-    await db.prepare(`
-      INSERT INTO grants (
-        id,
-        organization_id,
-        funding_opportunity_id,
-        title,
-        funder,
-        status,
-        deadline,
-        notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      grantId,
-      profile.organization_id,
-      opportunity.id,
-      opportunity.title,
-      opportunity.sponsor,
-      'discovered',
-      opportunity.deadline,
-      `Auto-added: ${matchPercentage}% match for profile ${profileId}`
-    )
+    await db
+      .prepare(
+        `
+          INSERT INTO grants (
+            id,
+            organization_id,
+            profile_id,
+            funding_opportunity_id,
+            title,
+            funder,
+            status,
+            deadline,
+            match_score,
+            match_reasons,
+            notes
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+      )
+      .run(
+        grantId,
+        profile.organization_id ?? null,
+        profileId,
+        opportunity.id,
+        opportunity.title,
+        opportunity.sponsor,
+        'discovered',
+        opportunity.deadline ?? null,
+        matchPercentage,
+        JSON.stringify(profileContext?.match_reasons ?? opportunity.match_reasons ?? []),
+        `Auto-added: ${matchPercentage}% match for profile ${profileId}`,
+      )
     
     console.log(`[opportunityMatcher] Added to pipeline: ${opportunity.title} (${matchPercentage}% match for profile ${profileId})`)
     
@@ -267,6 +288,11 @@ export async function saveToProfilePipeline(db, opportunity, profileId, profileC
     }
   } catch (error) {
     console.error('[opportunityMatcher] Error saving to pipeline:', error)
+    // If we raced another insert (unique constraint), treat as idempotent success=false.
+    const msg = String(error?.message || '')
+    if (msg.toLowerCase().includes('unique') || msg.toLowerCase().includes('duplicate')) {
+      return { saved: false, reason: 'Already in pipeline' }
+    }
     return {
       saved: false,
       reason: error.message

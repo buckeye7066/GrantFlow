@@ -169,6 +169,7 @@ CREATE TABLE IF NOT EXISTS grants (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   
   organization_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
+  profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
   funding_opportunity_id TEXT REFERENCES funding_opportunities(id),
   
   title TEXT NOT NULL,
@@ -689,6 +690,11 @@ CREATE TABLE IF NOT EXISTS billing_account_events (
 CREATE INDEX IF NOT EXISTS idx_organizations_state ON organizations(state);
 CREATE INDEX IF NOT EXISTS idx_organizations_applicant_type ON organizations(applicant_type);
 CREATE INDEX IF NOT EXISTS idx_grants_organization_id ON grants(organization_id);
+CREATE INDEX IF NOT EXISTS idx_grants_profile_id ON grants(profile_id);
+-- Idempotency: a profile should never get the same opportunity twice.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_grants_profile_opportunity
+  ON grants(profile_id, funding_opportunity_id)
+  WHERE profile_id IS NOT NULL AND funding_opportunity_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_grants_status ON grants(status);
 CREATE INDEX IF NOT EXISTS idx_grants_deadline ON grants(deadline);
 CREATE INDEX IF NOT EXISTS idx_opportunities_deadline ON funding_opportunities(deadline);
@@ -817,6 +823,27 @@ CREATE TABLE IF NOT EXISTS national_zip_progress (
 
 CREATE INDEX IF NOT EXISTS idx_national_zip_status ON national_zip_progress(status);
 CREATE INDEX IF NOT EXISTS idx_national_zip_last_run ON national_zip_progress(last_run_at);
+
+-- Geo Crawl state runner history (Phase 6)
+-- Tracks last run per state so Admin UI can show per-state counts and last run timestamp.
+CREATE TABLE IF NOT EXISTS geo_state_runs (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  state TEXT NOT NULL,
+  job_id TEXT REFERENCES crawler_jobs(id) ON DELETE SET NULL,
+  started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  completed_at DATETIME,
+  status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running', 'completed', 'failed')),
+  processed_zips INTEGER DEFAULT 0,
+  sources_inserted INTEGER DEFAULT 0,
+  failed_zips INTEGER DEFAULT 0,
+  skipped_zips INTEGER DEFAULT 0,
+  error TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_geo_state_runs_state ON geo_state_runs(state);
+CREATE INDEX IF NOT EXISTS idx_geo_state_runs_created_at ON geo_state_runs(created_at);
 
 -- Anya assistant sessions
 CREATE TABLE IF NOT EXISTS anya_sessions (

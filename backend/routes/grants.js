@@ -53,6 +53,8 @@ router.get('/', async (req, res) => {
     if (!user) return
 
     const { organization_id, status } = req.query;
+    const headerProfileId = typeof req.headers['x-profile-id'] === 'string' ? req.headers['x-profile-id'] : null
+    const profile_id = (typeof req.query.profile_id === 'string' ? req.query.profile_id : null) || headerProfileId
     const { limit, offset } = validatePagination(req.query);
     
     let query = `
@@ -64,16 +66,46 @@ router.get('/', async (req, res) => {
     const params = [];
 
     if (!isAdminUser(user)) {
-      const orgIds = await getAccessibleOrganizationIds(req.db, user)
-      if (!orgIds || orgIds.size === 0) {
-        return res.json([])
+      // If an active profile is selected, list the profile-scoped pipeline.
+      if (profile_id) {
+        if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
+        query += ` AND g.profile_id = ?`
+        params.push(String(profile_id))
+      } else {
+        // Backward compatible: fall back to organization-scoped listing.
+        // Also include any profile-scoped grants the user can access (in case org_id is null).
+        const ctxProfiles = req.ctx?.accessibleProfileIds instanceof Set ? Array.from(req.ctx.accessibleProfileIds) : []
+        const orgIds = await getAccessibleOrganizationIds(req.db, user)
+        const ctxOrgs = orgIds instanceof Set ? Array.from(orgIds) : []
+
+        if (ctxProfiles.length === 0 && ctxOrgs.length === 0) {
+          return res.json([])
+        }
+
+        const clauses = []
+        if (ctxProfiles.length > 0) {
+          clauses.push(`g.profile_id IN (${ctxProfiles.map(() => '?').join(',')})`)
+          params.push(...ctxProfiles)
+        }
+        if (ctxOrgs.length > 0) {
+          clauses.push(`g.organization_id IN (${ctxOrgs.map(() => '?').join(',')})`)
+          params.push(...ctxOrgs)
+        }
+        query += ` AND (${clauses.join(' OR ')})`
       }
-      if (organization_id && !orgIds.has(String(organization_id))) {
-        return res.status(403).json({ error: 'Not authorized to access this organization' })
+
+      if (organization_id) {
+        // If organization_id filter is requested, require explicit access.
+        const orgIds = await getAccessibleOrganizationIds(req.db, user)
+        if (organization_id && (!orgIds || !orgIds.has(String(organization_id)))) {
+          return res.status(403).json({ error: 'Not authorized to access this organization' })
+        }
       }
-      const placeholders = Array.from(orgIds).map(() => '?').join(',')
-      query += ` AND g.organization_id IN (${placeholders})`
-      params.push(...Array.from(orgIds))
+    } else {
+      if (profile_id) {
+        query += ` AND g.profile_id = ?`
+        params.push(String(profile_id))
+      }
     }
     
     if (organization_id) {
@@ -575,9 +607,24 @@ router.post('/from-opportunity', async (req, res) => {
       if (!(await ensureOrganizationAccess(accessReq, res, String(finalOrgId)))) return null
       
       // Check for duplicate grants by title for this organization
-      const existingGrant = await tx.prepare(
-        'SELECT id, title FROM grants WHERE organization_id = ? AND title = ?'
-      ).get(finalOrgId, opportunity.title);
+      const existingGrant = profile_id
+        ? await tx
+            .prepare(
+              `
+                SELECT id, title
+                FROM grants
+                WHERE profile_id = ?
+                  AND (
+                    (? IS NOT NULL AND funding_opportunity_id = ?)
+                    OR (funding_opportunity_id IS NULL AND title = ?)
+                  )
+                LIMIT 1
+              `,
+            )
+            .get(String(profile_id), opportunity_id ?? null, opportunity_id ?? null, opportunity.title)
+        : await tx
+            .prepare('SELECT id, title FROM grants WHERE organization_id = ? AND title = ? LIMIT 1')
+            .get(finalOrgId, opportunity.title);
       
       if (existingGrant) {
         return { 
@@ -600,14 +647,15 @@ router.post('/from-opportunity', async (req, res) => {
       
       await tx.prepare(`
         INSERT INTO grants (
-          id, organization_id, funding_opportunity_id, title, funder, 
+          id, organization_id, profile_id, funding_opportunity_id, title, funder, 
           deadline, status, match_score, match_reasons, application_url,
           amount_requested, notes
         )
-        VALUES (?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?)
       `).run(
         id, 
-        finalOrgId, 
+        finalOrgId,
+        profile_id ? String(profile_id) : null,
         opportunity_id || null,
         opportunity.title,
         opportunity.sponsor,
