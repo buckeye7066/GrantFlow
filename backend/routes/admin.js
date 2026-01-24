@@ -1743,6 +1743,8 @@ router.get('/geo/crawl/status', async (req, res) => {
         processed: resultMeta?.processed ?? null,
         total_zips: resultMeta?.total_zips ?? params?.max_zips ?? params?.maxZips ?? null,
         inserted: resultMeta?.sources ?? job.result_count ?? null,
+        // Some deployments also track "linked" in result_meta; keep this field for UI stability.
+        linked: resultMeta?.linked ?? null,
         failed: resultMeta?.failed ?? null,
         skipped: resultMeta?.skipped ?? null,
       },

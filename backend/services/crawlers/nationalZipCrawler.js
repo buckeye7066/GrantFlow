@@ -41,6 +41,92 @@ const DEFAULT_CONFIG = {
   overpass_max_results: 60,
 }
 
+async function ensureGeoCrawlTables(db) {
+  if (!db || typeof db.prepare !== 'function') return
+
+  // Some deployments may lag migrations. Geo Crawl should still run (and record progress)
+  // rather than immediately failing with "relation does not exist".
+  const isPostgres = db?.dialect === 'postgres'
+
+  const createNationalZipProgress = isPostgres
+    ? `
+        CREATE TABLE IF NOT EXISTS national_zip_progress (
+          zip TEXT PRIMARY KEY,
+          last_run_at TIMESTAMPTZ DEFAULT now(),
+          sources_found INTEGER DEFAULT 0,
+          cursor_meta TEXT DEFAULT '{}',
+          status TEXT DEFAULT 'pending' CHECK(status IN ('pending','in_progress','completed','failed','skipped')),
+          error TEXT,
+          created_at TIMESTAMPTZ DEFAULT now(),
+          updated_at TIMESTAMPTZ DEFAULT now()
+        );
+      `
+    : `
+        CREATE TABLE IF NOT EXISTS national_zip_progress (
+          zip TEXT PRIMARY KEY,
+          last_run_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          sources_found INTEGER DEFAULT 0,
+          cursor_meta TEXT DEFAULT '{}',
+          status TEXT DEFAULT 'pending' CHECK(status IN ('pending','in_progress','completed','failed','skipped')),
+          error TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+      `
+
+  const createGeoStateRuns = isPostgres
+    ? `
+        CREATE TABLE IF NOT EXISTS geo_state_runs (
+          id TEXT PRIMARY KEY,
+          state TEXT NOT NULL,
+          job_id TEXT REFERENCES crawler_jobs(id) ON DELETE SET NULL,
+          started_at TIMESTAMPTZ DEFAULT now(),
+          completed_at TIMESTAMPTZ,
+          status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running', 'completed', 'failed')),
+          processed_zips INTEGER DEFAULT 0,
+          sources_inserted INTEGER DEFAULT 0,
+          failed_zips INTEGER DEFAULT 0,
+          skipped_zips INTEGER DEFAULT 0,
+          error TEXT,
+          created_at TIMESTAMPTZ DEFAULT now(),
+          updated_at TIMESTAMPTZ DEFAULT now()
+        );
+      `
+    : `
+        CREATE TABLE IF NOT EXISTS geo_state_runs (
+          id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+          state TEXT NOT NULL,
+          job_id TEXT REFERENCES crawler_jobs(id) ON DELETE SET NULL,
+          started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          completed_at DATETIME,
+          status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running', 'completed', 'failed')),
+          processed_zips INTEGER DEFAULT 0,
+          sources_inserted INTEGER DEFAULT 0,
+          failed_zips INTEGER DEFAULT 0,
+          skipped_zips INTEGER DEFAULT 0,
+          error TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+      `
+
+  try {
+    await db.prepare(createNationalZipProgress).run()
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_national_zip_status ON national_zip_progress(status);`).run()
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_national_zip_last_run ON national_zip_progress(last_run_at);`).run()
+  } catch {
+    // best-effort: if the table is truly unavailable, Geo Crawl will fail later with a clearer error
+  }
+
+  try {
+    await db.prepare(createGeoStateRuns).run()
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_geo_state_runs_state ON geo_state_runs(state);`).run()
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_geo_state_runs_created_at ON geo_state_runs(created_at);`).run()
+  } catch {
+    // best-effort
+  }
+}
+
 function normalizeUrl(raw) {
   const value = String(raw ?? '').trim()
   if (!value) return null
@@ -845,6 +931,9 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   // keep sqlite file-path mode for local/script usage.
   const ownsDb = typeof dbPath === 'string'
   const db = ownsDb ? new Database(dbPath) : dbPath
+
+  // Ensure Phase-6 geo tables exist (prod safety).
+  await ensureGeoCrawlTables(db)
 
   const zipList = resolveZipList({
     zip_list: options.zip_list,

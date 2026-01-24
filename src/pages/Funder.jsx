@@ -14,15 +14,26 @@ export default function Funder() {
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedType, setSelectedType] = useState("all")
 
+  const normalizeList = (value) => {
+    if (Array.isArray(value)) return value
+    if (value && typeof value === 'object') {
+      if (Array.isArray(value.data)) return value.data
+      if (Array.isArray(value.items)) return value.items
+      if (Array.isArray(value.opportunities)) return value.opportunities
+      if (Array.isArray(value.grants)) return value.grants
+    }
+    return []
+  }
+
   const { data: grants = [] } = useQuery({
     queryKey: ['grants'],
-    queryFn: () => apiFetch('/api/grants'),
+    queryFn: async () => normalizeList(await apiFetch('/api/grants')),
     staleTime: 60_000,
   })
 
   const { data: opportunities = [] } = useQuery({
     queryKey: ['opportunities'],
-    queryFn: () => apiFetch('/api/opportunities'),
+    queryFn: async () => normalizeList(await apiFetch('/api/opportunities')),
     staleTime: 60_000,
   })
 

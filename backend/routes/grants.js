@@ -26,6 +26,39 @@ const ALLOWED_GRANT_COLUMNS = new Set([
 
 // NOTE: Access control is centralized in `backend/utils/accessControl.js`
 
+function normalizeSortColumn(raw) {
+  const key = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
+  if (!key) return 'g.created_at'
+
+  // Back-compat for older UI sort keys.
+  const normalizedKey =
+    key === 'created_date' ? 'created_at' :
+    key === 'updated_date' ? 'updated_at' :
+    key
+
+  // Only allow known columns (prevent SQL injection via sort param).
+  const allowed = new Set([
+    'created_at',
+    'updated_at',
+    'deadline',
+    'status',
+    'priority',
+    'title',
+    'funder',
+    'amount_requested',
+    'amount_awarded',
+    'match_score',
+  ])
+
+  if (!allowed.has(normalizedKey)) return 'g.created_at'
+  return `g.${normalizedKey}`
+}
+
+function normalizeSortOrder(raw) {
+  const key = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
+  return key === 'asc' ? 'ASC' : 'DESC'
+}
+
 function mapAutomationEvent(row) {
   if (!row) return null
   const actions = safeParseJSON(row.recommended_actions, []);
@@ -53,6 +86,8 @@ router.get('/', async (req, res) => {
     if (!user) return
 
     const { organization_id, status } = req.query;
+    const sortCol = normalizeSortColumn(req.query.sort)
+    const sortOrder = normalizeSortOrder(req.query.order)
     const headerProfileId = typeof req.headers['x-profile-id'] === 'string' ? req.headers['x-profile-id'] : null
     const profile_id = (typeof req.query.profile_id === 'string' ? req.query.profile_id : null) || headerProfileId
     const { limit, offset } = validatePagination(req.query);
@@ -124,7 +159,7 @@ router.get('/', async (req, res) => {
       }
     }
     
-    query += ' ORDER BY g.created_at DESC LIMIT ? OFFSET ?';
+    query += ` ORDER BY ${sortCol} ${sortOrder} LIMIT ? OFFSET ?`;
     params.push(limit, offset);
     
     const grants = await req.db.prepare(query).all(...params);
