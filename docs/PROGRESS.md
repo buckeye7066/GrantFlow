@@ -51,7 +51,7 @@ Branch: `fix/e2e-hardening-2026-01-23`
 - [x] Full runner (fixtures in test mode; throttles + retries in prod)
 - [x] Persist state + UI filter
 - [x] Summary endpoint/view
-- [ ] Commit + push: `feat: geo crawler full run + state-indexed opportunities`
+- [x] Commit + push: `feat: geo crawler full run + state-indexed opportunities`
 
 ## Finalization — PR
 - [ ] Full test run green on branch
