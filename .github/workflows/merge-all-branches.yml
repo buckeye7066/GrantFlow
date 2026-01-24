@@ -162,6 +162,7 @@ jobs:
             PR_TITLE="Merge $branch to main"
             PR_BODY="Automated merge of branch \`$branch\` into \`main\`. This PR was created by the merge-all-branches workflow."
 
+            PR_CREATE_FAILED=false
             PR_OUTPUT=$(gh pr create \
               --base main \
               --head "$branch" \
@@ -193,7 +194,7 @@ jobs:
             fi
 
             # Extract PR number
-            PR_NUMBER=$(echo "$PR_OUTPUT" | grep -oP '/pull/\K\d+' | head -1)
+            PR_NUMBER=$(echo "$PR_OUTPUT" | grep -o '/pull/[0-9]*' | sed 's|/pull/||' | head -1)
             echo "✅ Created PR #$PR_NUMBER"
             CREATED_COUNT=$((CREATED_COUNT + 1))
 
