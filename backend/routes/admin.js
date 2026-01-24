@@ -15,6 +15,7 @@ import { ensureDesignatedProfiles } from '../utils/ensureDesignatedProfiles.js';
 import { seedBaselineFromRepo } from '../utils/seedBaselineFromRepo.js';
 import { buildProfileSignals, calculateMatchScore } from '../services/profileHelpers.js';
 import { getSystemDiagnostics } from '../services/diagnosticsService.js';
+import { getFundingSourceStatus } from '../src/config/fundingSources.js'
 import { listClientSignInEvents } from '../services/adminLoginEventStore.js'
 import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js';
@@ -130,6 +131,14 @@ async function withTimeout(promise, ms, label) {
 // Use centralized admin enforcement from accessControl.js
 // This is now just an alias for consistency with existing code
 const ensureAdminRequest = ensureAdminUser;
+
+// ----------------------------
+// Funding Providers (no secrets)
+// ----------------------------
+router.get('/funding-sources', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  res.json({ sources: getFundingSourceStatus() })
+})
 
 function loadZipCoordinates() {
   if (zipCoordinatesCache) return zipCoordinatesCache;

@@ -35,11 +35,11 @@ Branch: `fix/e2e-hardening-2026-01-23`
 - [x] Commit + push: `fix: stabilize Anya tools with test harness`
 
 ## Phase 4 — Source API stubs (integration-ready, no key scraping)
-- [ ] Enumerate Admin source registry
-- [ ] Client module per source (base URL, wrapper, backoff)
-- [ ] Env placeholders + mocked tests
-- [ ] UI shows missing vs configured (never prints secrets)
-- [ ] Commit + push: `feat: source API client stubs + key validation + docs`
+- [x] Enumerate Admin source registry
+- [x] Client module per source (base URL, wrapper, backoff)
+- [x] Env placeholders + mocked tests
+- [x] UI shows missing vs configured (never prints secrets)
+- [x] Commit + push: `feat: source API client stubs + key validation + docs`
 
 ## Phase 5 — Per-profile crawler runs + pipeline persistence
 - [ ] Ensure opportunity persistence is profile-scoped (or link table) + idempotent reruns
