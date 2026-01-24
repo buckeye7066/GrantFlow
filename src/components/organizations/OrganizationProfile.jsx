@@ -24,6 +24,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { createLogger } from "@/utils/logger";
 
 
 const capitalize = (s) => s && s.charAt(0).toUpperCase() + s.slice(1);
@@ -41,6 +42,7 @@ export default function OrganizationProfile({
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const log = React.useMemo(() => createLogger("OrganizationProfile"), [])
   const [activeTab, setActiveTab] = useState('details');
   const [isEmailComposerOpen, setIsEmailComposerOpen] = useState(false);
   const [isFindingPicture, setIsFindingPicture] = useState(false);
@@ -58,12 +60,12 @@ export default function OrganizationProfile({
   const { data: orgData, isLoading, error, refetch } = useQuery({
     queryKey: ['organization', organizationId, retryKey, manualRetryCount],
     queryFn: async () => {
-      console.log('[OrganizationProfile] Fetching organization:', organizationId);
+      log.debug('fetching organization', { organizationId })
 
       // Check if we already have this in cache (from upload)
       const cached = queryClient.getQueryData(['organization', organizationId]);
       if (cached) {
-        console.log('[OrganizationProfile] Found in cache, using cached data');
+        log.debug('found in cache; using cached data')
         return cached;
       }
 
@@ -73,7 +75,7 @@ export default function OrganizationProfile({
 
         // FIXED: Use Profile API instead of Organization API since IDs are profile IDs
         const result = await base44.entities.Profile.get(organizationId);
-        console.log('[OrganizationProfile] Query result:', result);
+        log.debug('query completed')
 
         if (!result) {
           throw new Error('Organization not found');
@@ -128,9 +130,8 @@ export default function OrganizationProfile({
   // Log grants to verify drafting grants are included
   React.useEffect(() => {
     if (grants.length > 0 && orgData) {
-      console.log(`[Profile] Found ${grants.length} grants for ${orgData?.name}`);
       const draftingGrants = grants.filter(g => g.status === 'drafting');
-      console.log(`[Profile] ${draftingGrants.length} grants in drafting stage:`, draftingGrants.map(g => g.title));
+      log.debug('grants loaded', { total: grants.length, drafting: draftingGrants.length })
     }
   }, [grants, orgData?.name]);
 
@@ -258,7 +259,7 @@ export default function OrganizationProfile({
           <div className="flex gap-3 justify-center flex-wrap">
             <Button
               onClick={() => {
-                console.log('[OrganizationProfile] Manual retry triggered');
+                log.debug('manual retry triggered')
                 setManualRetryCount(prev => prev + 1);
                 refetch();
               }}
@@ -494,8 +495,7 @@ Return a single JSON object with the key "logo_url" containing the absolute, dir
            <Button
              variant="outline"
              onClick={() => {
-               console.log('[Profile] Email button clicked');
-               console.log('[Profile] Emails available:', emails);
+               log.debug('email composer opened', { emailCount: emails.length })
                setIsEmailComposerOpen(true);
              }}
              disabled={emails.length === 0 || isLoadingContacts}

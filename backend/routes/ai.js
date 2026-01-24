@@ -8,6 +8,8 @@ import { validatePagination } from '../utils/validation.js';
 import { DEFAULT_OPENAI_MODEL, OPENAI_TIMEOUT_MS, MAX_PROMPT_LENGTH } from '../config/constants.js';
 import { calculateMatchScore } from '../services/matchingEngine.js';
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';
+import { enforceTierCapability } from '../middleware/entitlements.js'
+import { TIER_CAPABILITIES } from '../utils/tierGating.js'
 import {
   ensureGrantAccess,
   ensureOrganizationAccess,
@@ -334,7 +336,7 @@ router.post('/match', async (req, res) => {
 });
 
 // AI-enhanced matching using OpenAI
-router.post('/match/ai', async (req, res) => {
+router.post('/match/ai', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_AI), async (req, res) => {
   try {
     const { profile_id, opportunity_ids } = req.body;
     const { limit } = validatePagination({ limit: req.body.limit || 20 });
@@ -488,7 +490,7 @@ Return ONLY valid JSON in this format:
 });
 
 // Generate proposal content
-router.post('/generate/proposal', async (req, res) => {
+router.post('/generate/proposal', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_AI), async (req, res) => {
   try {
     const { grant_id, section, prompt: userPrompt } = req.body;
 
@@ -643,7 +645,7 @@ Requirements:
 });
 
 // Analyze grant eligibility
-router.post('/analyze/eligibility', async (req, res) => {
+router.post('/analyze/eligibility', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_AI), async (req, res) => {
   try {
     const { profile_id, opportunity_id } = req.body;
 
@@ -726,7 +728,7 @@ Return as JSON:
   }
 });
 
-router.post('/reminders/plan', async (req, res) => {
+router.post('/reminders/plan', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_AI), async (req, res) => {
   try {
     const user = req.user ?? { role: 'guest' }
     const body = req.body || {};
@@ -813,7 +815,7 @@ router.post('/reminders/plan', async (req, res) => {
 });
 
 // General LLM invocation endpoint (Base44 SDK compatibility)
-router.post('/invoke', async (req, res) => {
+router.post('/invoke', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_AI), async (req, res) => {
   try {
     const {
       prompt,

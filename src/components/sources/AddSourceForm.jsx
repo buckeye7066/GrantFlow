@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Loader2 } from 'lucide-react';
+import { createLogger } from '@/utils/logger'
 
 const sourceTypes = [
   "university",
@@ -42,7 +43,8 @@ const sourceTypes = [
 
 const crawlFrequencies = ["daily", "weekly", "monthly", "quarterly", "annually"];
 
-export default function AddSourceForm({ source, onSuccess, onCancel }) {
+export default function AddSourceForm({ source, organizationId, onSuccess, onCancel }) {
+  const log = React.useMemo(() => createLogger('AddSourceForm'), [])
   const { register, handleSubmit, control, formState: { errors }, setValue, watch } = useForm({
     defaultValues: source || {
       name: '',
@@ -63,15 +65,22 @@ export default function AddSourceForm({ source, onSuccess, onCancel }) {
     mutationFn: async (data) => {
       // FIXED: Check if source has an ID to determine create vs update
       if (source && source.id) {
-        console.log('[AddSourceForm] Updating source:', source.id);
+        log.debug('updating source', { id: source.id })
         return base44.entities.SourceDirectory.update(source.id, data);
       } else {
-        console.log('[AddSourceForm] Creating new source');
-        return base44.entities.SourceDirectory.create(data);
+        log.debug('creating new source')
+        const orgId = organizationId ?? data.discovered_for_organization_id ?? null
+        if (!orgId) {
+          throw new Error('Missing organization for source directory entry')
+        }
+        return base44.entities.SourceDirectory.create({
+          ...data,
+          discovered_for_organization_id: orgId,
+        });
       }
     },
     onSuccess: (result) => {
-      console.log('[AddSourceForm] Success:', result);
+      log.debug('save success')
       if (onSuccess) onSuccess(result);
     },
     onError: (error) => {
@@ -81,7 +90,7 @@ export default function AddSourceForm({ source, onSuccess, onCancel }) {
   });
 
   const onSubmit = (data) => {
-    console.log('[AddSourceForm] Submitting:', data);
+    log.debug('submitting')
     mutation.mutate(data);
   };
 
