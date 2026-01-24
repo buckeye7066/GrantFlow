@@ -280,7 +280,7 @@ async function main() {
 }
 
 try {
-  main();
+  await main();
 } catch (error) {
   log('❌', `Error: ${error.message}`);
   console.error(error);
