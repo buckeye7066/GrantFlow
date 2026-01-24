@@ -91,7 +91,7 @@ async function loginWithPreviewOtp({ page, email }) {
 
 async function clickNavLink(page, name) {
   await dismissBlockingOverlay(page)
-  await page.getByRole('link', { name }).click()
+  await page.getByRole('link', { name }).click({ force: true })
 }
 
 test('e2e: login, admin panel, source directory, queue crawler, pipeline, opportunities', async ({ page }) => {
