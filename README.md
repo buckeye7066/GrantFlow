@@ -242,6 +242,26 @@ This script simulates the workflow's logic and shows which PRs would be automati
 
 **Documentation:** See [`docs/AUTO_MERGE_WORKFLOW.md`](docs/AUTO_MERGE_WORKFLOW.md) for detailed information about customization, security considerations, and troubleshooting.
 
+### Merge All Branches to Main
+
+A workflow is available to merge all branches in the repository to `main` and delete them after successful merge. This is useful for cleaning up stale branches.
+
+**Workflow:** `.github/workflows/merge-all-branches.yml`
+
+**Usage:** Manual trigger only (via Actions tab)
+
+**Parameters:**
+- `dry_run`: Preview changes without making actual merges (default: true)
+- `exclude_branches`: Comma-separated list of branches to exclude
+- `batch_size`: Number of branches to process per run (default: 10)
+
+**Alternative Script:**
+```bash
+node scripts/merge-all-branches.mjs --dry-run
+```
+
+**Documentation:** See [`docs/MERGE_BRANCHES.md`](docs/MERGE_BRANCHES.md) for detailed usage instructions and best practices.
+
 ---
 
 ## Crawler Matrix Test
