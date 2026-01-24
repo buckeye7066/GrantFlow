@@ -52,24 +52,24 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Fetching all branches from GitHub..."
-          
+
           # Get all branches
           gh api repos/:owner/:repo/branches --paginate --jq ".[].name" > all_branches.txt
-          
+
           # Count total branches
           TOTAL_BRANCHES=$(wc -l < all_branches.txt)
           echo "Found $TOTAL_BRANCHES total branches"
-          
+
           # Default excludes
           EXCLUDE_LIST="main,${{ github.ref_name }}"
-          
+
           # Add user-specified excludes
           if [ -n "${{ inputs.exclude_branches }}" ]; then
             EXCLUDE_LIST="$EXCLUDE_LIST,${{ inputs.exclude_branches }}"
           fi
-          
+
           echo "Excluding: $EXCLUDE_LIST"
-          
+
           # Filter out excluded branches
           > branches_to_merge.txt
           while IFS= read -r branch; do
@@ -82,15 +82,15 @@ jobs:
                 break
               fi
             done
-            
+
             if [ "$EXCLUDED" = false ]; then
               echo "$branch" >> branches_to_merge.txt
             fi
           done < all_branches.txt
-          
+
           MERGE_COUNT=$(wc -l < branches_to_merge.txt)
           echo "Branches to merge: $MERGE_COUNT"
-          
+
           # Apply batch size limit if specified
           BATCH_SIZE="${{ inputs.batch_size }}"
           if [ "$BATCH_SIZE" != "0" ] && [ "$MERGE_COUNT" -gt "$BATCH_SIZE" ]; then
@@ -99,9 +99,9 @@ jobs:
             echo "Limited to batch of $BATCH_SIZE branches"
             MERGE_COUNT=$BATCH_SIZE
           fi
-          
+
           echo "branch_count=$MERGE_COUNT" >> $GITHUB_OUTPUT
-          
+
           cat branches_to_merge.txt
 
       - name: Create PRs and merge branches
@@ -113,26 +113,26 @@ jobs:
           echo "Processing branches..."
           echo "Dry run: $DRY_RUN"
           echo ""
-          
+
           CREATED_COUNT=0
           MERGED_COUNT=0
           DELETED_COUNT=0
           SKIPPED_COUNT=0
           FAILED_COUNT=0
           EXISTING_COUNT=0
-          
+
           while IFS= read -r branch; do
             echo "=========================================="
             echo "Processing branch: $branch"
             echo "=========================================="
-            
+
             # Check if PR already exists
             EXISTING_PR=$(gh pr list --head "$branch" --base main --json number --jq ".[0].number" 2>/dev/null || echo "")
-            
+
             if [ -n "$EXISTING_PR" ]; then
               echo "ℹ️  PR already exists: #$EXISTING_PR"
               EXISTING_COUNT=$((EXISTING_COUNT + 1))
-              
+
               # Try to merge existing PR
               if [ "$DRY_RUN" = "true" ]; then
                 echo "🔍 [DRY RUN] Would merge existing PR #$EXISTING_PR"
@@ -148,7 +148,7 @@ jobs:
               echo ""
               continue
             fi
-            
+
             # Create PR
             if [ "$DRY_RUN" = "true" ]; then
               echo "🔍 [DRY RUN] Would create PR: $branch -> main"
@@ -156,26 +156,24 @@ jobs:
               echo ""
               continue
             fi
-            
-            echo "📝 Creating PR for $branch..."
-            
-            PR_TITLE="Merge $branch to main"
-            PR_BODY="Automated merge of branch \`$branch\` into \`main\`.
 
-This PR was created by the merge-all-branches workflow."
-            
+            echo "📝 Creating PR for $branch..."
+
+            PR_TITLE="Merge $branch to main"
+            PR_BODY="Automated merge of branch \`$branch\` into \`main\`. This PR was created by the merge-all-branches workflow."
+
             PR_OUTPUT=$(gh pr create \
               --base main \
               --head "$branch" \
               --title "$PR_TITLE" \
               --body "$PR_BODY" 2>&1) || PR_CREATE_FAILED=true
-            
+
             if [ "$PR_CREATE_FAILED" = true ]; then
               # Check if error is because no commits
               if echo "$PR_OUTPUT" | grep -q "no commits"; then
                 echo "ℹ️  Branch $branch has no new commits. Skipping and deleting..."
                 SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-                
+
                 # Delete the branch
                 if gh api -X DELETE "repos/:owner/:repo/git/refs/heads/$branch" 2>/dev/null; then
                   echo "🗑️  Deleted branch: $branch"
@@ -186,19 +184,19 @@ This PR was created by the merge-all-branches workflow."
                 echo ""
                 continue
               fi
-              
+
               echo "❌ Failed to create PR for $branch"
               echo "Error: $PR_OUTPUT"
               FAILED_COUNT=$((FAILED_COUNT + 1))
               echo ""
               continue
             fi
-            
+
             # Extract PR number
             PR_NUMBER=$(echo "$PR_OUTPUT" | grep -oP '/pull/\K\d+' | head -1)
             echo "✅ Created PR #$PR_NUMBER"
             CREATED_COUNT=$((CREATED_COUNT + 1))
-            
+
             # Try to auto-merge
             echo "🔀 Attempting to auto-merge PR #$PR_NUMBER..."
             if gh pr merge "$PR_NUMBER" --squash --delete-branch --auto 2>/dev/null; then
@@ -207,11 +205,11 @@ This PR was created by the merge-all-branches workflow."
             else
               echo "⚠️  Could not auto-merge PR #$PR_NUMBER (may need approval or have conflicts)"
             fi
-            
+
             echo ""
-            
+
           done < branches_to_merge.txt
-          
+
           echo "=========================================="
           echo "📊 Summary:"
           echo "   ✅ PRs created: $CREATED_COUNT"
@@ -221,7 +219,7 @@ This PR was created by the merge-all-branches workflow."
           echo "   ⏭️  Skipped (no commits): $SKIPPED_COUNT"
           echo "   ❌ Failed: $FAILED_COUNT"
           echo "=========================================="
-          
+
           if [ "$DRY_RUN" = "true" ]; then
             echo ""
             echo "🔍 This was a DRY RUN. No actual changes were made."
