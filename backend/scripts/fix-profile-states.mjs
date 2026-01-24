@@ -36,7 +36,12 @@ for (const update of stateUpdates) {
   
   let data = {};
   if (existing?.data) {
-    try { data = JSON.parse(existing.data); } catch (e) {}
+    try {
+      data = JSON.parse(existing.data);
+    } catch (e) {
+      console.warn(`⚠ Failed to parse existing basic_information JSON for ${update.name}:`, e?.message || e)
+      data = {}
+    }
   }
   
   // Add state/location if not present

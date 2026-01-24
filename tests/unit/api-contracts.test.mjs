@@ -82,16 +82,46 @@ async function startBackend({ rootDir, port }) {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
 
-  proc.stdout?.on('data', () => {})
-  proc.stderr?.on('data', () => {})
+  const stdoutChunks = []
+  const stderrChunks = []
+  proc.stdout?.on('data', (buf) => stdoutChunks.push(String(buf)))
+  proc.stderr?.on('data', (buf) => stderrChunks.push(String(buf)))
 
-  const ok = await waitForHttpOk(`http://127.0.0.1:${port}/api/health`, { timeoutMs: 30_000 })
-  if (!ok) {
-    await stopProcess(proc)
-    throw new Error('Backend did not become healthy for contract tests')
+  const start = Date.now()
+  const timeoutMs = 30_000
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    if (proc.exitCode != null) {
+      const stdout = stdoutChunks.join('')
+      const stderr = stderrChunks.join('')
+      throw new Error(
+        `Backend exited before becoming healthy (exit=${proc.exitCode}).\n` +
+          `--- stdout ---\n${stdout || '(empty)'}\n` +
+          `--- stderr ---\n${stderr || '(empty)'}\n`,
+      )
+    }
+
+    if (Date.now() - start > timeoutMs) break
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/health`, { method: 'GET' })
+      if (res.ok) return proc
+    } catch {
+      // keep polling
+    }
+
+    // eslint-disable-next-line no-await-in-loop
+    await sleep(250)
   }
 
-  return proc
+  const stdout = stdoutChunks.join('')
+  const stderr = stderrChunks.join('')
+  await stopProcess(proc)
+  throw new Error(
+    `Backend did not become healthy for contract tests within ${timeoutMs}ms.\n` +
+      `--- stdout ---\n${stdout || '(empty)'}\n` +
+      `--- stderr ---\n${stderr || '(empty)'}\n`,
+  )
 }
 
 test('backend /api/health contract + request id header', async () => {
