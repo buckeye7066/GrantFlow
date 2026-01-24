@@ -47,10 +47,10 @@ Branch: `fix/e2e-hardening-2026-01-23`
 - [x] Commit + push: `feat: per-profile crawler runs + pipeline persistence + idempotency`
 
 ## Phase 6 — Geo crawler full run + state indexing
-- [ ] Geo rules tests
-- [ ] Full runner (fixtures in test mode; throttles + retries in prod)
-- [ ] Persist state + UI filter
-- [ ] Summary endpoint/view
+- [x] Geo rules tests
+- [x] Full runner (fixtures in test mode; throttles + retries in prod)
+- [x] Persist state + UI filter
+- [x] Summary endpoint/view
 - [ ] Commit + push: `feat: geo crawler full run + state-indexed opportunities`
 
 ## Finalization — PR
