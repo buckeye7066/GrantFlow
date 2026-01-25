@@ -88,7 +88,8 @@ export async function loadProfileContext(db, profileId) {
   
   const signals = buildProfileSignals({ 
     profile: mergedProfile, 
-    sections 
+    sections,
+    asOf: mergedProfile.updated_at || mergedProfile.created_at || null,
   })
 
   return { 
@@ -116,7 +117,7 @@ export async function loadProfileContext(db, profileId) {
  * @param {string} profileId - Profile ID
  * @returns {Promise<object>} Complete profile context
  */
-export async function buildProfileContext(db, profileId) {
+export async function buildProfileContext(db, profileId, options = {}) {
   // Get base profile
   const profile = await db
     .prepare('SELECT * FROM profiles WHERE id = ? LIMIT 1')
@@ -125,6 +126,13 @@ export async function buildProfileContext(db, profileId) {
   if (!profile) {
     throw new Error(`Profile ${profileId} not found`)
   }
+
+  // Deterministic reference timestamp for derived computations and generated_at.
+  // Never default to "now" here; snapshots must be stable.
+  const referenceIsoRaw =
+    options && typeof options === 'object' && options.asOf
+      ? String(options.asOf)
+      : (profile.updated_at || profile.created_at || null)
 
   // Get all profile sections
   const sectionRows = await db
@@ -215,14 +223,15 @@ export async function buildProfileContext(db, profileId) {
   // Build signals (keywords, demographics, location, etc.)
   const signals = buildProfileSignals({ 
     profile: mergedProfile, 
-    sections 
+    sections,
+    asOf: referenceIsoRaw,
   })
 
   // Return deterministic context
   return {
     version: '2.0', // Version for future compatibility
     profile_id: profileId,
-    generated_at: new Date().toISOString(),
+    generated_at: referenceIsoRaw,
     profile: mergedProfile,
     sections,
     sections_meta: sectionsMeta,
@@ -474,7 +483,15 @@ function extractCityFromAddress(address) {
   return null
 }
 
-export function buildProfileSignals({ profile, sections }) {
+export function buildProfileSignals({ profile, sections, asOf = null }) {
+  let asOfDate = null
+  if (asOf) {
+    const d = new Date(asOf)
+    if (!Number.isNaN(d.getTime())) asOfDate = d
+  }
+  const nowMs = asOfDate ? asOfDate.getTime() : Date.now()
+  const nowYear = asOfDate ? asOfDate.getFullYear() : new Date().getFullYear()
+
   const keywordSet = new Set()
   const phraseSet = new Set()
   const demographicSet = new Set()
@@ -629,7 +646,7 @@ export function buildProfileSignals({ profile, sections }) {
     // Calculate age from DOB
     const dob = new Date(basic.date_of_birth)
     if (!isNaN(dob.getTime())) {
-      const age = Math.floor((Date.now() - dob.getTime()) / (365.25 * 24 * 60 * 60 * 1000))
+      const age = Math.floor((nowMs - dob.getTime()) / (365.25 * 24 * 60 * 60 * 1000))
       if (age < 18) { demographicSet.add('youth'); registerKeyword('youth') }
       if (age >= 18 && age <= 24) { demographicSet.add('young_adult'); registerKeyword('young adult') }
       if (age >= 55) { demographicSet.add('senior'); registerKeyword('senior') }
@@ -958,7 +975,7 @@ export function buildProfileSignals({ profile, sections }) {
     registerKeyword('nonprofit')
   }
   if (organizationDetails.founding_year) {
-    const age = new Date().getFullYear() - parseNumber(organizationDetails.founding_year)
+    const age = nowYear - parseNumber(organizationDetails.founding_year)
     if (age !== null && age <= 3) {
       registerKeyword('new organization')
       registerKeyword('startup nonprofit')
@@ -1075,7 +1092,7 @@ export function buildProfileSignals({ profile, sections }) {
   if (education.school_name) registerKeyword(education.school_name)
   if (education.graduation_year) {
     const gradYear = parseNumber(education.graduation_year)
-    const currentYear = new Date().getFullYear()
+    const currentYear = nowYear
     if (gradYear !== null) {
       if (gradYear === currentYear || gradYear === currentYear + 1) {
         registerKeyword('graduating senior')
