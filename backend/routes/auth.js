@@ -56,7 +56,7 @@ function getOpenAI() {
  */
 function resolveJwtSecret() {
   const raw = String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || '').trim()
-  const isProd = process.env.NODE_ENV === 'production'
+  const isProd = isProductionEnvironment()
 
   if (!raw) {
     if (isProd) {
@@ -1516,10 +1516,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
     console.info('[auth/email/start] Processing email authentication request for:', email)
 
     // Determine if we're in production
-    const isProd =
-      process.env.NODE_ENV === 'production' ||
-      process.env.RAILWAY_ENVIRONMENT === 'production' ||
-      process.env.VERCEL_ENV === 'production'
+    const isProd = isProductionEnvironment()
 
     // In production, enforce profile-email gating: allow only admin emails OR emails that match an existing profile.
     const normalizedEmail = normalizeEmail(email)
@@ -2256,10 +2253,7 @@ router.post('/password/setup/start', async (req, res) => {
       return res.status(400).json({ error: 'Invalid email address', error_type: 'validation_error' })
     }
 
-    const isProd =
-      process.env.NODE_ENV === 'production' ||
-      process.env.RAILWAY_ENVIRONMENT === 'production' ||
-      process.env.VERCEL_ENV === 'production'
+    const isProd = isProductionEnvironment()
 
     const isAdmin = isAdminEmail(email)
     const profileMatch = await findProfileRowForEmail(req.db, email)
@@ -2457,10 +2451,7 @@ router.post('/password/login', async (req, res) => {
       return res.status(400).json({ error: 'Invalid email address', error_type: 'validation_error' })
     }
 
-    const isProd =
-      process.env.NODE_ENV === 'production' ||
-      process.env.RAILWAY_ENVIRONMENT === 'production' ||
-      process.env.VERCEL_ENV === 'production'
+    const isProd = isProductionEnvironment()
 
     const isAdmin = isAdminEmail(email)
     const profileMatch = await findProfileRowForEmail(req.db, email)
