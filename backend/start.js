@@ -4,14 +4,18 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-// Load .env from the current working directory. Use override so .env wins over any stale
-// machine-level values during local development.
-dotenv.config({ override: true })
-
 function isTruthy(value) {
   const v = String(value || '').trim().toLowerCase()
   return v === '1' || v === 'true' || v === 'yes' || v === 'y' || v === 'on'
 }
+
+// Load .env from the current working directory.
+//
+// IMPORTANT:
+// - In normal local development, we want `.env` to win over stale machine-level values.
+// - In SMOKE_MODE / automation (tests), we must NOT override the env passed by the test runner
+//   (especially PORT/DB paths), otherwise parallel tests can collide and hang.
+dotenv.config({ override: !isTruthy(process.env.SMOKE_MODE) })
 
 function findSqliteDbPath() {
   const explicit = String(process.env.SQLITE_DB_PATH || '').trim()
