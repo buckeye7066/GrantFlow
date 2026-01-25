@@ -9,6 +9,14 @@ import crypto from 'crypto'
 import { buildProfileContext } from './profileHelpers.js'
 import { validateJobStatus, validateZipCode, validateStateCode, validateUuid } from '../utils/dbValidation.js'
 
+function stableStringify(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (value instanceof Date) return JSON.stringify(value.toISOString())
+  if (Array.isArray(value)) return `[${value.map((v) => stableStringify(v)).join(',')}]`
+  const keys = Object.keys(value).sort()
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`
+}
+
 /**
  * Generate idempotency key for a crawler job
  * @param {string} type - Job type
@@ -48,6 +56,8 @@ export async function createCrawlerJob(db, options) {
     buildSnapshot = true,
     skipIdempotencyCheck = false,
   } = options
+
+  const createdAtIso = new Date().toISOString()
 
   // Validate job type
   const VALID_TYPES = [
@@ -101,13 +111,8 @@ export async function createCrawlerJob(db, options) {
   // Build profile context snapshot if requested and profileId provided
   let profileContextSnapshot = null
   if (buildSnapshot && profileId) {
-    try {
-      const context = await buildProfileContext(db, profileId)
-      profileContextSnapshot = JSON.stringify(context)
-    } catch (error) {
-      console.warn('[createCrawlerJob] Failed to build profile context snapshot:', error?.message)
-      // Continue without snapshot - dispatcher will handle this
-    }
+    const context = await buildProfileContext(db, profileId, { asOf: createdAtIso })
+    profileContextSnapshot = stableStringify(context)
   }
 
   // Create job ID
@@ -130,7 +135,7 @@ export async function createCrawlerJob(db, options) {
         idempotency_key,
         requested_by,
         created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     )
     .run(
@@ -143,6 +148,7 @@ export async function createCrawlerJob(db, options) {
       profileContextSnapshot,
       idempotencyKey,
       requestedBy,
+      createdAtIso,
     )
 
   console.log('[createCrawlerJob] Created new crawler job', {

@@ -1777,10 +1777,19 @@ server.on('listening', () => {
     console.warn('[FeatureFlags] Failed to initialize:', err.message);
   }
 
-  // Schedule a tiny crawler smoke run once per deploy (production only).
-  setTimeout(() => {
-    scheduleCrawlerSmokeJobs({ db, uploadsDir }).catch(() => {})
-  }, 10_000)
+  // Startup smoke crawlers (PRODUCTION): default OFF.
+  // These are useful for deploy verification, but must not run automatically unless explicitly enabled.
+  const startupSmokeEnabled = parseBoolEnv(process.env.STARTUP_SMOKE_CRAWL_ENABLED) === true
+  if (startupSmokeEnabled) {
+    setTimeout(() => {
+      scheduleCrawlerSmokeJobs({ db, uploadsDir }).catch(() => {})
+    }, 10_000)
+    console.info('[startup] Startup smoke crawlers enabled (STARTUP_SMOKE_CRAWL_ENABLED=true)')
+  } else {
+    console.info(
+      '[startup] Startup smoke crawlers disabled (set STARTUP_SMOKE_CRAWL_ENABLED=true to enable)',
+    )
+  }
 
   // Auto-merge duplicate profiles once per deploy (production only).
   setTimeout(() => {

@@ -22,6 +22,12 @@ function loadJSON(filePath) {
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf8'))
   } catch (e) {
+    if (e && (e.code === 'ENOENT' || /ENOENT/i.test(String(e.message || '')))) {
+      console.info(
+        `[comprehensiveCrawler] Curated opportunities dataset not present at ${filePath}; continuing with empty curated dataset`,
+      )
+      return null
+    }
     console.warn(`[comprehensiveCrawler] Could not load ${filePath}:`, e.message)
     return null
   }
