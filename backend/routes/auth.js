@@ -2189,6 +2189,11 @@ router.post('/password/setup/start', async (req, res) => {
     const response = { ok: true, status: 'password_setup_email_sent', email_sent: emailSent }
     if (emailSent !== true) {
       response.notice = 'We created your password setup link, but email delivery may be delayed. Please try again in a minute.'
+      // Dev-only convenience: if email isn't configured, return a preview token/link so local users can proceed.
+      if (!isProd) {
+        response.preview_token = token
+        response.preview_url = link
+      }
     }
 
     return res.status(202).json(response)

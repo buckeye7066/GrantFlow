@@ -72,6 +72,12 @@ export default function EmailSignInForm({ onComplete }) {
       }
 
       if (response?.status === 'password_setup_email_sent') {
+        // Dev convenience: if the backend can't send email and provides a preview token, route straight to set-password.
+        if (response?.preview_token && import.meta?.env?.DEV) {
+          navigate(`/set-password?token=${encodeURIComponent(String(response.preview_token))}`)
+          return
+        }
+
         setStep('setup_sent')
         setStatus({
           type: 'success',
