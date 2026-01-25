@@ -85,6 +85,7 @@ const Admin = lazy(() => import("./Admin"));
 import Login from "./Login";
 import AuthCallback from "./AuthCallback";
 import ServiceApplication from "./ServiceApplication";
+import SetPassword from "./SetPassword";
 
 import { Route, Routes, useLocation, Navigate } from 'react-router-dom';
 import { useAuthStore } from "@/stores/authStore";
@@ -360,6 +361,7 @@ export default function Pages() {
     return (
         <Routes>
             <Route path="/login" element={withBoundary(<Login />, "Login")} />
+            <Route path="/set-password" element={withBoundary(<SetPassword />, "SetPassword")} />
             <Route path="/ServiceApplication" element={withBoundary(<ServiceApplication />, "ServiceApplication")} />
             <Route path="/auth/callback" element={withBoundary(<AuthCallback />, "AuthCallback")} />
             <Route path="/*" element={withBoundary(<LayoutRoutes />, "Layout")} />

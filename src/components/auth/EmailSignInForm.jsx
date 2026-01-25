@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import * as z from 'zod'
+import { useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Loader2, MailCheck, RefreshCw, Copy } from 'lucide-react'
+import { Loader2, MailCheck } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 
@@ -17,27 +18,16 @@ const emailSchema = z.object({
   email: z.preprocess((v) => normalizeEmail(v), z.string().email('Enter a valid email address')),
 })
 
-const codeSchema = z.object({
-  code: z.string().regex(/^\d{6}$/, 'Enter the 6-digit code we sent'),
-})
-
 export default function EmailSignInForm({ onComplete }) {
-  const [step, setStep] = useState('email')
+  const [step, setStep] = useState('email') // email | password | setup_sent
   const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [status, setStatus] = useState({ type: 'idle', message: null, previewCode: null, notice: null })
-  const [verificationToken, setVerificationToken] = useState(null)
-  const [resendCountdown, setResendCountdown] = useState(0)
   const [isLoading, setIsLoading] = useState(false)
-  const [copyFeedback, setCopyFeedback] = useState(null)
   const [emailError, setEmailError] = useState(null)
-  const [codeError, setCodeError] = useState(null)
+  const [passwordError, setPasswordError] = useState(null)
   const authStore = useAuthStore()
-
-  useEffect(() => {
-    if (resendCountdown <= 0) return undefined
-    const timer = setInterval(() => setResendCountdown((seconds) => seconds - 1), 1000)
-    return () => clearInterval(timer)
-  }, [resendCountdown])
+  const navigate = useNavigate()
 
   const maskedEmail = useMemo(() => {
     if (!email) return null
@@ -65,36 +55,53 @@ export default function EmailSignInForm({ onComplete }) {
 
       setEmailError(null)
       const cleanedEmail = normalizeEmail(parsed.data.email)
-      const response = await authStore.startEmailSignIn(cleanedEmail)
+      const response = await authStore.startPasswordSetup(cleanedEmail)
       setEmail(cleanedEmail)
-      setVerificationToken(response?.verification_token ?? null)
-      setStep('code')
-      setResendCountdown(45)
-      setCopyFeedback(null)
-      const previewCode = response?.previewCode ?? null
-      const emailSent = response?.email_sent === true
-      const notice =
-        response?.notice ??
-        (previewCode
-          ? 'Email delivery is not configured for this environment. Use the generated code below to continue.'
-          : !emailSent
-            ? 'Email delivery may be delayed. Check spam/junk and try again in a minute if you don’t receive a code.'
-          : null)
-      // Never log OTP codes in production consoles.
-      if (previewCode && import.meta?.env?.DEV) {
-        console.info('[auth] preview email code:', previewCode)
+
+      if (response?.status === 'password_exists') {
+        setPassword('')
+        setPasswordError(null)
+        setStep('password')
+        setStatus({
+          type: 'success',
+          message: `Password found for ${maskedEmail ?? cleanedEmail}. Enter it below to sign in.`,
+          previewCode: null,
+          notice: null,
+        })
+        return
       }
+
+      if (response?.status === 'password_setup_email_sent') {
+        setStep('setup_sent')
+        setStatus({
+          type: 'success',
+          message: `Check your email to set your password for ${maskedEmail ?? cleanedEmail}.`,
+          previewCode: null,
+          notice:
+            response?.notice ??
+            'If you don’t receive an email within a few minutes, check spam/junk and try again.',
+        })
+        return
+      }
+
       setStatus({
-        type: 'success',
-        message: previewCode
-          ? 'A verification code has been generated for you.'
-          : emailSent
-            ? `We sent a 6-digit code to ${maskedEmail ?? cleanedEmail}. Enter it below to continue.`
-            : 'We generated a 6-digit code. Enter it below once it arrives in your email.',
-        previewCode,
-        notice,
+        type: 'error',
+        message: 'Unable to start sign-in. Please try again.',
+        previewCode: null,
+        notice: null,
       })
     } catch (error) {
+      if (
+        error?.status === 403 ||
+        error?.errorType === 'unauthorized_email' ||
+        error?.details?.error_type === 'unauthorized_email'
+      ) {
+        // Profile-email gated access: unknown emails must go through the Service Application flow.
+        setStatus({ type: 'idle', message: null, previewCode: null, notice: null })
+        navigate('/ServiceApplication')
+        return
+      }
+
       // Provide more specific error messages based on error type
       let message = 'Unable to send verification code.'
 
@@ -111,28 +118,24 @@ export default function EmailSignInForm({ onComplete }) {
       }
 
       setStatus({ type: 'error', message, previewCode: null, notice: null })
-      setCopyFeedback(null)
     } finally {
       setIsLoading(false)
     }
   }
 
-  const handleVerify = async (event) => {
+  const handlePasswordLogin = async (event) => {
     event?.preventDefault?.()
     try {
       setIsLoading(true)
-      setStatus({ type: 'idle', message: null })
+      setPasswordError(null)
+      setStatus({ type: 'idle', message: null, previewCode: null, notice: null })
 
-      const form = event?.currentTarget
-      const rawCode = form ? new FormData(form).get('code') : null
-      const parsed = codeSchema.safeParse({ code: String(rawCode ?? '') })
-      if (!parsed.success) {
-        setCodeError(parsed.error.issues?.[0]?.message || 'Enter the 6-digit code we sent')
+      if (!password || String(password).trim().length < 10) {
+        setPasswordError('Password must be at least 10 characters long')
         return
       }
 
-      setCodeError(null)
-      const response = await authStore.verifyEmailCode({ email, code: parsed.data.code, verificationToken })
+      const response = await authStore.loginWithPassword({ email, password })
       if (typeof onComplete === 'function') {
         onComplete(response)
       }
@@ -144,72 +147,10 @@ export default function EmailSignInForm({ onComplete }) {
       })
     } catch (error) {
       // Provide more specific error messages
-      let message = 'The code you entered was not valid. Try again.'
-
-      if (error?.message?.includes('expired')) {
-        message = 'Your verification code has expired. Please request a new one.'
-      } else if (error?.message?.includes('invalid') || error?.message?.includes('incorrect')) {
-        message = 'Invalid verification code. Please check and try again.'
-      } else if (error?.message?.includes('rate limit')) {
-        message = 'Too many verification attempts. Please wait a few minutes.'
-      } else if (error?.error) {
-        message = error.error
-      } else if (error?.message) {
-        message = error.message
-      }
-
+      const message = error?.error || error?.message || 'Unable to sign in. Please try again.'
       setStatus({ type: 'error', message, previewCode: null, notice: null })
     } finally {
       setIsLoading(false)
-    }
-  }
-
-  const handleResend = async () => {
-    if (resendCountdown > 0 || !email) return
-    try {
-      setIsLoading(true)
-      setStatus({ type: 'idle', message: null, previewCode: null, notice: null })
-      const response = await authStore.startEmailSignIn(email)
-      setVerificationToken(response?.verification_token ?? null)
-      setResendCountdown(45)
-      setCopyFeedback(null)
-      const previewCode = response?.previewCode ?? null
-      const emailSent = response?.email_sent === true
-      const notice =
-        response?.notice ??
-        (previewCode
-          ? 'Email delivery is not configured for this environment. Use the generated code below to continue.'
-          : !emailSent
-            ? 'Email delivery may be delayed. Check spam/junk and try again in a minute if you don’t receive a code.'
-          : null)
-      setStatus({
-        type: 'success',
-        message: previewCode
-          ? 'A verification code has been generated for you.'
-          : emailSent
-            ? `We sent a 6-digit code to ${maskedEmail ?? email}. Enter it below to continue.`
-            : 'We generated a 6-digit code. Enter it below once it arrives in your email.',
-        previewCode,
-        notice,
-      })
-    } catch (error) {
-      const message = error?.error || error?.message || 'Unable to resend verification code.'
-      setStatus({ type: 'error', message, previewCode: null, notice: null })
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  const handleCopyPreviewCode = async () => {
-    if (!status.previewCode || typeof navigator === 'undefined' || !navigator.clipboard) return
-    try {
-      await navigator.clipboard.writeText(status.previewCode)
-      setCopyFeedback('Copied!')
-      setTimeout(() => setCopyFeedback(null), 1600)
-    } catch (error) {
-      console.error('Failed to copy verification code:', error)
-      setCopyFeedback('Copy failed')
-      setTimeout(() => setCopyFeedback(null), 1600)
     }
   }
 
@@ -223,31 +164,6 @@ export default function EmailSignInForm({ onComplete }) {
             {status.message}
             {status.notice ? (
               <p className="mt-2 text-xs text-slate-600">{status.notice}</p>
-            ) : null}
-            {status.previewCode ? (
-              <div className="mt-4 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3">
-                <p className="text-xs uppercase tracking-wide text-slate-500">Verification code</p>
-                <div className="mt-2 flex items-center gap-2">
-                  <span className="font-mono text-lg tracking-[0.5em] text-slate-900">{status.previewCode}</span>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handleCopyPreviewCode}
-                    className="shrink-0"
-                  >
-                    <Copy className="mr-1 h-3.5 w-3.5" />
-                    Copy
-                  </Button>
-                </div>
-                {copyFeedback ? (
-                  <p className="mt-1 text-xs text-emerald-600">{copyFeedback}</p>
-                ) : (
-                  <p className="mt-1 text-xs text-slate-500">
-                    Enter this code on the next screen. It expires in 10 minutes.
-                  </p>
-                )}
-              </div>
             ) : null}
           </AlertDescription>
         </Alert>
@@ -272,30 +188,30 @@ export default function EmailSignInForm({ onComplete }) {
             Continue with Email
           </Button>
           <p className="text-xs text-slate-500">
-            No password required. We'll send a verification code to your email address.
+            We'll email you a one-time link to set your password on first sign-in.
           </p>
         </form>
       ) : null}
 
-      {step === 'code' ? (
-        <form onSubmit={handleVerify} className="space-y-4" noValidate>
+      {step === 'password' ? (
+        <form onSubmit={handlePasswordLogin} className="space-y-4" noValidate>
           <div className="space-y-2">
-            <Label htmlFor="auth-code">6-digit code</Label>
+            <Label htmlFor="auth-password">Password</Label>
             <Input
-              id="auth-code"
-              name="code"
-              type="text"
-              inputMode="numeric"
-              maxLength={6}
-              placeholder="Enter code"
-              autoComplete="one-time-code"
-              aria-invalid={codeError ? 'true' : 'false'}
+              id="auth-password"
+              name="password"
+              type="password"
+              placeholder="Enter password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              aria-invalid={passwordError ? 'true' : 'false'}
             />
-            {codeError ? <p className="text-xs text-red-600">{codeError}</p> : null}
+            {passwordError ? <p className="text-xs text-red-600">{passwordError}</p> : null}
           </div>
           <Button type="submit" disabled={isLoading} className="w-full">
             {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            Verify &amp; continue
+            Sign in
           </Button>
           <div className="flex items-center justify-between text-xs text-slate-500">
             <button
@@ -305,19 +221,16 @@ export default function EmailSignInForm({ onComplete }) {
             >
               Use a different email
             </button>
-            <button
-              type="button"
-              onClick={handleResend}
-              disabled={resendCountdown > 0 || isLoading}
-              className={cn(
-                'inline-flex items-center gap-1 text-blue-600 hover:underline disabled:cursor-not-allowed disabled:text-slate-400',
-              )}
-            >
-              <RefreshCw className="h-3 w-3" />
-              {resendCountdown > 0 ? `Resend (${resendCountdown}s)` : 'Resend code'}
-            </button>
           </div>
         </form>
+      ) : null}
+
+      {step === 'setup_sent' ? (
+        <div className="space-y-4">
+          <Button type="button" variant="outline" disabled={isLoading} onClick={() => setStep('email')} className="w-full">
+            Use a different email
+          </Button>
+        </div>
       ) : null}
     </div>
   )
