@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import * as z from 'zod'
+import { useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -32,6 +33,7 @@ export default function EmailSignInForm({ onComplete }) {
   const [emailError, setEmailError] = useState(null)
   const [codeError, setCodeError] = useState(null)
   const authStore = useAuthStore()
+  const navigate = useNavigate()
 
   useEffect(() => {
     if (resendCountdown <= 0) return undefined
@@ -95,6 +97,18 @@ export default function EmailSignInForm({ onComplete }) {
         notice,
       })
     } catch (error) {
+      if (
+        error?.status === 403 ||
+        error?.errorType === 'unauthorized_email' ||
+        error?.details?.error_type === 'unauthorized_email'
+      ) {
+        // Profile-email gated access: unknown emails must go through the Service Application flow.
+        setStatus({ type: 'idle', message: null, previewCode: null, notice: null })
+        setCopyFeedback(null)
+        navigate('/ServiceApplication')
+        return
+      }
+
       // Provide more specific error messages based on error type
       let message = 'Unable to send verification code.'
 
