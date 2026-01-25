@@ -127,7 +127,7 @@ const corsOptions = {
   origin: configuredCorsOrigins && configuredCorsOrigins.length > 0 ? configuredCorsOrigins : defaultCorsOrigins,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Token', 'X-Anya-Token', 'X-Request-Id'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Token', 'X-Anya-Token', 'X-Profile-Id', 'X-Request-Id'],
 };
 
 app.use(cors(corsOptions));
@@ -1105,7 +1105,7 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
   try {
     const user = req.user ?? { role: 'guest' };
     if (user.role === 'guest') {
-      return res.status(401).json({ error: 'Not authenticated' });
+      return res.status(401).json({ error: 'unauthorized' });
     }
 
     if (user.userId) {
@@ -1123,11 +1123,11 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
           .get(user.userId);
       } catch (dbError) {
         console.error('[/api/auth/me] Database error fetching user:', dbError);
-        return res.status(500).json({ 
-          error: 'Database error occurred',
+        return res.status(503).json({
+          error: 'service_unavailable',
           error_type: 'database_error',
-          details: process.env.NODE_ENV !== 'production' ? dbError.message : undefined
-        });
+          message: 'Auth service temporarily unavailable. Please retry shortly.',
+        })
       }
 
       if (!dbUser) {
@@ -1161,7 +1161,7 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
         }
 
         if (!dbUser) {
-          return res.status(401).json({ error: 'User record not found' });
+          return res.status(401).json({ error: 'unauthorized' });
         }
       }
 
@@ -1209,7 +1209,7 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
         }
       } catch (dbError) {
         console.error('[/api/auth/me] Database error fetching profiles:', dbError);
-        // Return user data without profiles if profiles query fails
+        // Return user data without profiles if profiles query fails (avoid 5xx for auth bootstrap).
         profiles = [];
       }
 
@@ -1246,11 +1246,11 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
     });
   } catch (error) {
     console.error('[/api/auth/me] Unexpected error:', error);
-    return res.status(500).json({ 
-      error: 'An unexpected error occurred',
+    return res.status(503).json({
+      error: 'service_unavailable',
       error_type: 'internal_error',
-      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
-    });
+      message: 'Auth service temporarily unavailable. Please retry shortly.',
+    })
   }
 });
 

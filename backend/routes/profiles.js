@@ -227,12 +227,19 @@ function getOpenAIOptional() {
 
 async function createAnthropicClient() {
   if (!process.env.ANTHROPIC_API_KEY) return null
-  const Anthropic = (await import('@anthropic-ai/sdk')).default
-  return new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY,
-    timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 15_000),
-    maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
-  })
+  try {
+    const Anthropic = (await import('@anthropic-ai/sdk')).default
+    return new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 15_000),
+      maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
+    })
+  } catch (error) {
+    // Production hardening: if the Anthropic SDK isn't installed (or fails to load),
+    // do not 500 the endpoint — fall back to the configured provider(s) or a clear 503.
+    console.warn('[profiles/ai] Anthropic client unavailable:', error?.message || String(error))
+    return null
+  }
 }
 
 function extractAnthropicText(response) {
@@ -976,7 +983,7 @@ router.delete('/:id/sections/:sectionKey', async (req, res) => {
   res.status(204).send()
 })
 
-router.post('/:id/sections/:sectionKey/ai', async (req, res) => {
+async function handleProfileSectionAi(req, res) {
   const { id, sectionKey } = req.params
   const auth = req.user ?? { role: 'guest' }
 
@@ -1096,19 +1103,21 @@ router.post('/:id/sections/:sectionKey/ai', async (req, res) => {
       }
     }
 
-    return res.json({
+    return res.status(503).json({
+      error: 'ai_unavailable',
+      message: 'No AI provider configured (OPENAI_API_KEY/ANTHROPIC_API_KEY missing) or provider failed to initialize.',
       section_key: sectionKey,
-      suggestion: {},
-      usage: null,
-      raw_response: null,
-      ai_provider: 'fallback',
-      warning: 'No AI provider configured (OPENAI_API_KEY/ANTHROPIC_API_KEY missing).',
     })
   } catch (error) {
     console.error('Error generating profile section suggestion:', error)
     res.status(500).json(formatError(error))
   }
-})
+}
+
+// Back-compat for older clients:
+// GET /api/profiles/:id/:sectionKey/ai (legacy) -> same as the canonical POST route.
+router.get('/:id/:sectionKey/ai', handleProfileSectionAi)
+router.post('/:id/sections/:sectionKey/ai', handleProfileSectionAi)
 
 // Generate AI suggestion for individual profile field
 router.post('/:id/fields/ai', async (req, res) => {
