@@ -7,6 +7,7 @@ import { fetchOpportunities as fetchSimpler } from '../../backend/src/integratio
 import { fetchOpportunities as fetchGrantsGov } from '../../backend/src/integrations/grantsGov.js'
 import { fetchOpportunities as fetchNih } from '../../backend/src/integrations/nihReporter.js'
 import { fetchGovInfoPackageSummary } from '../../backend/src/integrations/apiDataGov.js'
+import { searchEntitiesByUei as searchSamEntitiesByUei } from '../../backend/src/integrations/samGovEntity.js'
 
 async function withEnv(vars, fn) {
   const originals = {}
@@ -40,6 +41,11 @@ test('funding clients: required keys throw deterministic MISSING_API_KEY', async
       })
 
       await assert.rejects(() => fetchSam({ keyword: 'x', limit: 1, offset: 0 }), (err) => {
+        assert.equal(err.code, 'MISSING_API_KEY')
+        return true
+      })
+
+      await assert.rejects(() => searchSamEntitiesByUei({ uei: 'SAMPLEUEI123456', limit: 1 }), (err) => {
         assert.equal(err.code, 'MISSING_API_KEY')
         return true
       })
@@ -88,6 +94,21 @@ test('funding clients: normalize responses (no real network)', async () => {
               title: 'SAM Test Opp',
               deptName: 'GSA',
               uiLink: 'https://example.org/sam/1',
+            },
+          ],
+        },
+      }
+    }
+
+    if (url.includes('api.sam.gov/entity-information/v4/entities')) {
+      return {
+        status: 200,
+        headers: {},
+        data: {
+          entityData: [
+            {
+              ueiSAM: 'TESTUEI123456',
+              legalBusinessName: 'Test Entity LLC',
             },
           ],
         },
@@ -154,6 +175,10 @@ test('funding clients: normalize responses (no real network)', async () => {
         const sam = await fetchSam({ keyword: 'research', limit: 1, offset: 0 })
         assert.equal(sam[0].source, 'sam.gov')
         assert.equal(sam[0].source_id, 'sam-1')
+
+        const samEntity = await searchSamEntitiesByUei({ uei: 'TESTUEI123456', limit: 1, offset: 0 })
+        assert.ok(Array.isArray(samEntity.entities))
+        assert.equal(samEntity.entities[0].ueiSAM, 'TESTUEI123456')
 
         const gg = await fetchGrantsGov({ keyword: 'health', rows: 1, startRecordNum: 0 })
         assert.equal(gg[0].source, 'grants.gov')
