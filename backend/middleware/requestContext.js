@@ -53,7 +53,10 @@ export async function buildRequestContext(db, user) {
   // CRITICAL: Admin status is DB-backed ONLY (users.is_admin).
   // Never trust token claims for admin authority.
   try {
-    const emailIsConfiguredAdmin = Boolean(ctx.email && isAdminEmail(ctx.email))
+    // IMPORTANT:
+    // `ctx.email` may not be present on the JWT (older tokens / some oauth flows).
+    // We recompute "configured admin email" AFTER we potentially hydrate ctx.email from the DB.
+    let emailIsConfiguredAdmin = Boolean(ctx.email && isAdminEmail(ctx.email))
 
     // If we only have a profileId, resolve its owning user first.
     if (!ctx.userId && ctx.activeProfileId) {
@@ -70,6 +73,7 @@ export async function buildRequestContext(db, user) {
       if (row) {
         ctx.isAdmin = Boolean(row.is_admin === true || row.is_admin === 1)
         if (row.primary_email && !ctx.email) ctx.email = row.primary_email
+        emailIsConfiguredAdmin = Boolean(ctx.email && isAdminEmail(ctx.email))
 
         // If this request belongs to a configured admin email but the DB flag wasn't set yet,
         // upgrade it (best-effort) so future requests are consistent.
