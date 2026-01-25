@@ -43,6 +43,10 @@ COPY seed ./seed
 # Copy built frontend assets from builder stage
 COPY --from=builder /app/dist ./dist
 
+# Copy package manifests so runtime has /app/package.json
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/package-lock.json ./package-lock.json
+
 # Expose port (Railway will set PORT env var)
 EXPOSE 8080
 
