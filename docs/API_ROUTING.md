@@ -25,8 +25,8 @@ GrantFlow uses a split deployment architecture:
 **CRITICAL: Auth and email logic runs on Railway, NOT Vercel.**
 
 - Email-based OTP login (`/api/auth/email/start`, `/api/auth/email/verify`) runs on Railway
-- **Email delivery is optional** - OTP codes are returned directly for authorized users via `previewCode`
-- In production, only emails matching existing profiles can log in (profile-email gated access)
+- Password setup + password login runs on Railway (`/api/auth/password/*`)
+- In production, only emails matching existing profiles can start login (profile-email gated access)
 - Admins can always log in (emails in `ADMIN_EMAIL` or `ADMIN_EMAILS`)
 - Environment variables for email (`RESEND_API_KEY`, `FROM_EMAIL`) **must be set in Railway** if you want email notifications
 - Setting these in Vercel does nothing, because Vercel only serves static assets
@@ -35,16 +35,15 @@ GrantFlow uses a split deployment architecture:
 
 ```
 Browser (frontend)
-  ↓ POST /api/auth/email/start
+  ↓ POST /api/auth/password/setup/start
   ↓
 Vercel (sees request to /api/*)
   ↓ (rewrites via vercel.json)
   ↓
 Railway Backend (backend/routes/auth.js)
   ↓ checks if email matches existing profile (production only)
-  ↓ generates OTP code and stores in DB
-  ↓ returns previewCode directly (no email required)
-  ↓ optionally attempts to send email (non-blocking)
+  ↓ if first login: generates one-time password setup token and emails link (non-blocking)
+  ↓ otherwise: client prompts for password login
 ```
 
 ## Development
@@ -79,9 +78,7 @@ In local development:
    - Create a profile in the database with a `profile_sections` entry that includes the email in the `basic_information` section
    - OR add the email to `ADMIN_EMAIL` or `ADMIN_EMAILS` environment variable
 
-### Email OTP not sending emails?
-
-**Email delivery is optional** - users can log in with the `previewCode` returned in the response.
+### Password setup email not arriving?
 
 If you want to enable email notifications:
 
@@ -106,12 +103,12 @@ If you want to enable email notifications:
 3. Check the request to `/api/auth/email/start`
    - Should be same-origin (no CORS preflight)
    - Response should come from Railway (check response headers)
-   - In production, should return `previewCode` for authorized emails
+   - In production, unauthorized emails return 403 + `redirect_to` for client-side redirect
 
 ## Security Notes
 
 - In production, only authorized emails (matching profiles or admin emails) can initiate login
-- OTP codes are returned directly via `previewCode` for authorized users
+- Password setup uses a one-time emailed link; codes are not returned in production responses
 - Email delivery is optional and non-blocking
 - Email logic runs server-side on Railway (not client-side on Vercel)
 - Same-origin proxy prevents CORS attacks

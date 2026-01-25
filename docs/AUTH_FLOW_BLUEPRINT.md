@@ -37,6 +37,22 @@ Schema updates:
 
 Magic link variant: `GET /api/auth/email/callback?token=...` to consume JWT-style token.
 
+#### First-login password setup + password login
+1. **`POST /api/auth/password/setup/start`**
+   - body `{ email }`
+   - Production gate: allow only admin emails or emails that match an existing profile email
+     (stored in `profile_sections` `basic_information.data.email`).
+   - If unauthorized: `403 { error_type: 'unauthorized_email', redirect_to: '/ServiceApplication' }`.
+   - If user already has `users.password_hash`: `200 { ok:true, status:'password_exists' }`.
+   - Otherwise: create one-time token in `password_setup_tokens` (TTL default 30m), email a link:
+     `.../set-password?token=<token>`, return `202 { ok:true, status:'password_setup_email_sent' }`.
+2. **`POST /api/auth/password/setup/complete`**
+   - body `{ token, password }`
+   - Validates token (unconsumed, not expired), sets `users.password_hash`, consumes token, issues session tokens.
+3. **`POST /api/auth/password/login`**
+   - body `{ email, password }`
+   - Validates password hash and issues session tokens.
+
 #### Phone SMS OTP
 1. **`POST /api/auth/phone/start`** with `{ phone }`.
 2. Send OTP via Twilio/MessageBird; store hashed code.
@@ -71,6 +87,9 @@ Magic link variant: `GET /api/auth/email/callback?token=...` to consume JWT-styl
 ```
 POST   /api/auth/email/start
 POST   /api/auth/email/verify
+POST   /api/auth/password/setup/start
+POST   /api/auth/password/setup/complete
+POST   /api/auth/password/login
 POST   /api/auth/phone/start
 POST   /api/auth/phone/verify
 GET    /api/auth/:provider/start
@@ -115,6 +134,7 @@ Future enhancements: `POST /api/auth/mfa/enable`, `POST /api/auth/password/set` 
   - Facebook: `AUTH_FACEBOOK_CLIENT_ID`, `AUTH_FACEBOOK_CLIENT_SECRET`, optional `AUTH_FACEBOOK_REDIRECT_URI`.
   - Yahoo: `AUTH_YAHOO_CLIENT_ID`, `AUTH_YAHOO_CLIENT_SECRET`, optional `AUTH_YAHOO_REDIRECT_URI`.
 - Shared callback helpers: `AUTH_PUBLIC_URL` (backend self URL) and `AUTH_FRONTEND_URL`/`AUTH_FRONTEND_APP_BASE` to constrain redirect targets.
+- Password setup TTL: optional `AUTH_PASSWORD_SETUP_TTL` (seconds, default 1800).
 
 ### 11. Open Questions / Next Steps
 - Do we need MFA beyond OTP? (e.g., TOTP apps).

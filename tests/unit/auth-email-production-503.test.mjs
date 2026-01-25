@@ -111,7 +111,7 @@ test('auth: email start returns 403 for unauthorized emails in production (no ma
 
   try {
     const email = 'test@example.com'
-    const start = await fetchJson(`http://127.0.0.1:${port}/api/auth/email/start`, {
+    const start = await fetchJson(`http://127.0.0.1:${port}/api/auth/password/setup/start`, {
       method: 'POST',
       body: JSON.stringify({ email }),
     })
@@ -120,14 +120,13 @@ test('auth: email start returns 403 for unauthorized emails in production (no ma
     assert.ok(start.json)
     assert.equal(start.json.error_type, 'unauthorized_email')
     assert.ok(start.json.error.includes('not authorized'))
-    assert.equal(start.json.previewCode, undefined, 'Preview code should not be returned')
     assert.equal(start.json.redirect_to, '/ServiceApplication', 'Expected redirect_to for unauthorized emails')
   } finally {
     await srv.stop()
   }
 })
 
-test('auth: email start returns 202 with preview code for authorized emails in production (matching profile)', async () => {
+test('auth: password setup start returns 202 for authorized emails in production (matching profile, no password yet)', async () => {
   const srv = startServer({
     NODE_ENV: 'production',
   })
@@ -160,68 +159,188 @@ test('auth: email start returns 202 with preview code for authorized emails in p
     
     db.close()
 
-    const start = await fetchJson(`http://127.0.0.1:${port}/api/auth/email/start`, {
+    const start = await fetchJson(`http://127.0.0.1:${port}/api/auth/password/setup/start`, {
       method: 'POST',
       body: JSON.stringify({ email }),
     })
 
-    assert.equal(start.status, 202, 'Expected 202 even when email delivery is unconfigured in production')
+    assert.equal(start.status, 202, 'Expected 202 for authorized email without password')
     assert.ok(start.json)
-    assert.ok(/^\d{6}$/.test(String(start.json.previewCode || '')), 'Expected previewCode to be a 6-digit string')
+    assert.equal(start.json.status, 'password_setup_email_sent')
     assert.equal(start.json.email_sent, false, 'email_sent should be false when provider is unconfigured')
     assert.ok(
       typeof start.json.notice === 'string' && start.json.notice.length > 0,
       'Expected a notice when email delivery may be delayed/unavailable',
     )
+    assert.equal(start.json.previewCode, undefined, 'Must not return OTP/preview codes in production')
+    assert.equal(start.json.token, undefined, 'Must not return raw setup token')
   } finally {
     await srv.stop()
   }
 })
 
-test('auth: admin email is authorized even without matching profile in production', async () => {
+test('auth: password setup complete sets password, consumes token, and returns session tokens', async () => {
   const srv = startServer({
     NODE_ENV: 'production',
-    ADMIN_EMAIL: 'admin@example.com',
   })
   const { port } = await srv.ready
 
   try {
-    const email = 'admin@example.com'
-    const start = await fetchJson(`http://127.0.0.1:${port}/api/auth/email/start`, {
+    const Database = (await import('better-sqlite3')).default
+    const db = new Database(srv.dbPath)
+    const userId = '00000000-0000-0000-0000-0000000000aa'
+    const email = 'authorized-complete@example.com'
+    db.prepare(
+      `INSERT INTO users (id, display_name, primary_email, is_admin, created_at, updated_at)
+       VALUES (?, 'Test User', ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+    ).run(userId, email)
+
+    const token = 'test-token-plaintext'
+    const tokenHash = (await import('node:crypto')).createHash('sha256').update(token).digest('hex')
+    const tokenId = '00000000-0000-0000-0000-0000000000bb'
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString()
+    db.prepare(
+      `INSERT INTO password_setup_tokens (id, user_id, token_hash, expires_at, consumed_at, request_ip, user_agent, created_at)
+       VALUES (?, ?, ?, ?, NULL, NULL, NULL, CURRENT_TIMESTAMP)`,
+    ).run(tokenId, userId, tokenHash, expiresAt)
+    db.close()
+
+    const complete = await fetchJson(`http://127.0.0.1:${port}/api/auth/password/setup/complete`, {
       method: 'POST',
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ token, password: 'a-very-strong-password' }),
     })
 
-    assert.equal(start.status, 202, 'Expected 202 even when email delivery is unconfigured in production')
-    assert.ok(start.json)
-    assert.ok(/^\d{6}$/.test(String(start.json.previewCode || '')), 'Expected previewCode to be a 6-digit string')
-    assert.equal(start.json.email_sent, false, 'email_sent should be false when provider is unconfigured')
-    assert.ok(
-      typeof start.json.notice === 'string' && start.json.notice.length > 0,
-      'Expected a notice when email delivery may be delayed/unavailable',
-    )
+    assert.equal(complete.status, 200)
+    assert.ok(complete.json?.accessToken)
+    assert.ok(complete.json?.refreshToken)
+
+    const db2 = new Database(srv.dbPath)
+    const userRow = db2.prepare('SELECT password_hash FROM users WHERE id = ?').get(userId)
+    assert.ok(typeof userRow?.password_hash === 'string' && userRow.password_hash.length > 10, 'Expected password_hash set')
+    const tokenRow = db2.prepare('SELECT consumed_at FROM password_setup_tokens WHERE id = ?').get(tokenId)
+    assert.ok(tokenRow?.consumed_at, 'Expected token consumed_at to be set')
+    db2.close()
   } finally {
     await srv.stop()
   }
 })
 
-test('auth: non-production always gets preview code regardless of email failure', async () => {
+test('auth: password login succeeds after password is set', async () => {
   const srv = startServer({
-    NODE_ENV: 'development',
+    NODE_ENV: 'production',
   })
   const { port } = await srv.ready
 
   try {
-    const email = 'test@example.com'
-    const start = await fetchJson(`http://127.0.0.1:${port}/api/auth/email/start`, {
+    const Database = (await import('better-sqlite3')).default
+    const db = new Database(srv.dbPath)
+    const bcrypt = (await import('bcryptjs')).default
+    const userId = '00000000-0000-0000-0000-0000000000cc'
+    const email = 'password-login@example.com'
+    const hash = await bcrypt.hash('a-very-strong-password', 10)
+    db.prepare(
+      `INSERT INTO users (id, display_name, primary_email, is_admin, password_hash, created_at, updated_at)
+       VALUES (?, 'Test User', ?, 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+    ).run(userId, email, hash)
+
+    // Production gate requires admin OR profile email match.
+    const profileId = '00000000-0000-0000-0000-0000000000c1'
+    const sectionId = '00000000-0000-0000-0000-0000000000c2'
+    db.prepare(
+      `INSERT INTO profiles (id, user_id, display_name, created_at, updated_at)
+       VALUES (?, NULL, 'Test Profile', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+    ).run(profileId)
+    db.prepare(
+      `INSERT INTO profile_sections (id, profile_id, section_key, data, created_at, updated_at)
+       VALUES (?, ?, 'basic_information', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+    ).run(sectionId, profileId, JSON.stringify({ email }))
+
+    db.close()
+
+    const login = await fetchJson(`http://127.0.0.1:${port}/api/auth/password/login`, {
       method: 'POST',
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ email, password: 'a-very-strong-password' }),
     })
 
-    assert.equal(start.status, 202, 'Expected 202 in development')
-    assert.ok(start.json)
-    assert.equal(typeof start.json.previewCode, 'string', 'Development should always get preview code')
-    assert.equal(start.json.previewCode.length, 6)
+    assert.equal(login.status, 200)
+    assert.ok(login.json?.accessToken)
+    assert.ok(login.json?.refreshToken)
+  } finally {
+    await srv.stop()
+  }
+})
+
+test('auth: password setup token reuse fails', async () => {
+  const srv = startServer({ NODE_ENV: 'production' })
+  const { port } = await srv.ready
+
+  try {
+    const Database = (await import('better-sqlite3')).default
+    const db = new Database(srv.dbPath)
+    const userId = '00000000-0000-0000-0000-0000000000dd'
+    const email = 'reuse@example.com'
+    db.prepare(
+      `INSERT INTO users (id, display_name, primary_email, is_admin, created_at, updated_at)
+       VALUES (?, 'Test User', ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+    ).run(userId, email)
+
+    const token = 'reuse-token-plaintext'
+    const tokenHash = (await import('node:crypto')).createHash('sha256').update(token).digest('hex')
+    const tokenId = '00000000-0000-0000-0000-0000000000ee'
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString()
+    db.prepare(
+      `INSERT INTO password_setup_tokens (id, user_id, token_hash, expires_at, consumed_at, request_ip, user_agent, created_at)
+       VALUES (?, ?, ?, ?, NULL, NULL, NULL, CURRENT_TIMESTAMP)`,
+    ).run(tokenId, userId, tokenHash, expiresAt)
+    db.close()
+
+    const first = await fetchJson(`http://127.0.0.1:${port}/api/auth/password/setup/complete`, {
+      method: 'POST',
+      body: JSON.stringify({ token, password: 'a-very-strong-password' }),
+    })
+    assert.equal(first.status, 200)
+
+    const second = await fetchJson(`http://127.0.0.1:${port}/api/auth/password/setup/complete`, {
+      method: 'POST',
+      body: JSON.stringify({ token, password: 'a-very-strong-password' }),
+    })
+    assert.equal(second.status, 400)
+    assert.equal(second.json?.error_type, 'invalid_or_expired_token')
+  } finally {
+    await srv.stop()
+  }
+})
+
+test('auth: expired password setup token fails', async () => {
+  const srv = startServer({ NODE_ENV: 'production' })
+  const { port } = await srv.ready
+
+  try {
+    const Database = (await import('better-sqlite3')).default
+    const db = new Database(srv.dbPath)
+    const userId = '00000000-0000-0000-0000-0000000000ff'
+    const email = 'expired@example.com'
+    db.prepare(
+      `INSERT INTO users (id, display_name, primary_email, is_admin, created_at, updated_at)
+       VALUES (?, 'Test User', ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+    ).run(userId, email)
+
+    const token = 'expired-token-plaintext'
+    const tokenHash = (await import('node:crypto')).createHash('sha256').update(token).digest('hex')
+    const tokenId = '00000000-0000-0000-0000-000000000111'
+    const expiresAt = new Date(Date.now() - 60 * 1000).toISOString()
+    db.prepare(
+      `INSERT INTO password_setup_tokens (id, user_id, token_hash, expires_at, consumed_at, request_ip, user_agent, created_at)
+       VALUES (?, ?, ?, ?, NULL, NULL, NULL, CURRENT_TIMESTAMP)`,
+    ).run(tokenId, userId, tokenHash, expiresAt)
+    db.close()
+
+    const complete = await fetchJson(`http://127.0.0.1:${port}/api/auth/password/setup/complete`, {
+      method: 'POST',
+      body: JSON.stringify({ token, password: 'a-very-strong-password' }),
+    })
+    assert.equal(complete.status, 400)
+    assert.equal(complete.json?.error_type, 'invalid_or_expired_token')
   } finally {
     await srv.stop()
   }
