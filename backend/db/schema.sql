@@ -296,6 +296,7 @@ CREATE TABLE IF NOT EXISTS users (
   primary_phone TEXT,
   avatar_url TEXT,
   is_admin BOOLEAN DEFAULT 0,
+  password_hash TEXT,
   metadata TEXT
 );
 
@@ -334,6 +335,20 @@ CREATE TABLE IF NOT EXISTS user_verification_codes (
   attempt_count INTEGER DEFAULT 0,
   metadata TEXT
 );
+
+-- One-time password setup tokens (first-login password setup via emailed link).
+CREATE TABLE IF NOT EXISTS password_setup_tokens (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL,
+  expires_at DATETIME NOT NULL,
+  consumed_at DATETIME,
+  request_ip TEXT,
+  user_agent TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_password_setup_tokens_token_hash ON password_setup_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_password_setup_tokens_user_id ON password_setup_tokens(user_id);
 
 CREATE TABLE IF NOT EXISTS user_providers (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),

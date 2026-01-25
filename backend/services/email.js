@@ -106,6 +106,64 @@ export async function sendVerificationEmail(email, code) {
   }
 }
 
+export async function sendPasswordSetupEmail(email, link) {
+  if (!email) return false
+  if (!link) return false
+  if (!isEmailServiceConfigured()) return false
+
+  try {
+    const resend = getResend()
+    if (!resend) return false
+
+    const from = resolveFromEmail()
+    if (!from) return false
+
+    const subject = 'Set your GrantFlow password'
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2>Set your GrantFlow password</h2>
+        <p>To finish signing in, set a password using this one-time link:</p>
+        <p style="margin: 20px 0;">
+          <a href="${link}" style="display: inline-block; padding: 12px 16px; background: #0f172a; color: #fff; text-decoration: none; border-radius: 8px;">
+            Set password
+          </a>
+        </p>
+        <p>If the button doesn't work, copy and paste this URL:</p>
+        <pre style="white-space: pre-wrap; word-break: break-all; background-color: #f5f5f5; padding: 12px; border-radius: 8px;">${link}</pre>
+        <p>This link expires in 30 minutes and can only be used once.</p>
+        <p>If you didn't request this, you can safely ignore this email.</p>
+      </div>
+    `
+    const text =
+      `Set your GrantFlow password using this one-time link:\n\n${link}\n\n` +
+      `This link expires in 30 minutes and can only be used once.\n\n` +
+      `If you didn't request this, you can safely ignore this email.`
+
+    const result = await resend.emails.send({
+      from,
+      to: email,
+      subject,
+      html,
+      text,
+    })
+
+    if (result?.error) {
+      console.error('[email/sendPasswordSetupEmail] Resend API error:', {
+        error: result.error,
+        to: email,
+        provider: 'resend',
+        runtime: 'railway',
+      })
+      return false
+    }
+
+    return true
+  } catch (error) {
+    console.error('[email] Failed to send password setup email:', error?.message)
+    return false
+  }
+}
+
 export async function sendAuthAttemptNotification({ event, identifier, success, error }) {
   // Only send notifications if explicitly enabled and admin email is configured
   const shouldNotify = process.env.AUTH_NOTIFY_ON_LOGIN === 'true'

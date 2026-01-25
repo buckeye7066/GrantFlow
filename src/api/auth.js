@@ -13,6 +13,30 @@ export async function startEmailSignIn(email) {
   return response
 }
 
+export async function startPasswordSetup(email) {
+  log.debug('starting password setup')
+  return apiFetch('/api/auth/password/setup/start', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  })
+}
+
+export async function completePasswordSetup({ token, password }) {
+  log.debug('completing password setup')
+  return apiFetch('/api/auth/password/setup/complete', {
+    method: 'POST',
+    body: JSON.stringify({ token, password }),
+  })
+}
+
+export async function loginWithPassword({ email, password }) {
+  log.debug('password login')
+  return apiFetch('/api/auth/password/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  })
+}
+
 export async function verifyEmailCode({ email, code, profileId, verificationToken }) {
   return apiFetch('/api/auth/email/verify', {
     method: 'POST',

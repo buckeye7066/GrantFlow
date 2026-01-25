@@ -1,6 +1,9 @@
 import { create } from 'zustand'
 import {
   startEmailSignIn,
+  startPasswordSetup,
+  completePasswordSetup,
+  loginWithPassword,
   verifyEmailCode,
   startPhoneSignIn,
   verifyPhoneCode,
@@ -398,6 +401,74 @@ export const useAuthStore = create((set, get) => ({
     }
 
     return startEmailSignIn(email)
+  },
+
+  startPasswordSetup: async (email) => {
+    // Clear any stale session before beginning auth.
+    try {
+      base44.clearToken()
+      clearRefreshTimer()
+      clearAccessExpiry()
+      set({
+        accessToken: null,
+        refreshToken: null,
+        isAuthenticated: false,
+        sessionExpired: false,
+        sessionMessage: null,
+        error: null,
+      })
+    } catch {
+      // ignore
+    }
+    return startPasswordSetup(email)
+  },
+
+  loginWithPassword: async ({ email, password }) => {
+    set({ isLoading: true, error: null })
+    try {
+      const result = await loginWithPassword({ email, password })
+      if (result?.accessToken) {
+        base44.setToken(result.accessToken)
+        set({ accessToken: result.accessToken })
+      }
+      if (result?.refreshToken) {
+        base44.setRefreshToken?.(result.refreshToken)
+        set({ refreshToken: result.refreshToken })
+      }
+      get().setAuthenticatedUser(result)
+      if (result) {
+        get().scheduleSessionRefresh(result)
+      }
+      set({ isLoading: false })
+      return result
+    } catch (error) {
+      set({ isLoading: false, error: error?.message ?? 'Unable to sign in' })
+      throw error
+    }
+  },
+
+  completePasswordSetup: async ({ token, password }) => {
+    set({ isLoading: true, error: null })
+    try {
+      const result = await completePasswordSetup({ token, password })
+      if (result?.accessToken) {
+        base44.setToken(result.accessToken)
+        set({ accessToken: result.accessToken })
+      }
+      if (result?.refreshToken) {
+        base44.setRefreshToken?.(result.refreshToken)
+        set({ refreshToken: result.refreshToken })
+      }
+      get().setAuthenticatedUser(result)
+      if (result) {
+        get().scheduleSessionRefresh(result)
+      }
+      set({ isLoading: false })
+      return result
+    } catch (error) {
+      set({ isLoading: false, error: error?.message ?? 'Unable to set password' })
+      throw error
+    }
   },
 
   verifyEmailCode: async ({ email, code, profileId, verificationToken }) => {
