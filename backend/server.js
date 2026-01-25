@@ -2,6 +2,7 @@
 // machine-level OPENAI_API_KEY values during local development.
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import { fileURLToPath } from 'url';
 import { dirname, join, resolve } from 'path';
 import fs from 'fs';
@@ -98,6 +99,18 @@ const distPath = join(__dirname, '..', 'dist');
 const app = express();
 app.set('trust proxy', 1);
 const PORT = ENV?.PORT ?? process.env.PORT ?? 8080;
+
+// Security headers (must run early, before routes).
+// Keep CSP behavior unchanged (some deployments may already set CSP at a proxy/CDN layer).
+// Allow cross-origin resource loading (e.g., Vercel frontend loading /uploads from Railway API origin).
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
+  }),
+);
 
 // CORS configuration
 const defaultCorsOrigins = [
