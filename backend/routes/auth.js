@@ -15,6 +15,7 @@ import {
   sendVerificationEmail as mainSendEmail,
   sendPasswordSetupEmail as mainSendPasswordSetupEmail,
   sendAuthAttemptNotification as mainAuthNotify,
+  isEmailServiceConfigured,
 } from '../services/email.js'
 import {
   sendVerificationEmail as fallbackSendEmail,
@@ -2289,6 +2290,24 @@ router.post('/password/setup/start', async (req, res) => {
       return res.status(200).json({ ok: true, status: 'password_exists' })
     }
 
+    // In production, email MUST be configured. Fail loudly if not.
+    if (isProd && !isEmailServiceConfigured()) {
+      const missingVars = []
+      if (!process.env.RESEND_API_KEY) missingVars.push('RESEND_API_KEY')
+      if (!process.env.FROM_EMAIL && !process.env.EMAIL_FROM) missingVars.push('FROM_EMAIL or EMAIL_FROM')
+      
+      console.error('[auth/password/setup/start] Email service not configured in production:', {
+        missing: missingVars,
+        email: email,
+        user_id: user.id,
+      })
+      
+      return res.status(503).json({
+        error_type: 'email_not_configured',
+        error: 'Email service is not configured. Please contact support.',
+      })
+    }
+
     const token = base64UrlToken(32)
     const tokenHash = hashValue(token)
     const now = new Date()
@@ -2363,6 +2382,19 @@ router.post('/password/setup/start', async (req, res) => {
       emailSent = await Promise.race([sendPromise, timeoutPromise])
     } catch {
       emailSent = false
+    }
+
+    // In production, email send failure is a hard error
+    if (isProd && !emailSent) {
+      console.error('[auth/password/setup/start] Email send failed in production:', {
+        email: email,
+        user_id: user.id,
+        token_id: id,
+      })
+      return res.status(503).json({
+        error_type: 'email_delivery_failed',
+        error: 'Unable to send password setup email. Please try again or contact support.',
+      })
     }
 
     const response = { ok: true, status: 'password_setup_email_sent', email_sent: emailSent }

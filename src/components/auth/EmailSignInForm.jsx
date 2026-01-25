@@ -8,6 +8,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Loader2, MailCheck } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
+import { checkAccess } from '@/api/auth'
 
 function normalizeEmail(value) {
   if (value == null) return ''
@@ -55,10 +56,32 @@ export default function EmailSignInForm({ onComplete }) {
 
       setEmailError(null)
       const cleanedEmail = normalizeEmail(parsed.data.email)
-      const response = await authStore.startPasswordSetup(cleanedEmail)
-      setEmail(cleanedEmail)
+      
+      // Step 1: Check access BEFORE attempting password setup
+      let accessCheck
+      try {
+        accessCheck = await checkAccess(cleanedEmail)
+      } catch (error) {
+        // If access check fails with 403, redirect to ServiceApplication
+        if (error?.status === 403 || error?.details?.allowed === false) {
+          navigate('/ServiceApplication')
+          return
+        }
+        // For other errors, show generic message
+        throw new Error('Unable to verify email access. Please try again.')
+      }
 
-      if (response?.status === 'password_exists') {
+      // If not allowed, redirect (shouldn't happen if 403 is caught above, but defensive)
+      if (accessCheck?.allowed === false) {
+        navigate(accessCheck?.redirect_to || '/ServiceApplication')
+        return
+      }
+
+      // Step 2: Branch based on whether user has password
+      setEmail(cleanedEmail)
+      
+      if (accessCheck?.hasPassword) {
+        // User has password - prompt for it
         setPassword('')
         setPasswordError(null)
         setStep('password')
@@ -70,6 +93,9 @@ export default function EmailSignInForm({ onComplete }) {
         })
         return
       }
+
+      // User doesn't have password - send setup email
+      const response = await authStore.startPasswordSetup(cleanedEmail)
 
       if (response?.status === 'password_setup_email_sent') {
         // Dev convenience: if the backend can't send email and provides a preview token, route straight to set-password.
@@ -97,21 +123,12 @@ export default function EmailSignInForm({ onComplete }) {
         notice: null,
       })
     } catch (error) {
-      if (
-        error?.status === 403 ||
-        error?.errorType === 'unauthorized_email' ||
-        error?.details?.error_type === 'unauthorized_email'
-      ) {
-        // Profile-email gated access: unknown emails must go through the Service Application flow.
-        setStatus({ type: 'idle', message: null, previewCode: null, notice: null })
-        navigate('/ServiceApplication')
-        return
-      }
-
       // Provide more specific error messages based on error type
       let message = 'Unable to send verification code.'
 
-      if (error?.message?.includes('not configured') || error?.message?.includes('RESEND_API_KEY')) {
+      if (error?.status === 503 || error?.errorType === 'email_not_configured' || error?.errorType === 'email_delivery_failed') {
+        message = 'Email service is temporarily unavailable. Please contact support or try again later.'
+      } else if (error?.message?.includes('not configured') || error?.message?.includes('RESEND_API_KEY')) {
         message = 'Email service is temporarily unavailable. Please contact support or try again later.'
       } else if (error?.message?.includes('network') || error?.message?.includes('fetch')) {
         message = 'Network error. Please check your internet connection and try again.'
