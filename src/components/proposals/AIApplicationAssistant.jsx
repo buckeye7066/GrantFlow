@@ -11,6 +11,7 @@ import { Progress } from '@/components/ui/progress';
 import { Loader2, Sparkles, ChevronLeft, ChevronRight, CheckCircle2, Send, Brain, FileText } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import ReactMarkdown from 'react-markdown';
+import { createLogger } from '@/utils/logger';
 
 const DEFAULT_SECTIONS = [
   { name: 'Executive Summary', order: 1, requirements: 'Brief overview of the project and its impact' },
@@ -23,6 +24,7 @@ const DEFAULT_SECTIONS = [
 export default function AIApplicationAssistant({ open, onClose, grant, organization }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const log = React.useMemo(() => createLogger('AIApplicationAssistant'), []);
   const [currentSectionIndex, setCurrentSectionIndex] = useState(0);
   const [isGenerating, setIsGenerating] = useState(false);
   const [aiSuggestion, setAiSuggestion] = useState('');
@@ -71,10 +73,11 @@ export default function AIApplicationAssistant({ open, onClose, grant, organizat
   const progress = sections.length > 0 ? (sections.filter(s => s.status === 'approved').length / sections.length) * 100 : 0;
 
   const handleGenerateDraft = async () => {
-    console.log('[AIAssistant] Generate button clicked');
-    console.log('[AIAssistant] Current section:', currentSection?.section_name);
-    console.log('[AIAssistant] Organization:', organization?.name);
-    console.log('[AIAssistant] Grant:', grant?.title);
+    log.debug('generate clicked', {
+      section: currentSection?.section_name,
+      organization: organization?.name,
+      grant: grant?.title,
+    });
     
     if (!currentSection) {
       console.error('[AIAssistant] No current section');
@@ -99,7 +102,7 @@ export default function AIApplicationAssistant({ open, onClose, grant, organizat
     setIsGenerating(true);
     setAiSuggestion('');
     
-    console.log('[AIAssistant] Starting generation...');
+    log.debug('starting generation');
 
     try {
       // Determine if this is an individual or organization
@@ -124,7 +127,7 @@ export default function AIApplicationAssistant({ open, onClose, grant, organizat
         })
         .join('\n');
 
-      console.log('[AIAssistant] Profile context length:', profileContext.length);
+      log.debug('profile context length', { length: profileContext.length });
 
       const grantContext = `
 Grant Title: ${grant.title}
@@ -135,7 +138,7 @@ Eligibility: ${grant.eligibility_summary || 'N/A'}
 Selection Criteria: ${grant.selection_criteria || 'N/A'}
       `.trim();
 
-      console.log('[AIAssistant] Grant context length:', grantContext.length);
+      log.debug('grant context length', { length: grantContext.length });
 
       const existingContent = currentSection.draft_content || '';
       const userGuidance = userPrompt.trim();
@@ -207,14 +210,14 @@ ${userGuidance ? `**SPECIFIC GUIDANCE:**\n${userGuidance}\n\n` : ''}
 
 Write now. Be clear, specific, and professional.`;
 
-      console.log('[AIAssistant] Calling AI with professional prompt');
+      log.debug('calling AI');
 
       const response = await base44.integrations.Core.InvokeLLM({ 
         prompt,
         add_context_from_internet: false 
       });
       
-      console.log('[AIAssistant] AI response received, length:', response?.length);
+      log.debug('AI response received', { length: response?.length ?? null });
       
       if (!response || response.trim() === '') {
         throw new Error('AI returned an empty or invalid response.');
@@ -228,7 +231,7 @@ Write now. Be clear, specific, and professional.`;
         description: 'Review the content below and edit as needed.',
       });
       
-      console.log('[AIAssistant] Generation complete');
+      log.debug('generation complete');
     } catch (error) {
       console.error('[AIAssistant] Generation failed:', error);
       console.error('[AIAssistant] Error details:', {
@@ -292,7 +295,7 @@ Write now. Be clear, specific, and professional.`;
   };
 
   const handleFinalizeApplication = async () => {
-    console.log('[AIAssistant] Finalizing application');
+    log.debug('finalizing application');
     
     try {
       // Update grant status to application_prep (ready for submission)
