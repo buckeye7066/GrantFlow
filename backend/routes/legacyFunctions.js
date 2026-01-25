@@ -1,9 +1,18 @@
 import express from 'express'
 import crypto from 'crypto'
-import { ensureOrganizationAccess, requireAuthenticatedUser } from '../utils/accessControl.js'
+import {
+  ensureGrantAccess,
+  ensureOrganizationAccess,
+  isAdminUser,
+  requireAuthenticatedUser,
+} from '../utils/accessControl.js'
 import { crawlGrantsGov } from '../services/grantsDotGovCrawler.js'
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
 import { searchStateBenefits } from '../services/connectors/benefitsGovConnector.js'
+import { createOpenAIClient } from '../utils/openaiClient.js'
+import { extractCompletionText } from '../utils/openai.js'
+import { safeParseJSON } from '../utils/safeJson.js'
+import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 
 const router = express.Router()
 
@@ -94,6 +103,43 @@ async function ensureOrg(req, res, orgId) {
 
 async function getSourceDirectoryRow(db, id) {
   return await db.prepare('SELECT * FROM source_directory WHERE id = ?').get(String(id))
+}
+
+function tryExtractFirstJson(text) {
+  const raw = String(text || '')
+  const match = raw.match(/\{[\s\S]*\}/)
+  return safeParseJSON(match ? match[0] : raw, null)
+}
+
+function fallbackGrantAnalysisMarkdown({ title }) {
+  const t = title ? String(title) : 'Grant'
+  return [
+    `## ${t} — Analysis (fallback)`,
+    '',
+    'AI analysis is currently unavailable (no provider configured or provider error).',
+    '',
+    '### Next steps',
+    '- Review eligibility requirements and selection criteria.',
+    '- Confirm applicant fit (location, applicant type, and required registrations).',
+    '- Gather missing narrative inputs (problem statement, goals, budget, timeline).',
+    '',
+  ].join('\n')
+}
+
+async function invokeOpenAiOptional(prompt) {
+  const openai = createOpenAIClient({ allowMissing: true }).openai
+  if (!openai) return { text: null, provider: 'fallback' }
+  try {
+    const completion = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.3,
+      max_tokens: 1200,
+    })
+    return { text: extractCompletionText(completion), provider: 'openai' }
+  } catch {
+    return { text: null, provider: 'fallback' }
+  }
 }
 
 // POST /api/crawlGrantsGov (legacy Base44 function endpoint)
@@ -482,6 +528,103 @@ router.post('/deleteSourceWithCascade', async (req, res) => {
   } catch (error) {
     console.error('[legacyFunctions] deleteSourceWithCascade error:', error)
     return res.status(500).json({ success: false, message: error?.message || String(error) })
+  }
+})
+
+// POST /api/analyzeGrant (legacy Base44 function endpoint)
+// Used by Diagnostics + GrantDetail + NOFO Parser. Must exist in production.
+router.post('/analyzeGrant', async (req, res) => {
+  const user = requireUser(req, res)
+  if (!user) return
+
+  try {
+    const payload = req.body ?? {}
+    const grantId = payload.grantId ?? payload.grant_id ?? null
+    if (!grantId) return res.status(400).json({ success: false, error: 'grantId is required' })
+
+    if (!(await ensureGrantAccess(req, res, String(grantId)))) return
+
+    const grant = await req.db
+      .prepare(
+        `
+          SELECT id, organization_id, profile_id, title, funder, deadline,
+                 award_ceiling, program_description, eligibility_summary, selection_criteria
+          FROM grants
+          WHERE id = ?
+          LIMIT 1
+        `,
+      )
+      .get(String(grantId))
+
+    if (!grant) return res.status(404).json({ success: false, error: 'Grant not found' })
+
+    // Tier enforcement: Grant analysis is a DOCUMENT_AI feature.
+    // Try to derive the billing-scoped id from the grant row. Admin bypass remains intact.
+    const ctx = req.ctx ?? {}
+    const admin = Boolean(ctx.isAdmin) || isAdminUser(user)
+    const resolvedProfileId = String(grant.profile_id ?? grant.organization_id ?? '').trim() || null
+    if (!admin) {
+      if (!resolvedProfileId) {
+        return res.status(400).json({ success: false, error: 'profile_id required for analysis' })
+      }
+      const allowed = await requireTierCapability(req, res, resolvedProfileId, TIER_CAPABILITIES.DOCUMENT_AI)
+      if (!allowed) return
+    }
+
+    const title = payload.title ?? grant.title ?? ''
+    const description = payload.description ?? grant.program_description ?? ''
+    const eligibility = payload.eligibility ?? grant.eligibility_summary ?? ''
+    const selectionCriteria = payload.selectionCriteria ?? payload.selection_criteria ?? grant.selection_criteria ?? ''
+
+    const prompt = `
+You are a grant proposal coach. Analyze this grant opportunity and return JSON ONLY with:
+{
+  "analysis_markdown": "markdown string",
+  "required_profile_fields": ["field_key", ...]
+}
+
+Grant title: ${String(title || '')}
+Description: ${String(description || '')}
+Eligibility: ${String(eligibility || '')}
+Selection criteria: ${String(selectionCriteria || '')}
+
+Notes:
+- "required_profile_fields" should be organization/profile fields likely needed to assess fit (e.g. website, mission, annual_budget, staff_count, applicant_type, state, zip, keywords).
+`.trim()
+
+    const ai = await invokeOpenAiOptional(prompt)
+    if (!ai.text) {
+      return res.json({
+        success: true,
+        analysis: {
+          analysis_markdown: fallbackGrantAnalysisMarkdown({ title }),
+          required_profile_fields: [],
+          ai_provider: ai.provider,
+          warning: 'No AI provider configured (OPENAI_API_KEY missing) or provider error.',
+        },
+      })
+    }
+
+    const parsed = tryExtractFirstJson(ai.text) || {}
+    const analysis_markdown =
+      typeof parsed.analysis_markdown === 'string' && parsed.analysis_markdown.trim()
+        ? parsed.analysis_markdown
+        : String(ai.text).trim()
+    const required_profile_fields = Array.isArray(parsed.required_profile_fields)
+      ? parsed.required_profile_fields.filter((v) => typeof v === 'string' && v.trim())
+      : []
+
+    return res.json({
+      success: true,
+      analysis: {
+        analysis_markdown,
+        required_profile_fields,
+        ai_provider: ai.provider,
+      },
+    })
+  } catch (error) {
+    console.error('[legacyFunctions] analyzeGrant error:', error)
+    return res.status(500).json({ success: false, error: error?.message || String(error) })
   }
 })
 
