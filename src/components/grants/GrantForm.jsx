@@ -8,6 +8,7 @@ import { Loader2, Sparkles, FileText } from 'lucide-react'; // Added FileText
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { base44 } from '@/api/base44Client';
 import { useToast } from '@/components/ui/use-toast';
+import { createLogger } from '@/utils/logger';
 import {
     Select,
     SelectContent,
@@ -18,6 +19,7 @@ import {
 
 export default function GrantForm({ grant, organization, onSubmit, onCancel, isSubmitting }) { // Added organization prop
     const { toast } = useToast();
+    const log = React.useMemo(() => createLogger('GrantForm'), []);
     const [formData, setFormData] = useState({
         title: grant?.title || '',
         funder: grant?.funder || '',
@@ -91,7 +93,7 @@ Return ONLY the JSON object. If you cannot find a specific piece of information,
                 }
             });
 
-            console.log('[GrantForm] AI Contact Response:', response);
+            log.debug('AI contact response', response);
 
             // Update form with AI suggestions
             const updates = {};

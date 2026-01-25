@@ -30,10 +30,12 @@ import {
   FileText
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
+import { createLogger } from '@/utils/logger';
 
 export default function SubmissionAssistant({ open, onClose, grant, organization }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const log = React.useMemo(() => createLogger('SubmissionAssistant'), []);
   
   const [submissionMethod, setSubmissionMethod] = useState('email');
   const [recipientEmail, setRecipientEmail] = useState('');
@@ -180,7 +182,7 @@ Return ONLY the JSON object. If you cannot find a specific piece of information,
         }
       });
 
-      console.log('[SubmissionAssistant] AI Contact Response:', response);
+      log.debug('AI contact response', response);
 
       // Update form fields with AI results
       if (response.email && !recipientEmail) setRecipientEmail(response.email);
