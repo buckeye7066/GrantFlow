@@ -9,12 +9,15 @@ import { initializeAnyaForAdmin } from '../services/anyaLoginTrigger.js'
 import { recordClientSignInEvent } from '../services/adminLoginEventStore.js'
 import { getOpenAIOptional } from '../utils/aiProviders.js'
 import { loadEnv, getJwtSecretOrThrow } from '../config/env.js'
+import { isProductionEnvironment } from '../utils/environment.js'
 
 // Import email service (with fallback if main service fails to load)
 import {
   sendVerificationEmail as mainSendEmail,
   sendPasswordSetupEmail as mainSendPasswordSetupEmail,
   sendAuthAttemptNotification as mainAuthNotify,
+  EmailNotConfiguredError,
+  EmailSendError,
 } from '../services/email.js'
 import {
   sendVerificationEmail as fallbackSendEmail,
@@ -84,6 +87,49 @@ function resolveJwtSecret() {
 }
 
 const JWT_SECRET = resolveJwtSecret()
+
+/**
+ * Helper function to classify and handle email sending errors
+ * @param {Error} error - The error thrown by email service
+ * @param {boolean} isProd - Whether running in production
+ * @returns {Object} Error response object for the client
+ */
+function handleEmailSendError(error, isProd) {
+  if (error instanceof EmailNotConfiguredError) {
+    return {
+      status: 503,
+      error: 'Email service unavailable. Please contact support or try again later.',
+      error_type: 'email_service_error',
+      email_sent: false,
+      details: isProd 
+        ? 'Email service is not properly configured on the server.'
+        : error.message,
+    }
+  }
+
+  if (error instanceof EmailSendError) {
+    return {
+      status: 503,
+      error: 'Email service unavailable. Please contact support or try again later.',
+      error_type: 'email_service_error',
+      email_sent: false,
+      details: isProd
+        ? 'Failed to send email.'
+        : error.message,
+    }
+  }
+
+  // Generic error
+  return {
+    status: 503,
+    error: 'Email service unavailable. Please contact support or try again later.',
+    error_type: 'email_service_error',
+    email_sent: false,
+    details: isProd
+      ? 'An unexpected error occurred.'
+      : error.message,
+  }
+}
 
 function parseSeconds(value, fallback) {
   if (value === undefined || value === null) {
@@ -1579,6 +1625,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       emailError = emailError_
       console.error('[auth/email/start] Error sending email:', {
         error: emailError_.message,
+        errorType: emailError_.name,
         email,
         isProd,
       })
@@ -1586,14 +1633,8 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
 
       // In production, if email is not configured or fails, return an error
       if (isProd) {
-        return res.status(503).json({
-          error: 'Email service unavailable. Please contact support or try again later.',
-          error_type: 'email_service_error',
-          email_sent: false,
-          details: emailError_.message?.includes('not configured') 
-            ? 'Email service is not properly configured on the server.'
-            : 'Failed to send verification email.',
-        })
+        const errorResponse = handleEmailSendError(emailError_, isProd)
+        return res.status(errorResponse.status).json(errorResponse)
       }
     }
 
@@ -2298,6 +2339,7 @@ router.post('/password/setup/start', async (req, res) => {
       emailError = emailError_
       console.error('[auth/password/setup/start] Error sending email:', {
         error: emailError_.message,
+        errorType: emailError_.name,
         email,
         isProd,
       })
@@ -2305,14 +2347,8 @@ router.post('/password/setup/start', async (req, res) => {
 
       // In production, if email is not configured or fails, return an error
       if (isProd) {
-        return res.status(503).json({
-          error: 'Email service unavailable. Please contact support or try again later.',
-          error_type: 'email_service_error',
-          email_sent: false,
-          details: emailError_.message?.includes('not configured') 
-            ? 'Email service is not properly configured on the server.'
-            : 'Failed to send password setup email.',
-        })
+        const errorResponse = handleEmailSendError(emailError_, isProd)
+        return res.status(errorResponse.status).json(errorResponse)
       }
     }
 
