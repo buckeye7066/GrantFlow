@@ -6,9 +6,11 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useToast } from "@/components/ui/use-toast";
 import { useQuery } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
+import { createLogger } from '@/utils/logger';
 
 const ProposalCoachPanel = ({ grant, onAnalyze, isAnalyzing, onStartApplication }) => {
     const { toast } = useToast();
+    const log = React.useMemo(() => createLogger('ProposalCoachPanel'), []);
     const [localLoading, setLocalLoading] = useState(false);
     const [showNextSteps, setShowNextSteps] = useState(false);
     
@@ -61,7 +63,7 @@ const ProposalCoachPanel = ({ grant, onAnalyze, isAnalyzing, onStartApplication 
         return null;
     }
 
-    console.log('[AI Coach] Rendering for grant:', grant.id, 'Status:', grant.ai_status);
+    log.debug('render', { grantId: grant.id, aiStatus: grant.ai_status });
 
     const { program_description, eligibility_summary, ai_status, ai_summary, ai_error } = grant;
     const hasSufficientData = !!(program_description || eligibility_summary);
@@ -78,7 +80,7 @@ const ProposalCoachPanel = ({ grant, onAnalyze, isAnalyzing, onStartApplication 
             return;
         }
         
-        console.log('[AI Coach] Analyze clicked for grant:', grant.id);
+        log.debug('analyze clicked', { grantId: grant.id });
         
         if (!hasSufficientData) {
             toast({
@@ -100,11 +102,11 @@ const ProposalCoachPanel = ({ grant, onAnalyze, isAnalyzing, onStartApplication 
         }
         
         setLocalLoading(true);
-        console.log('[AI Coach] Calling onAnalyze...');
+        log.debug('calling onAnalyze');
         
         try {
             await onAnalyze();
-            console.log('[AI Coach] onAnalyze completed successfully');
+            log.debug('onAnalyze completed');
         } catch (error) {
             console.error('[AI Coach] onAnalyze failed:', error);
             toast({

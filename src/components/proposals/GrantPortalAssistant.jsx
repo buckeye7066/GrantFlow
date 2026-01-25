@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Copy, Sparkles, Loader2, AlertCircle, ExternalLink, Eye, EyeOff } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useToast } from '@/components/ui/use-toast';
+import { createLogger } from '@/utils/logger';
 
 const ProfileField = ({ label, value, onCopy }) => {
   if (!value || (Array.isArray(value) && value.length === 0)) {
@@ -30,6 +31,7 @@ const ProfileField = ({ label, value, onCopy }) => {
 
 export default function GrantPortalAssistant({ open, onClose, grant, organization }) {
   const { toast } = useToast();
+  const log = React.useMemo(() => createLogger('GrantPortalAssistant'), []);
   const [portalQuestion, setPortalQuestion] = useState('');
   const [aiAnswer, setAiAnswer] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
@@ -49,8 +51,7 @@ export default function GrantPortalAssistant({ open, onClose, grant, organizatio
   };
 
   const handleAskAI = async () => {
-    console.log('[Portal Assistant] Generate Answer clicked');
-    console.log('[Portal Assistant] Question:', portalQuestion);
+    log.debug('generate answer clicked', { hasQuestion: Boolean(portalQuestion?.trim()) });
     
     if (!portalQuestion.trim()) {
       toast({
@@ -97,11 +98,11 @@ INSTRUCTIONS:
 3. The response should be ready to be pasted directly into the application. Do NOT add any extra conversational text, greetings, or explanations.
 `;
 
-    console.log('[Portal Assistant] Calling AI...');
+    log.debug('calling AI');
     
     try {
       const response = await base44.integrations.Core.InvokeLLM({ prompt });
-      console.log('[Portal Assistant] AI response received');
+      log.debug('AI response received');
       setAiAnswer(response);
       toast({
         title: "Answer Generated!",
