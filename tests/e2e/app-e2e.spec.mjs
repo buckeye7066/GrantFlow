@@ -96,11 +96,41 @@ async function clickNavLink(page, name) {
 
 test('e2e: login, admin panel, source directory, queue crawler, pipeline, opportunities', async ({ page }) => {
   const errors = attachConsoleFailureHooks(page)
+  const appBase = stripTrailingSlash(basePath)
 
   await loginWithPreviewOtp({ page, email: 'buckeye7066@gmail.com' })
   // Some dialogs mount right after navigation; give the UI a beat, then dismiss.
   await page.waitForTimeout(250)
   await dismissBlockingOverlay(page)
+
+  // Organizations page renders and we can create + select a profile.
+  await page.goto(`${appBase}/Organizations`, { waitUntil: 'networkidle' })
+  await expect(page.getByRole('heading', { name: 'Profiles' })).toBeVisible()
+
+  await page.getByRole('button', { name: /quick add/i }).click()
+  const quickAddDialog = page.getByRole('dialog').filter({ hasText: /quick add profile/i }).first()
+  await expect(quickAddDialog).toBeVisible()
+
+  const e2eProfileName = 'E2E Profile'
+  await quickAddDialog.locator('#display_name').fill(e2eProfileName)
+
+  // Select profile type.
+  await quickAddDialog.getByText('Select profile type').click()
+  await page.getByRole('option', { name: 'Organization', exact: true }).click()
+
+  await quickAddDialog.getByRole('button', { name: /create profile/i }).click()
+  await page.waitForURL(/\/OrganizationProfile/i, { timeout: 60_000 })
+  await dismissBlockingOverlay(page)
+
+  // Confirm we can select the newly created profile in a profile-scoped surface.
+  await page.goto(`${appBase}/Documents`, { waitUntil: 'networkidle' })
+  await expect(page.getByRole('heading', { name: 'Document Library' })).toBeVisible()
+
+  const documentsHeader = page.getByRole('heading', { name: 'Document Library' }).locator('..').locator('..')
+  const profilePicker = documentsHeader.getByRole('combobox').first()
+  await profilePicker.click()
+  await page.getByRole('option', { name: e2eProfileName }).click()
+  await expect(profilePicker).toContainText(e2eProfileName)
 
   // Admin panel renders.
   await clickNavLink(page, 'Admin Panel')
