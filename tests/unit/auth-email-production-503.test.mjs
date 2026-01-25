@@ -345,3 +345,31 @@ test('auth: expired password setup token fails', async () => {
     await srv.stop()
   }
 })
+
+test('auth: dev password setup start returns preview token when email is unconfigured', async () => {
+  const srv = startServer({
+    NODE_ENV: 'development',
+    // Ensure email service is unconfigured so we exercise preview flow.
+    RESEND_API_KEY: undefined,
+    FROM_EMAIL: undefined,
+    EMAIL_FROM: undefined,
+  })
+  const { port } = await srv.ready
+
+  try {
+    const email = 'dev-preview@example.com'
+    const start = await fetchJson(`http://127.0.0.1:${port}/api/auth/password/setup/start`, {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    })
+
+    assert.equal(start.status, 202)
+    assert.ok(start.json)
+    assert.equal(start.json.status, 'password_setup_email_sent')
+    assert.equal(start.json.email_sent, false)
+    assert.ok(typeof start.json.preview_token === 'string' && start.json.preview_token.length > 10)
+    assert.ok(typeof start.json.preview_url === 'string' && start.json.preview_url.includes('set-password'))
+  } finally {
+    await srv.stop()
+  }
+})
