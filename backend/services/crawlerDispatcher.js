@@ -1,4 +1,5 @@
 import fs from 'fs'
+import crypto from 'crypto'
 import { fileURLToPath } from 'url'
 import { dirname, join, resolve } from 'path'
 import { processAvatarLookupJob } from './avatarCrawler.js'
@@ -62,6 +63,54 @@ function computeBackoffMs(attempt) {
   const exp = Math.min(16, Math.max(0, attempt - 1))
   const jitter = Math.floor(Math.random() * 250)
   return Math.min(cap, base * (2 ** exp) + jitter)
+}
+
+function stableStringify(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (value instanceof Date) return JSON.stringify(value.toISOString())
+  if (Array.isArray(value)) return `[${value.map((v) => stableStringify(v)).join(',')}]`
+  const keys = Object.keys(value).sort()
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`
+}
+
+function normalizeIso(value) {
+  if (!value) return null
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return null
+  return d.toISOString()
+}
+
+async function ensureJobSnapshot(db, job) {
+  if (!job?.profile_id) return { snapshotJson: job?.profile_context_snapshot ?? null, repaired: false }
+  if (job.profile_context_snapshot) return { snapshotJson: job.profile_context_snapshot, repaired: false }
+
+  // Deterministic reference: use the job's persisted created_at when available.
+  const asOf = normalizeIso(job.created_at) || null
+  const context = await buildProfileContext(db, job.profile_id, { asOf })
+  const snapshotJson = stableStringify(context)
+  const snapshotHash = crypto.createHash('sha256').update(snapshotJson).digest('hex')
+
+  // Concurrency safety: only write snapshot if still NULL.
+  const updateRes = await db
+    .prepare(
+      `
+        UPDATE crawler_jobs
+        SET profile_context_snapshot = ?,
+            error = NULL
+        WHERE id = ?
+          AND profile_context_snapshot IS NULL
+      `,
+    )
+    .run(snapshotJson, job.id)
+
+  const wrote = Number(updateRes?.changes ?? updateRes?.rowCount ?? 0) > 0
+
+  const fresh = await db
+    .prepare('SELECT profile_context_snapshot FROM crawler_jobs WHERE id = ? LIMIT 1')
+    .get(job.id)
+
+  const persisted = fresh?.profile_context_snapshot ?? null
+  return { snapshotJson: persisted || snapshotJson, repaired: wrote, snapshotHash }
 }
 
 export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
@@ -254,14 +303,20 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
     // CRITICAL: Use snapshot if available, never load live profile data
     let profileContext = null
     try {
-      if (job.profile_context_snapshot) {
-        // Use stored snapshot (deterministic)
+      if (job.profile_id) {
+        const { snapshotJson, repaired } = await ensureJobSnapshot(db, job)
+        if (snapshotJson) {
+          profileContext = parseJSON(snapshotJson)
+          if (repaired) {
+            console.info('[crawlerDispatcher] Repaired missing job snapshot (persisted)', jobId)
+          } else {
+            console.log('[crawlerDispatcher] Using stored profile snapshot for job', jobId)
+          }
+        }
+      } else if (job.profile_context_snapshot) {
+        // Non-profile jobs may still carry a snapshot; use it when present.
         profileContext = parseJSON(job.profile_context_snapshot)
         console.log('[crawlerDispatcher] Using stored profile snapshot for job', jobId)
-      } else if (job.profile_id) {
-        // Legacy fallback: build snapshot now (non-deterministic, but maintain backward compatibility)
-        console.warn('[crawlerDispatcher] Job missing snapshot, building now (non-deterministic):', jobId)
-        profileContext = await buildProfileContext(db, job.profile_id)
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error)
