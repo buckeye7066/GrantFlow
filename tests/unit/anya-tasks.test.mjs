@@ -11,11 +11,21 @@ async function sleep(ms) {
 }
 
 async function isPortAvailable(port, host = '127.0.0.1') {
+  // Prefer connect-probing over bind-probing.
+  // On Windows, some listeners can allow a second bind probe to succeed (SO_REUSEADDR),
+  // but connect() will still succeed if a service is already bound and accepting.
   return await new Promise((resolve) => {
-    const server = net.createServer()
-    server.once('error', () => resolve(false))
-    server.once('listening', () => server.close(() => resolve(true)))
-    server.listen(port, host)
+    const socket = net.connect({ port, host })
+    socket.once('connect', () => {
+      try { socket.destroy() } catch {}
+      resolve(false)
+    })
+    socket.once('error', (err) => {
+      try { socket.destroy() } catch {}
+      if (err?.code === 'ECONNREFUSED') return resolve(true)
+      // Conservative default: treat unknown errors as "in use" so we pick another port.
+      resolve(false)
+    })
   })
 }
 
@@ -74,11 +84,18 @@ async function startBackend({ rootDir, port, sqlitePath }) {
     NATIONAL_PROGRAMS_CRAWLER_ENABLED: 'false',
   }
 
-  const proc = spawn(process.execPath, ['backend/server.js'], {
+  // IMPORTANT: Use backend/start.js so dotenv is loaded consistently before server boot.
+  // Running server.js directly can miss env initialization and cause flaky health readiness.
+  const proc = spawn(process.execPath, ['backend/start.js'], {
     cwd: rootDir,
     env,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
+  })
+
+  let spawnError = null
+  proc.once('error', (err) => {
+    spawnError = err
   })
 
   proc.stdout?.on('data', (chunk) => {
@@ -90,12 +107,51 @@ async function startBackend({ rootDir, port, sqlitePath }) {
     if (stderrBuf.length > 20_000) stderrBuf = stderrBuf.slice(-20_000)
   })
 
-  const ok = await waitForHttpOk(`http://127.0.0.1:${port}/api/health`, { timeoutMs: 45_000 })
-  if (!ok) {
+  const start = Date.now()
+  const timeoutMs = 60_000
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    if (spawnError) {
+      const stdout = stdoutBuf
+      const stderr = stderrBuf
+      throw new Error(
+        `Backend failed to spawn for Anya tests.\n` +
+          `--- error ---\n${spawnError?.message || String(spawnError)}\n` +
+          `--- stdout ---\n${stdout || '(empty)'}\n` +
+          `--- stderr ---\n${stderr || '(empty)'}\n`,
+      )
+    }
+
+    if (proc.exitCode != null) {
+      const stdout = stdoutBuf
+      const stderr = stderrBuf
+      throw new Error(
+        `Backend exited before becoming healthy (exit=${proc.exitCode}).\n` +
+          `--- stdout ---\n${stdout || '(empty)'}\n` +
+          `--- stderr ---\n${stderr || '(empty)'}\n`,
+      )
+    }
+
+    if (Date.now() - start > timeoutMs) break
+
     try {
-      proc.kill('SIGTERM')
-    } catch {}
-    throw new Error('Backend did not become healthy for Anya tests')
+      const res = await fetch(`http://127.0.0.1:${port}/api/health`, { method: 'GET' })
+      if (res.ok) break
+    } catch {
+      // keep polling
+    }
+
+    // eslint-disable-next-line no-await-in-loop
+    await sleep(250)
+  }
+
+  if (Date.now() - start > timeoutMs) {
+    try { proc.kill('SIGTERM') } catch {}
+    throw new Error(
+      `Backend did not become healthy for Anya tests within ${timeoutMs}ms.\n` +
+        `--- stdout ---\n${stdoutBuf || '(empty)'}\n` +
+        `--- stderr ---\n${stderrBuf || '(empty)'}\n`,
+    )
   }
 
   return {
