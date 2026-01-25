@@ -5,12 +5,16 @@ FROM node:20-slim AS builder
 # Set working directory
 WORKDIR /app
 
+# Build deps for native modules (node-gyp: better-sqlite3, etc.)
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
+
 # Copy package files
 COPY package*.json ./
 
-# Install ALL dependencies (including devDependencies for build)
-# Use --legacy-peer-deps as required by package.json
-RUN npm install --legacy-peer-deps
+# Install ALL deps (incl dev) for build. Use lockfile.
+RUN npm ci --legacy-peer-deps
 
 # Copy all source files
 COPY . .
@@ -18,17 +22,16 @@ COPY . .
 # Build Vite frontend to dist/
 RUN npm run build
 
+# Remove devDependencies so runtime image doesn't ship them
+RUN npm prune --omit=dev
+
 # Stage 2: Production stage
 FROM node:20-slim
 
 # Set working directory
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
-
-# Copy node_modules from builder (includes all deps)
-# This approach avoids npm install issues in production stage
+# Copy ONLY production dependencies from builder
 COPY --from=builder /app/node_modules ./node_modules
 
 # Copy backend code
@@ -48,4 +51,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD node -e "require('http').get('http://localhost:' + (process.env.PORT || 8080) + '/readyz', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); }).on('error', () => process.exit(1));"
 
 # Start the Express server
-CMD ["npm", "start"]
+CMD ["node", "backend/start.js"]
