@@ -2184,6 +2184,67 @@ function buildPasswordSetupLink(req, token) {
   return url.toString()
 }
 
+/**
+ * POST /api/auth/access/check
+ * Check if an email is allowed to login (admin or has matching profile)
+ * and whether they already have a password set up.
+ */
+router.post('/access/check', async (req, res) => {
+  try {
+    const emailRaw = req.body?.email
+    if (typeof emailRaw !== 'string') {
+      return res.status(400).json({ error: 'email is required', error_type: 'validation_error' })
+    }
+
+    const email = normalizeEmail(emailRaw)
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: 'Invalid email address', error_type: 'validation_error' })
+    }
+
+    // Determine if user is admin
+    const isAdmin = isAdminEmail(email)
+    
+    // Check for profile match
+    const profileMatch = await findProfileRowForEmail(req.db, email)
+
+    // If not admin and no profile match, access is denied
+    if (!isAdmin && !profileMatch) {
+      return res.status(403).json({
+        allowed: false,
+        reason: 'no_profile_match',
+        redirect_to: '/ServiceApplication',
+      })
+    }
+
+    // Determine the reason for access
+    const reason = isAdmin ? 'admin' : 'profile_match'
+
+    // Check if password is already set
+    let hasPassword = false
+    try {
+      const user = await req.db
+        .prepare('SELECT id, password_hash FROM users WHERE LOWER(primary_email) = ? LIMIT 1')
+        .get(email)
+      
+      if (user && typeof user.password_hash === 'string' && user.password_hash.trim()) {
+        hasPassword = true
+      }
+    } catch (error) {
+      // If user doesn't exist yet, hasPassword remains false
+      console.warn('[auth/access/check] Error checking password status:', error?.message || error)
+    }
+
+    return res.status(200).json({
+      allowed: true,
+      reason,
+      hasPassword,
+    })
+  } catch (error) {
+    console.error('[auth/access/check] Unexpected error:', error)
+    return res.status(500).json({ error: 'An unexpected error occurred', error_type: 'internal_error' })
+  }
+})
+
 router.post('/password/setup/start', async (req, res) => {
   try {
     await ensurePasswordAuthSchema(req.db)
@@ -2208,8 +2269,7 @@ router.post('/password/setup/start', async (req, res) => {
 
     if (isProd && !isAdmin && !profileMatch) {
       return res.status(403).json({
-        error_type: 'unauthorized_email',
-        error: 'Access denied. This email is not authorized for login.',
+        ok: false,
         redirect_to: '/ServiceApplication',
       })
     }
@@ -2239,8 +2299,18 @@ router.post('/password/setup/start', async (req, res) => {
           `,
         )
         .run(id, user.id, tokenHash, expiresAt, req.ip ?? null, req.headers['user-agent'] ?? null)
+      
+      // Structured logging (success) - DO NOT log the token itself
+      console.info('[auth/password/setup/start] Token created:', {
+        user_id: user.id,
+        email: email,
+        token_id: id,
+        expires_at: expiresAt,
+        ip: req.ip,
+      })
     } catch (dbError) {
       // Retry once after best-effort schema ensure (covers deploys where migrations lag).
+      console.warn('[auth/password/setup/start] Initial DB error, retrying after schema ensure:', dbError?.message || dbError)
       await ensurePasswordAuthSchema(req.db)
       try {
         await req.db
@@ -2252,8 +2322,23 @@ router.post('/password/setup/start', async (req, res) => {
             `,
           )
           .run(id, user.id, tokenHash, expiresAt, req.ip ?? null, req.headers['user-agent'] ?? null)
+        
+        // Structured logging (success after retry) - DO NOT log the token itself
+        console.info('[auth/password/setup/start] Token created (after retry):', {
+          user_id: user.id,
+          email: email,
+          token_id: id,
+          expires_at: expiresAt,
+          ip: req.ip,
+        })
       } catch (retryError) {
-        console.error('[auth/password/setup/start] DB error creating token:', retryError?.message || retryError)
+        // Structured logging (failure) - DO NOT log the token itself
+        console.error('[auth/password/setup/start] DB error creating token (after retry):', {
+          error: retryError?.message || retryError,
+          user_id: user.id,
+          email: email,
+          ip: req.ip,
+        })
         return res.status(503).json({
           error_type: 'service_unavailable',
           error: 'Login is temporarily unavailable. Please try again in a minute.',
