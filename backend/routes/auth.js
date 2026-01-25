@@ -11,16 +11,25 @@ import { getOpenAIOptional } from '../utils/aiProviders.js'
 import { loadEnv, getJwtSecretOrThrow } from '../config/env.js'
 
 // Import email service (with fallback if main service fails to load)
-import { sendVerificationEmail as mainSendEmail, sendAuthAttemptNotification as mainAuthNotify } from '../services/email.js'
-import { sendVerificationEmail as fallbackSendEmail } from '../services/emailFallback.js'
+import {
+  sendVerificationEmail as mainSendEmail,
+  sendPasswordSetupEmail as mainSendPasswordSetupEmail,
+  sendAuthAttemptNotification as mainAuthNotify,
+} from '../services/email.js'
+import {
+  sendVerificationEmail as fallbackSendEmail,
+  sendPasswordSetupEmail as fallbackSendPasswordSetupEmail,
+} from '../services/emailFallback.js'
 
 // Use main email service if available, otherwise fallback
 const sendVerificationEmail = mainSendEmail || fallbackSendEmail
+const sendPasswordSetupEmail = mainSendPasswordSetupEmail || fallbackSendPasswordSetupEmail
 const sendAuthAttemptNotification = typeof mainAuthNotify === 'function' ? mainAuthNotify : async () => false
 import { getDesignatedProfileForEmail } from '../config/userProfileMappings.js'
 import { ADMIN_EMAIL, isAdminEmail } from '../config/constants.js'
 import { ensureAdminUser, isAdminUserId } from '../utils/adminProfileLinks.js'
 import { triggerAutoDiscoveryCrawlers } from '../services/autoDiscoveryCrawlers.js'
+import bcrypt from 'bcryptjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -143,6 +152,7 @@ const EMAIL_RESEND_COOLDOWN = parseSeconds(process.env.AUTH_EMAIL_RESEND_SECONDS
 const PHONE_CODE_TTL = parseSeconds(process.env.AUTH_PHONE_CODE_TTL, 600) // seconds
 const PHONE_RESEND_COOLDOWN = parseSeconds(process.env.AUTH_PHONE_RESEND_SECONDS, 60) // seconds
 const OAUTH_STATE_TTL = parseSeconds(process.env.AUTH_OAUTH_STATE_TTL, 600) // seconds
+const PASSWORD_SETUP_TTL = parseSeconds(process.env.AUTH_PASSWORD_SETUP_TTL, 30 * 60) // seconds (default: 30 minutes)
 
 console.info('[auth] TTL configuration (seconds):', {
   ACCESS_TOKEN_TTL,
@@ -152,6 +162,7 @@ console.info('[auth] TTL configuration (seconds):', {
   PHONE_CODE_TTL,
   PHONE_RESEND_COOLDOWN,
   OAUTH_STATE_TTL,
+  PASSWORD_SETUP_TTL,
 })
 
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || null
@@ -236,6 +247,19 @@ function isValidEmail(email) {
 
 function hashValue(value) {
   return crypto.createHash('sha256').update(value).digest('hex')
+}
+
+function base64UrlToken(bytes = 32) {
+  return base64UrlEncode(crypto.randomBytes(Math.max(16, Number(bytes) || 32)))
+}
+
+function isStrongPassword(password) {
+  const value = String(password || '')
+  if (value.length < 10) return { ok: false, error: 'Password must be at least 10 characters long' }
+  const lower = value.toLowerCase()
+  const common = new Set(['password', 'password1', 'password123', '1234567890', 'qwertyuiop', 'letmein'])
+  if (common.has(lower)) return { ok: false, error: 'Password is too common' }
+  return { ok: true }
 }
 
 function signOtpToken({ kind, identifier, codeHash, ttlSeconds }) {
@@ -678,6 +702,54 @@ async function ensureEmailCredential(db, email) {
   const credential = await db.prepare('SELECT * FROM user_credentials WHERE id = ?').get(credentialId)
 
   return { user, credential }
+}
+
+async function getUserByEmail(db, email) {
+  if (!email) return null
+  return await db
+    .prepare(
+      `
+        SELECT *
+        FROM users
+        WHERE primary_email = ?
+      `,
+    )
+    .get(email)
+}
+
+async function ensureUserForPasswordAuth(db, email) {
+  const existing = await getUserByEmail(db, email)
+  if (existing) {
+    // Ensure admin status is set if this is the admin email
+    await ensureAdminStatus(db, existing.id, email)
+    return await getUserById(db, existing.id)
+  }
+
+  const displayName = email.split('@')[0] || 'New User'
+  const userId = crypto.randomUUID()
+  await db
+    .prepare('INSERT INTO users (id, display_name, primary_email, is_admin) VALUES (?, ?, ?, ?)')
+    .run(userId, displayName, email, isAdminEmail(email) ? true : false)
+
+  return await getUserById(db, userId)
+}
+
+async function consumePasswordSetupToken(db, tokenHash) {
+  const now = nowISOString()
+  // sqlite uses TEXT timestamps; postgres uses timestamptz; both compare fine as ISO strings in our abstraction.
+  const row = await db
+    .prepare(
+      `
+        SELECT *
+        FROM password_setup_tokens
+        WHERE token_hash = ?
+          AND consumed_at IS NULL
+          AND expires_at > ?
+        LIMIT 1
+      `,
+    )
+    .get(tokenHash, now)
+  return row ?? null
 }
 
 async function cleanupExpiredOAuthStates(db) {
@@ -1452,12 +1524,16 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
         : 'Verification code generated. Email delivery may be delayed.',
       email_sent: emailSent,
       verification_token: verificationToken,
-      previewCode: code,
       user_hint: {
         id: user.id,
         display_name: user.display_name,
         primary_email: user.primary_email,
       },
+    }
+
+    // Never return OTP codes in production.
+    if (!isProd) {
+      responseData.previewCode = code
     }
 
     // Also do not hard-fail if email delivery is slow/unavailable: providers can be async/queued,
@@ -2033,6 +2109,242 @@ router.post('/phone/verify', async (req, res) => {
   }
 
   return res.json(response)
+})
+
+function buildPasswordSetupLink(req, token) {
+  const baseUrl = inferFrontendBaseUrl(req)
+  const basePath = normalizeBasePath(FRONTEND_APP_BASE)
+  const url = new URL(baseUrl)
+  url.pathname = `${basePath}/set-password`.replace(/\/{2,}/g, '/')
+  url.searchParams.set('token', token)
+  return url.toString()
+}
+
+router.post('/password/setup/start', async (req, res) => {
+  try {
+    const emailRaw = req.body?.email
+    if (typeof emailRaw !== 'string') {
+      return res.status(400).json({ error: 'email is required', error_type: 'validation_error' })
+    }
+
+    const email = normalizeEmail(emailRaw)
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: 'Invalid email address', error_type: 'validation_error' })
+    }
+
+    const isProd =
+      process.env.NODE_ENV === 'production' ||
+      process.env.RAILWAY_ENVIRONMENT === 'production' ||
+      process.env.VERCEL_ENV === 'production'
+
+    const isAdmin = isAdminEmail(email)
+    const profileMatch = await findProfileRowForEmail(req.db, email)
+
+    if (isProd && !isAdmin && !profileMatch) {
+      return res.status(403).json({
+        error_type: 'unauthorized_email',
+        error: 'Access denied. This email is not authorized for login.',
+        redirect_to: '/ServiceApplication',
+      })
+    }
+
+    const user = await ensureUserForPasswordAuth(req.db, email)
+    if (!user) {
+      return res.status(503).json({ error: 'Unable to start password setup', error_type: 'service_unavailable' })
+    }
+
+    if (typeof user.password_hash === 'string' && user.password_hash.trim()) {
+      return res.status(200).json({ ok: true, status: 'password_exists' })
+    }
+
+    const token = base64UrlToken(32)
+    const tokenHash = hashValue(token)
+    const now = new Date()
+    const expiresAt = new Date(now.getTime() + PASSWORD_SETUP_TTL * 1000).toISOString()
+    const id = crypto.randomUUID()
+
+    await req.db
+      .prepare(
+        `
+          INSERT INTO password_setup_tokens (
+            id, user_id, token_hash, expires_at, consumed_at, request_ip, user_agent
+          ) VALUES (?, ?, ?, ?, NULL, ?, ?)
+        `,
+      )
+      .run(id, user.id, tokenHash, expiresAt, req.ip ?? null, req.headers['user-agent'] ?? null)
+
+    const link = buildPasswordSetupLink(req, token)
+
+    let emailSent = false
+    try {
+      const sendPromise = sendPasswordSetupEmail(email, link)
+      const timeoutPromise = new Promise((resolve) => {
+        setTimeout(() => resolve(false), Number(process.env.AUTH_EMAIL_SEND_TIMEOUT_MS || 15000))
+      })
+      emailSent = await Promise.race([sendPromise, timeoutPromise])
+    } catch {
+      emailSent = false
+    }
+
+    const response = { ok: true, status: 'password_setup_email_sent', email_sent: emailSent }
+    if (emailSent !== true) {
+      response.notice = 'We created your password setup link, but email delivery may be delayed. Please try again in a minute.'
+    }
+
+    return res.status(202).json(response)
+  } catch (error) {
+    console.error('[auth/password/setup/start] Unexpected error:', error)
+    return res.status(500).json({ error: 'An unexpected error occurred', error_type: 'internal_error' })
+  }
+})
+
+router.post('/password/setup/complete', async (req, res) => {
+  try {
+    const tokenRaw = req.body?.token
+    const passwordRaw = req.body?.password
+    if (typeof tokenRaw !== 'string' || typeof passwordRaw !== 'string') {
+      return res.status(400).json({ error: 'token and password are required', error_type: 'validation_error' })
+    }
+
+    const token = tokenRaw.trim()
+    if (!token) return res.status(400).json({ error: 'token is required', error_type: 'validation_error' })
+
+    const pwCheck = isStrongPassword(passwordRaw)
+    if (!pwCheck.ok) {
+      return res.status(400).json({ error: pwCheck.error, error_type: 'weak_password' })
+    }
+
+    const tokenHash = hashValue(token)
+    const record = await consumePasswordSetupToken(req.db, tokenHash)
+    if (!record) {
+      return res.status(400).json({ error: 'invalid_or_expired_token', error_type: 'invalid_or_expired_token' })
+    }
+
+    const user = await getUserById(req.db, record.user_id)
+    if (!user) {
+      return res.status(400).json({ error: 'invalid_or_expired_token', error_type: 'invalid_or_expired_token' })
+    }
+
+    const passwordHash = await bcrypt.hash(passwordRaw, 12)
+    await req.db
+      .prepare('UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(passwordHash, user.id)
+
+    await req.db
+      .prepare('UPDATE password_setup_tokens SET consumed_at = ? WHERE id = ?')
+      .run(nowISOString(), record.id)
+
+    // Ensure the user's profile link is established (self-heals after DB restores/imports).
+    let activeProfileId = null
+    try {
+      const attached = await assignProfileToUser(req.db, user.id, user.primary_email ?? null)
+      const profiles = await getUserProfiles(req.db, user.id)
+      activeProfileId = attached ?? profiles[0]?.id ?? null
+    } catch (e) {
+      console.warn('[auth/password/setup/complete] Failed to auto-attach profile:', e?.message || e)
+    }
+
+    const profiles = await getUserProfiles(req.db, user.id)
+    if (!activeProfileId && profiles.length > 0) activeProfileId = profiles[0].id
+
+    const session = await createSessionAndTokens(req.db, {
+      user,
+      profileId: activeProfileId,
+      userAgent: req.headers['user-agent'],
+      ipAddress: req.ip,
+    })
+
+    return res.json({
+      accessToken: session.accessToken,
+      refreshToken: session.refreshToken,
+      expiresIn: session.expiresIn,
+      accessExpires: session.accessExpires,
+      refreshExpires: session.refreshExpires,
+      tokenType: 'Bearer',
+      user: buildUserPayload(user, profiles, activeProfileId),
+    })
+  } catch (error) {
+    console.error('[auth/password/setup/complete] Unexpected error:', error)
+    return res.status(500).json({ error: 'An unexpected error occurred', error_type: 'internal_error' })
+  }
+})
+
+router.post('/password/login', async (req, res) => {
+  try {
+    const emailRaw = req.body?.email
+    const passwordRaw = req.body?.password
+    if (typeof emailRaw !== 'string' || typeof passwordRaw !== 'string') {
+      return res.status(400).json({ error: 'email and password are required', error_type: 'validation_error' })
+    }
+
+    const email = normalizeEmail(emailRaw)
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: 'Invalid email address', error_type: 'validation_error' })
+    }
+
+    const isProd =
+      process.env.NODE_ENV === 'production' ||
+      process.env.RAILWAY_ENVIRONMENT === 'production' ||
+      process.env.VERCEL_ENV === 'production'
+
+    const isAdmin = isAdminEmail(email)
+    const profileMatch = await findProfileRowForEmail(req.db, email)
+    if (isProd && !isAdmin && !profileMatch) {
+      return res.status(403).json({
+        error_type: 'unauthorized_email',
+        error: 'Access denied. This email is not authorized for login.',
+        redirect_to: '/ServiceApplication',
+      })
+    }
+
+    const user = await getUserByEmail(req.db, email)
+    if (!user) {
+      return res.status(401).json({ error: 'invalid_credentials', error_type: 'invalid_credentials' })
+    }
+
+    const storedHash = typeof user.password_hash === 'string' ? user.password_hash : ''
+    if (!storedHash.trim()) {
+      return res.status(400).json({ error: 'password_not_set', error_type: 'password_not_set', hint: 'use password setup email' })
+    }
+
+    const ok = await bcrypt.compare(passwordRaw, storedHash)
+    if (!ok) {
+      return res.status(401).json({ error: 'invalid_credentials', error_type: 'invalid_credentials' })
+    }
+
+    // Ensure the user's profile link is established (self-heals after DB restores/imports).
+    let activeProfileId = null
+    try {
+      const attached = await assignProfileToUser(req.db, user.id, user.primary_email ?? null)
+      const profiles = await getUserProfiles(req.db, user.id)
+      activeProfileId = attached ?? profiles[0]?.id ?? null
+    } catch (e) {
+      console.warn('[auth/password/login] Failed to auto-attach profile:', e?.message || e)
+    }
+
+    const profiles = await getUserProfiles(req.db, user.id)
+    if (!activeProfileId && profiles.length > 0) activeProfileId = profiles[0].id
+
+    const session = await createSessionAndTokens(req.db, {
+      user,
+      profileId: activeProfileId,
+      userAgent: req.headers['user-agent'],
+      ipAddress: req.ip,
+    })
+
+    return res.json({
+      accessToken: session.accessToken,
+      refreshToken: session.refreshToken,
+      expiresIn: session.expiresIn,
+      accessExpires: session.accessExpires,
+      refreshExpires: session.refreshExpires,
+      tokenType: 'Bearer',
+      user: buildUserPayload(user, profiles, activeProfileId),
+    })
+  } catch (error) {
+    console.error('[auth/password/login] Unexpected error:', error)
+    return res.status(500).json({ error: 'An unexpected error occurred', error_type: 'internal_error' })
+  }
 })
 
 router.get('/:provider/start', async (req, res) => {

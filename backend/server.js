@@ -410,6 +410,8 @@ const allowedMigrations = [
   // Link documents to per-school university applications (student profiles)
   { table: 'documents', column: 'university_application_id', type: 'TEXT' },
   { table: 'documents', column: 'university_application_name', type: 'TEXT' },
+  // Password auth (first-login password setup + password login)
+  { table: 'users', column: 'password_hash', type: 'TEXT' },
 ];
 
 const validTables = new Set(['profiles', 'crawler_jobs', 'users', 'organizations', 'grants', 'funding_opportunities', 'documents']);

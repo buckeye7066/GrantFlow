@@ -111,7 +111,7 @@ export default function Login() {
 function AuthMethodExpiryNotice() {
   return (
     <div className="mb-6 rounded-lg border border-blue-100 bg-blue-50/70 p-3 text-sm text-slate-700">
-      We'll send a 6-digit verification code to your email for secure authentication. The code expires after 10 minutes.
+      First-time sign-in uses a one-time email link to set your password. Returning users can sign in with email + password.
     </div>
   )
 }

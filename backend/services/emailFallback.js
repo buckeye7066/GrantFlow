@@ -26,6 +26,13 @@ export async function sendVerificationEmail(email, code) {
   return false
 }
 
+export async function sendPasswordSetupEmail(email, link) {
+  console.warn('[emailFallback] Using fallback email service')
+  console.warn('[emailFallback] Password setup email would be sent to:', email)
+  console.warn('[emailFallback] Password setup link:', link)
+  return false
+}
+
 /**
  * Fallback application email sender
  * @param {string} toEmail - Recipient email address
