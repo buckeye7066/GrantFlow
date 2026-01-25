@@ -108,6 +108,25 @@ export default function EmailSignInForm({ onComplete }) {
         return
       }
 
+      // Handle email service errors explicitly
+      if (
+        error?.status === 503 ||
+        error?.errorType === 'email_service_error' ||
+        error?.details?.error_type === 'email_service_error'
+      ) {
+        const message =
+          error?.details?.details ||
+          error?.message ||
+          'Email service is temporarily unavailable. Please contact support or try again later.'
+        setStatus({
+          type: 'error',
+          message,
+          previewCode: null,
+          notice: 'This typically means the email service is not configured. Please contact the system administrator.',
+        })
+        return
+      }
+
       // Provide more specific error messages based on error type
       let message = 'Unable to send verification code.'
 
