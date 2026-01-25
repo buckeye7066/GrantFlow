@@ -1,6 +1,9 @@
 /**
  * Fallback email service when Resend is not available
- * This ensures the authentication flow continues even without email delivery
+ * This is only for local development to allow auth flow testing without email configuration
+ * 
+ * WARNING: This fallback should NEVER be used in production environments.
+ * Production environments MUST have RESEND_API_KEY and FROM_EMAIL configured.
  */
 
 /**
@@ -12,24 +15,55 @@ export function isEmailServiceConfigured() {
 }
 
 /**
- * Fallback verification email sender
+ * Fallback verification email sender (DEV ONLY)
  * @param {string} email - Recipient email address
  * @param {string} code - 6-digit verification code
  * @returns {Promise<boolean>} Always returns false to indicate email wasn't sent
  */
 export async function sendVerificationEmail(email, code) {
-  console.warn('[emailFallback] Using fallback email service')
-  console.warn('[emailFallback] Email would be sent to:', email)
-  
+  const isProd = process.env.NODE_ENV === 'production' || 
+                 process.env.RAILWAY_ENVIRONMENT === 'production' ||
+                 process.env.VERCEL_ENV === 'production'
+
+  console.warn('[emailFallback/sendVerificationEmail] Using fallback email service - email NOT sent')
+  console.warn('[emailFallback] Target email:', email)
+  console.warn('[emailFallback] Environment:', {
+    NODE_ENV: process.env.NODE_ENV,
+    RAILWAY_ENVIRONMENT: process.env.RAILWAY_ENVIRONMENT,
+    isProd,
+  })
+
+  if (isProd) {
+    const errorMsg = 'Email service not configured. Fallback service cannot be used in production. Configure RESEND_API_KEY and FROM_EMAIL in Railway.'
+    console.error('[emailFallback/sendVerificationEmail]', errorMsg)
+    throw new Error(errorMsg)
+  }
+
   // Always return false to indicate email wasn't actually sent
   // This ensures the preview code is shown in the UI
   return false
 }
 
 export async function sendPasswordSetupEmail(email, link) {
-  console.warn('[emailFallback] Using fallback email service')
-  console.warn('[emailFallback] Password setup email would be sent to:', email)
+  const isProd = process.env.NODE_ENV === 'production' || 
+                 process.env.RAILWAY_ENVIRONMENT === 'production' ||
+                 process.env.VERCEL_ENV === 'production'
+
+  console.warn('[emailFallback/sendPasswordSetupEmail] Using fallback email service - email NOT sent')
+  console.warn('[emailFallback] Target email:', email)
   console.warn('[emailFallback] Password setup link:', link)
+  console.warn('[emailFallback] Environment:', {
+    NODE_ENV: process.env.NODE_ENV,
+    RAILWAY_ENVIRONMENT: process.env.RAILWAY_ENVIRONMENT,
+    isProd,
+  })
+
+  if (isProd) {
+    const errorMsg = 'Email service not configured. Fallback service cannot be used in production. Configure RESEND_API_KEY and FROM_EMAIL in Railway.'
+    console.error('[emailFallback/sendPasswordSetupEmail]', errorMsg)
+    throw new Error(errorMsg)
+  }
+
   return false
 }
 

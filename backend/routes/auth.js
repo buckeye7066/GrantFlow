@@ -1557,9 +1557,10 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       })
     }
 
-    // Attempt to send email with timeout (optional, not required for login)
+    // Attempt to send email with timeout
     console.info('[auth/email/start] Attempting to send verification email to:', email)
     let emailSent = false
+    let emailError = null
     try {
       // Add timeout to email sending to prevent hanging
       const emailPromise = sendVerificationEmail(email, code)
@@ -1574,10 +1575,26 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       } else {
         console.warn('[auth/email/start] Email service unavailable, timed out, or failed for:', email)
       }
-    } catch (emailError) {
-      console.error('[auth/email/start] Unexpected error sending email:', emailError)
+    } catch (emailError_) {
+      emailError = emailError_
+      console.error('[auth/email/start] Error sending email:', {
+        error: emailError_.message,
+        email,
+        isProd,
+      })
       emailSent = false
-      // Don't fail the request if email fails - code is stored in DB
+
+      // In production, if email is not configured or fails, return an error
+      if (isProd) {
+        return res.status(503).json({
+          error: 'Email service unavailable. Please contact support or try again later.',
+          error_type: 'email_service_error',
+          email_sent: false,
+          details: emailError_.message?.includes('not configured') 
+            ? 'Email service is not properly configured on the server.'
+            : 'Failed to send verification email.',
+        })
+      }
     }
 
     // Return success response
@@ -1612,7 +1629,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       event: 'email_start',
       identifier: email,
       success: Boolean(emailSent),
-      error: emailSent ? null : 'email_delivery_failed_or_unconfigured',
+      error: emailSent ? null : (emailError?.message || 'email_delivery_failed_or_unconfigured'),
     }).catch(() => {})
 
     console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent, 'isProd:', isProd)
@@ -2264,14 +2281,39 @@ router.post('/password/setup/start', async (req, res) => {
     const link = buildPasswordSetupLink(req, token)
 
     let emailSent = false
+    let emailError = null
     try {
       const sendPromise = sendPasswordSetupEmail(email, link)
       const timeoutPromise = new Promise((resolve) => {
         setTimeout(() => resolve(false), Number(process.env.AUTH_EMAIL_SEND_TIMEOUT_MS || 15000))
       })
       emailSent = await Promise.race([sendPromise, timeoutPromise])
-    } catch {
+      
+      if (emailSent === true) {
+        console.info('[auth/password/setup/start] Password setup email sent successfully to:', email)
+      } else {
+        console.warn('[auth/password/setup/start] Email service unavailable, timed out, or failed for:', email)
+      }
+    } catch (emailError_) {
+      emailError = emailError_
+      console.error('[auth/password/setup/start] Error sending email:', {
+        error: emailError_.message,
+        email,
+        isProd,
+      })
       emailSent = false
+
+      // In production, if email is not configured or fails, return an error
+      if (isProd) {
+        return res.status(503).json({
+          error: 'Email service unavailable. Please contact support or try again later.',
+          error_type: 'email_service_error',
+          email_sent: false,
+          details: emailError_.message?.includes('not configured') 
+            ? 'Email service is not properly configured on the server.'
+            : 'Failed to send password setup email.',
+        })
+      }
     }
 
     const response = { ok: true, status: 'password_setup_email_sent', email_sent: emailSent }

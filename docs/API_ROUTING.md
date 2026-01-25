@@ -80,21 +80,98 @@ In local development:
 
 ### Password setup email not arriving?
 
-If you want to enable email notifications:
+**CRITICAL: Email service MUST be configured in production environments (Railway).**
 
-1. **Set Railway environment variables**:
-   - `RESEND_API_KEY` - Your Resend API key
-   - `FROM_EMAIL` or `EMAIL_FROM` - Must be a verified domain in Resend
-   - `AUTH_JWT_SECRET` - Required for auth tokens
+If email is not configured properly, users will see an error message instead of being told to check their email. This is intentional - production environments require working email delivery.
 
-2. **Check Railway logs** for email sending errors:
-   - Look for `[email/sendVerificationEmail]` log messages
-   - Should see `provider: resend, runtime: railway`
+#### Required Railway Environment Variables
 
-3. **Verify Resend dashboard**:
-   - Domain is verified
-   - API key is valid
-   - FROM_EMAIL matches verified domain
+Set these in Railway project settings → Variables:
+
+1. **`RESEND_API_KEY`** (REQUIRED)
+   - Your Resend API key from https://resend.com
+   - Format: `re_xxxxxxxxxxxxx`
+   - Get it from: Resend Dashboard → API Keys
+
+2. **`FROM_EMAIL` or `EMAIL_FROM`** (REQUIRED)
+   - Must be a verified domain in Resend
+   - Format: `noreply@yourdomain.com` or `GrantFlow <noreply@yourdomain.com>`
+   - DO NOT use `onboarding@resend.dev` - this is only for examples
+   - Domain must be verified in Resend Dashboard → Domains
+
+3. **`AUTH_JWT_SECRET`** (REQUIRED)
+   - Secret key for signing authentication tokens
+   - Format: Any secure random string (minimum 32 characters recommended)
+   - Generate with: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+
+4. **`NODE_ENV`** (REQUIRED for production)
+   - Set to `production` in Railway production environment
+   - This enables production security checks
+
+#### How to Verify Railway Environment Variables
+
+1. Go to Railway dashboard: https://railway.app
+2. Select your project (GrantFlow)
+3. Click on your backend service
+4. Go to "Variables" tab
+5. Verify these variables are present with correct values:
+   - ✅ `RESEND_API_KEY` - Should start with `re_`
+   - ✅ `FROM_EMAIL` or `EMAIL_FROM` - Should be a real email address
+   - ✅ `AUTH_JWT_SECRET` - Should be a long random string
+   - ✅ `NODE_ENV` - Should be `production`
+
+#### Troubleshooting Email Delivery
+
+**Check Railway logs** for email sending errors:
+
+```bash
+# Look for these log messages in Railway logs:
+[email/sendVerificationEmail] Email service not configured
+[email/sendPasswordSetupEmail] Email service not configured
+[email/sendVerificationEmail] Resend API error
+[auth/email/start] Error sending email
+[auth/password/setup/start] Error sending email
+```
+
+Log messages will include:
+- `provider: resend` - Confirms using Resend service
+- `runtime: railway` - Confirms running on Railway
+- `has_api_key: false` - Indicates RESEND_API_KEY is missing
+- `has_from_email: false` - Indicates FROM_EMAIL is missing or invalid
+
+**Verify Resend dashboard** at https://resend.com:
+1. Domain is verified (green checkmark)
+2. API key is active and valid
+3. FROM_EMAIL matches a verified domain
+4. Check "Logs" tab for delivery status and errors
+
+**Test in development first:**
+- Run backend locally with `.env` file containing the same Railway variables
+- Attempt login to verify email sends successfully
+- Check console logs for any errors
+
+**Common Issues:**
+
+1. **"Email service not configured"** error:
+   - Missing RESEND_API_KEY or FROM_EMAIL in Railway
+   - Solution: Add both variables in Railway → Variables
+
+2. **"Invalid FROM_EMAIL configuration"** error:
+   - FROM_EMAIL contains `onboarding@resend.dev` (example address)
+   - FROM_EMAIL contains `FROM_EMAIL=` (pasted KEY=VALUE format)
+   - FROM_EMAIL domain is not verified in Resend
+   - Solution: Use a verified domain email address
+
+3. **Email sent but not received:**
+   - Check Resend dashboard → Logs for delivery status
+   - Verify recipient email is correct
+   - Check spam/junk folder
+   - Domain SPF/DKIM records may need configuration
+
+4. **Users see "Check your email" but email fails:**
+   - This should NOT happen anymore after this fix
+   - In production, users will see "Email service unavailable" if email is not configured
+   - In development, users see a preview token/link in the response
 
 ### How to verify routing is correct?
 

@@ -56,16 +56,53 @@ function getResend() {
 }
 
 export async function sendVerificationEmail(email, code) {
-  if (!email) return false
-  if (!code) return false
-  if (!isEmailServiceConfigured()) return false
+  const isProd = process.env.NODE_ENV === 'production' || 
+                 process.env.RAILWAY_ENVIRONMENT === 'production' ||
+                 process.env.VERCEL_ENV === 'production'
+
+  if (!email) {
+    const errorMsg = 'Email address is required'
+    console.error('[email/sendVerificationEmail]', errorMsg)
+    if (isProd) throw new Error(errorMsg)
+    return false
+  }
+
+  if (!code) {
+    const errorMsg = 'Verification code is required'
+    console.error('[email/sendVerificationEmail]', errorMsg)
+    if (isProd) throw new Error(errorMsg)
+    return false
+  }
+
+  if (!isEmailServiceConfigured()) {
+    const errorMsg = 'Email service not configured. Missing RESEND_API_KEY or FROM_EMAIL/EMAIL_FROM environment variables.'
+    console.error('[email/sendVerificationEmail]', errorMsg, {
+      has_api_key: Boolean(RESEND_API_KEY),
+      has_from_email: Boolean(resolveFromEmail()),
+      provider: 'resend',
+      runtime: 'railway',
+      environment: process.env.NODE_ENV || 'development',
+    })
+    if (isProd) throw new Error(errorMsg)
+    return false
+  }
 
   try {
     const resend = getResend()
-    if (!resend) return false
+    if (!resend) {
+      const errorMsg = 'Failed to initialize Resend client'
+      console.error('[email/sendVerificationEmail]', errorMsg)
+      if (isProd) throw new Error(errorMsg)
+      return false
+    }
 
     const from = resolveFromEmail()
-    if (!from) return false
+    if (!from) {
+      const errorMsg = 'Invalid FROM_EMAIL configuration'
+      console.error('[email/sendVerificationEmail]', errorMsg)
+      if (isProd) throw new Error(errorMsg)
+      return false
+    }
 
     const subject = 'Your GrantFlow Verification Code'
     const html = `
@@ -95,28 +132,81 @@ export async function sendVerificationEmail(email, code) {
         to: email,
         provider: 'resend',
         runtime: 'railway',
+        environment: process.env.NODE_ENV || 'development',
       })
+      if (isProd) {
+        throw new Error(`Failed to send email via Resend: ${JSON.stringify(result.error)}`)
+      }
       return false
     }
 
+    console.info('[email/sendVerificationEmail] Email sent successfully', {
+      to: email,
+      provider: 'resend',
+      runtime: 'railway',
+    })
+
     return true
   } catch (error) {
-    console.error('[email] Failed to send verification email:', error?.message)
+    console.error('[email/sendVerificationEmail] Failed to send verification email:', {
+      error: error?.message,
+      provider: 'resend',
+      runtime: 'railway',
+      environment: process.env.NODE_ENV || 'development',
+    })
+    if (isProd) throw error
     return false
   }
 }
 
 export async function sendPasswordSetupEmail(email, link) {
-  if (!email) return false
-  if (!link) return false
-  if (!isEmailServiceConfigured()) return false
+  const isProd = process.env.NODE_ENV === 'production' || 
+                 process.env.RAILWAY_ENVIRONMENT === 'production' ||
+                 process.env.VERCEL_ENV === 'production'
+
+  if (!email) {
+    const errorMsg = 'Email address is required'
+    console.error('[email/sendPasswordSetupEmail]', errorMsg)
+    if (isProd) throw new Error(errorMsg)
+    return false
+  }
+
+  if (!link) {
+    const errorMsg = 'Password setup link is required'
+    console.error('[email/sendPasswordSetupEmail]', errorMsg)
+    if (isProd) throw new Error(errorMsg)
+    return false
+  }
+
+  if (!isEmailServiceConfigured()) {
+    const errorMsg = 'Email service not configured. Missing RESEND_API_KEY or FROM_EMAIL/EMAIL_FROM environment variables.'
+    console.error('[email/sendPasswordSetupEmail]', errorMsg, {
+      has_api_key: Boolean(RESEND_API_KEY),
+      has_from_email: Boolean(resolveFromEmail()),
+      provider: 'resend',
+      runtime: 'railway',
+      environment: process.env.NODE_ENV || 'development',
+    })
+    if (isProd) throw new Error(errorMsg)
+    return false
+  }
 
   try {
     const resend = getResend()
-    if (!resend) return false
+    if (!resend) {
+      const errorMsg = 'Failed to initialize Resend client'
+      console.error('[email/sendPasswordSetupEmail]', errorMsg)
+      if (isProd) throw new Error(errorMsg)
+      return false
+    }
 
     const from = resolveFromEmail()
-    if (!from) return false
+    if (!from) {
+      const errorMsg = 'Invalid FROM_EMAIL configuration'
+      console.error('[email/sendPasswordSetupEmail]', errorMsg)
+      if (isProd) throw new Error(errorMsg)
+      return false
+    }
 
     const subject = 'Set your GrantFlow password'
     const html = `
@@ -153,13 +243,29 @@ export async function sendPasswordSetupEmail(email, link) {
         to: email,
         provider: 'resend',
         runtime: 'railway',
+        environment: process.env.NODE_ENV || 'development',
       })
+      if (isProd) {
+        throw new Error(`Failed to send email via Resend: ${JSON.stringify(result.error)}`)
+      }
       return false
     }
 
+    console.info('[email/sendPasswordSetupEmail] Email sent successfully', {
+      to: email,
+      provider: 'resend',
+      runtime: 'railway',
+    })
+
     return true
   } catch (error) {
-    console.error('[email] Failed to send password setup email:', error?.message)
+    console.error('[email/sendPasswordSetupEmail] Failed to send password setup email:', {
+      error: error?.message,
+      provider: 'resend',
+      runtime: 'railway',
+      environment: process.env.NODE_ENV || 'development',
+    })
+    if (isProd) throw error
     return false
   }
 }
