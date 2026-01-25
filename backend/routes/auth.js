@@ -2201,14 +2201,20 @@ router.post('/access/check', async (req, res) => {
       return res.status(400).json({ error: 'Invalid email address', error_type: 'validation_error' })
     }
 
+    // Determine if we're in production
+    const isProd =
+      process.env.NODE_ENV === 'production' ||
+      process.env.RAILWAY_ENVIRONMENT === 'production' ||
+      process.env.VERCEL_ENV === 'production'
+
     // Determine if user is admin
     const isAdmin = isAdminEmail(email)
     
     // Check for profile match
     const profileMatch = await findProfileRowForEmail(req.db, email)
 
-    // If not admin and no profile match, access is denied
-    if (!isAdmin && !profileMatch) {
+    // In production, enforce profile-email gating: allow only admin emails OR emails that match an existing profile
+    if (isProd && !isAdmin && !profileMatch) {
       return res.status(403).json({
         allowed: false,
         reason: 'no_profile_match',
