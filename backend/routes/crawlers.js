@@ -4,7 +4,7 @@ import fs from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
-import { createCrawlerJob, validateJobParameters } from '../services/crawlerJobCreation.js'
+import { createCrawlerJob, validateJobParameters, generateIdempotencyKey } from '../services/crawlerJobCreation.js'
 import { buildProfileContext } from '../services/profileHelpers.js'
 import { validatePagination } from '../utils/validation.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'
@@ -40,7 +40,6 @@ const TYPES_REQUIRING_PROFILE = new Set([
   'item_search',
   'avatar_lookup',
   'document_ingest',
-  'pipeline_automation',
   'profile_enrichment',
 ])
 
@@ -989,11 +988,45 @@ router.post('/jobs', enforceCrawlerJobTier(), async (req, res) => {
   if (!ctx) return
 
   try {
-    const { type, profile_id: bodyProfileId, parameters = {}, force = false } = req.body ?? {}
+    const requestId = req.requestId || null
+    const rawBody = req.body ?? {}
+    const {
+      type,
+      profile_id: bodyProfileId,
+      parameters: rawParameters,
+      force,
+    } = rawBody
 
-    if (!type || !ALLOWED_TYPES.has(type)) {
-      return res.status(400).json({ error: 'Invalid crawler type' })
+    if (!rawBody || typeof rawBody !== 'object' || Array.isArray(rawBody)) {
+      return res.status(400).json({
+        error: 'invalid_request',
+        message: 'Request body must be a JSON object.',
+      })
     }
+
+    if (typeof type !== 'string' || !type.trim() || !ALLOWED_TYPES.has(type)) {
+      return res.status(400).json({
+        error: 'invalid_crawler_type',
+        message: 'Invalid crawler type.',
+        details: {
+          allowed_types: Array.from(ALLOWED_TYPES),
+        },
+      })
+    }
+
+    const parameters =
+      rawParameters === undefined || rawParameters === null
+        ? {}
+        : rawParameters
+
+    if (parameters && (typeof parameters !== 'object' || Array.isArray(parameters))) {
+      return res.status(400).json({
+        error: 'invalid_parameters',
+        message: 'parameters must be a JSON object.',
+      })
+    }
+
+    const forceFlag = force === true || String(force || '').toLowerCase() === 'true'
 
     let targetProfileId = null
     if (ctx.isAdmin) {
@@ -1005,7 +1038,8 @@ router.post('/jobs', enforceCrawlerJobTier(), async (req, res) => {
 
     if (TYPES_REQUIRING_PROFILE.has(type) && !targetProfileId) {
       return res.status(400).json({
-        error: `Crawler type "${type}" requires a profile_id. Select a profile and try again.`,
+        error: 'profile_required',
+        message: `Crawler type "${type}" requires a profile_id. Select a profile and try again.`,
       })
     }
 
@@ -1029,19 +1063,57 @@ router.post('/jobs', enforceCrawlerJobTier(), async (req, res) => {
     // Tier gating is enforced by `enforceCrawlerJobTier` middleware.
 
     // Validate and normalize parameters
-    const validatedParameters = validateJobParameters(type, parameters)
+    const validatedParameters = validateJobParameters(type, parameters ?? {})
+
+    console.info('[crawlers/jobs] create request', {
+      request_id: requestId,
+      user_id: ctx.userId ?? null,
+      is_admin: Boolean(ctx.isAdmin),
+      type,
+      body_profile_id: bodyProfileId ?? null,
+      resolved_profile_id: targetProfileId ?? null,
+      resolved_organization_id: organizationId ?? null,
+      parameter_keys:
+        validatedParameters && typeof validatedParameters === 'object'
+          ? Object.keys(validatedParameters).slice(0, 30)
+          : [],
+      force: forceFlag,
+    })
     
     // Create job with automatic idempotency, validation, and snapshot
-    const result = await createCrawlerJob(req.db, {
-      type,
-      profileId: targetProfileId,
-      organizationId,
-      parameters: validatedParameters,
-      requestedBy: ctx.isAdmin ? 'admin' : (ctx.userId ?? ctx.email ?? targetProfileId ?? 'user'),
-      status: 'queued',
-      buildSnapshot: true,
-      skipIdempotencyCheck: Boolean(force),
-    })
+    let result
+    try {
+      result = await createCrawlerJob(req.db, {
+        type,
+        profileId: targetProfileId,
+        organizationId,
+        parameters: validatedParameters,
+        requestedBy: ctx.isAdmin ? 'admin' : (ctx.userId ?? ctx.email ?? targetProfileId ?? 'user'),
+        status: 'queued',
+        // Endpoint contract: queue fast and do not fail the request on snapshot-building issues.
+        // The dispatcher will repair missing snapshots when the job starts.
+        buildSnapshot: false,
+        skipIdempotencyCheck: Boolean(forceFlag),
+      })
+    } catch (error) {
+      // Handle concurrent requests racing on the UNIQUE(idempotency_key) constraint.
+      const idempotencyKey =
+        forceFlag ? null : generateIdempotencyKey(type, targetProfileId, validatedParameters)
+      if (idempotencyKey) {
+        const existing = await req.db
+          .prepare('SELECT * FROM crawler_jobs WHERE idempotency_key = ? AND status IN (?, ?) LIMIT 1')
+          .get(idempotencyKey, 'queued', 'running')
+        if (existing?.id) {
+          console.info('[crawlers/jobs] idempotency hit after insert race; returning existing', {
+            request_id: requestId,
+            job_id: existing.id,
+            type,
+          })
+          return res.status(200).json(mapJob(existing))
+        }
+      }
+      throw error
+    }
     
     // If existing job found, return it
     if (result.existing) {
@@ -1050,21 +1122,42 @@ router.post('/jobs', enforceCrawlerJobTier(), async (req, res) => {
       return res.status(200).json(mapJob(existingJob))
     }
     
-    // Dispatch the newly created job
+    // Dispatch the newly created job (fire-and-forget; never block the HTTP response).
     const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(result.jobId)
 
-    dispatchCrawlerJob({
-      db: req.db,
-      jobId: job.id,
-      uploadDir,
-      getOpenAI,
+    setImmediate(() => {
+      dispatchCrawlerJob({
+        db: req.db,
+        jobId: job.id,
+        uploadDir,
+        getOpenAI,
+      }).catch((dispatchError) => {
+        console.error('[crawlers/jobs] dispatch failed (job still queued)', {
+          request_id: requestId,
+          job_id: job?.id ?? null,
+          error: dispatchError?.message || String(dispatchError),
+        })
+      })
     })
 
     res.status(201).json(mapJob(job))
   } catch (error) {
-    console.error('Error creating crawler job:', error)
+    const requestId = req.requestId || null
     const status = Number(error?.statusCode || error?.status || 500)
-    res.status(status).json(formatError(error))
+    const safeStatus = Number.isFinite(status) && status >= 400 && status <= 599 ? status : 500
+
+    console.error('[crawlers/jobs] error', {
+      request_id: requestId,
+      status: safeStatus,
+      message: error?.message || String(error),
+      stack: error?.stack,
+    })
+
+    // Never leak raw stack traces to clients; `formatError` already redacts.
+    res.status(safeStatus).json({
+      ...formatError(error),
+      request_id: requestId,
+    })
   }
 })
 

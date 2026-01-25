@@ -385,9 +385,17 @@ class APIClient {
           }
         }
 
-        const err = new Error(errorBody.error || errorBody.message || 'Request failed');
+        const message =
+          typeof errorBody?.message === 'string' && errorBody.message.trim()
+            ? errorBody.message.trim()
+            : typeof errorBody?.error === 'string' && errorBody.error.trim()
+              ? errorBody.error.trim()
+              : 'Request failed'
+
+        const err = new Error(message);
         err.status = response.status;
         err.requestId = errorBody.request_id || headers['X-Request-Id'] || null;
+        err.errorCode = errorBody.error || null;
         err.errorType = errorBody.error_type || null;
         err.details = errorBody;
         throw err;

@@ -76,25 +76,34 @@ export function getCrawlerJobCapability(type, { enableAi } = {}) {
 
 export function enforceCrawlerJobTier() {
   return async (req, res, next) => {
-    const type = req?.body?.type
-    const capability = getCrawlerJobCapability(type, { enableAi: req?.body?.enable_ai === true })
-    if (!capability) return next()
+    try {
+      const type = req?.body?.type
+      const capability = getCrawlerJobCapability(type, { enableAi: req?.body?.enable_ai === true })
+      if (!capability) return next()
 
-    // Crawler jobs are always profile-scoped for paid features.
-    const profileId = resolveProfileId(req)
-    if (!profileId) {
-      if (req?.ctx?.isAdmin) return next()
-      return res.status(400).json({ error: 'profile_id required', capability })
+      // Crawler jobs are always profile-scoped for paid features.
+      const profileId = resolveProfileId(req)
+      if (!profileId) {
+        if (req?.ctx?.isAdmin) return next()
+        return res.status(400).json({ error: 'profile_id required', capability })
+      }
+
+      const okProfile = await profileExists(req.db, profileId)
+      if (!okProfile) {
+        return res.status(400).json({ error: 'Profile not found', profile_id: profileId })
+      }
+
+      const allowed = await requireTierCapability(req, res, profileId, capability)
+      if (!allowed) return
+      return next()
+    } catch (error) {
+      console.error('[entitlements] crawler job tier enforcement failed:', error)
+      return res.status(500).json({
+        error: 'tier_enforcement_failed',
+        message: 'Tier enforcement failed. Please retry shortly.',
+        request_id: req.requestId || null,
+      })
     }
-
-    const okProfile = await profileExists(req.db, profileId)
-    if (!okProfile) {
-      return res.status(400).json({ error: 'Profile not found', profile_id: profileId })
-    }
-
-    const allowed = await requireTierCapability(req, res, profileId, capability)
-    if (!allowed) return
-    return next()
   }
 }
 
