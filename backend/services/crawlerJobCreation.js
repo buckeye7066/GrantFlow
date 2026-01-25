@@ -9,6 +9,44 @@ import crypto from 'crypto'
 import { buildProfileContext } from './profileHelpers.js'
 import { validateJobStatus, validateZipCode, validateStateCode, validateUuid } from '../utils/dbValidation.js'
 
+// Postgres migrations run asynchronously at startup (see `backend/start.js`), so during deploys
+// a new app instance may begin creating crawler jobs before the latest migrations add new columns.
+// We cache a one-time schema probe so job creation can safely omit columns that don't exist yet.
+let postgresHasProfileContextSnapshotColumnPromise = null
+
+async function postgresHasProfileContextSnapshotColumn(db) {
+  if (!db || db?.dialect !== 'postgres') return true
+  if (postgresHasProfileContextSnapshotColumnPromise) {
+    return await postgresHasProfileContextSnapshotColumnPromise
+  }
+
+  postgresHasProfileContextSnapshotColumnPromise = (async () => {
+    try {
+      const row = await db
+        .prepare(
+          `
+            SELECT 1 AS ok
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'crawler_jobs'
+              AND column_name = 'profile_context_snapshot'
+            LIMIT 1
+          `,
+        )
+        .get()
+      return Boolean(row?.ok)
+    } catch (error) {
+      console.warn(
+        '[createCrawlerJob] Unable to probe crawler_jobs.profile_context_snapshot; assuming missing to avoid 500s during migration catch-up.',
+        error?.message || String(error),
+      )
+      return false
+    }
+  })()
+
+  return await postgresHasProfileContextSnapshotColumnPromise
+}
+
 function stableStringify(value) {
   if (value === null || typeof value !== 'object') return JSON.stringify(value)
   if (value instanceof Date) return JSON.stringify(value.toISOString())
@@ -120,36 +158,101 @@ export async function createCrawlerJob(db, options) {
 
   // Insert job (transactional)
   const parametersJson = JSON.stringify(parameters)
-  
-  await db
-    .prepare(
-      `
-      INSERT INTO crawler_jobs (
-        id,
+
+  if (db?.dialect === 'postgres') {
+    const hasSnapshotCol = await postgresHasProfileContextSnapshotColumn(db)
+    if (hasSnapshotCol) {
+      await db
+        .prepare(
+          `
+            INSERT INTO crawler_jobs (
+              id,
+              type,
+              status,
+              profile_id,
+              organization_id,
+              parameters,
+              profile_context_snapshot,
+              idempotency_key,
+              requested_by,
+              created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `,
+        )
+        .run(
+          jobId,
+          type,
+          normalizedStatus,
+          profileId,
+          organizationId,
+          parametersJson,
+          profileContextSnapshot,
+          idempotencyKey,
+          requestedBy,
+          createdAtIso,
+        )
+    } else {
+      // NOTE: Omit profile_context_snapshot while migrations catch up.
+      await db
+        .prepare(
+          `
+            INSERT INTO crawler_jobs (
+              id,
+              type,
+              status,
+              profile_id,
+              organization_id,
+              parameters,
+              idempotency_key,
+              requested_by,
+              created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `,
+        )
+        .run(
+          jobId,
+          type,
+          normalizedStatus,
+          profileId,
+          organizationId,
+          parametersJson,
+          idempotencyKey,
+          requestedBy,
+          createdAtIso,
+        )
+    }
+  } else {
+    // SQLite behavior unchanged.
+    await db
+      .prepare(
+        `
+        INSERT INTO crawler_jobs (
+          id,
+          type,
+          status,
+          profile_id,
+          organization_id,
+          parameters,
+          profile_context_snapshot,
+          idempotency_key,
+          requested_by,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      )
+      .run(
+        jobId,
         type,
-        status,
-        profile_id,
-        organization_id,
-        parameters,
-        profile_context_snapshot,
-        idempotency_key,
-        requested_by,
-        created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-    )
-    .run(
-      jobId,
-      type,
-      normalizedStatus,
-      profileId,
-      organizationId,
-      parametersJson,
-      profileContextSnapshot,
-      idempotencyKey,
-      requestedBy,
-      createdAtIso,
-    )
+        normalizedStatus,
+        profileId,
+        organizationId,
+        parametersJson,
+        profileContextSnapshot,
+        idempotencyKey,
+        requestedBy,
+        createdAtIso,
+      )
+  }
 
   console.log('[createCrawlerJob] Created new crawler job', {
     jobId,

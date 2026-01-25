@@ -16,20 +16,39 @@ import { validatePagination } from '../utils/validation.js'
 import { formatError } from '../middleware/errorHandler.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import {
-  ensureProfileAccess as ensureProfileAccessByEmail,
-  getAccessibleProfileIds,
-  isAdminUser,
-  isAdminUserWithDb,
-  isProfileOwner,
-  getAuthUserId,
-  getAuthProfileId,
   listProfileEmails,
   addProfileEmails,
   removeProfileEmail,
-  requireAuthenticatedUser,
 } from '../utils/accessControl.js'
 
 const router = express.Router()
+
+function isAuthenticatedFromCtx(ctx) {
+  return Boolean(ctx && (ctx.userId || ctx.activeProfileId || ctx.email))
+}
+
+function denyAuth(req, res) {
+  const authenticated = isAuthenticatedFromCtx(req.ctx)
+  return res.status(authenticated ? 403 : 401).json({
+    error: authenticated ? 'Not authorized' : 'Authentication required',
+  })
+}
+
+function canAccessProfileIdFromCtx(ctx, profileId) {
+  const id = String(profileId)
+  if (ctx?.isAdmin === true) return true
+  if (ctx?.accessibleProfileIds === null) return true // admin sentinel (all)
+  if (ctx?.activeProfileId && String(ctx.activeProfileId) === id) return true
+  if (ctx?.accessibleProfileIds instanceof Set && ctx.accessibleProfileIds.has(id)) return true
+  return false
+}
+
+function canAccessProfileRowFromCtx(ctx, profileRow) {
+  if (!profileRow) return false
+  if (canAccessProfileIdFromCtx(ctx, profileRow.id)) return true
+  if (ctx?.userId && profileRow.user_id && String(ctx.userId) === String(profileRow.user_id)) return true
+  return false
+}
 
 // Central enforcement: any route that includes a `:id` param in this router refers to a profile id.
 // This prevents profile “bleed” from stale token claims; access is always re-validated.
@@ -37,56 +56,28 @@ router.param('id', async (req, res, next, id) => {
   try {
     // Fast path: prefer the canonical requestContext computation.
     // This avoids recomputing access sets (and avoids 403s when DB checks are transiently failing).
-    if (req.ctx?.isAdmin === true) return next()
-    if (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === String(id)) return next()
-    if (req.ctx?.accessibleProfileIds === null) return next() // null => all profiles (admin)
-    if (req.ctx?.accessibleProfileIds instanceof Set && req.ctx.accessibleProfileIds.has(String(id))) {
-      return next()
+    if (canAccessProfileIdFromCtx(req.ctx, id)) return next()
+
+    // If unauthenticated, this is a clean 401 (never 500).
+    if (!isAuthenticatedFromCtx(req.ctx)) {
+      return res.status(401).json({ error: 'Authentication required' })
     }
 
-    const ok = await ensureProfileAccessByEmail(req, res, String(id))
-    if (!ok) return
-    next()
+    // As a last resort, verify ownership by userId (covers cases where access sets are empty/unavailable).
+    if (req.ctx?.userId) {
+      const row = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(String(id))
+      if (row?.user_id && String(row.user_id) === String(req.ctx.userId)) return next()
+    }
+
+    return res.status(403).json({ error: 'Not authorized to access this profile' })
   } catch (error) {
-    // Production safety: never hard-500 profiles due to an access-control edge case.
-    // Fall back to a minimal owner check so users aren't blocked by schema drift/migration timing.
-    try {
-      const user = req.user ?? { role: 'guest' }
-      const isAdmin = await isAdminUserWithDb(req.db, user)
-      if (isAdmin) return next()
-
-      const authUserId = getAuthUserId(user)
-      const authProfileId = getAuthProfileId(user)
-      if (authProfileId && String(authProfileId) === String(id)) return next()
-
-      if (authUserId) {
-        const row = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(String(id))
-        if (row?.user_id && String(row.user_id) === String(authUserId)) return next()
-      }
-    } catch {
-      // ignore fallback failures
-    }
-
     console.warn('[profiles] access precheck failed; denying access', {
       profileId: String(id),
       error: error?.message || String(error),
     })
-    return res.status(403).json({ error: 'Not authorized to access this profile' })
+    return denyAuth(req, res)
   }
 })
-
-function canAccessProfile({ auth, profileRow }) {
-  if (!profileRow) return false
-  // Prefer requestContext-derived admin (req.ctx.isAdmin) when provided by caller.
-  if (auth?.ctxIsAdmin === true) return true
-  // Back-compat fallback for older callsites.
-  if (isAdminUser(auth)) return true
-  const authProfileId = getAuthProfileId(auth)
-  if (authProfileId && authProfileId === profileRow.id) return true
-  const authUserId = getAuthUserId(auth)
-  if (authUserId && profileRow.user_id && authUserId === profileRow.user_id) return true
-  return false
-}
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -256,11 +247,10 @@ function extractAnthropicText(response) {
 }
 
 router.get('/', async (req, res) => {
-  const user = req.user
   const isAdmin = req.ctx?.isAdmin === true
   const includeSummary = req.query.summary === 'true'
   const includeDeleted = req.query.includeDeleted === 'true'
-  const userId = user?.userId ?? user?.id ?? null
+  const userId = req.ctx?.userId ?? null
   
   // Validate pagination parameters.
   // For admins, default to the max page size unless a limit is explicitly provided.
@@ -331,11 +321,14 @@ function isValidEmail(email) {
 // Profile login allowlist (board members, collaborators).
 router.get('/:id/emails', async (req, res) => {
   try {
-    const user = requireAuthenticatedUser(req, res)
-    if (!user) return
+    if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
     const profileId = String(req.params.id)
 
-    const canManage = req.ctx?.isAdmin === true || (await isProfileOwner(req.db, user, profileId))
+    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
+    const canManage =
+      req.ctx?.isAdmin === true ||
+      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
+      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
     if (!canManage) {
       return res.status(403).json({ error: 'Not authorized to manage profile emails' })
     }
@@ -349,11 +342,14 @@ router.get('/:id/emails', async (req, res) => {
 
 router.post('/:id/emails', async (req, res) => {
   try {
-    const user = requireAuthenticatedUser(req, res)
-    if (!user) return
+    if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
     const profileId = String(req.params.id)
 
-    const canManage = req.ctx?.isAdmin === true || (await isProfileOwner(req.db, user, profileId))
+    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
+    const canManage =
+      req.ctx?.isAdmin === true ||
+      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
+      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
     if (!canManage) {
       return res.status(403).json({ error: 'Not authorized to manage profile emails' })
     }
@@ -372,7 +368,7 @@ router.post('/:id/emails', async (req, res) => {
       return res.status(400).json({ error: `Invalid email(s): ${invalid.slice(0, 3).join(', ')}` })
     }
 
-    const addedBy = user.userId ?? user.email ?? user.primary_email ?? null
+    const addedBy = req.ctx?.userId ?? req.ctx?.email ?? null
     await addProfileEmails(req.db, { profileId, emails: normalized, addedBy })
     const emails = await listProfileEmails(req.db, profileId)
     res.status(201).json({ emails })
@@ -383,11 +379,14 @@ router.post('/:id/emails', async (req, res) => {
 
 router.delete('/:id/emails/:emailId', async (req, res) => {
   try {
-    const user = requireAuthenticatedUser(req, res)
-    if (!user) return
+    if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
     const profileId = String(req.params.id)
 
-    const canManage = req.ctx?.isAdmin === true || (await isProfileOwner(req.db, user, profileId))
+    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
+    const canManage =
+      req.ctx?.isAdmin === true ||
+      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
+      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
     if (!canManage) {
       return res.status(403).json({ error: 'Not authorized to manage profile emails' })
     }
@@ -401,9 +400,8 @@ router.delete('/:id/emails/:emailId', async (req, res) => {
 })
 
 router.post('/', async (req, res) => {
-  const user = req.user
   const isAdmin = req.ctx?.isAdmin === true
-  const userId = req.ctx?.userId ?? getAuthUserId(user)
+  const userId = req.ctx?.userId ?? null
   const { display_name, primary_type, organization_id, user_id, created_by, status = 'active', tags = [] } = req.body ?? {}
 
   if (!display_name || typeof display_name !== 'string') {
@@ -455,7 +453,7 @@ router.post('/', async (req, res) => {
       primary_type ?? null,
       organization_id ?? null,
       profileUserId ?? null,
-      created_by ?? user?.id ?? null,
+      created_by ?? req.ctx?.userId ?? req.ctx?.email ?? null,
       status,
       JSON.stringify(tags),
     )
@@ -481,9 +479,8 @@ router.post('/', async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   const { id } = req.params
-  const user = req.user
   const isAdmin = req.ctx?.isAdmin === true
-  const userId = req.ctx?.userId ?? getAuthUserId(user)
+  const userId = req.ctx?.userId ?? null
 
   let row = null
   try {
@@ -500,7 +497,10 @@ router.get('/:id', async (req, res) => {
   // Check access permissions
   if (!isAdmin) {
     // Enduser: can only access profiles where user_id matches
-    if (!userId || row.user_id !== userId) {
+    if (!userId) {
+      return res.status(401).json({ error: 'Authentication required' })
+    }
+    if (!canAccessProfileRowFromCtx(req.ctx, row)) {
       return res.status(403).json({ error: 'Access denied' })
     }
   }
@@ -546,10 +546,9 @@ router.get('/:id', async (req, res) => {
 router.put('/:id', async (req, res) => {
   const { id } = req.params
   const { display_name, primary_type, organization_id, status, tags } = req.body ?? {}
-  const auth = req.user ?? { role: 'guest' }
   const isAdmin = req.ctx?.isAdmin === true
-  const authUserId = req.ctx?.userId ?? getAuthUserId(auth)
-  const authProfileId = getAuthProfileId(auth)
+  const authUserId = req.ctx?.userId ?? null
+  const authProfileId = req.ctx?.activeProfileId ? String(req.ctx.activeProfileId) : null
 
   const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!existing) {
@@ -558,10 +557,10 @@ router.put('/:id', async (req, res) => {
 
   // Allow: admins (including admin-email allowlist), profile-scoped tokens for the profile, or session owners (userId match)
   const userIsAdmin = Boolean(isAdmin)
-  const matchesProfileId = authProfileId === id
+  const matchesProfileId = authProfileId === String(id)
   const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
   if (!userIsAdmin && !matchesProfileId && !matchesUserId) {
-    return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to update this profile' })
+    return denyAuth(req, res)
   }
 
   const updates = []
@@ -615,9 +614,8 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   const { id } = req.params
-  const auth = req.user ?? { role: 'guest' }
-  const authUserId = req.ctx?.userId ?? getAuthUserId(auth)
-  const authProfileId = getAuthProfileId(auth)
+  const authUserId = req.ctx?.userId ?? null
+  const authProfileId = req.ctx?.activeProfileId ? String(req.ctx.activeProfileId) : null
 
   // Check authorization - user must be admin or the profile must belong to them
   const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
@@ -625,12 +623,12 @@ router.delete('/:id', async (req, res) => {
     return res.status(404).json({ error: 'Profile not found' })
   }
 
-  const admin = await isAdminUserWithDb(req.db, auth)
+  const admin = req.ctx?.isAdmin === true
   if (!admin) {
-    const matchesProfileId = authProfileId === id
+    const matchesProfileId = authProfileId === String(id)
     const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
     if (!matchesProfileId && !matchesUserId) {
-      return res.status(403).json({ error: 'Not authorized to delete this profile' })
+      return denyAuth(req, res)
     }
   }
 
@@ -736,9 +734,8 @@ router.delete('/:id', async (req, res) => {
 
 router.post('/:id/avatar', runUploadSingle('avatar'), async (req, res, next) => {
   const { id } = req.params
-  const auth = req.user ?? { role: 'guest' }
-  const authUserId = req.ctx?.userId ?? getAuthUserId(auth)
-  const authProfileId = getAuthProfileId(auth)
+  const authUserId = req.ctx?.userId ?? null
+  const authProfileId = req.ctx?.activeProfileId ? String(req.ctx.activeProfileId) : null
 
   const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!existing) {
@@ -746,13 +743,13 @@ router.post('/:id/avatar', runUploadSingle('avatar'), async (req, res, next) => 
     return res.status(404).json({ error: 'Profile not found' })
   }
 
-  const userIsAdmin = isAdminUser(auth)
-  const matchesProfileId = authProfileId === id
+  const userIsAdmin = req.ctx?.isAdmin === true
+  const matchesProfileId = authProfileId === String(id)
   const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
 
   if (!userIsAdmin && !matchesProfileId && !matchesUserId) {
     if (req.file) fs.unlink(join(uploadDir, req.file.filename), () => {})
-    return res.status(403).json({ error: 'Not authorized to update this profile' })
+    return denyAuth(req, res)
   }
 
   if (!req.file) {
@@ -784,20 +781,19 @@ router.post('/:id/avatar', runUploadSingle('avatar'), async (req, res, next) => 
 
 router.post('/:id/avatar/ai', async (req, res) => {
   const { id } = req.params
-  const auth = req.user ?? { role: 'guest' }
-  const authUserId = req.ctx?.userId ?? getAuthUserId(auth)
-  const authProfileId = getAuthProfileId(auth)
+  const authUserId = req.ctx?.userId ?? null
+  const authProfileId = req.ctx?.activeProfileId ? String(req.ctx.activeProfileId) : null
 
   const profileRow = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!profileRow) {
     return res.status(404).json({ error: 'Profile not found' })
   }
 
-  const userIsAdmin = isAdminUser(auth)
-  const matchesProfileId = authProfileId === id
+  const userIsAdmin = req.ctx?.isAdmin === true
+  const matchesProfileId = authProfileId === String(id)
   const matchesUserId = authUserId && profileRow.user_id && authUserId === profileRow.user_id
   if (!userIsAdmin && !matchesProfileId && !matchesUserId) {
-    return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to update this profile' })
+    return denyAuth(req, res)
   }
 
   if (!(await requireTierCapability(req, res, id, TIER_CAPABILITIES.DOCUMENT_AI))) return
@@ -847,15 +843,14 @@ router.post('/:id/avatar/ai', async (req, res) => {
 
 router.get('/:id/sections', async (req, res) => {
   const { id } = req.params
-  const auth = { ...(req.user ?? { role: 'guest' }), ctxIsAdmin: req.ctx?.isAdmin === true }
 
   const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!profile) {
     return res.status(404).json({ error: 'Profile not found' })
   }
 
-  if (!canAccessProfile({ auth, profileRow: profile })) {
-    return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to access this profile' })
+  if (!canAccessProfileRowFromCtx(req.ctx, profile)) {
+    return denyAuth(req, res)
   }
 
   const sections = (await req.db
@@ -880,15 +875,14 @@ router.get('/:id/sections', async (req, res) => {
 
 router.get('/:id/sections/:sectionKey', async (req, res) => {
   const { id, sectionKey } = req.params
-  const auth = { ...(req.user ?? { role: 'guest' }), ctxIsAdmin: req.ctx?.isAdmin === true }
 
   const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!profile) {
     return res.status(404).json({ error: 'Profile not found' })
   }
 
-  if (!canAccessProfile({ auth, profileRow: profile })) {
-    return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to access this profile' })
+  if (!canAccessProfileRowFromCtx(req.ctx, profile)) {
+    return denyAuth(req, res)
   }
 
   const section = await req.db
@@ -916,15 +910,14 @@ router.get('/:id/sections/:sectionKey', async (req, res) => {
 router.put('/:id/sections/:sectionKey', async (req, res) => {
   const { id, sectionKey } = req.params
   const { data, updated_by } = req.body ?? {}
-  const auth = { ...(req.user ?? { role: 'guest' }), ctxIsAdmin: req.ctx?.isAdmin === true }
 
   const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!profile) {
     return res.status(404).json({ error: 'Profile not found' })
   }
 
-  if (!canAccessProfile({ auth, profileRow: profile })) {
-    return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to update this profile' })
+  if (!canAccessProfileRowFromCtx(req.ctx, profile)) {
+    return denyAuth(req, res)
   }
 
   if (typeof data !== 'object' || data === null) {
@@ -964,15 +957,14 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
 
 router.delete('/:id/sections/:sectionKey', async (req, res) => {
   const { id, sectionKey } = req.params
-  const auth = req.user ?? { role: 'guest' }
 
   const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!profile) {
     return res.status(404).json({ error: 'Profile not found' })
   }
 
-  if (!canAccessProfile({ auth, profileRow: profile })) {
-    return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to update this profile' })
+  if (!canAccessProfileRowFromCtx(req.ctx, profile)) {
+    return denyAuth(req, res)
   }
 
   const stmt = req.db.prepare(`DELETE FROM profile_sections WHERE profile_id = ? AND section_key = ?`)
@@ -985,7 +977,6 @@ router.delete('/:id/sections/:sectionKey', async (req, res) => {
 
 async function handleProfileSectionAi(req, res) {
   const { id, sectionKey } = req.params
-  const auth = req.user ?? { role: 'guest' }
 
   try {
     if (!supportedSectionKeys.includes(sectionKey)) {
@@ -997,8 +988,8 @@ async function handleProfileSectionAi(req, res) {
       return res.status(404).json({ error: 'Profile not found' })
     }
 
-    if (!canAccessProfile({ auth, profileRow })) {
-      return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to access this profile' })
+    if (!canAccessProfileRowFromCtx(req.ctx, profileRow)) {
+      return denyAuth(req, res)
     }
 
     if (!(await requireTierCapability(req, res, id, TIER_CAPABILITIES.DOCUMENT_AI))) return
@@ -1123,7 +1114,6 @@ router.post('/:id/sections/:sectionKey/ai', handleProfileSectionAi)
 router.post('/:id/fields/ai', async (req, res) => {
   const { id } = req.params
   const { fieldName, fieldLabel, currentValue, fieldDescription, sectionKey } = req.body
-  const auth = req.user ?? { role: 'guest' }
 
   try {
     // Get profile for context
@@ -1133,8 +1123,8 @@ router.post('/:id/fields/ai', async (req, res) => {
       return res.status(404).json({ error: 'Profile not found' })
     }
 
-    if (!canAccessProfile({ auth, profileRow })) {
-      return res.status(auth.role === 'guest' ? 401 : 403).json({ error: 'Not authorized to access this profile' })
+    if (!canAccessProfileRowFromCtx(req.ctx, profileRow)) {
+      return denyAuth(req, res)
     }
 
     if (!(await requireTierCapability(req, res, id, TIER_CAPABILITIES.DOCUMENT_AI))) return
@@ -1273,11 +1263,8 @@ Return ONLY the field value content, no JSON wrapper or explanations.`
 // GET /api/profiles/:id/completeness
 router.get('/:id/completeness', async (req, res) => {
   const { id } = req.params
-  const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
-    return res.status(403).json({ error: 'Not authorized to access this profile' })
-  }
+  if (!canAccessProfileIdFromCtx(req.ctx, id)) return denyAuth(req, res)
 
   try {
     const profile = await req.db.prepare('SELECT id, display_name FROM profiles WHERE id = ?').get(id)
@@ -1379,11 +1366,8 @@ router.get('/:id/completeness', async (req, res) => {
 // POST /api/profiles/:id/repair
 router.post('/:id/repair', async (req, res) => {
   const { id } = req.params
-  const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
-    return res.status(403).json({ error: 'Not authorized to repair this profile' })
-  }
+  if (!canAccessProfileIdFromCtx(req.ctx, id)) return denyAuth(req, res)
 
   try {
     const profile = await req.db.prepare('SELECT id, display_name FROM profiles WHERE id = ?').get(id)
@@ -1468,11 +1452,8 @@ router.post('/:id/repair', async (req, res) => {
 // GET /api/profiles/:id/export
 router.get('/:id/export', async (req, res) => {
   const { id } = req.params
-  const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
-    return res.status(403).json({ error: 'Not authorized to export this profile' })
-  }
+  if (!canAccessProfileIdFromCtx(req.ctx, id)) return denyAuth(req, res)
 
   try {
     const profileRow = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
@@ -1523,11 +1504,8 @@ router.get('/:id/export', async (req, res) => {
 // POST /api/profiles/:id/import
 router.post('/:id/import', async (req, res) => {
   const { id } = req.params
-  const auth = req.user ?? { role: 'guest' }
 
-  if (auth.role !== 'admin' && getAuthProfileId(auth) !== id) {
-    return res.status(403).json({ error: 'Not authorized to import to this profile' })
-  }
+  if (!canAccessProfileIdFromCtx(req.ctx, id)) return denyAuth(req, res)
 
   try {
     const { sections, merge = true } = req.body ?? {}
