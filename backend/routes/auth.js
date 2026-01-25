@@ -101,7 +101,7 @@ function handleEmailSendError(error, isProd) {
       error: 'Email service unavailable. Please contact support or try again later.',
       error_type: 'email_service_error',
       email_sent: false,
-      details: isProd 
+      details: isProd
         ? 'Email service is not properly configured on the server.'
         : error.message,
     }

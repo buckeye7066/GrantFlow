@@ -9,6 +9,9 @@
 import { isProductionEnvironment, getEnvironmentName } from '../utils/environment.js'
 import { EmailNotConfiguredError } from './email.js'
 
+// Error message for production use of fallback
+const PRODUCTION_FALLBACK_ERROR = 'Email service not configured. Fallback service cannot be used in production. Configure RESEND_API_KEY and FROM_EMAIL in Railway.'
+
 /**
  * Check if email service is configured
  * @returns {boolean} Always returns false for fallback
@@ -34,9 +37,8 @@ export async function sendVerificationEmail(email, code) {
   })
 
   if (isProd) {
-    const errorMsg = 'Email service not configured. Fallback service cannot be used in production. Configure RESEND_API_KEY and FROM_EMAIL in Railway.'
-    console.error('[emailFallback/sendVerificationEmail]', errorMsg)
-    throw new EmailNotConfiguredError(errorMsg)
+    console.error('[emailFallback/sendVerificationEmail]', PRODUCTION_FALLBACK_ERROR)
+    throw new EmailNotConfiguredError(PRODUCTION_FALLBACK_ERROR)
   }
 
   // Always return false to indicate email wasn't actually sent
@@ -56,9 +58,8 @@ export async function sendPasswordSetupEmail(email, link) {
   })
 
   if (isProd) {
-    const errorMsg = 'Email service not configured. Fallback service cannot be used in production. Configure RESEND_API_KEY and FROM_EMAIL in Railway.'
-    console.error('[emailFallback/sendPasswordSetupEmail]', errorMsg)
-    throw new EmailNotConfiguredError(errorMsg)
+    console.error('[emailFallback/sendPasswordSetupEmail]', PRODUCTION_FALLBACK_ERROR)
+    throw new EmailNotConfiguredError(PRODUCTION_FALLBACK_ERROR)
   }
 
   return false
