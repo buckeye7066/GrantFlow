@@ -25,7 +25,7 @@ GrantFlow uses a split deployment architecture:
 **CRITICAL: Auth and email logic runs on Railway, NOT Vercel.**
 
 - Email-based OTP login (`/api/auth/email/start`, `/api/auth/email/verify`) runs on Railway
-- **Email delivery is optional** - OTP codes are returned directly for authorized users
+- **Email delivery is optional** - OTP codes are returned directly for authorized users via `previewCode`
 - In production, only emails matching existing profiles can log in (profile-email gated access)
 - Admins can always log in (emails in `ADMIN_EMAIL` or `ADMIN_EMAILS`)
 - Environment variables for email (`RESEND_API_KEY`, `FROM_EMAIL`) **must be set in Railway** if you want email notifications
@@ -73,6 +73,7 @@ In local development:
    - Admin emails (configured in `ADMIN_EMAIL` or `ADMIN_EMAILS` environment variables)
 
 2. **Unauthorized emails** will receive a 403 error with message "Access denied. This email is not authorized for login."
+   - The response includes `redirect_to: "/ServiceApplication"`, and the frontend should redirect the user to the Service Application flow.
 
 3. **To authorize a new email for production login:**
    - Create a profile in the database with a `profile_sections` entry that includes the email in the `basic_information` section

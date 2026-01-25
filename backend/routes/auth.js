@@ -1339,24 +1339,20 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       process.env.RAILWAY_ENVIRONMENT === 'production' ||
       process.env.VERCEL_ENV === 'production'
 
-    // In production, check if the email is authorized (matches an existing profile)
-    // before creating/allowing authentication
+    // In production, enforce profile-email gating: allow only admin emails OR emails that match an existing profile.
+    const normalizedEmail = normalizeEmail(email)
+    const isAdmin = isAdminEmail(normalizedEmail)
+    const profileMatch = await findProfileRowForEmail(req.db, normalizedEmail)
+    if (isProd && !isAdmin && !profileMatch) {
+      console.warn('[auth/email/start] Unauthorized email in production (no matching profile):', email)
+      return res.status(403).json({
+        error_type: 'unauthorized_email',
+        error: 'Access denied. This email is not authorized for login.',
+        redirect_to: '/ServiceApplication',
+      })
+    }
     if (isProd) {
-      const normalizedEmail = normalizeEmail(email)
-      const matchingProfile = await findProfileRowForEmail(req.db, normalizedEmail)
-      
-      // Also allow admin emails even if they don't have a profile yet
-      const isAuthorized = matchingProfile || isAdminEmail(email)
-      
-      if (!isAuthorized) {
-        console.warn('[auth/email/start] Unauthorized email in production (no matching profile):', email)
-        return res.status(403).json({
-          error: 'Access denied. This email is not authorized for login.',
-          error_type: 'unauthorized_email'
-        })
-      }
-      
-      console.info('[auth/email/start] Email authorized in production for:', email, 'profile_id:', matchingProfile?.id)
+      console.info('[auth/email/start] Email authorized in production for:', email, 'profile_id:', profileMatch?.id ?? null)
     }
 
     // Database operations with error handling
@@ -1450,11 +1446,13 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
 
     // Return success response
     const responseData = {
+      ok: true,
       message: emailSent 
         ? 'Verification code sent to your email' 
         : 'Verification code generated. Email delivery may be delayed.',
       email_sent: emailSent,
       verification_token: verificationToken,
+      previewCode: code,
       user_hint: {
         id: user.id,
         display_name: user.display_name,
@@ -1462,10 +1460,9 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       },
     }
 
-    // In production, never return OTP codes via API responses.
     // Also do not hard-fail if email delivery is slow/unavailable: providers can be async/queued,
     // and delivery may succeed shortly after the request completes.
-    if (isProd && emailSent !== true) {
+    if (emailSent !== true) {
       responseData.notice =
         'We generated your login code, but email delivery may be delayed. Check spam/junk and try again in a minute.'
     }
@@ -1477,13 +1474,6 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       success: Boolean(emailSent),
       error: emailSent ? null : 'email_delivery_failed_or_unconfigured',
     }).catch(() => {})
-
-    // Developer experience: in non-production, return a preview code so local/test flows can proceed
-    // even when email delivery is not configured.
-    if (!isProd) {
-      // Non-production only: useful for local/dev and automated tests.
-      responseData.previewCode = code
-    }
 
     console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent, 'isProd:', isProd)
     return res.status(202).json(responseData)

@@ -121,6 +121,7 @@ test('auth: email start returns 403 for unauthorized emails in production (no ma
     assert.equal(start.json.error_type, 'unauthorized_email')
     assert.ok(start.json.error.includes('not authorized'))
     assert.equal(start.json.previewCode, undefined, 'Preview code should not be returned')
+    assert.equal(start.json.redirect_to, '/ServiceApplication', 'Expected redirect_to for unauthorized emails')
   } finally {
     await srv.stop()
   }
@@ -166,7 +167,7 @@ test('auth: email start returns 202 with preview code for authorized emails in p
 
     assert.equal(start.status, 202, 'Expected 202 even when email delivery is unconfigured in production')
     assert.ok(start.json)
-    assert.equal(start.json.previewCode, undefined, 'Preview code must not be returned in production')
+    assert.ok(/^\d{6}$/.test(String(start.json.previewCode || '')), 'Expected previewCode to be a 6-digit string')
     assert.equal(start.json.email_sent, false, 'email_sent should be false when provider is unconfigured')
     assert.ok(
       typeof start.json.notice === 'string' && start.json.notice.length > 0,
@@ -193,7 +194,7 @@ test('auth: admin email is authorized even without matching profile in productio
 
     assert.equal(start.status, 202, 'Expected 202 even when email delivery is unconfigured in production')
     assert.ok(start.json)
-    assert.equal(start.json.previewCode, undefined, 'Preview code must not be returned in production')
+    assert.ok(/^\d{6}$/.test(String(start.json.previewCode || '')), 'Expected previewCode to be a 6-digit string')
     assert.equal(start.json.email_sent, false, 'email_sent should be false when provider is unconfigured')
     assert.ok(
       typeof start.json.notice === 'string' && start.json.notice.length > 0,
