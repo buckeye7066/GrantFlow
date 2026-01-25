@@ -752,6 +752,70 @@ async function consumePasswordSetupToken(db, tokenHash) {
   return row ?? null
 }
 
+// Production hardening: protect password auth endpoints from schema drift / un-applied migrations.
+// This is safe and idempotent (uses IF NOT EXISTS / tolerated sqlite duplicate-column errors).
+let ensurePasswordAuthSchemaPromise = null
+
+async function ensurePasswordAuthSchema(db) {
+  if (!db) return
+  if (ensurePasswordAuthSchemaPromise) return await ensurePasswordAuthSchemaPromise
+
+  ensurePasswordAuthSchemaPromise = (async () => {
+    try {
+      if (db.dialect === 'postgres') {
+        await db.exec(`
+          ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT;
+
+          CREATE TABLE IF NOT EXISTS password_setup_tokens (
+            id TEXT PRIMARY KEY,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL,
+            expires_at TIMESTAMPTZ NOT NULL,
+            consumed_at TIMESTAMPTZ NULL,
+            request_ip TEXT NULL,
+            user_agent TEXT NULL
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_password_setup_tokens_token_hash ON password_setup_tokens(token_hash);
+          CREATE INDEX IF NOT EXISTS idx_password_setup_tokens_user_id ON password_setup_tokens(user_id);
+        `)
+        return
+      }
+
+      if (db.dialect === 'sqlite') {
+        try {
+          await db.exec(`ALTER TABLE users ADD COLUMN password_hash TEXT;`)
+        } catch (e) {
+          const msg = String(e?.message || e || '').toLowerCase()
+          if (!msg.includes('duplicate column')) throw e
+        }
+
+        await db.exec(`
+          CREATE TABLE IF NOT EXISTS password_setup_tokens (
+            id TEXT PRIMARY KEY,
+            created_at TEXT DEFAULT (CURRENT_TIMESTAMP),
+            user_id TEXT NOT NULL,
+            token_hash TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            consumed_at TEXT NULL,
+            request_ip TEXT NULL,
+            user_agent TEXT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+          );
+          CREATE INDEX IF NOT EXISTS idx_password_setup_tokens_token_hash ON password_setup_tokens(token_hash);
+          CREATE INDEX IF NOT EXISTS idx_password_setup_tokens_user_id ON password_setup_tokens(user_id);
+        `)
+      }
+    } catch (error) {
+      // Never throw from schema ensure: callers will handle degraded responses.
+      console.warn('[auth/password] Unable to ensure password auth schema:', error?.message || String(error))
+    }
+  })()
+
+  return await ensurePasswordAuthSchemaPromise
+}
+
 async function cleanupExpiredOAuthStates(db) {
   await db
     .prepare(
@@ -2122,6 +2186,8 @@ function buildPasswordSetupLink(req, token) {
 
 router.post('/password/setup/start', async (req, res) => {
   try {
+    await ensurePasswordAuthSchema(req.db)
+
     const emailRaw = req.body?.email
     if (typeof emailRaw !== 'string') {
       return res.status(400).json({ error: 'email is required', error_type: 'validation_error' })
@@ -2163,15 +2229,37 @@ router.post('/password/setup/start', async (req, res) => {
     const expiresAt = new Date(now.getTime() + PASSWORD_SETUP_TTL * 1000).toISOString()
     const id = crypto.randomUUID()
 
-    await req.db
-      .prepare(
-        `
-          INSERT INTO password_setup_tokens (
-            id, user_id, token_hash, expires_at, consumed_at, request_ip, user_agent
-          ) VALUES (?, ?, ?, ?, NULL, ?, ?)
-        `,
-      )
-      .run(id, user.id, tokenHash, expiresAt, req.ip ?? null, req.headers['user-agent'] ?? null)
+    try {
+      await req.db
+        .prepare(
+          `
+            INSERT INTO password_setup_tokens (
+              id, user_id, token_hash, expires_at, consumed_at, request_ip, user_agent
+            ) VALUES (?, ?, ?, ?, NULL, ?, ?)
+          `,
+        )
+        .run(id, user.id, tokenHash, expiresAt, req.ip ?? null, req.headers['user-agent'] ?? null)
+    } catch (dbError) {
+      // Retry once after best-effort schema ensure (covers deploys where migrations lag).
+      await ensurePasswordAuthSchema(req.db)
+      try {
+        await req.db
+          .prepare(
+            `
+              INSERT INTO password_setup_tokens (
+                id, user_id, token_hash, expires_at, consumed_at, request_ip, user_agent
+              ) VALUES (?, ?, ?, ?, NULL, ?, ?)
+            `,
+          )
+          .run(id, user.id, tokenHash, expiresAt, req.ip ?? null, req.headers['user-agent'] ?? null)
+      } catch (retryError) {
+        console.error('[auth/password/setup/start] DB error creating token:', retryError?.message || retryError)
+        return res.status(503).json({
+          error_type: 'service_unavailable',
+          error: 'Login is temporarily unavailable. Please try again in a minute.',
+        })
+      }
+    }
 
     const link = buildPasswordSetupLink(req, token)
 
@@ -2205,6 +2293,8 @@ router.post('/password/setup/start', async (req, res) => {
 
 router.post('/password/setup/complete', async (req, res) => {
   try {
+    await ensurePasswordAuthSchema(req.db)
+
     const tokenRaw = req.body?.token
     const passwordRaw = req.body?.password
     if (typeof tokenRaw !== 'string' || typeof passwordRaw !== 'string') {
@@ -2276,6 +2366,8 @@ router.post('/password/setup/complete', async (req, res) => {
 
 router.post('/password/login', async (req, res) => {
   try {
+    await ensurePasswordAuthSchema(req.db)
+
     const emailRaw = req.body?.email
     const passwordRaw = req.body?.password
     if (typeof emailRaw !== 'string' || typeof passwordRaw !== 'string') {
