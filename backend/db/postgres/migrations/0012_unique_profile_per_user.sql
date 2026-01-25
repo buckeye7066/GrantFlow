@@ -9,6 +9,7 @@
 -- - handle conflicts safely in:
 --   - profile_sections (UNIQUE(profile_id, section_key)): keep winner row, drop loser conflicts
 --   - profile_documents (PK(profile_id, document_id)): keep winner row, drop loser conflicts
+--   - billing_accounts (UNIQUE(profile_id) via idx_billing_accounts_profile): keep one billing_account per user, repoint events
 -- - delete loser profiles
 -- Then create the unique index.
 
@@ -70,7 +71,90 @@ SET profile_id = m.winner_id
 FROM profile_merge_map m
 WHERE pd.profile_id = m.loser_id;
 
--- 6) Repoint all other FK references to profiles(id) dynamically.
+-- 6) Resolve billing_accounts uniqueness (idx_billing_accounts_profile) safely.
+-- Choose ONE billing_account per user (oldest created_at; tie-breaker smallest id),
+-- repoint all billing_account_events to that account, delete the rest, then ensure the kept
+-- billing_account is attached to the winning profile.
+CREATE TEMP TABLE billing_account_chosen ON COMMIT DROP AS
+WITH impacted_users AS (
+  SELECT DISTINCT user_id, winner_id
+  FROM profile_merge_map
+),
+accounts AS (
+  SELECT
+    ba.id AS account_id,
+    ba.created_at,
+    p.user_id,
+    u.winner_id AS winner_profile_id
+  FROM billing_accounts ba
+  JOIN profiles p
+    ON p.id = ba.profile_id
+  JOIN impacted_users u
+    ON u.user_id = p.user_id
+),
+ranked AS (
+  SELECT
+    account_id,
+    user_id,
+    winner_profile_id,
+    ROW_NUMBER() OVER (
+      PARTITION BY user_id
+      ORDER BY created_at ASC NULLS LAST, account_id ASC
+    ) AS rn,
+    FIRST_VALUE(account_id) OVER (
+      PARTITION BY user_id
+      ORDER BY created_at ASC NULLS LAST, account_id ASC
+    ) AS keep_account_id
+  FROM accounts
+)
+SELECT DISTINCT
+  user_id,
+  winner_profile_id,
+  keep_account_id
+FROM ranked;
+
+CREATE TEMP TABLE billing_account_merge_map ON COMMIT DROP AS
+WITH impacted_users AS (
+  SELECT DISTINCT user_id
+  FROM profile_merge_map
+),
+accounts AS (
+  SELECT
+    ba.id AS account_id,
+    p.user_id
+  FROM billing_accounts ba
+  JOIN profiles p
+    ON p.id = ba.profile_id
+  JOIN impacted_users u
+    ON u.user_id = p.user_id
+)
+SELECT
+  a.account_id,
+  c.keep_account_id
+FROM accounts a
+JOIN billing_account_chosen c
+  ON c.user_id = a.user_id
+WHERE a.account_id <> c.keep_account_id;
+
+-- Repoint billing_account_events away from accounts we will delete (preserves history).
+UPDATE billing_account_events e
+SET account_id = m.keep_account_id
+FROM billing_account_merge_map m
+WHERE e.account_id = m.account_id;
+
+-- Delete extra billing accounts (prevents unique(profile_id) violation during profile repoint).
+DELETE FROM billing_accounts ba
+USING billing_account_merge_map m
+WHERE ba.id = m.account_id;
+
+-- Ensure the kept billing account is attached to the winning profile.
+UPDATE billing_accounts ba
+SET profile_id = c.winner_profile_id
+FROM billing_account_chosen c
+WHERE ba.id = c.keep_account_id
+  AND ba.profile_id <> c.winner_profile_id;
+
+-- 7) Repoint all other FK references to profiles(id) dynamically.
 DO $$
 DECLARE
   r RECORD;
@@ -88,7 +172,7 @@ BEGIN
     WHERE con.contype = 'f'
       AND con.confrelid = 'profiles'::regclass
       AND n.nspname = 'public'
-      AND c.relname NOT IN ('profile_sections', 'profile_documents')
+      AND c.relname NOT IN ('profile_sections', 'profile_documents', 'billing_accounts')
   LOOP
     EXECUTE format(
       'UPDATE %I.%I t SET %I = m.winner_id FROM profile_merge_map m WHERE t.%I = m.loser_id',
@@ -97,12 +181,12 @@ BEGIN
   END LOOP;
 END $$;
 
--- 7) Delete loser profiles after repointing.
+-- 8) Delete loser profiles after repointing.
 DELETE FROM profiles p
 USING profile_merge_map m
 WHERE p.id = m.loser_id;
 
--- 8) Assert no remaining duplicates (evidence query).
+-- 9) Assert no remaining duplicates (evidence query).
 DO $$
 BEGIN
   IF EXISTS (
@@ -116,10 +200,9 @@ BEGIN
   END IF;
 END $$;
 
--- 9) Enforce uniqueness (allows legacy profiles with NULL user_id).
+-- 10) Enforce uniqueness (allows legacy profiles with NULL user_id).
 CREATE UNIQUE INDEX IF NOT EXISTS ux_profiles_user_id
   ON profiles (user_id)
   WHERE user_id IS NOT NULL;
 
 COMMIT;
-
