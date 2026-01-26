@@ -115,6 +115,11 @@ function normalizeLiveOpportunity(raw, { crawlerType }) {
   const opportunityType = normalizeString(raw.opportunity_type || raw.type || raw.grant_type || 'grant') || 'grant'
   if (LOAN_TYPES.has(opportunityType)) return null
 
+  const existingScore = typeof raw.match_score === 'number' ? raw.match_score : null
+  const existingReasons = Array.isArray(raw.match_reasons) ? raw.match_reasons : []
+  const recordOriginRaw = normalizeString(raw.record_origin || '')
+  const isDirectoryStyle = opportunityType === 'program' || recordOriginRaw.includes('directory') || Boolean(raw.is_directory_resource)
+
   return {
     id: raw.id ?? null,
     title,
@@ -135,9 +140,43 @@ function normalizeLiveOpportunity(raw, { crawlerType }) {
     keywords: Array.isArray(raw.keywords) ? raw.keywords : [],
     eligibility_bullets: Array.isArray(raw.eligibility_bullets) ? raw.eligibility_bullets : [],
     opportunity_type: opportunityType,
-    record_origin: 'live_crawl',
+    // Preserve crawler-provided origin when present; directory-style resources must not be treated as volatile live crawls.
+    record_origin: recordOriginRaw || (isDirectoryStyle ? 'directory_resource' : 'live_crawl'),
     crawler_type: crawlerType,
+    ...(existingScore !== null ? { match_score: existingScore } : {}),
+    ...(existingReasons.length ? { match_reasons: existingReasons } : {}),
+    ...(isDirectoryStyle ? { is_directory_resource: true } : {}),
   }
+}
+
+function mergeReasons(a, b) {
+  const out = []
+  const seen = new Set()
+  for (const src of [a, b]) {
+    if (!Array.isArray(src)) continue
+    for (const r of src) {
+      const s = typeof r === 'string' ? r.trim() : ''
+      if (!s) continue
+      const key = s.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(s)
+    }
+  }
+  return out
+}
+
+function isDirectoryResource(row) {
+  if (!row || typeof row !== 'object') return false
+  const origin = normalizeString(row.record_origin || '')
+  const oppType = normalizeString(row.opportunity_type || '')
+  return (
+    oppType === 'program' ||
+    origin === 'directory' ||
+    origin === 'directory_resource' ||
+    origin.includes('directory') ||
+    Boolean(row.is_directory_resource)
+  )
 }
 
 async function withTimeout(promise, ms, label) {
@@ -209,21 +248,48 @@ async function runLiveCrawler({ crawlerType, profile, itemRequest, minMatchScore
       .map((row) => normalizeLiveOpportunity(row, { crawlerType }))
       .filter(Boolean)
 
-    // Apply deterministic scoring so the UI compares apples-to-apples with DB results.
-    const scored = normalized
-      .filter(isOpportunityCurrent)
-      .map((row) => {
-        const { score, reasons } = calculateMatchScore(profile, row)
-        return { ...row, match_score: score, match_reasons: reasons }
+    // Score with the FULL profile context (signals + sections) so we use all datapoints consistently.
+    const profileContextForScoring =
+      profile && typeof profile === 'object' && profile.sections
+        ? { profile, sections: profile.sections ?? {}, signals: profile.signals ?? null }
+        : profile
+
+    const current = normalized.filter(isOpportunityCurrent)
+
+    // Preserve crawler-provided match_score when present (directory-style resources often pre-score themselves),
+    // and only add our computed score on top.
+    const rescored = current.map((row) => {
+      const { score: computedScore, reasons: computedReasons } = calculateMatchScore(profileContextForScoring, row)
+      const existingScore = typeof row.match_score === 'number' ? row.match_score : null
+      const isDirectory = isDirectoryResource(row)
+
+      const mergedScore =
+        existingScore === null ? computedScore : Math.max(existingScore, computedScore)
+      const mergedReasons = mergeReasons(row.match_reasons, computedReasons)
+
+      // Guarantee directory resources survive the user's min threshold (they're entry points, not competitive matches).
+      const finalScore = isDirectory ? Math.max(Number(minMatchScore), mergedScore) : mergedScore
+      const finalReasons = isDirectory
+        ? mergeReasons(mergedReasons, [`Directory resource (always included at ${Number(minMatchScore)}%+ threshold)`])
+        : mergedReasons
+
+      return { ...row, match_score: finalScore, match_reasons: finalReasons }
+    })
+
+    const included = rescored
+      .filter((row) => {
+        if (isDirectoryResource(row)) return true
+        return typeof row.match_score === 'number' && row.match_score >= Number(minMatchScore)
       })
-      .filter((row) => typeof row.match_score === 'number' && row.match_score >= Number(minMatchScore))
       .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
       .slice(0, 50)
 
     return {
       ok: true,
       duration_ms: Date.now() - startedAt,
-      opportunities: scored,
+      total_found: current.length,
+      filtered_count: included.length,
+      opportunities: included,
       error: null,
     }
   } catch (error) {
@@ -511,7 +577,12 @@ router.post('/run', ensureAuth, async (req, res) => {
       }
 
       debug.used_live = true
-      debug.live = { ok: true, duration_ms: live.duration_ms, returned: live.opportunities.length }
+      debug.live = {
+        ok: true,
+        duration_ms: live.duration_ms,
+        returned: live.opportunities.length,
+        total_found: live.total_found ?? live.opportunities.length,
+      }
 
       // If live results are solid, skip fallback; otherwise optionally augment with DB.
       const shouldSkipFallback = live.opportunities.length >= MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK
@@ -521,7 +592,7 @@ router.post('/run', ensureAuth, async (req, res) => {
           success: true,
           crawler_type,
           count: live.opportunities.length,
-          total_found: live.opportunities.length,
+          total_found: live.total_found ?? live.opportunities.length,
           filtered_count: live.opportunities.length,
           min_match_score,
           duration,
@@ -608,6 +679,39 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     debug.used_db_fallback = true
     debug.db = { candidates: candidates.length, returned: filteredOpportunities.length }
+
+    // Guardrail: if something is being found but everything is filtered out, include score diagnostics.
+    // This is additive (does not change the existing response shape); the UI can ignore it.
+    if (filteredOpportunities.length === 0 && totalFound > 0) {
+      const scores = scored
+        .map((o) => (typeof o?.match_score === 'number' ? o.match_score : null))
+        .filter((v) => typeof v === 'number')
+      const minScore = scores.length ? Math.min(...scores) : null
+      const maxScore = scores.length ? Math.max(...scores) : null
+      const avgScore = scores.length ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10 : null
+      const topScores = scored
+        .filter((o) => typeof o?.match_score === 'number')
+        .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+        .slice(0, 5)
+        .map((o) => ({
+          title: o.title ?? null,
+          sponsor: o.sponsor ?? o.funder ?? null,
+          score: o.match_score,
+          record_origin: o.record_origin ?? null,
+          opportunity_type: o.opportunity_type ?? null,
+        }))
+
+      let primaryReason = 'filtered_below_min_match_score'
+      if (scores.length === 0) primaryReason = 'no_scores_generated'
+      else if (maxScore !== null && maxScore < Number(min_match_score)) primaryReason = 'all_below_min_match_score'
+
+      debug.filter_diagnostics = {
+        min_match_score: Number(min_match_score),
+        score_stats: { min: minScore, max: maxScore, avg: avgScore },
+        top_5: topScores,
+        primary_reason: primaryReason,
+      }
+    }
 
     // If live had *some* results, merge + dedupe by URL/title so users see real results first.
     let merged = filteredOpportunities
