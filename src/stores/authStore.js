@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import {
   startEmailSignIn,
   startPasswordSetup,
+  startPasswordReset,
   completePasswordSetup,
   loginWithPassword,
   verifyEmailCode,
@@ -421,6 +422,18 @@ export const useAuthStore = create((set, get) => ({
       // ignore
     }
     return startPasswordSetup(email)
+  },
+
+  startPasswordReset: async (email) => {
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : ''
+    if (!normalizedEmail) {
+      const err = new Error('email is required')
+      err.status = 400
+      throw err
+    }
+
+    const response = await startPasswordReset(normalizedEmail)
+    return response
   },
 
   loginWithPassword: async ({ email, password }) => {

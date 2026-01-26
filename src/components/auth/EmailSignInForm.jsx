@@ -23,6 +23,7 @@ export default function EmailSignInForm({ onComplete }) {
   const [step, setStep] = useState('email') // email | password | setup_sent
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [resetRequested, setResetRequested] = useState(false)
   const [status, setStatus] = useState({ type: 'idle', message: null, previewCode: null, notice: null })
   const [isLoading, setIsLoading] = useState(false)
   const [emailError, setEmailError] = useState(null)
@@ -177,6 +178,41 @@ export default function EmailSignInForm({ onComplete }) {
     }
   }
 
+  const handlePasswordReset = async () => {
+    try {
+      setIsLoading(true)
+      setResetRequested(true)
+      setStatus({ type: 'idle', message: null, previewCode: null, notice: null })
+
+      const response = await authStore.startPasswordReset(email)
+      if (response?.status === 'password_reset_email_sent' || response?.status === 'password_setup_email_sent') {
+        setStep('setup_sent')
+        setStatus({
+          type: 'success',
+          message: `Check your email to reset your password for ${maskedEmail ?? email}.`,
+          previewCode: null,
+          notice:
+            response?.notice ??
+            'If you don’t receive an email within a few minutes, check spam/junk and try again.',
+        })
+        return
+      }
+
+      setStatus({
+        type: 'error',
+        message: 'Unable to send password reset email. Please try again.',
+        previewCode: null,
+        notice: null,
+      })
+    } catch (error) {
+      const message = error?.error || error?.message || 'Unable to send password reset email. Please try again.'
+      setStatus({ type: 'error', message, previewCode: null, notice: null })
+    } finally {
+      setIsLoading(false)
+      setResetRequested(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       {status.type !== 'idle' ? (
@@ -243,6 +279,13 @@ export default function EmailSignInForm({ onComplete }) {
               className={cn('text-blue-600 hover:underline', isLoading && 'pointer-events-none opacity-60')}
             >
               Use a different email
+            </button>
+            <button
+              type="button"
+              onClick={handlePasswordReset}
+              className={cn('text-blue-600 hover:underline', (isLoading || resetRequested) && 'pointer-events-none opacity-60')}
+            >
+              Forgot password?
             </button>
           </div>
         </form>

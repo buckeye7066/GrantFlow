@@ -29,6 +29,14 @@ export async function startPasswordSetup(email) {
   })
 }
 
+export async function startPasswordReset(email) {
+  log.debug('starting password reset')
+  return apiFetch('/api/auth/password/reset/start', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  })
+}
+
 export async function completePasswordSetup({ token, password }) {
   log.debug('completing password setup')
   return apiFetch('/api/auth/password/setup/complete', {

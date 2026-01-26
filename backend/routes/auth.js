@@ -2448,6 +2448,123 @@ router.post('/password/setup/start', async (req, res) => {
   }
 })
 
+// Password reset: always send a one-time link (even if a password already exists).
+router.post('/password/reset/start', async (req, res) => {
+  try {
+    await ensurePasswordAuthSchema(req.db)
+
+    const emailRaw = req.body?.email
+    if (typeof emailRaw !== 'string') {
+      return res.status(400).json({ error: 'email is required', error_type: 'validation_error' })
+    }
+
+    const email = normalizeEmail(emailRaw)
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: 'Invalid email address', error_type: 'validation_error' })
+    }
+
+    const isProd = isProductionEnvironment()
+
+    const isAdmin = isAdminEmail(email)
+    const profileMatch = await findProfileRowForEmail(req.db, email)
+    if (isProd && !isAdmin && !profileMatch) {
+      return res.status(403).json({
+        error_type: 'unauthorized_email',
+        error: 'Access denied. This email is not authorized for login.',
+        redirect_to: '/ServiceApplication',
+      })
+    }
+
+    // In production, email MUST be configured.
+    if (isProd && !isEmailServiceConfigured()) {
+      const missingVars = []
+      if (!process.env.RESEND_API_KEY) missingVars.push('RESEND_API_KEY')
+      if (!process.env.FROM_EMAIL && !process.env.EMAIL_FROM) missingVars.push('FROM_EMAIL or EMAIL_FROM')
+
+      console.error('[auth/password/reset/start] Email service not configured in production:', {
+        missing: missingVars,
+        email: email,
+        has_resend_key: Boolean(process.env.RESEND_API_KEY),
+        has_from_email: Boolean(process.env.FROM_EMAIL || process.env.EMAIL_FROM),
+        node_env: process.env.NODE_ENV,
+        railway_env: process.env.RAILWAY_ENVIRONMENT,
+      })
+
+      return res.status(503).json({
+        error_type: 'email_not_configured',
+        error: 'Email service is not configured. Please contact support.',
+      })
+    }
+
+    const user = await ensureUserForPasswordAuth(req.db, email)
+    if (!user) {
+      return res.status(503).json({ error: 'Unable to start password reset', error_type: 'service_unavailable' })
+    }
+
+    const token = base64UrlToken(32)
+    const tokenHash = hashValue(token)
+    const now = new Date()
+    const expiresAt = new Date(now.getTime() + PASSWORD_SETUP_TTL * 1000).toISOString()
+    const id = crypto.randomUUID()
+
+    await req.db
+      .prepare(
+        `
+          INSERT INTO password_setup_tokens (
+            id, user_id, token_hash, expires_at, consumed_at, request_ip, user_agent
+          ) VALUES (?, ?, ?, ?, NULL, ?, ?)
+        `,
+      )
+      .run(id, user.id, tokenHash, expiresAt, req.ip ?? null, req.headers['user-agent'] ?? null)
+
+    const link = buildPasswordSetupLink(req, token)
+
+    let emailSent = false
+    /** @type {null | { name?: string, status?: any, provider?: any, message?: string }} */
+    let emailSendError = null
+    try {
+      const sendPromise = sendPasswordSetupEmail(email, link)
+      const timeoutPromise = new Promise((resolve) => {
+        setTimeout(() => resolve(false), Number(process.env.AUTH_EMAIL_SEND_TIMEOUT_MS || 15000))
+      })
+      emailSent = await Promise.race([sendPromise, timeoutPromise])
+    } catch (err) {
+      if (err instanceof EmailSendError) {
+        emailSendError = { name: err.name, status: err.status, provider: err.provider, message: err.message }
+      } else {
+        emailSendError = { name: err?.name, status: err?.status, provider: err?.provider, message: err?.message || String(err) }
+      }
+      emailSent = false
+    }
+
+    const response = { ok: true, status: 'password_reset_email_sent', email_sent: emailSent }
+    if (emailSent !== true) {
+      response.notice = 'We created your password reset link, but email delivery may be delayed. Please try again in a minute.'
+      if (isProd) {
+        response.error_type = 'email_delivery_failed'
+        console.error('[auth/password/reset/start] Email send failed in production:', {
+          email: email,
+          user_id: user.id,
+          token_id: id,
+          error_name: emailSendError?.name,
+          error_provider: emailSendError?.provider ?? null,
+          error_status: emailSendError?.status ?? null,
+          error_message: emailSendError?.message ?? null,
+        })
+      }
+      if (!isProd) {
+        response.preview_token = token
+        response.preview_url = link
+      }
+    }
+
+    return res.status(202).json(response)
+  } catch (error) {
+    console.error('[auth/password/reset/start] Unexpected error:', error)
+    return res.status(500).json({ error: 'An unexpected error occurred', error_type: 'internal_error' })
+  }
+})
+
 router.post('/password/setup/complete', async (req, res) => {
   try {
     await ensurePasswordAuthSchema(req.db)
