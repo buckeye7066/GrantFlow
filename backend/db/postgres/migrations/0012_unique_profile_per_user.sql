@@ -43,35 +43,106 @@ WHERE rn > 1;
 -- If no duplicates, proceed to index creation.
 -- (Keep the rest of the statements safe/idempotent anyway.)
 
--- 2) Pre-delete conflicts for profile_sections unique(profile_id, section_key).
+-- 2) Resolve profile_sections conflicts safely.
+-- Conflicts can occur not only between winner vs loser, but also between multiple losers that share the same section_key.
+-- We deterministically keep ONE row per (winner_id, section_key):
+--   - prefer an existing winner row if present
+--   - otherwise keep the oldest created_at (NULLS LAST), tie-breaker smallest id
+CREATE TEMP TABLE profile_sections_repoint ON COMMIT DROP AS
+WITH impacted_profiles AS (
+  SELECT loser_id AS profile_id FROM profile_merge_map
+  UNION
+  SELECT winner_id AS profile_id FROM profile_merge_map
+),
+rows AS (
+  SELECT
+    ps.id,
+    ps.profile_id AS source_profile_id,
+    COALESCE(m.winner_id, ps.profile_id) AS target_profile_id,
+    ps.section_key,
+    ps.created_at,
+    (ps.profile_id = COALESCE(m.winner_id, ps.profile_id)) AS is_winner_row
+  FROM profile_sections ps
+  JOIN impacted_profiles ip ON ip.profile_id = ps.profile_id
+  LEFT JOIN profile_merge_map m ON m.loser_id = ps.profile_id
+),
+ranked AS (
+  SELECT
+    id,
+    source_profile_id,
+    target_profile_id,
+    section_key,
+    ROW_NUMBER() OVER (
+      PARTITION BY target_profile_id, section_key
+      ORDER BY is_winner_row DESC, created_at ASC NULLS LAST, id ASC
+    ) AS rn
+  FROM rows
+)
+SELECT * FROM ranked;
+
+-- Delete any rows that would become duplicates after repointing.
 DELETE FROM profile_sections ps
-USING profile_merge_map m
-   , profile_sections keep
-WHERE ps.profile_id = m.loser_id
-  AND keep.profile_id = m.winner_id
-  AND keep.section_key = ps.section_key;
+USING profile_sections_repoint r
+WHERE ps.id = r.id
+  AND r.rn > 1;
 
--- 3) Repoint profile_sections to winner.
+-- Repoint remaining rows to the winner.
 UPDATE profile_sections ps
-SET profile_id = m.winner_id
-FROM profile_merge_map m
-WHERE ps.profile_id = m.loser_id;
+SET profile_id = r.target_profile_id
+FROM profile_sections_repoint r
+WHERE ps.id = r.id
+  AND ps.profile_id <> r.target_profile_id;
 
--- 4) Pre-delete conflicts for profile_documents PK(profile_id, document_id).
+-- 3) Resolve profile_documents conflicts safely.
+-- Conflicts can occur between winner vs loser OR between multiple losers that reference the same document_id.
+-- Deterministically keep ONE row per (winner_id, document_id):
+--   - prefer an existing winner row if present
+--   - otherwise keep the smallest source profile_id (stable tie-breaker; profile_documents has no timestamps)
+CREATE TEMP TABLE profile_documents_map ON COMMIT DROP AS
+WITH impacted_profiles AS (
+  SELECT loser_id AS profile_id FROM profile_merge_map
+  UNION
+  SELECT winner_id AS profile_id FROM profile_merge_map
+)
+SELECT
+  pd.profile_id AS source_profile_id,
+  pd.document_id,
+  COALESCE(m.winner_id, pd.profile_id) AS target_profile_id,
+  (pd.profile_id = COALESCE(m.winner_id, pd.profile_id)) AS is_winner_row
+FROM profile_documents pd
+JOIN impacted_profiles ip ON ip.profile_id = pd.profile_id
+LEFT JOIN profile_merge_map m ON m.loser_id = pd.profile_id;
+
+CREATE TEMP TABLE profile_documents_keep ON COMMIT DROP AS
+SELECT
+  target_profile_id,
+  document_id,
+  COALESCE(
+    MAX(CASE WHEN is_winner_row THEN source_profile_id END),
+    MIN(source_profile_id)
+  ) AS keep_source_profile_id
+FROM profile_documents_map
+GROUP BY target_profile_id, document_id;
+
+-- Delete any rows that would become duplicates after repointing.
 DELETE FROM profile_documents pd
-USING profile_merge_map m
-   , profile_documents keep
-WHERE pd.profile_id = m.loser_id
-  AND keep.profile_id = m.winner_id
-  AND keep.document_id = pd.document_id;
+USING profile_documents_map m
+JOIN profile_documents_keep k
+  ON k.target_profile_id = m.target_profile_id
+ AND k.document_id = m.document_id
+WHERE pd.profile_id = m.source_profile_id
+  AND pd.document_id = m.document_id
+  AND m.source_profile_id <> k.keep_source_profile_id;
 
--- 5) Repoint profile_documents to winner.
+-- Repoint remaining rows to the winner.
 UPDATE profile_documents pd
-SET profile_id = m.winner_id
-FROM profile_merge_map m
-WHERE pd.profile_id = m.loser_id;
+SET profile_id = m.target_profile_id
+FROM profile_documents_map m
+WHERE pd.profile_id = m.source_profile_id
+  AND pd.document_id = m.document_id
+  AND pd.profile_id <> m.target_profile_id;
 
--- 6) Resolve billing_accounts uniqueness (idx_billing_accounts_profile) safely.
+-- 4) Resolve billing_accounts uniqueness (idx_billing_accounts_profile) safely.
 -- Choose ONE billing_account per user (oldest created_at; tie-breaker smallest id),
 -- repoint all billing_account_events to that account, delete the rest, then ensure the kept
 -- billing_account is attached to the winning profile.
@@ -159,7 +230,7 @@ FROM billing_account_chosen c
 WHERE ba.id = c.keep_account_id
   AND ba.profile_id <> c.winner_profile_id;
 
--- 7) Repoint all other FK references to profiles(id) dynamically.
+-- 5) Repoint all other FK references to profiles(id) dynamically.
 DO $$
 DECLARE
   r RECORD;
@@ -186,12 +257,12 @@ BEGIN
   END LOOP;
 END $$;
 
--- 8) Delete loser profiles after repointing.
+-- 6) Delete loser profiles after repointing.
 DELETE FROM profiles p
 USING profile_merge_map m
 WHERE p.id = m.loser_id;
 
--- 9) Assert no remaining duplicates (evidence query).
+-- 7) Assert no remaining duplicates (evidence query).
 DO $$
 BEGIN
   IF EXISTS (
@@ -205,7 +276,7 @@ BEGIN
   END IF;
 END $$;
 
--- 10) Enforce uniqueness (allows legacy profiles with NULL user_id).
+-- 8) Enforce uniqueness (allows legacy profiles with NULL user_id).
 CREATE UNIQUE INDEX IF NOT EXISTS ux_profiles_user_id
   ON profiles (user_id)
   WHERE user_id IS NOT NULL;
