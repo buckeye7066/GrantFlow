@@ -350,6 +350,27 @@ class APIClient {
       clearTimeout(timeoutId);
 
       if (response.status === 401) {
+        // IMPORTANT: auth endpoints should not trigger refresh/reauth logic.
+        // For login/setup endpoints we want to surface the backend error payload (e.g. invalid_credentials)
+        // instead of converting it into a generic "Authentication required" error.
+        if (endpoint.startsWith('/api/auth/')) {
+          const errorBody = await response.json().catch(() => ({ error: response.statusText }))
+          const message =
+            typeof errorBody?.message === 'string' && errorBody.message.trim()
+              ? errorBody.message.trim()
+              : typeof errorBody?.error === 'string' && errorBody.error.trim()
+                ? errorBody.error.trim()
+                : 'Request failed'
+
+          const err = new Error(message)
+          err.status = response.status
+          err.requestId = errorBody.request_id || headers['X-Request-Id'] || null
+          err.errorCode = errorBody.error || null
+          err.errorType = errorBody.error_type || null
+          err.details = errorBody
+          throw err
+        }
+
         // Prevent infinite retry loops - only retry once
         if (isRetry) {
           console.error('[APIClient] Still getting 401 after refresh, giving up');
