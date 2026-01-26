@@ -46,10 +46,10 @@ WHERE rn > 1;
 -- 2) Pre-delete conflicts for profile_sections unique(profile_id, section_key).
 DELETE FROM profile_sections ps
 USING profile_merge_map m
-JOIN profile_sections keep
-  ON keep.profile_id = m.winner_id
- AND keep.section_key = ps.section_key
-WHERE ps.profile_id = m.loser_id;
+   , profile_sections keep
+WHERE ps.profile_id = m.loser_id
+  AND keep.profile_id = m.winner_id
+  AND keep.section_key = ps.section_key;
 
 -- 3) Repoint profile_sections to winner.
 UPDATE profile_sections ps
@@ -60,10 +60,10 @@ WHERE ps.profile_id = m.loser_id;
 -- 4) Pre-delete conflicts for profile_documents PK(profile_id, document_id).
 DELETE FROM profile_documents pd
 USING profile_merge_map m
-JOIN profile_documents keep
-  ON keep.profile_id = m.winner_id
- AND keep.document_id = pd.document_id
-WHERE pd.profile_id = m.loser_id;
+   , profile_documents keep
+WHERE pd.profile_id = m.loser_id
+  AND keep.profile_id = m.winner_id
+  AND keep.document_id = pd.document_id;
 
 -- 5) Repoint profile_documents to winner.
 UPDATE profile_documents pd
@@ -137,10 +137,15 @@ JOIN billing_account_chosen c
 WHERE a.account_id <> c.keep_account_id;
 
 -- Repoint billing_account_events away from accounts we will delete (preserves history).
-UPDATE billing_account_events e
-SET account_id = m.keep_account_id
-FROM billing_account_merge_map m
-WHERE e.account_id = m.account_id;
+DO $$
+BEGIN
+  IF to_regclass('public.billing_account_events') IS NOT NULL THEN
+    UPDATE billing_account_events e
+    SET account_id = m.keep_account_id
+    FROM billing_account_merge_map m
+    WHERE e.account_id = m.account_id;
+  END IF;
+END $$;
 
 -- Delete extra billing accounts (prevents unique(profile_id) violation during profile repoint).
 DELETE FROM billing_accounts ba
