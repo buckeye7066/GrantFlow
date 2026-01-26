@@ -726,7 +726,17 @@ router.post('/env/apply', async (req, res) => {
     'AUTH_FRONTEND_URL',
   ]);
 
-  const SECRET_KEYS = new Set(['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'RESEND_API_KEY', 'ANYA_ADMIN_TOKEN']);
+  const SECRET_KEYS = new Set([
+    'OPENAI_API_KEY',
+    'ANTHROPIC_API_KEY',
+    'RESEND_API_KEY',
+    'ANYA_ADMIN_TOKEN',
+    // Funding provider keys should be treated as secrets too.
+    'SAM_GOV_PUBLIC_API_KEY',
+    'GRANTS_GOV_API_KEY',
+    'SIMPLER_GRANTS_API_KEY',
+    'API_DATA_GOV_KEY',
+  ]);
 
   if (!ALLOWLIST.has(key)) {
     return res.status(403).json({
