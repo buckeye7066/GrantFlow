@@ -35,6 +35,14 @@
   ],
   "rewrites": [
     {
+      "source": "/grantflow/Grant Flow_ Get Started.mp4",
+      "destination": "/Grant Flow_ Get Started.mp4"
+    },
+    {
+      "source": "/grantflow/Grant Flow_ Get Started. mp4",
+      "destination": "/Grant Flow_ Get Started. mp4"
+    },
+    {
       "source": "/api/:path*",
       "destination": "https://grantflow-production.up.railway.app/api/:path*"
     },
