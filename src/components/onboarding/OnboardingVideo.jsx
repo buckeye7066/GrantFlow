@@ -11,13 +11,36 @@ import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Info, X, CheckCircle } from 'lucide-react'
 
-// Properly encode the video path to handle spaces and special characters in filename
-// The path parts are joined to ensure proper encoding while keeping forward slashes
-const VIDEO_FILENAME = 'Grant Flow_ Get Started.mp4'
-const VIDEO_PATH = '/' + encodeURIComponent(VIDEO_FILENAME)
+// The onboarding MP4 is expected to be deployed as a *public* asset.
+// README: "Drop the final MP4 into public/Grant Flow_ Get Started.mp4"
+//
+// IMPORTANT: We must respect Vite's base path (prod uses "/grantflow/"), otherwise we 404.
+const VIDEO_FILENAMES = [
+  'Grant Flow_ Get Started.mp4',
+  // Back-compat (a previous broken filename variant we’ve seen in the wild)
+  'Grant Flow_ Get Started. mp4',
+]
+
+function normalizeBaseUrl(baseUrl) {
+  const b = String(baseUrl || '/').trim() || '/'
+  return b.endsWith('/') ? b : b + '/'
+}
+
+function buildVideoCandidates() {
+  const base = normalizeBaseUrl(import.meta?.env?.BASE_URL)
+  const override = String(import.meta?.env?.VITE_ONBOARDING_VIDEO_URL || '').trim()
+  const candidates = []
+  if (override) candidates.push(override)
+  for (const name of VIDEO_FILENAMES) {
+    candidates.push(base + encodeURIComponent(name))
+  }
+  return candidates
+}
 
 export default function OnboardingVideo({ open, onComplete, onSkip }) {
-  const [videoError, setVideoError] = useState(false)
+  const [videoError, setVideoError] = useState(null)
+  const [sourceIndex, setSourceIndex] = useState(0)
+  const [candidates] = useState(() => buildVideoCandidates())
   const videoRef = useRef(null)
 
   // Prevent browser warning: don't allow focus to remain inside a dialog that is being aria-hidden during close.
@@ -57,7 +80,23 @@ export default function OnboardingVideo({ open, onComplete, onSkip }) {
   }
 
   const handleVideoError = () => {
-    setVideoError(true)
+    const failedSrc = candidates[sourceIndex] || null
+    console.error('[onboarding-video] Failed to load video source', {
+      src: failedSrc,
+      base_url: import.meta?.env?.BASE_URL,
+      has_override: Boolean(String(import.meta?.env?.VITE_ONBOARDING_VIDEO_URL || '').trim()),
+    })
+
+    // Try the next candidate if available (handles filename drift in deployments).
+    if (sourceIndex + 1 < candidates.length) {
+      setSourceIndex((i) => i + 1)
+      return
+    }
+
+    setVideoError({
+      message: 'Failed to load onboarding tutorial video.',
+      tried: candidates,
+    })
   }
 
   return (
@@ -86,13 +125,25 @@ export default function OnboardingVideo({ open, onComplete, onSkip }) {
 
         <div className="py-4">
           {videoError ? (
-            <Alert>
+            <Alert variant="destructive">
               <Info className="h-4 w-4" />
               <AlertDescription>
-                <p className="font-medium mb-2">Tutorial video unavailable</p>
-                <p className="text-sm">
-                  You can still proceed with using GrantFlow. If you need help getting started, review the docs.
+                <p className="font-medium mb-2">Onboarding video failed to load</p>
+                <p className="text-sm mb-3">
+                  This is a real configuration issue (the MP4 is missing or the URL is wrong).
                 </p>
+                <div className="text-sm space-y-2">
+                  <p className="font-medium">Tried these URL(s):</p>
+                  <ul className="list-disc list-inside space-y-1">
+                    {(videoError?.tried || []).map((u) => (
+                      <li key={u} className="break-all">{u}</li>
+                    ))}
+                  </ul>
+                  <p className="mt-3">
+                    Fix by adding the file to <code className="px-1 py-0.5 bg-white/60 rounded">public/Grant Flow_ Get Started.mp4</code> and redeploying,
+                    or set <code className="px-1 py-0.5 bg-white/60 rounded">VITE_ONBOARDING_VIDEO_URL</code> to a hosted MP4 URL at build time.
+                  </p>
+                </div>
               </AlertDescription>
             </Alert>
           ) : (
@@ -104,7 +155,7 @@ export default function OnboardingVideo({ open, onComplete, onSkip }) {
                 onError={handleVideoError}
                 tabIndex={-1}
               >
-                <source src={VIDEO_PATH} type="video/mp4" />
+                <source src={candidates[sourceIndex]} type="video/mp4" />
                 Your browser does not support the video tag.
               </video>
             </div>
