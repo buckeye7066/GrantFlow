@@ -51,6 +51,11 @@ public/*.mp4
 public/*mp4
 public/*mp4*
 
+# Allow the onboarding walkthrough video to be committed/deployed.
+# The UI expects this exact filename under Vite's base path.
+!public/Grant Flow_ Get Started.mp4
+!public/Grant Flow_ Get Started. mp4
+
 # Duplicate directories that should not be committed
 # The root of the repository is authoritative
 GrantFlow-main/
