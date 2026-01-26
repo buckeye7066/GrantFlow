@@ -3,6 +3,14 @@ import { createLogger } from '@/utils/logger'
 
 const log = createLogger('auth')
 
+export async function checkAccess(email) {
+  log.debug('checking email access')
+  return apiFetch('/api/auth/access/check', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  })
+}
+
 export async function startEmailSignIn(email) {
   log.debug('starting email sign in')
   const response = await apiFetch('/api/auth/email/start', {
