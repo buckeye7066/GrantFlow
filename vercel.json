@@ -35,6 +35,14 @@
   ],
   "rewrites": [
     {
+      "source": "/grantflow/Grant%20Flow_%20Get%20Started.mp4",
+      "destination": "/Grant Flow_ Get Started.mp4"
+    },
+    {
+      "source": "/grantflow/Grant%20Flow_%20Get%20Started.%20mp4",
+      "destination": "/Grant Flow_ Get Started. mp4"
+    },
+    {
       "source": "/grantflow/Grant Flow_ Get Started.mp4",
       "destination": "/Grant Flow_ Get Started.mp4"
     },
