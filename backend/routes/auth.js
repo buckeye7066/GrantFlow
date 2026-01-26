@@ -15,6 +15,7 @@ import {
   sendVerificationEmail as mainSendEmail,
   sendPasswordSetupEmail as mainSendPasswordSetupEmail,
   sendAuthAttemptNotification as mainAuthNotify,
+  isEmailServiceConfigured,
 } from '../services/email.js'
 import {
   sendVerificationEmail as fallbackSendEmail,
@@ -260,6 +261,18 @@ function isStrongPassword(password) {
   const common = new Set(['password', 'password1', 'password123', '1234567890', 'qwertyuiop', 'letmein'])
   if (common.has(lower)) return { ok: false, error: 'Password is too common' }
   return { ok: true }
+}
+
+/**
+ * Determine if we're running in production environment.
+ * Centralized helper to ensure consistent production detection across all auth routes.
+ */
+function isProductionEnvironment() {
+  return (
+    process.env.NODE_ENV === 'production' ||
+    process.env.RAILWAY_ENVIRONMENT === 'production' ||
+    process.env.VERCEL_ENV === 'production'
+  )
 }
 
 function signOtpToken({ kind, identifier, codeHash, ttlSeconds }) {
@@ -1469,11 +1482,8 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
 
     console.info('[auth/email/start] Processing email authentication request for:', email)
 
-    // Determine if we're in production
-    const isProd =
-      process.env.NODE_ENV === 'production' ||
-      process.env.RAILWAY_ENVIRONMENT === 'production' ||
-      process.env.VERCEL_ENV === 'production'
+    // Use centralized production detection helper
+    const isProd = isProductionEnvironment()
 
     // In production, enforce profile-email gating: allow only admin emails OR emails that match an existing profile.
     const normalizedEmail = normalizeEmail(email)
@@ -2184,6 +2194,79 @@ function buildPasswordSetupLink(req, token) {
   return url.toString()
 }
 
+/**
+ * POST /api/auth/access/check
+ * Check if an email is allowed to login (admin or has matching profile)
+ * and whether they already have a password set up.
+ */
+router.post('/access/check', async (req, res) => {
+  try {
+    const emailRaw = req.body?.email
+    if (typeof emailRaw !== 'string') {
+      return res.status(400).json({ error: 'email is required', error_type: 'validation_error' })
+    }
+
+    const email = normalizeEmail(emailRaw)
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: 'Invalid email address', error_type: 'validation_error' })
+    }
+
+    // Use centralized production detection helper
+    const isProd = isProductionEnvironment()
+
+    // Determine if user is admin
+    const isAdmin = isAdminEmail(email)
+    
+    // Check for profile match
+    const profileMatch = await findProfileRowForEmail(req.db, email)
+
+    // Enforce profile-email gating: allow only admin emails OR emails that match an existing profile
+    // In production, this is strict. In development, we still check but return 403 to maintain consistency.
+    if (!isAdmin && !profileMatch) {
+      return res.status(403).json({
+        allowed: false,
+        reason: 'no_profile_match',
+        redirect_to: '/ServiceApplication',
+      })
+    }
+
+    // Determine the reason for access - be explicit about why access was granted
+    let reason
+    if (isAdmin) {
+      reason = 'admin'
+    } else if (profileMatch) {
+      reason = 'profile_match'
+    } else {
+      // This should not be reachable due to the check above, but defensive coding
+      reason = 'unknown'
+    }
+
+    // Check if password is already set
+    let hasPassword = false
+    try {
+      const user = await req.db
+        .prepare('SELECT id, password_hash FROM users WHERE LOWER(primary_email) = ? LIMIT 1')
+        .get(email)
+      
+      if (user && typeof user.password_hash === 'string' && user.password_hash.trim()) {
+        hasPassword = true
+      }
+    } catch (error) {
+      // If user doesn't exist yet, hasPassword remains false
+      console.warn('[auth/access/check] Error checking password status:', error?.message || error)
+    }
+
+    return res.status(200).json({
+      allowed: true,
+      reason,
+      hasPassword,
+    })
+  } catch (error) {
+    console.error('[auth/access/check] Unexpected error:', error)
+    return res.status(500).json({ error: 'An unexpected error occurred', error_type: 'internal_error' })
+  }
+})
+
 router.post('/password/setup/start', async (req, res) => {
   try {
     await ensurePasswordAuthSchema(req.db)
@@ -2198,18 +2281,14 @@ router.post('/password/setup/start', async (req, res) => {
       return res.status(400).json({ error: 'Invalid email address', error_type: 'validation_error' })
     }
 
-    const isProd =
-      process.env.NODE_ENV === 'production' ||
-      process.env.RAILWAY_ENVIRONMENT === 'production' ||
-      process.env.VERCEL_ENV === 'production'
+    const isProd = isProductionEnvironment()
 
     const isAdmin = isAdminEmail(email)
     const profileMatch = await findProfileRowForEmail(req.db, email)
 
     if (isProd && !isAdmin && !profileMatch) {
       return res.status(403).json({
-        error_type: 'unauthorized_email',
-        error: 'Access denied. This email is not authorized for login.',
+        ok: false,
         redirect_to: '/ServiceApplication',
       })
     }
@@ -2221,6 +2300,24 @@ router.post('/password/setup/start', async (req, res) => {
 
     if (typeof user.password_hash === 'string' && user.password_hash.trim()) {
       return res.status(200).json({ ok: true, status: 'password_exists' })
+    }
+
+    // In production, email MUST be configured. Fail loudly if not.
+    if (isProd && !isEmailServiceConfigured()) {
+      const missingVars = []
+      if (!process.env.RESEND_API_KEY) missingVars.push('RESEND_API_KEY')
+      if (!process.env.FROM_EMAIL && !process.env.EMAIL_FROM) missingVars.push('FROM_EMAIL or EMAIL_FROM')
+      
+      console.error('[auth/password/setup/start] Email service not configured in production:', {
+        missing: missingVars,
+        email: email,
+        user_id: user.id,
+      })
+      
+      return res.status(503).json({
+        error_type: 'email_not_configured',
+        error: 'Email service is not configured. Please contact support.',
+      })
     }
 
     const token = base64UrlToken(32)
@@ -2239,8 +2336,18 @@ router.post('/password/setup/start', async (req, res) => {
           `,
         )
         .run(id, user.id, tokenHash, expiresAt, req.ip ?? null, req.headers['user-agent'] ?? null)
+      
+      // Structured logging (success) - DO NOT log the token itself
+      console.info('[auth/password/setup/start] Token created:', {
+        user_id: user.id,
+        email: email,
+        token_id: id,
+        expires_at: expiresAt,
+        ip: req.ip,
+      })
     } catch (dbError) {
       // Retry once after best-effort schema ensure (covers deploys where migrations lag).
+      console.warn('[auth/password/setup/start] Initial DB error, retrying after schema ensure:', dbError?.message || dbError)
       await ensurePasswordAuthSchema(req.db)
       try {
         await req.db
@@ -2252,8 +2359,23 @@ router.post('/password/setup/start', async (req, res) => {
             `,
           )
           .run(id, user.id, tokenHash, expiresAt, req.ip ?? null, req.headers['user-agent'] ?? null)
+        
+        // Structured logging (success after retry) - DO NOT log the token itself
+        console.info('[auth/password/setup/start] Token created (after retry):', {
+          user_id: user.id,
+          email: email,
+          token_id: id,
+          expires_at: expiresAt,
+          ip: req.ip,
+        })
       } catch (retryError) {
-        console.error('[auth/password/setup/start] DB error creating token:', retryError?.message || retryError)
+        // Structured logging (failure) - DO NOT log the token itself
+        console.error('[auth/password/setup/start] DB error creating token (after retry):', {
+          error: retryError?.message || retryError,
+          user_id: user.id,
+          email: email,
+          ip: req.ip,
+        })
         return res.status(503).json({
           error_type: 'service_unavailable',
           error: 'Login is temporarily unavailable. Please try again in a minute.',
@@ -2272,6 +2394,19 @@ router.post('/password/setup/start', async (req, res) => {
       emailSent = await Promise.race([sendPromise, timeoutPromise])
     } catch {
       emailSent = false
+    }
+
+    // In production, email send failure is a hard error
+    if (isProd && !emailSent) {
+      console.error('[auth/password/setup/start] Email send failed in production:', {
+        email: email,
+        user_id: user.id,
+        token_id: id,
+      })
+      return res.status(503).json({
+        error_type: 'email_delivery_failed',
+        error: 'Unable to send password setup email. Please try again or contact support.',
+      })
     }
 
     const response = { ok: true, status: 'password_setup_email_sent', email_sent: emailSent }
@@ -2379,10 +2514,7 @@ router.post('/password/login', async (req, res) => {
       return res.status(400).json({ error: 'Invalid email address', error_type: 'validation_error' })
     }
 
-    const isProd =
-      process.env.NODE_ENV === 'production' ||
-      process.env.RAILWAY_ENVIRONMENT === 'production' ||
-      process.env.VERCEL_ENV === 'production'
+    const isProd = isProductionEnvironment()
 
     const isAdmin = isAdminEmail(email)
     const profileMatch = await findProfileRowForEmail(req.db, email)
