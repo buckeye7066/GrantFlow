@@ -19,6 +19,9 @@ import {
   listProfileEmails,
   addProfileEmails,
   removeProfileEmail,
+  isAdminUserWithDb,
+  getAuthUserId,
+  getAccessibleProfileIds,
 } from '../utils/accessControl.js'
 
 const router = express.Router()
@@ -247,10 +250,14 @@ function extractAnthropicText(response) {
 }
 
 router.get('/', async (req, res) => {
-  const isAdmin = req.ctx?.isAdmin === true
+  // Canonical truth is req.ctx, but harden against any transient ctx-building issues
+  // by falling back to a DB-backed admin check (never token-only).
+  const user = req.user ?? { role: 'guest' }
+  const isAdmin =
+    req.ctx?.isAdmin === true ? true : await isAdminUserWithDb(req.db, user)
   const includeSummary = req.query.summary === 'true'
   const includeDeleted = req.query.includeDeleted === 'true'
-  const userId = req.ctx?.userId ?? null
+  const userId = req.ctx?.userId ?? getAuthUserId(user) ?? null
   
   // Validate pagination parameters.
   // For admins, default to the max page size unless a limit is explicitly provided.
@@ -265,15 +272,37 @@ router.get('/', async (req, res) => {
 
   // Check if user is admin
   if (!isAdmin) {
-    // Enduser: return only profiles where profiles.user_id = user.id
-    if (!userId) {
-      return res.status(401).json({ error: 'Authentication required' })
+    // Enduser: return all profiles the user can access.
+    // This includes ownership (profiles.user_id) AND shared access via profile_emails.
+    if (!userId) return res.status(401).json({ error: 'Authentication required' })
+
+    // Prefer the canonical access set computed by requestContext.
+    // If it's missing for some reason, recompute it (still DB-backed and safe).
+    let accessibleProfileIds = req.ctx?.accessibleProfileIds
+    if (accessibleProfileIds == null) {
+      try {
+        accessibleProfileIds = await getAccessibleProfileIds(req.db, user)
+      } catch {
+        accessibleProfileIds = new Set()
+      }
     }
 
-    // Get all profiles linked to this user (with pagination)
-    const rows = await req.db.prepare(
-      `${profileSelect} WHERE p.user_id = ? AND (p.status IS NULL OR p.status <> 'deleted') ORDER BY p.created_at ASC LIMIT ? OFFSET ?`
-    ).all(userId, limit, offset)
+    const ids =
+      accessibleProfileIds instanceof Set ? Array.from(accessibleProfileIds) : []
+
+    if (ids.length === 0) {
+      return res.json([])
+    }
+
+    const placeholders = ids.map(() => '?').join(', ')
+    const whereDeleted = includeDeleted ? '' : " AND (p.status IS NULL OR p.status <> 'deleted')"
+
+    // Get all accessible profiles (with pagination)
+    const rows = await req.db
+      .prepare(
+        `${profileSelect} WHERE p.id IN (${placeholders})${whereDeleted} ORDER BY p.created_at ASC LIMIT ? OFFSET ?`,
+      )
+      .all(...ids, limit, offset)
     
     const profiles = rows.map(mapProfile)
     if (includeSummary) {

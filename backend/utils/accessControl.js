@@ -135,6 +135,7 @@ export async function getAccessibleProfileIds(db, user) {
   // Allow additional profile access via email mapping (e.g. board members).
   const emails = collectUserEmails(user)
   if (emails.length > 0) {
+    // 1) Explicit allowlist table (profile_emails).
     try {
       await ensureProfileEmailSchema(db)
       const placeholders = emails.map(() => '?').join(', ')
@@ -152,6 +153,77 @@ export async function getAccessibleProfileIds(db, user) {
       })
     } catch {
       // Keep running even if schema isn't present yet.
+    }
+
+    // 2) Self-healing fallback: if the profile's saved "basic_information.email" matches the user,
+    // grant access even if profiles.user_id/profile_emails are not populated yet.
+    //
+    // This is critical for real production data where profiles may pre-exist users, or where
+    // ownership was never assigned. Product requirement: "email on the profile" implies access.
+    try {
+      const placeholders = emails.map(() => '?').join(', ')
+      if (db?.dialect === 'postgres') {
+        const rows = await db
+          .prepare(
+            `
+              SELECT DISTINCT ps.profile_id
+              FROM profile_sections ps
+              WHERE ps.section_key = 'basic_information'
+                AND LOWER((ps.data::jsonb ->> 'email')) IN (${placeholders})
+            `,
+          )
+          .all(...emails)
+        rows.forEach((row) => {
+          if (row?.profile_id) ids.add(row.profile_id)
+        })
+      } else {
+        // SQLite: prefer json_extract when json1 is available.
+        try {
+          const rows = await db
+            .prepare(
+              `
+                SELECT DISTINCT ps.profile_id
+                FROM profile_sections ps
+                WHERE ps.section_key = 'basic_information'
+                  AND LOWER(json_extract(ps.data, '$.email')) IN (${placeholders})
+              `,
+            )
+            .all(...emails)
+          rows.forEach((row) => {
+            if (row?.profile_id) ids.add(row.profile_id)
+          })
+        } catch {
+          // Fallback: match in JSON string (works even if json1 isn't enabled).
+          // We intentionally keep this best-effort and low risk; if it fails, access simply relies on other mechanisms.
+          const likeClauses = []
+          const likeArgs = []
+          for (const email of emails) {
+            const escapedEmail = String(email)
+              .toLowerCase()
+              .replace(/\\/g, '\\\\')
+              .replace(/"/g, '\\"')
+            likeClauses.push('LOWER(ps.data) LIKE ?')
+            likeArgs.push(`%\"email\"%${escapedEmail}%`)
+          }
+          if (likeClauses.length > 0) {
+            const rows = await db
+              .prepare(
+                `
+                  SELECT DISTINCT ps.profile_id
+                  FROM profile_sections ps
+                  WHERE ps.section_key = 'basic_information'
+                    AND (${likeClauses.join(' OR ')})
+                `,
+              )
+              .all(...likeArgs)
+            rows.forEach((row) => {
+              if (row?.profile_id) ids.add(row.profile_id)
+            })
+          }
+        }
+      }
+    } catch {
+      // ignore (best-effort)
     }
   }
 
