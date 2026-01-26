@@ -743,7 +743,7 @@ export default function SourceDirectory() {
                   <>
                     <Button
                       onClick={handleBulkCrawl}
-                      className="bg-blue-600 hover:bg-blue-700"
+                      className="bg-blue-600 hover:bg-blue-700 text-white hover:text-white"
                     >
                       <Play className="w-4 h-4 mr-2" />
                       Crawl {selectedSources.length} Selected
@@ -1141,7 +1141,7 @@ export default function SourceDirectory() {
                                                       description: `${opp.title} has been added to your pipeline`,
                                                     });
                                                   }}
-                                                  className="bg-blue-600 hover:bg-blue-700"
+                                                  className="bg-blue-600 hover:bg-blue-700 text-white hover:text-white"
                                                 >
                                                   <Plus className="w-4 h-4 mr-2" />
                                                   Add to Pipeline
@@ -1291,7 +1291,7 @@ export default function SourceDirectory() {
               <Button
                 onClick={handleSearchForSource}
                 disabled={!searchSourceName.trim() || searchSourceMutation.isPending}
-                className="bg-emerald-600 hover:bg-emerald-700"
+                className="bg-emerald-600 hover:bg-emerald-700 text-white hover:text-white"
               >
                 {searchSourceMutation.isPending ? (
                   <>
@@ -1373,7 +1373,7 @@ export default function SourceDirectory() {
               <AlertDialogCancel disabled={deleteMutation.isPending}>Cancel</AlertDialogCancel>
               <AlertDialogAction
                 onClick={handleDeleteConfirm}
-                className="bg-red-600 hover:bg-red-700"
+                className="bg-red-600 hover:bg-red-700 text-white hover:text-white"
                 disabled={deleteMutation.isPending}
               >
                 {deleteMutation.isPending ? (

@@ -187,7 +187,7 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
               <Button 
                 onClick={handleBulkAdd}
                 disabled={isProcessing}
-                className="bg-blue-600 hover:bg-blue-700"
+                className="bg-blue-600 hover:bg-blue-700 text-white hover:text-white"
               >
                 <Plus className="w-4 h-4 mr-2" />
                 Add {selectedOpportunities.size} to Pipeline
