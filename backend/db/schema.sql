@@ -196,6 +196,13 @@ CREATE TABLE IF NOT EXISTS grants (
   
   application_url TEXT,
   portal_url TEXT,
+
+  -- Application guidance (AI/deterministic advisor)
+  application_method TEXT,
+  application_steps TEXT,
+  contact_name TEXT,
+  contact_email TEXT,
+  contact_phone TEXT,
   
   -- Tracking
   assigned_to TEXT,

@@ -13,6 +13,7 @@ import {
   isAdminUser,
   requireAuthenticatedUser,
 } from '../utils/accessControl.js'
+import { scheduleGrantApplicationApproach } from '../services/grantApplicationApproachAdvisor.js'
 
 const router = express.Router();
 
@@ -803,6 +804,10 @@ router.post('/from-opportunity', async (req, res) => {
     
     // If grant already exists, return 200, otherwise 201
     const statusCode = result.already_exists ? 200 : 201;
+    // Trigger non-blocking application approach advisor for newly created grants.
+    if (!result.already_exists && result?.id) {
+      scheduleGrantApplicationApproach({ db: req.db, grantId: result.id })
+    }
     res.status(statusCode).json(result);
   } catch (error) {
     console.error('Error creating grant from opportunity:', error);
