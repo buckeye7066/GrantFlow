@@ -426,6 +426,12 @@ const allowedMigrations = [
   { table: 'documents', column: 'university_application_name', type: 'TEXT' },
   // Password auth (first-login password setup + password login)
   { table: 'users', column: 'password_hash', type: 'TEXT' },
+  // Grant application guidance (how to apply)
+  { table: 'grants', column: 'application_method', type: 'TEXT' },
+  { table: 'grants', column: 'application_steps', type: 'TEXT' },
+  { table: 'grants', column: 'contact_name', type: 'TEXT' },
+  { table: 'grants', column: 'contact_email', type: 'TEXT' },
+  { table: 'grants', column: 'contact_phone', type: 'TEXT' },
 ];
 
 const validTables = new Set(['profiles', 'crawler_jobs', 'users', 'organizations', 'grants', 'funding_opportunities', 'documents']);
