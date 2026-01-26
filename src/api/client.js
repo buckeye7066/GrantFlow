@@ -471,7 +471,14 @@ class APIClient {
         const params = new URLSearchParams();
         if (sortBy) {
           const order = sortBy.startsWith('-') ? 'desc' : 'asc';
-          const field = sortBy.replace(/^-/, '');
+          const rawField = sortBy.replace(/^-/, '');
+          // Back-compat: Base44 commonly used *_date while our DB uses *_at.
+          const field =
+            rawField === 'created_date'
+              ? 'created_at'
+              : rawField === 'updated_date'
+                ? 'updated_at'
+                : rawField
           params.set('sort', field);
           params.set('order', order);
         }
