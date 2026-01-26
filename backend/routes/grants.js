@@ -68,6 +68,43 @@ async function grantsHasProfileIdColumn(db) {
   return sqliteHasGrantsProfileIdColumn
 }
 
+function normalizeOrganizationApplicantType(raw) {
+  const v = typeof raw === 'string' ? raw.trim() : ''
+  if (!v) return null
+  const key = v.toLowerCase()
+  // Must match organizations.applicant_type CHECK constraint.
+  const allowed = new Set([
+    'individual_need',
+    'family',
+    'organization',
+    'nonprofit',
+    'small_business',
+    'student',
+    'college_student',
+    'high_school_student',
+    'medical_assistance',
+    'government',
+    'other',
+  ])
+  if (allowed.has(key)) return key
+  return null
+}
+
+function deriveOrganizationApplicantTypeFromProfile(profileRow) {
+  // Prefer explicit types when present.
+  const direct =
+    normalizeOrganizationApplicantType(profileRow?.primary_type) ??
+    normalizeOrganizationApplicantType(profileRow?.applicant_type) ??
+    null
+  if (direct) return direct
+
+  // Heuristic fallback.
+  const name = String(profileRow?.display_name || '').toLowerCase()
+  if (name.includes('inc') || name.includes('llc') || name.includes('company')) return 'small_business'
+  if (name.includes('church') || name.includes('ministry') || name.includes('foundation')) return 'nonprofit'
+  return 'individual_need'
+}
+
 function normalizeSortColumn(raw) {
   const key = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
   if (!key) return 'g.created_at'
@@ -673,16 +710,19 @@ router.post('/from-opportunity', async (req, res) => {
           } else {
             // Create organization for this profile
             const orgId = crypto.randomUUID();
+            const applicantType = deriveOrganizationApplicantTypeFromProfile(profile)
             await tx.prepare(`
               INSERT INTO organizations (id, name, applicant_type, created_at, updated_at)
-              VALUES (?, ?, 'individual', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            `).run(orgId, profile.display_name || 'My Organization');
+              VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            `).run(orgId, profile.display_name || 'My Organization', applicantType);
             
             // Link profile to organization
             await tx.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, finalProfileId);
             
             finalOrgId = orgId;
-            console.log(`[grants] Auto-created organization ${orgId} for profile ${finalProfileId}`);
+            console.log(`[grants] Auto-created organization ${orgId} for profile ${finalProfileId}`, {
+              applicant_type: applicantType,
+            });
           }
         }
       }
