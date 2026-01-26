@@ -199,3 +199,60 @@ test('profile access: only owner + admin can access /api/profiles/:id', async ()
   }
 })
 
+test('profile access: basic_information email grants access', async () => {
+  const srv = startServer()
+  const { port } = await srv.ready
+
+  try {
+    const email1 = 'user1@grantflow.local'
+    const email2 = 'anastasia@grantflow.local'
+
+    const user1Id = '00000000-0000-0000-0000-00000000d001'
+    const user2Id = '00000000-0000-0000-0000-00000000d002'
+
+    const profileByEmailId = '00000000-0000-0000-0000-00000000e001'
+
+    const Database = (await import('better-sqlite3')).default
+    const db = new Database(srv.dbPath)
+    db.exec(`
+      INSERT INTO users (id, display_name, primary_email, is_admin)
+      VALUES
+        ('${user1Id}', 'User One', '${email1}', 0),
+        ('${user2Id}', 'Anastasia', '${email2}', 0);
+
+      INSERT INTO user_credentials (id, user_id, type, identifier, attempt_count)
+      VALUES
+        ('00000000-0000-0000-0000-00000000f001', '${user1Id}', 'email_otp', '${email1}', 0),
+        ('00000000-0000-0000-0000-00000000f002', '${user2Id}', 'email_otp', '${email2}', 0);
+
+      -- Profile is NOT owned (user_id is NULL), but the profile's saved email matches email2.
+      INSERT INTO profiles (id, display_name, user_id, status, tags)
+      VALUES
+        ('${profileByEmailId}', 'Profile By Email', NULL, 'active', '[]');
+
+      INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+      VALUES
+        ('${profileByEmailId}', 'basic_information', '{"email":"${email2}"}', 'test');
+    `)
+    db.close()
+
+    const tokenUser2 = await loginEmailOtp({ port, email: email2 })
+
+    const canAccess = await fetchJson(`http://127.0.0.1:${port}/api/profiles/${profileByEmailId}`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${tokenUser2}` },
+    })
+    assert.equal(canAccess.status, 200)
+
+    const listRes = await fetchJson(`http://127.0.0.1:${port}/api/profiles`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${tokenUser2}` },
+    })
+    assert.equal(listRes.status, 200)
+    assert.ok(Array.isArray(listRes.json))
+    assert.ok(listRes.json.some((p) => p?.id === profileByEmailId))
+  } finally {
+    await srv.stop()
+  }
+})
+
