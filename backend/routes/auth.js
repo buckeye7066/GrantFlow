@@ -16,6 +16,7 @@ import {
   sendPasswordSetupEmail as mainSendPasswordSetupEmail,
   sendAuthAttemptNotification as mainAuthNotify,
   isEmailServiceConfigured,
+  EmailSendError,
 } from '../services/email.js'
 import {
   sendVerificationEmail as fallbackSendEmail,
@@ -2312,6 +2313,10 @@ router.post('/password/setup/start', async (req, res) => {
         missing: missingVars,
         email: email,
         user_id: user.id,
+        has_resend_key: Boolean(process.env.RESEND_API_KEY),
+        has_from_email: Boolean(process.env.FROM_EMAIL || process.env.EMAIL_FROM),
+        node_env: process.env.NODE_ENV,
+        railway_env: process.env.RAILWAY_ENVIRONMENT,
       })
       
       return res.status(503).json({
@@ -2386,32 +2391,49 @@ router.post('/password/setup/start', async (req, res) => {
     const link = buildPasswordSetupLink(req, token)
 
     let emailSent = false
+    /** @type {null | { name?: string, status?: any, provider?: any, message?: string }} */
+    let emailSendError = null
     try {
       const sendPromise = sendPasswordSetupEmail(email, link)
       const timeoutPromise = new Promise((resolve) => {
         setTimeout(() => resolve(false), Number(process.env.AUTH_EMAIL_SEND_TIMEOUT_MS || 15000))
       })
       emailSent = await Promise.race([sendPromise, timeoutPromise])
-    } catch {
+    } catch (err) {
+      if (err instanceof EmailSendError) {
+        emailSendError = {
+          name: err.name,
+          status: err.status,
+          provider: err.provider,
+          message: err.message,
+        }
+      } else {
+        emailSendError = {
+          name: err?.name,
+          status: err?.status,
+          provider: err?.provider,
+          message: err?.message || String(err),
+        }
+      }
       emailSent = false
-    }
-
-    // In production, email send failure is a hard error
-    if (isProd && !emailSent) {
-      console.error('[auth/password/setup/start] Email send failed in production:', {
-        email: email,
-        user_id: user.id,
-        token_id: id,
-      })
-      return res.status(503).json({
-        error_type: 'email_delivery_failed',
-        error: 'Unable to send password setup email. Please try again or contact support.',
-      })
     }
 
     const response = { ok: true, status: 'password_setup_email_sent', email_sent: emailSent }
     if (emailSent !== true) {
       response.notice = 'We created your password setup link, but email delivery may be delayed. Please try again in a minute.'
+      if (isProd) {
+        // Production diagnostics: distinguish delivery failures from misconfiguration.
+        response.error_type = 'email_delivery_failed'
+        console.error('[auth/password/setup/start] Email send failed in production:', {
+          email: email,
+          user_id: user.id,
+          token_id: id,
+          error_name: emailSendError?.name,
+          error_provider: emailSendError?.provider ?? null,
+          error_status: emailSendError?.status ?? null,
+          error_message: emailSendError?.message ?? null,
+        })
+      }
       // Dev-only convenience: if email isn't configured, return a preview token/link so local users can proceed.
       if (!isProd) {
         response.preview_token = token
