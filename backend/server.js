@@ -362,35 +362,44 @@ const shouldAutoMigrate =
 // Load persisted runtime secrets (encrypted) if missing from environment.
 // This is intended as an emergency stopgap for hosted environments where env var updates are delayed.
 try {
-  const currentKey = String(process.env.OPENAI_API_KEY || '').trim()
-  const looksMissing =
-    !currentKey ||
-    currentKey === 'YOUR_OPENAI_API_KEY' ||
-    currentKey.includes('*')
+  async function restoreRuntimeSecretIfMissing(key) {
+    const current = String(process.env[key] || '').trim()
+    const looksMissing = !current || current.includes('*')
+    if (!looksMissing) return
 
-  if (looksMissing) {
     const row = await db
       .prepare(
         `
           SELECT value_ciphertext, iv, tag, updated_at
           FROM app_runtime_secrets
-          WHERE key = 'OPENAI_API_KEY'
+          WHERE key = ?
           LIMIT 1
         `,
       )
-      .get()
+      .get(key)
 
     if (row?.value_ciphertext && row?.iv && row?.tag) {
       const restored = decryptRuntimeSecret(row)
       if (restored && String(restored).trim()) {
-        process.env.OPENAI_API_KEY = String(restored).trim()
-        console.info('[startup] Restored OPENAI_API_KEY from app_runtime_secrets', {
+        process.env[key] = String(restored).trim()
+        // Never log full secrets. Only log a short prefix for OpenAI key debugging.
+        console.info(`[startup] Restored ${key} from app_runtime_secrets`, {
           updated_at: row.updated_at ?? null,
-          prefix: `${String(process.env.OPENAI_API_KEY).slice(0, 7)}...`,
+          ...(key === 'OPENAI_API_KEY' ? { prefix: `${String(process.env[key]).slice(0, 7)}...` } : {}),
         })
       }
     }
   }
+
+  // Restore common secrets used by the Admin Panel + Funding API clients.
+  await restoreRuntimeSecretIfMissing('OPENAI_API_KEY')
+  await restoreRuntimeSecretIfMissing('RESEND_API_KEY')
+  await restoreRuntimeSecretIfMissing('ANTHROPIC_API_KEY')
+  await restoreRuntimeSecretIfMissing('ANYA_ADMIN_TOKEN')
+  await restoreRuntimeSecretIfMissing('SAM_GOV_PUBLIC_API_KEY')
+  await restoreRuntimeSecretIfMissing('SIMPLER_GRANTS_API_KEY')
+  await restoreRuntimeSecretIfMissing('API_DATA_GOV_KEY')
+  await restoreRuntimeSecretIfMissing('GRANTS_GOV_API_KEY')
 } catch (error) {
   console.warn('[startup] Failed to restore runtime secrets:', error?.message || error)
 }

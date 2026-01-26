@@ -384,7 +384,13 @@ export default function AdminDiagnostics() {
       }
     }
 
-    // Non-flag keys (e.g. NODE_ENV) - not editable here.
+    // Allow direct env var names (used by Funding provider keys table).
+    // Safety is enforced by ENV_EDIT_ALLOWLIST in openEnvEditor/applyEnvVar.
+    if (/^[A-Z0-9_]+$/.test(k)) {
+      return { ok: true, envKey: k };
+    }
+
+    // Non-flag keys (e.g. arbitrary) - not editable here.
     return { ok: false, reason: 'not_editable', message: 'This flag is not editable from the UI.' };
   };
 
@@ -404,7 +410,17 @@ export default function AdminDiagnostics() {
     'AUTH_FRONTEND_URL',
   ]);
 
-  const ENV_SECRET_KEYS = new Set(['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'RESEND_API_KEY', 'ANYA_ADMIN_TOKEN']);
+  const ENV_SECRET_KEYS = new Set([
+    'OPENAI_API_KEY',
+    'ANTHROPIC_API_KEY',
+    'RESEND_API_KEY',
+    'ANYA_ADMIN_TOKEN',
+    // Funding provider keys should be treated as secrets too.
+    'SAM_GOV_PUBLIC_API_KEY',
+    'GRANTS_GOV_API_KEY',
+    'SIMPLER_GRANTS_API_KEY',
+    'API_DATA_GOV_KEY',
+  ]);
 
   const openEnvEditor = (flagKey) => {
     const target = flagToEnvTarget(flagKey);
@@ -1029,7 +1045,19 @@ export default function AdminDiagnostics() {
                       {(src.env_vars || []).length === 0 ? (
                         <span className="text-slate-500">none</span>
                       ) : (
-                        (src.env_vars || []).join(', ')
+                        <div className="flex flex-wrap gap-2">
+                          {(src.env_vars || []).map((envKey) => (
+                            <button
+                              key={envKey}
+                              type="button"
+                              onClick={() => openEnvEditor(envKey)}
+                              className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100"
+                              title={`Click to edit ${envKey}`}
+                            >
+                              {envKey}
+                            </button>
+                          ))}
+                        </div>
                       )}
                     </TableCell>
                   </TableRow>
