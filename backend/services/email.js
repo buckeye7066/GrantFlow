@@ -12,46 +12,63 @@
 
 import { Resend } from 'resend'
 
-const RESEND_API_KEY = process.env.RESEND_API_KEY || null
-const FROM_EMAIL = process.env.FROM_EMAIL || process.env.EMAIL_FROM || null
+// Startup diagnostic (runs once at import time during backend boot).
+// IMPORTANT: Never log secrets; only log safe presence booleans.
+console.info('[email] Email config check', {
+  has_resend_key: Boolean(process.env.RESEND_API_KEY),
+  has_from_email: Boolean(process.env.FROM_EMAIL || process.env.EMAIL_FROM),
+  node_env: process.env.NODE_ENV,
+  railway_env: process.env.RAILWAY_ENVIRONMENT,
+})
 
-// Resolve sender address for Resend.
-// In production-like environments, a missing/invalid sender should be treated as "not configured"
-// to avoid silent delivery failures.
-function resolveFromEmail() {
-  const raw = FROM_EMAIL
-  if (!raw) return null
-  const v = String(raw).trim()
+function getResendApiKey() {
+  const v = process.env.RESEND_API_KEY
   if (!v) return null
+  const s = String(v).trim()
+  return s ? s : null
+}
 
-  // Common misconfiguration: users paste KEY=VALUE into the value field.
-  if (v.includes('FROM_EMAIL=')) return null
+function getFromEmail() {
+  const v = process.env.FROM_EMAIL || process.env.EMAIL_FROM
+  if (!v) return null
+  const s = String(v).trim()
+  return s ? s : null
+}
 
-  // Resend's onboarding sender is only for examples; do not use it as a fallback in production.
-  if (v.toLowerCase().includes('onboarding@resend.dev')) return null
-
-  return v
+export class EmailSendError extends Error {
+  constructor(message, { provider, status, details } = {}) {
+    super(message)
+    this.name = 'EmailSendError'
+    this.provider = provider || 'unknown'
+    this.status = status ?? null
+    this.details = details ?? null
+  }
 }
 
 // Create a shared Resend client instance.
 let resendClient = null
+let resendClientKey = null
 
 export function isEmailServiceConfigured() {
-  // Require api key. Also require a from email address.
-  // Without a real sender, most providers will reject or silently drop messages.
-  return Boolean(RESEND_API_KEY && resolveFromEmail())
+  // Required and sufficient:
+  // - RESEND_API_KEY exists
+  // - FROM_EMAIL or EMAIL_FROM exists
+  // Do not cache across requests; env presence is checked at call time.
+  return Boolean(getResendApiKey() && getFromEmail())
 }
 
 function getResend() {
-  if (!RESEND_API_KEY) {
+  const key = getResendApiKey()
+  if (!key) {
     return null
   }
 
-  if (resendClient) {
+  if (resendClient && resendClientKey === key) {
     return resendClient
   }
 
-  resendClient = new Resend(RESEND_API_KEY)
+  resendClientKey = key
+  resendClient = new Resend(key)
   return resendClient
 }
 
@@ -64,7 +81,7 @@ export async function sendVerificationEmail(email, code) {
     const resend = getResend()
     if (!resend) return false
 
-    const from = resolveFromEmail()
+    const from = getFromEmail()
     if (!from) return false
 
     const subject = 'Your GrantFlow Verification Code'
@@ -115,7 +132,7 @@ export async function sendPasswordSetupEmail(email, link) {
     const resend = getResend()
     if (!resend) return false
 
-    const from = resolveFromEmail()
+    const from = getFromEmail()
     if (!from) return false
 
     const subject = 'Set your GrantFlow password'
@@ -148,19 +165,31 @@ export async function sendPasswordSetupEmail(email, link) {
     })
 
     if (result?.error) {
+      const status = result?.error?.statusCode ?? result?.error?.status ?? null
+      const message = result?.error?.message ?? String(result.error)
       console.error('[email/sendPasswordSetupEmail] Resend API error:', {
-        error: result.error,
+        status,
+        message,
         to: email,
         provider: 'resend',
         runtime: 'railway',
       })
-      return false
+      throw new EmailSendError('Resend email delivery failed', {
+        provider: 'resend',
+        status,
+        details: { message },
+      })
     }
 
     return true
   } catch (error) {
-    console.error('[email] Failed to send password setup email:', error?.message)
-    return false
+    if (error instanceof EmailSendError) throw error
+    console.error('[email/sendPasswordSetupEmail] Unexpected send error:', error?.message || String(error))
+    throw new EmailSendError('Email delivery failed', {
+      provider: 'resend',
+      status: null,
+      details: { message: error?.message || String(error) },
+    })
   }
 }
 
@@ -181,7 +210,7 @@ export async function sendAuthAttemptNotification({ event, identifier, success, 
     const resend = getResend()
     if (!resend) return false
 
-    const from = resolveFromEmail()
+    const from = getFromEmail()
     if (!from) return false
 
     const statusEmoji = success ? '✅' : '❌'
@@ -222,7 +251,7 @@ export async function sendApplicationEmail(toEmail, applicationData) {
     throw new Error(errorMsg)
   }
 
-  const from = resolveFromEmail()
+  const from = getFromEmail()
   if (!from) {
     const errorMsg = 'Email service not configured. Missing/invalid FROM_EMAIL (or EMAIL_FROM).'
     console.error('[email/sendApplicationEmail]', errorMsg)

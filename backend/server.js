@@ -10,6 +10,11 @@ import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
 import { db } from './db/index.js';
 
+console.info('[server] Booting backend', {
+  commit: process.env.RAILWAY_GIT_COMMIT_SHA || 'unknown',
+  time: new Date().toISOString(),
+});
+
 // Routes
 import organizationsRouter from './routes/organizations.js';
 import grantsRouter from './routes/grants.js';
