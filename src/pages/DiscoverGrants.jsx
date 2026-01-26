@@ -85,47 +85,61 @@ export default function DiscoverGrants() {
     log.debug('processing crawler results', { count: opportunities.length })
     
     // Add all 50%+ matches to pipeline automatically
-    let addedCount = 0;
+    let addedCount = 0
+    let alreadyCount = 0
+    let failedCount = 0
+    let attempted = 0
+
     for (const opp of opportunities) {
       const score = Number(opp.match_score ?? opp.match ?? 0);
       if (Number.isFinite(score) && score >= 50) {
+        attempted += 1
         try {
-          await handleAddToPipeline(opp);
-          addedCount++;
+          const result = await handleAddToPipeline(opp, { silent: true })
+          if (result?.status === 'added') addedCount += 1
+          else if (result?.status === 'already') alreadyCount += 1
+          else failedCount += 1
         } catch (error) {
-          console.error('[DiscoverGrants] Error adding to pipeline:', error);
+          failedCount += 1
+          console.error('[DiscoverGrants] Error adding to pipeline:', error)
         }
       }
     }
-    
+
+    // Refresh pipeline once (avoid spamming invalidations during batch add).
+    queryClient.invalidateQueries({ queryKey: ['grants'] })
+
     toast({
-      title: 'Crawler Complete',
-      description: `Found ${opportunities.length} opportunities, added ${addedCount} to pipeline (50%+ matches)`,
-      variant: 'success'
-    });
+      title: 'Crawler complete',
+      description: `Found ${opportunities.length} opportunities. Pipeline update: ${addedCount} added, ${alreadyCount} already in pipeline, ${failedCount} failed (from ${attempted} eligible).`,
+    })
     
     // Update search results to show crawler results
     setSearchResults(opportunities);
   };
 
-  const handleAddToPipeline = async (opportunity) => {
+  const handleAddToPipeline = async (opportunity, { silent = false } = {}) => {
     log.debug('add to pipeline requested')
     if (!authReady) {
-      toast({
-        variant: 'destructive',
-        title: 'Sign in required',
-        description: 'Your session has expired. Please sign in again before updating the pipeline.',
-      });
-      return;
+      if (!silent) {
+        toast({
+          variant: 'destructive',
+          title: 'Sign in required',
+          description: 'Your session has expired. Please sign in again before updating the pipeline.',
+        })
+      }
+      return { status: 'failed', error: 'not_authenticated' }
     }
     
     if (!selectedProfileId) {
-      toast({
-        variant: 'destructive',
-        title: 'No Profile Selected',
-        description: 'Please select a profile before adding to pipeline.',
-      });
-      return;
+      if (!silent) {
+        toast({
+          variant: 'destructive',
+          title: 'No profile selected',
+          description: 'Please select a profile before adding to pipeline.',
+        })
+      }
+      return { status: 'failed', error: 'missing_profile' }
     }
     
     const orgId = selectedProfile?.organization_id;
@@ -139,12 +153,13 @@ export default function DiscoverGrants() {
         });
         
         if (existingGrants.length > 0) {
-          toast({
-            title: 'Already in Pipeline',
-            description: `"${opportunity.title}" is already in your pipeline.`,
-            variant: 'default',
-          });
-          return existingGrants[0];
+          if (!silent) {
+            toast({
+              title: 'Already in pipeline',
+              description: `"${opportunity.title}" is already in your pipeline.`,
+            })
+          }
+          return { status: 'already', grant: existingGrants[0] }
         }
       } catch (e) {
         // Ignore duplicate check errors, continue to add
@@ -179,11 +194,13 @@ export default function DiscoverGrants() {
       
       // Check if it was already in pipeline
       if (newGrant.already_exists) {
-        toast({
-          title: 'Already in Pipeline',
-          description: `"${opportunity.title}" is already in your grants pipeline.`,
-        });
-        return newGrant;
+        if (!silent) {
+          toast({
+            title: 'Already in pipeline',
+            description: `"${opportunity.title}" is already in your grants pipeline.`,
+          })
+        }
+        return { status: 'already', grant: newGrant }
       }
       
       // If a new org was created, refresh profile data
@@ -192,20 +209,25 @@ export default function DiscoverGrants() {
         queryClient.invalidateQueries({ queryKey: ['organizations'] });
       }
       
-      queryClient.invalidateQueries({ queryKey: ['grants'] });
-      toast({
-        title: 'Grant Added to Pipeline',
-        description: `${opportunity.title} has been added to your grants pipeline.`,
-      });
-      return newGrant;
+      if (!silent) {
+        queryClient.invalidateQueries({ queryKey: ['grants'] })
+        toast({
+          title: 'Added to pipeline',
+          description: `${opportunity.title} has been added to your grants pipeline.`,
+        })
+      }
+      return { status: 'added', grant: newGrant }
     } catch (error) {
       console.error('Failed to add grant to pipeline:', error);
       const message = error instanceof Error ? error.message : 'Unknown error';
-      toast({
-        variant: 'destructive',
-        title: 'Failed to Add Grant',
-        description: message,
-      });
+      if (!silent) {
+        toast({
+          variant: 'destructive',
+          title: 'Failed to add grant',
+          description: message,
+        })
+      }
+      return { status: 'failed', error: message }
     }
   };
 
