@@ -263,6 +263,18 @@ function isStrongPassword(password) {
   return { ok: true }
 }
 
+/**
+ * Determine if we're running in production environment.
+ * Centralized helper to ensure consistent production detection across all auth routes.
+ */
+function isProductionEnvironment() {
+  return (
+    process.env.NODE_ENV === 'production' ||
+    process.env.RAILWAY_ENVIRONMENT === 'production' ||
+    process.env.VERCEL_ENV === 'production'
+  )
+}
+
 function signOtpToken({ kind, identifier, codeHash, ttlSeconds }) {
   const jti = crypto.randomUUID()
   return jwt.sign(
@@ -1470,11 +1482,8 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
 
     console.info('[auth/email/start] Processing email authentication request for:', email)
 
-    // Determine if we're in production
-    const isProd =
-      process.env.NODE_ENV === 'production' ||
-      process.env.RAILWAY_ENVIRONMENT === 'production' ||
-      process.env.VERCEL_ENV === 'production'
+    // Use centralized production detection helper
+    const isProd = isProductionEnvironment()
 
     // In production, enforce profile-email gating: allow only admin emails OR emails that match an existing profile.
     const normalizedEmail = normalizeEmail(email)
@@ -2202,11 +2211,8 @@ router.post('/access/check', async (req, res) => {
       return res.status(400).json({ error: 'Invalid email address', error_type: 'validation_error' })
     }
 
-    // Determine if we're in production
-    const isProd =
-      process.env.NODE_ENV === 'production' ||
-      process.env.RAILWAY_ENVIRONMENT === 'production' ||
-      process.env.VERCEL_ENV === 'production'
+    // Use centralized production detection helper
+    const isProd = isProductionEnvironment()
 
     // Determine if user is admin
     const isAdmin = isAdminEmail(email)
@@ -2214,8 +2220,9 @@ router.post('/access/check', async (req, res) => {
     // Check for profile match
     const profileMatch = await findProfileRowForEmail(req.db, email)
 
-    // In production, enforce profile-email gating: allow only admin emails OR emails that match an existing profile
-    if (isProd && !isAdmin && !profileMatch) {
+    // Enforce profile-email gating: allow only admin emails OR emails that match an existing profile
+    // In production, this is strict. In development, we still check but return 403 to maintain consistency.
+    if (!isAdmin && !profileMatch) {
       return res.status(403).json({
         allowed: false,
         reason: 'no_profile_match',
@@ -2223,8 +2230,16 @@ router.post('/access/check', async (req, res) => {
       })
     }
 
-    // Determine the reason for access
-    const reason = isAdmin ? 'admin' : 'profile_match'
+    // Determine the reason for access - be explicit about why access was granted
+    let reason
+    if (isAdmin) {
+      reason = 'admin'
+    } else if (profileMatch) {
+      reason = 'profile_match'
+    } else {
+      // This should not be reachable due to the check above, but defensive coding
+      reason = 'unknown'
+    }
 
     // Check if password is already set
     let hasPassword = false
@@ -2266,10 +2281,7 @@ router.post('/password/setup/start', async (req, res) => {
       return res.status(400).json({ error: 'Invalid email address', error_type: 'validation_error' })
     }
 
-    const isProd =
-      process.env.NODE_ENV === 'production' ||
-      process.env.RAILWAY_ENVIRONMENT === 'production' ||
-      process.env.VERCEL_ENV === 'production'
+    const isProd = isProductionEnvironment()
 
     const isAdmin = isAdminEmail(email)
     const profileMatch = await findProfileRowForEmail(req.db, email)
@@ -2502,10 +2514,7 @@ router.post('/password/login', async (req, res) => {
       return res.status(400).json({ error: 'Invalid email address', error_type: 'validation_error' })
     }
 
-    const isProd =
-      process.env.NODE_ENV === 'production' ||
-      process.env.RAILWAY_ENVIRONMENT === 'production' ||
-      process.env.VERCEL_ENV === 'production'
+    const isProd = isProductionEnvironment()
 
     const isAdmin = isAdminEmail(email)
     const profileMatch = await findProfileRowForEmail(req.db, email)

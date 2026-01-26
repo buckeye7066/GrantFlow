@@ -175,6 +175,28 @@ test('auth/access/check: email without profile or admin returns 403 in productio
   }
 })
 
+test('auth/access/check: email without profile or admin returns 403 in development too', async () => {
+  const srv = startServer({ 
+    NODE_ENV: 'development',  // Explicitly development
+  })
+  const { port } = await srv.ready
+
+  try {
+    const result = await fetchJson(`http://127.0.0.1:${port}/api/auth/access/check`, {
+      method: 'POST',
+      body: JSON.stringify({ email: 'unknown-dev@example.com' }),
+    })
+
+    // Even in dev, we return 403 for consistency (no profile match = no access)
+    assert.equal(result.status, 403)
+    assert.equal(result.json.allowed, false)
+    assert.equal(result.json.reason, 'no_profile_match')
+    assert.equal(result.json.redirect_to, '/ServiceApplication')
+  } finally {
+    await srv.stop()
+  }
+})
+
 test('auth/access/check: hasPassword=true when user has password_hash', async () => {
   const srv = startServer()
   const { port } = await srv.ready
