@@ -26,6 +26,47 @@ const ALLOWED_GRANT_COLUMNS = new Set([
 
 // NOTE: Access control is centralized in `backend/utils/accessControl.js`
 
+let postgresHasGrantsProfileIdColumn = null
+let sqliteHasGrantsProfileIdColumn = null
+
+async function hasColumn(db, { tableName, columnName }) {
+  const dialect = db?.dialect || 'sqlite'
+  if (dialect === 'postgres') {
+    const row = await db
+      .prepare(
+        `
+          SELECT 1 AS ok
+          FROM information_schema.columns
+          WHERE table_schema='public'
+            AND table_name=?
+            AND column_name=?
+          LIMIT 1
+        `,
+      )
+      .get(String(tableName), String(columnName))
+    return Boolean(row?.ok)
+  }
+
+  // SQLite
+  const rows = await db.prepare(`PRAGMA table_info(${String(tableName)})`).all()
+  return rows.some((r) => String(r?.name || '').toLowerCase() === String(columnName).toLowerCase())
+}
+
+async function grantsHasProfileIdColumn(db) {
+  const dialect = db?.dialect || 'sqlite'
+  if (dialect === 'postgres') {
+    if (postgresHasGrantsProfileIdColumn === null) {
+      postgresHasGrantsProfileIdColumn = await hasColumn(db, { tableName: 'grants', columnName: 'profile_id' })
+    }
+    return postgresHasGrantsProfileIdColumn
+  }
+
+  if (sqliteHasGrantsProfileIdColumn === null) {
+    sqliteHasGrantsProfileIdColumn = await hasColumn(db, { tableName: 'grants', columnName: 'profile_id' })
+  }
+  return sqliteHasGrantsProfileIdColumn
+}
+
 function normalizeSortColumn(raw) {
   const key = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
   if (!key) return 'g.created_at'
@@ -560,11 +601,23 @@ router.post('/from-opportunity', async (req, res) => {
       opportunity_data
     } = req.body;
 
-    if (profile_id) {
-      if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
+    const normalizedProfileId = profile_id ? String(profile_id) : null
+    const normalizedOrgId = organization_id ? String(organization_id) : null
+
+    if (!normalizedProfileId && !normalizedOrgId) {
+      return res.status(400).json({
+        error: 'Profile ID or Organization ID is required',
+        message: 'Provide profile_id (preferred) or organization_id to add a grant to the pipeline.',
+      })
     }
-    if (organization_id) {
-      if (!(await ensureOrganizationAccess(req, res, String(organization_id)))) return
+
+    // Authorization:
+    // - If profile_id provided, profile access is the source of truth (org may be auto-created/linked).
+    // - If only organization_id provided, require org access.
+    if (normalizedProfileId) {
+      if (!(await ensureProfileAccess(req, res, normalizedProfileId))) return
+    } else if (normalizedOrgId) {
+      if (!(await ensureOrganizationAccess(req, res, normalizedOrgId))) return
     }
     
     // Try to get opportunity from database first
@@ -604,10 +657,14 @@ router.post('/from-opportunity', async (req, res) => {
     
     // TRANSACTION: Wrap multi-step grant pipeline creation
     const result = await req.db.withTransaction(async (tx) => {
+      const hasProfileId = await grantsHasProfileIdColumn(tx)
+
       // If no organization_id but profile_id provided, auto-create organization
-      let finalOrgId = organization_id;
-      if (!finalOrgId && profile_id) {
-        const profile = await tx.prepare('SELECT * FROM profiles WHERE id = ?').get(profile_id);
+      let finalOrgId = normalizedOrgId
+      let finalProfileId = normalizedProfileId
+
+      if (!finalOrgId && finalProfileId) {
+        const profile = await tx.prepare('SELECT * FROM profiles WHERE id = ?').get(finalProfileId);
         if (profile) {
           if (profile.organization_id) {
             // Profile already has an organization
@@ -621,10 +678,10 @@ router.post('/from-opportunity', async (req, res) => {
             `).run(orgId, profile.display_name || 'My Organization');
             
             // Link profile to organization
-            await tx.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile_id);
+            await tx.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, finalProfileId);
             
             finalOrgId = orgId;
-            console.log(`[grants] Auto-created organization ${orgId} for profile ${profile_id}`);
+            console.log(`[grants] Auto-created organization ${orgId} for profile ${finalProfileId}`);
           }
         }
       }
@@ -633,16 +690,18 @@ router.post('/from-opportunity', async (req, res) => {
         throw new Error('Organization ID or Profile ID is required');
       }
 
-      // Re-check access after auto-linking.
-      //
-      // IMPORTANT (Postgres): perform this check against the *transaction* connection so it can see
-      // uncommitted `profiles.organization_id` updates made above. Using `req.db` (pool) can hit a
-      // different connection and incorrectly fail access checks, surfacing as a 500.
-      const accessReq = { user: req.user, ctx: req.ctx, db: tx }
-      if (!(await ensureOrganizationAccess(accessReq, res, String(finalOrgId)))) return null
+      // If a caller provided organization_id explicitly, enforce org access even when profile_id is present.
+      // Otherwise profile access is sufficient (especially for legacy profiles without user_id mappings).
+      if (normalizedOrgId) {
+        const accessReq = { user: req.user, ctx: req.ctx, db: tx }
+        if (!(await ensureOrganizationAccess(accessReq, res, String(finalOrgId)))) {
+          // Ensure we don't throw later on a null result.
+          return { _aborted: true }
+        }
+      }
       
       // Check for duplicate grants by title for this organization
-      const existingGrant = profile_id
+      const existingGrant = hasProfileId && finalProfileId
         ? await tx
             .prepare(
               `
@@ -656,10 +715,21 @@ router.post('/from-opportunity', async (req, res) => {
                 LIMIT 1
               `,
             )
-            .get(String(profile_id), opportunity_id ?? null, opportunity_id ?? null, opportunity.title)
+            .get(String(finalProfileId), opportunity_id ?? null, opportunity_id ?? null, opportunity.title)
         : await tx
-            .prepare('SELECT id, title FROM grants WHERE organization_id = ? AND title = ? LIMIT 1')
-            .get(finalOrgId, opportunity.title);
+            .prepare(
+              `
+                SELECT id, title
+                FROM grants
+                WHERE organization_id = ?
+                  AND (
+                    (? IS NOT NULL AND funding_opportunity_id = ?)
+                    OR (funding_opportunity_id IS NULL AND title = ?)
+                  )
+                LIMIT 1
+              `,
+            )
+            .get(String(finalOrgId), opportunity_id ?? null, opportunity_id ?? null, opportunity.title);
       
       if (existingGrant) {
         return { 
@@ -680,31 +750,56 @@ router.post('/from-opportunity', async (req, res) => {
         else if (/^\d{4}-\d{2}-\d{2}T/.test(s)) insertDeadline = s.slice(0, 10)
       }
       
-      await tx.prepare(`
-        INSERT INTO grants (
-          id, organization_id, profile_id, funding_opportunity_id, title, funder, 
-          deadline, status, match_score, match_reasons, application_url,
-          amount_requested, notes
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?)
-      `).run(
-        id, 
-        finalOrgId,
-        profile_id ? String(profile_id) : null,
-        opportunity_id || null,
-        opportunity.title,
-        opportunity.sponsor,
-        insertDeadline,
-        match_score || null,
-        JSON.stringify(match_reasons || []),
-        opportunity.application_url,
-        opportunity.amount_max || opportunity.amount_min || null,
-        opportunity.description ? opportunity.description.substring(0, 500) : null
-      );
+      if (hasProfileId) {
+        await tx.prepare(`
+          INSERT INTO grants (
+            id, organization_id, profile_id, funding_opportunity_id, title, funder, 
+            deadline, status, match_score, match_reasons, application_url,
+            amount_requested, notes
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?)
+        `).run(
+          id, 
+          finalOrgId,
+          finalProfileId ? String(finalProfileId) : null,
+          opportunity_id || null,
+          opportunity.title,
+          opportunity.sponsor,
+          insertDeadline,
+          match_score || null,
+          JSON.stringify(match_reasons || []),
+          opportunity.application_url,
+          opportunity.amount_max || opportunity.amount_min || null,
+          opportunity.description ? opportunity.description.substring(0, 500) : null
+        );
+      } else {
+        await tx.prepare(`
+          INSERT INTO grants (
+            id, organization_id, funding_opportunity_id, title, funder, 
+            deadline, status, match_score, match_reasons, application_url,
+            amount_requested, notes
+          )
+          VALUES (?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?)
+        `).run(
+          id, 
+          finalOrgId,
+          opportunity_id || null,
+          opportunity.title,
+          opportunity.sponsor,
+          insertDeadline,
+          match_score || null,
+          JSON.stringify(match_reasons || []),
+          opportunity.application_url,
+          opportunity.amount_max || opportunity.amount_min || null,
+          opportunity.description ? opportunity.description.substring(0, 500) : null
+        );
+      }
       
       const grant = await tx.prepare('SELECT * FROM grants WHERE id = ?').get(id);
       return { ...grant, organization_id: finalOrgId };
     });
+
+    if (result && result._aborted) return
     
     // If grant already exists, return 200, otherwise 201
     const statusCode = result.already_exists ? 200 : 201;
