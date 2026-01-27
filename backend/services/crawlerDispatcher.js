@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'path'
 import { processAvatarLookupJob } from './avatarCrawler.js'
 import { processLocalCrawlerJob } from './localCrawler.js'
 import { processScholarshipCrawlerJob } from './scholarshipCrawler.js'
+import { processHealthResourcesCrawlerJob } from './healthResourcesCrawler.js'
 import { runComprehensiveCrawler as processComprehensiveCrawlerJob } from './comprehensiveCrawlerOptimized.js'
 import { processItemCrawlerJob } from './itemCrawler.js'
 import { processDocumentIngestionJob } from './documentIngestion.js'
@@ -25,6 +26,7 @@ const HANDLERS = {
   avatar_lookup: processAvatarLookupJob,
   local: processLocalCrawlerJob,
   scholarship: processScholarshipCrawlerJob,
+  health_resources: processHealthResourcesCrawlerJob,
   comprehensive: processComprehensiveCrawlerJob,
   national: processNationalJob,
   item_search: processItemCrawlerJob,

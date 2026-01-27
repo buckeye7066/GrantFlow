@@ -12,6 +12,7 @@ import { bulkUpsertFundingOpportunities } from '../services/opportunityInserter.
 import { crawlLocalFunding } from '../services/crawlers/localFundingCrawler.js'
 import { crawlGovernmentFunding } from '../services/crawlers/governmentFundingCrawler.js'
 import { crawlStudentGrants } from '../services/crawlers/studentGrantsCrawler.js'
+import { crawlHealthResources } from '../services/crawlers/healthResourcesCrawler.js'
 import { crawlSpecialNeeds } from '../services/crawlers/specialNeedsCrawler.js'
 import { crawlItemFunding } from '../services/crawlers/itemFundingCrawler.js'
 import { crawlECFBenefits } from '../services/crawlers/ecfBenefitsCrawler.js'
@@ -25,6 +26,7 @@ const CRAWLER_TYPES = [
   'local_funding',
   'government_funding', 
   'student_grants',
+  'health_resources',
   'ecf_benefits',
   'item_matching',
   'special_needs'
@@ -220,6 +222,9 @@ async function runLiveCrawler({ crawlerType, profile, itemRequest, minMatchScore
         break
       case 'student_grants':
         rawResults = await withTimeout(crawlStudentGrants(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'student_grants')
+        break
+      case 'health_resources':
+        rawResults = await withTimeout(crawlHealthResources(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'health_resources')
         break
       case 'special_needs':
         rawResults = await withTimeout(crawlSpecialNeeds(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'special_needs')

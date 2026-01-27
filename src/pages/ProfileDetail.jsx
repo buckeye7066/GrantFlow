@@ -30,6 +30,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import UniversityApplicationsSection from "@/components/profiles/UniversityApplicationsSection.jsx"
 import StudentPortalsCard from "@/components/profiles/StudentPortalsCard.jsx"
+import HealthResourcesCard from "@/components/profiles/HealthResourcesCard.jsx"
 
 export default function ProfileDetail() {
   const [searchParams] = useSearchParams()
@@ -375,6 +376,33 @@ export default function ProfileDetail() {
     ["high_school_student", "college_student", "graduate_student"].includes(primaryType) ||
     profileTypeLabel.includes("student")
 
+  const healthMedical =
+    profile.sections?.find((section) => section.section_key === "health_medical")?.data ?? {}
+
+  const hasHealthSignals =
+    Boolean(healthMedical?.chronic_illness) ||
+    Boolean(healthMedical?.dialysis_patient) ||
+    Boolean(healthMedical?.organ_transplant) ||
+    Boolean(healthMedical?.hiv_aids) ||
+    Boolean(healthMedical?.tbi_survivor) ||
+    Boolean(healthMedical?.amputee) ||
+    Boolean(healthMedical?.neurodivergent) ||
+    Boolean(healthMedical?.mental_health_condition) ||
+    Boolean(healthMedical?.wheelchair_user) ||
+    Boolean(healthMedical?.visual_impairment) ||
+    Boolean(healthMedical?.hearing_impairment) ||
+    (Array.isArray(healthMedical?.disability_type) && healthMedical.disability_type.length > 0) ||
+    (Array.isArray(healthMedical?.support_needs) && healthMedical.support_needs.length > 0) ||
+    (Array.isArray(healthMedical?.conditions) && healthMedical.conditions.length > 0) ||
+    Boolean(String(healthMedical?.notes || "").trim())
+
+  const isHealthProfile =
+    primaryType.includes("health") ||
+    primaryType.includes("patient") ||
+    profileTypeLabel.includes("health") ||
+    profileTypeLabel.includes("medical") ||
+    hasHealthSignals
+
   const studentState =
     basicInfo?.address?.state ??
     basicInfo?.state ??
@@ -439,7 +467,15 @@ export default function ProfileDetail() {
         </div>
 
         <Tabs defaultValue="profile" className="w-full">
-          <TabsList className={`grid w-full ${isStudentProfile ? "grid-cols-10" : "grid-cols-9"} lg:w-auto lg:inline-flex`}>
+          <TabsList
+            className={`grid w-full ${
+              isStudentProfile && isHealthProfile
+                ? "grid-cols-11"
+                : isStudentProfile || isHealthProfile
+                  ? "grid-cols-10"
+                  : "grid-cols-9"
+            } lg:w-auto lg:inline-flex`}
+          >
             <TabsTrigger value="profile">Profile Information</TabsTrigger>
             <TabsTrigger value="pipeline">Pipeline</TabsTrigger>
             <TabsTrigger value="item-funding">Item Funding</TabsTrigger>
@@ -450,6 +486,7 @@ export default function ProfileDetail() {
             <TabsTrigger value="billing">Billing</TabsTrigger>
             <TabsTrigger value="personalization">Personalization</TabsTrigger>
             {isStudentProfile ? <TabsTrigger value="universities">Universities</TabsTrigger> : null}
+            {isHealthProfile ? <TabsTrigger value="health">Health</TabsTrigger> : null}
           </TabsList>
 
           <TabsContent value="profile" className="mt-6">
@@ -716,6 +753,20 @@ export default function ProfileDetail() {
                 studentGender={studentGender}
                 profileId={profileId}
               />
+              </div>
+            </TabsContent>
+          ) : null}
+
+          {isHealthProfile ? (
+            <TabsContent value="health" className="mt-6">
+              <div className="space-y-6">
+                <HealthResourcesCard
+                  state={studentState}
+                  conditions={healthMedical?.conditions}
+                  supportNeeds={healthMedical?.support_needs}
+                  consentForStudies={Boolean(healthMedical?.consent_for_studies)}
+                  onEditHealth={() => handleOpenSection("health_medical", healthMedical)}
+                />
               </div>
             </TabsContent>
           ) : null}

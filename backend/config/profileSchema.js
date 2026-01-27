@@ -100,6 +100,12 @@ export const PROFILE_SCHEMA = {
     title: 'Health & Medical',
     description: 'Medical/health characteristics frequently used in assistance eligibility.',
     fields: {
+      conditions: {
+        type: 'array<object>',
+        default: [],
+        description:
+          'List of health conditions (objects). Minimum shape: { name, icd10?, stage?, diagnosed_year? }. Informational only (no medical advice).',
+      },
       chronic_illness: { type: 'boolean', default: false, description: 'True if chronic illness is explicitly stated.' },
       chronic_illness_type: { type: 'string', default: '', description: 'Type/name of chronic illness if provided.' },
       disability_type: {
@@ -107,10 +113,28 @@ export const PROFILE_SCHEMA = {
         default: [],
         description: 'List of disability types (strings) when explicitly stated.',
       },
+      support_needs: {
+        type: 'array<string>',
+        default: [],
+        description:
+          'Support needs (strings). Examples: transportation, copay_assistance, lodging, caregiver_support, equipment, mental_health_support.',
+      },
       support_needs_level: {
         type: 'string',
         default: '',
         description: 'Short descriptor of support needs (high/moderate/low/unknown).',
+      },
+      consent_for_studies: {
+        type: 'boolean',
+        default: false,
+        description:
+          'True if the user opts in to seeing research studies/trials they may be eligible to participate in.',
+      },
+      mobility_or_transport_notes: {
+        type: 'string',
+        default: '',
+        description:
+          'Optional notes about mobility or transportation needs for appointments (informational; no medical advice).',
       },
       dialysis_patient: { type: 'boolean', default: false, description: 'True if on dialysis.' },
       organ_transplant: { type: 'boolean', default: false, description: 'True if transplant recipient/candidate.' },
