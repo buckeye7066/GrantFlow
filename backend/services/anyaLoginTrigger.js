@@ -179,7 +179,7 @@ export async function initializeAnyaForAdmin(db, user, profileId = null, { uploa
 
 1. **Local Opportunities** - Searching within 50 miles
 2. **Scholarship Opportunities** - Finding relevant scholarships
-3. **Geo Crawl** - Scanning nationwide funding sources by geography
+3. **Comprehensive Match** - Scanning the opportunity catalog for strong nationwide matches
 4. **Profile Enrichment** - Updating profile data
 
 I'll notify you when these crawlers complete. You can check their progress anytime by asking me about crawler status.

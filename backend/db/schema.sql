@@ -137,6 +137,12 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   -- Geographic
   is_national BOOLEAN DEFAULT FALSE,
   state TEXT,
+  -- Geo Crawl tagging (durable run tracking)
+  geo_run_id TEXT,
+  geo_zip TEXT,
+  geo_county TEXT,
+  geo_source TEXT,
+  geo_scope TEXT,
   regions TEXT DEFAULT '[]', -- JSON array
   
   -- Categories
@@ -161,6 +167,54 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   notes TEXT,
   profile_id TEXT
 );
+
+-- Geo Crawl run tracking (durable progress for live monitor)
+CREATE TABLE IF NOT EXISTS geo_crawl_runs (
+  id TEXT PRIMARY KEY,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  created_by_user_id TEXT,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','paused','failed','complete')),
+  state TEXT,
+  current_zip TEXT,
+  current_county TEXT,
+  current_source TEXT,
+  processed_zip_count INTEGER DEFAULT 0,
+  found_opportunity_count INTEGER DEFAULT 0,
+  last_heartbeat_at DATETIME,
+  last_error TEXT,
+  crawler_job_id TEXT REFERENCES crawler_jobs(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS geo_crawl_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL REFERENCES geo_crawl_runs(id) ON DELETE CASCADE,
+  ts DATETIME DEFAULT CURRENT_TIMESTAMP,
+  level TEXT NOT NULL DEFAULT 'info' CHECK(level IN ('info','warn','error')),
+  state TEXT,
+  zip TEXT,
+  county TEXT,
+  source TEXT,
+  message TEXT,
+  found_count_delta INTEGER DEFAULT 0
+);
+
+-- Geo Crawl association index (opportunity_id can appear in many runs/zips)
+CREATE TABLE IF NOT EXISTS funding_opportunity_geo_index (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  opportunity_id TEXT NOT NULL REFERENCES funding_opportunities(id) ON DELETE CASCADE,
+  geo_run_id TEXT,
+  state TEXT,
+  zip TEXT,
+  county TEXT,
+  source TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_fo_geo_index
+  ON funding_opportunity_geo_index(opportunity_id, geo_run_id, state, zip, source);
+
+CREATE INDEX IF NOT EXISTS idx_fo_geo_index_run_id
+  ON funding_opportunity_geo_index(geo_run_id);
 
 -- Grants (opportunities being actively tracked/pursued)
 CREATE TABLE IF NOT EXISTS grants (

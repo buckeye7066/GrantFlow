@@ -202,6 +202,7 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
           overpass_max_results: Number.isFinite(overpassMaxResults) ? overpassMaxResults : 60,
           resume: false,
           job_id: jobId,
+          geo_run_id: params.geo_run_id ?? params.geoRunId ?? null,
           fixtures_dir: process.env.GEO_CRAWL_FIXTURES_DIR || undefined,
         })
       }

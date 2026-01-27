@@ -23,6 +23,15 @@ import fs from 'fs'
 import path from 'path'
 import Database from 'better-sqlite3'
 import zipcodes from 'zipcodes'
+import {
+  appendGeoCrawlEvent,
+  completeGeoCrawlRun,
+  incrementGeoCrawlRunCounts,
+  markGeoCrawlRunRunning,
+  updateGeoCrawlRunCurrent,
+  getGeoCrawlRun,
+} from '../geoCrawlRunStore.js'
+import { resolveCountyForZip } from '../geo/zipCountyResolver.js'
 
 // All US ZIP codes (43,859 total)
 // In production, this would be loaded from a file or database
@@ -122,6 +131,49 @@ async function ensureGeoCrawlTables(db) {
     await db.prepare(createGeoStateRuns).run()
     await db.prepare(`CREATE INDEX IF NOT EXISTS idx_geo_state_runs_state ON geo_state_runs(state);`).run()
     await db.prepare(`CREATE INDEX IF NOT EXISTS idx_geo_state_runs_created_at ON geo_state_runs(created_at);`).run()
+  } catch {
+    // best-effort
+  }
+
+  // Association index so globally-deduped opportunities can be linked to many ZIPs/runs.
+  // (Avoids overwriting geo_* fields on the opportunity row.)
+  const createGeoIndex = isPostgres
+    ? `
+        CREATE TABLE IF NOT EXISTS funding_opportunity_geo_index (
+          id TEXT PRIMARY KEY,
+          opportunity_id TEXT NOT NULL REFERENCES funding_opportunities(id) ON DELETE CASCADE,
+          geo_run_id TEXT,
+          state TEXT,
+          zip TEXT,
+          county TEXT,
+          source TEXT,
+          created_at TIMESTAMPTZ DEFAULT now()
+        );
+      `
+    : `
+        CREATE TABLE IF NOT EXISTS funding_opportunity_geo_index (
+          id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+          opportunity_id TEXT NOT NULL REFERENCES funding_opportunities(id) ON DELETE CASCADE,
+          geo_run_id TEXT,
+          state TEXT,
+          zip TEXT,
+          county TEXT,
+          source TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+      `
+
+  try {
+    await db.prepare(createGeoIndex).run()
+    await db
+      .prepare(
+        `
+          CREATE UNIQUE INDEX IF NOT EXISTS uniq_fo_geo_index
+          ON funding_opportunity_geo_index(opportunity_id, geo_run_id, state, zip, source);
+        `,
+      )
+      .run()
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_fo_geo_index_run_id ON funding_opportunity_geo_index(geo_run_id);`).run()
   } catch {
     // best-effort
   }
@@ -365,7 +417,11 @@ async function searchGrantsGovByZip(zip, coords) {
           source: 'grants.gov',
           source_id: sourceIdRaw ? String(sourceIdRaw) : `grantsgov:${zip}:${idx}`,
           zip: zip,
-          state: coords?.state,
+          // Grants.gov is national. Do not stamp it with the ZIP's state (it causes bad grouping).
+          // The ZIP/state association is tracked separately via funding_opportunity_geo_index.
+          state: null,
+          is_national: true,
+          type: 'OPPORTUNITY',
         })
       }
     }
@@ -374,6 +430,39 @@ async function searchGrantsGovByZip(zip, coords) {
   }
   
   return opportunities
+}
+
+async function upsertGeoAssociation(db, { opportunityId, geoRunId, state, zip, county, source } = {}) {
+  if (!opportunityId || !geoRunId) return 0
+  const id = crypto.randomUUID()
+  const st = state ? String(state).toUpperCase() : null
+  const z = normalizeZip(zip) || null
+  const c = county ? String(county) : null
+  const src = source ? String(source) : null
+
+  if (db?.dialect === 'postgres') {
+    const res = await db
+      .prepare(
+        `
+          INSERT INTO funding_opportunity_geo_index (id, opportunity_id, geo_run_id, state, zip, county, source, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+          ON CONFLICT (opportunity_id, geo_run_id, state, zip, source) DO NOTHING
+        `,
+      )
+      .run(id, String(opportunityId), String(geoRunId), st, z, c, src)
+    return Number(res?.changes ?? res?.rowCount ?? 0)
+  }
+
+  const res = db
+    .prepare(
+      `
+        INSERT OR IGNORE INTO funding_opportunity_geo_index (id, opportunity_id, geo_run_id, state, zip, county, source, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      `,
+    )
+    .run(id, String(opportunityId), String(geoRunId), st, z, c, src)
+
+  return Number(res?.changes ?? 0)
 }
 
 function buildOverpassQuery({ lat, lng, radiusMeters, maxResults }) {
@@ -671,6 +760,7 @@ async function processZip(zip, db, config) {
   const startTime = Date.now()
   let sources = []
   let insertedNew = 0
+  let associationsNew = 0
   let eligibleFound = 0
   let error = null
   let status = 'completed'
@@ -691,13 +781,20 @@ async function processZip(zip, db, config) {
           opp.keywords = [zip, inferredState].filter(Boolean)
         }
         if (isLoanOrMatchingFund(opp)) continue
-        const changes = await saveOpportunity(db, opp)
-        if (Number(changes) > 0) insertedNew += Number(changes)
+        const saved = await saveOpportunity(db, opp)
+        if (saved?.inserted) insertedNew += 1
       }
 
       const eligibleFixtureCount = sources.filter((opp) => opp && !isLoanOrMatchingFund(opp)).length
       console.log(`  [fixtures] Found ${eligibleFixtureCount} sources; inserted ${insertedNew} new for ZIP ${zip}`)
-      return { zip, status: 'completed', sources_found: eligibleFixtureCount, inserted_new: insertedNew, duration: Date.now() - startTime }
+      return {
+        zip,
+        status: 'completed',
+        sources_found: eligibleFixtureCount,
+        inserted_new: insertedNew,
+        associations_new: 0,
+        duration: Date.now() - startTime,
+      }
     }
 
     // Get coordinates
@@ -708,14 +805,48 @@ async function processZip(zip, db, config) {
     // (These are “entry points” users can click even when upstream APIs are blocked.)
     const baselineDirectories = buildBaselineDirectorySources({ zip, meta: meta ?? coords ?? null })
     
-    // Search all data sources
+    // Search all data sources (sequential so GeoCrawl Monitor can show current_source live).
     const discoverLocal = Boolean(config?.discover_local_resources)
-    const [grantsGovResults, stateResults, foundationResults, overpassResults] = await Promise.all([
-      coords ? searchGrantsGovByZip(zip, coords) : Promise.resolve([]),
-      searchStateGrantsByZip(zip, coords ?? meta ?? null),
-      searchFoundationLocator(zip, coords ?? meta ?? null),
-      discoverLocal ? searchOverpassLocalResources(zip, coords ?? meta ?? null, config) : Promise.resolve([]),
-    ])
+    const runId = config?.geo_run_id ?? null
+    const stateForZip = (coords?.state ?? meta?.state ?? null)
+      ? String(coords?.state ?? meta?.state).toUpperCase()
+      : null
+    const countyForZip = resolveCountyForZip(zip, stateForZip) ?? null
+
+    const reportSource = async (source, message) => {
+      if (!runId) return
+      await updateGeoCrawlRunCurrent(db, runId, {
+        state: stateForZip,
+        zip,
+        county: countyForZip,
+        source,
+      })
+      await appendGeoCrawlEvent(db, runId, {
+        level: 'info',
+        state: stateForZip,
+        zip,
+        county: countyForZip,
+        source,
+        message,
+      })
+    }
+
+    await reportSource(null, `Starting ZIP ${zip}`)
+
+    await reportSource('grants.gov', 'Querying source: grants.gov')
+    const grantsGovResults = coords ? await searchGrantsGovByZip(zip, coords) : []
+
+    await reportSource('state_portal', 'Querying source: state portals')
+    const stateResults = await searchStateGrantsByZip(zip, coords ?? meta ?? null)
+
+    await reportSource('foundation_locator', 'Querying source: foundation locators')
+    const foundationResults = await searchFoundationLocator(zip, coords ?? meta ?? null)
+
+    let overpassResults = []
+    if (discoverLocal) {
+      await reportSource('overpass', 'Querying source: overpass directories')
+      overpassResults = await searchOverpassLocalResources(zip, coords ?? meta ?? null, config).catch(() => [])
+    }
     
     sources = [
       ...baselineDirectories,
@@ -740,10 +871,27 @@ async function processZip(zip, db, config) {
     const eligible = deduped.filter((opp) => opp && !isLoanOrMatchingFund(opp))
     eligibleFound = eligible.length
     
-    // Save opportunities to database
+    // Save opportunities to database (global de-dupe) + per-run association index.
     for (const opp of eligible) {
-      const changes = await saveOpportunity(db, opp)
-      if (Number(changes) > 0) insertedNew += Number(changes)
+      if (runId) {
+        opp.geo_run_id = runId
+        opp.geo_zip = zip
+        opp.geo_county = countyForZip
+        opp.geo_source = opp.source ?? null
+        opp.geo_scope = 'zip'
+      }
+      const saved = await saveOpportunity(db, opp)
+      if (saved?.inserted) insertedNew += 1
+      if (runId && saved?.id) {
+        associationsNew += await upsertGeoAssociation(db, {
+          opportunityId: saved.id,
+          geoRunId: runId,
+          state: stateForZip,
+          zip,
+          county: countyForZip,
+          source: opp.source ?? null,
+        })
+      }
     }
     
     // Check if we met minimum sources requirement
@@ -765,6 +913,7 @@ async function processZip(zip, db, config) {
     // UI and progress should be non-zero when opportunities exist, even on reruns.
     sources_found: eligibleFound,
     inserted_new: insertedNew,
+    associations_new: associationsNew,
     error,
     duration: Date.now() - startTime
   }
@@ -937,7 +1086,75 @@ async function saveOpportunity(db, opp) {
       String(opp.source),
       String(opp.source_id),
     )
-    return result?.changes ?? 0
+
+    const inserted = Number(result?.changes ?? result?.rowCount ?? 0) > 0
+    let finalId = id
+    if (!inserted) {
+      try {
+        const existing = await db
+          .prepare('SELECT id FROM funding_opportunities WHERE source = ? AND source_id = ? LIMIT 1')
+          .get(String(opp.source), String(opp.source_id))
+        if (existing?.id) finalId = existing.id
+      } catch {
+        // ignore
+      }
+    }
+
+    // Tag geo columns ONLY on insert to avoid overwriting geo fields for globally deduped opportunities.
+    if (
+      inserted &&
+      (opp.geo_run_id || opp.geo_zip || opp.geo_county || opp.geo_source || opp.geo_scope)
+    ) {
+      try {
+        await db
+          .prepare(
+            `
+              UPDATE funding_opportunities
+              SET geo_run_id = ?,
+                  geo_zip = ?,
+                  geo_county = ?,
+                  geo_source = ?,
+                  geo_scope = ?,
+                  updated_at = CURRENT_TIMESTAMP
+              WHERE source = ?
+                AND source_id = ?
+            `,
+          )
+          .run(
+            opp.geo_run_id ?? null,
+            opp.geo_zip ?? null,
+            opp.geo_county ?? null,
+            opp.geo_source ?? null,
+            opp.geo_scope ?? null,
+            String(opp.source),
+            String(opp.source_id),
+          )
+      } catch {
+        // ignore (schema drift / migrations not applied yet)
+      }
+    }
+
+    // Data hygiene: Grants.gov opportunities are national. Older rows may have been incorrectly
+    // stamped with a state from the first ZIP that discovered them.
+    if (String(opp.source) === 'grants.gov' && isNational === true) {
+      try {
+        await db
+          .prepare(
+            `
+              UPDATE funding_opportunities
+              SET is_national = TRUE,
+                  state = NULL,
+                  updated_at = CURRENT_TIMESTAMP
+              WHERE source = ?
+                AND source_id = ?
+            `,
+          )
+          .run(String(opp.source), String(opp.source_id))
+      } catch {
+        // ignore
+      }
+    }
+    return { inserted, id: finalId }
   } else {
     const result = stmt.run(
       id,
@@ -962,7 +1179,68 @@ async function saveOpportunity(db, opp) {
       String(opp.source),
       String(opp.source_id),
     )
-    return result?.changes ?? 0
+
+    const inserted = Number(result?.changes ?? 0) > 0
+    let finalId = id
+    if (!inserted) {
+      try {
+        const existing = db
+          .prepare('SELECT id FROM funding_opportunities WHERE source = ? AND source_id = ? LIMIT 1')
+          .get(String(opp.source), String(opp.source_id))
+        if (existing?.id) finalId = existing.id
+      } catch {
+        // ignore
+      }
+    }
+
+    if (
+      inserted &&
+      (opp.geo_run_id || opp.geo_zip || opp.geo_county || opp.geo_source || opp.geo_scope)
+    ) {
+      try {
+        db.prepare(
+          `
+            UPDATE funding_opportunities
+            SET geo_run_id = ?,
+                geo_zip = ?,
+                geo_county = ?,
+                geo_source = ?,
+                geo_scope = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE source = ?
+              AND source_id = ?
+          `,
+        ).run(
+          opp.geo_run_id ?? null,
+          opp.geo_zip ?? null,
+          opp.geo_county ?? null,
+          opp.geo_source ?? null,
+          opp.geo_scope ?? null,
+          String(opp.source),
+          String(opp.source_id),
+        )
+      } catch {
+        // ignore (schema drift / migrations not applied yet)
+      }
+    }
+
+    if (String(opp.source) === 'grants.gov' && isNational === true) {
+      try {
+        db.prepare(
+          `
+            UPDATE funding_opportunities
+            SET is_national = 1,
+                state = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE source = ?
+              AND source_id = ?
+          `,
+        ).run(String(opp.source), String(opp.source_id))
+      } catch {
+        // ignore
+      }
+    }
+    return { inserted, id: finalId }
   }
 }
 
@@ -1041,6 +1319,24 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   // Ensure Phase-6 geo tables exist (prod safety).
   await ensureGeoCrawlTables(db)
 
+  const geoRunId = config.geo_run_id ?? options.geo_run_id ?? null
+  if (geoRunId) {
+    // Mark run as running; do not hard-fail if run tables are missing.
+    try {
+      await markGeoCrawlRunRunning(db, geoRunId)
+      await appendGeoCrawlEvent(db, geoRunId, {
+        level: 'info',
+        state: options.state ? String(options.state).toUpperCase() : null,
+        zip: null,
+        county: null,
+        source: null,
+        message: 'Geo crawl started',
+      })
+    } catch {
+      // ignore (schema drift / migrations not applied yet)
+    }
+  }
+
   const zipList = resolveZipList({
     zip_list: options.zip_list,
     state: options.state,
@@ -1065,11 +1361,25 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   // - State-scoped and explicit-list crawls default to resume=false to avoid surprising skips.
   const inferredResumeDefault = !options.state && !options.zip_list
   const allowResume = options.resume != null ? Boolean(options.resume) : inferredResumeDefault
-  const lastProcessedZip = allowResume
+  let lastProcessedZip = allowResume
     ? (await getLastProcessedZipForList(db, zipList)) ?? (await getLastProcessedZip(db))
     : null
 
-  const startIndex = lastProcessedZip ? zipList.indexOf(lastProcessedZip) + 1 : 0
+  // Prefer geo_crawl_runs.current_zip when provided (durable per-run resume).
+  // We re-run the current ZIP on resume for safety (dedupe prevents duplication).
+  let startIndex = lastProcessedZip ? zipList.indexOf(lastProcessedZip) + 1 : 0
+  if (geoRunId && allowResume) {
+    try {
+      const runRow = await getGeoCrawlRun(db, geoRunId)
+      const currentZip = runRow?.current_zip ? String(runRow.current_zip) : null
+      if (currentZip && zipList.includes(currentZip)) {
+        lastProcessedZip = currentZip
+        startIndex = zipList.indexOf(currentZip)
+      }
+    } catch {
+      // ignore
+    }
+  }
   
   if (lastProcessedZip) {
     console.log(`Resuming from ZIP ${lastProcessedZip} (index ${startIndex})`)
@@ -1095,6 +1405,7 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
     options.state && normalizeState(options.state) ? await createStateRunRow(db, { state: options.state, jobId: options.job_id ?? null }) : null
   
   // Process in batches
+  let fatalError = null
   try {
     for (let i = startIndex; i < totalZips; i += config.batch_size) {
       const batchEnd = Math.min(i + config.batch_size, totalZips)
@@ -1112,6 +1423,43 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
         totalSources += result.sources_found
         if (result.status === 'failed') failedCount += 1
         if (result.status === 'skipped') skippedCount += 1
+
+        if (geoRunId) {
+          try {
+            await incrementGeoCrawlRunCounts(db, geoRunId, {
+              processedZipDelta: 1,
+              // Count “new run associations” so progress is non-zero even when the global
+              // opportunity already existed (global de-dupe is preserved).
+              foundOppDelta: Number(result?.associations_new ?? result?.inserted_new ?? 0),
+            })
+            const eventState =
+              options.state ? String(options.state).toUpperCase() : (zipcodes.lookup(result.zip)?.state ?? null)
+            const delta = Number(result?.associations_new ?? result?.inserted_new ?? 0)
+            if (delta > 0) {
+              await appendGeoCrawlEvent(db, geoRunId, {
+                level: 'info',
+                state: eventState,
+                zip: result.zip,
+                county: resolveCountyForZip(result.zip, eventState) ?? null,
+                source: null,
+                message: `Saved ${delta} run result link(s)`,
+                foundCountDelta: delta,
+              })
+            }
+            if (result.status === 'failed' && result.error) {
+              await appendGeoCrawlEvent(db, geoRunId, {
+                level: 'error',
+                state: eventState,
+                zip: result.zip,
+                county: resolveCountyForZip(result.zip, eventState) ?? null,
+                source: null,
+                message: `ZIP failed: ${result.error}`,
+              })
+            }
+          } catch {
+            // ignore
+          }
+        }
         
         // Rate limiting
         if (Number(config.rate_limit_ms) > 0) {
@@ -1134,7 +1482,40 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
       console.log(`  Batch complete, checkpointing...`)
       console.log()
     }
+  } catch (error) {
+    fatalError = error
+    if (geoRunId) {
+      try {
+        await appendGeoCrawlEvent(db, geoRunId, {
+          level: 'error',
+          state: options.state ? String(options.state).toUpperCase() : null,
+          zip: null,
+          county: null,
+          source: null,
+          message: `Geo crawl failed: ${error?.message || String(error)}`,
+        })
+        await completeGeoCrawlRun(db, geoRunId, { status: 'failed', error: error?.message || String(error) })
+      } catch {
+        // ignore
+      }
+    }
+    throw error
   } finally {
+    if (geoRunId && !fatalError) {
+      try {
+        await completeGeoCrawlRun(db, geoRunId, { status: 'complete', error: null })
+        await appendGeoCrawlEvent(db, geoRunId, {
+          level: 'info',
+          state: options.state ? String(options.state).toUpperCase() : null,
+          zip: null,
+          county: null,
+          source: null,
+          message: 'Geo crawl complete',
+        })
+      } catch {
+        // ignore
+      }
+    }
     if (stateRun) {
       await completeStateRunRow(db, stateRun, {
         status: 'completed',
