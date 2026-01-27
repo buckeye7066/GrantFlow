@@ -4,8 +4,15 @@ import { runAutonomousFunctionTests } from './anyaAutonomousFunctionTesting.js'
 import { repairFailingTests } from './anyaTestRepair.js'
 import { promises as fs } from 'fs'
 import path from 'path'
+import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 
 const REPO_ROOT = path.resolve(process.cwd())
+
+function isProdEnv() {
+  const nodeEnv = String(process.env.NODE_ENV || '').toLowerCase()
+  const deployEnv = String(process.env.DEPLOY_ENV || '').toLowerCase()
+  return nodeEnv === 'production' || deployEnv === 'production'
+}
 
 /**
  * Configuration for autonomous operations
@@ -52,19 +59,47 @@ const AUTONOMOUS_CONFIG = {
 /**
  * Log autonomous operations
  */
-async function logOperation(operation, status, details = {}) {
-  const logDir = path.join(REPO_ROOT, 'backend', 'data', 'audit')
-  await fs.mkdir(logDir, { recursive: true })
-  
+async function logOperation(operation, status, details = {}, context = null) {
   const logEntry = {
     timestamp: new Date().toISOString(),
     operation,
     status,
     ...details,
   }
-  
-  const logFile = path.join(logDir, 'autonomous-scheduler.log')
-  await fs.appendFile(logFile, JSON.stringify(logEntry) + '\n', 'utf8')
+
+  const db = context?.db
+  if (db) {
+    try {
+      logAuditEvent(db, {
+        category: AUDIT_CATEGORIES.ANYA,
+        action: `autonomous_scheduler.${String(operation || 'event')}`,
+        severity: status === 'failed' ? SEVERITY.ERROR : SEVERITY.INFO,
+        userId: context?.user?.userId ?? context?.user?.id ?? null,
+        profileId: context?.profile_id ?? context?.profileId ?? null,
+        resourceType: 'anya_autonomous_scheduler',
+        resourceId: null,
+        details: logEntry,
+      })
+      return
+    } catch (error) {
+      console.warn('[anyaAutonomousScheduler] audit db write failed:', error?.message || error)
+    }
+  }
+
+  // Durable fallback: platform logs
+  console.log('[audit][autonomous-scheduler]', JSON.stringify(logEntry))
+
+  // Dev-only filesystem sink (explicit opt-in).
+  if (!isProdEnv() && String(process.env.ALLOW_DEV_FILESYSTEM_AUDIT_LOGS || '').toLowerCase() === 'true') {
+    try {
+      const logDir = path.join(REPO_ROOT, 'backend', 'data', 'audit')
+      await fs.mkdir(logDir, { recursive: true })
+      const logFile = path.join(logDir, 'autonomous-scheduler.log')
+      await fs.appendFile(logFile, JSON.stringify(logEntry) + '\n', 'utf8')
+    } catch {
+      // best-effort
+    }
+  }
 }
 
 /**
@@ -83,7 +118,7 @@ export async function runAllAutonomousOperations(context, trigger = 'manual') {
     errors: [],
   }
   
-  await logOperation('batch_start', 'started', { trigger })
+  await logOperation('batch_start', 'started', { trigger }, context)
   console.log(`[Anya Scheduler] Starting autonomous operations (trigger: ${trigger})`)
   
   try {
@@ -186,7 +221,7 @@ export async function runAllAutonomousOperations(context, trigger = 'manual') {
     report.completed_at = new Date().toISOString()
     report.status = report.errors.length > 0 ? 'completed_with_errors' : 'success'
     
-    await logOperation('batch_complete', report.status, report)
+    await logOperation('batch_complete', report.status, report, context)
     
     console.log('[Anya Scheduler] ========================================')
     console.log('[Anya Scheduler] AUTONOMOUS OPERATIONS COMPLETE')
@@ -199,7 +234,7 @@ export async function runAllAutonomousOperations(context, trigger = 'manual') {
   } catch (error) {
     report.status = 'failed'
     report.error = error.message
-    await logOperation('batch_error', 'failed', { error: error.message })
+    await logOperation('batch_error', 'failed', { error: error.message }, context)
     throw error
   }
 }

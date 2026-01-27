@@ -1695,7 +1695,7 @@ registerTool({
       maxIterations: { type: 'integer', description: 'Maximum number of files to process (default: 50)', minimum: 1, maximum: 200 },
       maxFileChanges: { type: 'integer', description: 'Maximum number of files to modify (default: 20)', minimum: 1, maximum: 100 },
       dryRun: { type: 'boolean', description: 'If true, dont save changes (default: false)' },
-      fixConsoleLog: { type: 'boolean', description: 'Fix // TODO: Remove debug log - // TODO: Remove debug log - console.log statements (default: true)' },
+      fixConsoleLog: { type: 'boolean', description: 'Fix debug console.log statements (default: true)' },
       fixEmptyCatch: { type: 'boolean', description: 'Fix empty catch blocks (default: false)' },
       fixTodos: { type: 'boolean', description: 'Convert TODO comments to tracked issues (default: false)' },
     },
@@ -1807,7 +1807,7 @@ registerTool({
     }
     
     if (operationType === 'functions' || operationType === 'all') {
-      status.function_tests = await getAutonomousFunctionTestsStatus()
+      status.function_tests = await getAutonomousFunctionTestsStatus(context?.db ?? null)
     }
     
     return status

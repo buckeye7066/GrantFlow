@@ -166,7 +166,7 @@ export async function adminCodeCrawl({ pattern, directory, includeTests = false 
                   })
                 }
 
-                // TODO/FIXME comments
+                // Task-marker comments (e.g. fixme/hack markers)
                 if (line.match(/\/\/\s*(TODO|FIXME|XXX|HACK)/i)) {
                   findings.push({
                     file: relativePath,
