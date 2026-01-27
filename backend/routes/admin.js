@@ -33,6 +33,7 @@ import { crawlECFBenefits } from '../services/crawlers/ecfBenefitsCrawler.js';
 import { findDuplicateProfileGroups, mergeProfiles } from '../services/profileDedupeService.js'
 import { ensureAdminUser, isAdminUser } from '../utils/accessControl.js'
 import zipcodes from 'zipcodes';
+import { createGeoCrawlRun } from '../services/geoCrawlRunStore.js'
 
 const router = express.Router();
 
@@ -2016,9 +2017,12 @@ router.post('/geo/crawl/start', async (req, res) => {
           ? incoming.zip_list
           : null
 
+    const geoRunId = crypto.randomUUID()
+
     const parameters = {
       ...incoming,
       mode: 'geo',
+      geo_run_id: geoRunId,
       run_all_states:
         incoming.run_all_states ?? incoming.runAllStates ?? undefined,
       states: Array.isArray(incoming.states) ? incoming.states : undefined,
@@ -2052,6 +2056,18 @@ router.post('/geo/crawl/start', async (req, res) => {
       .prepare('SELECT id, type, status, created_at, started_at, completed_at, result_count, error FROM crawler_jobs WHERE id = ?')
       .get(jobId);
 
+    // Best-effort: create a durable run row for live monitoring (schema may lag on some deployments).
+    try {
+      await createGeoCrawlRun(req.db, {
+        id: geoRunId,
+        state: parameters.run_all_states ? null : parameters.state ?? null,
+        createdByUserId: req.ctx?.userId ?? null,
+        crawlerJobId: jobId,
+      })
+    } catch {
+      // ignore
+    }
+
     // Dispatch asynchronously (don't block response).
     try {
       dispatchCrawlerJob({
@@ -2064,7 +2080,7 @@ router.post('/geo/crawl/start', async (req, res) => {
       console.warn('[admin/geo/crawl/start] Failed to dispatch job:', error?.message || error);
     }
 
-    res.status(201).json({ success: true, job });
+    res.status(201).json({ success: true, job, run_id: geoRunId });
   } catch (error) {
     console.error('[admin/geo/crawl/start] Error:', error);
     res.status(500).json({ error: error.message });
