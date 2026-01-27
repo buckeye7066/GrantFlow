@@ -31,6 +31,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { installClickTracer } from '../components/shared/clickTracer';
 import SubmissionAssistant from '../components/proposals/SubmissionAssistant';
 import { createLogger } from '@/utils/logger';
+import { apiFetch } from "@/api/client"
 
 const toMessage = (e) => (e instanceof Error ? e.message : String(e ?? ''));
 
@@ -409,6 +410,20 @@ export default function GrantDetail() {
                         onAnalyze={runGrantAnalysis}
                         isAnalyzing={isAnalyzing}
                         onStartApplication={() => setIsApplicationAssistantOpen(true)}
+                        onSaveDetails={(payload) => updateGrantMutation.mutateAsync(payload)}
+                        onDraftDetails={async () => {
+                          const data = await apiFetch(`/api/grants/${encodeURIComponent(String(grant.id))}/ai/draft-details`, {
+                            method: "POST",
+                            body: JSON.stringify({}),
+                          })
+                          const updated = data?.grant ?? null
+                          if (updated) {
+                            queryClient.setQueryData(["grant", grantId], updated)
+                          } else {
+                            queryClient.invalidateQueries({ queryKey: ["grant", grantId] })
+                          }
+                          return updated
+                        }}
                     />
                 </ErrorBoundary>
             </TabsContent>
