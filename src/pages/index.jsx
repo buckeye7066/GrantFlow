@@ -34,6 +34,7 @@ import Automation from "./Automation";
 import NewProject from "./NewProject";
 
 import GrantDetail from "./GrantDetail";
+import Apply from "./Apply";
 
 import InvoiceView from "./InvoiceView";
 
@@ -303,6 +304,7 @@ function LayoutRoutes() {
                 <Route path="/NewProject" element={withBoundary(<NewProject />, "NewProject")} />
 
                 <Route path="/GrantDetail" element={withBoundary(<GrantDetail />, "GrantDetail")} />
+                <Route path="/Apply" element={withBoundary(<Apply />, "Apply")} />
 
                 <Route path="/InvoiceView" element={withBoundary(<InvoiceView />, "InvoiceView")} />
 

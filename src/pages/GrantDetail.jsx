@@ -340,6 +340,10 @@ export default function GrantDetail() {
   
   const handleApplyWithAI = async () => {
     log.debug('start application clicked', { status: grant.status });
+
+    // Apply / Submission Engine now lives on its own page (Base44-free submission path).
+    navigate(`/Apply?id=${encodeURIComponent(String(grantId))}`)
+    return
     
     // NEW: If status is application_prep, open submission assistant
     if (grant.status === 'application_prep') {

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import { apiFetch } from '@/api/apiClient';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -101,7 +101,10 @@ INSTRUCTIONS:
     log.debug('calling AI');
     
     try {
-      const response = await base44.integrations.Core.InvokeLLM({ prompt });
+      const response = await apiFetch('/api/ai/invoke', {
+        method: 'POST',
+        body: JSON.stringify({ prompt }),
+      });
       log.debug('AI response received');
       setAiAnswer(response);
       toast({
