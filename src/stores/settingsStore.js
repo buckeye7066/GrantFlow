@@ -58,6 +58,40 @@ function hexToHsl(hex) {
   return `${h} ${sPct}% ${lPct}%`
 }
 
+function relativeLuminanceFromHex(hex) {
+  const raw = String(hex || '').trim()
+  const cleaned = raw.startsWith('#') ? raw.slice(1) : raw
+  if (!/^[0-9a-fA-F]{6}$/.test(cleaned)) return null
+
+  const r8 = parseInt(cleaned.slice(0, 2), 16)
+  const g8 = parseInt(cleaned.slice(2, 4), 16)
+  const b8 = parseInt(cleaned.slice(4, 6), 16)
+
+  const srgbToLinear = (c8) => {
+    const c = c8 / 255
+    return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
+  }
+
+  const r = srgbToLinear(r8)
+  const g = srgbToLinear(g8)
+  const b = srgbToLinear(b8)
+  // WCAG relative luminance
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+function pickReadableForegroundHex(backgroundHex, { highContrast = false } = {}) {
+  const lum = relativeLuminanceFromHex(backgroundHex)
+  if (lum == null) return '#ffffff'
+
+  // Prefer strict black/white in high-contrast mode.
+  if (highContrast) {
+    return lum > 0.35 ? '#0a0a0a' : '#ffffff'
+  }
+
+  // Heuristic threshold: brighter accents need dark text, darker accents need white text.
+  return lum > 0.55 ? '#0a0a0a' : '#ffffff'
+}
+
 export const useSettingsStore = create((set, get) => ({
   preferences: DEFAULT_PREFERENCES,
   isLoading: false,
@@ -171,6 +205,14 @@ export const useSettingsStore = create((set, get) => ({
       root.style.setProperty('--primary', accentHsl)
       root.style.setProperty('--ring', accentHsl)
       root.style.setProperty('--sidebar-ring', accentHsl)
+    }
+
+    // Ensure button text stays readable against the chosen accent.
+    const fgHex = pickReadableForegroundHex(accentHex, { highContrast })
+    const fgHsl = hexToHsl(fgHex)
+    if (fgHsl) {
+      root.style.setProperty('--primary-foreground', fgHsl)
+      root.style.setProperty('--sidebar-primary-foreground', fgHsl)
     }
 
     // Apply font size
