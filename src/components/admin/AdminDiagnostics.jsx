@@ -582,9 +582,11 @@ export default function AdminDiagnostics() {
       {/* System Status - Truth-based */}
       <Card
         className={`border-2 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-300 ${
-        systemStatus === 'ok' ? 'border-green-500 bg-green-50' : 
-        systemStatus === 'error' ? 'border-red-500 bg-red-50' : 
-        'border-amber-500 bg-amber-50'
+        systemStatus === 'ok'
+          ? 'border-emerald-500/70 bg-emerald-50 text-slate-900 dark:border-emerald-400/50 dark:bg-emerald-950/35 dark:text-slate-50'
+          : systemStatus === 'error'
+            ? 'border-red-500/70 bg-red-50 text-slate-900 dark:border-red-400/50 dark:bg-red-950/35 dark:text-slate-50'
+            : 'border-amber-500/70 bg-amber-50 text-slate-900 dark:border-amber-400/50 dark:bg-amber-950/35 dark:text-slate-50'
       }`}
         role="button"
         tabIndex={0}
@@ -607,16 +609,16 @@ export default function AdminDiagnostics() {
         }}
       >
         <CardHeader>
-          <CardTitle className="flex items-center gap-3">
-            <Server className="w-5 h-5" />
+          <CardTitle className="flex items-center gap-3 text-slate-900 dark:text-slate-50">
+            <Server className="w-5 h-5 text-slate-700 dark:text-slate-200" />
             <span>System Status</span>
             <StatusIcon className={`w-6 h-6 ${
-              systemStatus === 'ok' ? 'text-green-600' :
+              systemStatus === 'ok' ? 'text-emerald-600 dark:text-emerald-300' :
               systemStatus === 'error' ? 'text-red-600' :
-              'text-amber-600'
+              'text-amber-700 dark:text-amber-300'
             }`} />
             <Badge className={`${
-              systemStatus === 'ok' ? 'bg-green-600' :
+              systemStatus === 'ok' ? 'bg-emerald-600' :
               systemStatus === 'error' ? 'bg-red-600' :
               'bg-amber-600'
             } text-white`}>
@@ -624,15 +626,15 @@ export default function AdminDiagnostics() {
             </Badge>
           </CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="text-slate-900 dark:text-slate-50">
           <div className="space-y-2">
-            <p className="text-sm">
+            <p className="text-sm text-slate-900 dark:text-slate-50">
               <strong>Environment:</strong> {diagnostics.app?.env || 'unknown'}
             </p>
-            <p className="text-sm">
+            <p className="text-sm text-slate-900 dark:text-slate-50">
               <strong>Version:</strong> {diagnostics.app?.version || 'unknown'}
             </p>
-            <p className="text-sm">
+            <p className="text-sm text-slate-900 dark:text-slate-50">
               <strong>Uptime:</strong> {Math.floor((diagnostics.app?.uptime_seconds || 0) / 60)} minutes
             </p>
             {/* Truth warnings */}
@@ -643,9 +645,9 @@ export default function AdminDiagnostics() {
               </Alert>
             )}
             {hasEmptyOpportunities && !dbNotOk && (
-              <Alert className="mt-3 border-amber-300 bg-amber-50">
-                <AlertTriangle className="h-4 w-4 text-amber-600" />
-                <AlertDescription className="text-amber-800">
+              <Alert className="mt-3 border-amber-300 bg-amber-50 dark:border-amber-400/40 dark:bg-amber-950/35">
+                <AlertTriangle className="h-4 w-4 text-amber-700 dark:text-amber-300" />
+                <AlertDescription className="text-amber-900 dark:text-amber-100">
                   <strong>Warning:</strong> No funding opportunities in database
                 </AlertDescription>
               </Alert>
