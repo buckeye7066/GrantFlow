@@ -258,6 +258,7 @@ router.get('/', async (req, res) => {
     req.ctx?.isAdmin === true ? true : await isAdminUserWithDb(req.db, user)
   const includeSummary = req.query.summary === 'true'
   const includeDeleted = req.query.includeDeleted === 'true'
+  const scopeMine = req.query.scope === 'mine' || req.query.mine === 'true'
   const userId = req.ctx?.userId ?? getAuthUserId(user) ?? null
   
   // Validate pagination parameters.
@@ -265,11 +266,109 @@ router.get('/', async (req, res) => {
   // This prevents "missing profiles" in the UI when admins expect to see everything.
   const paginationQuery = { ...req.query }
   const limitProvided = Object.prototype.hasOwnProperty.call(req.query ?? {}, 'limit')
-  if (isAdmin && !limitProvided) {
+  if (isAdmin && !scopeMine && !limitProvided) {
     paginationQuery.limit = 1000
     paginationQuery.offset = 0
   }
   const { limit, offset } = validatePagination(paginationQuery);
+
+  // "My Profiles" scope: return only profiles owned-by or shared-to this user,
+  // even if the caller is an admin (admins otherwise see ALL profiles).
+  if (scopeMine) {
+    const emails = []
+    const primary = normalizeEmail(user?.primary_email)
+    const secondary = normalizeEmail(user?.email)
+    if (primary) emails.push(primary)
+    if (secondary && secondary !== primary) emails.push(secondary)
+
+    if (!userId && emails.length === 0) return res.status(401).json({ error: 'Authentication required' })
+
+    const ids = new Set()
+
+    if (userId) {
+      const owned = await req.db.prepare('SELECT id FROM profiles WHERE user_id = ?').all(String(userId))
+      for (const row of owned || []) {
+        if (row?.id) ids.add(String(row.id))
+      }
+    }
+
+    if (emails.length > 0) {
+      // 1) Explicit allowlist table (profile_emails).
+      try {
+        const placeholders = emails.map(() => '?').join(', ')
+        const rows = await req.db
+          .prepare(
+            `
+              SELECT DISTINCT profile_id
+              FROM profile_emails
+              WHERE lower(email) IN (${placeholders})
+            `,
+          )
+          .all(...emails)
+        for (const row of rows || []) {
+          if (row?.profile_id) ids.add(String(row.profile_id))
+        }
+      } catch {
+        // ignore (schema may not exist yet)
+      }
+
+      // 2) Backfill: match profile basic_information.email against the user (like accessControl fallback).
+      try {
+        const placeholders = emails.map(() => '?').join(', ')
+        if (req.db?.dialect === 'postgres') {
+          const rows = await req.db
+            .prepare(
+              `
+                SELECT DISTINCT ps.profile_id
+                FROM profile_sections ps
+                WHERE ps.section_key = 'basic_information'
+                  AND LOWER((ps.data::jsonb ->> 'email')) IN (${placeholders})
+              `,
+            )
+            .all(...emails)
+          for (const row of rows || []) {
+            if (row?.profile_id) ids.add(String(row.profile_id))
+          }
+        } else {
+          const rows = await req.db
+            .prepare(
+              `
+                SELECT DISTINCT ps.profile_id
+                FROM profile_sections ps
+                WHERE ps.section_key = 'basic_information'
+                  AND LOWER(json_extract(ps.data, '$.email')) IN (${placeholders})
+              `,
+            )
+            .all(...emails)
+          for (const row of rows || []) {
+            if (row?.profile_id) ids.add(String(row.profile_id))
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    const idList = Array.from(ids)
+    if (idList.length === 0) return res.json([])
+
+    const placeholders = idList.map(() => '?').join(', ')
+    const whereDeleted = includeDeleted ? '' : " AND (p.status IS NULL OR p.status <> 'deleted')"
+
+    const rows = await req.db
+      .prepare(
+        `${profileSelect} WHERE p.id IN (${placeholders})${whereDeleted} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`,
+      )
+      .all(...idList, limit, offset)
+
+    const profiles = rows.map(mapProfile)
+    if (includeSummary) {
+      for (const profile of profiles) {
+        await enrichProfileWithSummary(req.db, profile)
+      }
+    }
+    return res.json(profiles)
+  }
 
   // Check if user is admin
   if (!isAdmin) {
