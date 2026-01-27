@@ -12,6 +12,8 @@
 
 import fetch from 'node-fetch';
 
+// Public, unauthenticated endpoint (no API keys, no auth headers).
+const SEARCH2_URL = 'https://api.grants.gov/v1/api/search2';
 const BASE_URL = 'https://www.grants.gov/grantsws/rest';
 const RATE_LIMIT_MS = 1000; // 1 second between requests
 
@@ -42,8 +44,12 @@ async function rateLimitedFetch(url, options = {}) {
   if (!response.ok) {
     throw new Error(`Grants.gov API error: ${response.status} ${response.statusText}`);
   }
-  
-  return response.json();
+
+  const data = await response.json();
+  if (options && options.returnMeta === true) {
+    return { status: response.status, data };
+  }
+  return data;
 }
 
 /**
@@ -59,50 +65,85 @@ async function rateLimitedFetch(url, options = {}) {
  */
 export async function searchOpportunities(params = {}) {
   const searchPayload = {
+    rows: Math.min(params.rows || 25, 1000),
+    oppStatuses: params.oppStatus || 'forecasted|posted',
     keyword: params.keyword || '',
-    oppStatuses: params.oppStatus || 'posted',
-    rows: Math.min(params.rows || 100, 1000),
-    offset: params.offset || 0
+    agencies: '',
+    fundingCategories: '',
+    startRecordNum: params.offset || 0,
   };
   
-  if (params.fundingInstrument) {
-    searchPayload.fundingInstruments = params.fundingInstrument;
-  }
-  
-  if (params.eligibility) {
-    searchPayload.eligibilities = params.eligibility;
-  }
-  
   try {
-    const data = await rateLimitedFetch(`${BASE_URL}/opportunities/search`, {
+    console.log('[grants.gov] search2 request payload:', JSON.stringify(searchPayload));
+    const { status, data } = await rateLimitedFetch(SEARCH2_URL, {
       method: 'POST',
-      body: JSON.stringify(searchPayload)
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(searchPayload),
+      returnMeta: true,
     });
-    
-    const opportunities = data.oppHits || [];
-    
-    return opportunities.map(opp => ({
-      title: opp.oppTitle || '',
-      sponsor: opp.agencyName || '',
-      source: 'grants.gov',
-      source_id: opp.oppNumber || '',
-      source_url: `https://www.grants.gov/web/grants/view-opportunity.html?oppId=${opp.id}`,
-      description: opp.oppDescription || '',
-      amount_min: null, // Not in search results
-      amount_max: null,
-      deadline: opp.closeDate ? new Date(opp.closeDate).toISOString().split('T')[0] : null,
-      deadline_type: 'fixed',
-      application_url: `https://www.grants.gov/web/grants/view-opportunity.html?oppId=${opp.id}`,
-      is_national: true, // Federal grants are typically national
-      categories: opp.categories || [],
-      keywords: [opp.oppTitle, opp.agencyCode].filter(Boolean),
-      opportunity_type: 'grant',
-      type: 'OPPORTUNITY', // Real, active solicitation
-      evidence_url: `${BASE_URL}/opportunities/search`,
-      last_verified_at: new Date().toISOString(),
-      is_active: opp.oppStatus === 'posted',
-      last_crawled: new Date().toISOString()
-    }));
+
+    const hitsNode = data?.data?.oppHits ? data.data : data?.data?.data?.oppHits ? data.data.data : data
+    const hits = Array.isArray(hitsNode?.oppHits) ? hitsNode.oppHits : []
+
+    console.log('[grants.gov] search2 HTTP status:', status)
+    console.log('[grants.gov] search2 oppHits returned:', hits.length)
+    if (hits.length === 0) {
+      console.warn('[grants.gov] search2 returned 0 results; full response:', JSON.stringify(data, null, 2))
+    }
+
+    return hits.map((hit) => {
+      const number = hit?.number ?? hit?.oppNum ?? hit?.oppNumber ?? null
+      const id = hit?.id ?? hit?.oppId ?? null
+      const title = hit?.title ?? hit?.oppTitle ?? ''
+      const agencyName = hit?.agencyName ?? hit?.agency ?? ''
+      const agencyCode = hit?.agencyCode ?? ''
+      const openDate = hit?.openDate ?? null
+      const closeDate = hit?.closeDate ?? null
+      const oppStatus = hit?.oppStatus ?? null
+      const alnlist = hit?.alnlist ?? null
+
+      const url =
+        id != null
+          ? `https://www.grants.gov/search-results-detail/${id}`
+          : number
+            ? `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(number))}`
+            : 'https://www.grants.gov/search-grants'
+
+      const keywords = []
+      if (agencyCode) keywords.push(String(agencyCode))
+      if (oppStatus) keywords.push(String(oppStatus))
+      if (openDate) keywords.push(String(openDate))
+      if (Array.isArray(alnlist)) keywords.push(...alnlist.map((v) => String(v)))
+
+      const statusLower = oppStatus ? String(oppStatus).toLowerCase() : ''
+      const isActive = statusLower.includes('posted') || statusLower.includes('forecast')
+
+      return {
+        title: title || '',
+        sponsor: agencyName || '',
+        source: 'grants.gov',
+        source_id: number ? String(number) : '',
+        source_url: url,
+        description: `Grants.gov opportunity ${number || ''}${oppStatus ? ` (${oppStatus})` : ''}`.trim(),
+        amount_min: null,
+        amount_max: null,
+        deadline: closeDate ? new Date(closeDate).toISOString().split('T')[0] : null,
+        deadline_type: closeDate ? 'fixed' : 'rolling',
+        application_url: url,
+        is_national: true,
+        categories: ['federal', 'grants.gov', 'government'],
+        keywords,
+        opportunity_type: 'grant',
+        type: 'OPPORTUNITY',
+        evidence_url: SEARCH2_URL,
+        last_verified_at: new Date().toISOString(),
+        is_active: isActive,
+        last_crawled: new Date().toISOString(),
+      }
+    });
   } catch (error) {
     console.error('[Grants.gov] Search failed:', error.message);
     throw error;

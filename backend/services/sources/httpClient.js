@@ -20,6 +20,7 @@ const USER_AGENT = 'GrantFlow/1.0 (funding opportunity aggregator)';
  * @param {string} options.method - HTTP method (GET, POST, etc)
  * @param {object} options.params - Query parameters
  * @param {object} options.data - Request body
+ * @param {boolean} options.returnMeta - If true, return { status, data } instead of data
  * @returns {Promise<object>} Response data
  */
 export async function fetchWithRetry(url, options = {}) {
@@ -30,6 +31,7 @@ export async function fetchWithRetry(url, options = {}) {
     method = 'GET',
     params = {},
     data = null,
+    returnMeta = false,
   } = options;
 
   const config = {
@@ -54,6 +56,9 @@ export async function fetchWithRetry(url, options = {}) {
         console.log(`[httpClient] Success after ${attempt} retries`);
       }
       
+      if (returnMeta) {
+        return { status: response.status, data: response.data };
+      }
       return response.data;
     } catch (error) {
       lastError = error;

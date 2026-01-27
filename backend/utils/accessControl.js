@@ -203,7 +203,7 @@ export async function getAccessibleProfileIds(db, user) {
               .replace(/\\/g, '\\\\')
               .replace(/"/g, '\\"')
             likeClauses.push('LOWER(ps.data) LIKE ?')
-            likeArgs.push(`%\"email\"%${escapedEmail}%`)
+            likeArgs.push(`%"email"%${escapedEmail}%`)
           }
           if (likeClauses.length > 0) {
             const rows = await db

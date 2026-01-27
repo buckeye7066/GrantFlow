@@ -4,8 +4,6 @@ import { BrainCircuit, Sparkles, Loader2, AlertTriangle, RefreshCw, CheckCircle2
 import ReactMarkdown from 'react-markdown';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useToast } from "@/components/ui/use-toast";
-import { useQuery } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
 import { createLogger } from '@/utils/logger';
 
 const ProposalCoachPanel = ({ grant, onAnalyze, isAnalyzing, onStartApplication }) => {
@@ -13,50 +11,11 @@ const ProposalCoachPanel = ({ grant, onAnalyze, isAnalyzing, onStartApplication 
     const log = React.useMemo(() => createLogger('ProposalCoachPanel'), []);
     const [localLoading, setLocalLoading] = useState(false);
     const [showNextSteps, setShowNextSteps] = useState(false);
-    
-    // Check for outstanding checklist items
-    const { data: checklistItems = [] } = useQuery({
-        queryKey: ['checklistItems', grant?.id],
-        queryFn: () => base44.entities.ChecklistItem.filter({ grant_id: grant.id }),
-        enabled: !!grant?.id && grant.ai_status === 'ready'
-    });
-    
-    useEffect(() => {
-        // Show next steps if analysis is complete and no outstanding items
-        if (grant?.ai_status === 'ready' && checklistItems.length > 0) {
-            const openItems = checklistItems.filter(item => item.status !== 'done');
-            setShowNextSteps(openItems.length === 0);
-        }
-    }, [grant?.ai_status, checklistItems]);
 
-    // Auto-reset stuck status after timeout
     useEffect(() => {
-        if (!grant) return;
-        
-        // If stuck in running/queued for more than 2 minutes, consider it failed
-        if (['running', 'queued'].includes(grant.ai_status)) {
-            const timeout = setTimeout(async () => {
-                console.warn('[AI Coach] Analysis timeout - resetting status');
-                toast({
-                    variant: "destructive",
-                    title: "Analysis Timeout",
-                    description: "The analysis took too long. Please try again."
-                });
-                
-                // Reset status to allow retry
-                try {
-                    await base44.entities.Grant.update(grant.id, {
-                        ai_status: 'error',
-                        ai_error: 'Analysis timeout - please try again'
-                    });
-                } catch (err) {
-                    console.error('Failed to reset status:', err);
-                }
-            }, 120000); // 2 minutes
-            
-            return () => clearTimeout(timeout);
-        }
-    }, [grant, toast]);
+        // Submission readiness lives in the Apply Engine (backend).
+        setShowNextSteps(grant?.ai_status === 'ready');
+    }, [grant?.ai_status]);
     
     if (!grant) {
         console.error('[AI Coach] No grant provided');
@@ -133,42 +92,24 @@ const ProposalCoachPanel = ({ grant, onAnalyze, isAnalyzing, onStartApplication 
     
     const renderContent = () => {
         if (ai_status === 'ready' && ai_summary) {
-            const openChecklistItems = checklistItems.filter(item => item.status !== 'done');
-            const hasOutstandingItems = openChecklistItems.length > 0;
-            
             return (
                 <div className="relative z-10 space-y-4">
                     <ReactMarkdown className="prose prose-sm max-w-none">{ai_summary}</ReactMarkdown>
-                    
-                    {hasOutstandingItems ? (
-                        <Alert className="bg-amber-50 border-amber-200">
-                            <AlertTriangle className="h-4 w-4 text-amber-600" />
-                            <AlertDescription>
-                                <p className="font-semibold text-amber-900 mb-1">Action Required</p>
-                                <p className="text-amber-800 text-sm">
-                                    Complete {openChecklistItems.length} checklist item{openChecklistItems.length > 1 ? 's' : ''} before starting the application.
-                                </p>
-                            </AlertDescription>
-                        </Alert>
-                    ) : showNextSteps && checklistItems.length > 0 ? (
-                        <Alert className="bg-emerald-50 border-emerald-200">
-                            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                            <AlertDescription>
-                                <p className="font-semibold text-emerald-900 mb-2">Ready to Apply!</p>
-                                <p className="text-emerald-800 text-sm mb-3">
-                                    All checklist items are complete. You can now start building your application with AI assistance.
-                                </p>
-                                <Button 
-                                    onClick={handleStartApplication}
-                                    className="bg-emerald-600 hover:bg-emerald-700 text-white"
-                                    size="sm"
-                                >
-                                    <Sparkles className="w-4 h-4 mr-2" />
-                                    Start Application with AI
-                                    <ArrowRight className="w-4 h-4 ml-2" />
-                                </Button>
-                            </AlertDescription>
-                        </Alert>
+                    {showNextSteps ? (
+                      <Alert className="bg-emerald-50 border-emerald-200">
+                        <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                        <AlertDescription>
+                          <p className="font-semibold text-emerald-900 mb-2">Ready to Apply</p>
+                          <p className="text-emerald-800 text-sm mb-3">
+                            Start drafting sections using the Apply Engine (sections + checklist + exports live in the backend).
+                          </p>
+                          <Button onClick={handleStartApplication} className="bg-emerald-600 hover:bg-emerald-700 text-white" size="sm">
+                            <Sparkles className="w-4 h-4 mr-2" />
+                            Start Application
+                            <ArrowRight className="w-4 h-4 ml-2" />
+                          </Button>
+                        </AlertDescription>
+                      </Alert>
                     ) : null}
                     
                     <div className="text-right">
