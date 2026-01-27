@@ -1,9 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import ReactQuill from 'react-quill'
-import 'react-quill/dist/quill.snow.css'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Loader2, Plus, Send, CheckCircle, AlertTriangle, Sparkles, Download } from 'lucide-react'
 import SubmissionAssistant from './SubmissionAssistant'
@@ -269,7 +268,13 @@ export default function ProposalEditor({ grant, organization }) {
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-2xl font-bold text-slate-900">{activeSection.title || activeSection.section_key}</h2>
               </div>
-              <ReactQuill theme="snow" value={draftContent} onChange={setDraftContent} className="h-96 mb-12" />
+              <Textarea
+                value={draftContent}
+                onChange={(e) => setDraftContent(e.target.value)}
+                rows={18}
+                className="font-mono text-sm"
+                placeholder="Draft your section here…"
+              />
             </>
           ) : (
             <div className="text-center py-12 text-slate-500">
