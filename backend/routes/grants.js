@@ -105,6 +105,92 @@ function deriveOrganizationApplicantTypeFromProfile(profileRow) {
   return 'individual_need'
 }
 
+function normalizeDateForDb(value) {
+  if (value == null || value === '') return null
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10)
+  const raw = typeof value === 'string' ? value.trim() : String(value)
+  if (!raw) return null
+
+  const lowered = raw.toLowerCase()
+  // Common non-date values from crawlers/discovery.
+  if (
+    lowered === 'rolling' ||
+    lowered === 'ongoing' ||
+    lowered === 'open' ||
+    lowered === 'continuous' ||
+    lowered === 'varies' ||
+    lowered === 'tbd' ||
+    lowered === 'unknown'
+  ) {
+    return null
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw
+  if (/^\d{4}-\d{2}-\d{2}t/i.test(raw)) return raw.slice(0, 10)
+
+  const parsed = new Date(raw)
+  if (Number.isNaN(parsed.getTime())) return null
+  return parsed.toISOString().slice(0, 10)
+}
+
+function normalizeMoney(value) {
+  if (value == null || value === '') return null
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  const s = String(value).trim()
+  if (!s) return null
+  const cleaned = s
+    .replace(/[$,]/g, '')
+    .replace(/usd/gi, '')
+    .replace(/\s+/g, '')
+  const n = Number.parseFloat(cleaned)
+  if (!Number.isFinite(n)) return null
+  return n
+}
+
+function normalizeMatchScore(value) {
+  if (value == null || value === '') return null
+  let n = null
+  if (typeof value === 'number' && Number.isFinite(value)) n = value
+  else {
+    const s = String(value).trim().replace('%', '')
+    const parsed = Number.parseFloat(s)
+    if (Number.isFinite(parsed)) n = parsed
+  }
+  if (n == null) return null
+  // If it looks like a fraction (0..1), treat as 0..100.
+  if (n > 0 && n <= 1) n = n * 100
+  const rounded = Math.round(n)
+  return Math.max(0, Math.min(100, rounded))
+}
+
+function coerceString(value, { maxLen } = {}) {
+  if (value == null) return null
+  const s = String(value).trim()
+  if (!s) return null
+  if (typeof maxLen === 'number' && maxLen > 0 && s.length > maxLen) return s.slice(0, maxLen)
+  return s
+}
+
+function coerceArray(value) {
+  if (Array.isArray(value)) return value
+  if (value == null) return []
+  // Try JSON if it looks like it.
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return []
+    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        return Array.isArray(parsed) ? parsed : [parsed]
+      } catch {
+        return [trimmed]
+      }
+    }
+    return [trimmed]
+  }
+  return [value]
+}
+
 function normalizeSortColumn(raw) {
   const key = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
   if (!key) return 'g.created_at'
@@ -657,6 +743,13 @@ router.post('/from-opportunity', async (req, res) => {
     } else if (normalizedOrgId) {
       if (!(await ensureOrganizationAccess(req, res, normalizedOrgId))) return
     }
+
+    // If a caller provided organization_id explicitly (even alongside profile_id),
+    // enforce org access using the real request context. This avoids passing synthetic
+    // req objects that can crash (missing req.db/req.ctx) and cause 500s.
+    if (normalizedOrgId) {
+      if (!(await ensureOrganizationAccess(req, res, normalizedOrgId))) return
+    }
     
     // Try to get opportunity from database first
     let opportunity = null;
@@ -666,25 +759,25 @@ router.post('/from-opportunity', async (req, res) => {
     
     // If not found in DB, use provided opportunity_data
     if (!opportunity && opportunity_data) {
-      // Postgres safety: `grants.deadline` is a DATE; empty strings (and some ISO timestamps)
-      // will hard-fail inserts. Normalize to YYYY-MM-DD or NULL.
-      let normalizedDeadline = opportunity_data.deadline || opportunity_data.deadlineAt || null
-      if (typeof normalizedDeadline === 'string') {
-        const s = normalizedDeadline.trim()
-        if (!s) normalizedDeadline = null
-        else if (/^\d{4}-\d{2}-\d{2}T/.test(s)) normalizedDeadline = s.slice(0, 10)
+      const normalizedDeadline = normalizeDateForDb(opportunity_data.deadline || opportunity_data.deadlineAt || null)
+      const amountMin = normalizeMoney(opportunity_data.awardMin ?? opportunity_data.amount_min ?? null)
+      const amountMax = normalizeMoney(opportunity_data.awardMax ?? opportunity_data.amount_max ?? null)
+      const applicationUrl = coerceString(opportunity_data.url || opportunity_data.application_url, { maxLen: 2000 })
+      const title = coerceString(opportunity_data.title, { maxLen: 500 })
+      if (!title) {
+        return res.status(400).json({ error: 'Opportunity title is required' })
       }
 
       opportunity = {
-        title: opportunity_data.title,
-        sponsor: opportunity_data.sponsor,
+        title,
+        sponsor: coerceString(opportunity_data.sponsor, { maxLen: 500 }),
         deadline: normalizedDeadline,
-        application_url: opportunity_data.url || opportunity_data.application_url,
-        amount_min: opportunity_data.awardMin || opportunity_data.amount_min,
-        amount_max: opportunity_data.awardMax || opportunity_data.amount_max,
-        description: opportunity_data.descriptionMd || opportunity_data.description,
-        eligibility_bullets: JSON.stringify(opportunity_data.eligibilityBullets || []),
-        source: opportunity_data.source || 'discovery'
+        application_url: applicationUrl,
+        amount_min: amountMin,
+        amount_max: amountMax,
+        description: coerceString(opportunity_data.descriptionMd || opportunity_data.description, { maxLen: 50_000 }),
+        eligibility_bullets: JSON.stringify(coerceArray(opportunity_data.eligibilityBullets)),
+        source: coerceString(opportunity_data.source, { maxLen: 200 }) || 'discovery',
       };
       console.log('[grants] Using direct opportunity data for:', opportunity.title);
     }
@@ -730,16 +823,6 @@ router.post('/from-opportunity', async (req, res) => {
       if (!finalOrgId) {
         throw new Error('Organization ID or Profile ID is required');
       }
-
-      // If a caller provided organization_id explicitly, enforce org access even when profile_id is present.
-      // Otherwise profile access is sufficient (especially for legacy profiles without user_id mappings).
-      if (normalizedOrgId) {
-        const accessReq = { user: req.user, ctx: req.ctx, db: tx }
-        if (!(await ensureOrganizationAccess(accessReq, res, String(finalOrgId)))) {
-          // Ensure we don't throw later on a null result.
-          return { _aborted: true }
-        }
-      }
       
       // Check for duplicate grants by title for this organization
       const existingGrant = hasProfileId && finalProfileId
@@ -783,13 +866,11 @@ router.post('/from-opportunity', async (req, res) => {
       
       const id = crypto.randomUUID();
 
-      // Postgres safety: reject empty deadline strings
-      let insertDeadline = opportunity.deadline ?? null
-      if (typeof insertDeadline === 'string') {
-        const s = insertDeadline.trim()
-        if (!s) insertDeadline = null
-        else if (/^\d{4}-\d{2}-\d{2}T/.test(s)) insertDeadline = s.slice(0, 10)
-      }
+      const insertDeadline = normalizeDateForDb(opportunity.deadline ?? null)
+      const insertMatchScore = normalizeMatchScore(match_score ?? null)
+      const insertMatchReasons = JSON.stringify(coerceArray(match_reasons))
+      const amountRequested = normalizeMoney(opportunity.amount_max ?? opportunity.amount_min ?? null)
+      const notes = coerceString(opportunity.description, { maxLen: 500 })
       
       if (hasProfileId) {
         await tx.prepare(`
@@ -807,11 +888,11 @@ router.post('/from-opportunity', async (req, res) => {
           opportunity.title,
           opportunity.sponsor,
           insertDeadline,
-          match_score || null,
-          JSON.stringify(match_reasons || []),
+          insertMatchScore,
+          insertMatchReasons,
           opportunity.application_url,
-          opportunity.amount_max || opportunity.amount_min || null,
-          opportunity.description ? opportunity.description.substring(0, 500) : null
+          amountRequested,
+          notes
         );
       } else {
         await tx.prepare(`
@@ -828,11 +909,11 @@ router.post('/from-opportunity', async (req, res) => {
           opportunity.title,
           opportunity.sponsor,
           insertDeadline,
-          match_score || null,
-          JSON.stringify(match_reasons || []),
+          insertMatchScore,
+          insertMatchReasons,
           opportunity.application_url,
-          opportunity.amount_max || opportunity.amount_min || null,
-          opportunity.description ? opportunity.description.substring(0, 500) : null
+          amountRequested,
+          notes
         );
       }
       
