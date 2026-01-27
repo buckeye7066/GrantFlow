@@ -35,6 +35,7 @@ import billingRouter from './routes/billing.js';
 import authRouter from './routes/auth.js';
 import preferencesRouter from './routes/preferences.js';
 import adminRouter from './routes/admin.js';
+import createGeoCrawlRouter from './routes/geoCrawl.js'
 import discoveryRouter from './routes/discovery.js';
 import serviceApplicationRouter from './routes/serviceApplication.js';
 import statsRouter from './routes/stats.js';
@@ -1311,6 +1312,8 @@ app.use('/api', nofoRouter);
 app.use('/api', legacyFunctionsRouter);
 // Base44 legacy entity endpoints
 app.use('/api/crawl-logs', crawlLogsRouter);
+// Geo Crawl monitor + start endpoints (admin-only)
+app.use('/api/geo-crawl', createGeoCrawlRouter({ uploadDir: uploadsDir, getOpenAI: null }));
 
 function resolveBuildSha() {
   return (

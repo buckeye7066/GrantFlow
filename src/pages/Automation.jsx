@@ -31,6 +31,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Separator } from "@/components/ui/separator"
 import { format, formatDistanceToNow } from "date-fns"
 import { useToast } from "@/components/ui/use-toast"
+import { apiFetch } from "@/api/client"
 import {
   listCrawlerJobs,
   createCrawlerJob,
@@ -47,10 +48,17 @@ import PipelineAutomationPanel from "@/components/pipeline/PipelineAutomationPan
 import CrawlerProgressMeter from "@/components/automation/CrawlerProgressMeter"
 import { SECTION_CONFIG } from "@/components/profiles/ProfileSectionEditor"
 
+async function startGeoCrawl(payload) {
+  return apiFetch("/api/geo-crawl/start", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
 const JOB_LABELS = {
   local: "Local 50-mile sweep",
   scholarship: "Scholarship intelligence",
-  comprehensive: "Geo Crawl",
+  comprehensive: "Comprehensive match",
   item_search: "Item funding search",
   avatar_lookup: "AI avatar lookup",
   document_ingest: "Document enrichment",
@@ -79,6 +87,23 @@ const JOB_ICON_MAP = {
   avatar_lookup: UserCircle2,
 }
 
+function getJobLabel(job) {
+  if (!job) return "Crawler"
+  if (job.type !== "comprehensive") {
+    return JOB_LABELS[job.type] ?? job.type
+  }
+
+  const params = job.parameters ?? {}
+  const meta = job.result_meta ?? {}
+  const mode = String(params?.mode ?? meta?.mode ?? "").toLowerCase()
+  return mode === "geo" ? "Geo Crawl" : "Comprehensive match"
+}
+
+function getJobIcon(job) {
+  const type = job?.type
+  return JOB_ICON_MAP[type] ?? Globe2
+}
+
 function formatNumber(value) {
   if (typeof value !== "number" || Number.isNaN(value)) return null
   return value.toLocaleString("en-US")
@@ -94,6 +119,31 @@ function formatDuration(seconds) {
   const hours = Math.floor(mins / 60)
   const remainingMins = mins % 60
   return `${hours}h ${remainingMins}m`
+}
+
+function deriveStateFromProfile(profileDetail) {
+  const sections = Array.isArray(profileDetail?.sections) ? profileDetail.sections : []
+  const basic = sections.find((s) => s?.section_key === "basic_information")?.data ?? null
+  const location = sections.find((s) => s?.section_key === "location_focus")?.data ?? null
+
+  const candidates = [
+    basic?.state,
+    basic?.address_state,
+    location?.state,
+    location?.primary_state,
+    location?.geographic_focus,
+    basic?.address,
+  ]
+
+  for (const v of candidates) {
+    if (typeof v !== "string") continue
+    const m = v.trim().match(/\b([A-Za-z]{2})\b/)
+    if (!m) continue
+    const code = m[1].toUpperCase()
+    if (/^[A-Z]{2}$/.test(code)) return code
+  }
+
+  return null
 }
 
 function summarizeJob(job) {
@@ -684,7 +734,7 @@ function LiveQueueCard({
         className="flex flex-col gap-1 rounded-md border border-slate-200/80 bg-white/80 px-3 py-2"
       >
         <div className="flex items-center justify-between gap-3">
-          <JobTypeBadge type={job.type} />
+          <JobTypeBadge job={job} />
           <Badge className={cn("text-[10px] uppercase tracking-wide", STATUS_VARIANTS[job.status] ?? STATUS_VARIANTS.queued)}>
             {job.status.replace(/_/g, " ")}
           </Badge>
@@ -753,7 +803,7 @@ function LiveQueueCard({
         className="flex flex-col gap-1 rounded-md border border-red-200/70 bg-red-50 px-3 py-2"
       >
         <div className="flex items-center justify-between gap-3">
-          <JobTypeBadge type={job.type} />
+          <JobTypeBadge job={job} />
           <Badge className="text-[10px] uppercase tracking-wide bg-red-100 text-red-700">Failed</Badge>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-red-600">
@@ -878,8 +928,8 @@ function JobStatusBadge({ status }) {
   )
 }
 
-function JobTypeBadge({ type }) {
-  const label = JOB_LABELS[type] ?? type ?? "Unknown job"
+function JobTypeBadge({ job }) {
+  const label = getJobLabel(job)
   return (
     <Badge variant="outline" className="text-xs uppercase tracking-wide text-slate-600">
       {label}
@@ -959,7 +1009,7 @@ function JobDetailsDialog({ job, onOpenChange, onRetry, retrying, onCancel, canc
             ) : null}
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wide text-slate-500">Type</span>
-              <JobTypeBadge type={job.type} />
+              <JobTypeBadge job={job} />
             </div>
             <div>
               <span className="text-xs uppercase tracking-wide text-slate-500">Profile ID</span>
@@ -1540,6 +1590,57 @@ export default function Automation() {
     },
   })
 
+  const geoCrawlMutation = useMutation({
+    mutationFn: (payload) => startGeoCrawl(payload),
+    onSuccess: (res) => {
+      const runId = res?.run_id ? String(res.run_id) : null
+      if (runId) {
+        try {
+          window.localStorage.setItem("gf_geo_crawl_last_run_id", runId)
+        } catch {
+          // ignore
+        }
+      }
+      toast({
+        title: "Geo crawl started",
+        description: runId ? `Run ${runId.slice(0, 8)}… is live. Open Admin → Geo Crawl to monitor.` : "Geo crawl queued.",
+      })
+    },
+    onError: (error) => {
+      toast({
+        variant: "destructive",
+        title: "Unable to start geo crawl",
+        description: error instanceof Error ? error.message : "Try again shortly.",
+      })
+    },
+  })
+
+  const handleStartGeoCrawl = () => {
+    if (!isAdmin) {
+      toast({
+        variant: "destructive",
+        title: "Admin access required",
+        description: "Geo Crawl is an admin-only operation.",
+      })
+      return
+    }
+    const state = deriveStateFromProfile(profileDetailQuery.data)
+    if (!state) {
+      toast({
+        variant: "destructive",
+        title: "Missing profile state",
+        description: "Select a profile with a valid US state (Basic Information) to run a scoped Geo Crawl.",
+      })
+      return
+    }
+    geoCrawlMutation.mutate({
+      state,
+      zip_limit: 25,
+      min_sources_per_zip: 3,
+      discover_local_resources: true,
+    })
+  }
+
   const retryJobMutation = useMutation({
     mutationFn: (jobId) => retryCrawlerJob(jobId),
     onSuccess: (newJob) => {
@@ -1796,7 +1897,7 @@ export default function Automation() {
             </Select>
             {selectedProfile === "none" ? (
               <p className="text-xs text-amber-700">
-                Select a specific profile to run crawlers like Local Sweep, Scholarship match, Geo Crawl, and Profile enrichment.
+                Select a specific profile to run crawlers like Local Sweep, Scholarship match, and Profile enrichment.
               </p>
             ) : null}
           </CardContent>
@@ -1824,9 +1925,9 @@ export default function Automation() {
           icon={Target}
           title="Geo Crawl"
           description="Populate the Funding Opportunities catalog with at least three grants per ZIP."
-          onClick={() => handleQueueJob("comprehensive")}
-          disabled={createJobMutation.isPending}
-          loading={createJobMutation.isPending && createJobMutation.variables?.type === "comprehensive"}
+          onClick={handleStartGeoCrawl}
+          disabled={geoCrawlMutation.isPending || !isAdmin}
+          loading={geoCrawlMutation.isPending}
         />
         <QuickActionCard
           icon={Sparkles}
@@ -1997,7 +2098,7 @@ export default function Automation() {
                         <tr key={job.id} className="hover:bg-slate-50/60">
                           <td className="px-4 py-3">
                             <div className="flex flex-col gap-1">
-                              <JobTypeBadge type={job.type} />
+                              <JobTypeBadge job={job} />
                               <span className="font-mono text-[11px] text-slate-500">{job.id.slice(0, 10)}…</span>
                               {job.retried_from_job_id ? (
                                 <span className="text-[10px] uppercase tracking-wide text-slate-400">

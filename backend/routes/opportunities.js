@@ -166,6 +166,8 @@ router.get('/', async (req, res) => {
       search,
       state,
       source,
+      geo_run_id: geoRunIdParam,
+      run_id: runIdParam,
       deadline_after: deadlineAfter,
       deadline_before: deadlineBefore,
       is_national: isNational,
@@ -178,7 +180,16 @@ router.get('/', async (req, res) => {
     const parsedLimit = Number.parseInt(limit, 10) || 10000;
     const parsedOffset = Math.max(Number.parseInt(offset, 10) || 0, 0);
 
-    const baseConditions = ['is_active = ?'];
+    const geoRunId = geoRunIdParam ?? runIdParam ?? null
+
+    // Geo-run filtering is performed via the geo index table so we can:
+    // - preserve global de-dupe (one opportunity row)
+    // - still show per-zip/per-state associations for a run
+    const fromClause = geoRunId
+      ? `FROM funding_opportunities fo JOIN funding_opportunity_geo_index gi ON gi.opportunity_id = fo.id`
+      : `FROM funding_opportunities`
+
+    const baseConditions = geoRunId ? ['fo.is_active = ?'] : ['is_active = ?'];
     const baseParams = [true];
 
     // Pass dialect through params for applyComplianceFilters.
@@ -188,19 +199,23 @@ router.get('/', async (req, res) => {
     if (search) {
       const searchTerm = `%${search}%`;
       const likeOp = likeOperatorForDb(req.db);
-      baseConditions.push(`(title ${likeOp} ? OR sponsor ${likeOp} ? OR description ${likeOp} ?)`);
+      baseConditions.push(
+        geoRunId
+          ? `(fo.title ${likeOp} ? OR fo.sponsor ${likeOp} ? OR fo.description ${likeOp} ?)`
+          : `(title ${likeOp} ? OR sponsor ${likeOp} ? OR description ${likeOp} ?)`,
+      );
       baseParams.push(searchTerm, searchTerm, searchTerm);
     }
 
     const normalizedState = state ? String(state).toUpperCase() : null;
 
     if (isNational === 'true') {
-      baseConditions.push('is_national = ?');
+      baseConditions.push(geoRunId ? 'fo.is_national = ?' : 'is_national = ?');
       baseParams.push(true);
     }
 
     if (source) {
-      baseConditions.push('source = ?');
+      baseConditions.push(geoRunId ? 'fo.source = ?' : 'source = ?');
       baseParams.push(source);
     }
 
@@ -214,12 +229,17 @@ router.get('/', async (req, res) => {
       baseParams.push(deadlineBefore);
     }
 
+    if (geoRunId) {
+      baseConditions.push('gi.geo_run_id = ?')
+      baseParams.push(String(geoRunId))
+    }
+
     const conditions = [...baseConditions];
     const filterParams = [...baseParams];
 
     if (normalizedState) {
       // Default behavior includes both state + national.
-      conditions.push('(state = ? OR is_national = ?)');
+      conditions.push(geoRunId ? '(fo.state = ? OR fo.is_national = ?)' : '(state = ? OR is_national = ?)');
       filterParams.push(normalizedState);
       filterParams.push(true);
     }
@@ -254,10 +274,10 @@ router.get('/', async (req, res) => {
       const nationals = req.db
         .prepare(
           `
-            SELECT *
-            FROM funding_opportunities
+            SELECT ${geoRunId ? 'fo.*, gi.geo_run_id as geo_run_id, gi.zip as geo_zip, gi.county as geo_county, gi.source as geo_source' : '*'}
+            ${fromClause}
             ${commonWhere}
-              AND is_national = ?
+              AND ${geoRunId ? 'fo.is_national' : 'is_national'} = ?
             ${orderClause}
             LIMIT ?
           `,
@@ -269,11 +289,11 @@ router.get('/', async (req, res) => {
         ? req.db
             .prepare(
               `
-                SELECT *
-                FROM funding_opportunities
+                SELECT ${geoRunId ? 'fo.*, gi.geo_run_id as geo_run_id, gi.zip as geo_zip, gi.county as geo_county, gi.source as geo_source' : '*'}
+                ${fromClause}
                 ${commonWhere}
-                  AND state = ?
-                  AND (is_national IS NULL OR is_national = ?)
+                  AND ${geoRunId ? 'fo.state' : 'state'} = ?
+                  AND (${geoRunId ? 'fo.is_national' : 'is_national'} IS NULL OR ${geoRunId ? 'fo.is_national' : 'is_national'} = ?)
                 ${orderClause}
                 LIMIT ?
               `,
@@ -287,8 +307,8 @@ router.get('/', async (req, res) => {
       opportunities = await req.db
         .prepare(
           `
-            SELECT *
-            FROM funding_opportunities
+            SELECT ${geoRunId ? 'fo.*, gi.geo_run_id as geo_run_id, gi.zip as geo_zip, gi.county as geo_county, gi.source as geo_source' : '*'}
+            ${fromClause}
             ${whereClause}
             ${orderClause}
             LIMIT ?
@@ -304,7 +324,7 @@ router.get('/', async (req, res) => {
       .prepare(
         `
           SELECT COUNT(*) AS total
-          FROM funding_opportunities
+          ${fromClause}
           ${whereClause}
         `,
       )

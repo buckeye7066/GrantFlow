@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { useToast } from "@/components/ui/use-toast"
 import { apiFetch } from "@/api/client"
+import GeoCrawlMonitor from "@/components/admin/GeoCrawlMonitor.jsx"
 
 async function fetchStates() {
   return apiFetch("/api/admin/geo/states")
@@ -51,6 +52,7 @@ export default function AdminGeoCrawl() {
   const [selectedCounties, setSelectedCounties] = useState(new Set())
   const [minSources, setMinSources] = useState(3)
   const [status, setStatus] = useState(null)
+  const [activeRunId, setActiveRunId] = useState("")
 
   useEffect(() => {
     let mounted = true
@@ -259,6 +261,7 @@ export default function AdminGeoCrawl() {
       })
       toast({ title: "Geo crawl started", description: `Job ${res?.job?.id || ""}` })
       setStatus((prev) => ({ ...(prev || {}), geo_crawl: res?.job }))
+      if (res?.run_id) setActiveRunId(String(res.run_id))
     } catch (err) {
       toast({ title: "Failed to start geo crawl", description: err.message, variant: "destructive" })
     }
@@ -541,6 +544,8 @@ export default function AdminGeoCrawl() {
           ) : null}
         </CardContent>
       </Card>
+
+      {activeRunId ? <GeoCrawlMonitor runId={activeRunId} /> : null}
     </div>
   )
 }

@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
+import { useSearchParams } from "react-router-dom"
 import {
   AlertTriangle,
   Building,
@@ -879,19 +880,34 @@ function OpportunityDetail({
 
 export default function FundingOpportunities() {
   const { toast } = useToast()
-  const [filters, setFilters] = useState({
+  const [searchParams, setSearchParams] = useSearchParams()
+  const geoRunIdFromUrl = String(searchParams.get("geo_run_id") || searchParams.get("run_id") || "").trim()
+
+  const [filters, setFilters] = useState(() => ({
     search: "",
     state: "all",
     source: "all",
     nationalOnly: false,
     profileId: "all",
     compliance: "grant_only",
-  })
+    geo_run_id: geoRunIdFromUrl || "",
+  }))
   const [selectedOpportunity, setSelectedOpportunity] = useState(null)
   const [addingOpportunityId, setAddingOpportunityId] = useState(null)
   const [savingOpportunityId, setSavingOpportunityId] = useState(null)
   const [currentPage, setCurrentPage] = useState(1)
   const ITEMS_PER_PAGE = 50
+
+  React.useEffect(() => {
+    // Keep filter in sync with URL (so monitor->opportunities deep-links work).
+    if (geoRunIdFromUrl && geoRunIdFromUrl !== filters.geo_run_id) {
+      setFilters((prev) => ({ ...prev, geo_run_id: geoRunIdFromUrl }))
+      return
+    }
+    if (!geoRunIdFromUrl && filters.geo_run_id) {
+      setFilters((prev) => ({ ...prev, geo_run_id: "" }))
+    }
+  }, [geoRunIdFromUrl, filters.geo_run_id])
 
   const opportunitiesQuery = useQuery({
     queryKey: ["opportunities", filters, currentPage],
@@ -902,9 +918,12 @@ export default function FundingOpportunities() {
         source: filters.source !== "all" ? filters.source : undefined,
         is_national: filters.nationalOnly ? "true" : undefined,
         compliance: filters.compliance,
+        geo_run_id: filters.geo_run_id || undefined,
         limit: ITEMS_PER_PAGE,
         offset: (currentPage - 1) * ITEMS_PER_PAGE,
       }),
+    // Live refresh when viewing a GeoCrawl run (new rows arrive incrementally).
+    refetchInterval: filters.geo_run_id ? 3000 : false,
   })
   
   // Reset to page 1 when filters change
@@ -955,6 +974,14 @@ export default function FundingOpportunities() {
     filters.compliance === "grant_only"
       ? "Grant funds only — excluding loans and match requirements."
       : "Including opportunities that may require matching funds or repayment."
+
+  const clearGeoRunFilter = () => {
+    setFilters((prev) => ({ ...prev, geo_run_id: "" }))
+    const next = new URLSearchParams(searchParams)
+    next.delete("geo_run_id")
+    next.delete("run_id")
+    setSearchParams(next, { replace: true })
+  }
 
   // When a profile is selected, default the state filter based on their address/geographic focus.
   React.useEffect(() => {
@@ -1276,6 +1303,22 @@ export default function FundingOpportunities() {
           </Alert>
         )}
 
+        {/* GeoCrawl run filter banner */}
+        {filters.geo_run_id ? (
+          <Alert className="border-emerald-200 bg-emerald-50">
+            <Sparkles className="w-4 h-4 text-emerald-700" />
+            <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+              <span className="text-emerald-900">
+                Viewing live results for GeoCrawl run{" "}
+                <span className="font-semibold">{String(filters.geo_run_id).slice(0, 8)}…</span>
+              </span>
+              <Button size="sm" variant="outline" onClick={clearGeoRunFilter}>
+                Clear run filter
+              </Button>
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
         <Card className="border border-slate-200 bg-white/80 backdrop-blur shadow-sm">
           <CardContent className="pt-6 space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
@@ -1395,6 +1438,7 @@ export default function FundingOpportunities() {
                       nationalOnly: false,
                       profileId: "",
                       compliance: "grant_only",
+                      geo_run_id: "",
                     })
                   }
                 >
