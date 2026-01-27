@@ -1,0 +1,507 @@
+import crypto from 'crypto'
+import JSZip from 'jszip'
+import { writeApplicationArtifact } from './storageAdapter.js'
+
+function nowSqlLiteral(db) {
+  return db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+}
+
+function normalizeMethod(method) {
+  const v = String(method || '').trim().toLowerCase()
+  if (!v) return null
+  const allowed = new Set(['portal', 'email', 'fax', 'mail', 's2s', 'download'])
+  return allowed.has(v) ? v : null
+}
+
+function normalizeStatus(status) {
+  const v = String(status || '').trim().toLowerCase()
+  if (!v) return null
+  const allowed = new Set(['draft', 'ready', 'exported', 'submitted'])
+  return allowed.has(v) ? v : null
+}
+
+function normalizeChecklistStatus(status) {
+  const v = String(status || '').trim().toLowerCase()
+  if (!v) return 'pending'
+  const allowed = new Set(['pending', 'done', 'blocked'])
+  return allowed.has(v) ? v : 'pending'
+}
+
+function safeJsonStringify(value) {
+  if (value === null || value === undefined) return null
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return JSON.stringify({ _error: 'unstringifiable_snapshot' })
+  }
+}
+
+async function getApplicationOr404(db, applicationId) {
+  const row = await db.prepare('SELECT * FROM applications WHERE id = ?').get(String(applicationId))
+  if (!row) {
+    const err = new Error('Application not found')
+    err.status = 404
+    throw err
+  }
+  return row
+}
+
+async function upsertByUniqueKey({ db, table, uniqueWhereSql, uniqueParams, insertSql, insertParams, updateSql, updateParams }) {
+  const existing = await db.prepare(`SELECT id FROM ${table} WHERE ${uniqueWhereSql} LIMIT 1`).get(...uniqueParams)
+  if (existing?.id) {
+    await db.prepare(updateSql).run(...updateParams, existing.id)
+    const updated = await db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(existing.id)
+    return { row: updated, created: false }
+  }
+  const id = crypto.randomUUID()
+  await db.prepare(insertSql).run(id, ...insertParams)
+  const createdRow = await db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(id)
+  return { row: createdRow, created: true }
+}
+
+export async function prepareApplication({ db, grantId, organizationId, userId }) {
+  if (!grantId) throw new Error('grantId required')
+  if (!organizationId) throw new Error('organizationId required')
+
+  const existing = await db
+    .prepare('SELECT * FROM applications WHERE grant_id = ? AND organization_id = ? LIMIT 1')
+    .get(String(grantId), String(organizationId))
+
+  if (existing) return existing
+
+  const id = crypto.randomUUID()
+  await db
+    .prepare(
+      `
+        INSERT INTO applications (id, grant_id, organization_id, status, snapshot_json, created_at, updated_at)
+        VALUES (?, ?, ?, 'draft', ?, ${nowSqlLiteral(db)}, ${nowSqlLiteral(db)})
+      `,
+    )
+    .run(id, String(grantId), String(organizationId), safeJsonStringify({ created_by: userId ?? null }))
+
+  return db.prepare('SELECT * FROM applications WHERE id = ?').get(id)
+}
+
+export async function getApplication({ db, applicationId }) {
+  return getApplicationOr404(db, applicationId)
+}
+
+export async function patchApplication({ db, applicationId, patch = {} }) {
+  const existing = await getApplicationOr404(db, applicationId)
+
+  const nextStatus = normalizeStatus(patch.status) ?? null
+  const portalUrl = patch.portal_url !== undefined ? (patch.portal_url ? String(patch.portal_url) : null) : undefined
+  const snapshot = patch.snapshot_json !== undefined ? patch.snapshot_json : undefined
+
+  const mergedSnapshot =
+    snapshot === undefined
+      ? undefined
+      : (() => {
+          let prev = null
+          try {
+            prev = existing.snapshot_json ? JSON.parse(existing.snapshot_json) : null
+          } catch {
+            prev = null
+          }
+          const next = snapshot && typeof snapshot === 'object' ? snapshot : null
+          if (!next) return safeJsonStringify(prev)
+          if (!prev || typeof prev !== 'object') return safeJsonStringify(next)
+          return safeJsonStringify({ ...prev, ...next })
+        })()
+
+  await db
+    .prepare(
+      `
+        UPDATE applications
+        SET updated_at = ${nowSqlLiteral(db)},
+            status = COALESCE(?, status),
+            portal_url = COALESCE(?, portal_url),
+            snapshot_json = COALESCE(?, snapshot_json)
+        WHERE id = ?
+      `,
+    )
+    .run(nextStatus, portalUrl === undefined ? null : portalUrl, mergedSnapshot === undefined ? null : mergedSnapshot, String(applicationId))
+
+  return db.prepare('SELECT * FROM applications WHERE id = ?').get(String(applicationId))
+}
+
+export async function listSections({ db, applicationId }) {
+  await getApplicationOr404(db, applicationId)
+  const rows = await db
+    .prepare(
+      `
+        SELECT *
+        FROM application_sections
+        WHERE application_id = ?
+        ORDER BY section_key ASC
+      `,
+    )
+    .all(String(applicationId))
+  return rows || []
+}
+
+export async function upsertSection({ db, applicationId, sectionKey, title, content }) {
+  if (!sectionKey) throw new Error('sectionKey required')
+  await getApplicationOr404(db, applicationId)
+
+  const key = String(sectionKey)
+  const t = title !== undefined ? (title == null ? null : String(title)) : null
+  const c = content !== undefined ? (content == null ? null : String(content)) : null
+
+  const result = await upsertByUniqueKey({
+    db,
+    table: 'application_sections',
+    uniqueWhereSql: 'application_id = ? AND section_key = ?',
+    uniqueParams: [String(applicationId), key],
+    insertSql: `
+      INSERT INTO application_sections (id, application_id, section_key, title, content, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ${nowSqlLiteral(db)}, ${nowSqlLiteral(db)})
+    `,
+    insertParams: [String(applicationId), key, t, c],
+    updateSql: `
+      UPDATE application_sections
+      SET updated_at = ${nowSqlLiteral(db)},
+          title = COALESCE(?, title),
+          content = COALESCE(?, content)
+      WHERE id = ?
+    `,
+    updateParams: [t, c],
+  })
+
+  return result.row
+}
+
+export async function listChecklist({ db, applicationId }) {
+  await getApplicationOr404(db, applicationId)
+  const rows = await db
+    .prepare(
+      `
+        SELECT *
+        FROM application_checklist_items
+        WHERE application_id = ?
+        ORDER BY key ASC
+      `,
+    )
+    .all(String(applicationId))
+  return rows || []
+}
+
+export async function setChecklistItem({ db, applicationId, key, label, status }) {
+  if (!key) throw new Error('key required')
+  await getApplicationOr404(db, applicationId)
+
+  const k = String(key)
+  const l = label !== undefined ? (label == null ? null : String(label)) : null
+  const s = normalizeChecklistStatus(status)
+
+  const result = await upsertByUniqueKey({
+    db,
+    table: 'application_checklist_items',
+    uniqueWhereSql: 'application_id = ? AND key = ?',
+    uniqueParams: [String(applicationId), k],
+    insertSql: `
+      INSERT INTO application_checklist_items (id, application_id, key, label, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ${nowSqlLiteral(db)}, ${nowSqlLiteral(db)})
+    `,
+    insertParams: [String(applicationId), k, l, s],
+    updateSql: `
+      UPDATE application_checklist_items
+      SET updated_at = ${nowSqlLiteral(db)},
+          label = COALESCE(?, label),
+          status = COALESCE(?, status)
+      WHERE id = ?
+    `,
+    updateParams: [l, s],
+  })
+
+  return result.row
+}
+
+export async function validateApplication({ db, applicationId }) {
+  const app = await getApplicationOr404(db, applicationId)
+  const sections = await listSections({ db, applicationId })
+  const checklist = await listChecklist({ db, applicationId })
+
+  const missingChecklist = (checklist || [])
+    .filter((i) => String(i.status || '').toLowerCase() !== 'done')
+    .map((i) => ({
+      key: i.key,
+      label: i.label ?? null,
+      status: i.status ?? 'pending',
+    }))
+
+  const emptySections = (sections || [])
+    .filter((s) => !String(s.content || '').trim())
+    .map((s) => ({
+      section_key: s.section_key,
+      title: s.title ?? null,
+    }))
+
+  const ready = missingChecklist.length === 0 && emptySections.length === 0 && (sections || []).length > 0
+
+  if (ready && String(app.status || '').toLowerCase() === 'draft') {
+    await db
+      .prepare(`UPDATE applications SET status = 'ready', updated_at = ${nowSqlLiteral(db)} WHERE id = ?`)
+      .run(String(applicationId))
+  }
+
+  return {
+    ok: true,
+    application_id: String(applicationId),
+    ready,
+    missing: {
+      checklist: missingChecklist,
+      empty_sections: emptySections,
+      no_sections: (sections || []).length === 0,
+    },
+  }
+}
+
+export async function compileApplicationPackage({ db, applicationId }) {
+  const app = await getApplicationOr404(db, applicationId)
+  const grant = await db.prepare('SELECT * FROM grants WHERE id = ?').get(String(app.grant_id))
+  const org = await db.prepare('SELECT * FROM organizations WHERE id = ?').get(String(app.organization_id))
+  const sections = await listSections({ db, applicationId })
+  const checklist = await listChecklist({ db, applicationId })
+
+  return {
+    ok: true,
+    application: app,
+    grant: grant ?? null,
+    organization: org ?? null,
+    sections,
+    checklist,
+    compiled_at: new Date().toISOString(),
+  }
+}
+
+export async function exportApplicationPackage({ db, applicationId, format }) {
+  const normalizedFormat = String(format || '').toLowerCase()
+  if (normalizedFormat !== 'zip' && normalizedFormat !== 'docx') {
+    const err = new Error('Unsupported format')
+    err.status = 400
+    throw err
+  }
+
+  const compiled = await compileApplicationPackage({ db, applicationId })
+
+  // For now, produce ZIP (docx placeholder uses zip too).
+  const zip = new JSZip()
+  zip.file('compiled_application.json', JSON.stringify(compiled, null, 2))
+
+  const checklist = Array.isArray(compiled.checklist) ? compiled.checklist : []
+  zip.file('checklist.json', JSON.stringify(checklist, null, 2))
+
+  const sections = Array.isArray(compiled.sections) ? compiled.sections : []
+  const sectionsMd = sections
+    .map((s) => {
+      const title = String(s.title || s.section_key || 'Section').trim() || 'Section'
+      const body = String(s.content || '').trim()
+      return `## ${title}\n\n${body || '_[empty]_'}\n`
+    })
+    .join('\n')
+  zip.file('proposal_sections.md', sectionsMd || '_No sections_')
+
+  // Best-effort cover letter: first section keyed "cover_letter" if present.
+  const cover = sections.find((s) => String(s.section_key || '').toLowerCase() === 'cover_letter')
+  if (cover) {
+    zip.file('cover_letter.md', String(cover.content || '').trim() || '_[empty]_')
+  }
+
+  const buffer = await zip.generateAsync({ type: 'nodebuffer' })
+  const artifactId = crypto.randomUUID()
+  const extension = 'zip'
+
+  const written = await writeApplicationArtifact({
+    applicationId: String(applicationId),
+    artifactId,
+    extension,
+    buffer,
+  })
+
+  await db
+    .prepare(
+      `
+        INSERT INTO application_artifacts (id, application_id, format, storage_path, created_at)
+        VALUES (?, ?, ?, ?, ${nowSqlLiteral(db)})
+      `,
+    )
+    .run(artifactId, String(applicationId), 'zip', written.storage_path)
+
+  await db
+    .prepare(
+      `
+        UPDATE applications
+        SET status = 'exported',
+            exported_at = ${nowSqlLiteral(db)},
+            artifact_uri = ?,
+            updated_at = ${nowSqlLiteral(db)}
+        WHERE id = ?
+      `,
+    )
+    .run(written.storage_path, String(applicationId))
+
+  return {
+    ok: true,
+    artifact: {
+      id: artifactId,
+      application_id: String(applicationId),
+      format: 'zip',
+      download_url: `/api/applications/${String(applicationId)}/artifacts/${artifactId}/download`,
+    },
+  }
+}
+
+export async function markSubmitted({ db, applicationId, method, metadata }) {
+  const app = await getApplicationOr404(db, applicationId)
+  const m = normalizeMethod(method)
+  if (!m) {
+    const err = new Error('Invalid submission method')
+    err.status = 400
+    throw err
+  }
+
+  // Merge snapshot for auditability.
+  let prev = null
+  try {
+    prev = app.snapshot_json ? JSON.parse(app.snapshot_json) : null
+  } catch {
+    prev = null
+  }
+  const nextSnapshot = {
+    ...(prev && typeof prev === 'object' ? prev : {}),
+    submitted: {
+      method: m,
+      metadata: metadata ?? null,
+      submitted_at: new Date().toISOString(),
+    },
+  }
+
+  await db.withTransaction(async (tx) => {
+    await tx
+      .prepare(
+        `
+          UPDATE applications
+          SET status = 'submitted',
+              submission_method = ?,
+              submitted_at = ${nowSqlLiteral(db)},
+              snapshot_json = ?,
+              updated_at = ${nowSqlLiteral(db)}
+          WHERE id = ?
+        `,
+      )
+      .run(m, safeJsonStringify(nextSnapshot), String(applicationId))
+
+    // Keep grants pipeline consistent: mark the grant itself as submitted.
+    try {
+      await tx
+        .prepare(
+          `
+            UPDATE grants
+            SET status = 'submitted',
+                updated_at = ${nowSqlLiteral(db)}
+            WHERE id = ?
+          `,
+        )
+        .run(String(app.grant_id))
+    } catch {
+      // best-effort only (some environments may not have grants.status constraints aligned)
+    }
+
+    // Record a milestone for the submission event (best-effort, non-fatal).
+    try {
+      const milestoneId = crypto.randomUUID()
+      const dueDate = new Date().toISOString().slice(0, 10)
+      await tx
+        .prepare(
+          `
+            INSERT INTO milestones (id, grant_id, title, description, due_date, type, completed, completed_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `,
+        )
+        .run(
+          milestoneId,
+          String(app.grant_id),
+          'Submitted',
+          `Submitted via ${m}`,
+          dueDate,
+          'submission',
+          db?.dialect === 'postgres' ? true : 1,
+          dueDate,
+        )
+    } catch {
+      // ignore
+    }
+  })
+
+  return db.prepare('SELECT * FROM applications WHERE id = ?').get(String(applicationId))
+}
+
+export async function autoPopulate({ db, applicationId }) {
+  const app = await getApplicationOr404(db, applicationId)
+  const grant = await db.prepare('SELECT * FROM grants WHERE id = ?').get(String(app.grant_id))
+
+  const sources = []
+  const sourceUrl = grant?.source_url ?? grant?.url ?? grant?.application_url ?? null
+  if (sourceUrl) sources.push(String(sourceUrl))
+
+  // Heuristic portal url from grant columns if present.
+  let portalUrl = null
+  const maybePortal = grant?.application_method ?? null
+  if (maybePortal && /^https?:\/\//i.test(String(maybePortal))) portalUrl = String(maybePortal)
+  if (!portalUrl && sourceUrl && /^https?:\/\//i.test(String(sourceUrl))) portalUrl = String(sourceUrl)
+
+  const defaultSections = [
+    { section_key: 'cover_letter', title: 'Cover Letter', content: '' },
+    { section_key: 'project_narrative', title: 'Project Narrative', content: '' },
+    { section_key: 'budget_justification', title: 'Budget Justification', content: '' },
+    { section_key: 'organization_background', title: 'Organization Background', content: '' },
+    { section_key: 'evaluation_plan', title: 'Evaluation Plan', content: '' },
+    { section_key: 'attachments', title: 'Attachments / Supporting Docs', content: '' },
+  ]
+
+  const defaultChecklist = [
+    { key: 'confirm_deadline', label: 'Confirm deadline and timezone', status: 'pending' },
+    { key: 'confirm_eligibility', label: 'Confirm eligibility requirements', status: 'pending' },
+    { key: 'gather_required_docs', label: 'Gather required documents/attachments', status: 'pending' },
+    { key: 'review_budget', label: 'Review budget and match requirements', status: 'pending' },
+    { key: 'final_review', label: 'Final review and compliance check', status: 'pending' },
+  ]
+
+  await db.withTransaction(async () => {
+    if (portalUrl) {
+      await patchApplication({
+        db,
+        applicationId,
+        patch: {
+          portal_url: portalUrl,
+          snapshot_json: { auto_populate: { sources, portal_url_source: sources[0] ?? null } },
+        },
+      })
+    } else {
+      await patchApplication({
+        db,
+        applicationId,
+        patch: {
+          snapshot_json: { auto_populate: { sources } },
+        },
+      })
+    }
+
+    for (const s of defaultSections) {
+      await upsertSection({ db, applicationId, sectionKey: s.section_key, title: s.title, content: s.content })
+    }
+    for (const c of defaultChecklist) {
+      await setChecklistItem({ db, applicationId, key: c.key, label: c.label, status: c.status })
+    }
+  })
+
+  return {
+    ok: true,
+    portal_url: portalUrl,
+    sources,
+    sections_seeded: defaultSections.length,
+    checklist_seeded: defaultChecklist.length,
+  }
+}
+

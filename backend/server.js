@@ -49,6 +49,7 @@ import sourceDirectoryRouter from './routes/sourceDirectory.js'
 import budgetsRouter from './routes/budgets.js'
 import contactsRouter from './routes/contacts.js'
 import applicationDraftsRouter from './routes/applicationDrafts.js'
+import applicationsRouter from './routes/applications.js'
 import billingSettingsRouter from './routes/billingSettings.js'
 import contactMethodsRouter from './routes/contactMethods.js'
 import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
@@ -1291,6 +1292,7 @@ app.use('/api/expenses', expensesRouter);
 app.use('/api/budgets', budgetsRouter);
 app.use('/api/contacts', contactsRouter);
 app.use('/api/application-drafts', applicationDraftsRouter);
+app.use('/api/applications', applicationsRouter);
 app.use('/api/billing-settings', billingSettingsRouter);
 app.use('/api/contact-methods', contactMethodsRouter);
 app.use('/api/source-directory', sourceDirectoryRouter);
