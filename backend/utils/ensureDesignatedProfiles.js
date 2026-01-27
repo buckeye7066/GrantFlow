@@ -4,6 +4,16 @@ import path from 'path'
 import { DESIGNATED_PROFILES } from '../config/designatedProfiles.js'
 import { safeParseJSON } from './safeJson.js'
 
+export const DESIGNATED_PROFILE_IDS = new Set(
+  (Array.isArray(DESIGNATED_PROFILES) ? DESIGNATED_PROFILES : [])
+    .map((p) => String(p?.id || '').trim())
+    .filter(Boolean),
+)
+
+export function isDesignatedProfileId(id) {
+  return DESIGNATED_PROFILE_IDS.has(String(id || '').trim())
+}
+
 function loadSectionsFromDataFile(dataFile) {
   if (!dataFile) return null
   try {
@@ -33,6 +43,9 @@ export async function ensureDesignatedProfiles(db) {
         status = excluded.status,
         tags = excluded.tags,
         updated_at = CURRENT_TIMESTAMP
+      -- Never resurrect profiles that a user/admin explicitly deleted.
+      -- (Otherwise these "designated" profiles keep coming back after deletion.)
+      WHERE profiles.status IS NULL OR profiles.status <> 'deleted'
     `)
 
     // CRITICAL: never wipe existing profile sections on boot.

@@ -23,6 +23,7 @@ import {
   getAuthUserId,
   getAccessibleProfileIds,
 } from '../utils/accessControl.js'
+import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 
 const router = express.Router()
 
@@ -659,6 +660,17 @@ router.delete('/:id', async (req, res) => {
     if (!matchesProfileId && !matchesUserId) {
       return denyAuth(req, res)
     }
+  }
+
+  // Designated/demo profiles are intentionally "ensured" by boot-time seeding.
+  // If we hard-delete them, the seeder will re-create them on the next run.
+  // So for these IDs, always use a durable tombstone (soft-delete).
+  if (isDesignatedProfileId(id)) {
+    await req.db
+      .prepare("UPDATE profiles SET status = 'deleted', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+      .run(id)
+    console.info('[profiles] Soft-deleted designated profile (tombstoned):', String(id))
+    return res.status(204).send()
   }
 
   // Delete the profile.
