@@ -84,6 +84,34 @@ function toEditableString(value) {
   }
 }
 
+function toEditableStringForField(fieldKey, value) {
+  // Special-case: address is often stored as an object (Base44 export),
+  // but inline editing expects a human-friendly string.
+  if (fieldKey === "address") {
+    if (looksLikeAddressObject(value)) {
+      const formatted = formatAddressObject(value)
+      if (formatted) return formatted
+    }
+    if (typeof value === "string") {
+      const trimmed = value.trim()
+      if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+        try {
+          const parsed = JSON.parse(trimmed)
+          if (looksLikeAddressObject(parsed)) {
+            const formatted = formatAddressObject(parsed)
+            if (formatted) return formatted
+          }
+        } catch {
+          // ignore parse failures; fall back to raw string
+        }
+      }
+      return value
+    }
+  }
+
+  return toEditableString(value)
+}
+
 function normalizeEntry([key, value]) {
   if (value === "" || value === null || value === undefined) {
     return null
@@ -375,7 +403,7 @@ function SectionPreview({
                 >
                   <EditableField
                     label={label}
-                    value={toEditableString(value)}
+                    value={toEditableStringForField(key, value)}
                     type={
                       typeof value === "string" && (value.includes("\n") || value.length > 80)
                         ? "textarea"
