@@ -36,6 +36,92 @@ function safeJsonStringify(value) {
   }
 }
 
+function xmlEscape(text) {
+  return String(text ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;')
+}
+
+async function buildDocxBuffer({ title, sections, checklist }) {
+  const zip = new JSZip()
+
+  zip.file(
+    '[Content_Types].xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+</Types>`,
+  )
+
+  zip.folder('_rels')?.file(
+    '.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+</Relationships>`,
+  )
+
+  const makeParagraphs = (text) => {
+    const lines = String(text ?? '').split(/\r?\n/)
+    return lines
+      .map((line) => `<w:p><w:r><w:t xml:space="preserve">${xmlEscape(line)}</w:t></w:r></w:p>`)
+      .join('')
+  }
+
+  const docBodyParts = []
+  docBodyParts.push(makeParagraphs(title || 'Application Package'))
+  docBodyParts.push(`<w:p/>`)
+
+  docBodyParts.push(makeParagraphs('Sections'))
+  docBodyParts.push(`<w:p/>`)
+
+  for (const s of sections || []) {
+    const heading = String(s.title || s.section_key || 'Section')
+    docBodyParts.push(makeParagraphs(`## ${heading}`))
+    docBodyParts.push(makeParagraphs(String(s.content || '').trim() || '[empty]'))
+    docBodyParts.push(`<w:p/>`)
+  }
+
+  docBodyParts.push(makeParagraphs('Checklist'))
+  docBodyParts.push(`<w:p/>`)
+  for (const item of checklist || []) {
+    const line = `- [${String(item.status || 'pending')}] ${String(item.label || item.key || '')}`.trim()
+    docBodyParts.push(makeParagraphs(line))
+  }
+
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    ${docBodyParts.join('')}
+    <w:sectPr/>
+  </w:body>
+</w:document>`
+
+  zip.folder('word')?.file('document.xml', documentXml)
+
+  zip.folder('docProps')?.file(
+    'core.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
+  xmlns:dc="http://purl.org/dc/elements/1.1/"
+  xmlns:dcterms="http://purl.org/dc/terms/"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:title>${xmlEscape(title || 'Application Package')}</dc:title>
+  <dc:creator>GrantFlow</dc:creator>
+  <dcterms:created xsi:type="dcterms:W3CDTF">${xmlEscape(new Date().toISOString())}</dcterms:created>
+</cp:coreProperties>`,
+  )
+
+  return zip.generateAsync({ type: 'nodebuffer' })
+}
+
 async function getApplicationOr404(db, applicationId) {
   const row = await db.prepare('SELECT * FROM applications WHERE id = ?').get(String(applicationId))
   if (!row) {
@@ -285,32 +371,46 @@ export async function exportApplicationPackage({ db, applicationId, format }) {
 
   const compiled = await compileApplicationPackage({ db, applicationId })
 
-  // For now, produce ZIP (docx placeholder uses zip too).
-  const zip = new JSZip()
-  zip.file('compiled_application.json', JSON.stringify(compiled, null, 2))
-
   const checklist = Array.isArray(compiled.checklist) ? compiled.checklist : []
-  zip.file('checklist.json', JSON.stringify(checklist, null, 2))
-
   const sections = Array.isArray(compiled.sections) ? compiled.sections : []
-  const sectionsMd = sections
-    .map((s) => {
-      const title = String(s.title || s.section_key || 'Section').trim() || 'Section'
-      const body = String(s.content || '').trim()
-      return `## ${title}\n\n${body || '_[empty]_'}\n`
-    })
-    .join('\n')
-  zip.file('proposal_sections.md', sectionsMd || '_No sections_')
 
-  // Best-effort cover letter: first section keyed "cover_letter" if present.
-  const cover = sections.find((s) => String(s.section_key || '').toLowerCase() === 'cover_letter')
-  if (cover) {
-    zip.file('cover_letter.md', String(cover.content || '').trim() || '_[empty]_')
+  let buffer
+  let extension
+  let storedFormat
+
+  if (normalizedFormat === 'docx') {
+    buffer = await buildDocxBuffer({
+      title: compiled?.grant?.title ? `Application Package: ${compiled.grant.title}` : 'Application Package',
+      sections,
+      checklist,
+    })
+    extension = 'docx'
+    storedFormat = 'docx'
+  } else {
+    const zip = new JSZip()
+    zip.file('compiled_application.json', JSON.stringify(compiled, null, 2))
+    zip.file('checklist.json', JSON.stringify(checklist, null, 2))
+
+    const sectionsMd = sections
+      .map((s) => {
+        const title = String(s.title || s.section_key || 'Section').trim() || 'Section'
+        const body = String(s.content || '').trim()
+        return `## ${title}\n\n${body || '_[empty]_'}\n`
+      })
+      .join('\n')
+    zip.file('proposal_sections.md', sectionsMd || '_No sections_')
+
+    const cover = sections.find((s) => String(s.section_key || '').toLowerCase() === 'cover_letter')
+    if (cover) {
+      zip.file('cover_letter.md', String(cover.content || '').trim() || '_[empty]_')
+    }
+
+    buffer = await zip.generateAsync({ type: 'nodebuffer' })
+    extension = 'zip'
+    storedFormat = 'zip'
   }
 
-  const buffer = await zip.generateAsync({ type: 'nodebuffer' })
   const artifactId = crypto.randomUUID()
-  const extension = 'zip'
 
   const written = await writeApplicationArtifact({
     applicationId: String(applicationId),
@@ -326,7 +426,7 @@ export async function exportApplicationPackage({ db, applicationId, format }) {
         VALUES (?, ?, ?, ?, ${nowSqlLiteral(db)})
       `,
     )
-    .run(artifactId, String(applicationId), 'zip', written.storage_path)
+    .run(artifactId, String(applicationId), storedFormat, written.storage_path)
 
   await db
     .prepare(
@@ -346,7 +446,7 @@ export async function exportApplicationPackage({ db, applicationId, format }) {
     artifact: {
       id: artifactId,
       application_id: String(applicationId),
-      format: 'zip',
+      format: storedFormat,
       download_url: `/api/applications/${String(applicationId)}/artifacts/${artifactId}/download`,
     },
   }
