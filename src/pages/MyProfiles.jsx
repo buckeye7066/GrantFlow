@@ -36,7 +36,7 @@ export default function MyProfiles() {
     error 
   } = useQuery({
     queryKey: ['profiles', 'summary'],
-    queryFn: () => listProfiles({ summary: true }),
+    queryFn: () => listProfiles({ summary: true, scope: 'mine' }),
   });
   
   // Filter profiles
