@@ -32,6 +32,7 @@ import { crawlItemFunding } from '../services/crawlers/itemFundingCrawler.js';
 import { crawlECFBenefits } from '../services/crawlers/ecfBenefitsCrawler.js';
 import { findDuplicateProfileGroups, mergeProfiles } from '../services/profileDedupeService.js'
 import { ensureAdminUser, isAdminUser } from '../utils/accessControl.js'
+import { listJobRuns } from '../services/jobs/jobRunStore.js'
 import zipcodes from 'zipcodes';
 
 const router = express.Router();
@@ -138,6 +139,70 @@ const ensureAdminRequest = ensureAdminUser;
 router.get('/funding-sources', async (req, res) => {
   if (!(await ensureAdminRequest(req, res))) return
   res.json({ sources: getFundingSourceStatus() })
+})
+
+// ----------------------------
+// Job Runs (Anya + crawler enqueue visibility)
+// ----------------------------
+router.get('/jobs', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+
+  try {
+    const limit = Math.max(1, Math.min(Number(req.query?.limit) || 100, 200))
+    const offset = Math.max(0, Number(req.query?.offset) || 0)
+    const profileId = typeof req.query.profile_id === 'string' ? req.query.profile_id : null
+    const type = typeof req.query.type === 'string' ? req.query.type : null
+    const status = typeof req.query.status === 'string' ? req.query.status : null
+
+    const jobs = await listJobRuns(req.db, { profileId, type, status, limit, offset })
+    res.json({ jobs, limit, offset })
+  } catch (error) {
+    console.error('[admin/jobs] list failed', error)
+    res.status(500).json({ error: 'Unable to list jobs' })
+  }
+})
+
+// ----------------------------
+// Audit Events (durable DB-backed)
+// ----------------------------
+router.get('/audit-events', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+
+  try {
+    const limit = Math.max(1, Math.min(Number(req.query?.limit) || 200, 200))
+    const type = typeof req.query.type === 'string' ? req.query.type.trim() : ''
+
+    // Fetch a larger window then filter by prefix to support "type" queries.
+    const raw = await queryAuditLogs(req.db, {
+      category: AUDIT_CATEGORIES.ANYA,
+      limit: 500,
+      offset: 0,
+    })
+
+    let logs = raw?.logs || []
+
+    if (type === 'autonomous_crawler') {
+      logs = logs.filter((l) => String(l.action || '').startsWith('autonomous.'))
+    } else if (type === 'autonomous_crawlers') {
+      logs = logs.filter((l) => String(l.action || '').startsWith('autonomous_crawlers.'))
+    } else if (type === 'autonomous_scheduler') {
+      logs = logs.filter((l) => String(l.action || '').startsWith('autonomous_scheduler.'))
+    } else if (type === 'route_generation') {
+      logs = logs.filter((l) => String(l.action || '').startsWith('route_generation.'))
+    } else if (type) {
+      // Generic prefix filter (admin-only endpoint).
+      logs = logs.filter((l) => String(l.action || '').startsWith(type))
+    }
+
+    res.json({
+      type: type || null,
+      limit,
+      audit_events: logs.slice(0, limit),
+    })
+  } catch (error) {
+    console.error('[admin/audit-events] list failed', error)
+    res.status(500).json({ error: 'Unable to list audit events' })
+  }
 })
 
 function loadZipCoordinates() {

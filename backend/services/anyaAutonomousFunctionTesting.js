@@ -1,29 +1,54 @@
 import path from 'path'
 import { promises as fs } from 'fs'
+import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 
 const REPO_ROOT = path.resolve(process.cwd())
+
+function isProdEnv() {
+  const nodeEnv = String(process.env.NODE_ENV || '').toLowerCase()
+  const deployEnv = String(process.env.DEPLOY_ENV || '').toLowerCase()
+  return nodeEnv === 'production' || deployEnv === 'production'
+}
 
 /**
  * Create audit log entry for function testing operations
  */
-async function auditLog(entry) {
-  // IMPORTANT: hosted deployments may have a read-only filesystem for the repo.
-  // Audit logging is best-effort and must never crash the request.
-  try {
-    const auditDir = path.join(REPO_ROOT, 'backend', 'data', 'audit')
-    await fs.mkdir(auditDir, { recursive: true })
+async function auditLog(entry, context) {
+  const timestamp = new Date().toISOString()
+  const logEntry = { timestamp, ...entry }
 
-    const timestamp = new Date().toISOString()
-    const logEntry = {
-      timestamp,
-      ...entry,
+  const db = context?.db
+  if (db) {
+    try {
+      logAuditEvent(db, {
+        category: AUDIT_CATEGORIES.ANYA,
+        action: `autonomous_function_tests.${String(entry?.action || 'event')}`,
+        severity: SEVERITY.INFO,
+        userId: context?.user?.userId ?? context?.user?.id ?? null,
+        profileId: context?.profile_id ?? context?.profileId ?? null,
+        resourceType: 'anya_autonomous_function_tests',
+        resourceId: null,
+        details: logEntry,
+      })
+      return
+    } catch (error) {
+      console.warn('[anyaAutonomousFunctionTesting] audit db write failed:', error?.message || error)
     }
+  }
 
-    const logFile = path.join(auditDir, 'autonomous-function-tests.log')
-    const logLine = JSON.stringify(logEntry) + '\n'
-    await fs.appendFile(logFile, logLine, 'utf8')
-  } catch (error) {
-    console.warn('[auditLog] Failed to write audit log:', error?.message || error)
+  // Durable fallback: platform logs
+  console.log('[audit][autonomous-function-tests]', JSON.stringify(logEntry))
+
+  // Dev-only filesystem sink (explicit opt-in).
+  if (!isProdEnv() && String(process.env.ALLOW_DEV_FILESYSTEM_AUDIT_LOGS || '').toLowerCase() === 'true') {
+    try {
+      const auditDir = path.join(REPO_ROOT, 'backend', 'data', 'audit')
+      await fs.mkdir(auditDir, { recursive: true })
+      const logFile = path.join(auditDir, 'autonomous-function-tests.log')
+      await fs.appendFile(logFile, JSON.stringify(logEntry) + '\n', 'utf8')
+    } catch {
+      // best-effort
+    }
   }
 }
 
@@ -260,7 +285,7 @@ export async function runAutonomousFunctionTests(options, context) {
   await auditLog({
     action: 'autonomous_function_tests_start',
     options,
-  })
+  }, context)
 
   try {
     for (const suiteName of testSuites) {
@@ -302,7 +327,7 @@ export async function runAutonomousFunctionTests(options, context) {
             suite: suiteName,
             test: test.name,
             result: testResult,
-          })
+          }, context)
         } catch (error) {
           report.tests_failed++
           report.errors_found++
@@ -321,10 +346,13 @@ export async function runAutonomousFunctionTests(options, context) {
     report.completed_at = new Date().toISOString()
     report.duration_ms = duration
 
-    await auditLog({
-      action: 'autonomous_function_tests_complete',
-      report,
-    })
+    await auditLog(
+      {
+        action: 'autonomous_function_tests_complete',
+        report,
+      },
+      context,
+    )
 
     // Extract failed tests for potential repair
     const failedTests = []
@@ -344,10 +372,13 @@ export async function runAutonomousFunctionTests(options, context) {
 
     return report
   } catch (error) {
-    await auditLog({
-      action: 'autonomous_function_tests_error',
-      error: error.message,
-    })
+    await auditLog(
+      {
+        action: 'autonomous_function_tests_error',
+        error: error.message,
+      },
+      context,
+    )
     throw error
   }
 }
@@ -374,10 +405,13 @@ export async function testButtonFunctionality(options, context) {
     results: [],
   }
 
-  await auditLog({
-    action: 'button_functionality_test_start',
-    options,
-  })
+  await auditLog(
+    {
+      action: 'button_functionality_test_start',
+      options,
+    },
+    context,
+  )
 
   try {
     // This would require parsing React components to find button handlers
@@ -395,17 +429,23 @@ export async function testButtonFunctionality(options, context) {
     report.completed_at = new Date().toISOString()
     report.duration_ms = duration
 
-    await auditLog({
-      action: 'button_functionality_test_complete',
-      report,
-    })
+    await auditLog(
+      {
+        action: 'button_functionality_test_complete',
+        report,
+      },
+      context,
+    )
 
     return report
   } catch (error) {
-    await auditLog({
-      action: 'button_functionality_test_error',
-      error: error.message,
-    })
+    await auditLog(
+      {
+        action: 'button_functionality_test_error',
+        error: error.message,
+      },
+      context,
+    )
     throw error
   }
 }
@@ -413,38 +453,79 @@ export async function testButtonFunctionality(options, context) {
 /**
  * Get status of autonomous function testing operations
  */
-export async function getAutonomousFunctionTestsStatus() {
-  const auditDir = path.join(REPO_ROOT, 'backend', 'data', 'audit')
-  const logFile = path.join(auditDir, 'autonomous-function-tests.log')
-  
-  try {
-    const content = await fs.readFile(logFile, 'utf8')
-    const lines = content.trim().split('\n').filter(Boolean)
-    const recentLogs = lines.slice(-30).map(line => {
+export async function getAutonomousFunctionTestsStatus(db = null) {
+  // Prefer durable DB audit logs when available.
+  if (db) {
+    try {
+      const row = await db
+        .prepare(
+          `
+            SELECT *
+            FROM audit_logs
+            WHERE category = ?
+              AND action = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+          `,
+        )
+        .get(AUDIT_CATEGORIES.ANYA, 'autonomous_function_tests.autonomous_function_tests_complete')
+
+      if (!row) {
+        return { last_run: null, recent_operations: 0, message: 'No autonomous function testing operations have been run yet' }
+      }
+
+      let details = null
       try {
-        return JSON.parse(line)
+        details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details
       } catch {
-        return null
+        details = row.details ?? null
       }
-    }).filter(Boolean)
 
-    const lastRun = recentLogs.reverse().find(
-      log => log.action === 'autonomous_function_tests_complete'
-    )
-
-    return {
-      last_run: lastRun || null,
-      recent_operations: recentLogs.length,
-      audit_log_path: path.relative(REPO_ROOT, logFile),
-    }
-  } catch (error) {
-    if (error.code === 'ENOENT') {
       return {
-        last_run: null,
-        recent_operations: 0,
-        message: 'No autonomous function testing operations have been run yet',
+        last_run: details?.report ?? details ?? null,
+        recent_operations: 1,
+        audit_event_id: row.id,
+        created_at: row.created_at,
+      }
+    } catch (error) {
+      return { last_run: null, recent_operations: 0, message: error?.message || String(error) }
+    }
+  }
+
+  // Dev-only filesystem fallback (explicit opt-in).
+  if (!isProdEnv() && String(process.env.ALLOW_DEV_FILESYSTEM_AUDIT_LOGS || '').toLowerCase() === 'true') {
+    const auditDir = path.join(REPO_ROOT, 'backend', 'data', 'audit')
+    const logFile = path.join(auditDir, 'autonomous-function-tests.log')
+    try {
+      const content = await fs.readFile(logFile, 'utf8')
+      const lines = content.trim().split('\n').filter(Boolean)
+      const recentLogs = lines
+        .slice(-30)
+        .map((line) => {
+          try {
+            return JSON.parse(line)
+          } catch {
+            return null
+          }
+        })
+        .filter(Boolean)
+
+      const lastRun = recentLogs.reverse().find((log) => log.action === 'autonomous_function_tests_complete')
+      return {
+        last_run: lastRun || null,
+        recent_operations: recentLogs.length,
+        audit_log_path: path.relative(REPO_ROOT, logFile),
+      }
+    } catch (error) {
+      if (error?.code === 'ENOENT') {
+        return {
+          last_run: null,
+          recent_operations: 0,
+          message: 'No autonomous function testing operations have been run yet',
+        }
       }
     }
-    throw error
   }
+
+  return { last_run: null, recent_operations: 0, message: 'No autonomous function testing logs available' }
 }
