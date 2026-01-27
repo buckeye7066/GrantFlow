@@ -5,17 +5,30 @@ import ReactMarkdown from 'react-markdown';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useToast } from "@/components/ui/use-toast";
 import { createLogger } from '@/utils/logger';
+import { Textarea } from '@/components/ui/textarea'
 
-const ProposalCoachPanel = ({ grant, onAnalyze, isAnalyzing, onStartApplication }) => {
+const ProposalCoachPanel = ({ grant, onAnalyze, isAnalyzing, onStartApplication, onSaveDetails, onDraftDetails }) => {
     const { toast } = useToast();
     const log = React.useMemo(() => createLogger('ProposalCoachPanel'), []);
     const [localLoading, setLocalLoading] = useState(false);
     const [showNextSteps, setShowNextSteps] = useState(false);
+    const [editOpen, setEditOpen] = useState(false)
+    const [draftLoading, setDraftLoading] = useState(false)
+    const [programDescription, setProgramDescription] = useState('')
+    const [eligibilitySummary, setEligibilitySummary] = useState('')
+    const [selectionCriteria, setSelectionCriteria] = useState('')
 
     useEffect(() => {
         // Submission readiness lives in the Apply Engine (backend).
         setShowNextSteps(grant?.ai_status === 'ready');
     }, [grant?.ai_status]);
+
+    useEffect(() => {
+      // Keep local editor state in sync with the grant.
+      setProgramDescription(String(grant?.program_description || ''))
+      setEligibilitySummary(String(grant?.eligibility_summary || ''))
+      setSelectionCriteria(String(grant?.selection_criteria || ''))
+    }, [grant?.id, grant?.program_description, grant?.eligibility_summary, grant?.selection_criteria])
     
     if (!grant) {
         console.error('[AI Coach] No grant provided');
@@ -177,10 +190,126 @@ const ProposalCoachPanel = ({ grant, onAnalyze, isAnalyzing, onStartApplication 
                 <BrainCircuit className="w-12 h-12 mx-auto text-slate-400 mb-4" />
                 <h3 className="text-lg font-semibold text-slate-800 mb-2">AI Coach is ready</h3>
                 {!hasSufficientData ? (
-                    <div className="text-left bg-amber-50 border border-amber-200 text-amber-800 p-3 rounded-md text-sm mb-4">
-                        <AlertTriangle className="h-4 w-4 inline-block mr-2" />
-                        More information needed. Please add a Program Description or Eligibility Summary to enable analysis.
-                    </div>
+                    <>
+                      <div className="text-left bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded-md text-sm mb-4">
+                          <AlertTriangle className="h-4 w-4 inline-block mr-2" />
+                          More information needed. Add a Program Description or Eligibility Summary to enable analysis.
+                      </div>
+
+                      <div className="flex flex-wrap justify-center gap-2 mb-4">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => setEditOpen((v) => !v)}
+                          disabled={loading}
+                          size="sm"
+                        >
+                          {editOpen ? 'Hide editor' : 'Add info'}
+                        </Button>
+                        <Button
+                          type="button"
+                          onClick={async () => {
+                            if (!onDraftDetails) {
+                              toast({ variant: 'destructive', title: 'Not available', description: 'AI drafting is not available here.' })
+                              return
+                            }
+                            if (draftLoading) return
+                            setDraftLoading(true)
+                            try {
+                              await onDraftDetails()
+                              toast({ title: 'Draft added', description: 'Program Description / Eligibility Summary updated.' })
+                            } catch (e) {
+                              toast({ variant: 'destructive', title: 'AI draft failed', description: e?.message || 'Try again.' })
+                            } finally {
+                              setDraftLoading(false)
+                            }
+                          }}
+                          disabled={loading || draftLoading}
+                          className="bg-purple-600 hover:bg-purple-700 text-white"
+                          size="sm"
+                        >
+                          {draftLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+                          Draft with AI
+                        </Button>
+                      </div>
+
+                      {editOpen ? (
+                        <div className="mx-auto max-w-2xl text-left space-y-3">
+                          <div className="space-y-1">
+                            <div className="text-xs font-semibold text-slate-800">Program Description</div>
+                            <Textarea
+                              value={programDescription}
+                              onChange={(e) => setProgramDescription(e.target.value)}
+                              placeholder="Paste or type the program description here..."
+                              className="min-h-[120px]"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <div className="text-xs font-semibold text-slate-800">Eligibility Summary</div>
+                            <Textarea
+                              value={eligibilitySummary}
+                              onChange={(e) => setEligibilitySummary(e.target.value)}
+                              placeholder="Paste or type eligibility details here (bullets preferred)..."
+                              className="min-h-[120px]"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <div className="text-xs font-semibold text-slate-800">Selection Criteria (optional)</div>
+                            <Textarea
+                              value={selectionCriteria}
+                              onChange={(e) => setSelectionCriteria(e.target.value)}
+                              placeholder="Optional: key scoring/selection criteria..."
+                              className="min-h-[90px]"
+                            />
+                          </div>
+
+                          <div className="flex items-center justify-end gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => {
+                                setEditOpen(false)
+                                setProgramDescription(String(grant?.program_description || ''))
+                                setEligibilitySummary(String(grant?.eligibility_summary || ''))
+                                setSelectionCriteria(String(grant?.selection_criteria || ''))
+                              }}
+                              disabled={loading}
+                              size="sm"
+                            >
+                              Cancel
+                            </Button>
+                            <Button
+                              type="button"
+                              onClick={async () => {
+                                if (!onSaveDetails) {
+                                  toast({ variant: 'destructive', title: 'Not available', description: 'Saving is not available here.' })
+                                  return
+                                }
+                                setLocalLoading(true)
+                                try {
+                                  await onSaveDetails({
+                                    program_description: programDescription,
+                                    eligibility_summary: eligibilitySummary,
+                                    selection_criteria: selectionCriteria,
+                                  })
+                                  toast({ title: 'Saved', description: 'Grant info updated.' })
+                                  setEditOpen(false)
+                                } catch (e) {
+                                  toast({ variant: 'destructive', title: 'Save failed', description: e?.message || 'Try again.' })
+                                } finally {
+                                  setLocalLoading(false)
+                                }
+                              }}
+                              disabled={loading}
+                              className="bg-blue-600 hover:bg-blue-700"
+                              size="sm"
+                            >
+                              Save
+                            </Button>
+                          </div>
+                        </div>
+                      ) : null}
+                    </>
                 ) : (
                     <p className="text-slate-600 mb-6">Click below to analyze this grant's requirements and generate strategic insights.</p>
                 )}

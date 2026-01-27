@@ -5,6 +5,7 @@ import { validatePagination, validateRequiredFields, sanitizeColumns } from '../
 import { formatError } from '../middleware/errorHandler.js';
 import { mutationRateLimiter } from '../middleware/rateLimiting.js';
 import { GRANT_STATUSES } from '../config/constants.js';
+import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
 import {
   ensureGrantAccess as ensureGrantAccessUtil,
   ensureOrganizationAccess,
@@ -22,13 +23,28 @@ const ALLOWED_GRANT_COLUMNS = new Set([
   'organization_id', 'funding_opportunity_id', 'title', 'funder', 'deadline',
   'status', 'priority', 'amount_requested', 'amount_awarded', 'application_url',
   'match_score', 'match_reasons', 'notes', 'requirements', 'eligibility',
-  'application_steps', 'contact_name', 'contact_email', 'contact_phone'
+  'application_steps', 'contact_name', 'contact_email', 'contact_phone',
+
+  // AI Coach input fields
+  'program_description',
+  'eligibility_summary',
+  'selection_criteria',
+
+  // AI Coach outputs / status tracking
+  'ai_status',
+  'ai_summary',
+  'ai_error',
+  'ai_updated_at',
+
+  // optional back-compat fields used by some UIs
+  'portal_url',
 ]);
 
 // NOTE: Access control is centralized in `backend/utils/accessControl.js`
 
 let postgresHasGrantsProfileIdColumn = null
 let sqliteHasGrantsProfileIdColumn = null
+let ensuredGrantAiColumns = false
 
 async function hasColumn(db, { tableName, columnName }) {
   const dialect = db?.dialect || 'sqlite'
@@ -66,6 +82,48 @@ async function grantsHasProfileIdColumn(db) {
     sqliteHasGrantsProfileIdColumn = await hasColumn(db, { tableName: 'grants', columnName: 'profile_id' })
   }
   return sqliteHasGrantsProfileIdColumn
+}
+
+async function ensureGrantAiColumns(db) {
+  if (!db || typeof db.prepare !== 'function') return
+  if (ensuredGrantAiColumns) return
+
+  try {
+    const columnsToEnsure = [
+      { name: 'program_description', pg: 'TEXT', sqlite: 'TEXT' },
+      { name: 'eligibility_summary', pg: 'TEXT', sqlite: 'TEXT' },
+      { name: 'selection_criteria', pg: 'TEXT', sqlite: 'TEXT' },
+      { name: 'ai_status', pg: 'TEXT', sqlite: 'TEXT' },
+      { name: 'ai_summary', pg: 'TEXT', sqlite: 'TEXT' },
+      { name: 'ai_error', pg: 'TEXT', sqlite: 'TEXT' },
+      { name: 'ai_updated_at', pg: 'TIMESTAMPTZ', sqlite: 'DATETIME' },
+    ]
+
+    // Ensure profile_id exists too (many code paths expect it).
+    const needsProfileId = !(await grantsHasProfileIdColumn(db))
+    const cols = needsProfileId ? [{ name: 'profile_id', pg: 'TEXT', sqlite: 'TEXT' }, ...columnsToEnsure] : columnsToEnsure
+
+    if (db.dialect === 'postgres') {
+      for (const c of cols) {
+        await db.prepare(`ALTER TABLE grants ADD COLUMN IF NOT EXISTS ${c.name} ${c.pg};`).run()
+      }
+      ensuredGrantAiColumns = true
+      return
+    }
+
+    // SQLite: detect via PRAGMA, then ALTER TABLE (no IF NOT EXISTS in older versions)
+    const info = await db.prepare('PRAGMA table_info(grants)').all()
+    const existing = new Set((info || []).map((r) => String(r?.name || '').toLowerCase()))
+    for (const c of cols) {
+      if (existing.has(String(c.name).toLowerCase())) continue
+      await db.prepare(`ALTER TABLE grants ADD COLUMN ${c.name} ${c.sqlite};`).run()
+    }
+  } catch (error) {
+    // Do not 500 normal grant routes if schema drift exists; log and continue.
+    console.warn('[grants] ensureGrantAiColumns failed (continuing):', error?.message || String(error))
+  } finally {
+    ensuredGrantAiColumns = true
+  }
 }
 
 function normalizeOrganizationApplicantType(raw) {
@@ -537,6 +595,7 @@ router.get('/:id/automation/latest', async (req, res) => {
 // Get single grant
 router.get('/:id', async (req, res) => {
   try {
+    await ensureGrantAiColumns(req.db)
     const grantAccess = await ensureGrantAccessUtil(req, res, req.params.id)
     if (!grantAccess) return
 
@@ -575,6 +634,122 @@ router.get('/:id', async (req, res) => {
     res.status(500).json(formatError(error));
   }
 });
+
+// AI helper: draft missing Program Description / Eligibility Summary / Selection Criteria
+router.post('/:id/ai/draft-details', mutationRateLimiter, async (req, res) => {
+  const grantAccess = await ensureGrantAccessUtil(req, res, req.params.id)
+  if (!grantAccess) return
+
+  try {
+    await ensureGrantAiColumns(req.db)
+
+    const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(req.params.id)
+    if (!grant) return res.status(404).json({ error: 'Grant not found' })
+
+    const opp = grant.funding_opportunity_id
+      ? await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(grant.funding_opportunity_id)
+      : null
+
+    const oppEligibilityBullets = safeParseJSON(opp?.eligibility_bullets, [])
+    const eligibilityFromBullets =
+      Array.isArray(oppEligibilityBullets) && oppEligibilityBullets.length > 0
+        ? oppEligibilityBullets.map((b) => `- ${String(b).trim()}`).join('\n')
+        : ''
+
+    let program_description = String(grant.program_description || '').trim()
+    let eligibility_summary = String(grant.eligibility_summary || '').trim()
+    let selection_criteria = String(grant.selection_criteria || '').trim()
+
+    // Deterministic backfill from the linked opportunity (preferred to AI hallucination)
+    if (!program_description) {
+      const fromOpp = String(opp?.description || '').trim()
+      if (fromOpp) program_description = fromOpp
+    }
+    if (!eligibility_summary) {
+      if (eligibilityFromBullets) eligibility_summary = eligibilityFromBullets
+    }
+
+    const needsAi = !program_description || !eligibility_summary || !selection_criteria
+    if (needsAi) {
+      const { openai } = createOpenAIClient({ allowMissing: true })
+      if (!openai) {
+        return res.status(503).json({
+          error: 'ai_unavailable',
+          message: 'OpenAI is not configured on the server (OPENAI_API_KEY missing).',
+          draft: { program_description, eligibility_summary, selection_criteria },
+        })
+      }
+
+      const evidence = {
+        title: grant.title,
+        funder: grant.funder ?? null,
+        application_url: grant.application_url ?? opp?.application_url ?? opp?.source_url ?? null,
+        opportunity_description: String(opp?.description || '').trim() || null,
+        opportunity_eligibility_bullets: Array.isArray(oppEligibilityBullets) ? oppEligibilityBullets : [],
+        existing_program_description: program_description || null,
+        existing_eligibility_summary: eligibility_summary || null,
+        existing_selection_criteria: selection_criteria || null,
+      }
+
+      const prompt = `You are helping fill missing grant listing fields so an AI coach can analyze the grant.
+
+RULES:
+- Use ONLY the provided evidence JSON.
+- If evidence is insufficient, write a minimal neutral placeholder like: "Not provided in the listing. Review the application URL for details."
+- Return STRICT JSON with keys: program_description, eligibility_summary, selection_criteria (strings).
+- Keep it concise and readable. Prefer bullets for eligibility_summary and selection_criteria.
+
+EVIDENCE JSON:
+${JSON.stringify(evidence, null, 2)}
+`
+
+      try {
+        const completion = await openai.chat.completions.create({
+          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.2,
+          max_tokens: 800,
+        })
+
+        const raw = String(completion?.choices?.[0]?.message?.content || '').trim()
+        const match = raw.match(/\{[\s\S]*\}/)
+        const parsed = match ? JSON.parse(match[0]) : JSON.parse(raw)
+
+        if (!program_description) program_description = String(parsed?.program_description || '').trim()
+        if (!eligibility_summary) eligibility_summary = String(parsed?.eligibility_summary || '').trim()
+        if (!selection_criteria) selection_criteria = String(parsed?.selection_criteria || '').trim()
+      } catch (error) {
+        const summary = summarizeOpenAIError(error)
+        return res.status(502).json({
+          error: 'ai_failed',
+          message: summary?.message || 'AI drafting failed',
+          draft: { program_description, eligibility_summary, selection_criteria },
+        })
+      }
+    }
+
+    const now = new Date().toISOString()
+    await req.db
+      .prepare(
+        `
+          UPDATE grants
+          SET program_description = ?,
+              eligibility_summary = ?,
+              selection_criteria = ?,
+              updated_at = CURRENT_TIMESTAMP,
+              ai_updated_at = ?
+          WHERE id = ?
+        `,
+      )
+      .run(program_description || null, eligibility_summary || null, selection_criteria || null, now, req.params.id)
+
+    const updated = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(req.params.id)
+    res.json({ ok: true, grant: updated })
+  } catch (error) {
+    console.error('[grants/ai/draft-details] Error:', error)
+    res.status(500).json(formatError(error))
+  }
+})
 
 // Create grant
 router.post('/', mutationRateLimiter, async (req, res) => {
@@ -625,6 +800,7 @@ router.post('/', mutationRateLimiter, async (req, res) => {
 // Update grant
 router.put('/:id', mutationRateLimiter, async (req, res) => {
   try {
+    await ensureGrantAiColumns(req.db)
     const grantAccess = await ensureGrantAccessUtil(req, res, req.params.id)
     if (!grantAccess) return
 
