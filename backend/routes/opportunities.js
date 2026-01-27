@@ -185,9 +185,13 @@ router.get('/', async (req, res) => {
     // Geo-run filtering is performed via the geo index table so we can:
     // - preserve global de-dupe (one opportunity row)
     // - still show per-zip/per-state associations for a run
-    const fromClause = geoRunId
+    //
+    // Production safety: older DBs may not have the geo index table yet; we fall back to
+    // filtering on funding_opportunities.geo_run_id if the join table is missing.
+    const primaryFromClause = geoRunId
       ? `FROM funding_opportunities fo JOIN funding_opportunity_geo_index gi ON gi.opportunity_id = fo.id`
       : `FROM funding_opportunities`
+    const fallbackFromClause = geoRunId ? `FROM funding_opportunities fo` : `FROM funding_opportunities`
 
     const baseConditions = geoRunId ? ['fo.is_active = ?'] : ['is_active = ?'];
     const baseParams = [true];
@@ -267,14 +271,21 @@ router.get('/', async (req, res) => {
       0,
     );
 
-    let opportunities;
-    if (normalizedState && parsedOffset === 0 && isNational !== 'true' && parsedLimit > 0 && minNationalVisible > 0) {
+    async function runQuery({ fromClause, whereClauseSql, baseConditionsSql, useGeoIndex }) {
+      let opportunities
+      if (normalizedState && parsedOffset === 0 && isNational !== 'true' && parsedLimit > 0 && minNationalVisible > 0) {
       const commonWhere = baseConditions.length ? `WHERE ${baseConditions.join(' AND ')}` : 'WHERE 1=1';
 
       const nationals = req.db
         .prepare(
           `
-            SELECT ${geoRunId ? 'fo.*, gi.geo_run_id as geo_run_id, gi.zip as geo_zip, gi.county as geo_county, gi.source as geo_source' : '*'}
+            SELECT ${
+              geoRunId && useGeoIndex
+                ? 'fo.*, gi.geo_run_id as geo_run_id, gi.zip as geo_zip, gi.county as geo_county, gi.source as geo_source'
+                : geoRunId
+                  ? 'fo.*'
+                  : '*'
+            }
             ${fromClause}
             ${commonWhere}
               AND ${geoRunId ? 'fo.is_national' : 'is_national'} = ?
@@ -289,7 +300,13 @@ router.get('/', async (req, res) => {
         ? req.db
             .prepare(
               `
-                SELECT ${geoRunId ? 'fo.*, gi.geo_run_id as geo_run_id, gi.zip as geo_zip, gi.county as geo_county, gi.source as geo_source' : '*'}
+                SELECT ${
+                  geoRunId && useGeoIndex
+                    ? 'fo.*, gi.geo_run_id as geo_run_id, gi.zip as geo_zip, gi.county as geo_county, gi.source as geo_source'
+                    : geoRunId
+                      ? 'fo.*'
+                      : '*'
+                }
                 ${fromClause}
                 ${commonWhere}
                   AND ${geoRunId ? 'fo.state' : 'state'} = ?
@@ -303,32 +320,82 @@ router.get('/', async (req, res) => {
 
       // Return locals first, then nationals to guarantee visibility in the response.
       opportunities = [...locals, ...nationals];
-    } else {
-      opportunities = await req.db
+      } else {
+        opportunities = await req.db
         .prepare(
           `
-            SELECT ${geoRunId ? 'fo.*, gi.geo_run_id as geo_run_id, gi.zip as geo_zip, gi.county as geo_county, gi.source as geo_source' : '*'}
+            SELECT ${
+              geoRunId && useGeoIndex
+                ? 'fo.*, gi.geo_run_id as geo_run_id, gi.zip as geo_zip, gi.county as geo_county, gi.source as geo_source'
+                : geoRunId
+                  ? 'fo.*'
+                  : '*'
+            }
             ${fromClause}
-            ${whereClause}
+            ${whereClauseSql}
             ${orderClause}
             LIMIT ?
             OFFSET ?
           `,
         )
         .all(...filterParams, parsedLimit, parsedOffset);
+      }
+      return opportunities
+    }
+
+    let opportunities;
+    try {
+      opportunities = await runQuery({ fromClause: primaryFromClause, whereClauseSql: whereClause, baseConditionsSql: baseConditions, useGeoIndex: Boolean(geoRunId) })
+    } catch (err) {
+      const msg = String(err?.message || err)
+      const missingGeoIndex =
+        geoRunId &&
+        (msg.includes('funding_opportunity_geo_index') || msg.includes('relation') || msg.includes('does not exist'))
+      if (!missingGeoIndex) throw err
+
+      // Fallback: older DB without geo index table
+      const fallbackBaseConditions = baseConditions.map((c) => (c === 'gi.geo_run_id = ?' ? 'fo.geo_run_id = ?' : c))
+      const fallbackConditions = conditions.map((c) => (c === 'gi.geo_run_id = ?' ? 'fo.geo_run_id = ?' : c))
+      const fallbackWhere = fallbackConditions.length ? `WHERE ${fallbackConditions.join(' AND ')}` : ''
+
+      // Replace the in-scope arrays used by runQuery
+      baseConditions.length = 0
+      baseConditions.push(...fallbackBaseConditions)
+      conditions.length = 0
+      conditions.push(...fallbackConditions)
+
+      opportunities = await runQuery({ fromClause: fallbackFromClause, whereClauseSql: fallbackWhere, baseConditionsSql: fallbackBaseConditions, useGeoIndex: false })
     }
 
     const parsed = opportunities.map((opp) => decorateOpportunity(opp));
 
-    const countRow = await req.db
-      .prepare(
-        `
-          SELECT COUNT(*) AS total
-          ${fromClause}
-          ${whereClause}
-        `,
-      )
-      .get(...filterParams);
+    let countRow = null
+    try {
+      countRow = await req.db
+        .prepare(
+          `
+            SELECT COUNT(*) AS total
+            ${primaryFromClause}
+            ${whereClause}
+          `,
+        )
+        .get(...filterParams);
+    } catch (err) {
+      const msg = String(err?.message || err)
+      const missingGeoIndex =
+        geoRunId &&
+        (msg.includes('funding_opportunity_geo_index') || msg.includes('relation') || msg.includes('does not exist'))
+      if (!missingGeoIndex) throw err
+      countRow = await req.db
+        .prepare(
+          `
+            SELECT COUNT(*) AS total
+            ${fallbackFromClause}
+            ${whereClause.replaceAll('gi.geo_run_id', 'fo.geo_run_id')}
+          `,
+        )
+        .get(...filterParams);
+    }
 
     res.json({
       data: parsed,
