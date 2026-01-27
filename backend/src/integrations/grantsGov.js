@@ -1,9 +1,8 @@
 import { requestJson } from './httpClient.js'
 import { toNumberOrNull, toTrimmedStringOrNull } from './types.js'
-import { loadFundingApiKeys } from '../config/apiKeys.js'
 
-// Grants.gov grantsws search endpoint (POST JSON). Using apply07 directly avoids redirects.
-const GRANTS_GOV_SEARCH_URL = 'https://apply07.grants.gov/grantsws/rest/opportunities/search'
+// Grants.gov public search2 endpoint (POST JSON, unauthenticated).
+const GRANTS_GOV_SEARCH_URL = 'https://api.grants.gov/v1/api/search2'
 const GRANTS_GOV_VIEW_URL = 'https://www.grants.gov/search-results-detail/'
 
 /**
@@ -29,21 +28,14 @@ export async function fetchOpportunities(query = {}) {
     startRecordNum = 0,
   } = query
 
-  const { GRANTS_GOV_API_KEY } = loadFundingApiKeys()
-  const headers = {}
-
-  // Only attach if provided (never required for basic search).
-  if (GRANTS_GOV_API_KEY) {
-    headers.Authorization = `APIKEY=${GRANTS_GOV_API_KEY}`
-  }
-
   const body = {
     keyword,
     oppStatuses,
     rows,
     startRecordNum,
-    // Per Grants.gov docs/examples: this influences response envelope.
-    resultType: 'json',
+    // Keep optional search2 params blank by default for broad coverage.
+    agencies: '',
+    fundingCategories: '',
   }
 
   /** @type {any} */
@@ -51,20 +43,23 @@ export async function fetchOpportunities(query = {}) {
     provider: 'grants.gov',
     url: GRANTS_GOV_SEARCH_URL,
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...headers },
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     data: body,
     timeoutMs: 25_000,
     maxRetries: 3,
   })
 
-  const hits = Array.isArray(data?.oppHits) ? data.oppHits : []
+  const hitsNode = data?.data?.oppHits ? data.data : data?.data?.data?.oppHits ? data.data.data : data
+  const hits = Array.isArray(hitsNode?.oppHits) ? hitsNode.oppHits : []
   return hits.map((opp) => normalizeGrantsGovOpportunity(opp))
 }
 
 function normalizeGrantsGovOpportunity(opp) {
   const sourceId =
-    toTrimmedStringOrNull(opp?.id) ||
-    toTrimmedStringOrNull(opp?.opportunityId) ||
+    // De-dupe by opportunity number when present.
+    toTrimmedStringOrNull(opp?.number) ||
+    toTrimmedStringOrNull(opp?.oppNum) ||
+    toTrimmedStringOrNull(opp?.oppNumber) ||
     toTrimmedStringOrNull(opp?.opportunityNumber) ||
     'unknown'
 
@@ -89,6 +84,10 @@ function normalizeGrantsGovOpportunity(opp) {
   const cfda = toTrimmedStringOrNull(opp?.cfda)
   const eligibleApplicants = toTrimmedStringOrNull(opp?.eligibleApplicants)
   const costSharing = toTrimmedStringOrNull(opp?.costSharing)
+  const agencyCode = toTrimmedStringOrNull(opp?.agencyCode)
+  const openDate = toTrimmedStringOrNull(opp?.openDate)
+  const oppStatus = toTrimmedStringOrNull(opp?.oppStatus)
+  const alnlist = opp?.alnlist
 
   /** @type {import('./types.js').FundingOpportunity} */
   const normalized = {
@@ -114,6 +113,9 @@ function normalizeGrantsGovOpportunity(opp) {
       category?.toLowerCase(),
       sponsor?.toLowerCase(),
       opportunityCategory?.toLowerCase(),
+      agencyCode?.toLowerCase(),
+      oppStatus?.toLowerCase(),
+      openDate,
       'grants.gov',
       'federal',
       'grant',
@@ -122,6 +124,7 @@ function normalizeGrantsGovOpportunity(opp) {
       eligibleApplicants ? `Eligible: ${eligibleApplicants}` : null,
       cfda ? `CFDA: ${cfda}` : null,
       costSharing === 'Yes' ? 'Cost sharing/matching may be required' : null,
+      alnlist ? `ALN list: ${Array.isArray(alnlist) ? alnlist.join(', ') : String(alnlist)}` : null,
       'Apply through Grants.gov',
     ].filter(Boolean),
     opportunity_type: 'grant',

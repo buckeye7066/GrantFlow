@@ -22,18 +22,18 @@ const GRANTS_GOV_VIEW = 'https://www.grants.gov/search-results-detail/';
 async function fetchGrantsGov(params = {}) {
   const {
     keyword = '',
-    oppStatus = 'posted', // posted, forecasted, closed, archived
-    rows = 100,
+    oppStatus = 'forecasted|posted', // posted|forecasted (public search2)
+    rows = 25,
     startRow = 0,
     fundingCategories = null, // Array of category codes
   } = params;
 
   try {
     const payload = {
-      rows: Number(rows) || 100,
+      rows: Number(rows) || 25,
       // Grants.gov supports multiple statuses; string delimiter is accepted by their docs.
       // Keep it simple for now.
-      oppStatuses: String(oppStatus || 'posted'),
+      oppStatuses: String(oppStatus || 'forecasted|posted'),
       keyword: String(keyword || ''),
       startRecordNum: Number(startRow) || 0,
       // Optional fields (safe defaults)
@@ -43,22 +43,27 @@ async function fetchGrantsGov(params = {}) {
       oppNum: '',
     };
 
+    console.log('[GrantsGov] search2 request payload:', JSON.stringify(payload))
     const response = await axios.post(GRANTS_GOV_SEARCH2, payload, {
       timeout: 30000,
       headers: {
-        'Accept': 'application/json',
         'Content-Type': 'application/json',
-        'User-Agent': 'GrantFlow/1.0 (grant-matching-platform)',
+        Accept: 'application/json',
       }
     });
 
+    console.log('[GrantsGov] search2 HTTP status:', response.status)
+
     const body = response?.data ?? null
     if (!body) return null
-    if (typeof body.errorcode === 'number' && body.errorcode !== 0) {
-      console.error('[GrantsGov] API error:', `errorcode=${body.errorcode}`, body.msg || '')
-      return null
+
+    const hitsNode = body?.data?.oppHits ? body.data : body?.data?.data?.oppHits ? body.data.data : body
+    const oppHits = Array.isArray(hitsNode?.oppHits) ? hitsNode.oppHits : []
+    console.log('[GrantsGov] search2 oppHits returned:', oppHits.length)
+    if (oppHits.length === 0) {
+      console.warn('[GrantsGov] search2 returned 0 results; full response:', JSON.stringify(body, null, 2))
     }
-    return body.data ?? body
+    return hitsNode
   } catch (error) {
     const status = error?.response?.status;
     const detail = error?.response?.data ? JSON.stringify(error.response.data).slice(0, 400) : null;
@@ -71,31 +76,40 @@ async function fetchGrantsGov(params = {}) {
  * Transform Grants.gov opportunity to our format
  */
 function transformGrantsGovOpportunity(opp) {
-  const rawId = opp?.id ?? opp?.opportunityId ?? opp?.oppId ?? opp?.opportunity_id ?? null
-  const id = `grants-gov-${rawId || cryptoSafeId(opp)}`;
-  const oppNumber = opp.number || opp.opportunityNumber || opp.oppNum || '';
+  const oppId = opp?.id ?? opp?.oppId ?? null
+  const oppNumber = opp?.number || opp?.oppNum || opp?.oppNumber || opp?.opportunityNumber || '';
+  const id = `grants-gov-${oppNumber || oppId || cryptoSafeId(opp)}`;
+  const agencyName = opp?.agencyName || opp?.agency || null
+  const agencyCode = opp?.agencyCode || null
+  const openDate = opp?.openDate || null
+  const closeDate = opp?.closeDate || null
+  const oppStatus = opp?.oppStatus || null
+  const alnlist = opp?.alnlist ?? null
   
   return {
     id,
-    title: opp.title || opp.opportunityTitle || opp.oppTitle || 'Federal Grant Opportunity',
-    sponsor: opp.agencyName || opp.agency || opp.agencyCode || 'Federal Agency',
+    title: opp?.title || opp?.opportunityTitle || opp?.oppTitle || 'Federal Grant Opportunity',
+    sponsor: agencyName || agencyCode || 'Federal Agency',
     source: 'grants.gov',
-    source_id: rawId || null,
-    source_url: rawId ? `${GRANTS_GOV_VIEW}${rawId}` : null,
-    application_url: rawId ? `${GRANTS_GOV_VIEW}${rawId}` : null,
-    description: opp.synopsis || opp.description || `Federal funding opportunity: ${oppNumber}`,
-    amount_min: parseAmount(opp.awardFloor) || null,
-    amount_max: parseAmount(opp.awardCeiling) || null,
-    deadline: opp.closeDate || opp.closingDate || null,
-    deadline_type: opp.closeDateExplanation ? 'fixed' : 'rolling',
+    // De-dupe by Grants.gov opportunity number (idempotent).
+    source_id: oppNumber || null,
+    source_url: oppId != null ? `${GRANTS_GOV_VIEW}${oppId}` : oppNumber ? `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(oppNumber))}` : null,
+    application_url: oppId != null ? `${GRANTS_GOV_VIEW}${oppId}` : oppNumber ? `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(oppNumber))}` : null,
+    description: opp?.synopsis || opp?.description || `Grants.gov opportunity ${oppNumber}${oppStatus ? ` (${oppStatus})` : ''}`.trim(),
+    amount_min: parseAmount(opp?.awardFloor) || null,
+    amount_max: parseAmount(opp?.awardCeiling) || null,
+    deadline: closeDate || null,
+    deadline_type: closeDate ? 'fixed' : 'rolling',
     is_national: true,
     state: 'nationwide',
-    categories: [opp.categoryOfFunding || 'federal', 'government'].filter(Boolean),
+    categories: [opp?.categoryOfFunding || 'federal', 'government', 'grants.gov'].filter(Boolean),
     keywords: extractKeywords(opp),
     opportunity_type: 'grant',
+    type: 'OPPORTUNITY',
     requires_501c3: false,
-    requires_match: opp.costSharing === 'Yes',
-    eligibility_bullets: buildEligibility(opp),
+    requires_match: false,
+    eligibility_bullets: buildEligibility({ oppNumber, agencyName, agencyCode, openDate, closeDate, oppStatus, alnlist }),
+    last_verified_at: new Date().toISOString(),
   };
 }
 
@@ -120,24 +134,22 @@ function parseAmount(val) {
 
 function extractKeywords(opp) {
   const keywords = [];
-  if (opp.categoryOfFunding) keywords.push(opp.categoryOfFunding.toLowerCase());
-  if (opp.agencyName) keywords.push(opp.agencyName.toLowerCase());
-  if (opp.opportunityCategory) keywords.push(opp.opportunityCategory.toLowerCase());
-  keywords.push('federal', 'government', 'grant');
+  if (opp?.categoryOfFunding) keywords.push(String(opp.categoryOfFunding).toLowerCase());
+  if (opp?.agencyName) keywords.push(String(opp.agencyName).toLowerCase());
+  if (opp?.agencyCode) keywords.push(String(opp.agencyCode).toLowerCase());
+  if (opp?.oppStatus) keywords.push(String(opp.oppStatus).toLowerCase());
+  keywords.push('grants.gov', 'federal', 'government', 'grant');
   return keywords;
 }
 
-function buildEligibility(opp) {
+function buildEligibility({ oppNumber, agencyName, agencyCode, openDate, closeDate, oppStatus, alnlist }) {
   const bullets = [];
-  if (opp.eligibleApplicants) {
-    bullets.push(`Eligible: ${opp.eligibleApplicants}`);
-  }
-  if (opp.costSharing === 'Yes') {
-    bullets.push('Cost sharing/matching may be required');
-  }
-  if (opp.cfda) {
-    bullets.push(`CFDA: ${opp.cfda}`);
-  }
+  if (oppNumber) bullets.push(`Opportunity number: ${oppNumber}`);
+  if (agencyName) bullets.push(`Agency: ${agencyName}${agencyCode ? ` (${agencyCode})` : ''}`);
+  if (oppStatus) bullets.push(`Status: ${oppStatus}`);
+  if (openDate) bullets.push(`Open date: ${openDate}`);
+  if (closeDate) bullets.push(`Close date: ${closeDate}`);
+  if (alnlist) bullets.push(`ALN list: ${Array.isArray(alnlist) ? alnlist.join(', ') : String(alnlist)}`);
   bullets.push('Apply through Grants.gov');
   return bullets;
 }
@@ -146,7 +158,7 @@ function buildEligibility(opp) {
  * Crawl Grants.gov and populate database
  */
 export async function crawlGrantsGov(db, options = {}) {
-  const { maxPages = 10, rowsPerPage = 100 } = options;
+  const { maxPages = 4, rowsPerPage = 25 } = options;
   
   console.log('[GrantsGov] Starting crawl...');
   
@@ -195,15 +207,11 @@ export async function crawlGrantsGov(db, options = {}) {
       }
       
       for (const opp of data.oppHits) {
-        // Skip if requires cost sharing/matching
-        if (opp.costSharing === 'Yes') {
-          continue;
-        }
-        
         const transformed = transformGrantsGovOpportunity(opp);
         const result = await upsertFundingOpportunity(db, {
           ...transformed,
-          record_origin: 'live_crawl',
+          // Ingested from a public API feed (traceable via URL + raw payload).
+          record_origin: 'funding_api',
           evidence_url: transformed.source_url ?? transformed.application_url ?? null,
         });
         

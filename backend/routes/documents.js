@@ -10,9 +10,10 @@ import { createOpenAIClient } from '../utils/openaiClient.js';
 import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js';
 import fetch from 'node-fetch';
-import { extractTextFromFile } from '../services/documentTextExtraction.js';
 import { classifyUniversityApplicationForDocument, loadUniversityApplicationsForProfile } from '../services/universityDocumentClassifier.js';
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
+import { detectFileType } from '../services/documentIngestion/index.js'
+import { ensureDocumentExtract } from '../services/documentIngestion/documentExtractStore.js'
 
 // OpenAI client helper
 function getOpenAI() {
@@ -292,6 +293,16 @@ function normalizeProfileId(value) {
   return trimmed;
 }
 
+function safeJsonParse(value, fallback = null) {
+  if (!value) return fallback;
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
 function ensureProfileAccess(res, context, profileId) {
   if (!profileId) {
     res.status(400).json({ error: 'profile_id is required' });
@@ -487,19 +498,7 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
       : null;
     
     let extractedText = rawExtractedText || null;
-    if (!extractedText && file) {
-      const ocr = req.body?.ocr === 'true' || req.body?.ocr === true;
-      const ocrLanguage = req.body?.ocr_language || 'eng';
-      const result = await extractTextFromFile({
-        filePath: file.path,
-        mimeType: file.mimetype,
-        fileName: file.originalname,
-        ocr,
-        handwriting: req.body?.handwriting === 'true' || req.body?.handwriting === true,
-        ocrLanguage,
-      });
-      extractedText = result?.text ?? null;
-    }
+    // IMPORTANT: Text extraction (including OCR) is async and handled by the `document_ingest` worker.
 
     const hasEnableAiField = rawEnableAi !== undefined;
     const hasSkipParsingField = rawSkipParsing !== undefined;
@@ -518,7 +517,7 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
             : false;
 
     const skipParsing = !shouldRunAi;
-    const processingStatus = skipParsing || extractedText ? 'completed' : 'pending';
+    const processingStatus = extractedText ? 'completed' : 'pending';
 
     // Auto-classify to a university application when possible (if caller didn't specify one).
     if (profileId && !universityApplicationId && extractedText) {
@@ -593,10 +592,33 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
       await linkProfileToAdmin(req.db, profileId);
     }
 
-    if (!skipParsing) {
-      if (profileId) {
+    // Create the canonical DocumentExtract row immediately (async worker fills it in).
+    if (!extractedText && file?.path) {
+      try {
+        const detected = detectFileType({
+          filePath: file.path,
+          mimeType: file.mimetype,
+          fileName: file.originalname,
+        })
+        await ensureDocumentExtract(req.db, {
+          documentId: docId,
+          sourceType: detected.source_type,
+          fileHash: null,
+        })
+      } catch {
+        // Best-effort: if migrations aren't applied yet, ingestion still succeeds.
+      }
+    }
+
+    // Queue background ingestion:
+    // - always extracts text (PDF/DOCX/TXT)
+    // - OCR fallback for scanned PDFs + images
+    // - AI parsing runs only if enable_ai is true (tier-gated)
+    if (!extractedText && file?.path) {
+      if (!skipParsing && profileId) {
         if (!(await requireTierCapability(req, res, profileId, TIER_CAPABILITIES.DOCUMENT_AI))) return
       }
+
       const requestedBy = context.ctx?.userId ?? context.ctx?.activeProfileId ?? 'system';
       const jobId = crypto.randomUUID();
       await req.db
@@ -612,12 +634,11 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
             document_id: docId,
             source,
             handwriting: req.body?.handwriting === 'true' || req.body?.handwriting === true,
-            enable_ai: true,
+            enable_ai: !skipParsing,
           }),
           requestedBy,
         );
       
-      // Dispatch the job immediately
       const parseJob = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId);
       if (parseJob) {
         dispatchCrawlerJob({
@@ -708,7 +729,7 @@ router.post('/:id/parse', async (req, res) => {
     const existing = await req.db
       .prepare(
         `
-          SELECT id, status
+          SELECT id, status, parameters
           FROM crawler_jobs
           WHERE type = 'document_ingest'
             AND (status = 'queued' OR status = 'running')
@@ -719,7 +740,49 @@ router.post('/:id/parse', async (req, res) => {
       )
       .get(`%"document_id":"${document.id}"%`);
 
-    if (!existing) {
+    if (existing) {
+      const params = safeJsonParse(existing.parameters, {}) || {}
+      if (params.enable_ai !== true) {
+        // If the job is already running, queue a follow-up parse job; otherwise upgrade in-place.
+        if (existing.status === 'running') {
+          const jobId = crypto.randomUUID();
+          await req.db
+            .prepare(
+              `
+                INSERT INTO crawler_jobs (id, type, status, profile_id, organization_id, parameters, requested_by)
+                VALUES (?, 'document_ingest', 'queued', ?, ?, ?, ?)
+              `,
+            )
+            .run(
+              jobId,
+              profileId,
+              document.organization_id ?? null,
+              JSON.stringify({
+                document_id: document.id,
+                source: 'manual_parse_followup',
+                handwriting: req.body?.handwriting === 'true' || req.body?.handwriting === true,
+                enable_ai: true,
+              }),
+              requestedBy,
+            );
+          const parseJob = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId);
+          if (parseJob) {
+            dispatchCrawlerJob({
+              db: req.db,
+              jobId: parseJob.id,
+              uploadDir,
+              getOpenAI,
+            });
+          }
+        } else {
+          params.enable_ai = true
+          params.handwriting = req.body?.handwriting === 'true' || req.body?.handwriting === true
+          await req.db
+            .prepare('UPDATE crawler_jobs SET parameters = ? WHERE id = ?')
+            .run(JSON.stringify(params), existing.id)
+        }
+      }
+    } else {
       const jobId = crypto.randomUUID();
       await req.db
         .prepare(
@@ -736,6 +799,7 @@ router.post('/:id/parse', async (req, res) => {
             document_id: document.id,
             source: 'manual_parse',
             handwriting: req.body?.handwriting === 'true' || req.body?.handwriting === true,
+            enable_ai: true,
           }),
           requestedBy,
         );
@@ -815,7 +879,7 @@ router.post('/parse-all', async (req, res) => {
       const already = await req.db
         .prepare(
           `
-            SELECT 1
+            SELECT id, status, parameters
             FROM crawler_jobs
             WHERE type = 'document_ingest'
               AND (status = 'queued' OR status = 'running')
@@ -825,7 +889,36 @@ router.post('/parse-all', async (req, res) => {
         )
         .get(`%"document_id":"${doc.id}"%`);
 
-      if (already) continue;
+      if (already) {
+        const params = safeJsonParse(already.parameters, {}) || {}
+        if (params.enable_ai !== true) {
+          if (already.status === 'running') {
+            const jobId = crypto.randomUUID();
+            await insertJob.run(
+              jobId,
+              profileId,
+              doc.organization_id ?? null,
+              JSON.stringify({
+                document_id: doc.id,
+                source: 'parse_all_followup',
+                handwriting: req.body?.handwriting === 'true' || req.body?.handwriting === true,
+                enable_ai: true,
+              }),
+              requestedBy,
+            );
+            jobsToDispatch.push(jobId);
+            queued += 1;
+          } else {
+            params.enable_ai = true
+            params.handwriting = req.body?.handwriting === 'true' || req.body?.handwriting === true
+            await req.db
+              .prepare('UPDATE crawler_jobs SET parameters = ? WHERE id = ?')
+              .run(JSON.stringify(params), already.id)
+            queued += 1
+          }
+        }
+        continue;
+      }
 
       const jobId = crypto.randomUUID();
       await insertJob.run(
@@ -836,6 +929,7 @@ router.post('/parse-all', async (req, res) => {
           document_id: doc.id,
           source: 'parse_all',
           handwriting: req.body?.handwriting === 'true' || req.body?.handwriting === true,
+          enable_ai: true,
         }),
         requestedBy,
       );
@@ -855,6 +949,167 @@ router.post('/parse-all', async (req, res) => {
     }
 
     res.json({ success: true, queued_count: queued, document_count: docs.length });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/documents/:id/ingest
+// Kick off extraction (and only extraction) for a document if not started.
+router.post('/:id/ingest', async (req, res) => {
+  try {
+    const context = await buildAccessContext(req);
+    if (!ensureAuthenticated(res, context)) return;
+
+    const document = await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
+    if (!ensureDocumentAccess(res, context, document)) return;
+
+    const profileId = normalizeProfileId(document.profile_id);
+    const requestedBy = context.ctx?.userId ?? context.ctx?.activeProfileId ?? 'system';
+
+    // If there's already a queued/running ingest job, leave it alone (it will do extraction).
+    const existing = await req.db
+      .prepare(
+        `
+          SELECT id
+          FROM crawler_jobs
+          WHERE type = 'document_ingest'
+            AND (status = 'queued' OR status = 'running')
+            AND parameters LIKE ?
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+      )
+      .get(`%"document_id":"${document.id}"%`);
+
+    if (!existing) {
+      const jobId = crypto.randomUUID();
+      await req.db
+        .prepare(
+          `
+            INSERT INTO crawler_jobs (id, type, status, profile_id, organization_id, parameters, requested_by)
+            VALUES (?, 'document_ingest', 'queued', ?, ?, ?, ?)
+          `,
+        )
+        .run(
+          jobId,
+          profileId,
+          document.organization_id ?? null,
+          JSON.stringify({
+            document_id: document.id,
+            source: 'manual_ingest',
+            handwriting: req.body?.handwriting === 'true' || req.body?.handwriting === true,
+            enable_ai: false,
+          }),
+          requestedBy,
+        );
+
+      const ingestJob = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId);
+      if (ingestJob) {
+        dispatchCrawlerJob({
+          db: req.db,
+          jobId: ingestJob.id,
+          uploadDir,
+          getOpenAI,
+        });
+      }
+    }
+
+    await req.db
+      .prepare(
+        `
+          UPDATE documents
+          SET processing_status = CASE
+            WHEN processing_status = 'completed' THEN 'pending'
+            ELSE processing_status
+          END
+          WHERE id = ?
+        `,
+      )
+      .run(document.id);
+
+    res.json({ success: true, queued: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/documents/:id/extract
+// Returns extraction status + confidence meter (no full text payload).
+router.get('/:id/extract', async (req, res) => {
+  try {
+    const context = await buildAccessContext(req);
+    if (!ensureAuthenticated(res, context)) return;
+
+    const document = await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
+    if (!ensureDocumentAccess(res, context, document)) return;
+
+    const extract = await req.db
+      .prepare('SELECT * FROM document_extracts WHERE document_id = ? LIMIT 1')
+      .get(document.id);
+
+    if (!extract) {
+      return res.json({
+        document_id: document.id,
+        status: 'pending',
+        confidence: 0,
+        warnings: ['Extraction not started yet.'],
+        char_count: 0,
+        word_count: 0,
+        pages: null,
+        ocr_used: false,
+        methods_used: [],
+      });
+    }
+
+    const warnings = safeJsonParse(extract.warnings, []) ?? [];
+    const methods = safeJsonParse(extract.methods_used, []) ?? [];
+
+    res.json({
+      id: extract.id,
+      document_id: extract.document_id,
+      status: extract.status,
+      source_type: extract.source_type,
+      methods_used: methods,
+      pages: extract.pages ?? null,
+      char_count: extract.char_count ?? 0,
+      word_count: extract.word_count ?? 0,
+      warnings,
+      confidence: extract.confidence ?? 0,
+      ocr_used: Boolean(extract.ocr_used),
+      started_at: extract.started_at ?? null,
+      finished_at: extract.finished_at ?? null,
+      updated_at: extract.updated_at ?? null,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/documents/:id/extract/text
+router.get('/:id/extract/text', async (req, res) => {
+  try {
+    const context = await buildAccessContext(req);
+    if (!ensureAuthenticated(res, context)) return;
+
+    const document = await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
+    if (!ensureDocumentAccess(res, context, document)) return;
+
+    const extract = await req.db
+      .prepare('SELECT status, text, confidence, warnings FROM document_extracts WHERE document_id = ? LIMIT 1')
+      .get(document.id);
+
+    if (!extract) return res.status(404).json({ error: 'No extraction record found' });
+    if (extract.status !== 'ready') {
+      return res.status(409).json({ error: 'Extraction not ready', status: extract.status });
+    }
+
+    res.json({
+      document_id: document.id,
+      status: extract.status,
+      confidence: extract.confidence ?? 0,
+      text: extract.text ?? '',
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

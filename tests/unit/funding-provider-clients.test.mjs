@@ -115,14 +115,14 @@ test('funding clients: normalize responses (no real network)', async () => {
       }
     }
 
-    if (url.includes('apply07.grants.gov/grantsws/rest/opportunities/search')) {
+    if (url.includes('api.grants.gov/v1/api/search2')) {
       return {
         status: 200,
         headers: {},
         data: {
           oppHits: [
             {
-              id: 'gg-1',
+              number: 'gg-1',
               title: 'Grants.gov Test Opp',
               agencyName: 'NIH',
               closeDate: '2026-11-30',

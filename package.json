@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "check:submission-no-base44": "node scripts/check-submission-no-base44.mjs",
     "lint": "eslint --max-warnings 0 \"src/**/*.{js,jsx}\" \"backend/**/*.js\"",
     "typecheck": "tsc -p tsconfig.node.json --noEmit",
     "unit": "node scripts/run-unit-tests.mjs",
@@ -18,7 +19,8 @@
     "e2e:install": "npm run smoke:install",
     "doctor": "node scripts/doctor.mjs",
     "dns:godaddy:vercel": "node ./scripts/godaddy-set-vercel-dns.mjs",
-    "test": "npm run lint && npm run typecheck && npm run unit && npm run build",
+    "smoke:apply-engine": "node backend/scripts/smoke-apply-engine.mjs",
+    "test": "npm run check:submission-no-base44 && npm run lint && npm run typecheck && npm run unit && npm run build",
     "test:all": "npm run test && npm run smoke:install && npm run smoke && npm run e2e",
     "preview": "vite preview",
     "backend": "node backend/start.js",
@@ -57,6 +59,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.1",
+    "@aws-sdk/client-textract": "^3.975.0",
     "@base44/sdk": "^0.1.2",
     "@hello-pangea/dnd": "^16.5.0",
     "@hookform/resolvers": "^4.1.2",

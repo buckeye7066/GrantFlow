@@ -1,0 +1,342 @@
+import crypto from 'node:crypto'
+
+function jsonOrNull(value) {
+  if (value == null) return null
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return null
+  }
+}
+
+function isPostgres(db) {
+  return String(db?.dialect || '').toLowerCase() === 'postgres'
+}
+
+export async function getDocumentExtract(db, documentId) {
+  if (!documentId) return null
+  return db.prepare('SELECT * FROM document_extracts WHERE document_id = ? LIMIT 1').get(documentId)
+}
+
+export async function ensureDocumentExtract(db, {
+  documentId,
+  sourceType = null,
+  fileHash = null,
+} = {}) {
+  if (!documentId) throw new Error('documentId is required')
+
+  const existing = await getDocumentExtract(db, documentId)
+  if (existing) {
+    // Best-effort: hydrate missing metadata (common when rows were created by older code paths).
+    const shouldUpdate =
+      (sourceType && !existing.source_type) || (fileHash && !existing.file_hash)
+    if (shouldUpdate) {
+      await db
+        .prepare(
+          `
+            UPDATE document_extracts
+            SET source_type = COALESCE(source_type, ?),
+                file_hash = COALESCE(file_hash, ?),
+                updated_at = ${isPostgres(db) ? 'NOW()' : 'CURRENT_TIMESTAMP'}
+            WHERE document_id = ?
+          `,
+        )
+        .run(sourceType, fileHash, documentId)
+    }
+    return getDocumentExtract(db, documentId)
+  }
+
+  const id = crypto.randomUUID()
+  const pg = isPostgres(db)
+
+  if (pg) {
+    await db.prepare(
+      `
+        INSERT INTO document_extracts (
+          id, document_id, status, source_type, methods_used, warnings, confidence, file_hash, ocr_used
+        ) VALUES (
+          ?, ?, 'pending', ?, '[]'::jsonb, '[]'::jsonb, 0.0, ?, false
+        )
+        ON CONFLICT (document_id) DO NOTHING
+      `,
+    ).run(id, documentId, sourceType, fileHash)
+  } else {
+    await db.prepare(
+      `
+        INSERT INTO document_extracts (
+          id, document_id, status, source_type, methods_used, warnings, confidence, file_hash, ocr_used
+        ) VALUES (
+          ?, ?, 'pending', ?, '[]', '[]', 0.0, ?, 0
+        )
+      `,
+    ).run(id, documentId, sourceType, fileHash)
+  }
+
+  return getDocumentExtract(db, documentId)
+}
+
+export async function markDocumentExtractProcessing(db, documentId, startedAtIso) {
+  const pg = isPostgres(db)
+  const started = startedAtIso || new Date().toISOString()
+  if (pg) {
+    await db.prepare(
+      `
+        UPDATE document_extracts
+        SET status = 'processing',
+            started_at = ?::timestamptz,
+            updated_at = NOW()
+        WHERE document_id = ?
+      `,
+    ).run(started, documentId)
+  } else {
+    await db.prepare(
+      `
+        UPDATE document_extracts
+        SET status = 'processing',
+            started_at = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE document_id = ?
+      `,
+    ).run(started, documentId)
+  }
+}
+
+export async function markDocumentExtractFailed(db, documentId, {
+  warnings = [],
+  finishedAtIso,
+} = {}) {
+  const pg = isPostgres(db)
+  const finished = finishedAtIso || new Date().toISOString()
+  const warningsJson = jsonOrNull(Array.isArray(warnings) ? warnings : [String(warnings || '')]) || '[]'
+
+  if (pg) {
+    await db.prepare(
+      `
+        UPDATE document_extracts
+        SET status = 'failed',
+            warnings = ?::jsonb,
+            finished_at = ?::timestamptz,
+            updated_at = NOW()
+        WHERE document_id = ?
+      `,
+    ).run(warningsJson, finished, documentId)
+  } else {
+    await db.prepare(
+      `
+        UPDATE document_extracts
+        SET status = 'failed',
+            warnings = ?,
+            finished_at = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE document_id = ?
+      `,
+    ).run(warningsJson, finished, documentId)
+  }
+}
+
+export async function saveDocumentExtractResult(db, documentId, result) {
+  const pg = isPostgres(db)
+  const meta = result?.meta || {}
+
+  const methodsJson = jsonOrNull(meta.methods_used || []) || '[]'
+  const warningsJson = jsonOrNull(meta.warnings || []) || '[]'
+  const provenanceJson = jsonOrNull(meta.provenance || null)
+  const finishedAt = meta.finished_at || new Date().toISOString()
+  const startedAt = meta.started_at || null
+
+  const charCount = Number(meta.char_count ?? 0) || 0
+  const wordCount = Number(meta.word_count ?? 0) || 0
+  const pages = meta.pages == null ? null : Number(meta.pages)
+  const confidence = typeof result?.confidence === 'number' && Number.isFinite(result.confidence) ? result.confidence : 0.0
+  const ocrUsed = Boolean(meta.ocr_used)
+
+  const text = typeof result?.text === 'string' ? result.text : ''
+  const ocrText = typeof result?.ocr_text === 'string' ? result.ocr_text : null
+
+  if (pg) {
+    await db.prepare(
+      `
+        UPDATE document_extracts
+        SET status = 'ready',
+            source_type = ?,
+            methods_used = ?::jsonb,
+            pages = ?,
+            char_count = ?,
+            word_count = ?,
+            text = ?,
+            ocr_text = ?,
+            warnings = ?::jsonb,
+            confidence = ?,
+            provenance = ?::jsonb,
+            ocr_used = ?,
+            started_at = COALESCE(started_at, ?::timestamptz),
+            finished_at = ?::timestamptz,
+            updated_at = NOW()
+        WHERE document_id = ?
+      `,
+    ).run(
+      meta.source_type ?? null,
+      methodsJson,
+      pages,
+      charCount,
+      wordCount,
+      text,
+      ocrText,
+      warningsJson,
+      confidence,
+      provenanceJson || 'null',
+      ocrUsed,
+      startedAt || finishedAt,
+      finishedAt,
+      documentId,
+    )
+  } else {
+    await db.prepare(
+      `
+        UPDATE document_extracts
+        SET status = 'ready',
+            source_type = ?,
+            methods_used = ?,
+            pages = ?,
+            char_count = ?,
+            word_count = ?,
+            text = ?,
+            ocr_text = ?,
+            warnings = ?,
+            confidence = ?,
+            provenance = ?,
+            ocr_used = ?,
+            started_at = COALESCE(started_at, ?),
+            finished_at = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE document_id = ?
+      `,
+    ).run(
+      meta.source_type ?? null,
+      methodsJson,
+      pages,
+      charCount,
+      wordCount,
+      text,
+      ocrText,
+      warningsJson,
+      confidence,
+      provenanceJson,
+      ocrUsed ? 1 : 0,
+      startedAt || finishedAt,
+      finishedAt,
+      documentId,
+    )
+  }
+}
+
+export async function tryReuseExtractByHash(db, { fileHash, documentId } = {}) {
+  if (!fileHash || !documentId) return null
+  const pg = isPostgres(db)
+
+  // Look for any ready extract with this hash and reuse its content.
+  // NOTE: This intentionally ignores document_id uniqueness by copying content into the current row.
+  const existing = pg
+    ? await db
+        .prepare(
+          `
+            SELECT *
+            FROM document_extracts
+            WHERE file_hash = ?
+              AND status = 'ready'
+            ORDER BY finished_at DESC NULLS LAST, updated_at DESC
+            LIMIT 1
+          `,
+        )
+        .get(fileHash)
+    : await db
+        .prepare(
+          `
+            SELECT *
+            FROM document_extracts
+            WHERE file_hash = ?
+              AND status = 'ready'
+            ORDER BY COALESCE(finished_at, updated_at) DESC, updated_at DESC
+            LIMIT 1
+          `,
+        )
+        .get(fileHash)
+
+  if (!existing) return null
+
+  // Copy across fields.
+  if (pg) {
+    await db.prepare(
+      `
+        UPDATE document_extracts
+        SET status = 'ready',
+            source_type = ?,
+            methods_used = ?::jsonb,
+            pages = ?,
+            char_count = ?,
+            word_count = ?,
+            text = ?,
+            ocr_text = ?,
+            warnings = ?::jsonb,
+            confidence = ?,
+            provenance = ?::jsonb,
+            ocr_used = ?,
+            started_at = COALESCE(started_at, NOW()),
+            finished_at = NOW(),
+            updated_at = NOW()
+        WHERE document_id = ?
+      `,
+    ).run(
+      existing.source_type ?? null,
+      typeof existing.methods_used === 'string' ? existing.methods_used : JSON.stringify(existing.methods_used ?? []),
+      existing.pages ?? null,
+      existing.char_count ?? 0,
+      existing.word_count ?? 0,
+      existing.text ?? '',
+      existing.ocr_text ?? null,
+      typeof existing.warnings === 'string' ? existing.warnings : JSON.stringify(existing.warnings ?? []),
+      existing.confidence ?? 0,
+      typeof existing.provenance === 'string' ? existing.provenance : JSON.stringify(existing.provenance ?? null),
+      Boolean(existing.ocr_used),
+      documentId,
+    )
+  } else {
+    await db.prepare(
+      `
+        UPDATE document_extracts
+        SET status = 'ready',
+            source_type = ?,
+            methods_used = ?,
+            pages = ?,
+            char_count = ?,
+            word_count = ?,
+            text = ?,
+            ocr_text = ?,
+            warnings = ?,
+            confidence = ?,
+            provenance = ?,
+            ocr_used = ?,
+            started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
+            finished_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE document_id = ?
+      `,
+    ).run(
+      existing.source_type ?? null,
+      typeof existing.methods_used === 'string' ? existing.methods_used : JSON.stringify(existing.methods_used ?? []),
+      existing.pages ?? null,
+      existing.char_count ?? 0,
+      existing.word_count ?? 0,
+      existing.text ?? '',
+      existing.ocr_text ?? null,
+      typeof existing.warnings === 'string' ? existing.warnings : JSON.stringify(existing.warnings ?? []),
+      existing.confidence ?? 0,
+      typeof existing.provenance === 'string' ? existing.provenance : JSON.stringify(existing.provenance ?? null),
+      existing.ocr_used ? 1 : 0,
+      documentId,
+    )
+  }
+
+  return getDocumentExtract(db, documentId)
+}
+

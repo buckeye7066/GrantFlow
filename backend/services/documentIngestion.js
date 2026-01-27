@@ -1,11 +1,17 @@
 import { buildProfileSectionPrompt } from '../prompts/profileSections.js'
-import { extractCompletionText } from '../utils/openai.js'
-import { extractTextFromFile } from './documentTextExtraction.js'
 import { summarizeOpenAIError } from '../utils/openaiClient.js'
 import { invokeJsonWithFallback } from '../utils/aiProviders.js'
-import { promises as fsp } from 'node:fs'
 import { buildFallbackDocumentSummary, applyFallbackUniversityUpdates } from './documentFallbackParser.js'
 import { classifyUniversityApplicationForDocument, loadUniversityApplicationsForProfile } from './universityDocumentClassifier.js'
+import { countWords, detectFileType, extractTextWithFallback, normalizeText, scoreExtraction, sha256File } from './documentIngestion/index.js'
+import {
+  ensureDocumentExtract,
+  getDocumentExtract,
+  markDocumentExtractFailed,
+  markDocumentExtractProcessing,
+  saveDocumentExtractResult,
+  tryReuseExtractByHash,
+} from './documentIngestion/documentExtractStore.js'
 
 const TARGET_SECTIONS = [
   'basic_information',
@@ -37,9 +43,8 @@ function truncateText(text, limit = 4000) {
   return `${text.slice(0, limit)}…`
 }
 
-function isImageMime(mimeType) {
-  const safe = String(mimeType || '').toLowerCase().trim()
-  return safe.startsWith('image/') || safe === 'application/octet-stream'
+function normalizeEnableAi(value) {
+  return value === true || value === 'true' || value === 1 || value === '1'
 }
 
 async function createAnthropicClient() {
@@ -66,41 +71,8 @@ function extractAnthropicText(response) {
     .trim()
 }
 
-async function extractTextFromImageWithVision({ openai, filePath, mimeType }) {
-  if (!openai) return null
-  if (!filePath) return null
-
-  const buffer = await fsp.readFile(filePath)
-  // Guard: avoid pushing huge base64 payloads to the model.
-  if (buffer.length > 8 * 1024 * 1024) {
-    return null
-  }
-
-  const safeMime = String(mimeType || 'image/png').trim() || 'image/png'
-  const base64 = buffer.toString('base64')
-  const url = `data:${safeMime};base64,${base64}`
-
-  const completion = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    temperature: 0.0,
-    messages: [
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'text',
-            text:
-              'Extract all readable text from this image. Preserve line breaks. Return plain text only (no markdown, no JSON). If nothing is readable, return an empty string.',
-          },
-          { type: 'image_url', image_url: { url } },
-        ],
-      },
-    ],
-  })
-
-  const text = String(extractCompletionText(completion) || '').trim()
-  return text || null
-}
+// IMPORTANT: OCR is handled by the ingestion pipeline (tesseract / cloud OCR providers).
+// We intentionally do NOT use an LLM vision model as an OCR fallback.
 
 function extractFirstMatch(text, regex) {
   if (!text) return null
@@ -277,6 +249,7 @@ export async function processDocumentIngestionJob({
   const params = job.parameters ?? {}
   const documentId = params.document_id
   const handwriting = params.handwriting === true
+  const enableAi = normalizeEnableAi(params.enable_ai)
 
   if (!documentId) {
     throw new Error('document_ingest job missing document_id parameter')
@@ -307,28 +280,173 @@ export async function processDocumentIngestionJob({
   const updates = []
   const profile = profileContext.profile
   const sections = profileContext.sections
+  let extractRecord = null
+  let extractConfidence = 0.0
 
-  // If we don't have extracted text yet, try again here (handles remote-url ingests and prior failures).
+  // Canonical extraction pipeline (async worker):
+  // - Always extract text (PDF/DOCX/TXT)
+  // - OCR fallback for scanned PDFs + images
+  // - Persist a canonical DocumentExtract record + confidence/provenance
   try {
-    if (!document.extracted_text && document.file_path && document.mime_type) {
-      const result = await extractTextFromFile({
+    const legacyText = normalizeText(document.extracted_text || '')
+
+    const detected = detectFileType({
+      filePath: document.file_path,
+      mimeType: document.mime_type,
+      fileName: document.name,
+    })
+
+    const fileHash = document.file_path ? await sha256File(document.file_path).catch(() => null) : null
+    extractRecord = await ensureDocumentExtract(db, {
+      documentId,
+      sourceType: detected.source_type,
+      fileHash,
+    })
+
+    // Legacy fast-path: if we already have extracted_text but no file path to re-process,
+    // persist a canonical DocumentExtract row from that text and proceed.
+    if (legacyText && !document.file_path) {
+      const finished = new Date().toISOString()
+      const meta = {
+        source_type: detected.source_type || 'text',
+        methods_used: ['legacy_text'],
+        pages: null,
+        char_count: legacyText.length,
+        word_count: countWords(legacyText),
+        warnings: ['Using legacy documents.extracted_text'],
+        ocr_used: false,
+        started_at: finished,
+        finished_at: finished,
+        provenance: {
+          extractor: 'grantflow-document-ingestion',
+          version: '1',
+          ocr_provider: null,
+          timestamps: { started_at: finished, finished_at: finished },
+        },
+      }
+      const confidence = scoreExtraction({ ...meta, text: legacyText })
+      await saveDocumentExtractResult(db, documentId, {
+        text: legacyText,
+        ocr_text: null,
+        meta,
+        confidence,
+      })
+      extractRecord = await getDocumentExtract(db, documentId)
+    }
+
+    // Caching: reuse an existing ready extract for identical file hash.
+    if (fileHash) {
+      const reused = await tryReuseExtractByHash(db, { fileHash, documentId })
+      if (reused?.status === 'ready') {
+        extractRecord = reused
+      }
+    }
+
+    if (!extractRecord || extractRecord.status !== 'ready') {
+      await markDocumentExtractProcessing(db, documentId, new Date().toISOString())
+      const result = await extractTextWithFallback({
         filePath: document.file_path,
         mimeType: document.mime_type,
         fileName: document.name,
-        ocr: true,
-        handwriting,
         ocrLanguage: 'eng',
+        handwriting,
       })
-      if (result?.text) {
-        await db.prepare('UPDATE documents SET extracted_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
-          result.text,
-          documentId,
-        )
-        document.extracted_text = result.text
+      await saveDocumentExtractResult(db, documentId, result)
+      extractRecord = await getDocumentExtract(db, documentId)
+    }
+
+    const canonicalText = String(extractRecord?.text || '').trim()
+    extractConfidence = typeof extractRecord?.confidence === 'number' ? extractRecord.confidence : 0.0
+
+    if (!canonicalText) {
+      const message =
+        'No readable text could be extracted. If this is a scanned PDF, ensure OCR is enabled (or use OCR_PROVIDER=aws_textract in production) and re-upload.'
+      await markDocumentExtractFailed(db, documentId, {
+        warnings: [message],
+        finishedAtIso: new Date().toISOString(),
+      })
+      await db.prepare(
+        `
+          UPDATE documents
+          SET processing_status = 'failed',
+              processing_error = ?,
+              extracted_text = NULL,
+              status = CASE
+                WHEN status IN ('draft', 'review', 'final', 'submitted') THEN status
+                ELSE 'draft'
+              END
+          WHERE id = ?
+        `,
+      ).run(message, documentId)
+      return {
+        inserted: 0,
+        sections_updated: [],
+        document_id: documentId,
+        summary: message,
+        result_count: 0,
+        result_meta: {
+          document_id: documentId,
+          profile_id: profile?.id ?? null,
+          summary: message,
+          extraction_status: 'failed',
+        },
       }
     }
+
+    // Back-compat: keep documents.extracted_text populated for downstream readers (download/print/UI).
+    try {
+      await db.prepare(
+        `
+          UPDATE documents
+          SET extracted_text = ?,
+              processing_status = 'completed',
+              processing_error = NULL,
+              updated_at = CURRENT_TIMESTAMP,
+              status = CASE
+                WHEN status IN ('draft', 'review', 'final', 'submitted') THEN status
+                ELSE 'draft'
+              END
+          WHERE id = ?
+        `,
+      ).run(canonicalText, documentId)
+    } catch (error) {
+      // Unit tests use minimal schemas that may omit updated_at.
+      if (String(error?.message || '').includes('no such column: updated_at')) {
+        await db.prepare(
+          `
+            UPDATE documents
+            SET extracted_text = ?,
+                processing_status = 'completed',
+                processing_error = NULL,
+                status = CASE
+                  WHEN status IN ('draft', 'review', 'final', 'submitted') THEN status
+                  ELSE 'draft'
+                END
+            WHERE id = ?
+          `,
+        ).run(canonicalText, documentId)
+      } else {
+        throw error
+      }
+    }
+
+    document.extracted_text = canonicalText
   } catch (error) {
-    // Best-effort; we'll proceed and let downstream report "text unavailable".
+    const message = error instanceof Error ? error.message : String(error)
+    await markDocumentExtractFailed(db, documentId, { warnings: [message] })
+    await db.prepare(
+      `
+        UPDATE documents
+        SET processing_status = 'failed',
+            processing_error = ?,
+            status = CASE
+              WHEN status IN ('draft', 'review', 'final', 'submitted') THEN status
+              ELSE 'draft'
+            END
+        WHERE id = ?
+      `,
+    ).run(message, documentId)
+    throw error
   }
 
   let docExcerpt = truncateText(document.extracted_text ?? document.notes ?? '', 5000)
@@ -339,13 +457,48 @@ export async function processDocumentIngestionJob({
       name: document.name,
       type: document.type,
       status: document.status,
-      notes: docExcerpt || 'Document text unavailable.',
+      notes: (() => {
+        const base = docExcerpt || 'Document text unavailable.'
+        if (enableAi && extractConfidence < 0.70) {
+          return `WARNING: Document may be incomplete (confidence ${(extractConfidence ?? 0).toFixed(2)}). Use caution.\n\n${base}`
+        }
+        return base
+      })(),
     },
   ]
 
   const aiSectionsLog = {}
 
   try {
+    // Extraction-only mode (do not run AI parsing).
+    if (!enableAi) {
+      return {
+        inserted: 0,
+        sections_updated: [],
+        document_id: documentId,
+        summary: 'Document text extracted.',
+        result_count: 0,
+        result_meta: {
+          document_id: documentId,
+          profile_id: profile?.id ?? null,
+          extraction_status: extractRecord?.status ?? null,
+          confidence: extractConfidence,
+        },
+      }
+    }
+
+    // Safety gating: if the extract is unreliable, we MAY still run AI parsing,
+    // but must explicitly warn and avoid overconfident claims.
+    const confidenceWarning =
+      enableAi && extractConfidence < 0.70
+        ? `Document may be incomplete (confidence ${(extractConfidence ?? 0).toFixed(2)}). ` +
+          'Only extract facts that are explicitly present in the text; do not guess. Consider re-uploading a higher-quality file.'
+        : null
+
+    if (confidenceWarning) {
+      aiSectionsLog._confidence_warning = confidenceWarning
+    }
+
     // Auto-classify existing docs (in case they were uploaded without a school selection).
     if (!document.university_application_id && profile?.id && document.extracted_text) {
       try {
@@ -356,15 +509,30 @@ export async function processDocumentIngestionJob({
           extractedText: document.extracted_text,
         })
         if (match) {
-          await db.prepare(
-            `
-              UPDATE documents
-              SET university_application_id = ?,
-                  university_application_name = ?,
-                  updated_at = CURRENT_TIMESTAMP
-              WHERE id = ?
-            `,
-          ).run(match.id, match.name, documentId)
+          try {
+            await db.prepare(
+              `
+                UPDATE documents
+                SET university_application_id = ?,
+                    university_application_name = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+              `,
+            ).run(match.id, match.name, documentId)
+          } catch (error) {
+            if (String(error?.message || '').includes('no such column: updated_at')) {
+              await db.prepare(
+                `
+                  UPDATE documents
+                  SET university_application_id = ?,
+                      university_application_name = ?
+                  WHERE id = ?
+                `,
+              ).run(match.id, match.name, documentId)
+            } else {
+              throw error
+            }
+          }
           document.university_application_id = match.id
           document.university_application_name = match.name
         }
@@ -383,34 +551,6 @@ export async function processDocumentIngestionJob({
       aiSectionsLog._openai_client_error = message
       openaiUnavailableMessage = message
       openai = null
-    }
-
-    // If this is an image (screenshots/handwriting) and OCR didn't yield text, use a vision pass as a fallback.
-    try {
-      const current = String(document.extracted_text || '').trim()
-      const handwriting = Boolean(params?.handwriting)
-      const shouldTryVision =
-        openai &&
-        document.file_path &&
-        isImageMime(document.mime_type) &&
-        (handwriting || !current || current.length < 40)
-
-      if (shouldTryVision) {
-        const visionText = await extractTextFromImageWithVision({
-          openai,
-          filePath: document.file_path,
-          mimeType: document.mime_type,
-        })
-        if (visionText) {
-          await db
-            .prepare('UPDATE documents SET extracted_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-            .run(visionText, documentId)
-          document.extracted_text = visionText
-          docExcerpt = truncateText(document.extracted_text ?? document.notes ?? '', 5000)
-        }
-      }
-    } catch {
-      // best-effort; fall through
     }
 
     if (!docExcerpt) {
