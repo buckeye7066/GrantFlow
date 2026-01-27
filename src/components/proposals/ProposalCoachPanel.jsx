@@ -13,7 +13,7 @@ const ProposalCoachPanel = ({ grant, onAnalyze, isAnalyzing, onStartApplication 
     const [showNextSteps, setShowNextSteps] = useState(false);
 
     useEffect(() => {
-        // No Base44 coupling here; the Apply Engine handles readiness/validation.
+        // Submission readiness lives in the Apply Engine (backend).
         setShowNextSteps(grant?.ai_status === 'ready');
     }, [grant?.ai_status]);
     
