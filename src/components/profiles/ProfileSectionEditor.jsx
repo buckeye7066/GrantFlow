@@ -56,6 +56,18 @@ function normalizeTextValue(fieldName, value) {
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
 
   if (Array.isArray(value)) {
+    if (fieldName === 'conditions') {
+      // health_medical.conditions is an array of objects; present it as a simple list for editing.
+      return value
+        .map((entry) => {
+          if (entry == null) return ''
+          if (typeof entry === 'string') return entry
+          if (typeof entry === 'object' && typeof entry.name === 'string') return entry.name
+          return ''
+        })
+        .filter(Boolean)
+        .join('\n')
+    }
     return value.map((entry) => (entry === null || entry === undefined ? '' : String(entry))).filter(Boolean).join(', ')
   }
 
@@ -222,6 +234,60 @@ const assistanceSchema = z.object({
 const healthSchema = z.object({
   chronic_illness: booleanField,
   chronic_illness_type: z.string().optional().or(z.literal("")),
+  conditions: z
+    .union([
+      z.array(
+        z.object({
+          name: z.string(),
+          icd10: z.string().optional(),
+          stage: z.string().optional(),
+          diagnosed_year: z.union([z.number(), z.string()]).optional(),
+        }),
+      ),
+      z.string(),
+    ])
+    .optional()
+    .transform((value) => {
+      if (Array.isArray(value)) {
+        return value
+          .map((c) => ({
+            name: String(c?.name || '').trim(),
+            icd10: c?.icd10 ? String(c.icd10).trim() : undefined,
+            stage: c?.stage ? String(c.stage).trim() : undefined,
+            diagnosed_year:
+              c?.diagnosed_year === undefined || c?.diagnosed_year === null || c?.diagnosed_year === ''
+                ? undefined
+                : Number.isFinite(Number(c.diagnosed_year))
+                  ? Number(c.diagnosed_year)
+                  : undefined,
+          }))
+          .filter((c) => c.name.length > 0)
+      }
+      if (typeof value === 'string' && value.trim() !== '') {
+        // Accept either JSON or newline/comma separated condition names.
+        const raw = value.trim()
+        try {
+          const parsed = JSON.parse(raw)
+          if (Array.isArray(parsed)) {
+            return parsed
+              .map((c) => {
+                if (typeof c === 'string') return { name: c.trim() }
+                if (c && typeof c === 'object' && typeof c.name === 'string') return { name: c.name.trim() }
+                return null
+              })
+              .filter(Boolean)
+          }
+        } catch {
+          // fall through
+        }
+        return raw
+          .split(/[\n,;]+/)
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .map((name) => ({ name }))
+      }
+      return []
+    }),
   disability_type: z
     .union([z.array(z.string()), z.string()])
     .optional()
@@ -232,7 +298,22 @@ const healthSchema = z.object({
       }
       return []
     }),
+  support_needs: z
+    .union([z.array(z.string()), z.string()])
+    .optional()
+    .transform((value) => {
+      if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean)
+      if (typeof value === 'string' && value.trim() !== '') {
+        return value
+          .split(/[,;\n]+/)
+          .map((entry) => entry.trim())
+          .filter(Boolean)
+      }
+      return []
+    }),
   support_needs_level: z.string().optional().or(z.literal("")),
+  consent_for_studies: booleanField,
+  mobility_or_transport_notes: z.string().optional().or(z.literal("")),
   dialysis_patient: booleanField,
   organ_transplant: booleanField,
   hiv_aids: booleanField,
@@ -616,10 +697,14 @@ export const SECTION_CONFIG = {
       "Capture relevant health information to highlight eligibility for medical and disability-focused opportunities.",
     schema: healthSchema,
     defaults: {
+      conditions: [],
       chronic_illness: false,
       chronic_illness_type: "",
       disability_type: [],
+      support_needs: [],
       support_needs_level: "",
+      consent_for_studies: false,
+      mobility_or_transport_notes: "",
       dialysis_patient: false,
       organ_transplant: false,
       hiv_aids: false,
@@ -634,10 +719,19 @@ export const SECTION_CONFIG = {
       notes: "",
     },
     fields: [
+      {
+        name: "conditions",
+        label: "Conditions (list)",
+        component: Textarea,
+        props: { rows: 4, placeholder: "One per line (e.g., Epilepsy)\nOptional: paste JSON array of {name, icd10, stage, diagnosed_year}" },
+      },
       { name: "chronic_illness", label: "Chronic illness", type: "boolean" },
       { name: "chronic_illness_type", label: "Illness type", component: Input, description: "Provide diagnosis or condition if known." },
       { name: "disability_type", label: "Disability types", component: Textarea, props: { rows: 3, placeholder: "Separate multiple entries with commas" } },
+      { name: "support_needs", label: "Support needs (list)", component: Textarea, props: { rows: 3, placeholder: "Comma or newline separated (transportation, copay_assistance, lodging...)" } },
       { name: "support_needs_level", label: "Support needs level", component: Input, props: { placeholder: "e.g. high, moderate, low, unknown" } },
+      { name: "consent_for_studies", label: "Consent to view research studies/trials", type: "boolean" },
+      { name: "mobility_or_transport_notes", label: "Mobility / transportation notes", component: Textarea, props: { rows: 2, placeholder: "Optional context for appointment transportation support" } },
       { name: "dialysis_patient", label: "Dialysis patient", type: "boolean" },
       { name: "organ_transplant", label: "Organ transplant recipient", type: "boolean" },
       { name: "hiv_aids", label: "Living with HIV/AIDS", type: "boolean" },

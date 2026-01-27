@@ -766,6 +766,7 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
   type TEXT NOT NULL CHECK(type IN (
     'local',
     'scholarship',
+    'health_resources',
     'comprehensive',
     'national',
     'item_search',

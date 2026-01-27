@@ -1,5 +1,6 @@
 import { dispatchCrawlerJob } from './crawlerDispatcher.js'
 import { randomUUID } from 'crypto'
+import { buildProfileSignals } from './profileHelpers.js'
 
 /**
  * Check if a profile has student indicators
@@ -38,6 +39,63 @@ function checkStudentIndicators(profile) {
   return false
 }
 
+function safeParseJson(value, fallback) {
+  if (value == null) return fallback
+  if (typeof value === 'object') return value
+  if (typeof value !== 'string') return fallback
+  const trimmed = value.trim()
+  if (!trimmed) return fallback
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    return fallback
+  }
+}
+
+function normalizeString(value) {
+  const v = String(value ?? '').trim().toLowerCase()
+  return v || ''
+}
+
+/**
+ * Check if a profile has health/medical indicators
+ * Mirrors the student pattern, but consults sections + derived signals when available.
+ */
+function checkHealthIndicators({ profile, sections, signals }) {
+  if (!profile) return false
+
+  const primaryType = normalizeString(profile.primary_type)
+  if (primaryType) {
+    const tokens = ['health', 'medical', 'patient', 'disability', 'caregiver']
+    if (tokens.some((t) => primaryType.includes(t))) return true
+  }
+
+  // Tags can be stringified JSON or array depending on caller.
+  const tags = safeParseJson(profile.tags, [])
+  if (Array.isArray(tags) && tags.length > 0) {
+    const healthKeywords = ['health', 'medical', 'patient', 'disability', 'dialysis', 'transplant', 'cancer', 'hiv', 'tbi']
+    const tagsLower = tags.map((tag) => normalizeString(tag)).filter(Boolean)
+    if (healthKeywords.some((kw) => tagsLower.some((t) => t.includes(kw)))) return true
+  }
+
+  const health = sections?.health_medical ?? {}
+  if (health && typeof health === 'object') {
+    if (health.chronic_illness || health.dialysis_patient || health.organ_transplant || health.hiv_aids) return true
+    if (health.tbi_survivor || health.amputee || health.neurodivergent || health.mental_health_condition) return true
+    if (health.wheelchair_user || health.visual_impairment || health.hearing_impairment) return true
+    if (Array.isArray(health.disability_type) && health.disability_type.length > 0) return true
+    if (Array.isArray(health.support_needs) && health.support_needs.length > 0) return true
+    if (Array.isArray(health.conditions) && health.conditions.length > 0) return true
+    if (typeof health.notes === 'string' && health.notes.trim().length > 0) return true
+  }
+
+  // Signals are the "use all profile data" derived form used by crawlers.
+  if (signals?.health?.size && signals.health.size > 0) return true
+  if (signals?.assistance?.has?.('medicaid') || signals?.assistance?.has?.('medicare')) return true
+
+  return false
+}
+
 /**
  * Automatically trigger discovery crawlers for a user profile on login
  * @param {object} db - Database instance
@@ -58,6 +116,26 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
       return
     }
 
+    // Load sections once (for health indicators + signals). Safe if table is missing.
+    let sections = {}
+    try {
+      const rows = await db
+        .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
+        .all(profileId)
+      for (const row of rows || []) {
+        if (!row?.section_key) continue
+        const data = safeParseJson(row.data, {})
+        sections[String(row.section_key)] = data && typeof data === 'object' ? data : {}
+      }
+    } catch (error) {
+      // Keep auto-discovery non-blocking even on schema drift.
+      sections = {}
+      console.warn('[auto-discovery] Unable to load profile_sections (continuing):', error?.message || String(error))
+    }
+
+    // Derive signals (mirrors crawler matching logic).
+    const signals = buildProfileSignals({ profile, sections })
+
     const jobs = []
     
     // 1. Local crawler (profile zip + 50 mile radius)
@@ -77,6 +155,18 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
         type: 'scholarship',
         profile_id: profileId,
         parameters: {}
+      })
+    }
+
+    // 2b. Health resources crawler (if health indicators exist)
+    const isHealth = checkHealthIndicators({ profile, sections, signals })
+    if (isHealth) {
+      const consent = Boolean(sections?.health_medical?.consent_for_studies)
+      jobs.push({
+        id: randomUUID(),
+        type: 'health_resources',
+        profile_id: profileId,
+        parameters: { include_trials: consent }
       })
     }
     

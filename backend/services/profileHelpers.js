@@ -742,6 +742,44 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   registerKeywords(disabilityTypes)
   disabilityTypes.forEach(dt => healthSet.add(normalizeString(dt)))
 
+  // Structured conditions (array of objects). Accept legacy/string formats too.
+  const rawConditions = Array.isArray(health.conditions) ? health.conditions : []
+  for (const entry of rawConditions) {
+    const name =
+      typeof entry === 'string'
+        ? entry
+        : entry && typeof entry === 'object'
+          ? entry.name
+          : null
+    const normalized = normalizeString(name)
+    if (!normalized) continue
+    healthSet.add(normalized)
+    registerKeyword(normalized)
+  }
+
+  // Support needs (array<string>) - feed both keyword + assistance signals (non-exclusive).
+  const rawSupportNeeds =
+    Array.isArray(health.support_needs)
+      ? health.support_needs
+      : typeof health.support_needs === 'string'
+        ? health.support_needs.split(/[,;\n]+/).map((v) => v.trim()).filter(Boolean)
+        : []
+  for (const need of rawSupportNeeds) {
+    const normalized = normalizeString(need)
+    if (!normalized) continue
+    registerKeyword(normalized)
+    assistanceSet.add(normalized.replace(/\s+/g, '_'))
+    // Also include in health for condition-aware matching.
+    healthSet.add(normalized)
+  }
+
+  if (health.mobility_or_transport_notes) {
+    collectNarrativeKeywords({ mobility_or_transport_notes: health.mobility_or_transport_notes }, registerKeyword)
+    // Add a couple generic transport keywords to help resource matching.
+    registerKeyword('transportation')
+    registerKeyword('appointment transportation')
+  }
+
   if (health.dialysis_patient) { healthSet.add('dialysis'); registerKeyword('dialysis'); registerKeyword('kidney disease') }
   if (health.organ_transplant) { healthSet.add('transplant'); registerKeyword('organ transplant'); registerKeyword('transplant recipient') }
   if (health.hiv_aids) { healthSet.add('hiv'); registerKeyword('hiv'); registerKeyword('aids') }
