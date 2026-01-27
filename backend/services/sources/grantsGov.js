@@ -7,7 +7,9 @@
 import { fetchWithRetry } from './httpClient.js';
 import crypto from 'crypto';
 
-const API_BASE = 'https://www.grants.gov/grantsws/rest/opportunities/search';
+// Public, unauthenticated Grants.gov search2 endpoint (2026).
+// IMPORTANT: no API key, no Authorization header, POST JSON only.
+const GRANTS_GOV_SEARCH2_URL = 'https://api.grants.gov/v1/api/search2';
 const SOURCE_NAME = 'grants.gov';
 
 /**
@@ -18,31 +20,54 @@ const SOURCE_NAME = 'grants.gov';
  * @returns {Promise<object>} Normalized opportunities and metadata
  */
 export async function fetchGrantsGov(options = {}) {
-  const { limit = 100, offset = 0 } = options;
+  const { limit = 25, offset = 0 } = options;
   
   console.log(`[grants.gov] Fetching opportunities (limit: ${limit}, offset: ${offset})`);
   
   try {
-    // Build query string
-    // Only fetch posted opportunities (status: posted)
-    const url = `${API_BASE}/`;
-    const params = {
-      oppNum: '', // Empty to get all
-      oppStatus: 'posted', // Only active posted opportunities
-      rows: limit,
-      startRecordNum: offset,
+    // Build POST body per Grants.gov search2 docs.
+    // Minimal required example (no auth):
+    // {
+    //   "rows": 25,
+    //   "oppStatuses": "forecasted|posted",
+    //   "keyword": "",
+    //   "agencies": "",
+    //   "fundingCategories": ""
+    // }
+    const payload = {
+      rows: Math.max(1, Math.min(Number(limit) || 25, 1000)),
+      oppStatuses: 'forecasted|posted',
+      keyword: '',
+      agencies: '',
+      fundingCategories: '',
+      startRecordNum: Math.max(0, Number(offset) || 0),
     };
     
-    const data = await fetchWithRetry(url, { 
-      method: 'GET',
-      params,
+    console.log('[grants.gov] search2 request payload:', JSON.stringify(payload));
+
+    const resp = await fetchWithRetry(GRANTS_GOV_SEARCH2_URL, { 
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      data: payload,
       timeout: 60000, // 60 second timeout for this API
+      returnMeta: true,
     });
+    console.log('[grants.gov] search2 HTTP status:', resp?.status)
+    const data = resp?.data
+
+    // Note: fetchWithRetry returns response.data only; we can't log HTTP status here.
+    // To keep the contract stable we log the payload + parsed hit counts and log the full body on zero hits.
     
     // Parse response
     const opportunities = parseGrantsGovResponse(data);
     
     console.log(`[grants.gov] Fetched ${opportunities.length} opportunities`);
+    if (opportunities.length === 0) {
+      console.warn('[grants.gov] search2 returned 0 results; full response:', JSON.stringify(data, null, 2));
+    }
     
     return {
       opportunities,
@@ -69,8 +94,12 @@ function parseGrantsGovResponse(data) {
   // The Grants.gov API returns data in various formats, handle accordingly
   let records = [];
   
-  if (data && data.oppHits) {
-    records = Array.isArray(data.oppHits) ? data.oppHits : [data.oppHits];
+  // search2 returns opportunities under `data.oppHits` (sometimes nested under `data.data`).
+  const envelope = data && typeof data === 'object' ? data : null
+  const dataNode = envelope?.data?.oppHits ? envelope.data : envelope?.data?.data?.oppHits ? envelope.data.data : envelope
+
+  if (dataNode && dataNode.oppHits) {
+    records = Array.isArray(dataNode.oppHits) ? dataNode.oppHits : [dataNode.oppHits];
   } else if (Array.isArray(data)) {
     records = data;
   }
@@ -95,17 +124,14 @@ function parseGrantsGovResponse(data) {
  */
 function normalizeGrantsGovRecord(record) {
   // Extract fields from various possible locations
-  const oppNumber = record.number || record.opportunityNumber || record.oppNumber;
-  const title = record.opportunityTitle || record.title;
-  const agency = record.agencyName || record.agency || record.sponsor;
-  const description = record.description || record.synopsis || '';
-  const closeDate = record.closeDate || record.archiveDate;
-  const postDate = record.postDate || record.openDate;
-  const category = record.categoryOfFundingActivity || record.category;
-  const eligibility = record.eligibleApplicants || record.eligibility;
-  const awardFloor = parseAmount(record.awardFloor || record.estimatedFunding);
-  const awardCeiling = parseAmount(record.awardCeiling || record.estimatedFunding);
-  const costSharing = record.costSharingOrMatchingRequirement;
+  const oppNumber = record?.number || record?.opportunityNumber || record?.oppNumber || null;
+  const title = record?.title || record?.opportunityTitle || null;
+  const agencyName = record?.agencyName || record?.agency || record?.sponsor || null;
+  const agencyCode = record?.agencyCode || null;
+  const openDate = record?.openDate || record?.postDate || null;
+  const closeDate = record?.closeDate || record?.closingDate || null;
+  const oppStatus = record?.oppStatus || null;
+  const alnlist = record?.alnlist ?? null;
   
   // Skip if missing required fields
   if (!oppNumber || !title) {
@@ -114,56 +140,59 @@ function normalizeGrantsGovRecord(record) {
   }
   
   // Build source URL
-  const sourceUrl = `https://www.grants.gov/web/grants/view-opportunity.html?oppId=${oppNumber}`;
+  const id = record?.id ?? record?.oppId ?? null
+  const sourceUrl =
+    id != null
+      ? `https://www.grants.gov/search-results-detail/${id}`
+      : `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(oppNumber))}`;
   
-  // Determine if national or state-specific
-  const isNational = !record.state && !record.restrictedState;
-  
-  // Parse eligibility bullets
+  const categories = ['federal', 'grants.gov', 'government'];
+  const keywords = new Set(['grants.gov', 'federal', 'government', 'grant']);
+  if (agencyCode) keywords.add(String(agencyCode).toLowerCase());
+  if (oppStatus) keywords.add(String(oppStatus).toLowerCase());
+  if (Array.isArray(alnlist)) {
+    alnlist.filter(Boolean).forEach((aln) => keywords.add(`aln:${String(aln).toLowerCase()}`));
+  } else if (typeof alnlist === 'string' && alnlist.trim()) {
+    alnlist
+      .split(/[|,]+/g)
+      .map((v) => v.trim())
+      .filter(Boolean)
+      .forEach((aln) => keywords.add(`aln:${String(aln).toLowerCase()}`));
+  }
+
   const eligibilityBullets = [];
-  if (eligibility) {
-    // Eligibility codes from Grants.gov
-    const codes = Array.isArray(eligibility) ? eligibility : [eligibility];
-    eligibilityBullets.push(...codes.map(code => parseEligibilityCode(code)));
-  }
-  
-  // Parse categories
-  const categories = [];
-  if (category) {
-    const cats = Array.isArray(category) ? category : [category];
-    categories.push(...cats);
-  }
-  
-  // Determine if 501c3 required
-  const requires501c3 = checkRequires501c3(eligibilityBullets, description);
-  
-  // Determine if matching funds required
-  const requiresMatch = costSharing === 'Yes' || checkRequiresMatch(description);
+  eligibilityBullets.push(`Opportunity number: ${oppNumber}`);
+  if (agencyName) eligibilityBullets.push(`Agency: ${agencyName}${agencyCode ? ` (${agencyCode})` : ''}`);
+  if (oppStatus) eligibilityBullets.push(`Status: ${oppStatus}`);
+  if (openDate) eligibilityBullets.push(`Open date: ${openDate}`);
+  if (closeDate) eligibilityBullets.push(`Close date: ${closeDate}`);
+  if (alnlist) eligibilityBullets.push(`ALN list: ${Array.isArray(alnlist) ? alnlist.join(', ') : String(alnlist)}`);
   
   return {
     id: crypto.randomUUID(),
     source: SOURCE_NAME,
-    source_id: oppNumber,
+    // De-dupe by Grants.gov opportunity number (idempotent re-runs).
+    source_id: String(oppNumber),
     source_url: sourceUrl,
     title: cleanText(title),
-    sponsor: cleanText(agency),
-    description: cleanText(description),
+    sponsor: cleanText(agencyName),
+    description: cleanText(`Grants.gov opportunity ${oppNumber}${oppStatus ? ` (${oppStatus})` : ''}.`),
     application_url: sourceUrl,
     deadline: parseDate(closeDate),
     deadline_type: closeDate ? 'fixed' : 'rolling',
-    amount_min: awardFloor || null,
-    amount_max: awardCeiling || null,
-    amount_description: formatAmountDescription(awardFloor, awardCeiling),
-    is_national: isNational ? 1 : 0,
-    state: record.state || null,
+    amount_min: null,
+    amount_max: null,
+    amount_description: null,
+    is_national: 1,
+    state: 'nationwide',
     categories: JSON.stringify(categories),
-    keywords: JSON.stringify(extractKeywords(title, description, category)),
+    keywords: JSON.stringify(Array.from(keywords)),
     eligibility_bullets: JSON.stringify(eligibilityBullets),
-    requires_501c3: requires501c3 ? 1 : 0,
-    requires_match: requiresMatch ? 1 : 0,
+    requires_501c3: 0,
+    requires_match: 0,
     match_percentage: null, // Not typically specified in the API
     opportunity_type: 'grant',
-    is_active: 1,
+    is_active: oppStatus ? (String(oppStatus).toLowerCase().includes('posted') || String(oppStatus).toLowerCase().includes('forecast') ? 1 : 0) : 1,
     raw_source_payload: JSON.stringify(record),
     last_crawled: new Date().toISOString(),
   };
@@ -197,23 +226,6 @@ function parseEligibilityCode(code) {
 }
 
 /**
- * Check if 501(c)(3) status is required
- */
-function checkRequires501c3(eligibilityBullets, description) {
-  const text = `${eligibilityBullets.join(' ')} ${description}`.toLowerCase();
-  return text.includes('501(c)(3)') || text.includes('501c3');
-}
-
-/**
- * Check if matching funds are required
- */
-function checkRequiresMatch(description) {
-  const text = description.toLowerCase();
-  const matchTerms = ['match required', 'matching funds', 'cost sharing required'];
-  return matchTerms.some(term => text.includes(term));
-}
-
-/**
  * Parse amount string to number
  */
 function parseAmount(amountStr) {
@@ -236,41 +248,6 @@ function parseDate(dateStr) {
   } catch {
     return null;
   }
-}
-
-/**
- * Format amount description
- */
-function formatAmountDescription(min, max) {
-  if (min && max) {
-    return `$${min.toLocaleString()} - $${max.toLocaleString()}`;
-  } else if (max) {
-    return `Up to $${max.toLocaleString()}`;
-  } else if (min) {
-    return `From $${min.toLocaleString()}`;
-  }
-  return null;
-}
-
-/**
- * Extract keywords from text
- */
-function extractKeywords(title, description, category) {
-  const keywords = new Set();
-  
-  // Add category as keyword
-  if (category) {
-    const cats = Array.isArray(category) ? category : [category];
-    cats.forEach(c => keywords.add(c.toLowerCase()));
-  }
-  
-  // Extract key terms from title
-  const titleWords = title.toLowerCase().split(/\s+/);
-  titleWords.forEach(word => {
-    if (word.length > 4) keywords.add(word);
-  });
-  
-  return Array.from(keywords).slice(0, 10); // Limit to 10 keywords
 }
 
 /**

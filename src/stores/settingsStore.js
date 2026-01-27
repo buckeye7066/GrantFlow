@@ -208,7 +208,7 @@ export const useSettingsStore = create((set, get) => ({
     }
 
     // Ensure button text stays readable against the chosen accent.
-    const fgHex = pickReadableForegroundHex(accentHex, { highContrast })
+    const fgHex = pickReadableForegroundHex(accentHex, { highContrast: high_contrast })
     const fgHsl = hexToHsl(fgHex)
     if (fgHsl) {
       root.style.setProperty('--primary-foreground', fgHsl)

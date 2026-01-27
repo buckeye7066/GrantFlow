@@ -31,9 +31,12 @@ export function ingestOpportunities(db, opportunities, sourceName) {
   let errors = 0;
   const errorMessages = [];
   
-  // Prepare upsert statement
-  // Use INSERT ... ON CONFLICT to handle deduplication by (source, source_id)
-  const upsert = db.prepare(`
+  // IMPORTANT:
+  // We cannot rely on `ON CONFLICT (source, source_id)` because some deployments use
+  // a PARTIAL unique index (WHERE source/source_id IS NOT NULL), which does not satisfy
+  // ON CONFLICT inference in SQLite/Postgres.
+  // Instead we do deterministic insert-or-update using a preflight existence check.
+  const insertStmt = db.prepare(`
     INSERT INTO funding_opportunities (
       id, source, source_id, title, sponsor, description,
       application_url, source_url, deadline, deadline_type,
@@ -53,30 +56,35 @@ export function ingestOpportunities(db, opportunities, sourceName) {
       ?, ?, ?, ?,
       CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
     )
-    ON CONFLICT(source, source_id) DO UPDATE SET
-      title = excluded.title,
-      sponsor = excluded.sponsor,
-      description = excluded.description,
-      application_url = excluded.application_url,
-      source_url = excluded.source_url,
-      deadline = excluded.deadline,
-      deadline_type = excluded.deadline_type,
-      amount_min = excluded.amount_min,
-      amount_max = excluded.amount_max,
-      amount_description = excluded.amount_description,
-      is_national = excluded.is_national,
-      state = excluded.state,
-      categories = excluded.categories,
-      keywords = excluded.keywords,
-      eligibility_bullets = excluded.eligibility_bullets,
-      requires_match = excluded.requires_match,
-      requires_501c3 = excluded.requires_501c3,
-      match_percentage = excluded.match_percentage,
-      opportunity_type = excluded.opportunity_type,
-      is_active = excluded.is_active,
-      raw_source_payload = excluded.raw_source_payload,
-      last_crawled = excluded.last_crawled,
+  `);
+
+  const updateStmt = db.prepare(`
+    UPDATE funding_opportunities
+    SET
+      title = ?,
+      sponsor = ?,
+      description = ?,
+      application_url = ?,
+      source_url = ?,
+      deadline = ?,
+      deadline_type = ?,
+      amount_min = ?,
+      amount_max = ?,
+      amount_description = ?,
+      is_national = ?,
+      state = ?,
+      categories = ?,
+      keywords = ?,
+      eligibility_bullets = ?,
+      requires_match = ?,
+      requires_501c3 = ?,
+      match_percentage = ?,
+      opportunity_type = ?,
+      is_active = ?,
+      raw_source_payload = ?,
+      last_crawled = ?,
       updated_at = CURRENT_TIMESTAMP
+    WHERE source = ? AND source_id = ?
   `);
   
   // Check if record exists to determine if it's insert or update
@@ -90,38 +98,63 @@ export function ingestOpportunities(db, opportunities, sourceName) {
       try {
         // Check if exists before upsert to track insert vs update
         const existing = checkExists.get(opp.source, opp.source_id);
-        
-        upsert.run(
-          opp.id,
-          opp.source,
-          opp.source_id,
-          opp.title,
-          opp.sponsor,
-          opp.description,
-          opp.application_url,
-          opp.source_url,
-          opp.deadline,
-          opp.deadline_type,
-          opp.amount_min,
-          opp.amount_max,
-          opp.amount_description,
-          opp.is_national,
-          opp.state,
-          opp.categories,
-          opp.keywords,
-          opp.eligibility_bullets,
-          opp.requires_match,
-          opp.requires_501c3,
-          opp.match_percentage,
-          opp.opportunity_type,
-          opp.is_active,
-          opp.raw_source_payload,
-          opp.last_crawled
-        );
-        
+
         if (existing) {
+          updateStmt.run(
+            opp.title,
+            opp.sponsor,
+            opp.description,
+            opp.application_url,
+            opp.source_url,
+            opp.deadline,
+            opp.deadline_type,
+            opp.amount_min,
+            opp.amount_max,
+            opp.amount_description,
+            opp.is_national,
+            opp.state,
+            opp.categories,
+            opp.keywords,
+            opp.eligibility_bullets,
+            opp.requires_match,
+            opp.requires_501c3,
+            opp.match_percentage,
+            opp.opportunity_type,
+            opp.is_active,
+            opp.raw_source_payload,
+            opp.last_crawled,
+            opp.source,
+            opp.source_id,
+          );
           updated++;
         } else {
+          insertStmt.run(
+            opp.id,
+            opp.source,
+            opp.source_id,
+            opp.title,
+            opp.sponsor,
+            opp.description,
+            opp.application_url,
+            opp.source_url,
+            opp.deadline,
+            opp.deadline_type,
+            opp.amount_min,
+            opp.amount_max,
+            opp.amount_description,
+            opp.is_national,
+            opp.state,
+            opp.categories,
+            opp.keywords,
+            opp.eligibility_bullets,
+            opp.requires_match,
+            opp.requires_501c3,
+            opp.match_percentage,
+            opp.opportunity_type,
+            opp.is_active,
+            opp.raw_source_payload,
+            opp.last_crawled,
+          );
           inserted++;
         }
       } catch (error) {
