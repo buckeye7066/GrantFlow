@@ -1,4 +1,5 @@
 import crypto from 'crypto'
+import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 
 // In-memory ring buffer of recent client sign-ins.
 // This intentionally does NOT require email/Resend and does not persist across restarts.
@@ -28,6 +29,7 @@ function safeUuid() {
 }
 
 export function recordClientSignInEvent({ identifier, method, userId, profileId, ip, userAgent } = {}) {
+  const db = arguments?.[0]?.db ?? null
   const event = {
     id: safeUuid(),
     type: 'client_sign_in',
@@ -44,6 +46,30 @@ export function recordClientSignInEvent({ identifier, method, userId, profileId,
   if (events.length > MAX_EVENTS) {
     events.length = MAX_EVENTS
   }
+
+  // Durable sink: DB audit logs (best-effort).
+  if (db) {
+    try {
+      logAuditEvent(db, {
+        category: AUDIT_CATEGORIES.AUTH,
+        action: 'client_sign_in',
+        severity: SEVERITY.INFO,
+        userId: event.user_id ?? null,
+        profileId: event.profile_id ?? null,
+        resourceType: 'client_sign_in',
+        resourceId: null,
+        details: {
+          identifier: event.identifier,
+          method: event.method,
+        },
+        ipAddress: event.ip ?? null,
+        userAgent: event.user_agent ?? null,
+      })
+    } catch {
+      // best-effort only
+    }
+  }
+
   return event
 }
 

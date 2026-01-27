@@ -1899,6 +1899,7 @@ router.post('/email/verify', async (req, res) => {
   // Record only non-admin sign-ins so the Admin panel highlights client activity.
   if (!user?.is_admin) {
     recordClientSignInEvent({
+      db: req.db,
       identifier: email,
       method: 'email',
       userId: user?.id ?? null,
@@ -2174,6 +2175,7 @@ router.post('/phone/verify', async (req, res) => {
 
   if (!user?.is_admin) {
     recordClientSignInEvent({
+      db: req.db,
       identifier: normalized,
       method: 'phone',
       userId: user?.id ?? null,
@@ -2623,6 +2625,20 @@ router.post('/password/setup/complete', async (req, res) => {
       ipAddress: req.ip,
     })
 
+    // In-app admin notification (best-effort).
+    // Record only non-admin sign-ins so the Admin panel highlights client activity.
+    if (!user?.is_admin) {
+      recordClientSignInEvent({
+        db: req.db,
+        identifier: user?.primary_email ?? null,
+        method: 'password_setup_complete',
+        userId: user?.id ?? null,
+        profileId: activeProfileId ?? null,
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+      })
+    }
+
     return res.json({
       accessToken: session.accessToken,
       refreshToken: session.refreshToken,
@@ -2843,6 +2859,7 @@ router.get('/:provider/callback', async (req, res) => {
 
     if (!user?.is_admin) {
       recordClientSignInEvent({
+      db: req.db,
         identifier: profile?.email ? normalizeEmail(profile.email) : `${provider}:${profile?.providerAccountId || 'unknown'}`,
         method: `oauth:${provider}`,
         userId: user?.id ?? null,
