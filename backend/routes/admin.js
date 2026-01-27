@@ -1595,7 +1595,7 @@ router.get('/diagnostics', async (req, res) => {
 });
 
 // GET /api/admin/login-events - Recent client logins (admin only)
-// Stored in-memory only (best-effort; cleared on restart).
+// Preferred: DB-backed audit logs + session backfill. Falls back to in-memory ring buffer.
 router.get('/login-events', async (req, res) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return
@@ -1606,11 +1606,111 @@ router.get('/login-events', async (req, res) => {
 
     const since = typeof req.query?.since === 'string' ? req.query.since : null
     const limitRaw = typeof req.query?.limit === 'string' ? req.query.limit : null
-    const limit = limitRaw ? Number(limitRaw) : 25
+    const limit = Math.max(1, Math.min(100, limitRaw ? Number(limitRaw) : 25))
+
+    const sinceMs = since ? Date.parse(String(since)) : NaN
+    const startDateIso = Number.isFinite(sinceMs) ? new Date(sinceMs).toISOString() : null
+
+    // 1) Durable source: audit_logs (client_sign_in)
+    const events = []
+    try {
+      const auditRes = await queryAuditLogs(req.db, {
+        category: AUDIT_CATEGORIES.AUTH,
+        action: 'client_sign_in',
+        startDate: startDateIso,
+        limit: Math.max(1, Math.min(200, limit)),
+        offset: 0,
+      })
+
+      for (const row of auditRes?.logs || []) {
+        const details = row?.details && typeof row.details === 'object' ? row.details : {}
+        events.push({
+          id: row.id,
+          type: 'client_sign_in',
+          at: row.created_at,
+          identifier: details?.identifier ?? null,
+          method: details?.method ?? null,
+          user_id: row.user_id ?? null,
+          profile_id: row.profile_id ?? null,
+          ip: row.ip_address ?? null,
+          user_agent: row.user_agent ?? null,
+        })
+      }
+    } catch {
+      // ignore and fall back
+    }
+
+    // 2) Backfill: sessions table (helps recover events from before audit logging existed)
+    try {
+      if (events.length < limit) {
+        const remaining = limit - events.length
+        const rows = startDateIso
+          ? await req.db
+              .prepare(
+                `
+                  SELECT
+                    s.id,
+                    COALESCE(s.issued_at, s.created_at) AS at,
+                    s.user_id,
+                    s.profile_id,
+                    s.ip_address,
+                    s.user_agent,
+                    u.primary_email,
+                    u.is_admin
+                  FROM user_sessions s
+                  LEFT JOIN users u ON u.id = s.user_id
+                  WHERE (u.is_admin IS NULL OR u.is_admin = 0)
+                    AND COALESCE(s.issued_at, s.created_at) > ?
+                  ORDER BY COALESCE(s.issued_at, s.created_at) DESC
+                  LIMIT ?
+                `,
+              )
+              .all(startDateIso, remaining)
+          : await req.db
+              .prepare(
+                `
+                  SELECT
+                    s.id,
+                    COALESCE(s.issued_at, s.created_at) AS at,
+                    s.user_id,
+                    s.profile_id,
+                    s.ip_address,
+                    s.user_agent,
+                    u.primary_email,
+                    u.is_admin
+                  FROM user_sessions s
+                  LEFT JOIN users u ON u.id = s.user_id
+                  WHERE (u.is_admin IS NULL OR u.is_admin = 0)
+                  ORDER BY COALESCE(s.issued_at, s.created_at) DESC
+                  LIMIT ?
+                `,
+              )
+              .all(remaining)
+
+        for (const r of rows || []) {
+          events.push({
+            id: `session:${r.id}`,
+            type: 'client_sign_in',
+            at: r.at,
+            identifier: r.primary_email ?? null,
+            method: 'session',
+            user_id: r.user_id ?? null,
+            profile_id: r.profile_id ?? null,
+            ip: r.ip_address ?? null,
+            user_agent: r.user_agent ?? null,
+          })
+        }
+      }
+    } catch {
+      // ignore and fall back
+    }
+
+    // 3) Final fallback: in-memory ring buffer (dev only / best-effort)
+    const finalEvents = events.length > 0 ? events.slice(0, limit) : listClientSignInEvents({ since, limit })
 
     return res.json({
       ok: true,
-      events: listClientSignInEvents({ since, limit }),
+      events: finalEvents,
     })
   } catch (error) {
     console.error('[admin/login-events] Error:', error)
