@@ -2,6 +2,188 @@ import fs from 'fs'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 import { summarizeOpenAIError } from '../utils/openaiClient.js'
+import * as cheerio from 'cheerio'
+
+const fetchImpl = globalThis.fetch
+
+function normalizeHttpUrl(value) {
+  const raw = String(value ?? '').trim()
+  if (!raw) return null
+  const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`
+  try {
+    const u = new URL(withScheme)
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
+    return u.toString()
+  } catch {
+    return null
+  }
+}
+
+function isPrivateHostname(hostname) {
+  const h = String(hostname || '').trim().toLowerCase()
+  if (!h) return true
+  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local')) return true
+  if (h === '::1') return true
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(h)) {
+    const parts = h.split('.').map((p) => Number(p))
+    const [a, b] = parts
+    if (a === 10) return true
+    if (a === 127) return true
+    if (a === 192 && b === 168) return true
+    if (a === 172 && b >= 16 && b <= 31) return true
+    if (a === 0) return true
+    if (a === 169 && b === 254) return true
+  }
+  return false
+}
+
+function resolveUrl(baseUrl, maybeRelative) {
+  const raw = String(maybeRelative ?? '').trim()
+  if (!raw) return null
+  try {
+    return new URL(raw, baseUrl).toString()
+  } catch {
+    return null
+  }
+}
+
+function pickCoverImageUrl(html, baseUrl) {
+  if (!html) return null
+  const $ = cheerio.load(html)
+
+  const candidates = [
+    $('meta[property="og:image"]').attr('content'),
+    $('meta[property="og:image:url"]').attr('content'),
+    $('meta[name="twitter:image"]').attr('content'),
+    $('meta[name="twitter:image:src"]').attr('content'),
+    $('link[rel="image_src"]').attr('href'),
+  ]
+    .map((v) => String(v ?? '').trim())
+    .filter(Boolean)
+
+  for (const candidate of candidates) {
+    const resolved = resolveUrl(baseUrl, candidate)
+    if (resolved) return resolved
+  }
+
+  return null
+}
+
+function extensionFromContentType(contentType) {
+  const ct = String(contentType || '').toLowerCase()
+  if (ct.includes('image/png')) return 'png'
+  if (ct.includes('image/webp')) return 'webp'
+  if (ct.includes('image/jpeg') || ct.includes('image/jpg')) return 'jpg'
+  if (ct.includes('image/gif')) return 'gif'
+  return 'jpg'
+}
+
+async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
+  const websiteRaw =
+    profileContext?.sections?.basic_information?.website ??
+    profileContext?.profile?.website ??
+    null
+
+  const website = normalizeHttpUrl(websiteRaw)
+  if (!website) {
+    return { ok: false, reason: 'no_website' }
+  }
+
+  // SSRF guard (allow localhost only in tests).
+  const allowLocalhost = process.env.NODE_ENV === 'test'
+  const websiteHost = new URL(website).hostname
+  if (!allowLocalhost && isPrivateHostname(websiteHost)) {
+    return { ok: false, reason: 'blocked_private_host' }
+  }
+
+  if (!fetchImpl) {
+    return { ok: false, reason: 'fetch_unavailable' }
+  }
+
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 12_000)
+  let res = null
+  let finalUrl = website
+  try {
+    res = await fetchImpl(website, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'GrantFlow Avatar Lookup/1.0',
+        Accept: 'text/html,application/xhtml+xml',
+      },
+    })
+    finalUrl = res?.url || website
+  } finally {
+    clearTimeout(timeoutId)
+  }
+
+  if (!res || !res.ok) {
+    return { ok: false, reason: 'website_fetch_failed' }
+  }
+
+  const contentType = String(res.headers.get('content-type') || '')
+  if (!contentType.toLowerCase().includes('text/html')) {
+    // Some sites serve HTML as application/octet-stream; still attempt.
+  }
+
+  const html = await res.text().catch(() => '')
+  const coverUrl = pickCoverImageUrl(html, finalUrl)
+  if (!coverUrl) {
+    return { ok: false, reason: 'no_cover_meta' }
+  }
+
+  const coverHost = new URL(coverUrl).hostname
+  if (!allowLocalhost && isPrivateHostname(coverHost)) {
+    return { ok: false, reason: 'blocked_private_cover_host' }
+  }
+
+  const imgController = new AbortController()
+  const imgTimeoutId = setTimeout(() => imgController.abort(), 12_000)
+  let imgRes = null
+  try {
+    imgRes = await fetchImpl(coverUrl, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: imgController.signal,
+      headers: {
+        'User-Agent': 'GrantFlow Avatar Lookup/1.0',
+        Accept: 'image/*,*/*;q=0.8',
+      },
+    })
+  } finally {
+    clearTimeout(imgTimeoutId)
+  }
+
+  if (!imgRes || !imgRes.ok) {
+    return { ok: false, reason: 'cover_fetch_failed' }
+  }
+
+  const imgType = String(imgRes.headers.get('content-type') || '').toLowerCase()
+  if (!imgType.startsWith('image/')) {
+    return { ok: false, reason: 'cover_not_image' }
+  }
+
+  const buf = Buffer.from(await imgRes.arrayBuffer())
+  // Safety cap: 10MB
+  if (buf.length > 10 * 1024 * 1024) {
+    return { ok: false, reason: 'cover_too_large' }
+  }
+
+  const ext = extensionFromContentType(imgType)
+  const filename = `${Date.now()}-${randomUUID()}.${ext}`
+  const filePath = join(uploadDir, filename)
+  fs.writeFileSync(filePath, buf)
+
+  return {
+    ok: true,
+    avatarFilename: filename,
+    avatarUrl: `/uploads/${filename}`,
+    coverUrl,
+    website: finalUrl,
+  }
+}
 
 export async function processAvatarLookupJob({ profileContext, uploadDir, getOpenAI }) {
   const profile = profileContext?.profile
@@ -17,6 +199,29 @@ export async function processAvatarLookupJob({ profileContext, uploadDir, getOpe
       },
     }
   }
+
+  // Preferred behavior: use website cover image if available.
+  // This makes the UI button deterministic and matches user intent.
+  try {
+    const websiteResult = await tryUseWebsiteCoverPhoto({ profileContext, uploadDir })
+    if (websiteResult?.ok && websiteResult.avatarUrl) {
+      return {
+        inserted: 1,
+        avatarFilename: websiteResult.avatarFilename,
+        avatarUrl: websiteResult.avatarUrl,
+        result_meta: {
+          ok: true,
+          method: 'website_cover',
+          website: websiteResult.website ?? null,
+          cover_url: websiteResult.coverUrl ?? null,
+        },
+      }
+    }
+  } catch (error) {
+    // best-effort; fall back to OpenAI generation
+    console.warn('[avatarCrawler] Website cover fetch failed; falling back to OpenAI', error?.message || String(error))
+  }
+
   let openai = null
   try {
     openai = typeof getOpenAI === 'function' ? getOpenAI() : null
@@ -30,8 +235,9 @@ export async function processAvatarLookupJob({ profileContext, uploadDir, getOpe
       result_count: 0,
       result_meta: {
         ok: false,
-        reason: 'openai_unavailable',
-        message: 'Avatar generation unavailable (OpenAI not configured). Using default avatar.',
+        reason: 'no_website_cover_and_openai_unavailable',
+        message:
+          'Avatar lookup could not find a website cover image and OpenAI is not configured. Using default avatar.',
       },
     }
   }
@@ -103,6 +309,10 @@ export async function processAvatarLookupJob({ profileContext, uploadDir, getOpe
     inserted: 1,
     avatarFilename: filename,
     avatarUrl: `/uploads/${filename}`,
+    result_meta: {
+      ok: true,
+      method: 'openai_generated',
+    },
   }
 }
 
