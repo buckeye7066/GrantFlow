@@ -32,7 +32,6 @@ import { crawlItemFunding } from '../services/crawlers/itemFundingCrawler.js';
 import { crawlECFBenefits } from '../services/crawlers/ecfBenefitsCrawler.js';
 import { findDuplicateProfileGroups, mergeProfiles } from '../services/profileDedupeService.js'
 import { ensureAdminUser, isAdminUser } from '../utils/accessControl.js'
-import { listJobRuns } from '../services/jobs/jobRunStore.js'
 import zipcodes from 'zipcodes';
 
 const router = express.Router();
@@ -139,27 +138,6 @@ const ensureAdminRequest = ensureAdminUser;
 router.get('/funding-sources', async (req, res) => {
   if (!(await ensureAdminRequest(req, res))) return
   res.json({ sources: getFundingSourceStatus() })
-})
-
-// ----------------------------
-// Job Runs (Anya + crawler enqueue visibility)
-// ----------------------------
-router.get('/jobs', async (req, res) => {
-  if (!(await ensureAdminRequest(req, res))) return
-
-  try {
-    const limit = Math.max(1, Math.min(Number(req.query?.limit) || 100, 200))
-    const offset = Math.max(0, Number(req.query?.offset) || 0)
-    const profileId = typeof req.query.profile_id === 'string' ? req.query.profile_id : null
-    const type = typeof req.query.type === 'string' ? req.query.type : null
-    const status = typeof req.query.status === 'string' ? req.query.status : null
-
-    const jobs = await listJobRuns(req.db, { profileId, type, status, limit, offset })
-    res.json({ jobs, limit, offset })
-  } catch (error) {
-    console.error('[admin/jobs] list failed', error)
-    res.status(500).json({ error: 'Unable to list jobs' })
-  }
 })
 
 // ----------------------------

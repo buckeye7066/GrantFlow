@@ -2,7 +2,7 @@ import path from 'path'
 import { promises as fs } from 'fs'
 import { randomUUID } from 'crypto'
 import { dispatchCrawlerJob } from './crawlerDispatcher.js'
-import { enqueueCrawlerJobWithPolicy } from './jobs/enqueueJob.js'
+import { createCrawlerJob } from './crawlerJobCreation.js'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 
 const REPO_ROOT = path.resolve(process.cwd())
@@ -121,7 +121,7 @@ export async function runAutonomousCrawlers(options, context) {
 
     report.profiles_processed = profiles.length
 
-    // Create crawler jobs for each profile (policy-backed; admin context).
+    // Create crawler jobs for each profile (idempotent creation).
     const createdJobs = []
     
     for (const profile of profiles) {
@@ -131,34 +131,29 @@ export async function runAutonomousCrawlers(options, context) {
             autonomous_run: true,
             profile_id: profile.id,
           }
-          const decision = await enqueueCrawlerJobWithPolicy({
-            db,
-            ctx: { isAdmin: true, userId: context?.user?.id ?? 'anya' },
+          const created = await createCrawlerJob(db, {
             type: crawlerType,
             profileId: profile.id,
             organizationId: null,
             parameters,
-            requestedBy: 'anya_autonomous',
-            force: false,
-            origin: 'anya.autonomous.crawlers',
-            ip: null,
-            userAgent: null,
+            requestedBy: context?.user?.id ?? 'anya_autonomous',
+            status: 'queued',
+            buildSnapshot: false,
           })
 
-          // Policy may dedupe / skip; keep visibility either way.
-          if (!decision.accepted) {
+          if (created?.existing) {
             report.jobs.push({
-              job_id: decision.existing_job_id ?? null,
+              job_id: created.jobId ?? created?.job?.id ?? null,
               profile_id: profile.id,
               profile_name: profile.display_name,
               crawler_type: crawlerType,
               status: 'skipped',
-              skipped_reason: decision.reason,
+              skipped_reason: 'duplicate',
             })
             continue
           }
 
-          const jobId = decision.job_id
+          const jobId = created.jobId
           report.jobs_created++
           report.jobs.push({
             job_id: jobId,
