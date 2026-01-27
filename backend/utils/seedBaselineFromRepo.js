@@ -313,6 +313,9 @@ export async function seedBaselineFromRepo(db, opts = {}) {
         avatar_url = excluded.avatar_url,
         organization_id = excluded.organization_id,
         updated_at = CURRENT_TIMESTAMP
+      -- Never resurrect profiles that a user/admin explicitly deleted.
+      -- (Otherwise "orphaned" seed profiles keep coming back after deletion.)
+      WHERE profiles.status IS NULL OR profiles.status <> 'deleted'
     `)
 
     const upsertSection = tx.prepare(`
