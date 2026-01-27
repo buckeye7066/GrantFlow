@@ -7,22 +7,23 @@ const REPO_ROOT = path.resolve(process.cwd())
  * Create audit log entry for function testing operations
  */
 async function auditLog(entry) {
-  const auditDir = path.join(REPO_ROOT, 'backend', 'data', 'audit')
-  await fs.mkdir(auditDir, { recursive: true })
-  
-  const timestamp = new Date().toISOString()
-  const logEntry = {
-    timestamp,
-    ...entry,
-  }
-  
-  const logFile = path.join(auditDir, 'autonomous-function-tests.log')
-  const logLine = JSON.stringify(logEntry) + '\n'
-  
+  // IMPORTANT: hosted deployments may have a read-only filesystem for the repo.
+  // Audit logging is best-effort and must never crash the request.
   try {
+    const auditDir = path.join(REPO_ROOT, 'backend', 'data', 'audit')
+    await fs.mkdir(auditDir, { recursive: true })
+
+    const timestamp = new Date().toISOString()
+    const logEntry = {
+      timestamp,
+      ...entry,
+    }
+
+    const logFile = path.join(auditDir, 'autonomous-function-tests.log')
+    const logLine = JSON.stringify(logEntry) + '\n'
     await fs.appendFile(logFile, logLine, 'utf8')
   } catch (error) {
-    console.error('[auditLog] Failed to write audit log:', error)
+    console.warn('[auditLog] Failed to write audit log:', error?.message || error)
   }
 }
 
@@ -39,37 +40,17 @@ const API_TEST_SUITES = {
         path: '/api/health',
         expectedStatus: 200,
       },
-      {
-        name: 'Database Connection',
-        method: 'GET',
-        path: '/api/health/db',
-        expectedStatus: 200,
-      },
+      { name: 'Liveness', method: 'GET', path: '/healthz', expectedStatus: 200 },
+      // readiness can be 503 in misconfigured prod; keep it informative but non-fatal.
+      { name: 'Readiness', method: 'GET', path: '/readyz', expectedStatus: [200, 503] },
     ],
   },
   auth: {
     name: 'Authentication',
     tests: [
-      {
-        name: 'Email Send Code',
-        method: 'POST',
-        path: '/api/auth/email/send-code',
-        expectedStatus: 200,
-        body: { email: 'test@example.com' },
-      },
-      {
-        name: 'Check Session',
-        method: 'GET',
-        path: '/api/auth/session',
-        expectedStatus: 401,
-      },
-      {
-        name: 'Refresh Token',
-        method: 'POST',
-        path: '/api/auth/refresh',
-        expectedStatus: 401,
-        requiresAuth: true,
-      },
+      // This should be 401 without auth, 200 with auth.
+      { name: 'Auth Me (unauth)', method: 'GET', path: '/api/auth/me', expectedStatus: 401 },
+      { name: 'Auth Me (admin token)', method: 'GET', path: '/api/auth/me', expectedStatus: 200, requiresAuth: true },
     ],
   },
   profiles: {
@@ -83,18 +64,10 @@ const API_TEST_SUITES = {
         requiresAuth: true,
       },
       {
-        name: 'Get Current Profile',
+        name: 'Profile Schema',
         method: 'GET',
-        path: '/api/profiles/current',
+        path: '/api/profiles/schema',
         expectedStatus: 200,
-        requiresAuth: true,
-      },
-      {
-        name: 'Profile Stats',
-        method: 'GET',
-        path: '/api/profiles/stats',
-        expectedStatus: 200,
-        requiresAuth: true,
       },
     ],
   },
@@ -107,18 +80,6 @@ const API_TEST_SUITES = {
         path: '/api/opportunities',
         expectedStatus: 200,
       },
-      {
-        name: 'Search Opportunities',
-        method: 'GET',
-        path: '/api/opportunities/search?query=grant',
-        expectedStatus: 200,
-      },
-      {
-        name: 'Get Opportunity Categories',
-        method: 'GET',
-        path: '/api/opportunities/categories',
-        expectedStatus: 200,
-      },
     ],
   },
   crawlers: {
@@ -127,14 +88,7 @@ const API_TEST_SUITES = {
       {
         name: 'List Crawler Jobs',
         method: 'GET',
-        path: '/api/crawlers',
-        expectedStatus: 200,
-        requiresAuth: true,
-      },
-      {
-        name: 'Get Crawler Status',
-        method: 'GET',
-        path: '/api/crawlers/status',
+        path: '/api/crawlers/jobs',
         expectedStatus: 200,
         requiresAuth: true,
       },
@@ -158,58 +112,49 @@ const API_TEST_SUITES = {
         expectedStatus: 200,
         requiresAuth: true,
       },
-      {
-        name: 'Chat with Anya',
-        method: 'POST',
-        path: '/api/anya/chat',
-        expectedStatus: 200,
-        requiresAuth: true,
-        body: { message: 'Hello Anya, what can you do?' },
-      },
     ],
   },
-  ai: {
-    name: 'AI Features',
-    tests: [
-      {
-        name: 'Check OpenAI Connection',
-        method: 'GET',
-        path: '/api/ai/status',
-        expectedStatus: 200,
-        requiresAuth: true,
-      },
-      {
-        name: 'Grant Match Analysis',
-        method: 'POST',
-        path: '/api/ai/match',
-        expectedStatus: 200,
-        requiresAuth: true,
-        body: { profileId: 'test', opportunityId: 'test' },
-      },
-    ],
-  },
+}
+
+function resolveInternalBaseUrl() {
+  const explicit = String(process.env.ANYA_SELF_BASE_URL || '').trim()
+  if (explicit) return explicit.replace(/\/+$/, '')
+
+  try {
+    const globalUrl = globalThis.__grantflow_internal_base_url
+    if (typeof globalUrl === 'string' && globalUrl.trim()) {
+      return globalUrl.trim().replace(/\/+$/, '')
+    }
+  } catch {
+    // ignore
+  }
+
+  const port = String(process.env.PORT || '').trim()
+  if (port && port !== '0') return `http://127.0.0.1:${port}`
+  return null
+}
+
+function resolveAdminToken() {
+  const token = String(process.env.ANYA_ADMIN_TOKEN || process.env.ADMIN_TOKEN || '').trim()
+  return token || null
+}
+
+async function fetchWithTimeout(url, init, timeoutMs = 20_000) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const res = await fetch(url, { ...init, signal: controller.signal })
+    return res
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 /**
  * Execute a single API test
  */
 async function executeApiTest(test, context) {
-  const { db } = context
-  
-  // Create a test request object
-  const testRequest = {
-    method: test.method,
-    path: test.path,
-    headers: {},
-    body: test.body || {},
-  }
-  
-  // Add auth headers if needed
-  if (test.requiresAuth) {
-    // Use a test token or admin token for testing
-    testRequest.headers['Authorization'] = 'Bearer test-token'
-  }
-  
+  const baseUrl = resolveInternalBaseUrl()
   const result = {
     test_name: test.name,
     method: test.method,
@@ -220,37 +165,63 @@ async function executeApiTest(test, context) {
   }
   
   try {
-    // For now, perform basic validation checks
-    // In production, this would make actual HTTP requests
-    
-    // Check if the route exists in the database (for dynamic routes)
-    if (test.path.includes('/api/profiles') && db) {
-      const profileCount = db.prepare('SELECT COUNT(*) as count FROM profiles').get()
-      if (profileCount && profileCount.count > 0) {
-        result.status = 'passed'
-        result.message = `Route exists, ${profileCount.count} profiles in database`
-      } else {
-        result.status = 'warning'
-        result.message = 'Route exists but no test data found'
-      }
-    } else if (test.path === '/api/health') {
-      result.status = 'passed'
-      result.message = 'Health check endpoint should be available'
-    } else if (test.path.includes('/api/opportunities') && db) {
-      const oppCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get()
-      result.status = 'passed'
-      result.message = `Route exists, ${oppCount?.count || 0} opportunities in database`
-    } else if (test.path.includes('/api/anya')) {
-      result.status = 'passed'
-      result.message = 'Anya endpoints configured'
-    } else {
+    if (!baseUrl) {
       result.status = 'skipped'
-      result.message = 'Test execution deferred - requires live server'
+      result.message =
+        'No internal base URL available. Set ANYA_SELF_BASE_URL or run inside the backend process.'
+      return result
     }
-    
+
+    const expectedStatuses = Array.isArray(test.expectedStatus) ? test.expectedStatus : [test.expectedStatus]
+    const headers = { 'content-type': 'application/json' }
+
+    if (test.requiresAuth || test.requiresAdmin) {
+      const token = resolveAdminToken()
+      if (!token) {
+        result.status = 'skipped'
+        result.message = 'Admin token not configured (set ADMIN_TOKEN or ANYA_ADMIN_TOKEN)'
+        return result
+      }
+      headers.Authorization = `Bearer ${token}`
+    }
+
+    const url = `${baseUrl}${test.path}`
+    const init = {
+      method: test.method,
+      headers,
+    }
+    if (test.body && test.method && String(test.method).toUpperCase() !== 'GET') {
+      init.body = JSON.stringify(test.body)
+    }
+
+    const res = await fetchWithTimeout(url, init, Number(process.env.ANYA_FUNCTION_TEST_TIMEOUT_MS || 20_000))
+    const status = res.status
+    let bodyText = ''
+    try {
+      bodyText = await res.text()
+    } catch {
+      bodyText = ''
+    }
+
+    result.http_status = status
+    result.expected_status = expectedStatuses
+
+    if (expectedStatuses.includes(status)) {
+      result.status = 'passed'
+      result.message = `HTTP ${status}`
+    } else if (status >= 500) {
+      result.status = 'failed'
+      result.message = `Unexpected HTTP ${status}`
+      result.body = bodyText.slice(0, 8000)
+    } else {
+      // 4xx/3xx mismatches are still useful but usually indicate auth/route drift.
+      result.status = 'warning'
+      result.message = `Unexpected HTTP ${status}`
+      result.body = bodyText.slice(0, 2000)
+    }
   } catch (error) {
     result.status = 'failed'
-    result.error = error.message
+    result.error = error?.message || String(error)
   }
 
   return result

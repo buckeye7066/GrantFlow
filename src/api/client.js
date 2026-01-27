@@ -19,8 +19,6 @@ if (import.meta.env.DEV) {
   if (raw && !/^https?:\/\//i.test(String(raw))) {
     console.warn('[env] VITE_API_URL should be http(s)://...; falling back to same-origin proxy. value=', raw)
   }
-} else if (import.meta.env.VITE_API_URL) {
-  console.warn('[env] VITE_API_URL is ignored in production (same-origin /api via Vercel rewrites).')
 }
 
 const log = createLogger('APIClient')

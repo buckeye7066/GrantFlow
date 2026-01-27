@@ -1790,6 +1790,14 @@ server.on('listening', () => {
   console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
   const actualPort = server.address()?.port ?? PORT;
   console.log('[Server] Ready on port', actualPort);
+
+  // Expose a stable in-process base URL for Anya autonomous function tests.
+  // NOTE: When PORT=0 (ephemeral), the actual listening port differs from process.env.PORT.
+  try {
+    globalThis.__grantflow_internal_base_url = `http://127.0.0.1:${actualPort}`
+  } catch {
+    // best-effort only
+  }
   
   // Initialize feature flags
   try {
