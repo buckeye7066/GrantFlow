@@ -2,31 +2,59 @@ import path from 'path'
 import { promises as fs } from 'fs'
 import { randomUUID } from 'crypto'
 import { dispatchCrawlerJob } from './crawlerDispatcher.js'
+import { createCrawlerJob } from './crawlerJobCreation.js'
+import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 
 const REPO_ROOT = path.resolve(process.cwd())
 
 /**
  * Create audit log entry for autonomous crawler operations
  */
-async function auditLog(entry) {
-  // IMPORTANT: hosted deployments may have a read-only filesystem for the repo.
-  // Audit logging is best-effort and must never crash the request.
-  try {
-    const auditDir = path.join(REPO_ROOT, 'backend', 'data', 'audit')
-    await fs.mkdir(auditDir, { recursive: true })
+function isProdEnv() {
+  const nodeEnv = String(process.env.NODE_ENV || '').toLowerCase()
+  const deployEnv = String(process.env.DEPLOY_ENV || '').toLowerCase()
+  return nodeEnv === 'production' || deployEnv === 'production'
+}
 
-    const timestamp = new Date().toISOString()
-    const logEntry = {
-      timestamp,
-      ...entry,
+async function auditLog(entry, context) {
+  const db = context?.db
+  if (db) {
+    try {
+      logAuditEvent(db, {
+        category: AUDIT_CATEGORIES.ANYA,
+        action: `autonomous_crawlers.${String(entry?.action || 'event')}`,
+        severity: SEVERITY.INFO,
+        userId: context?.user?.userId ?? context?.user?.id ?? null,
+        profileId: context?.profile_id ?? context?.profileId ?? null,
+        resourceType: 'anya_autonomous_crawlers',
+        resourceId: null,
+        details: entry ?? null,
+      })
+      return
+    } catch (error) {
+      // fall through to platform logs
+      console.warn('[anyaAutonomousFunctionRunner] audit db write failed:', error?.message || error)
     }
+  }
 
-    const logFile = path.join(auditDir, 'autonomous-crawlers.log')
-    const logLine = JSON.stringify(logEntry) + '\n'
+  const logEntry = {
+    timestamp: new Date().toISOString(),
+    ...entry,
+  }
 
-    await fs.appendFile(logFile, logLine, 'utf8')
-  } catch (error) {
-    console.warn('[auditLog] Failed to write audit log:', error?.message || error)
+  // Durable fallback when DB is unavailable: platform logs.
+  console.log('[audit][autonomous-crawlers]', JSON.stringify(logEntry))
+
+  // Dev-only filesystem sink (explicit opt-in).
+  if (!isProdEnv() && String(process.env.ALLOW_DEV_FILESYSTEM_AUDIT_LOGS || '').toLowerCase() === 'true') {
+    try {
+      const auditDir = path.join(REPO_ROOT, 'backend', 'data', 'audit')
+      await fs.mkdir(auditDir, { recursive: true })
+      const logFile = path.join(auditDir, 'autonomous-crawlers.log')
+      await fs.appendFile(logFile, JSON.stringify(logEntry) + '\n', 'utf8')
+    } catch {
+      // best-effort
+    }
   }
 }
 
@@ -74,10 +102,7 @@ export async function runAutonomousCrawlers(options, context) {
     jobs: [],
   }
 
-  await auditLog({
-    action: 'autonomous_crawlers_start',
-    options,
-  })
+  await auditLog({ action: 'start', options }, context)
 
   try {
     // Get profiles to process
@@ -96,25 +121,39 @@ export async function runAutonomousCrawlers(options, context) {
 
     report.profiles_processed = profiles.length
 
-    // Create crawler jobs for each profile
+    // Create crawler jobs for each profile (idempotent creation).
     const createdJobs = []
     
     for (const profile of profiles) {
       for (const crawlerType of crawlerTypes) {
         try {
-          const jobId = randomUUID()
           const parameters = {
             autonomous_run: true,
             profile_id: profile.id,
           }
+          const created = await createCrawlerJob(db, {
+            type: crawlerType,
+            profileId: profile.id,
+            organizationId: null,
+            parameters,
+            requestedBy: context?.user?.id ?? 'anya_autonomous',
+            status: 'queued',
+            buildSnapshot: false,
+          })
 
-          await db.prepare(
-            `
-            INSERT INTO crawler_jobs (id, type, profile_id, status, parameters, created_at)
-            VALUES (?, ?, ?, 'queued', ?, CURRENT_TIMESTAMP)
-            `
-          ).run(jobId, crawlerType, profile.id, JSON.stringify(parameters))
+          if (created?.existing) {
+            report.jobs.push({
+              job_id: created.jobId ?? created?.job?.id ?? null,
+              profile_id: profile.id,
+              profile_name: profile.display_name,
+              crawler_type: crawlerType,
+              status: 'skipped',
+              skipped_reason: 'duplicate',
+            })
+            continue
+          }
 
+          const jobId = created.jobId
           report.jobs_created++
           report.jobs.push({
             job_id: jobId,
@@ -127,12 +166,15 @@ export async function runAutonomousCrawlers(options, context) {
           // Track job for dispatch
           createdJobs.push({ jobId, crawlerType, profileId: profile.id })
 
-          await auditLog({
-            action: 'crawler_job_created',
-            job_id: jobId,
-            profile_id: profile.id,
-            crawler_type: crawlerType,
-          })
+          await auditLog(
+            {
+              action: 'crawler_job_created',
+              job_id: jobId,
+              profile_id: profile.id,
+              crawler_type: crawlerType,
+            },
+            context,
+          )
         } catch (error) {
           report.errors.push({
             profile_id: profile.id,
@@ -315,12 +357,15 @@ export async function runAutonomousCrawlers(options, context) {
               report.jobs_retried++
               failedJob.retry_job_id = newJobId
 
-              await auditLog({
-                action: 'crawler_job_retried',
-                original_job_id: failedJob.job_id,
-                new_job_id: newJobId,
-                retry_count: retriesUsed + 1,
-              })
+              await auditLog(
+                {
+                  action: 'crawler_job_retried',
+                  original_job_id: failedJob.job_id,
+                  new_job_id: newJobId,
+                  retry_count: retriesUsed + 1,
+                },
+                context,
+              )
             } catch (error) {
               report.errors.push({
                 job_id: failedJob.job_id,
@@ -336,17 +381,23 @@ export async function runAutonomousCrawlers(options, context) {
     report.completed_at = new Date().toISOString()
     report.duration_ms = duration
 
-    await auditLog({
-      action: 'autonomous_crawlers_complete',
-      report,
-    })
+    await auditLog(
+      {
+        action: 'autonomous_crawlers_complete',
+        report,
+      },
+      context,
+    )
 
     return report
   } catch (error) {
-    await auditLog({
-      action: 'autonomous_crawlers_error',
-      error: error.message,
-    })
+    await auditLog(
+      {
+        action: 'autonomous_crawlers_error',
+        error: error.message,
+      },
+      context,
+    )
     throw error
   }
 }
@@ -666,29 +717,44 @@ export async function saveCrawlerResultsToGlobal(options, context) {
  * Get status of autonomous crawler operations
  */
 export async function getAutonomousCrawlersStatus(db = null) {
-  const auditDir = path.join(REPO_ROOT, 'backend', 'data', 'audit')
-  const logFile = path.join(auditDir, 'autonomous-crawlers.log')
-  
-  try {
-    const content = await fs.readFile(logFile, 'utf8')
-    const lines = content.trim().split('\n').filter(Boolean)
-    const recentLogs = lines.slice(-30).map(line => {
-      try {
-        return JSON.parse(line)
-      } catch {
-        return null
+  const base = {
+    last_run: null,
+    recent_operations: 0,
+  }
+
+  // Prefer durable DB audit logs when available.
+  if (db) {
+    try {
+      const row = await db
+        .prepare(
+          `
+            SELECT *
+            FROM audit_logs
+            WHERE category = ?
+              AND action = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+          `,
+        )
+        .get(AUDIT_CATEGORIES.ANYA, 'autonomous_crawlers.autonomous_crawlers_complete')
+
+      if (row) {
+        let details = null
+        try {
+          details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details
+        } catch {
+          details = row.details ?? null
+        }
+        base.last_run = details?.report ?? details ?? null
+        base.recent_operations = 1
+        base.audit_event_id = row.id
+        base.created_at = row.created_at
+      } else {
+        base.message = 'No autonomous crawler operations have been run yet'
       }
-    }).filter(Boolean)
-
-    const lastRun = recentLogs.reverse().find(log => log.action === 'autonomous_crawlers_complete')
-
-    const base = {
-      last_run: lastRun || null,
-      recent_operations: recentLogs.length,
-      audit_log_path: path.relative(REPO_ROOT, logFile),
+    } catch (error) {
+      base.audit_error = error?.message || String(error)
     }
-
-    if (!db) return base
 
     try {
       const rows = await db
@@ -716,41 +782,36 @@ export async function getAutonomousCrawlersStatus(db = null) {
     }
 
     return base
-  } catch (error) {
-    if (error.code === 'ENOENT') {
-      const base = {
-        last_run: null,
-        recent_operations: 0,
-        message: 'No autonomous crawler operations have been run yet',
-      }
-      if (db) {
-        try {
-          const rows = await db
-            .prepare(
-              `
-                SELECT status, COUNT(*) as count
-                FROM crawler_jobs
-                GROUP BY status
-              `,
-            )
-            .all()
-          const byStatus = (rows || []).reduce((acc, row) => {
-            acc[row.status] = Number(row.count || 0)
-            return acc
-          }, {})
-          base.job_status_counts = {
-            queued: byStatus.queued || 0,
-            running: byStatus.running || 0,
-            completed: byStatus.completed || 0,
-            failed: byStatus.failed || 0,
-            cancelled: byStatus.cancelled || 0,
-          }
-        } catch (metricsError) {
-          base.job_status_counts = { error: metricsError?.message || String(metricsError) }
-        }
-      }
-      return base
-    }
-    throw error
   }
+
+  // Dev-only filesystem fallback (explicit opt-in).
+  if (!isProdEnv() && String(process.env.ALLOW_DEV_FILESYSTEM_AUDIT_LOGS || '').toLowerCase() === 'true') {
+    const auditDir = path.join(REPO_ROOT, 'backend', 'data', 'audit')
+    const logFile = path.join(auditDir, 'autonomous-crawlers.log')
+    try {
+      const content = await fs.readFile(logFile, 'utf8')
+      const lines = content.trim().split('\n').filter(Boolean)
+      const recentLogs = lines
+        .slice(-30)
+        .map((line) => {
+          try {
+            return JSON.parse(line)
+          } catch {
+            return null
+          }
+        })
+        .filter(Boolean)
+
+      const lastRun = recentLogs.reverse().find((log) => log.action === 'autonomous_crawlers_complete')
+      base.last_run = lastRun || null
+      base.recent_operations = recentLogs.length
+      base.audit_log_path = path.relative(REPO_ROOT, logFile)
+      return base
+    } catch (error) {
+      if (error?.code !== 'ENOENT') base.audit_error = error?.message || String(error)
+    }
+  }
+
+  base.message = 'No autonomous crawler operations have been run yet'
+  return base
 }

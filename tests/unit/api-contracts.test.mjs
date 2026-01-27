@@ -69,7 +69,7 @@ async function startBackend({ rootDir, port }) {
     SMOKE_MODE: 'true',
     PORT: String(port),
     DB_AUTO_MIGRATE: 'true',
-    ADMIN_TOKEN: process.env.ADMIN_TOKEN || 'dev-admin-token',
+    ADMIN_TOKEN: process.env.ADMIN_TOKEN || 'test-admin-token',
     CORS_ORIGIN: process.env.CORS_ORIGIN || 'http://localhost:5173,http://127.0.0.1:5173',
     AUTH_FRONTEND_APP_BASE: process.env.VITE_APP_BASE || '/grantflow',
   }

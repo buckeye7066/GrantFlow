@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import net from 'node:net'
 import { spawn } from 'node:child_process'
+import crypto from 'node:crypto'
 
 import { repoRoot, artifactsDir, todayStamp } from './_doctor/paths.mjs'
 import { ensureDir, runCommand, writeFile } from './_doctor/run.mjs'
@@ -74,7 +75,8 @@ async function startBackend(root, { outDir, logFile }) {
       NODE_ENV: 'development',
       SMOKE_MODE: 'true',
       PORT: String(port),
-      ADMIN_TOKEN: process.env.ADMIN_TOKEN || 'dev-admin-token',
+      // SECURITY: never fall back to a hard-coded token. Use explicit ADMIN_TOKEN or an ephemeral per-run token.
+      ADMIN_TOKEN: process.env.ADMIN_TOKEN || crypto.randomUUID(),
       CORS_ORIGIN: process.env.CORS_ORIGIN || 'http://localhost:5173,http://127.0.0.1:5173',
       AUTH_FRONTEND_APP_BASE: process.env.VITE_APP_BASE || '/grantflow',
     })
