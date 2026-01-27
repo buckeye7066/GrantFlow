@@ -10,6 +10,8 @@
     "dev": "vite",
     "build": "vite build",
     "check:submission-no-base44": "node scripts/check-submission-no-base44.mjs",
+    "quality:gate": "node scripts/code-quality-gate.mjs",
+    "quality:report": "node scripts/code-quality-gate.mjs --report",
     "lint": "eslint --max-warnings 0 \"src/**/*.{js,jsx}\" \"backend/**/*.js\"",
     "typecheck": "tsc -p tsconfig.node.json --noEmit",
     "unit": "node scripts/run-unit-tests.mjs",

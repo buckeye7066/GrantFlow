@@ -140,6 +140,49 @@ router.get('/funding-sources', async (req, res) => {
   res.json({ sources: getFundingSourceStatus() })
 })
 
+// ----------------------------
+// Audit Events (durable DB-backed)
+// ----------------------------
+router.get('/audit-events', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+
+  try {
+    const limit = Math.max(1, Math.min(Number(req.query?.limit) || 200, 200))
+    const type = typeof req.query.type === 'string' ? req.query.type.trim() : ''
+
+    // Fetch a larger window then filter by prefix to support "type" queries.
+    const raw = await queryAuditLogs(req.db, {
+      category: AUDIT_CATEGORIES.ANYA,
+      limit: 500,
+      offset: 0,
+    })
+
+    let logs = raw?.logs || []
+
+    if (type === 'autonomous_crawler') {
+      logs = logs.filter((l) => String(l.action || '').startsWith('autonomous.'))
+    } else if (type === 'autonomous_crawlers') {
+      logs = logs.filter((l) => String(l.action || '').startsWith('autonomous_crawlers.'))
+    } else if (type === 'autonomous_scheduler') {
+      logs = logs.filter((l) => String(l.action || '').startsWith('autonomous_scheduler.'))
+    } else if (type === 'route_generation') {
+      logs = logs.filter((l) => String(l.action || '').startsWith('route_generation.'))
+    } else if (type) {
+      // Generic prefix filter (admin-only endpoint).
+      logs = logs.filter((l) => String(l.action || '').startsWith(type))
+    }
+
+    res.json({
+      type: type || null,
+      limit,
+      audit_events: logs.slice(0, limit),
+    })
+  } catch (error) {
+    console.error('[admin/audit-events] list failed', error)
+    res.status(500).json({ error: 'Unable to list audit events' })
+  }
+})
+
 function loadZipCoordinates() {
   if (zipCoordinatesCache) return zipCoordinatesCache;
   if (!fs.existsSync(zipCoordinatesPath)) {

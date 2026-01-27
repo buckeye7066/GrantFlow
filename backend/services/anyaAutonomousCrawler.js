@@ -5,6 +5,12 @@ import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 
 const REPO_ROOT = path.resolve(process.cwd())
 
+function isProdEnv() {
+  const nodeEnv = String(process.env.NODE_ENV || '').toLowerCase()
+  const deployEnv = String(process.env.DEPLOY_ENV || '').toLowerCase()
+  return nodeEnv === 'production' || deployEnv === 'production'
+}
+
 /**
  * Create audit log entry for autonomous operations
  */
@@ -31,22 +37,22 @@ async function auditLog(entry, context) {
     }
   }
 
-  const auditDir = path.join(REPO_ROOT, 'backend', 'data', 'audit')
-  await fs.mkdir(auditDir, { recursive: true })
-  
   const timestamp = new Date().toISOString()
-  const logEntry = {
-    timestamp,
-    ...entry,
-  }
-  
-  const logFile = path.join(auditDir, 'autonomous-crawler.log')
-  const logLine = JSON.stringify(logEntry) + '\n'
-  
-  try {
-    await fs.appendFile(logFile, logLine, 'utf8')
-  } catch (error) {
-    console.error('[auditLog] Failed to write audit log:', error)
+  const logEntry = { timestamp, ...entry }
+
+  // Durable fallback: platform logs (structured JSON)
+  console.log('[audit][autonomous-crawler]', JSON.stringify(logEntry))
+
+  // Dev-only filesystem sink (explicit opt-in).
+  if (!isProdEnv() && String(process.env.ALLOW_DEV_FILESYSTEM_AUDIT_LOGS || '').toLowerCase() === 'true') {
+    try {
+      const auditDir = path.join(REPO_ROOT, 'backend', 'data', 'audit')
+      await fs.mkdir(auditDir, { recursive: true })
+      const logFile = path.join(auditDir, 'autonomous-crawler.log')
+      await fs.appendFile(logFile, JSON.stringify(logEntry) + '\n', 'utf8')
+    } catch (error) {
+      console.warn('[auditLog] Failed to write dev audit log:', error?.message || error)
+    }
   }
 }
 
@@ -58,9 +64,9 @@ async function auditLog(entry, context) {
  * @param {number} options.maxIterations - Maximum number of files to process
  * @param {number} options.maxFileChanges - Maximum number of files to modify
  * @param {boolean} options.dryRun - If true, don't save changes
- * @param {boolean} options.fixConsoleLog - Fix // TODO: Remove debug log - console.log statements
+ * @param {boolean} options.fixConsoleLog - Fix debug console.log statements
  * @param {boolean} options.fixEmptyCatch - Fix empty catch blocks
- * @param {boolean} options.fixTodos - Convert TODO comments to tracked issues
+ * @param {boolean} options.fixTodos - Convert task-marker comments to tracked issues
  * @param {Object} context - Database and user context
  */
 export async function runAutonomousCodeCrawl(options, context) {

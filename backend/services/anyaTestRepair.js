@@ -5,6 +5,51 @@
 
 import fs from 'fs/promises'
 import path from 'path'
+import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
+
+function isProdEnv() {
+  const nodeEnv = String(process.env.NODE_ENV || '').toLowerCase()
+  const deployEnv = String(process.env.DEPLOY_ENV || '').toLowerCase()
+  return nodeEnv === 'production' || deployEnv === 'production'
+}
+
+function allowTestRepairMutations() {
+  if (isProdEnv()) return false
+  return String(process.env.ALLOW_ANYA_TEST_REPAIR_MUTATIONS || '').toLowerCase() === 'true'
+}
+
+function allowAutoRouteGeneration() {
+  if (isProdEnv()) return false
+  return String(process.env.ALLOW_AUTO_ROUTE_GENERATION || '').toLowerCase() === 'true'
+}
+
+function isAdminContext(context) {
+  const user = context?.user
+  const ctx = context?.ctx
+  return Boolean(
+    ctx?.isAdmin === true ||
+      user?.role === 'admin' ||
+      user?.is_admin === true ||
+      user?.is_admin === 1,
+  )
+}
+
+function audit(db, { action, severity = SEVERITY.INFO, userId = null, details = null } = {}) {
+  if (!db) return
+  try {
+    logAuditEvent(db, {
+      category: AUDIT_CATEGORIES.ANYA,
+      action,
+      severity,
+      userId,
+      resourceType: 'anya_test_repair',
+      resourceId: null,
+      details,
+    })
+  } catch {
+    // best-effort only
+  }
+}
 
 /**
  * Analyze and repair failing tests
@@ -12,7 +57,12 @@ import path from 'path'
  * @param {Object} db - Database connection
  * @returns {Object} Repair report
  */
-export async function repairFailingTests(failedTests, db) {
+export async function repairFailingTests(failedTests, dbOrContext) {
+  const context =
+    dbOrContext && typeof dbOrContext === 'object' && typeof dbOrContext.prepare !== 'function'
+      ? dbOrContext
+      : { db: dbOrContext }
+  const db = context?.db
   console.log(`[Anya Test Repair] 🔧 Analyzing ${failedTests.length} failing tests...`)
   
   const repairReport = {
@@ -32,28 +82,43 @@ export async function repairFailingTests(failedTests, db) {
       switch (failureCategory) {
         case 'AUTH_FAILURE':
           // Fix authentication issues
-          const authFix = await fixAuthenticationIssue(test, db)
+          const authFix = await fixAuthenticationIssue(test, context)
           if (authFix.success) {
             repairReport.repaired.push(test.test_name)
             repairReport.actions_taken.push(authFix.action)
+          } else {
+            repairReport.unable_to_repair.push({
+              test: test.test_name,
+              reason: authFix.reason || 'Auth auto-repair disabled or not applicable',
+            })
           }
           break
           
         case 'MISSING_DATA':
           // Seed required test data
-          const dataFix = await seedTestData(test, db)
+          const dataFix = await seedTestData(test, context)
           if (dataFix.success) {
             repairReport.repaired.push(test.test_name)
             repairReport.actions_taken.push(dataFix.action)
+          } else {
+            repairReport.unable_to_repair.push({
+              test: test.test_name,
+              reason: dataFix.reason || 'Data seeding is disabled',
+            })
           }
           break
           
         case 'ENDPOINT_404':
           // Create missing endpoint or fix route
-          const routeFix = await fixMissingRoute(test)
+          const routeFix = await fixMissingRoute(test, context)
           if (routeFix.success) {
             repairReport.repaired.push(test.test_name)
             repairReport.actions_taken.push(routeFix.action)
+          } else {
+            repairReport.unable_to_repair.push({
+              test: test.test_name,
+              reason: routeFix.reason || 'Route generation disabled or not applicable',
+            })
           }
           break
           
@@ -68,10 +133,15 @@ export async function repairFailingTests(failedTests, db) {
           
         case 'SERVER_ERROR':
           // Fix server-side errors
-          const serverFix = await fixServerError(test, db)
+          const serverFix = await fixServerError(test, context)
           if (serverFix.success) {
             repairReport.repaired.push(test.test_name)
             repairReport.actions_taken.push(serverFix.action)
+          } else {
+            repairReport.unable_to_repair.push({
+              test: test.test_name,
+              reason: serverFix.reason || serverFix.action || 'Server auto-repair disabled or not applicable',
+            })
           }
           break
           
@@ -124,8 +194,20 @@ function categorizeFailure(test) {
 /**
  * Fix authentication issues
  */
-async function fixAuthenticationIssue(test, db) {
+async function fixAuthenticationIssue(test, context) {
+  const db = context?.db
   try {
+    // SECURITY: never patch auth middleware in production. Allow only explicit opt-in.
+    if (!allowTestRepairMutations()) {
+      audit(db, {
+        action: 'test_repair.auth_patch.blocked',
+        severity: SEVERITY.WARNING,
+        userId: context?.user?.userId ?? context?.user?.id ?? null,
+        details: { test: test?.test_name ?? null },
+      })
+      return { success: false, reason: 'mutations_disabled' }
+    }
+
     // Check if test user exists
     const testUser = db.prepare('SELECT * FROM profiles WHERE email = ?')
       .get('test@grantflow.com')
@@ -143,7 +225,7 @@ async function fixAuthenticationIssue(test, db) {
       }
     }
     
-    // Ensure auth middleware accepts test tokens
+    // Ensure auth middleware accepts test tokens (dev-only)
     const authMiddlewarePath = path.join(process.cwd(), 'backend/middleware/auth.js')
     const authCode = await fs.readFile(authMiddlewarePath, 'utf8')
     
@@ -178,51 +260,13 @@ async function fixAuthenticationIssue(test, db) {
 /**
  * Seed required test data
  */
-async function seedTestData(test, db) {
+async function seedTestData(test, context) {
   try {
-    // Determine what data is needed based on the test path
-    if (test.path.includes('/profiles')) {
-      const profileCount = db.prepare('SELECT COUNT(*) as count FROM profiles').get().count
-      if (profileCount === 0) {
-        // Seed test profiles
-        db.prepare(`
-          INSERT INTO profiles (name, email, role, created_at)
-          VALUES 
-            ('Test Student', 'student@test.com', 'student', datetime('now')),
-            ('Test Organization', 'org@test.com', 'organization', datetime('now'))
-        `).run()
-        
-        return {
-          success: true,
-          action: `Seeded test profiles for ${test.test_name}`
-        }
-      }
-    }
-    
-    if (test.path.includes('/opportunities')) {
-      const oppCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities').get().count
-      if (oppCount === 0) {
-        // Seed test opportunities
-        db.prepare(`
-          INSERT INTO funding_opportunities (
-            title, description, amount, deadline, 
-            eligibility_criteria, created_at
-          )
-          VALUES 
-            ('Test Grant 1', 'Test grant description', 5000, 
-             date('now', '+30 days'), '{}', datetime('now')),
-            ('Test Grant 2', 'Another test grant', 10000,
-             date('now', '+60 days'), '{}', datetime('now'))
-        `).run()
-        
-        return {
-          success: true,
-          action: `Seeded test opportunities for ${test.test_name}`
-        }
-      }
-    }
-    
-    return { success: false }
+    // SECURITY: never auto-seed data from test repair.
+    // This can be done via explicit seed scripts in controlled environments.
+    void test
+    void context
+    return { success: false, reason: 'seeding_disabled' }
   } catch (error) {
     console.error('[Anya Test Repair] Data seeding error:', error)
     return { success: false }
@@ -232,8 +276,11 @@ async function seedTestData(test, db) {
 /**
  * Fix missing routes
  */
-async function fixMissingRoute(test) {
+async function fixMissingRoute(test, context) {
   try {
+    const db = context?.db ?? null
+    const actorUserId = context?.user?.userId ?? context?.user?.id ?? null
+
     // Extract route info
     const [method, pathParts] = test.path.split(' ')
     const routePath = pathParts || test.path
@@ -252,16 +299,60 @@ async function fixMissingRoute(test) {
                        new RegExp(routePattern).test(routeCode)
     
     if (!routeExists) {
+      if (isProdEnv()) {
+        audit(db, {
+          action: 'route_generation.blocked',
+          severity: SEVERITY.CRITICAL,
+          userId: actorUserId,
+          details: { route: routePath, file: routeFile, reason: 'blocked_in_production' },
+        })
+        const err = new Error('Auto-route generation is disabled in production')
+        err.code = 'AUTO_ROUTE_GENERATION_DISABLED'
+        throw err
+      }
+
+      // SECURITY: auto route generation is disabled by default and never allowed in production.
+      if (!allowTestRepairMutations() || !allowAutoRouteGeneration() || !isAdminContext(context)) {
+        audit(db, {
+          action: 'route_generation.blocked',
+          severity: SEVERITY.WARNING,
+          userId: actorUserId,
+          details: {
+            route: routePath,
+            file: routeFile,
+            reason: isProdEnv()
+              ? 'blocked_in_production'
+              : !allowAutoRouteGeneration()
+                ? 'flag_disabled'
+                : !allowTestRepairMutations()
+                  ? 'mutations_disabled'
+                  : 'not_admin',
+          },
+        })
+        return { success: false, reason: 'route_generation_blocked' }
+      }
+
+      audit(db, {
+        action: 'route_generation.attempt',
+        severity: SEVERITY.INFO,
+        userId: actorUserId,
+        details: { route: routePath, file: routeFile, method: test?.method ?? null },
+      })
+
       // Add skeleton route
-      const routeMethod = (test.method || 'GET').toLowerCase()
+      const requested = String(test.method || method || 'GET').toLowerCase()
+      const routeMethod = ['get', 'post', 'put', 'patch', 'delete'].includes(requested) ? requested : 'get'
       const newRoute = `
 // Auto-generated route by Anya Test Repair
 router.${routeMethod}('${routePath}', async (req, res) => {
+  const ctx = req.ctx
+  if (!ctx?.userId) {
+    return res.status(401).json({ error: 'Authentication required' })
+  }
   try {
-    // TODO: Implement ${test.test_name}
-    res.json({ 
-      message: 'Endpoint created by Anya Test Repair',
-      status: 'pending_implementation'
+    res.status(501).json({
+      error: 'not_implemented',
+      message: 'This endpoint was generated as a placeholder and must be implemented explicitly.',
     })
   } catch (error) {
     res.status(500).json({ error: error.message })
@@ -276,6 +367,13 @@ router.${routeMethod}('${routePath}', async (req, res) => {
       )
       
       await fs.writeFile(filePath, updatedCode, 'utf8')
+
+      audit(db, {
+        action: 'route_generation.succeeded',
+        severity: SEVERITY.INFO,
+        userId: actorUserId,
+        details: { route: routePath, file: routeFile },
+      })
       
       return {
         success: true,
@@ -286,7 +384,7 @@ router.${routeMethod}('${routePath}', async (req, res) => {
     return { success: false }
   } catch (error) {
     console.error('[Anya Test Repair] Route fix error:', error)
-    return { success: false }
+    return { success: false, reason: error?.code || error?.message || 'route_fix_error' }
   }
 }
 
@@ -346,11 +444,11 @@ async function fixValidationIssue(test) {
 /**
  * Fix server errors
  */
-async function fixServerError(test, db) {
+async function fixServerError(test, context) {
   try {
-    // Common server error fixes
-    
-    // Check for missing environment variables
+    void context
+    // SECURITY: never auto-set environment variables (especially secrets).
+    // Only report missing configuration.
     const requiredEnvVars = [
       'JWT_SECRET',
       'DATABASE_URL',
@@ -359,29 +457,14 @@ async function fixServerError(test, db) {
     
     const missingVars = requiredEnvVars.filter(v => !process.env[v])
     if (missingVars.length > 0) {
-      // Set default values
-      missingVars.forEach(v => {
-        process.env[v] = v === 'PORT' ? '8080' : `default-${v.toLowerCase()}`
-      })
-      
       return {
-        success: true,
-        action: `Set default values for missing env vars: ${missingVars.join(', ')}`
+        success: false,
+        reason: 'missing_env',
+        action: `Missing required env vars (no auto-fix): ${missingVars.join(', ')}`,
       }
     }
-    
-    // Check database connection
-    try {
-      db.prepare('SELECT 1').get()
-    } catch (dbError) {
-      // Attempt to fix database connection
-      return {
-        success: true,
-        action: `Repaired database connection for ${test.test_name}`
-      }
-    }
-    
-    return { success: false }
+
+    return { success: false, reason: 'no_safe_fix', action: `No safe auto-fix available for ${test?.test_name ?? 'server_error'}` }
   } catch (error) {
     console.error('[Anya Test Repair] Server error fix error:', error)
     return { success: false }

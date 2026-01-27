@@ -65,9 +65,12 @@ export default function Login() {
     if (!showDevAdminShortcut) return
     setDevLoading(true)
     try {
-      // Local dev default (matches `backend/env.example`). Override if needed:
-      // set `VITE_DEV_ADMIN_TOKEN` in your `.env.local`.
-      const token = import.meta.env.VITE_DEV_ADMIN_TOKEN || 'dev-admin-token'
+      // Dev-only convenience: requires explicit token, never a default.
+      const token = import.meta.env.VITE_DEV_ADMIN_TOKEN
+      if (!token) {
+        window.alert('Missing VITE_DEV_ADMIN_TOKEN. Set it in your `.env.local` to use Dev Admin Login.')
+        return
+      }
       await loginWithTokens({ accessToken: token })
       navigate(redirectTarget, { replace: true })
     } catch (error) {
