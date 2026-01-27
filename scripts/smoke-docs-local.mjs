@@ -6,7 +6,7 @@
  *
  * Env:
  *  - SMOKE_API_BASE (default: http://127.0.0.1:18194)
- *  - X_ADMIN_TOKEN  (default: dev-admin-token)
+ *  - X_ADMIN_TOKEN  (required; must match backend ADMIN_TOKEN)
  */
 
 import { promises as fsp } from 'node:fs'
@@ -16,7 +16,11 @@ import { promisify } from 'node:util'
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
 
 const base = String(process.env.SMOKE_API_BASE || 'http://127.0.0.1:18194').replace(/\/+$/, '')
-const adminToken = String(process.env.X_ADMIN_TOKEN || 'dev-admin-token')
+const adminToken = String(process.env.X_ADMIN_TOKEN || process.env.ADMIN_TOKEN || '').trim()
+if (!adminToken) {
+  console.error('[smoke-docs-local] Missing X_ADMIN_TOKEN (or ADMIN_TOKEN). Refusing to run without explicit admin auth.')
+  process.exit(1)
+}
 const execFileAsync = promisify(execFile)
 
 async function sleep(ms) {

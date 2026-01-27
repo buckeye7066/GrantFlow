@@ -6,7 +6,7 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN || ''
 
 if (!ADMIN_TOKEN) {
   console.error(
-    'Missing ADMIN_TOKEN. Run with e.g. ADMIN_TOKEN=dev-admin-token node scripts/run-all-real-crawlers.mjs',
+    'Missing ADMIN_TOKEN. Set ADMIN_TOKEN to an authorized session token (do not use hard-coded defaults).',
   )
   process.exit(1)
 }

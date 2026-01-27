@@ -263,7 +263,7 @@ It enumerates environment variables referenced in code and/or present in example
 ### `ADMIN_TOKEN`
 
 - **Templates**:
-  - `backend/env.example:30` = `dev-admin-token`
+  - `backend/env.example:30` = (empty by default; must be set explicitly for local/dev)
 - **Code references**:
   - `backend/routes/anya.js:L19` (process.env)
   - `backend/server.js:L85–L976` (process.env)

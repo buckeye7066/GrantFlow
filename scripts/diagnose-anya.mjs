@@ -8,6 +8,9 @@ import fetch from 'node-fetch'
 import { config } from 'dotenv'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import process from 'process'
+
+import { redactSecret, resolveAdminToken } from './_lib/secrets.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -17,14 +20,19 @@ config({ path: path.join(__dirname, '../.env') })
 config({ path: path.join(__dirname, '../backend/.env') })
 
 const API_URL = process.env.API_URL || 'https://grantflow-production.up.railway.app'
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || 'dev-admin-token'
+let ADMIN_TOKEN = null
+try {
+  ADMIN_TOKEN = resolveAdminToken({ required: true })
+} catch (err) {
+  console.error('[diagnose-anya] Missing admin token. Set ADMIN_TOKEN or ANYA_ADMIN_TOKEN.')
+  process.exit(1)
+}
 
 console.log('=== Anya AI Connection Diagnosis ===\n')
 
 // Step 1: Check local environment
 console.log('1. Local Environment Check:')
-console.log('   ANTHROPIC_API_KEY:', process.env.ANTHROPIC_API_KEY ? 
-  `✅ Set (${process.env.ANTHROPIC_API_KEY.substring(0, 10)}...)` : '❌ Missing')
+console.log('   ANTHROPIC_API_KEY:', process.env.ANTHROPIC_API_KEY ? `✅ Set (${redactSecret()})` : '❌ Missing')
 console.log('   Key format:', process.env.ANTHROPIC_API_KEY?.startsWith('sk-ant-') ? 
   '✅ Correct' : '⚠️  Should start with sk-ant-')
 console.log()
@@ -55,7 +63,7 @@ if (process.env.ANTHROPIC_API_KEY) {
       const errorText = await response.text()
       console.log('   ❌ API Key is INVALID or there\'s an API issue')
       console.log('   Status:', response.status)
-      console.log('   Error:', errorText.substring(0, 200))
+      console.log('   Error:', String(errorText || '').slice(0, 200))
       
       if (response.status === 401) {
         console.log('\n   💡 Solution: Your API key is invalid. Get a new one from https://console.anthropic.com/')
@@ -85,8 +93,7 @@ try {
     const data = await response.json()
     console.log('   Endpoint Status:', data.status)
     console.log('   Anthropic Status:', data.anthropic?.status || 'Unknown')
-    console.log('   API Key in Railway:', data.anthropic?.api_key_configured ? 
-      `✅ Set (${data.anthropic.api_key_prefix})` : '❌ Not set')
+    console.log('   API Key in Railway:', data.anthropic?.api_key_configured ? '✅ Set (redacted)' : '❌ Not set')
     
     if (data.anthropic?.error) {
       console.log('\n   ❌ Error Details:')
@@ -140,7 +147,7 @@ try {
     if (messageResponse.ok) {
       const result = await messageResponse.json()
       const assistantReply = result.assistant?.content || result.content || 'No response'
-      console.log('   Anya replied:', assistantReply.substring(0, 100) + '...')
+      console.log('   Anya replied:', String(assistantReply || '').slice(0, 100) + '...')
       
       if (assistantReply.includes('trouble reaching') || assistantReply.includes('without an AI model')) {
         console.log('\n   ❌ Anya is in fallback mode (no AI)')

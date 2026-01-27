@@ -76,7 +76,7 @@ async function startBackend({ rootDir, port, sqlitePath }) {
     DB_AUTO_MIGRATE: 'true',
     SQLITE_DB_PATH: sqlitePath,
     // Make tests deterministic even if host env has ADMIN_TOKEN set.
-    ADMIN_TOKEN: 'dev-admin-token',
+    ADMIN_TOKEN: 'test-admin-token',
     CORS_ORIGIN: process.env.CORS_ORIGIN || 'http://localhost:5173,http://127.0.0.1:5173',
     AUTH_FRONTEND_APP_BASE: process.env.VITE_APP_BASE || '/grantflow',
     // Avoid any surprise background work during unit tests.
@@ -205,7 +205,7 @@ test('Anya sessions + tasks: create and update task', async () => {
   try {
     const headers = {
       'content-type': 'application/json',
-      'x-admin-token': 'dev-admin-token',
+      'x-admin-token': 'test-admin-token',
     }
 
     const createSessionRes = await fetch(`http://127.0.0.1:${port}/api/anya/sessions`, {

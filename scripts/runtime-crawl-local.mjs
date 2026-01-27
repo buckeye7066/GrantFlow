@@ -15,6 +15,7 @@
 import { spawn } from 'node:child_process'
 import net from 'node:net'
 import process from 'node:process'
+import crypto from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { chromium } from 'playwright'
 
@@ -125,12 +126,13 @@ async function main() {
   // Start backend + preview
   try {
     if (!process.env.BACKEND_BASE_URL) {
+      const adminToken = process.env.ADMIN_TOKEN || crypto.randomUUID()
       const backendProc = runCmd('npm', ['run', 'backend'], {
         env: {
           ...process.env,
           PORT: String(backendPort),
           // Match `backend/env.example` so local smoke flows work without a copied backend/.env
-          ADMIN_TOKEN: process.env.ADMIN_TOKEN || 'dev-admin-token',
+          ADMIN_TOKEN: adminToken,
         },
       })
       procs.push(backendProc)
