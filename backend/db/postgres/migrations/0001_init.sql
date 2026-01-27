@@ -142,6 +142,12 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   -- Geographic
   is_national BOOLEAN DEFAULT FALSE,
   state TEXT,
+  -- Geo Crawl tagging (durable run tracking)
+  geo_run_id TEXT,
+  geo_zip TEXT,
+  geo_county TEXT,
+  geo_source TEXT,
+  geo_scope TEXT,
   regions TEXT DEFAULT '[]', -- JSON array
   
   -- Categories
@@ -166,6 +172,58 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   notes TEXT,
   profile_id TEXT
 );
+
+-- Geo Crawl run tracking (durable progress for live monitor)
+CREATE TABLE IF NOT EXISTS geo_crawl_runs (
+  id TEXT PRIMARY KEY,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  created_by_user_id TEXT NULL,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','paused','failed','complete')),
+  state TEXT NULL,
+  current_zip TEXT NULL,
+  current_county TEXT NULL,
+  current_source TEXT NULL,
+  processed_zip_count INTEGER DEFAULT 0,
+  found_opportunity_count INTEGER DEFAULT 0,
+  last_heartbeat_at TIMESTAMPTZ NULL,
+  last_error TEXT NULL,
+  crawler_job_id TEXT NULL REFERENCES crawler_jobs(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS geo_crawl_events (
+  id BIGSERIAL PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES geo_crawl_runs(id) ON DELETE CASCADE,
+  ts TIMESTAMPTZ DEFAULT now(),
+  level TEXT NOT NULL DEFAULT 'info' CHECK(level IN ('info','warn','error')),
+  state TEXT NULL,
+  zip TEXT NULL,
+  county TEXT NULL,
+  source TEXT NULL,
+  message TEXT NULL,
+  found_count_delta INTEGER DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_geo_crawl_events_run_id ON geo_crawl_events(run_id);
+CREATE INDEX IF NOT EXISTS idx_geo_crawl_events_ts ON geo_crawl_events(ts);
+CREATE INDEX IF NOT EXISTS idx_geo_crawl_events_run_id_id ON geo_crawl_events(run_id, id);
+
+-- Geo Crawl association index (opportunity_id can appear in many runs/zips)
+CREATE TABLE IF NOT EXISTS funding_opportunity_geo_index (
+  id TEXT PRIMARY KEY,
+  opportunity_id TEXT NOT NULL REFERENCES funding_opportunities(id) ON DELETE CASCADE,
+  geo_run_id TEXT,
+  state TEXT,
+  zip TEXT,
+  county TEXT,
+  source TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_fo_geo_index
+  ON funding_opportunity_geo_index(opportunity_id, geo_run_id, state, zip, source);
+
+CREATE INDEX IF NOT EXISTS idx_fo_geo_index_run_id
+  ON funding_opportunity_geo_index(geo_run_id);
 
 -- Grants (opportunities being actively tracked/pursued)
 CREATE TABLE IF NOT EXISTS grants (

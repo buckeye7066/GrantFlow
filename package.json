@@ -57,7 +57,8 @@
     "migrate:data": "node backend/scripts/migrate-sqlite-to-postgres.mjs",
     "test:keys": "node backend/scripts/test-keys.js",
     "test:auto-merge": "node ./scripts/test-auto-merge-workflow.mjs",
-    "merge:all-branches": "node ./scripts/merge-all-branches.mjs"
+    "merge:all-branches": "node ./scripts/merge-all-branches.mjs",
+    "geo:dev-start": "node ./scripts/dev-start-geo-crawl.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.1",
@@ -138,6 +139,7 @@
     "uuid": "^9.0.1",
     "vaul": "^1.1.2",
     "zipcodes": "8.0.0",
+    "zipcodes-nrviens": "^8.0.6",
     "zod": "^3.24.2",
     "zustand": "4.5.7"
   },
