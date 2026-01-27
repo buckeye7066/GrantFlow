@@ -1,13 +1,13 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { FileText, Download, Trash2, Printer, Wand2 } from 'lucide-react';
 import { format } from 'date-fns';
 import { base44 } from '@/api/base44Client';
-import { parseDocument } from '@/api/documents';
+import { getDocumentExtract, parseDocument } from '@/api/documents';
 import { useToast } from '@/components/ui/use-toast';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 function escapeHtml(value) {
   if (value == null) return '';
@@ -38,6 +38,32 @@ export default function DocumentItem({ document, onDelete }) {
 
   const processingStatus = document.processing_status ?? 'pending';
   const isUnparsed = processingStatus === 'pending' || processingStatus === 'failed';
+
+  const extractQuery = useQuery({
+    queryKey: ['document-extract', document.id],
+    queryFn: () => getDocumentExtract(document.id),
+    enabled: Boolean(document?.id),
+    refetchInterval: (query) => {
+      const status = query.state.data?.status
+      return status === 'pending' || status === 'processing' ? 3000 : false
+    },
+  })
+
+  const confidenceMeter = useMemo(() => {
+    const data = extractQuery.data
+    if (!data) return null
+
+    const confidence = typeof data.confidence === 'number' ? data.confidence : 0
+    const ocrUsed = Boolean(data.ocr_used)
+
+    if (confidence >= 0.85) {
+      return { label: ocrUsed ? 'Readable (OCR)' : 'Readable (text)', tone: 'ok', confidence }
+    }
+    if (confidence >= 0.5) {
+      return { label: 'Partial', tone: 'warn', confidence }
+    }
+    return { label: 'Unreliable', tone: 'bad', confidence }
+  }, [extractQuery.data])
   
   const parseMutation = useMutation({
     mutationFn: () => parseDocument(document.id),
@@ -178,6 +204,21 @@ export default function DocumentItem({ document, onDelete }) {
             >
               {processingStatus}
             </Badge>
+            {confidenceMeter ? (
+              <Badge
+                variant={
+                  confidenceMeter.tone === 'ok'
+                    ? 'default'
+                    : confidenceMeter.tone === 'warn'
+                    ? 'secondary'
+                    : 'destructive'
+                }
+                className="text-[10px]"
+                title={`Confidence ${(confidenceMeter.confidence ?? 0).toFixed(2)}`}
+              >
+                {confidenceMeter.label}
+              </Badge>
+            ) : null}
           </div>
         </div>
       </CardHeader>

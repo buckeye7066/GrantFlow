@@ -52,3 +52,21 @@ export function parseAllProfileDocuments(profileId, options = {}) {
     body: JSON.stringify(payload),
   })
 }
+
+export function ingestDocumentById(documentId, options = {}) {
+  if (!documentId) throw new Error('documentId is required')
+  return apiFetch(`/api/documents/${documentId}/ingest`, {
+    method: 'POST',
+    body: JSON.stringify(options || {}),
+  })
+}
+
+export function getDocumentExtract(documentId) {
+  if (!documentId) throw new Error('documentId is required')
+  return apiFetch(`/api/documents/${documentId}/extract`)
+}
+
+export function getDocumentExtractText(documentId) {
+  if (!documentId) throw new Error('documentId is required')
+  return apiFetch(`/api/documents/${documentId}/extract/text`)
+}

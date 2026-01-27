@@ -72,6 +72,29 @@ async function withTempSqliteDb() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE document_extracts (
+      id TEXT PRIMARY KEY,
+      document_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      source_type TEXT,
+      methods_used TEXT,
+      pages INTEGER,
+      char_count INTEGER,
+      word_count INTEGER,
+      text TEXT,
+      ocr_text TEXT,
+      warnings TEXT,
+      confidence REAL,
+      provenance TEXT,
+      file_hash TEXT,
+      ocr_used BOOLEAN,
+      started_at DATETIME,
+      finished_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(document_id)
+    );
+
     CREATE TABLE profile_sections (
       profile_id TEXT NOT NULL,
       section_key TEXT NOT NULL,
@@ -118,7 +141,7 @@ test('document_ingest job: updates profile sections and marks document ready for
 
     const result = await processDocumentIngestionJob({
       db,
-      job: { id: 'job-1', parameters: { document_id: documentId, handwriting: true } },
+      job: { id: 'job-1', parameters: { document_id: documentId, handwriting: true, enable_ai: true } },
       profileContext: { profile: { id: profileId }, sections: {} },
       getOpenAI: () => createMockOpenAI(),
       uploadDir: null,

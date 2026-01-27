@@ -38,6 +38,29 @@ function createDb() {
       university_application_id TEXT,
       university_application_name TEXT
     );
+
+    CREATE TABLE document_extracts (
+      id TEXT PRIMARY KEY,
+      document_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      source_type TEXT,
+      methods_used TEXT,
+      pages INTEGER,
+      char_count INTEGER,
+      word_count INTEGER,
+      text TEXT,
+      ocr_text TEXT,
+      warnings TEXT,
+      confidence REAL,
+      provenance TEXT,
+      file_hash TEXT,
+      ocr_used BOOLEAN,
+      started_at DATETIME,
+      finished_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(document_id)
+    );
   `)
   return db
 }
@@ -86,7 +109,7 @@ test('documentIngestion: fallback completes when OpenAI missing and updates univ
     'The Ohio State University',
   )
 
-  const job = { parameters: { document_id: docId } }
+  const job = { parameters: { document_id: docId, enable_ai: true } }
   const profileContext = {
     profile: { id: profileId },
     sections: {

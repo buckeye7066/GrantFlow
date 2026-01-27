@@ -59,6 +59,9 @@ export default function AdminDiagnostics() {
   const [crawlerAuditError, setCrawlerAuditError] = useState(null);
   const [crawlerAuditResult, setCrawlerAuditResult] = useState(null);
   const [crawlerAuditLimit, setCrawlerAuditLimit] = useState(25);
+  const [crawlerAuditProfileId, setCrawlerAuditProfileId] = useState('');
+  const [crawlerAuditProfiles, setCrawlerAuditProfiles] = useState([]);
+  const [crawlerAuditProfilesError, setCrawlerAuditProfilesError] = useState(null);
   const [crawlerAuditTimeout, setCrawlerAuditTimeout] = useState(20000);
   const [crawlerAuditMinScore, setCrawlerAuditMinScore] = useState(50);
   const [crawlerAuditItemRequest, setCrawlerAuditItemRequest] = useState('');
@@ -80,6 +83,16 @@ export default function AdminDiagnostics() {
       } catch (e) {
         setFundingSources([]);
         setFundingSourcesError(e?.message || 'Failed to load funding provider status');
+      }
+
+      try {
+        const profiles = await apiFetch('/api/profiles?limit=200&offset=0')
+        const active = Array.isArray(profiles) ? profiles.filter((p) => (p?.status ?? 'active') === 'active') : []
+        setCrawlerAuditProfiles(active)
+        setCrawlerAuditProfilesError(null)
+      } catch (e) {
+        setCrawlerAuditProfiles([])
+        setCrawlerAuditProfilesError(e?.message || 'Failed to load profiles')
       }
     } catch (err) {
       // Build comprehensive error information
@@ -165,6 +178,7 @@ export default function AdminDiagnostics() {
       setCrawlerAuditResult(null);
 
       const payload = {
+        profile_ids: crawlerAuditProfileId ? [crawlerAuditProfileId] : undefined,
         limit_profiles: Number(crawlerAuditLimit) || 25,
         timeout_ms: Number(crawlerAuditTimeout) || 20000,
         min_match_score: Number(crawlerAuditMinScore) || 50,
@@ -797,14 +811,22 @@ export default function AdminDiagnostics() {
 
               <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                 <div className="space-y-1">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Profiles</p>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={200}
-                    value={crawlerAuditLimit}
-                    onChange={(e) => setCrawlerAuditLimit(e.target.value)}
-                  />
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Profile (optional)</p>
+                  <select
+                    value={crawlerAuditProfileId}
+                    onChange={(e) => setCrawlerAuditProfileId(e.target.value)}
+                    className="h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    <option value="">Recent profiles (auto)</option>
+                    {(crawlerAuditProfiles || []).map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.display_name || p.id}
+                      </option>
+                    ))}
+                  </select>
+                  {crawlerAuditProfilesError ? (
+                    <p className="text-[11px] text-amber-700">{crawlerAuditProfilesError}</p>
+                  ) : null}
                 </div>
                 <div className="space-y-1">
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Timeout (ms)</p>
@@ -826,6 +848,22 @@ export default function AdminDiagnostics() {
                   />
                 </div>
                 <div className="space-y-1">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    {crawlerAuditProfileId ? 'Limit (ignored)' : 'Limit profiles'}
+                  </p>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={200}
+                    value={crawlerAuditLimit}
+                    onChange={(e) => setCrawlerAuditLimit(e.target.value)}
+                    disabled={Boolean(crawlerAuditProfileId)}
+                  />
+                </div>
+              </div>
+
+              <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-3">
+                <div className="space-y-1 md:col-span-4">
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Item request (optional)</p>
                   <Input
                     placeholder="e.g., 15 passenger van"
