@@ -1,0 +1,63 @@
+{
+  "federal_grants": [
+    {
+      "id": "fixture-fed-1",
+      "title": "Fixture Federal Community Support Grant",
+      "sponsor": "Fixture Federal Agency",
+      "description": "A fixture opportunity used for deterministic crawler tests.",
+      "amount_min": 1000,
+      "amount_max": 5000,
+      "amount_description": "Up to $5,000",
+      "deadline": null,
+      "application_url": "https://example.com/apply/fed-1",
+      "categories": ["community", "education"],
+      "keywords": ["community", "education", "support"],
+      "eligibility_bullets": ["Open to eligible applicants nationwide."],
+      "requires_501c3": false,
+      "requires_match": false,
+      "state": "nationwide"
+    }
+  ],
+  "foundation_grants": [
+    {
+      "id": "fixture-foundation-1",
+      "title": "Fixture Foundation Micro-Grant",
+      "sponsor": "Fixture Foundation",
+      "description": "A small fixture grant for testing multi-source inserts.",
+      "amount_min": 250,
+      "amount_max": 250,
+      "amount_description": "$250 micro-grant",
+      "deadline": null,
+      "application_url": "https://example.com/apply/foundation-1",
+      "categories": ["nonprofit"],
+      "keywords": ["nonprofit", "micro-grant"],
+      "eligibility_bullets": ["Open to nonprofit projects."],
+      "requires_501c3": true,
+      "requires_match": false,
+      "state": "nationwide"
+    }
+  ],
+  "state_programs": [
+    {
+      "id": "fixture-state-ny-1",
+      "title": "Fixture State Program (NY)",
+      "sponsor": "Fixture State Department",
+      "description": "A fixture state-scoped opportunity for deterministic crawler tests.",
+      "amount_min": 2000,
+      "amount_max": 10000,
+      "amount_description": "Up to $10,000",
+      "deadline": null,
+      "application_url": "https://example.com/apply/state-ny-1",
+      "categories": ["state"],
+      "keywords": ["state", "ny"],
+      "eligibility_bullets": ["Available to applicants in NY."],
+      "requires_501c3": false,
+      "requires_match": false,
+      "state": "NY"
+    }
+  ],
+  "disability_assistance": [],
+  "veteran_assistance": [],
+  "nonprofit_grants": []
+}
+

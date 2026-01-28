@@ -1,6 +1,4 @@
-import fs from "fs"
 import path from "path"
-import { fileURLToPath } from "url"
 
 export const TEST_ADMIN_TOKEN = "test-admin-token"
 export const TEST_ADMIN_AUTH_HEADER = { Authorization: `Bearer ${TEST_ADMIN_TOKEN}` }
@@ -16,6 +14,7 @@ export async function getAppAndDb() {
   process.env.ADMIN_TOKEN = TEST_ADMIN_TOKEN
   process.env.ANYA_ADMIN_TOKEN = TEST_ADMIN_TOKEN
   process.env.SQLITE_DB_PATH = ":memory:"
+  process.env.CRAWLER_DATA_DIR = path.join(process.cwd(), "backend", "tests", "fixtures", "crawlers")
 
   const mod = await import("../server.js")
   const dbMod = await import("../db/index.js")
@@ -79,16 +78,9 @@ export async function waitForCrawlerJob(db, jobId, { timeoutMs = 15_000 } = {}) 
 }
 
 export function pickAnyZipFromSeed() {
-  const __filename = fileURLToPath(import.meta.url)
-  const __dirname = path.dirname(__filename)
-  const zipPath = path.join(__dirname, "..", "data", "crawlers", "zip_coordinates.json")
-  const raw = fs.readFileSync(zipPath, "utf8")
-  const json = JSON.parse(raw)
-  const zips = Object.keys(json).filter((zip) => /^\d{5}$/.test(zip))
-  zips.sort()
-  if (zips.length === 0) {
-    throw new Error("zip_coordinates.json contains no ZIP entries")
-  }
-  return zips[0]
+  const fromEnv = String(process.env.TEST_ZIP || "").trim()
+  if (/^\d{5}$/.test(fromEnv)) return fromEnv
+  // Deterministic, always-valid US ZIP for crawler smoke.
+  return "10001"
 }
 
