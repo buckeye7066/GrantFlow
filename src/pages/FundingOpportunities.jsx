@@ -32,7 +32,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Progress } from "@/components/ui/progress"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useToast } from "@/components/ui/use-toast"
 import { listOpportunities, listOpportunitySources, listOpportunityStates } from "@/api/opportunities"
@@ -967,11 +967,13 @@ export default function FundingOpportunities() {
 
   const opportunitiesResponse = opportunitiesQuery.data ?? null
   const opportunities = opportunitiesResponse?.data ?? []
+  const effectiveCompliance = opportunitiesResponse?.compliance_effective ?? filters.compliance
+  const fallbackApplied = Boolean(opportunitiesResponse?.fallback_applied)
   const totalResults = typeof opportunitiesResponse?.total === "number" ? opportunitiesResponse.total : opportunities.length
   const selectedProfile = selectedProfileQuery.data ?? null
   const autoDiscoveryStatus = autoDiscoveryQuery.data ?? null
   const complianceMessage =
-    filters.compliance === "grant_only"
+    effectiveCompliance === "grant_only"
       ? "Grant funds only — excluding loans and match requirements."
       : "Including opportunities that may require matching funds or repayment."
 
@@ -1452,6 +1454,30 @@ export default function FundingOpportunities() {
           </CardContent>
         </Card>
       </header>
+
+      {fallbackApplied ? (
+        <Alert className="border-amber-200 bg-amber-50/70">
+          <AlertTitle className="text-amber-900">No grant-only results for these filters</AlertTitle>
+          <AlertDescription className="text-amber-800">
+            GrantFlow widened the view to include opportunities that may require match funds or repayment so you still have
+            actionable results. Switch the Funding terms filter to “Include review-required” to make this explicit.
+          </AlertDescription>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button
+              variant="default"
+              onClick={() => setFilters((prev) => ({ ...prev, compliance: "all" }))}
+            >
+              Include review-required
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => setFilters((prev) => ({ ...prev, compliance: "grant_only" }))}
+            >
+              Keep grant-only filter
+            </Button>
+          </div>
+        </Alert>
+      ) : null}
 
       {isLoading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">

@@ -1871,7 +1871,10 @@ app.use((req, res) => {
 });
 
 // Graceful shutdown handling
+let server = null
+
 function gracefulShutdown(signal) {
+  if (!server) return
   console.log(`\nReceived ${signal}, closing server gracefully...`);
   
   server.close(async () => {
@@ -1898,34 +1901,39 @@ function gracefulShutdown(signal) {
   }, 10000);
 }
 
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+if (process.env.NODE_ENV !== 'test') {
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-const server = app.listen(PORT, '0.0.0.0');
+  server = app.listen(PORT, '0.0.0.0');
 
-server.on('error', (err) => {
-  const code = err?.code || 'UNKNOWN';
-  if (code === 'EADDRINUSE') {
-    console.error('[Server] Failed to bind port ' + PORT + ': address already in use. Stop the other process or set PORT to a free port (e.g. PORT=0 for ephemeral).');
-  } else {
-    console.error('[Server] Failed to start HTTP server:', err);
-  }
-  process.exit(1);
-});
+  server.on('error', (err) => {
+    const code = err?.code || 'UNKNOWN';
+    if (code === 'EADDRINUSE') {
+      console.error(
+        '[Server] Failed to bind port ' +
+          PORT +
+          ': address already in use. Stop the other process or set PORT to a free port (e.g. PORT=0 for ephemeral).',
+      );
+    } else {
+      console.error('[Server] Failed to start HTTP server:', err);
+    }
+    process.exit(1);
+  });
 
-server.on('listening', () => {
-  const loggedCorsOrigins = Array.isArray(corsOptions.origin) ? corsOptions.origin : [corsOptions.origin];
-  console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
-  const actualPort = server.address()?.port ?? PORT;
-  console.log('[Server] Ready on port', actualPort);
+  server.on('listening', () => {
+    const loggedCorsOrigins = Array.isArray(corsOptions.origin) ? corsOptions.origin : [corsOptions.origin];
+    console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
+    const actualPort = server.address()?.port ?? PORT;
+    console.log('[Server] Ready on port', actualPort);
 
-  // Expose a stable in-process base URL for Anya autonomous function tests.
-  // NOTE: When PORT=0 (ephemeral), the actual listening port differs from process.env.PORT.
-  try {
-    globalThis.__grantflow_internal_base_url = `http://127.0.0.1:${actualPort}`
-  } catch {
-    // best-effort only
-  }
+    // Expose a stable in-process base URL for Anya autonomous function tests.
+    // NOTE: When PORT=0 (ephemeral), the actual listening port differs from process.env.PORT.
+    try {
+      globalThis.__grantflow_internal_base_url = `http://127.0.0.1:${actualPort}`
+    } catch {
+      // best-effort only
+    }
   
   // Initialize feature flags
   try {
@@ -2032,6 +2040,9 @@ server.on('listening', () => {
       '[NationalPrograms] Continuous crawler disabled (set NATIONAL_PROGRAMS_CRAWLER_ENABLED=true to enable)',
     )
   }
-});
+  });
+} else {
+  console.info('[server] NODE_ENV=test; HTTP listener disabled')
+}
 
 export default app;
