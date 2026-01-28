@@ -91,6 +91,11 @@ const navigationItems = [
     icon: DollarSign,
   },
   {
+    title: "Services",
+    url: createPageUrl("Services"),
+    icon: DollarSign,
+  },
+  {
     title: "Budgets",
     url: createPageUrl("Budgets"),
     icon: DollarSign,

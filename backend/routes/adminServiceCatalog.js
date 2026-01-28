@@ -1,0 +1,47 @@
+import express from 'express'
+import { ensureAdmin, ensureAuth } from '../middleware/auth.js'
+import { ensureServiceCatalogSchema, listServiceCatalog, seedServiceCatalogFromExtract } from '../services/serviceCatalogStore.js'
+
+const router = express.Router()
+router.use(ensureAuth)
+router.use(ensureAdmin)
+
+router.get('/catalog', async (req, res) => {
+  await seedServiceCatalogFromExtract(req.db)
+  const catalog = await listServiceCatalog(req.db, { includeInactive: true })
+  res.json({ ok: true, catalog })
+})
+
+router.post('/service/:slug/toggle', async (req, res) => {
+  await ensureServiceCatalogSchema(req.db)
+  const slug = String(req.params.slug || '').trim()
+  const isActive = req.body?.is_active === true
+  if (!slug) return res.status(400).json({ ok: false, error: 'slug required' })
+
+  const out = await req.db
+    .prepare('UPDATE service_catalog_items SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE slug = ?')
+    .run(req.db?.dialect === 'postgres' ? Boolean(isActive) : isActive ? 1 : 0, slug)
+  const changed = Number(out?.changes ?? out?.rowCount ?? 0)
+  res.json({ ok: true, updated: changed > 0 })
+})
+
+router.post('/price/:id/map-stripe', async (req, res) => {
+  await ensureServiceCatalogSchema(req.db)
+  const id = String(req.params.id || '').trim()
+  const stripePriceIdRaw = typeof req.body?.stripe_price_id === 'string' ? req.body.stripe_price_id.trim() : ''
+  const stripePriceId = stripePriceIdRaw || null
+
+  if (!id) return res.status(400).json({ ok: false, error: 'id required' })
+  if (stripePriceId && !/^price_[A-Za-z0-9]+$/.test(stripePriceId)) {
+    return res.status(400).json({ ok: false, error: 'invalid stripe_price_id (expected price_*)' })
+  }
+
+  const out = await req.db
+    .prepare('UPDATE service_prices SET stripe_price_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    .run(stripePriceId, id)
+  const changed = Number(out?.changes ?? out?.rowCount ?? 0)
+  res.json({ ok: true, updated: changed > 0 })
+})
+
+export default router
+
