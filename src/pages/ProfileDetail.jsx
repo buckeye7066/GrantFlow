@@ -468,25 +468,20 @@ export default function ProfileDetail() {
 
         <Tabs defaultValue="profile" className="w-full">
           <TabsList
-            className={`grid w-full ${
-              isStudentProfile && isHealthProfile
-                ? "grid-cols-11"
-                : isStudentProfile || isHealthProfile
-                  ? "grid-cols-10"
-                  : "grid-cols-9"
-            } lg:w-auto lg:inline-flex`}
+            // Responsive tabs: NEVER overlap. Scroll horizontally on narrow widths.
+            className="w-full justify-start gap-2 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           >
-            <TabsTrigger value="profile">Profile Information</TabsTrigger>
-            <TabsTrigger value="pipeline">Pipeline</TabsTrigger>
-            <TabsTrigger value="item-funding">Item Funding</TabsTrigger>
-            <TabsTrigger value="deadlines">Grant Deadline</TabsTrigger>
-            <TabsTrigger value="monitoring">Grant Monitoring</TabsTrigger>
-            <TabsTrigger value="proposals">Proposals & Files</TabsTrigger>
-            <TabsTrigger value="documents">Documents</TabsTrigger>
-            <TabsTrigger value="billing">Billing</TabsTrigger>
-            <TabsTrigger value="personalization">Personalization</TabsTrigger>
-            {isStudentProfile ? <TabsTrigger value="universities">Universities</TabsTrigger> : null}
-            {isHealthProfile ? <TabsTrigger value="health">Health</TabsTrigger> : null}
+            <TabsTrigger className="shrink-0 min-w-max px-3" value="profile">Profile Information</TabsTrigger>
+            <TabsTrigger className="shrink-0 min-w-max px-3" value="pipeline">Pipeline</TabsTrigger>
+            <TabsTrigger className="shrink-0 min-w-max px-3" value="item-funding">Item Funding</TabsTrigger>
+            <TabsTrigger className="shrink-0 min-w-max px-3" value="deadlines">Grant Deadline</TabsTrigger>
+            <TabsTrigger className="shrink-0 min-w-max px-3" value="monitoring">Grant Monitoring</TabsTrigger>
+            <TabsTrigger className="shrink-0 min-w-max px-3" value="proposals">Proposals & Files</TabsTrigger>
+            <TabsTrigger className="shrink-0 min-w-max px-3" value="documents">Documents</TabsTrigger>
+            <TabsTrigger className="shrink-0 min-w-max px-3" value="billing">Billing</TabsTrigger>
+            <TabsTrigger className="shrink-0 min-w-max px-3" value="personalization">Personalization</TabsTrigger>
+            {isStudentProfile ? <TabsTrigger className="shrink-0 min-w-max px-3" value="universities">Universities</TabsTrigger> : null}
+            {isHealthProfile ? <TabsTrigger className="shrink-0 min-w-max px-3" value="health">Health</TabsTrigger> : null}
           </TabsList>
 
           <TabsContent value="profile" className="mt-6">
