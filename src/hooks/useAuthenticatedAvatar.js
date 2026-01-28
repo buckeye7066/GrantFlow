@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { apiFetch } from '@/api/apiClient'
 import { normalizeAuthenticatedApiPath } from '@/utils/authenticatedDownload'
 
@@ -12,8 +12,15 @@ import { normalizeAuthenticatedApiPath } from '@/utils/authenticatedDownload'
 export function useAuthenticatedAvatar(avatarUrl) {
   const [blobUrl, setBlobUrl] = useState(null)
   const [isLoading, setIsLoading] = useState(false)
+  const objectUrlRef = useRef(null)
 
   useEffect(() => {
+    // Clean up previous object URL if exists
+    if (objectUrlRef.current) {
+      URL.revokeObjectURL(objectUrlRef.current)
+      objectUrlRef.current = null
+    }
+
     if (!avatarUrl) {
       setBlobUrl(null)
       return
@@ -30,15 +37,15 @@ export function useAuthenticatedAvatar(avatarUrl) {
 
     // Fetch the protected resource with authentication
     let cancelled = false
-    let objectUrl = null
 
     setIsLoading(true)
     
     apiFetch(normalizedApiPath, { method: 'GET', responseType: 'blob' })
       .then(blob => {
         if (cancelled) return
-        objectUrl = URL.createObjectURL(blob)
-        setBlobUrl(objectUrl)
+        const newObjectUrl = URL.createObjectURL(blob)
+        objectUrlRef.current = newObjectUrl
+        setBlobUrl(newObjectUrl)
         setIsLoading(false)
       })
       .catch(error => {
@@ -52,8 +59,9 @@ export function useAuthenticatedAvatar(avatarUrl) {
     // Cleanup function to revoke object URL
     return () => {
       cancelled = true
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl)
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current)
+        objectUrlRef.current = null
       }
     }
   }, [avatarUrl])

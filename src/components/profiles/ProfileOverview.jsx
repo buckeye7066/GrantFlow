@@ -532,8 +532,6 @@ export default function ProfileOverview({
   
   // Use authenticated avatar hook to handle protected API endpoints
   const { blobUrl: avatarSrc } = useAuthenticatedAvatar(avatarUrl)
-    return words.slice(0, 2).map((word) => word.charAt(0).toUpperCase()).join("")
-  }, [profile.display_name])
 
   const formattedFundsTotal = useMemo(() => {
     const formatter = new Intl.NumberFormat("en-US", {
