@@ -24,6 +24,7 @@ import {
   submit,
   validate,
 } from '@/api/applicationsApi'
+import { downloadAuthenticatedUrl } from '@/utils/authenticatedDownload'
 
 export default function SubmissionAssistant({ open, onClose, grant, organization, applicationId }) {
   const queryClient = useQueryClient()
@@ -60,7 +61,11 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
     mutationFn: (format) => exportPackage(applicationId, format),
     onSuccess: (result) => {
       const url = result?.artifact?.download_url
-      if (url) window.location.assign(url)
+      if (url) {
+        downloadAuthenticatedUrl(url, { fallbackFileName: `application_${applicationId || 'export'}.docx` }).catch(() => {
+          // errors are surfaced via the browser + backend; keep UI stable
+        })
+      }
     },
   })
 

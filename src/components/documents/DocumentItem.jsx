@@ -8,6 +8,7 @@ import { base44 } from '@/api/base44Client';
 import { getDocumentExtract, parseDocument } from '@/api/documents';
 import { useToast } from '@/components/ui/use-toast';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { downloadAuthenticatedUrl, openAuthenticatedUrlForPrint } from '@/utils/authenticatedDownload'
 
 function escapeHtml(value) {
   if (value == null) return '';
@@ -145,8 +146,18 @@ export default function DocumentItem({ document, onDelete }) {
   const handleDownload = async () => {
     const url = await resolveFileUrl();
     if (url) {
-      window.open(url, '_blank', 'noopener,noreferrer');
-      return;
+      try {
+        await downloadAuthenticatedUrl(url, {
+          fallbackFileName: String(document.file_name || document.name || 'document').trim() || 'document',
+        })
+      } catch (error) {
+        toast({
+          variant: 'destructive',
+          title: 'Download failed',
+          description: error?.message || 'Unable to download this document right now.',
+        })
+      }
+      return
     }
     if (document.extracted_text) {
       const blob = new Blob([document.extracted_text], { type: 'text/plain;charset=utf-8' });
@@ -167,13 +178,16 @@ export default function DocumentItem({ document, onDelete }) {
   const handlePrint = async () => {
     const url = await resolveFileUrl();
     if (url) {
-      const printWindow = window.open(url, '_blank', 'noopener,noreferrer');
-      if (printWindow) {
-        printWindow.onload = () => {
-          printWindow.print();
-        };
+      try {
+        await openAuthenticatedUrlForPrint(url)
+      } catch (error) {
+        toast({
+          variant: 'destructive',
+          title: 'Print failed',
+          description: error?.message || 'Unable to open printable view right now.',
+        })
       }
-      return;
+      return
     }
     if (document.extracted_text) {
       openTextPrintWindow(document.name ?? 'Document', document.extracted_text);

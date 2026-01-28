@@ -279,6 +279,7 @@ class APIClient {
     const url = `${this.baseUrl}${endpoint}`;
     const token = this.getToken();
     const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+    const responseType = options?.responseType || null; // 'blob' | 'arrayBuffer' | 'response'
 
     // Strip internal retry flags so we don't pass unknown keys to `fetch()`.
     const {
@@ -422,6 +423,17 @@ class APIClient {
 
       if (response.status === 204) {
         return null;
+      }
+
+      // Binary/stream responses (e.g., authenticated downloads).
+      if (responseType === 'response') {
+        return response
+      }
+      if (responseType === 'blob') {
+        return await response.blob()
+      }
+      if (responseType === 'arrayBuffer') {
+        return await response.arrayBuffer()
       }
 
       const contentType = response.headers.get('content-type') || '';

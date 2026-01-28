@@ -158,10 +158,11 @@ class ApiClient {
     const url = `${this.baseUrl}${path}`
     const method = String(options.method || 'GET').toUpperCase()
     const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData
+    const { responseType = null, ...requestOptions } = options || {} // 'blob' | 'arrayBuffer' | 'response'
 
     const headers = {
       ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
-      ...(options.headers || {}),
+      ...(requestOptions.headers || {}),
     }
     if (isFormData) delete headers['Content-Type']
 
@@ -176,7 +177,7 @@ class ApiClient {
 
     const attempt = async (isRetry) => {
       const resp = await fetch(url, {
-        ...options,
+        ...requestOptions,
         method,
         headers,
         credentials: 'include',
@@ -217,6 +218,11 @@ class ApiClient {
       }
 
       if (resp.status === 204) return null
+
+      if (responseType === 'response') return resp
+      if (responseType === 'blob') return await resp.blob()
+      if (responseType === 'arrayBuffer') return await resp.arrayBuffer()
+
       const contentType = resp.headers.get('content-type') || ''
       if (contentType.includes('application/json')) return resp.json()
       return resp.text()
