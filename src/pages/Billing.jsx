@@ -7,11 +7,13 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
-import { Loader2, PenSquare, ShieldCheck, Users } from "lucide-react"
+import { Loader2, PenSquare, ShieldCheck, Users, FileText } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { useAuthStore } from "@/stores/authStore"
 import { listBillingTiers, listBillingAccounts, updateBillingAccount, getBillingAccount } from "@/api/billing"
 import { getProfile } from "@/api/profiles"
+import { Link } from "react-router-dom"
+import { createPageUrl } from "@/utils"
 
 const discountOptions = [
   { value: "none", label: "No discount" },
@@ -600,6 +602,14 @@ export default function Billing() {
             Assign tiers, apply student or minister discounts, and track pro bono agreements across every onboarding profile.
             Changes here flow through to invoices, time tracking, and reporting exports.
           </p>
+          <div className="pt-2">
+            <Link to={createPageUrl("BillingSheet")}>
+              <Button variant="outline" size="sm">
+                <FileText className="w-4 h-4 mr-2" />
+                Payment Sheet (Master)
+              </Button>
+            </Link>
+          </div>
         </header>
 
         <section className="space-y-4">
@@ -643,6 +653,14 @@ export default function Billing() {
           Review the tier and guardrails tied to your onboarding application. Contact the GrantFlow team if your situation
           changes or you need to request a different arrangement.
         </p>
+        <div className="pt-2">
+          <Link to={createPageUrl("BillingSheet")}>
+            <Button variant="outline" size="sm">
+              <FileText className="w-4 h-4 mr-2" />
+              Payment Sheet (Master)
+            </Button>
+          </Link>
+        </div>
       </header>
       <MemberBillingCard
         profileId={activeProfileId ?? "unknown"}

@@ -714,7 +714,15 @@ if (db.dialect === 'sqlite') {
   ensureCrawlerJobsSupportsAllTypes()
 }
 
-const IS_SMOKE_MODE = String(process.env.SMOKE_MODE || '').trim().toLowerCase() === 'true'
+// Smoke mode: used by unit/contract tests (fast deterministic boot).
+// Many unit tests start the server with PORT=0 + DB_AUTO_MIGRATE=true but do not set SMOKE_MODE explicitly.
+// In that case, we infer smoke mode so that heavy startup tasks never block the "Ready" signal.
+const explicitSmoke = String(process.env.SMOKE_MODE || '').trim().toLowerCase() === 'true'
+const inferredSmoke =
+  String(PORT) === '0' &&
+  String(process.env.DB_AUTO_MIGRATE || '').trim().toLowerCase() === 'true' &&
+  String(process.env.NODE_ENV || '').trim().toLowerCase() !== 'production'
+const IS_SMOKE_MODE = explicitSmoke || inferredSmoke
 
 // Restore baseline data (profiles + sections, plus other seed tables if DB appears empty).
 // This makes the app self-heal after an ephemeral DB reset, so "real profiles" reappear on next login.
@@ -722,6 +730,10 @@ if (IS_SMOKE_MODE) {
   // Contract/unit tests start the backend in "smoke" mode and only need a fast, deterministic boot.
   // Heavy boot tasks (baseline seeding, network-dependent backfills, large DB scans) must not block PORT binding.
   console.info('[startup] SMOKE_MODE enabled; skipping baseline seed + heavy startup tasks')
+  // Still ensure core fixtures exist so auth/access tests have profiles to attach to.
+  await ensureDesignatedProfiles(db)
+  await linkAllProfilesToAdmin(db)
+  await ensureUserPreferencesTable(db)
 } else {
   try {
     const mode = String(process.env.BASELINE_SEED_MODE || '').trim().toLowerCase() || 'auto'

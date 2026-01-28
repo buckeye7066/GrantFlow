@@ -110,48 +110,64 @@ async function ensureGeoCrawlSchema(db) {
           );
         `
 
+    // IMPORTANT:
+    // - This is called from request/worker paths in production.
+    // - If schema creation fails once (e.g., migrations lag), we MUST NOT permanently mark it as "ensured".
+    //   Otherwise later requests will keep failing with "relation does not exist".
     try {
+      // Core tables must exist for the monitor endpoints to work.
       await db.prepare(createRuns).run()
       await db.prepare(createEvents).run()
-      await db.prepare(createGeoIndex).run()
+
+      // Optional: association index table (used for durable per-zip attribution).
+      try {
+        await db.prepare(createGeoIndex).run()
+        await db
+          .prepare(
+            `
+              CREATE UNIQUE INDEX IF NOT EXISTS uniq_fo_geo_index
+              ON funding_opportunity_geo_index(opportunity_id, geo_run_id, state, zip, source);
+            `,
+          )
+          .run()
+        await db.prepare(`CREATE INDEX IF NOT EXISTS idx_fo_geo_index_run_id ON funding_opportunity_geo_index(geo_run_id);`).run()
+      } catch (error) {
+        console.warn('[geoCrawlRunStore] Unable to ensure funding_opportunity_geo_index (continuing):', error?.message || error)
+      }
 
       // Indexes (best-effort)
-      await db.prepare(`CREATE INDEX IF NOT EXISTS idx_geo_crawl_runs_status ON geo_crawl_runs(status);`).run()
-      await db.prepare(`CREATE INDEX IF NOT EXISTS idx_geo_crawl_runs_state ON geo_crawl_runs(state);`).run()
-      await db.prepare(`CREATE INDEX IF NOT EXISTS idx_geo_crawl_runs_job ON geo_crawl_runs(crawler_job_id);`).run()
+      try {
+        await db.prepare(`CREATE INDEX IF NOT EXISTS idx_geo_crawl_runs_status ON geo_crawl_runs(status);`).run()
+        await db.prepare(`CREATE INDEX IF NOT EXISTS idx_geo_crawl_runs_state ON geo_crawl_runs(state);`).run()
+        await db.prepare(`CREATE INDEX IF NOT EXISTS idx_geo_crawl_runs_job ON geo_crawl_runs(crawler_job_id);`).run()
 
-      await db.prepare(`CREATE INDEX IF NOT EXISTS idx_geo_crawl_events_run_id ON geo_crawl_events(run_id);`).run()
-      await db.prepare(`CREATE INDEX IF NOT EXISTS idx_geo_crawl_events_run_id_id ON geo_crawl_events(run_id, id);`).run()
-      await db.prepare(`CREATE INDEX IF NOT EXISTS idx_geo_crawl_events_run_id_ts ON geo_crawl_events(run_id, ts);`).run()
-
-      await db
-        .prepare(
-          `
-            CREATE UNIQUE INDEX IF NOT EXISTS uniq_fo_geo_index
-            ON funding_opportunity_geo_index(opportunity_id, geo_run_id, state, zip, source);
-          `,
-        )
-        .run()
-      await db.prepare(`CREATE INDEX IF NOT EXISTS idx_fo_geo_index_run_id ON funding_opportunity_geo_index(geo_run_id);`).run()
+        await db.prepare(`CREATE INDEX IF NOT EXISTS idx_geo_crawl_events_run_id ON geo_crawl_events(run_id);`).run()
+        await db.prepare(`CREATE INDEX IF NOT EXISTS idx_geo_crawl_events_run_id_id ON geo_crawl_events(run_id, id);`).run()
+        await db.prepare(`CREATE INDEX IF NOT EXISTS idx_geo_crawl_events_run_id_ts ON geo_crawl_events(run_id, ts);`).run()
+      } catch (error) {
+        console.warn('[geoCrawlRunStore] Unable to ensure geo crawl indexes (continuing):', error?.message || error)
+      }
 
       // Legacy columns on funding_opportunities (some UIs rely on these).
-      // Keep best-effort and do not fail requests if ALTER isn't permitted.
-      try {
-        if (isPostgres) {
+      // Best-effort and do not fail requests if ALTER isn't permitted.
+      if (isPostgres) {
+        try {
           await db.prepare(`ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS geo_run_id TEXT;`).run()
           await db.prepare(`ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS geo_zip TEXT;`).run()
           await db.prepare(`ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS geo_county TEXT;`).run()
           await db.prepare(`ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS geo_source TEXT;`).run()
           await db.prepare(`ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS geo_scope TEXT;`).run()
-        } else {
-          // SQLite ALTER ADD COLUMN IF NOT EXISTS is not supported across all builds.
-          // We intentionally skip this here; SQLite dev uses migrations.
+        } catch (error) {
+          console.warn('[geoCrawlRunStore] Unable to ensure geo_* columns on funding_opportunities (continuing):', error?.message || error)
         }
-      } catch {
-        // ignore
       }
-    } finally {
+
       ensured = true
+    } catch (error) {
+      // Allow future calls to retry schema creation.
+      ensurePromise = null
+      ensured = false
+      throw error
     }
   })()
 

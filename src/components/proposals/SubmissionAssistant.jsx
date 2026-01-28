@@ -15,7 +15,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { CheckCircle, Download, FileText, Loader2, Send, Sparkles, AlertTriangle } from 'lucide-react'
-import {
+import { 
   autoPopulate,
   exportPackage,
   getApplication,
@@ -123,17 +123,17 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
             </div>
             <Button variant="outline" size="sm" disabled={!applicationId || autoPopulateMutation.isPending} onClick={() => autoPopulateMutation.mutate()}>
               {autoPopulateMutation.isPending ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                   Seeding…
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-4 h-4 mr-2" />
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4 mr-2" />
                   Auto-populate
-                </>
-              )}
-            </Button>
+                    </>
+                  )}
+                </Button>
           </div>
 
           <Alert className={ready ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}>
@@ -157,8 +157,8 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
               ) : (
                 'Run Validate to compute readiness.'
               )}
-            </AlertDescription>
-          </Alert>
+              </AlertDescription>
+            </Alert>
 
           <div>
             <Label className="text-base font-semibold mb-3 block">Submission Method</Label>
@@ -207,7 +207,7 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
                   <div className="flex items-center gap-2">
                     <FileText className="w-4 h-4 text-slate-700" />
                     <span className="font-medium">Portal</span>
-                  </div>
+          </div>
                   <p className="text-xs text-slate-600">
                     {application?.portal_url ? (
                       <>
@@ -220,7 +220,7 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
                 </Label>
               </div>
             </RadioGroup>
-          </div>
+              </div>
 
           {submissionMethod !== 'download' ? (
             <div className="space-y-3 p-4 bg-slate-50 rounded-lg border">
@@ -238,10 +238,10 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
                 </div>
               ) : null}
               {submissionMethod === 'mail' ? (
-                <div>
+              <div>
                   <Label htmlFor="recipientAddress">Mailing address</Label>
                   <Textarea id="recipientAddress" value={recipientAddress} onChange={(e) => setRecipientAddress(e.target.value)} rows={3} />
-                </div>
+              </div>
               ) : null}
               <div>
                 <Label htmlFor="notes">Notes</Label>
@@ -263,20 +263,20 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
               ) : (
                 'Validate'
               )}
-            </Button>
-            <Button
+          </Button>
+          <Button 
               variant="outline"
               onClick={() => exportMutation.mutate('docx')}
               disabled={!applicationId || exportMutation.isPending}
             >
               {exportMutation.isPending ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                   Exporting…
-                </>
+              </>
               ) : (
-                <>
-                  <Download className="w-4 h-4 mr-2" />
+              <>
+                <Download className="w-4 h-4 mr-2" />
                   Export DOCX
                 </>
               )}
@@ -301,14 +301,14 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                   Saving…
-                </>
-              ) : (
-                <>
-                  <Send className="w-4 h-4 mr-2" />
+              </>
+            ) : (
+              <>
+                <Send className="w-4 h-4 mr-2" />
                   Mark submitted
-                </>
-              )}
-            </Button>
+              </>
+            )}
+          </Button>
           </div>
         </div>
       </DialogContent>
