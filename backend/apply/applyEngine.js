@@ -6,6 +6,163 @@ function nowSqlLiteral(db) {
   return db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
 }
 
+let ensuredApplySchema = false
+let ensureApplySchemaPromise = null
+
+async function ensureApplyEngineSchema(db) {
+  if (!db || typeof db.prepare !== 'function') return
+  if (ensuredApplySchema) return
+  if (ensureApplySchemaPromise) return ensureApplySchemaPromise
+
+  ensureApplySchemaPromise = (async () => {
+    const isPostgres = db?.dialect === 'postgres'
+
+    const createApplications = isPostgres
+      ? `
+          CREATE TABLE IF NOT EXISTS applications (
+            id TEXT PRIMARY KEY DEFAULT (gen_random_uuid()::text),
+            grant_id TEXT NOT NULL REFERENCES grants(id) ON DELETE CASCADE,
+            organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+            status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','ready','exported','submitted')),
+            submission_method TEXT CHECK(submission_method IN ('portal','email','fax','mail','s2s','download')),
+            submitted_at TIMESTAMPTZ,
+            exported_at TIMESTAMPTZ,
+            portal_url TEXT,
+            snapshot_json TEXT,
+            artifact_uri TEXT,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(grant_id, organization_id)
+          );
+        `
+      : `
+          CREATE TABLE IF NOT EXISTS applications (
+            id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+            grant_id TEXT NOT NULL REFERENCES grants(id) ON DELETE CASCADE,
+            organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+            status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','ready','exported','submitted')),
+            submission_method TEXT CHECK(submission_method IN ('portal','email','fax','mail','s2s','download')),
+            submitted_at DATETIME,
+            exported_at DATETIME,
+            portal_url TEXT,
+            snapshot_json TEXT,
+            artifact_uri TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(grant_id, organization_id)
+          );
+        `
+
+    const createSections = isPostgres
+      ? `
+          CREATE TABLE IF NOT EXISTS application_sections (
+            id TEXT PRIMARY KEY DEFAULT (gen_random_uuid()::text),
+            application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+            section_key TEXT NOT NULL,
+            title TEXT,
+            content TEXT,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(application_id, section_key)
+          );
+        `
+      : `
+          CREATE TABLE IF NOT EXISTS application_sections (
+            id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+            application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+            section_key TEXT NOT NULL,
+            title TEXT,
+            content TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(application_id, section_key)
+          );
+        `
+
+    const createChecklist = isPostgres
+      ? `
+          CREATE TABLE IF NOT EXISTS application_checklist_items (
+            id TEXT PRIMARY KEY DEFAULT (gen_random_uuid()::text),
+            application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+            key TEXT NOT NULL,
+            label TEXT,
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','done','blocked')),
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(application_id, key)
+          );
+        `
+      : `
+          CREATE TABLE IF NOT EXISTS application_checklist_items (
+            id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+            application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+            key TEXT NOT NULL,
+            label TEXT,
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','done','blocked')),
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(application_id, key)
+          );
+        `
+
+    const createArtifacts = isPostgres
+      ? `
+          CREATE TABLE IF NOT EXISTS application_artifacts (
+            id TEXT PRIMARY KEY DEFAULT (gen_random_uuid()::text),
+            application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+            format TEXT NOT NULL CHECK(format IN ('docx','zip','pdf')),
+            storage_path TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT now()
+          );
+        `
+      : `
+          CREATE TABLE IF NOT EXISTS application_artifacts (
+            id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+            application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+            format TEXT NOT NULL CHECK(format IN ('docx','zip','pdf')),
+            storage_path TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+          );
+        `
+
+    try {
+      await db.prepare(createApplications).run()
+      await db.prepare(createSections).run()
+      await db.prepare(createChecklist).run()
+      await db.prepare(createArtifacts).run()
+
+      // Indexes (best-effort; harmless if they already exist)
+      await db.prepare('CREATE INDEX IF NOT EXISTS idx_applications_grant_id ON applications(grant_id);').run()
+      await db.prepare('CREATE INDEX IF NOT EXISTS idx_applications_org_id ON applications(organization_id);').run()
+      await db.prepare('CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status);').run()
+      await db
+        .prepare('CREATE INDEX IF NOT EXISTS idx_application_sections_application_id ON application_sections(application_id);')
+        .run()
+      await db
+        .prepare(
+          'CREATE INDEX IF NOT EXISTS idx_application_checklist_application_id ON application_checklist_items(application_id);',
+        )
+        .run()
+      await db
+        .prepare('CREATE INDEX IF NOT EXISTS idx_application_checklist_status ON application_checklist_items(status);')
+        .run()
+      await db
+        .prepare('CREATE INDEX IF NOT EXISTS idx_application_artifacts_application_id ON application_artifacts(application_id);')
+        .run()
+
+      ensuredApplySchema = true
+    } catch (error) {
+      ensuredApplySchema = false
+      throw error
+    } finally {
+      // Allow retry after failures; keep memory bounded after success.
+      ensureApplySchemaPromise = null
+    }
+  })()
+
+  return ensureApplySchemaPromise
+}
+
 function normalizeMethod(method) {
   const v = String(method || '').trim().toLowerCase()
   if (!v) return null
@@ -123,6 +280,7 @@ async function buildDocxBuffer({ title, sections, checklist }) {
 }
 
 async function getApplicationOr404(db, applicationId) {
+  await ensureApplyEngineSchema(db)
   const row = await db.prepare('SELECT * FROM applications WHERE id = ?').get(String(applicationId))
   if (!row) {
     const err = new Error('Application not found')
@@ -149,6 +307,7 @@ export async function prepareApplication({ db, grantId, organizationId, userId }
   if (!grantId) throw new Error('grantId required')
   if (!organizationId) throw new Error('organizationId required')
 
+  await ensureApplyEngineSchema(db)
   const existing = await db
     .prepare('SELECT * FROM applications WHERE grant_id = ? AND organization_id = ? LIMIT 1')
     .get(String(grantId), String(organizationId))

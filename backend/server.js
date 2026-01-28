@@ -72,6 +72,7 @@ import { ensureProfileEmailSchema } from './utils/accessControl.js';
 import { dispatchCrawlerJob } from './services/crawlerDispatcher.js';
 import { findDuplicateProfileGroups, mergeProfiles } from './services/profileDedupeService.js'
 import { assertEnv, getJwtSecretOrThrow } from './config/env.js'
+import { resolveUploadsDir, ensureUploadsDirWritable, isLikelyPersistentPath } from './utils/uploadsDir.js'
 
 // Validate environment variables early (fail-fast in production).
 const { env: ENV } = assertEnv()
@@ -96,16 +97,89 @@ const __dirname = dirname(__filename);
 // Uploads must live on a persistent volume in production (Railway Volume).
 // Set UPLOADS_DIR=/data/uploads (or your mount path) in Railway.
 // Default to backend/uploads for local/dev so routes and serving agree.
-const uploadsDir = process.env.UPLOADS_DIR
-  ? resolve(process.env.UPLOADS_DIR)
-  : join(__dirname, 'uploads');
-// Backward-compat: some older builds stored uploads at repo-root `/uploads`.
-const legacyUploadsDir = join(__dirname, '..', 'uploads');
+const { uploadsDir, legacyUploadsDir } = resolveUploadsDir({ baseDir: __dirname })
 const distPath = join(__dirname, '..', 'dist');
 
 const app = express();
 app.set('trust proxy', 1);
 const PORT = ENV?.PORT ?? process.env.PORT ?? 8080;
+
+// --- Upload storage health (single source of truth) ---
+const isProdEnv = String(process.env.NODE_ENV || '').toLowerCase() === 'production'
+const allowEphemeralUploads = String(process.env.ALLOW_EPHEMERAL_UPLOADS || '').toLowerCase() === 'true'
+let storageStatus = {
+  uploads_dir: uploadsDir,
+  legacy_uploads_dir: legacyUploadsDir,
+  writable: false,
+  likely_persistent: isLikelyPersistentPath(uploadsDir),
+  status: 'unknown', // ok|degraded|error|unknown
+  last_error: null,
+  checked_at: new Date().toISOString(),
+}
+
+try {
+  const writable = await ensureUploadsDirWritable(uploadsDir)
+  storageStatus = {
+    ...storageStatus,
+    writable: Boolean(writable?.ok),
+    last_error: writable?.ok ? null : writable?.error || 'uploads_unwritable',
+    checked_at: new Date().toISOString(),
+  }
+
+  if (isProdEnv) {
+    const missingEnv = !String(process.env.UPLOADS_DIR || '').trim()
+    const persistentOk = storageStatus.likely_persistent === true
+    const writableOk = storageStatus.writable === true
+
+    if ((missingEnv || !persistentOk || !writableOk) && !allowEphemeralUploads) {
+      const reason = missingEnv
+        ? 'UPLOADS_DIR is required in production'
+        : !persistentOk
+          ? `UPLOADS_DIR is not a likely persistent mount: ${uploadsDir}`
+          : `UPLOADS_DIR is not writable: ${uploadsDir}`
+      console.error('[storage] FATAL: refusing to boot with non-persistent uploads storage', {
+        uploadsDir,
+        missingEnv,
+        likely_persistent: storageStatus.likely_persistent,
+        writable: storageStatus.writable,
+        last_error: storageStatus.last_error,
+      })
+      // Hard fail in production so we never "think it saved" to an ephemeral filesystem.
+      process.exit(1)
+    }
+
+    if (missingEnv || !persistentOk || !writableOk) {
+      storageStatus = { ...storageStatus, status: 'degraded' }
+      console.error('[storage] DEGRADED upload storage', {
+        uploadsDir,
+        missingEnv,
+        likely_persistent: storageStatus.likely_persistent,
+        writable: storageStatus.writable,
+        last_error: storageStatus.last_error,
+      })
+    } else {
+      storageStatus = { ...storageStatus, status: 'ok' }
+    }
+  } else {
+    storageStatus = { ...storageStatus, status: storageStatus.writable ? 'ok' : 'degraded' }
+  }
+} catch (error) {
+  storageStatus = {
+    ...storageStatus,
+    status: 'error',
+    writable: false,
+    last_error: error?.message || String(error),
+    checked_at: new Date().toISOString(),
+  }
+  // fail-fast already handled above; if we got here, still crash in prod, warn in dev.
+  if (isProdEnv) {
+    console.error('[storage] FATAL upload storage error:', storageStatus.last_error)
+    process.exit(1)
+  }
+  console.error('[storage] Upload storage unavailable (dev mode continuing):', storageStatus.last_error)
+}
+
+app.locals.uploads = { uploadsDir, legacyUploadsDir, storageStatus }
 
 // Security headers (must run early, before routes).
 // Keep CSP behavior unchanged (some deployments may already set CSP at a proxy/CDN layer).
@@ -224,17 +298,12 @@ app.use(express.json({ limit: MAX_JSON_BODY_SIZE }));
 app.use((req, res, next) => {
   req.db = db;
   req.uploadsDir = uploadsDir;
+  req.legacyUploadsDir = legacyUploadsDir;
+  req.storageStatus = app.locals.uploads?.storageStatus || null;
   next();
 });
 app.use(healthRouter);
 
-try {
-  if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-  }
-} catch (error) {
-  console.warn('Failed to create uploads directory:', error);
-}
 // IMPORTANT: Missing uploads must return 404 (not SPA index.html).
 // Serve both current + legacy upload locations, then terminate with a strict 404.
 app.use('/uploads', express.static(uploadsDir, { index: false }));
@@ -245,7 +314,29 @@ try {
 } catch {
   // ignore legacy-dir probing failures
 }
-app.use('/uploads', (_req, res) => res.status(404).send('Not Found'));
+app.use('/uploads', (req, res) => {
+  const reqPath = String(req.path || '').replace(/^\/+/, '')
+  console.warn('[uploads] missing file', {
+    requestId: req.requestId || null,
+    path: reqPath || null,
+    uploadsDir,
+    legacyUploadsDir,
+    referer: req.headers?.referer || null,
+    ip: req.ip || null,
+    userAgent: req.headers?.['user-agent'] || null,
+    hasAuthHeader: Boolean(req.headers?.authorization),
+  })
+  const wantsJson = Boolean(req.accepts(['json']) && !req.accepts(['html']))
+  if (wantsJson) {
+    return res.status(404).json({
+      ok: false,
+      error: 'File not found',
+      code: 'UPLOAD_MISSING',
+      path: reqPath || null,
+    })
+  }
+  return res.status(404).send('Not Found')
+});
 
 async function repairMissingUploadAvatars({ db, uploadsDir }) {
   // If the DB references upload URLs that no longer exist on disk (common after an ephemeral volume reset),

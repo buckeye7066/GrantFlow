@@ -30,7 +30,7 @@ export default function DocumentItem({ document, onDelete }) {
     return !isNaN(date.getTime());
   };
 
-  const fileUri = document.file_url ?? document.file_uri;
+  const fileUri = document.download_url ?? document.file_url ?? document.file_uri;
 
   const uploadedLabel = isValidDate(document.created_at)
     ? format(new Date(document.created_at), 'MMM dd, yyyy')

@@ -20,6 +20,7 @@ function startServer(extraEnv = {}) {
     AUTH_JWT_SECRET: 'test-secret-prod',
     ALLOW_SQLITE_IN_PROD: 'true', // Allow SQLite in production for testing
     ALLOW_EPHEMERAL_SQLITE: 'true', // Allow ephemeral SQLite paths for testing
+    ALLOW_EPHEMERAL_UPLOADS: 'true', // Explicitly allow ephemeral uploads in test harness
   }
 
   // Remove email service configuration to simulate unconfigured email service

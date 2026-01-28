@@ -627,9 +627,14 @@ export default function ProfileOverview({
         <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-start gap-5">
             <div className="relative">
-              {profile.avatar_url ? (
+              {(profile.avatar_download_url || profile.avatar_url) ? (
                 <img
-                  src={profile.avatar_url}
+                  src={
+                    profile.avatar_download_url ||
+                    (profile.avatar_url && String(profile.avatar_url).includes('/uploads/')
+                      ? `/api/profiles/${profile.id}/avatar/download`
+                      : profile.avatar_url)
+                  }
                   alt={profile.display_name}
                   className="h-24 w-24 rounded-2xl border border-slate-200 object-cover shadow-md"
                 />

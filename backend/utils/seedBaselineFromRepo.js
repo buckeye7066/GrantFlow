@@ -166,6 +166,38 @@ export async function seedBaselineFromRepo(db, opts = {}) {
   }
 
   await db.withTransaction(async (tx) => {
+    // Tombstones prevent baseline seeding from resurrecting hard-deleted profiles.
+    const isPostgres = tx?.dialect === 'postgres'
+    await tx.prepare(
+      isPostgres
+        ? `
+          CREATE TABLE IF NOT EXISTS profile_tombstones (
+            profile_id TEXT PRIMARY KEY,
+            deleted_at TIMESTAMPTZ DEFAULT now(),
+            deleted_by TEXT,
+            reason TEXT
+          )
+        `
+        : `
+          CREATE TABLE IF NOT EXISTS profile_tombstones (
+            profile_id TEXT PRIMARY KEY,
+            deleted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            deleted_by TEXT,
+            reason TEXT
+          )
+        `,
+    ).run()
+
+    let tombstoneRows = []
+    try {
+      tombstoneRows = await tx.prepare('SELECT profile_id FROM profile_tombstones').all()
+    } catch {
+      tombstoneRows = []
+    }
+    const tombstonedProfileIds = new Set(
+      (tombstoneRows || []).map((r) => String(r?.profile_id || '').trim()).filter(Boolean),
+    )
+
     const upsertOrg = tx.prepare(`
       INSERT INTO organizations (
         id, name, email, phone, applicant_type,
@@ -487,8 +519,13 @@ export async function seedBaselineFromRepo(db, opts = {}) {
 
       for (const p of seed.profiles) {
         if (!p?.id || !p?.display_name) continue
+        const profileId = String(p.id).trim()
+        if (tombstonedProfileIds.has(profileId)) {
+          console.warn('[seedBaselineFromRepo] Skipping tombstoned profile', { profile_id: profileId })
+          continue
+        }
         await upsertProfile.run({
-          id: p.id,
+          id: profileId,
           display_name: p.display_name,
           primary_type: p.primary_type ?? null,
           status: p.status ?? 'active',
@@ -501,9 +538,11 @@ export async function seedBaselineFromRepo(db, opts = {}) {
 
       for (const s of seed.sections) {
         if (!s?.profile_id || !s?.section_key) continue
+        const profileId = String(s.profile_id).trim()
+        if (tombstonedProfileIds.has(profileId)) continue
         await upsertSection.run({
           id: crypto.randomUUID(),
-          profile_id: s.profile_id,
+          profile_id: profileId,
           section_key: s.section_key,
           data: typeof s.data === 'string' ? s.data : safeJsonString(s.data, '{}'),
         })
@@ -620,7 +659,9 @@ export async function seedBaselineFromRepo(db, opts = {}) {
 
       for (const link of seed.profileDocuments) {
         if (!link?.profile_id || !link?.document_id) continue
-        await upsertProfileDoc.run(link.profile_id, link.document_id)
+        const profileId = String(link.profile_id).trim()
+        if (tombstonedProfileIds.has(profileId)) continue
+        await upsertProfileDoc.run(profileId, link.document_id)
         counts.profile_documents_upserted++
       }
     }
