@@ -38,6 +38,7 @@ const TYPES_REQUIRING_PROFILE = new Set([
   'local',
   'scholarship',
   'item_search',
+  'health_resources',
   'avatar_lookup',
   'document_ingest',
   'profile_enrichment',
