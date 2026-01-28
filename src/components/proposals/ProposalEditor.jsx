@@ -15,6 +15,7 @@ import {
   saveSection,
   validate,
 } from '@/api/applicationsApi'
+import { downloadAuthenticatedUrl } from '@/utils/authenticatedDownload'
 
 function slugify(input) {
   return String(input || '')
@@ -117,7 +118,9 @@ export default function ProposalEditor({ grant, organization }) {
     onSuccess: (result) => {
       const url = result?.artifact?.download_url
       if (url) {
-        window.location.assign(url)
+        downloadAuthenticatedUrl(url, { fallbackFileName: `application_${applicationId || 'export'}.docx` }).catch(() => {
+          // ignore: keep UI responsive
+        })
       }
     },
   })
