@@ -47,11 +47,11 @@ function resolveUrl(baseUrl, maybeRelative) {
   }
 }
 
-function pickCoverImageUrl(html, baseUrl) {
+function pickWebsiteImageCandidate(html, baseUrl) {
   if (!html) return null
   const $ = cheerio.load(html)
 
-  const candidates = [
+  const coverCandidates = [
     $('meta[property="og:image"]').attr('content'),
     $('meta[property="og:image:url"]').attr('content'),
     $('meta[name="twitter:image"]').attr('content'),
@@ -61,10 +61,30 @@ function pickCoverImageUrl(html, baseUrl) {
     .map((v) => String(v ?? '').trim())
     .filter(Boolean)
 
-  for (const candidate of candidates) {
+  for (const candidate of coverCandidates) {
     const resolved = resolveUrl(baseUrl, candidate)
-    if (resolved) return resolved
+    if (resolved) return { url: resolved, method: 'website_cover' }
   }
+
+  // Fallback: icon links (logos / favicons)
+  const iconCandidates = [
+    $('link[rel="apple-touch-icon"]').attr('href'),
+    $('link[rel="apple-touch-icon-precomposed"]').attr('href'),
+    $('link[rel="icon"]').attr('href'),
+    $('link[rel="shortcut icon"]').attr('href'),
+    $('link[rel="mask-icon"]').attr('href'),
+  ]
+    .map((v) => String(v ?? '').trim())
+    .filter(Boolean)
+
+  for (const candidate of iconCandidates) {
+    const resolved = resolveUrl(baseUrl, candidate)
+    if (resolved) return { url: resolved, method: 'website_icon' }
+  }
+
+  // Last resort: common favicon location
+  const originFavicon = resolveUrl(baseUrl, '/favicon.ico')
+  if (originFavicon) return { url: originFavicon, method: 'website_icon' }
 
   return null
 }
@@ -82,6 +102,7 @@ async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
   const websiteRaw =
     profileContext?.sections?.basic_information?.website ??
     profileContext?.profile?.website ??
+    profileContext?.organization?.website ??
     null
 
   const website = normalizeHttpUrl(websiteRaw)
@@ -129,10 +150,12 @@ async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
   }
 
   const html = await res.text().catch(() => '')
-  const coverUrl = pickCoverImageUrl(html, finalUrl)
-  if (!coverUrl) {
+  const pick = pickWebsiteImageCandidate(html, finalUrl)
+  if (!pick?.url) {
     return { ok: false, reason: 'no_cover_meta' }
   }
+  const coverUrl = pick.url
+  const method = pick.method || 'website_cover'
 
   const coverHost = new URL(coverUrl).hostname
   if (!allowLocalhost && isPrivateHostname(coverHost)) {
@@ -161,7 +184,7 @@ async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
   }
 
   const imgType = String(imgRes.headers.get('content-type') || '').toLowerCase()
-  if (!imgType.startsWith('image/')) {
+  if (!imgType.startsWith('image/') && !imgType.includes('icon')) {
     return { ok: false, reason: 'cover_not_image' }
   }
 
@@ -182,6 +205,7 @@ async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
     avatarUrl: `/uploads/${filename}`,
     coverUrl,
     website: finalUrl,
+    method,
   }
 }
 
@@ -211,9 +235,9 @@ export async function processAvatarLookupJob({ profileContext, uploadDir, getOpe
         avatarUrl: websiteResult.avatarUrl,
         result_meta: {
           ok: true,
-          method: 'website_cover',
-          website: websiteResult.website ?? null,
-          cover_url: websiteResult.coverUrl ?? null,
+          method: websiteResult.method || 'website_cover',
+          website_used: websiteResult.website ?? null,
+          image_url_used: websiteResult.coverUrl ?? null,
         },
       }
     }

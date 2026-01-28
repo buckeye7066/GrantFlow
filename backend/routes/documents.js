@@ -14,6 +14,7 @@ import { classifyUniversityApplicationForDocument, loadUniversityApplicationsFor
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { detectFileType } from '../services/documentIngestion/index.js'
 import { ensureDocumentExtract } from '../services/documentIngestion/documentExtractStore.js'
+import { resolveUploadsDir } from '../utils/uploadsDir.js'
 
 // OpenAI client helper
 function getOpenAI() {
@@ -24,18 +25,107 @@ const router = express.Router();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-// Uploads must live on a persistent volume in production (Railway Volume).
-// Keep this aligned with backend/server.js static `/uploads` serving.
-const uploadDir = process.env.UPLOADS_DIR
-  ? resolve(process.env.UPLOADS_DIR)
-  : join(__dirname, '..', 'uploads');
+function getUploadsDir(req) {
+  const fromApp = req?.app?.locals?.uploads?.uploadsDir
+  if (fromApp) return String(fromApp)
+  if (req?.uploadsDir) return String(req.uploadsDir)
+  const resolved = resolveUploadsDir({ baseDir: join(__dirname, '..') })
+  return resolved.uploadsDir
+}
 
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
+function getLegacyUploadsDir(req) {
+  const fromApp = req?.app?.locals?.uploads?.legacyUploadsDir
+  if (fromApp) return String(fromApp)
+  if (req?.legacyUploadsDir) return String(req.legacyUploadsDir)
+  const resolved = resolveUploadsDir({ baseDir: join(__dirname, '..') })
+  return resolved.legacyUploadsDir
+}
+
+function requireUploadsWritable(req, res, next) {
+  const status = req?.storageStatus || req?.app?.locals?.uploads?.storageStatus || null
+  if (status && status.writable === false) {
+    return res.status(503).json({
+      ok: false,
+      error: 'Upload storage is unavailable',
+      code: 'UPLOAD_STORAGE_UNAVAILABLE',
+      uploads_dir: status.uploads_dir || null,
+      status: status.status || 'degraded',
+    })
+  }
+  return next()
+}
+
+function addDownloadUrl(doc) {
+  if (!doc || !doc.id) return doc
+  return { ...doc, download_url: `/api/documents/${String(doc.id)}/download` }
+}
+
+function extractUploadsFilenameFromUrl(rawUrl) {
+  const raw = String(rawUrl || '').trim()
+  if (!raw) return null
+
+  let pathname = raw
+  try {
+    if (/^https?:\/\//i.test(raw)) pathname = new URL(raw).pathname
+  } catch {
+    pathname = raw
+  }
+
+  if (!pathname.includes('/uploads/')) return null
+  const fileName = pathname.split('/uploads/').pop() || ''
+  const baseName = fileName.split('/').pop() // defensive
+  return baseName ? baseName.replace(/[^a-zA-Z0-9._-]/g, '') : null
+}
+
+function resolveDocumentFilePath({ req, doc }) {
+  const uploadsDir = getUploadsDir(req)
+  const legacyUploadsDir = getLegacyUploadsDir(req)
+
+  const tried = []
+
+  const filePath = doc?.file_path ? String(doc.file_path) : ''
+  if (filePath) {
+    tried.push(filePath)
+    try {
+      if (fs.existsSync(filePath)) {
+        return { ok: true, path: filePath, tried }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const fileName =
+    extractUploadsFilenameFromUrl(doc?.file_url) ||
+    extractUploadsFilenameFromUrl(doc?.file_uri) ||
+    extractUploadsFilenameFromUrl(doc?.fileUrl) ||
+    null
+
+  if (fileName) {
+    const primary = join(uploadsDir, fileName)
+    tried.push(primary)
+    try {
+      if (fs.existsSync(primary)) return { ok: true, path: primary, tried }
+    } catch {
+      // ignore
+    }
+
+    if (legacyUploadsDir && legacyUploadsDir !== uploadsDir) {
+      const legacy = join(legacyUploadsDir, fileName)
+      tried.push(legacy)
+      try {
+        if (fs.existsSync(legacy)) return { ok: true, path: legacy, tried }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  return { ok: false, tried }
 }
 
 const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadDir),
+  destination: (req, _file, cb) => cb(null, getUploadsDir(req)),
   filename: (_req, file, cb) => {
     const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
     const extension = file.originalname.includes('.') ? `.${file.originalname.split('.').pop()}` : '';
@@ -222,7 +312,7 @@ async function downloadRemoteFileToUploads({ url, req }) {
     const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
     const extension = fileNameFromUrl.includes('.') ? `.${fileNameFromUrl.split('.').pop()}` : '';
     const filename = `${unique}${extension}`;
-    const absPath = join(uploadDir, filename);
+    const absPath = join(getUploadsDir(req), filename);
 
     const buf = Buffer.from(await resp.arrayBuffer());
     if (buf.length > 50 * 1024 * 1024) {
@@ -366,7 +456,8 @@ router.get('/', async (req, res) => {
     if (filters.length > 0) query += ` WHERE ${filters.join(' AND ')}`;
     query += ' ORDER BY created_at DESC';
 
-    res.json(await req.db.prepare(query).all(...params));
+    const rows = await req.db.prepare(query).all(...params)
+    res.json((rows || []).map(addDownloadUrl));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -381,14 +472,53 @@ router.get('/:id', async (req, res) => {
     const doc = await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
     if (!ensureDocumentAccess(res, context, doc)) return;
     
-    res.json(doc);
+    res.json(addDownloadUrl(doc));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
+// GET /api/documents/:id/download
+// Defensive: returns a clear 404 if the file is missing, with docId/profileId context.
+router.get('/:id/download', async (req, res) => {
+  try {
+    const context = await buildAccessContext(req)
+    if (!ensureAuthenticated(res, context)) return
+
+    const doc = await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id)
+    if (!ensureDocumentAccess(res, context, doc)) return
+
+    const resolved = resolveDocumentFilePath({ req, doc })
+    if (!resolved.ok) {
+      console.warn('[documents] missing file for download', {
+        requestId: req.requestId || null,
+        documentId: String(req.params.id),
+        profileId: doc?.profile_id ?? null,
+        file_path: doc?.file_path ?? null,
+        file_url: doc?.file_url ?? null,
+        tried: resolved.tried,
+      })
+      return res.status(404).json({
+        ok: false,
+        error: 'Document file not found',
+        code: 'DOCUMENT_FILE_MISSING',
+        document_id: String(req.params.id),
+        profile_id: doc?.profile_id ?? null,
+      })
+    }
+
+    const fileName = String(doc?.file_name || doc?.name || '').trim() || 'document'
+    const mimeType = String(doc?.mime_type || '').trim() || 'application/octet-stream'
+    res.setHeader('Content-Type', mimeType)
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName.replace(/"/g, '')}"`)
+    return fs.createReadStream(resolved.path).pipe(res)
+  } catch (error) {
+    return res.status(500).json({ error: error?.message || String(error) })
+  }
+})
+
 // POST /api/documents/upload (Base44 Compatibility)
-router.post('/upload', uploadLimiter, runUploadSingle('file'), async (req, res) => {
+router.post('/upload', uploadLimiter, requireUploadsWritable, runUploadSingle('file'), async (req, res) => {
   try {
     const context = await buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) {
@@ -436,7 +566,7 @@ router.post('/signed-url', (req, res) => {
 });
 
 // POST /api/documents/ingest (Universal Ingest)
-router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, res) => {
+router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('document'), async (req, res) => {
   try {
     const context = await buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) {
@@ -644,7 +774,7 @@ router.post('/ingest', uploadLimiter, runUploadSingle('document'), async (req, r
         dispatchCrawlerJob({
           db: req.db,
           jobId: parseJob.id,
-          uploadDir,
+          uploadDir: getUploadsDir(req),
           getOpenAI,
         });
       }
@@ -770,7 +900,7 @@ router.post('/:id/parse', async (req, res) => {
             dispatchCrawlerJob({
               db: req.db,
               jobId: parseJob.id,
-              uploadDir,
+              uploadDir: getUploadsDir(req),
               getOpenAI,
             });
           }
@@ -810,7 +940,7 @@ router.post('/:id/parse', async (req, res) => {
         dispatchCrawlerJob({
           db: req.db,
           jobId: parseJob.id,
-          uploadDir,
+          uploadDir: getUploadsDir(req),
           getOpenAI,
         });
       }
@@ -943,7 +1073,7 @@ router.post('/parse-all', async (req, res) => {
       dispatchCrawlerJob({
         db: req.db,
         jobId,
-        uploadDir,
+        uploadDir: getUploadsDir(req),
         getOpenAI,
       });
     }
@@ -1009,7 +1139,7 @@ router.post('/:id/ingest', async (req, res) => {
         dispatchCrawlerJob({
           db: req.db,
           jobId: ingestJob.id,
-          uploadDir,
+          uploadDir: getUploadsDir(req),
           getOpenAI,
         });
       }

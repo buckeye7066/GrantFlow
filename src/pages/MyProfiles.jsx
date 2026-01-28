@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { listProfiles, deleteProfile } from "@/api/profiles";
+import { listProfiles, deleteProfile, hardDeleteProfileAdmin } from "@/api/profiles";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,8 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { useToast } from "@/components/ui/use-toast";
 import ProfileCard from "@/components/profiles/ProfileCard";
 import { createPageUrl } from "@/utils";
+import { useAuthStore } from "@/stores/authStore";
+import { Checkbox } from "@/components/ui/checkbox";
 
 // Deletion confirmation message
 const DELETE_CONFIRMATION_MESSAGE = 
@@ -25,9 +27,17 @@ const DELETE_CONFIRMATION_MESSAGE =
 export default function MyProfiles() {
   const [searchTerm, setSearchTerm] = useState("");
   const [profileToDelete, setProfileToDelete] = useState(null);
+  const [profileToHardDelete, setProfileToHardDelete] = useState(null);
+  const [hardDeleteConfirmText, setHardDeleteConfirmText] = useState("");
+  const [hardDeleteReason, setHardDeleteReason] = useState("orphan_cleanup");
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const user = useAuthStore((state) => state.user);
+  const isAdmin = Boolean(user?.is_admin);
+
+  const [viewMode, setViewMode] = useState(() => (isAdmin ? "all" : "mine"));
+  const [includeDeleted, setIncludeDeleted] = useState(false);
   
   // Fetch profiles with summary data
   const { 
@@ -35,8 +45,15 @@ export default function MyProfiles() {
     isLoading, 
     error 
   } = useQuery({
-    queryKey: ['profiles', 'summary'],
-    queryFn: () => listProfiles({ summary: true, scope: 'mine' }),
+    queryKey: ['profiles', 'summary', viewMode, includeDeleted],
+    queryFn: () => {
+      const mode = isAdmin ? viewMode : "mine";
+      return listProfiles({
+        summary: true,
+        ...(mode === "mine" ? { scope: "mine" } : {}),
+        ...(includeDeleted ? { includeDeleted: true } : {}),
+      });
+    },
   });
   
   // Filter profiles
@@ -70,6 +87,28 @@ export default function MyProfiles() {
       });
     },
   });
+
+  const hardDeleteMutation = useMutation({
+    mutationFn: async ({ id, payload }) => hardDeleteProfileAdmin(id, payload),
+    onSuccess: (_res, vars) => {
+      toast({
+        title: "Profile hard-deleted",
+        description: "The profile was permanently removed and tombstoned so it cannot return.",
+      });
+      queryClient.invalidateQueries({ queryKey: ['profiles'] });
+      if (vars?.id) queryClient.invalidateQueries({ queryKey: ['profile', vars.id] });
+      setProfileToHardDelete(null);
+      setHardDeleteConfirmText("");
+      setHardDeleteReason("orphan_cleanup");
+    },
+    onError: (error) => {
+      toast({
+        title: "Error hard-deleting profile",
+        description: error.message || "Failed to hard delete the profile. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
   
   const handleViewInvoices = (profile) => {
     navigate(createPageUrl("CreateInvoice", { organization_id: profile.organization_id, profile_id: profile.id }));
@@ -77,6 +116,12 @@ export default function MyProfiles() {
   
   const handleDeleteProfile = (profile) => {
     setProfileToDelete(profile);
+  };
+
+  const handleHardDeleteProfile = (profile) => {
+    setProfileToHardDelete(profile);
+    setHardDeleteConfirmText("");
+    setHardDeleteReason("orphan_cleanup");
   };
   
   const confirmDelete = () => {
@@ -115,12 +160,12 @@ export default function MyProfiles() {
   }
   
   return (
-    <section className="p-6 md:p-8" aria-label="My Profiles">
+    <section className="p-6 md:p-8" aria-label="Profiles">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
           <div>
-            <h1 className="text-3xl font-bold text-slate-900">My Profiles</h1>
+            <h1 className="text-3xl font-bold text-slate-900">Profiles</h1>
             <p className="text-slate-600 mt-2">
               View and manage your profiles with billing and funding information
             </p>
@@ -133,6 +178,34 @@ export default function MyProfiles() {
             Create Profile
           </Button>
         </header>
+
+        {/* Admin controls */}
+        {isAdmin ? (
+          <div className="mb-6 flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant={viewMode === "mine" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setViewMode("mine")}
+              >
+                My Profiles
+              </Button>
+              <Button
+                type="button"
+                variant={viewMode === "all" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setViewMode("all")}
+              >
+                All Profiles
+              </Button>
+            </div>
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <Checkbox checked={includeDeleted} onCheckedChange={(v) => setIncludeDeleted(Boolean(v))} />
+              Include deleted
+            </label>
+          </div>
+        ) : null}
         
         {/* Search */}
         <div className="mb-6">
@@ -176,8 +249,10 @@ export default function MyProfiles() {
                 <ProfileCard
                   key={profile.id}
                   profile={profile}
+                  isAdmin={isAdmin}
                   onViewInvoices={handleViewInvoices}
                   onDelete={handleDeleteProfile}
+                  onHardDelete={handleHardDeleteProfile}
                 />
               ))}
             </div>
@@ -214,6 +289,68 @@ export default function MyProfiles() {
                   </>
                 ) : (
                   'Delete'
+                )}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Hard Delete Confirmation Dialog (admin-only) */}
+        <AlertDialog open={!!profileToHardDelete} onOpenChange={(open) => !open && setProfileToHardDelete(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Hard delete profile (permanent)</AlertDialogTitle>
+              <AlertDialogDescription>
+                This permanently deletes the profile and creates a tombstone so it cannot be recreated by startup seeding.
+                To confirm, type <strong>DELETE</strong> below.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <div className="space-y-3">
+              <div className="text-sm text-slate-700">
+                Target:{" "}
+                <strong>{profileToHardDelete?.display_name || profileToHardDelete?.organization_name || profileToHardDelete?.id}</strong>
+              </div>
+              <div className="grid grid-cols-1 gap-2">
+                <Input
+                  placeholder="Reason (optional)"
+                  value={hardDeleteReason}
+                  onChange={(e) => setHardDeleteReason(e.target.value)}
+                />
+                <Input
+                  placeholder='Type "DELETE" to confirm'
+                  value={hardDeleteConfirmText}
+                  onChange={(e) => setHardDeleteConfirmText(e.target.value)}
+                />
+              </div>
+            </div>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={hardDeleteMutation.isPending}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  if (!profileToHardDelete?.id) return;
+                  hardDeleteMutation.mutate({
+                    id: profileToHardDelete.id,
+                    payload: {
+                      reason: hardDeleteReason || undefined,
+                      tombstone: true,
+                      force: false,
+                    },
+                  });
+                }}
+                disabled={
+                  !isAdmin ||
+                  hardDeleteMutation.isPending ||
+                  String(hardDeleteConfirmText || "").trim().toUpperCase() !== "DELETE"
+                }
+                className="bg-red-700 hover:bg-red-800"
+              >
+                {hardDeleteMutation.isPending ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  "Hard Delete"
                 )}
               </AlertDialogAction>
             </AlertDialogFooter>

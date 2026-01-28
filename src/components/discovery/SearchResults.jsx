@@ -13,34 +13,74 @@ import { Checkbox } from '@/components/ui/checkbox';
 const AddToPipelineButton = ({ opportunity, onAddToPipeline, organizationName }) => {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const [lastStatus, setLastStatus] = React.useState(null);
 
   const mutation = useMutation({
-    mutationFn: onAddToPipeline,
-    onSuccess: (newGrant) => {
+    mutationFn: (opp) => onAddToPipeline(opp, { silent: true }),
+    onSuccess: (result, opp) => {
       queryClient.invalidateQueries({ queryKey: ['grants'] });
-      toast({
-        title: "Added to Pipeline!",
-        description: `"${newGrant.title}" is now in the discovery stage for ${organizationName}.`,
-      });
+      const status = result?.status || (result?.already_exists ? 'already' : 'added');
+      setLastStatus(status);
+
+      if (status === 'already') {
+        toast({
+          title: 'Already in pipeline',
+          description: `"${opp?.title || opportunity?.title || 'This item'}" is already in your pipeline.`,
+          duration: 3500,
+        });
+        return;
+      }
+
+      if (status === 'added') {
+        toast({
+          title: 'Added to pipeline',
+          description: `"${opp?.title || opportunity?.title || 'Opportunity'}" was added for ${organizationName}.`,
+          duration: 3500,
+        });
+        return;
+      }
     },
     onError: (error) => {
+      setLastStatus('failed');
       toast({
         variant: "destructive",
-        title: "Error",
-        description: "Could not add to pipeline.",
+        title: "Could not add to pipeline",
+        description: "Please try again. If this keeps happening, refresh and sign in again.",
+        duration: 4500,
       });
     }
   });
 
   const handleClick = () => mutation.mutate(opportunity);
 
-  if (mutation.isSuccess) {
-    return <Button variant="outline" className="w-full bg-emerald-50 text-emerald-700" disabled><Check className="w-4 h-4 mr-2" /> Added</Button>;
+  if (mutation.isPending) {
+    return (
+      <Button onClick={handleClick} disabled className="w-full">
+        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+        Adding…
+      </Button>
+    );
+  }
+
+  if (lastStatus === 'added') {
+    return (
+      <Button variant="outline" className="w-full bg-emerald-50 text-emerald-700 border-emerald-200" disabled>
+        <Check className="w-4 h-4 mr-2" /> Added
+      </Button>
+    );
+  }
+
+  if (lastStatus === 'already') {
+    return (
+      <Button variant="outline" className="w-full bg-slate-50 text-slate-700 border-slate-200" disabled>
+        <Check className="w-4 h-4 mr-2" /> Already in pipeline
+      </Button>
+    );
   }
 
   return (
-    <Button onClick={handleClick} disabled={mutation.isPending} className="w-full">
-      {mutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />}
+    <Button onClick={handleClick} className="w-full">
+      <Plus className="w-4 h-4 mr-2" />
       Add to Pipeline
     </Button>
   );
@@ -84,11 +124,12 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
     // Clear selection immediately
     setSelectedOpportunities(new Set());
     
-    // Show initial toast
+    // Show a single, updatable toast (no spam)
     toast({
-      title: "🚀 Processing in Background",
-      description: `Adding ${selectedOpps.length} opportunities to pipeline. Checking for duplicates...`,
-      duration: 3000,
+      id: 'bulk-add-pipeline',
+      title: "Updating pipeline",
+      description: `Processing ${selectedOpps.length} opportunities in the background…`,
+      duration: 3500,
     });
 
     // Start processing in background
@@ -103,18 +144,13 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
     for (let i = 0; i < selectedOpps.length; i++) {
       const opp = selectedOpps[i];
       try {
-        const result = await onAddToPipeline(opp);
-        if (result) {
-          successCount++;
-        }
+        const result = await onAddToPipeline(opp, { silent: true });
+        if (result?.status === 'already') duplicateCount++;
+        else if (result?.status === 'added') successCount++;
+        else failCount++;
       } catch (error) {
-        // Check if error is due to duplicate (the onAddToPipeline returns existing grant)
-        if (error?.message?.includes('already in pipeline') || error?.message?.includes('Already in Pipeline')) {
-          duplicateCount++;
-        } else {
-          console.error(`Failed to add ${opp.title}:`, error);
-          failCount++;
-        }
+        console.error(`Failed to add ${opp.title}:`, error);
+        failCount++;
       }
       setProcessingProgress({ current: i + 1, total: selectedOpps.length });
     }
@@ -133,8 +169,9 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
     if (failCount > 0) messageParts.push(`${failCount} failed`);
     
     toast({
-      title: "✅ Bulk Add Complete",
-      description: messageParts.join(' • '),
+      id: 'bulk-add-pipeline',
+      title: "Pipeline update complete",
+      description: messageParts.join(' • ') || 'No changes were made.',
       duration: 5000,
     });
   };

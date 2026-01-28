@@ -34,6 +34,36 @@ function loadSectionsFromDataFile(dataFile) {
 export async function ensureDesignatedProfiles(db) {
   // Use a real transaction for both sqlite + postgres.
   await db.withTransaction(async (tx) => {
+    // Ensure tombstones exist (migration drift safety).
+    const isPostgres = tx?.dialect === 'postgres'
+    await tx.prepare(
+      isPostgres
+        ? `
+          CREATE TABLE IF NOT EXISTS profile_tombstones (
+            profile_id TEXT PRIMARY KEY,
+            deleted_at TIMESTAMPTZ DEFAULT now(),
+            deleted_by TEXT,
+            reason TEXT
+          )
+        `
+        : `
+          CREATE TABLE IF NOT EXISTS profile_tombstones (
+            profile_id TEXT PRIMARY KEY,
+            deleted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            deleted_by TEXT,
+            reason TEXT
+          )
+        `,
+    ).run()
+
+    let tombstoneRows = []
+    try {
+      tombstoneRows = await tx.prepare('SELECT profile_id FROM profile_tombstones').all()
+    } catch {
+      tombstoneRows = []
+    }
+    const tombstoned = new Set((tombstoneRows || []).map((r) => String(r?.profile_id || '').trim()).filter(Boolean))
+
     const upsertProfile = tx.prepare(`
       INSERT INTO profiles (id, display_name, primary_type, status, tags, updated_at)
       VALUES (@id, @display_name, @primary_type, @status, @tags, CURRENT_TIMESTAMP)
@@ -57,8 +87,16 @@ export async function ensureDesignatedProfiles(db) {
     `)
 
     for (const profile of DESIGNATED_PROFILES) {
+      const profileId = String(profile?.id || '').trim()
+      if (!profileId) continue
+      if (tombstoned.has(profileId)) {
+        // A profile was hard-deleted; never recreate it.
+        console.warn('[ensureDesignatedProfiles] Skipping tombstoned profile', { profile_id: profileId })
+        continue
+      }
+
       await upsertProfile.run({
-        id: profile.id,
+        id: profileId,
         display_name: profile.display_name,
         primary_type: profile.primary_type,
         status: profile.status ?? 'active',
@@ -68,7 +106,7 @@ export async function ensureDesignatedProfiles(db) {
       const seededSections = profile.sections ?? loadSectionsFromDataFile(profile.data_file)
       if (seededSections) {
         for (const [sectionKey, sectionData] of Object.entries(seededSections)) {
-          await upsertSection.run(randomUUID(), profile.id, sectionKey, JSON.stringify(sectionData ?? {}))
+          await upsertSection.run(randomUUID(), profileId, sectionKey, JSON.stringify(sectionData ?? {}))
         }
       }
     }

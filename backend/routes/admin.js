@@ -31,9 +31,11 @@ import { crawlSpecialNeeds } from '../services/crawlers/specialNeedsCrawler.js';
 import { crawlItemFunding } from '../services/crawlers/itemFundingCrawler.js';
 import { crawlECFBenefits } from '../services/crawlers/ecfBenefitsCrawler.js';
 import { findDuplicateProfileGroups, mergeProfiles } from '../services/profileDedupeService.js'
-import { ensureAdminUser, isAdminUser } from '../utils/accessControl.js'
+import { ensureAdminUser, isAdminUser, addProfileEmails, listProfileEmails } from '../utils/accessControl.js'
 import zipcodes from 'zipcodes';
 import { createGeoCrawlRun } from '../services/geoCrawlRunStore.js'
+import { resolveUploadsDir, ensureUploadsDirWritable } from '../utils/uploadsDir.js'
+import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 
 const router = express.Router();
 
@@ -44,9 +46,27 @@ const AI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini'; // Configurable AI m
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const repoRootDir = join(__dirname, '..', '..');
-const uploadDir = process.env.UPLOADS_DIR
-  ? resolve(process.env.UPLOADS_DIR)
-  : join(__dirname, '..', 'uploads');
+function getUploadsDir(req) {
+  const fromApp = req?.app?.locals?.uploads?.uploadsDir
+  if (fromApp) return String(fromApp)
+  if (req?.uploadsDir) return String(req.uploadsDir)
+  const resolvedDirs = resolveUploadsDir({ baseDir: join(__dirname, '..') })
+  return resolvedDirs.uploadsDir
+}
+
+function requireUploadsWritable(req, res, next) {
+  const status = req?.storageStatus || req?.app?.locals?.uploads?.storageStatus || null
+  if (status && status.writable === false) {
+    return res.status(503).json({
+      ok: false,
+      error: 'Upload storage is unavailable',
+      code: 'UPLOAD_STORAGE_UNAVAILABLE',
+      uploads_dir: status.uploads_dir || null,
+      status: status.status || 'degraded',
+    })
+  }
+  return next()
+}
 
 // Geo datasets are optional. If present, we use them to power ZIP-scoped crawls.
 // If absent, we still return a usable state list so the Geo Crawl UI can run state-wide crawls.
@@ -184,6 +204,107 @@ router.get('/audit-events', async (req, res) => {
   }
 })
 
+/**
+ * GET /api/admin/storage/uploads-check
+ * Admin-only: verifies uploadsDir is writable and samples avatar/doc file existence.
+ */
+router.get('/storage/uploads-check', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+
+  const uploadsDir = getUploadsDir(req)
+  const legacyUploadsDir =
+    (req?.app?.locals?.uploads?.legacyUploadsDir ? String(req.app.locals.uploads.legacyUploadsDir) : null) ||
+    (req?.legacyUploadsDir ? String(req.legacyUploadsDir) : null)
+
+  const writableCheck = uploadsDir ? await ensureUploadsDirWritable(uploadsDir) : { ok: false, error: 'uploads_not_configured' }
+
+  let fileCount = null
+  try {
+    const entries = uploadsDir ? await fsp.readdir(uploadsDir) : []
+    fileCount = Array.isArray(entries) ? entries.length : null
+  } catch {
+    fileCount = null
+  }
+
+  const extractUploadsFilename = (value) => {
+    const raw = typeof value === 'string' ? value : ''
+    const idx = raw.lastIndexOf('/uploads/')
+    if (idx === -1) return null
+    const tail = raw.slice(idx + '/uploads/'.length)
+    const file = tail.split('?')[0].split('#')[0].replace(/^\/+/, '').trim()
+    return file || null
+  }
+
+  const existsInUploads = (filename) => {
+    if (!filename) return false
+    try {
+      if (uploadsDir && fs.existsSync(join(uploadsDir, filename))) return true
+    } catch {
+      // ignore fs probing errors
+    }
+    try {
+      if (legacyUploadsDir && fs.existsSync(join(legacyUploadsDir, filename))) return true
+    } catch {
+      // ignore fs probing errors
+    }
+    return false
+  }
+
+  const sample = []
+  try {
+    const avatarRows = await req.db
+      .prepare("SELECT id, avatar_url, updated_at FROM profiles WHERE avatar_url LIKE '/uploads/%' ORDER BY updated_at DESC LIMIT 10")
+      .all()
+    for (const row of avatarRows || []) {
+      const filename = extractUploadsFilename(row?.avatar_url)
+      sample.push({
+        type: 'avatar',
+        id: String(row?.id || ''),
+        url: row?.avatar_url || null,
+        exists: existsInUploads(filename),
+      })
+    }
+  } catch {
+    // ignore missing tables / query failures in drifted environments
+  }
+
+  try {
+    const docRows = await req.db
+      .prepare(
+        `
+          SELECT id, file_url, file_path, updated_at
+          FROM documents
+          WHERE (file_url LIKE '%/uploads/%' OR file_path LIKE '%uploads%')
+          ORDER BY updated_at DESC
+          LIMIT 10
+        `,
+      )
+      .all()
+    for (const row of docRows || []) {
+      const filename = extractUploadsFilename(row?.file_url) || extractUploadsFilename(row?.file_path)
+      sample.push({
+        type: 'document',
+        id: String(row?.id || ''),
+        url: row?.file_url || row?.file_path || null,
+        exists: existsInUploads(filename),
+      })
+    }
+  } catch {
+    // ignore missing tables / query failures in drifted environments
+  }
+
+  return res.status(writableCheck?.ok ? 200 : 503).json({
+    ok: Boolean(writableCheck?.ok),
+    uploadsDir,
+    legacyUploadsDir,
+    writable: Boolean(writableCheck?.ok),
+    last_error: writableCheck?.ok ? null : (writableCheck?.error || null),
+    fileCount,
+    sampleExistsCheck: sample,
+    timestamp: new Date().toISOString(),
+  })
+})
+
 function loadZipCoordinates() {
   if (zipCoordinatesCache) return zipCoordinatesCache;
   if (!fs.existsSync(zipCoordinatesPath)) {
@@ -286,12 +407,8 @@ async function fetchCountiesFromCensus(stateCode) {
   }
 }
 
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
 const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadDir),
+  destination: (req, _file, cb) => cb(null, getUploadsDir(req)),
   filename: (_req, file, cb) => {
     const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
     const extension = file.originalname.includes('.') ? `.${file.originalname.split('.').pop()}` : '';
@@ -357,7 +474,7 @@ function kbMulterFileFilter(_req, file, cb) {
 
 const knowledgeUpload = multer({
   storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, uploadDir),
+    destination: (req, _file, cb) => cb(null, getUploadsDir(req)),
     filename: (_req, file, cb) => {
       const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`
       const extension = file.originalname.includes('.') ? `.${file.originalname.split('.').pop()}` : ''
@@ -460,7 +577,7 @@ function assertRemoteUrlAllowed(rawUrl) {
   return parsed
 }
 
-async function downloadRemoteFileToUploads({ url }) {
+async function downloadRemoteFileToUploads({ url, req }) {
   const initial = assertRemoteUrlAllowed(url)
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 20_000)
@@ -491,7 +608,7 @@ async function downloadRemoteFileToUploads({ url }) {
     const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`
     const extension = fileNameFromUrl.includes('.') ? `.${fileNameFromUrl.split('.').pop()}` : ''
     const filename = `kb-${unique}${extension}`
-    const absPath = join(uploadDir, filename)
+    const absPath = join(getUploadsDir(req), filename)
 
     const buf = Buffer.from(await resp.arrayBuffer())
     if (buf.length > KB_MAX_FILE_BYTES) {
@@ -855,12 +972,12 @@ function safeTrim(value) {
   return t ? t : ''
 }
 
-function safeDeleteFile(filePath) {
+function safeDeleteFile(req, filePath) {
   try {
     const raw = safeTrim(filePath)
     if (!raw) return false
     const resolved = resolve(raw)
-    const base = resolve(uploadDir)
+    const base = resolve(getUploadsDir(req))
     if (!resolved.startsWith(base)) return false
     if (!fs.existsSync(resolved)) return false
     fs.unlinkSync(resolved)
@@ -928,7 +1045,7 @@ router.get('/knowledge/:id', async (req, res) => {
 // multipart/form-data: document=<file>, name?, notes?, ocr?, handwriting?, ocr_language?
 router.post('/knowledge/upload', knowledgeUpload.single('document'), async (req, res) => {
   if (!(await ensureAdminRequest(req, res))) {
-    if (req.file?.path) safeDeleteFile(req.file.path)
+    if (req.file?.path) safeDeleteFile(req, req.file.path)
     return
   }
   try {
@@ -986,7 +1103,7 @@ router.post('/knowledge/upload', knowledgeUpload.single('document'), async (req,
     const doc = await req.db.prepare(`SELECT * FROM documents WHERE id = ? LIMIT 1`).get(docId)
     res.status(201).json({ ok: true, document: doc })
   } catch (error) {
-    if (req.file?.path) safeDeleteFile(req.file.path)
+    if (req.file?.path) safeDeleteFile(req, req.file.path)
     res.status(500).json({ ok: false, error: error?.message || String(error) })
   }
 })
@@ -1000,7 +1117,7 @@ router.post('/knowledge/ingest-url', async (req, res) => {
     const url = safeTrim(req.body?.url)
     if (!url) return res.status(400).json({ ok: false, error: 'url is required' })
 
-    downloaded = await downloadRemoteFileToUploads({ url })
+    downloaded = await downloadRemoteFileToUploads({ url, req })
     const file = downloaded.file
 
     const name = safeTrim(req.body?.name) || safeTrim(file.originalname) || 'Knowledge Document'
@@ -1053,7 +1170,7 @@ router.post('/knowledge/ingest-url', async (req, res) => {
     const doc = await req.db.prepare(`SELECT * FROM documents WHERE id = ? LIMIT 1`).get(docId)
     res.status(201).json({ ok: true, document: doc })
   } catch (error) {
-    if (downloaded?.file?.path) safeDeleteFile(downloaded.file.path)
+    if (downloaded?.file?.path) safeDeleteFile(req, downloaded.file.path)
     res.status(500).json({ ok: false, error: error?.message || String(error) })
   }
 })
@@ -1069,7 +1186,7 @@ router.delete('/knowledge/:id', async (req, res) => {
     if (!doc) return res.status(404).json({ ok: false, error: 'Not found' })
 
     await req.db.prepare(`DELETE FROM documents WHERE id = ?`).run(id)
-    const deletedFile = doc.file_path ? safeDeleteFile(doc.file_path) : false
+    const deletedFile = doc.file_path ? safeDeleteFile(req, doc.file_path) : false
 
     res.json({ ok: true, deleted: true, deleted_file: deletedFile })
   } catch (error) {
@@ -1426,7 +1543,7 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
         dispatchCrawlerJob({
           db: req.db,
           jobId: parseJob.id,
-          uploadDir,
+          uploadDir: getUploadsDir(req),
           getOpenAI: getOpenAIOptional,
         });
       }
@@ -2073,7 +2190,7 @@ router.post('/geo/crawl/start', async (req, res) => {
       dispatchCrawlerJob({
         db: req.db,
         jobId: job.id,
-        uploadDir,
+        uploadDir: getUploadsDir(req),
         getOpenAI,
       });
     } catch (error) {
@@ -2981,6 +3098,523 @@ router.get('/profiles/duplicates', async (req, res, next) => {
     console.error('[admin/profiles/duplicates] Error:', error)
     return next(error)
   }
+})
+
+async function ensureProfileTombstonesTable(db) {
+  const isPostgres = db?.dialect === 'postgres'
+  await db.prepare(
+    isPostgres
+      ? `
+        CREATE TABLE IF NOT EXISTS profile_tombstones (
+          profile_id TEXT PRIMARY KEY,
+          deleted_at TIMESTAMPTZ DEFAULT now(),
+          deleted_by TEXT,
+          reason TEXT
+        )
+      `
+      : `
+        CREATE TABLE IF NOT EXISTS profile_tombstones (
+          profile_id TEXT PRIMARY KEY,
+          deleted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          deleted_by TEXT,
+          reason TEXT
+        )
+      `,
+  ).run()
+}
+
+async function getProfileHardDeleteStats(db, profileId) {
+  const pid = String(profileId || '').trim()
+  const p = await db
+    .prepare('SELECT id, display_name, primary_type, status, user_id, organization_id FROM profiles WHERE id = ? LIMIT 1')
+    .get(pid)
+  if (!p) return { ok: false, code: 'NOT_FOUND' }
+
+  const sectionCount = Number(
+    (await db.prepare('SELECT COUNT(*) AS count FROM profile_sections WHERE profile_id = ?').get(pid))?.count || 0,
+  )
+  const profileDocCount = Number(
+    (await db.prepare('SELECT COUNT(*) AS count FROM profile_documents WHERE profile_id = ?').get(pid))?.count || 0,
+  )
+  const docCount = Number((await db.prepare('SELECT COUNT(*) AS count FROM documents WHERE profile_id = ?').get(pid))?.count || 0)
+  const grantCount = Number((await db.prepare('SELECT COUNT(*) AS count FROM grants WHERE profile_id = ?').get(pid))?.count || 0)
+  const jobCount = Number((await db.prepare('SELECT COUNT(*) AS count FROM crawler_jobs WHERE profile_id = ?').get(pid))?.count || 0)
+
+  return {
+    ok: true,
+    profile: p,
+    counts: {
+      profile_sections: sectionCount,
+      profile_documents: profileDocCount,
+      documents: docCount,
+      grants: grantCount,
+      crawler_jobs: jobCount,
+    },
+  }
+}
+
+async function hardDeleteProfileById({ db, profileId, actorUserId, reason, tombstone = true }) {
+  const pid = String(profileId || '').trim()
+  if (!pid) throw new Error('profile id required')
+
+  await ensureProfileTombstonesTable(db)
+
+  // Best-effort delete helper (tolerate missing tables in drifted prod DBs).
+  const safeRun = async (tx, sql, ...params) => {
+    try {
+      return await tx.prepare(sql).run(...params)
+    } catch (error) {
+      const msg = String(error?.message || error)
+      if (msg.includes('no such table') || msg.includes('does not exist')) return null
+      throw error
+    }
+  }
+
+  await db.withTransaction(async (tx) => {
+    if (tombstone) {
+      await tx.prepare(
+        `
+          INSERT INTO profile_tombstones (profile_id, deleted_at, deleted_by, reason)
+          VALUES (?, CURRENT_TIMESTAMP, ?, ?)
+          ON CONFLICT(profile_id) DO UPDATE SET
+            deleted_at = CURRENT_TIMESTAMP,
+            deleted_by = excluded.deleted_by,
+            reason = excluded.reason
+        `,
+      ).run(pid, actorUserId || null, reason || null)
+    }
+
+    // Delete dependent rows first (regardless of FK enforcement).
+    await safeRun(tx, 'DELETE FROM profile_documents WHERE profile_id = ?', pid)
+    await safeRun(tx, 'DELETE FROM documents WHERE profile_id = ?', pid)
+    await safeRun(tx, 'DELETE FROM profile_sections WHERE profile_id = ?', pid)
+    await safeRun(tx, 'DELETE FROM grants WHERE profile_id = ?', pid)
+    await safeRun(tx, 'DELETE FROM crawler_jobs WHERE profile_id = ?', pid)
+    await safeRun(tx, 'DELETE FROM billing_account_events WHERE account_id IN (SELECT id FROM billing_accounts WHERE profile_id = ?)', pid)
+    await safeRun(tx, 'DELETE FROM billing_accounts WHERE profile_id = ?', pid)
+
+    const out = await tx.prepare('DELETE FROM profiles WHERE id = ?').run(pid)
+    const deletedCount = Number(out?.changes ?? out?.rowCount ?? 0)
+    if (deletedCount <= 0) {
+      const err = new Error('Profile was not deleted (not found)')
+      err.code = 'NOT_FOUND'
+      throw err
+    }
+  })
+}
+
+/**
+ * POST /api/admin/profiles/:id/hard-delete
+ * Admin-only: HARD delete an orphaned/deleted profile so it cannot return.
+ *
+ * Body:
+ *  { reason?: string, tombstone?: boolean = true, force?: boolean = false }
+ */
+router.post('/profiles/:id/hard-delete', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+
+  const profileId = String(req.params.id || '').trim()
+  if (!profileId) return res.status(400).json({ ok: false, error: 'profile id required' })
+
+  const body = req.body ?? {}
+  const tombstone = body.tombstone !== false
+  const force = body.force === true
+  const reason = typeof body.reason === 'string' && body.reason.trim() ? body.reason.trim() : null
+
+  if (isDesignatedProfileId(profileId) && !force) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Refusing to hard-delete a designated/system profile. Pass force=true to override.',
+      code: 'DESIGNATED_PROFILE',
+    })
+  }
+
+  const stats = await getProfileHardDeleteStats(req.db, profileId)
+  if (!stats?.ok) return res.status(404).json({ ok: false, error: 'Profile not found' })
+
+  const profile = stats.profile
+  const counts = stats.counts
+  const minSections = 2
+  const isDeleted = String(profile?.status || '').toLowerCase() === 'deleted'
+  const isUnowned = !profile?.user_id
+  const hasNoContent =
+    (Number(counts?.profile_sections || 0) < minSections) &&
+    (Number(counts?.profile_documents || 0) === 0) &&
+    (Number(counts?.documents || 0) === 0) &&
+    (Number(counts?.grants || 0) === 0)
+
+  // Safeguard: only hard-delete "truly orphaned" profiles unless force=true.
+  if (!force) {
+    if (!isDeleted) {
+      return res.status(400).json({
+        ok: false,
+        error: "Profile must be deleted first (status='deleted') to hard-delete without force=true.",
+        code: 'NOT_DELETED',
+        profile_id: profileId,
+      })
+    }
+    if (!isUnowned) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Profile has an owner (user_id). Pass force=true to override.',
+        code: 'HAS_OWNER',
+        profile_id: profileId,
+      })
+    }
+    if (!hasNoContent) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Profile has meaningful linked data (sections/docs/pipeline). Pass force=true to override.',
+        code: 'HAS_CONTENT',
+        profile_id: profileId,
+        counts,
+      })
+    }
+  }
+
+  await hardDeleteProfileById({
+    db: req.db,
+    profileId,
+    actorUserId: req.ctx?.userId ?? req.user?.userId ?? null,
+    reason,
+    tombstone,
+  })
+
+  try {
+    logAuditEvent(req.db, {
+      category: AUDIT_CATEGORIES.ADMIN,
+      action: 'profile_hard_delete',
+      severity: SEVERITY.WARNING,
+      userId: req.ctx?.userId ?? req.user?.userId ?? null,
+      resourceType: 'profile',
+      resourceId: profileId,
+      details: { reason, tombstone, force, counts },
+      ipAddress: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+    })
+  } catch {
+    // ignore audit failures
+  }
+
+  return res.json({ ok: true, success: true, profile_id: profileId })
+})
+
+/**
+ * GET /api/admin/profiles/orphans
+ * Admin-only: list HARD-deletable orphan profiles (dry-run report).
+ *
+ * "Orphan" for hard delete means:
+ * - status='deleted' (unless includeActive=true)
+ * - user_id IS NULL (unless includeOwned=true)
+ * - NOT a designated/system profile
+ * - minimal content: <2 sections AND no docs AND no pipeline/grants
+ */
+router.get('/profiles/orphans', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+
+  const includeActive = String(req.query?.includeActive || '').toLowerCase() === 'true'
+  const includeOwned = String(req.query?.includeOwned || '').toLowerCase() === 'true'
+  const limit = Math.max(1, Math.min(Number(req.query?.limit) || 200, 2000))
+  const offset = Math.max(0, Math.min(Number(req.query?.offset) || 0, 100_000))
+
+  const whereDeleted = includeActive ? '' : "AND (p.status IS NOT NULL AND lower(p.status) = 'deleted')"
+  const whereOwned = includeOwned ? '' : "AND (p.user_id IS NULL OR TRIM(p.user_id) = '')"
+
+  const rows = await req.db
+    .prepare(
+      `
+        SELECT
+          p.id, p.display_name, p.primary_type, p.status, p.created_at, p.updated_at, p.user_id, p.organization_id,
+          (SELECT COUNT(*) FROM profile_sections ps WHERE ps.profile_id = p.id) AS section_count,
+          (SELECT COUNT(*) FROM profile_documents pd WHERE pd.profile_id = p.id) AS profile_document_count,
+          (SELECT COUNT(*) FROM documents d WHERE d.profile_id = p.id) AS document_count,
+          (SELECT COUNT(*) FROM grants g WHERE g.profile_id = p.id) AS grant_count
+        FROM profiles p
+        WHERE 1=1
+          ${whereDeleted}
+          ${whereOwned}
+          AND (p.organization_id IS NULL OR TRIM(p.organization_id) = '')
+          AND (SELECT COUNT(*) FROM profile_sections ps WHERE ps.profile_id = p.id) < 2
+          AND (SELECT COUNT(*) FROM profile_documents pd WHERE pd.profile_id = p.id) = 0
+          AND (SELECT COUNT(*) FROM documents d WHERE d.profile_id = p.id) = 0
+          AND (SELECT COUNT(*) FROM grants g WHERE g.profile_id = p.id) = 0
+        ORDER BY p.updated_at DESC
+        LIMIT ? OFFSET ?
+      `,
+    )
+    .all(limit, offset)
+
+  const candidates = (rows || []).filter((r) => !isDesignatedProfileId(r?.id))
+
+  return res.json({
+    ok: true,
+    includeActive,
+    includeOwned,
+    limit,
+    offset,
+    total_returned: candidates.length,
+    candidates,
+  })
+})
+
+/**
+ * POST /api/admin/profiles/orphans/cleanup
+ * Admin-only: HARD delete orphan profiles (default dry-run).
+ *
+ * Body:
+ *  { dry_run?: boolean, limit?: number, tombstone?: boolean = true, reason?: string }
+ */
+async function handleOrphanProfilesHardDeleteCleanup(req, res) {
+  if (!(await ensureAdminRequest(req, res))) return
+
+  const dryRun = req.body?.dry_run !== false
+  const limit = Math.max(1, Math.min(Number(req.body?.limit) || 200, 2000))
+  const tombstone = req.body?.tombstone !== false
+  const reason = typeof req.body?.reason === 'string' && req.body.reason.trim() ? req.body.reason.trim() : 'orphan_cleanup'
+
+  const rows = await req.db
+    .prepare(
+      `
+        SELECT
+          p.id, p.display_name, p.primary_type, p.status, p.created_at, p.updated_at, p.user_id, p.organization_id,
+          (SELECT COUNT(*) FROM profile_sections ps WHERE ps.profile_id = p.id) AS section_count,
+          (SELECT COUNT(*) FROM profile_documents pd WHERE pd.profile_id = p.id) AS profile_document_count,
+          (SELECT COUNT(*) FROM documents d WHERE d.profile_id = p.id) AS document_count,
+          (SELECT COUNT(*) FROM grants g WHERE g.profile_id = p.id) AS grant_count
+        FROM profiles p
+        WHERE (p.status IS NOT NULL AND lower(p.status) = 'deleted')
+          AND (p.user_id IS NULL OR TRIM(p.user_id) = '')
+          AND (p.organization_id IS NULL OR TRIM(p.organization_id) = '')
+          AND (SELECT COUNT(*) FROM profile_sections ps WHERE ps.profile_id = p.id) < 2
+          AND (SELECT COUNT(*) FROM profile_documents pd WHERE pd.profile_id = p.id) = 0
+          AND (SELECT COUNT(*) FROM documents d WHERE d.profile_id = p.id) = 0
+          AND (SELECT COUNT(*) FROM grants g WHERE g.profile_id = p.id) = 0
+        ORDER BY p.updated_at DESC
+        LIMIT ?
+      `,
+    )
+    .all(limit)
+
+  const candidates = (rows || []).filter((r) => !isDesignatedProfileId(r?.id))
+  const ids = candidates.map((c) => String(c.id))
+
+  if (dryRun) {
+    return res.json({
+      ok: true,
+      dry_run: true,
+      would_delete: ids.length,
+      candidates,
+    })
+  }
+
+  let deleted = 0
+  const deletedIds = []
+  for (const id of ids) {
+    await hardDeleteProfileById({
+      db: req.db,
+      profileId: id,
+      actorUserId: req.ctx?.userId ?? req.user?.userId ?? null,
+      reason,
+      tombstone,
+    })
+    deleted += 1
+    deletedIds.push(id)
+  }
+
+  try {
+    logAuditEvent(req.db, {
+      category: AUDIT_CATEGORIES.ADMIN,
+      action: 'cleanup_orphan_profiles_hard_delete',
+      severity: SEVERITY.WARNING,
+      userId: req.ctx?.userId ?? req.user?.userId ?? null,
+      resourceType: 'profile',
+      resourceId: null,
+      details: {
+        deleted_count: deleted,
+        profile_ids: deletedIds,
+        tombstone,
+        reason,
+      },
+      ipAddress: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+    })
+  } catch {
+    // ignore audit failures
+  }
+
+  return res.json({
+    ok: true,
+    dry_run: false,
+    deleted,
+    deleted_ids: deletedIds,
+  })
+}
+
+router.post('/profiles/orphans/cleanup', async (req, res) => {
+  return handleOrphanProfilesHardDeleteCleanup(req, res)
+})
+
+/**
+ * POST /api/admin/cleanup/orphan-profiles
+ * Alias for /api/admin/profiles/orphans/cleanup (hard-delete).
+ */
+router.post('/cleanup/orphan-profiles', async (req, res) => {
+  return handleOrphanProfilesHardDeleteCleanup(req, res)
+})
+
+/**
+ * POST /api/admin/profiles/:id/restore-access
+ * Admin-only: repair ownership/sharing for an existing profile.
+ *
+ * Body:
+ *  { user_id?: string, add_emails?: string[], set_basic_email?: string, restore_deleted?: boolean }
+ */
+router.post('/profiles/:id/restore-access', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+
+  const profileId = String(req.params.id || '').trim()
+  if (!profileId) return res.status(400).json({ ok: false, error: 'profile id required' })
+
+  const body = req.body ?? {}
+  const requestedUserId = typeof body.user_id === 'string' && body.user_id.trim() ? String(body.user_id).trim() : null
+  const restoreDeleted = body.restore_deleted === true
+
+  const rawEmails = Array.isArray(body.add_emails) ? body.add_emails : body.add_emails ? [body.add_emails] : []
+  const addEmails = rawEmails.map((e) => normalizeEmail(e)).filter(Boolean)
+
+  const setBasicEmail = normalizeEmail(body.set_basic_email)
+
+  const existing = await req.db
+    .prepare('SELECT id, user_id, organization_id, status FROM profiles WHERE id = ? LIMIT 1')
+    .get(profileId)
+  if (!existing) return res.status(404).json({ ok: false, error: 'Profile not found' })
+
+  if (String(existing.status || '').toLowerCase() === 'deleted' && !restoreDeleted) {
+    return res.status(409).json({
+      ok: false,
+      error: 'Profile is deleted. Pass restore_deleted=true to restore it.',
+      code: 'PROFILE_DELETED',
+    })
+  }
+
+  // If caller didn't provide emails, try to self-heal from organizations.email.
+  let derivedEmail = null
+  try {
+    if ((!addEmails || addEmails.length === 0) && existing.organization_id) {
+      const org = await req.db.prepare('SELECT email FROM organizations WHERE id = ? LIMIT 1').get(String(existing.organization_id))
+      derivedEmail = normalizeEmail(org?.email)
+    }
+  } catch {
+    derivedEmail = null
+  }
+
+  const emailsToAdd = Array.from(new Set([...(addEmails || []), ...(derivedEmail ? [derivedEmail] : [])]))
+
+  const changes = {}
+
+  if (restoreDeleted) {
+    changes.status = null
+  }
+  if (requestedUserId !== null) {
+    changes.user_id = requestedUserId
+  }
+
+  // Apply DB changes
+  if (Object.keys(changes).length > 0) {
+    const setCols = []
+    const params = []
+    for (const [k, v] of Object.entries(changes)) {
+      setCols.push(`${k} = ?`)
+      params.push(v)
+    }
+    setCols.push('updated_at = CURRENT_TIMESTAMP')
+    await req.db.prepare(`UPDATE profiles SET ${setCols.join(', ')} WHERE id = ?`).run(...params, profileId)
+  }
+
+  let addedCount = 0
+  if (emailsToAdd.length > 0) {
+    const added = await addProfileEmails(req.db, {
+      profileId,
+      emails: emailsToAdd,
+      addedBy: req.ctx?.userId ?? req.user?.userId ?? 'admin',
+    })
+    addedCount = Number(added?.added || 0)
+  }
+
+  // Upsert basic_information.email if requested
+  let basicUpdated = false
+  if (setBasicEmail) {
+    try {
+      const section = await req.db
+        .prepare(`SELECT id, data FROM profile_sections WHERE profile_id = ? AND section_key = 'basic_information' LIMIT 1`)
+        .get(profileId)
+      let data = {}
+      if (section?.data) {
+        try {
+          data = typeof section.data === 'string' ? JSON.parse(section.data) : section.data
+        } catch {
+          data = {}
+        }
+      }
+      const next = { ...(data && typeof data === 'object' ? data : {}), email: setBasicEmail }
+      const id = section?.id || crypto.randomUUID()
+      await req.db
+        .prepare(
+          `
+            INSERT INTO profile_sections (id, profile_id, section_key, data, updated_by)
+            VALUES (?, ?, 'basic_information', ?, ?)
+            ON CONFLICT(profile_id, section_key) DO UPDATE SET
+              data = excluded.data,
+              updated_at = CURRENT_TIMESTAMP,
+              updated_by = excluded.updated_by
+          `,
+        )
+        .run(id, profileId, JSON.stringify(next), req.ctx?.userId ?? 'admin')
+      basicUpdated = true
+    } catch {
+      basicUpdated = false
+    }
+  }
+
+  const updated = await req.db.prepare('SELECT * FROM profiles WHERE id = ? LIMIT 1').get(profileId)
+  const emails = await listProfileEmails(req.db, profileId).catch(() => [])
+
+  // Durable audit log
+  try {
+    logAuditEvent(req.db, {
+      category: AUDIT_CATEGORIES.ADMIN,
+      action: 'profile_restore_access',
+      severity: SEVERITY.INFO,
+      userId: req.ctx?.userId ?? req.user?.userId ?? null,
+      profileId,
+      resourceType: 'profile',
+      resourceId: profileId,
+      details: {
+        requested_user_id: requestedUserId,
+        restore_deleted: restoreDeleted,
+        added_emails: emailsToAdd,
+        added_count: addedCount,
+        set_basic_email: setBasicEmail ? true : false,
+        basic_updated: basicUpdated,
+      },
+      ipAddress: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+    })
+  } catch {
+    // ignore audit failures
+  }
+
+  return res.json({
+    ok: true,
+    profile: updated,
+    emails,
+    changes: {
+      updated_user_id: requestedUserId !== null,
+      restored_deleted: restoreDeleted,
+      added_emails: addedCount,
+      basic_email_updated: basicUpdated,
+    },
+  })
 })
 
 /**
