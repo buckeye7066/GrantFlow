@@ -10,6 +10,7 @@ import AdminServiceApplications from '@/components/admin/AdminServiceApplication
 import AdminLoginNotifications from '@/components/admin/AdminLoginNotifications.jsx';
 import AdminProfileDedupe from '@/components/admin/AdminProfileDedupe.jsx';
 import AdminKnowledgeBase from '@/components/admin/AdminKnowledgeBase.jsx'
+import AdminServiceCatalog from '@/components/admin/AdminServiceCatalog.jsx'
 import Billing from '@/pages/Billing';
 import Automation from '@/pages/Automation';
 import { useAuthStore } from '@/stores/authStore';
@@ -81,6 +82,10 @@ export default function Admin() {
               <DollarSign className="w-4 h-4 mr-2" />
               Billing
             </TabsTrigger>
+            <TabsTrigger value="services">
+              <DollarSign className="w-4 h-4 mr-2" />
+              Services
+            </TabsTrigger>
             <TabsTrigger value="maintenance">
               <Wrench className="w-4 h-4 mr-2" />
               Maintenance
@@ -125,6 +130,10 @@ export default function Admin() {
 
           <TabsContent value="billing" className="mt-6">
             <Billing />
+          </TabsContent>
+
+          <TabsContent value="services" className="mt-6">
+            <AdminServiceCatalog />
           </TabsContent>
 
           <TabsContent value="maintenance" className="mt-6">
