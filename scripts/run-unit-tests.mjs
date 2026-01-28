@@ -32,7 +32,12 @@ async function main() {
     return
   }
 
-  const child = spawn(process.execPath, ['--test', ...testFiles], {
+  // Node's default test concurrency can overwhelm machines because many tests spawn full backend
+  // processes. Keep this conservative by default to reduce flakes/timeouts.
+  const concurrencyRaw = process.env.UNIT_TEST_CONCURRENCY || process.env.TEST_CONCURRENCY || '4'
+  const concurrency = Math.max(1, Number.parseInt(String(concurrencyRaw), 10) || 4)
+
+  const child = spawn(process.execPath, ['--test', `--test-concurrency=${concurrency}`, ...testFiles], {
     stdio: 'inherit',
     env: process.env,
   })

@@ -817,7 +817,7 @@ export default function AdminDiagnostics() {
                   <select
                     value={crawlerAuditProfileId}
                     onChange={(e) => setCrawlerAuditProfileId(e.target.value)}
-                    className="h-9 w-full rounded-md border border-input bg-white px-3 py-1 text-sm text-slate-900 shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring dark:bg-slate-900 dark:text-slate-50"
+                    className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 py-1 text-sm text-slate-900 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                   >
                     <option value="">Recent profiles (auto)</option>
                     {(crawlerAuditProfiles || []).map((p) => (

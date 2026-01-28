@@ -39,7 +39,8 @@ export async function ensureServiceCatalogSchema(db) {
       client_category TEXT NOT NULL,
       amount_cents INTEGER NOT NULL,
       currency TEXT NOT NULL DEFAULT 'usd',
-      milestone_phase TEXT,
+      -- IMPORTANT: Do not allow NULL here; UNIQUE treats NULL as distinct (idempotency bug).
+      milestone_phase TEXT NOT NULL DEFAULT '',
       stripe_price_id TEXT,
       active ${isPostgres(db) ? 'BOOLEAN' : 'INTEGER'} DEFAULT ${isPostgres(db) ? 'TRUE' : '1'},
       created_at ${isPostgres(db) ? 'TIMESTAMPTZ' : 'DATETIME'} DEFAULT ${nowSqlLiteral(db)},
@@ -216,20 +217,20 @@ export async function seedServiceCatalogFromExtract(db) {
           clientCategory: category,
           amountCents: unitCents,
           currency: 'usd',
-          milestonePhase: null,
+          milestonePhase: '',
           stripePriceId: null,
           active: true,
         })
         continue
       }
 
-      // Total row (milestone_phase NULL)
+      // Total row (milestone_phase '') — NULL would allow duplicates under UNIQUE.
       await upsertPriceRow(db, {
         serviceId: effectiveServiceId,
         clientCategory: category,
         amountCents: Number(cents),
         currency: 'usd',
-        milestonePhase: null,
+        milestonePhase: '',
         stripePriceId: null,
         active: true,
       })
@@ -256,7 +257,7 @@ export async function seedServiceCatalogFromExtract(db) {
 
 async function upsertPriceRow(
   db,
-  { serviceId, clientCategory, amountCents, currency, milestonePhase = null, stripePriceId = null, active = true },
+  { serviceId, clientCategory, amountCents, currency, milestonePhase = '', stripePriceId = null, active = true },
 ) {
   const id = crypto.randomUUID()
   const activeDb = isPostgres(db) ? Boolean(active) : active ? 1 : 0
@@ -274,7 +275,7 @@ async function upsertPriceRow(
         stripe_price_id = COALESCE(service_prices.stripe_price_id, excluded.stripe_price_id),
         updated_at = ${nowSqlLiteral(db)}
     `,
-  ).run(id, serviceId, clientCategory, Number(amountCents), currency, milestonePhase, stripePriceId, activeDb)
+  ).run(id, serviceId, clientCategory, Number(amountCents), currency, String(milestonePhase ?? ''), stripePriceId, activeDb)
 }
 
 export async function listServiceCatalog(db, { includeInactive = false } = {}) {
@@ -303,7 +304,9 @@ export async function listServiceCatalog(db, { includeInactive = false } = {}) {
         FROM service_prices
         WHERE service_id IN (${placeholders})
           AND active = 1
-        ORDER BY client_category ASC, milestone_phase IS NOT NULL, milestone_phase ASC
+        ORDER BY client_category ASC,
+                 CASE WHEN COALESCE(milestone_phase, '') = '' THEN 0 ELSE 1 END,
+                 milestone_phase ASC
       `,
     )
     .all(...ids)

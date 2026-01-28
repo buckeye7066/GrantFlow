@@ -101,6 +101,7 @@ export async function createCrawlerJob(db, options) {
   const VALID_TYPES = [
     'local',
     'scholarship',
+    'health_resources',
     'comprehensive',
     'national',
     'item_search',

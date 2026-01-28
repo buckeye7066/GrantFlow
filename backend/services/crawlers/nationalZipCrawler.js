@@ -762,6 +762,7 @@ async function processZip(zip, db, config) {
   let insertedNew = 0
   let associationsNew = 0
   let eligibleFound = 0
+  let associationWriteAvailable = true
   let error = null
   let status = 'completed'
   
@@ -804,6 +805,10 @@ async function processZip(zip, db, config) {
     // Always include durable local directory sources so every ZIP yields at least 3.
     // (These are “entry points” users can click even when upstream APIs are blocked.)
     const baselineDirectories = buildBaselineDirectorySources({ zip, meta: meta ?? coords ?? null })
+
+    // Deterministic/no-network mode for tests and local debugging.
+    // Keeps GeoCrawl stable even when upstream providers throttle.
+    const offlineOnly = Boolean(config?.offline_only ?? config?.offlineOnly ?? false)
     
     // Search all data sources (sequential so GeoCrawl Monitor can show current_source live).
     const discoverLocal = Boolean(config?.discover_local_resources)
@@ -833,19 +838,25 @@ async function processZip(zip, db, config) {
 
     await reportSource(null, `Starting ZIP ${zip}`)
 
-    await reportSource('grants.gov', 'Querying source: grants.gov')
-    const grantsGovResults = coords ? await searchGrantsGovByZip(zip, coords) : []
-
-    await reportSource('state_portal', 'Querying source: state portals')
-    const stateResults = await searchStateGrantsByZip(zip, coords ?? meta ?? null)
-
-    await reportSource('foundation_locator', 'Querying source: foundation locators')
-    const foundationResults = await searchFoundationLocator(zip, coords ?? meta ?? null)
-
+    let grantsGovResults = []
+    let stateResults = []
+    let foundationResults = []
     let overpassResults = []
-    if (discoverLocal) {
-      await reportSource('overpass', 'Querying source: overpass directories')
-      overpassResults = await searchOverpassLocalResources(zip, coords ?? meta ?? null, config).catch(() => [])
+
+    if (!offlineOnly) {
+      await reportSource('grants.gov', 'Querying source: grants.gov')
+      grantsGovResults = coords ? await searchGrantsGovByZip(zip, coords) : []
+
+      await reportSource('state_portal', 'Querying source: state portals')
+      stateResults = await searchStateGrantsByZip(zip, coords ?? meta ?? null)
+
+      await reportSource('foundation_locator', 'Querying source: foundation locators')
+      foundationResults = await searchFoundationLocator(zip, coords ?? meta ?? null)
+
+      if (discoverLocal) {
+        await reportSource('overpass', 'Querying source: overpass directories')
+        overpassResults = await searchOverpassLocalResources(zip, coords ?? meta ?? null, config).catch(() => [])
+      }
     }
     
     sources = [
@@ -880,17 +891,35 @@ async function processZip(zip, db, config) {
         opp.geo_source = opp.source ?? null
         opp.geo_scope = 'zip'
       }
-      const saved = await saveOpportunity(db, opp)
-      if (saved?.inserted) insertedNew += 1
-      if (runId && saved?.id) {
-        associationsNew += await upsertGeoAssociation(db, {
-          opportunityId: saved.id,
-          geoRunId: runId,
-          state: stateForZip,
-          zip,
-          county: countyForZip,
-          source: opp.source ?? null,
-        })
+      let saved = null
+      try {
+        saved = await saveOpportunity(db, opp)
+        if (saved?.inserted) insertedNew += 1
+      } catch (e) {
+        // Do not fail the ZIP if one item can't be persisted; continue so we still meet minimums.
+        console.warn(`[GeoCrawl] saveOpportunity failed (zip=${zip} source=${opp?.source}):`, e?.message || e)
+        continue
+      }
+
+      if (runId && saved?.id && associationWriteAvailable) {
+        try {
+          associationsNew += await upsertGeoAssociation(db, {
+            opportunityId: saved.id,
+            geoRunId: runId,
+            state: stateForZip,
+            zip,
+            county: countyForZip,
+            source: opp.source ?? null,
+          })
+        } catch (e) {
+          // If the association table is missing or permissions are limited, we should still save
+          // globally (funding_opportunities). Mark association writes unavailable for this ZIP.
+          associationWriteAvailable = false
+          console.warn(
+            `[GeoCrawl] geo association insert failed (zip=${zip} run=${runId}) continuing without associations:`,
+            e?.message || e,
+          )
+        }
       }
     }
     
