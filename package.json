@@ -14,7 +14,7 @@
     "quality:report": "node scripts/code-quality-gate.mjs --report",
     "lint": "eslint --max-warnings 0 \"src/**/*.{js,jsx}\" \"backend/**/*.js\"",
     "typecheck": "tsc -p tsconfig.node.json --noEmit",
-    "unit": "node scripts/run-unit-tests.mjs",
+    "unit": "node scripts/run-unit-tests.mjs && vitest run",
     "smoke": "node ./node_modules/playwright/cli.js test -c tests/smoke/playwright.config.mjs",
     "smoke:install": "node ./node_modules/playwright/cli.js install chromium",
     "e2e": "node ./node_modules/playwright/cli.js test -c tests/e2e/playwright.config.mjs",
@@ -146,7 +146,10 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "14.3.1",
     "@vitejs/plugin-react": "^5.1.1",
+    "@vitest/coverage-v8": "4.0.18",
     "autoprefixer": "^10.4.23",
     "concurrently": "9.2.1",
     "eslint": "^9.39.1",
@@ -157,8 +160,10 @@
     "pdf2pic": "^3.2.0",
     "playwright": "^1.49.1",
     "postcss": "^8.5.6",
+    "supertest": "7.2.2",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.3",
-    "vite": "^7.2.4"
+    "vite": "^7.2.4",
+    "vitest": "4.0.18"
   }
 }

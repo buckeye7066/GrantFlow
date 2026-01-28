@@ -157,15 +157,17 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   requires_501c3 BOOLEAN DEFAULT FALSE,
   requires_match BOOLEAN DEFAULT FALSE,
   match_percentage REAL,
+  match_reasons TEXT DEFAULT '[]', -- JSON array of match/eligibility reasons
   
   -- Status
   is_active BOOLEAN DEFAULT TRUE,
   last_crawled DATETIME,
   
   -- For tracking which profiles this was matched to
-  match_reasons TEXT DEFAULT '[]', -- JSON array
-  notes TEXT,
-  profile_id TEXT
+  profile_id TEXT,
+
+  -- Misc
+  notes TEXT
 );
 
 -- Geo Crawl run tracking (durable progress for live monitor)

@@ -134,22 +134,27 @@ function decorateOpportunity(row) {
   return parsed;
 }
 
-function applyComplianceFilters(compliance, conditions, params) {
+function applyComplianceFilters(compliance, conditions, params, options = {}) {
   const normalized = (compliance || 'grant_only').toLowerCase();
+  const prefix = typeof options.prefix === 'string' ? options.prefix : '';
   if (normalized === 'grant_only') {
-    conditions.push('(opportunity_type IS NULL OR LOWER(opportunity_type) NOT IN (?, ?, ?))');
+    conditions.push(`(${prefix}opportunity_type IS NULL OR LOWER(${prefix}opportunity_type) NOT IN (?, ?, ?))`);
     params.push(...LOAN_TYPES);
 
     if (params.__dialect === 'postgres') {
-      conditions.push('(requires_match IS NULL OR requires_match = FALSE)');
+      conditions.push(`(${prefix}requires_match IS NULL OR ${prefix}requires_match = FALSE)`);
     } else {
       // Explicitly allow NULL, 0, '0', false, 'false'
-      conditions.push("(requires_match IS NULL OR requires_match = 0 OR requires_match = '0' OR requires_match = 'false')");
+      conditions.push(
+        `(${prefix}requires_match IS NULL OR ${prefix}requires_match = 0 OR ${prefix}requires_match = '0' OR ${prefix}requires_match = 'false')`,
+      );
     }
     if (params.__dialect === 'postgres') {
-      conditions.push('(match_percentage IS NULL OR match_percentage = 0)');
+      conditions.push(`(${prefix}match_percentage IS NULL OR ${prefix}match_percentage = 0)`);
     } else {
-      conditions.push("(match_percentage IS NULL OR match_percentage = 0 OR match_percentage = '0')");
+      conditions.push(
+        `(${prefix}match_percentage IS NULL OR ${prefix}match_percentage = 0 OR ${prefix}match_percentage = '0')`,
+      );
     }
   }
   return normalized;
@@ -157,6 +162,32 @@ function applyComplianceFilters(compliance, conditions, params) {
 
 function likeOperatorForDb(db) {
   return db?.dialect === 'postgres' ? 'ILIKE' : 'LIKE';
+}
+
+function coerceBooleanToSqlite(value) {
+  const normalized = normalizeBoolean(value);
+  if (normalized === null) return null;
+  return normalized ? 1 : 0;
+}
+
+function normalizeSqlitePayload(payload) {
+  const result = { ...payload };
+  // SQLite bindings cannot accept raw booleans.
+  if (result.is_national !== undefined) {
+    result.is_national = coerceBooleanToSqlite(result.is_national) ?? 0;
+  }
+  if (result.is_active !== undefined) {
+    result.is_active = coerceBooleanToSqlite(result.is_active) ?? 0;
+  }
+  if (result.requires_501c3 !== undefined) {
+    result.requires_501c3 = coerceBooleanToSqlite(result.requires_501c3) ?? 0;
+  }
+  return result;
+}
+
+function normalizePayloadForDb(payload, db) {
+  if (db?.dialect === 'sqlite') return normalizeSqlitePayload(payload);
+  return payload;
 }
 
 // Search/list funding opportunities
@@ -180,7 +211,12 @@ router.get('/', async (req, res) => {
     const parsedLimit = Number.parseInt(limit, 10) || 10000;
     const parsedOffset = Math.max(Number.parseInt(offset, 10) || 0, 0);
 
-    const geoRunId = geoRunIdParam ?? runIdParam ?? null
+    const dialect = req.db?.dialect;
+    const requestedCompliance = (compliance || 'grant_only').toLowerCase();
+
+    const geoRunId = geoRunIdParam ?? runIdParam ?? null;
+    const hasGeoRun = Boolean(geoRunId);
+    const prefix = hasGeoRun ? 'fo.' : '';
 
     // Geo-run filtering is performed via the geo index table so we can:
     // - preserve global de-dupe (one opportunity row)
@@ -188,69 +224,72 @@ router.get('/', async (req, res) => {
     //
     // Production safety: older DBs may not have the geo index table yet; we fall back to
     // filtering on funding_opportunities.geo_run_id if the join table is missing.
-    const primaryFromClause = geoRunId
+    const primaryFromClause = hasGeoRun
       ? `FROM funding_opportunities fo JOIN funding_opportunity_geo_index gi ON gi.opportunity_id = fo.id`
-      : `FROM funding_opportunities`
-    const fallbackFromClause = geoRunId ? `FROM funding_opportunities fo` : `FROM funding_opportunities`
+      : `FROM funding_opportunities`;
+    const fallbackFromClause = hasGeoRun ? `FROM funding_opportunities fo` : `FROM funding_opportunities`;
 
-    const baseConditions = geoRunId ? ['fo.is_active = ?'] : ['is_active = ?'];
+    const baseConditions = [`${prefix}is_active = ?`];
     const baseParams = [true];
-
-    // Pass dialect through params for applyComplianceFilters.
-    baseParams.__dialect = req.db?.dialect;
-    applyComplianceFilters(compliance, baseConditions, baseParams);
 
     if (search) {
       const searchTerm = `%${search}%`;
       const likeOp = likeOperatorForDb(req.db);
-      baseConditions.push(
-        geoRunId
-          ? `(fo.title ${likeOp} ? OR fo.sponsor ${likeOp} ? OR fo.description ${likeOp} ?)`
-          : `(title ${likeOp} ? OR sponsor ${likeOp} ? OR description ${likeOp} ?)`,
-      );
+      baseConditions.push(`(${prefix}title ${likeOp} ? OR ${prefix}sponsor ${likeOp} ? OR ${prefix}description ${likeOp} ?)`);
       baseParams.push(searchTerm, searchTerm, searchTerm);
     }
 
     const normalizedState = state ? String(state).toUpperCase() : null;
 
     if (isNational === 'true') {
-      baseConditions.push(geoRunId ? 'fo.is_national = ?' : 'is_national = ?');
+      baseConditions.push(`${prefix}is_national = ?`);
       baseParams.push(true);
     }
 
     if (source) {
-      baseConditions.push(geoRunId ? 'fo.source = ?' : 'source = ?');
+      baseConditions.push(`${prefix}source = ?`);
       baseParams.push(source);
     }
 
     if (deadlineAfter) {
-      baseConditions.push('(deadline_type = "rolling" OR (deadline IS NOT NULL AND deadline >= ?))');
+      baseConditions.push(`(${prefix}deadline_type = "rolling" OR (${prefix}deadline IS NOT NULL AND ${prefix}deadline >= ?))`);
       baseParams.push(deadlineAfter);
     }
 
     if (deadlineBefore) {
-      baseConditions.push('(deadline IS NOT NULL AND deadline <= ?)');
+      baseConditions.push(`(${prefix}deadline IS NOT NULL AND ${prefix}deadline <= ?)`);
       baseParams.push(deadlineBefore);
     }
 
-    if (geoRunId) {
-      baseConditions.push('gi.geo_run_id = ?')
-      baseParams.push(String(geoRunId))
+    if (hasGeoRun) {
+      baseConditions.push('gi.geo_run_id = ?');
+      baseParams.push(String(geoRunId));
     }
 
-    const conditions = [...baseConditions];
-    const filterParams = [...baseParams];
+    // Apply compliance on a copy, preserving the base query for fallback behavior.
+    const filteredConditions = [...baseConditions];
+    const filteredParams = [...baseParams];
+    filteredParams.__dialect = dialect;
+    const normalizedCompliance = applyComplianceFilters(requestedCompliance, filteredConditions, filteredParams, { prefix });
 
-    if (normalizedState) {
-      // Default behavior includes both state + national.
-      conditions.push(geoRunId ? '(fo.state = ? OR fo.is_national = ?)' : '(state = ? OR is_national = ?)');
-      filterParams.push(normalizedState);
-      filterParams.push(true);
+    const stateCondition = normalizedState ? `(${prefix}state = ? OR ${prefix}is_national = ?)` : null;
+
+    const baseWithStateConditions = [...baseConditions];
+    const baseWithStateParams = [...baseParams];
+    const filteredWithStateConditions = [...filteredConditions];
+    const filteredWithStateParams = [...filteredParams];
+
+    if (stateCondition) {
+      baseWithStateConditions.push(stateCondition);
+      baseWithStateParams.push(normalizedState, true);
+      filteredWithStateConditions.push(stateCondition);
+      filteredWithStateParams.push(normalizedState, true);
     }
 
-    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const whereClause = filteredWithStateConditions.length ? `WHERE ${filteredWithStateConditions.join(' AND ')}` : '';
+
     const orderClause =
-      req.db?.dialect === 'postgres'
+      dialect === 'postgres'
         ? `
             ORDER BY
               CASE WHEN deadline IS NULL THEN 1 ELSE 0 END,
@@ -271,66 +310,64 @@ router.get('/', async (req, res) => {
       0,
     );
 
-    async function runQuery({ fromClause, whereClauseSql, baseConditionsSql, useGeoIndex }) {
-      let opportunities
+    function selectFields(useGeoIndex) {
+      if (hasGeoRun && useGeoIndex) {
+        return 'fo.*, gi.geo_run_id as geo_run_id, gi.zip as geo_zip, gi.county as geo_county, gi.source as geo_source';
+      }
+      if (hasGeoRun) return 'fo.*';
+      return '*';
+    }
+
+    async function runQuery({
+      fromClause,
+      whereClauseSql,
+      queryParams,
+      baseConditionsSql,
+      baseParamsSql,
+      useGeoIndex,
+    }) {
       if (normalizedState && parsedOffset === 0 && isNational !== 'true' && parsedLimit > 0 && minNationalVisible > 0) {
-      const commonWhere = baseConditions.length ? `WHERE ${baseConditions.join(' AND ')}` : 'WHERE 1=1';
+        const commonWhere = baseConditionsSql.length ? `WHERE ${baseConditionsSql.join(' AND ')}` : 'WHERE 1=1';
 
-      const nationals = req.db
+        const nationals = await req.db
+          .prepare(
+            `
+              SELECT ${selectFields(useGeoIndex)}
+              ${fromClause}
+              ${commonWhere}
+                AND ${hasGeoRun ? 'fo.is_national' : 'is_national'} = ?
+              ${orderClause}
+              LIMIT ?
+            `,
+          )
+          .all(...baseParamsSql, true, minNationalVisible);
+
+        const remaining = Math.max(parsedLimit - nationals.length, 0);
+        const locals =
+          remaining > 0
+            ? await req.db
+                .prepare(
+                  `
+                    SELECT ${selectFields(useGeoIndex)}
+                    ${fromClause}
+                    ${commonWhere}
+                      AND ${hasGeoRun ? 'fo.state' : 'state'} = ?
+                      AND (${hasGeoRun ? 'fo.is_national' : 'is_national'} IS NULL OR ${hasGeoRun ? 'fo.is_national' : 'is_national'} = ?)
+                    ${orderClause}
+                    LIMIT ?
+                  `,
+                )
+                .all(...baseParamsSql, normalizedState, false, remaining)
+            : [];
+
+        // Return locals first, then nationals to guarantee visibility in the response.
+        return [...locals, ...nationals];
+      }
+
+      return req.db
         .prepare(
           `
-            SELECT ${
-              geoRunId && useGeoIndex
-                ? 'fo.*, gi.geo_run_id as geo_run_id, gi.zip as geo_zip, gi.county as geo_county, gi.source as geo_source'
-                : geoRunId
-                  ? 'fo.*'
-                  : '*'
-            }
-            ${fromClause}
-            ${commonWhere}
-              AND ${geoRunId ? 'fo.is_national' : 'is_national'} = ?
-            ${orderClause}
-            LIMIT ?
-          `,
-        )
-        .all(...baseParams, true, minNationalVisible);
-
-      const remaining = Math.max(parsedLimit - nationals.length, 0);
-      const locals = remaining > 0
-        ? req.db
-            .prepare(
-              `
-                SELECT ${
-                  geoRunId && useGeoIndex
-                    ? 'fo.*, gi.geo_run_id as geo_run_id, gi.zip as geo_zip, gi.county as geo_county, gi.source as geo_source'
-                    : geoRunId
-                      ? 'fo.*'
-                      : '*'
-                }
-                ${fromClause}
-                ${commonWhere}
-                  AND ${geoRunId ? 'fo.state' : 'state'} = ?
-                  AND (${geoRunId ? 'fo.is_national' : 'is_national'} IS NULL OR ${geoRunId ? 'fo.is_national' : 'is_national'} = ?)
-                ${orderClause}
-                LIMIT ?
-              `,
-            )
-            .all(...baseParams, normalizedState, false, remaining)
-        : [];
-
-      // Return locals first, then nationals to guarantee visibility in the response.
-      opportunities = [...locals, ...nationals];
-      } else {
-        opportunities = await req.db
-        .prepare(
-          `
-            SELECT ${
-              geoRunId && useGeoIndex
-                ? 'fo.*, gi.geo_run_id as geo_run_id, gi.zip as geo_zip, gi.county as geo_county, gi.source as geo_source'
-                : geoRunId
-                  ? 'fo.*'
-                  : '*'
-            }
+            SELECT ${selectFields(useGeoIndex)}
             ${fromClause}
             ${whereClauseSql}
             ${orderClause}
@@ -338,70 +375,173 @@ router.get('/', async (req, res) => {
             OFFSET ?
           `,
         )
-        .all(...filterParams, parsedLimit, parsedOffset);
+        .all(...queryParams, parsedLimit, parsedOffset);
+    }
+
+    function isMissingGeoIndexError(err) {
+      if (!hasGeoRun) return false;
+      const msg = String(err?.message || err);
+      return (
+        msg.includes('funding_opportunity_geo_index') ||
+        msg.includes('relation') ||
+        msg.includes('does not exist')
+      );
+    }
+
+    function replaceGeoIndexCondition(conds) {
+      return conds.map((c) => (c === 'gi.geo_run_id = ?' ? 'fo.geo_run_id = ?' : c));
+    }
+
+    async function listAndCount({
+      fromClause,
+      whereClauseSql,
+      queryParams,
+      baseConditionsSql,
+      baseParamsSql,
+      useGeoIndex,
+    }) {
+      const rows = await runQuery({
+        fromClause,
+        whereClauseSql,
+        queryParams,
+        baseConditionsSql,
+        baseParamsSql,
+        useGeoIndex,
+      });
+
+      const countRow = await req.db
+        .prepare(
+          `
+            SELECT COUNT(*) AS total
+            ${fromClause}
+            ${whereClauseSql}
+          `,
+        )
+        .get(...queryParams);
+
+      return { rows, total: countRow?.total ?? rows.length };
+    }
+
+    let effectiveFromClause = primaryFromClause;
+    let effectiveUseGeoIndex = hasGeoRun;
+
+    let result;
+    try {
+      result = await listAndCount({
+        fromClause: effectiveFromClause,
+        whereClauseSql: whereClause,
+        queryParams: filteredWithStateParams,
+        baseConditionsSql: filteredConditions,
+        baseParamsSql: filteredParams,
+        useGeoIndex: effectiveUseGeoIndex,
+      });
+    } catch (err) {
+      if (!isMissingGeoIndexError(err)) throw err;
+
+      effectiveFromClause = fallbackFromClause;
+      effectiveUseGeoIndex = false;
+
+      const fallbackBaseConditions = replaceGeoIndexCondition(baseConditions);
+      const fallbackFilteredConditions = replaceGeoIndexCondition(filteredConditions);
+      const fallbackFilteredWithStateConditions = replaceGeoIndexCondition(filteredWithStateConditions);
+      const fallbackBaseWithStateConditions = replaceGeoIndexCondition(baseWithStateConditions);
+
+      const fallbackWhere = fallbackFilteredWithStateConditions.length
+        ? `WHERE ${fallbackFilteredWithStateConditions.join(' AND ')}`
+        : '';
+
+      result = await listAndCount({
+        fromClause: effectiveFromClause,
+        whereClauseSql: fallbackWhere,
+        queryParams: filteredWithStateParams,
+        baseConditionsSql: fallbackFilteredConditions,
+        baseParamsSql: filteredParams,
+        useGeoIndex: false,
+      });
+
+      // Swap in the fallback conditions for any later fallback queries.
+      baseConditions.length = 0;
+      baseConditions.push(...fallbackBaseConditions);
+      filteredConditions.length = 0;
+      filteredConditions.push(...fallbackFilteredConditions);
+      filteredWithStateConditions.length = 0;
+      filteredWithStateConditions.push(...fallbackFilteredWithStateConditions);
+      baseWithStateConditions.length = 0;
+      baseWithStateConditions.push(...fallbackBaseWithStateConditions);
+    }
+
+    const parsed = result.rows.map((opp) => decorateOpportunity(opp));
+    const filteredTotal = result.total ?? parsed.length;
+
+    // Guardrail: if the user requested grant-only compliance but this filter eliminates everything,
+    // fall back to returning review-required opportunities instead of an empty result set.
+    if (normalizedCompliance === 'grant_only' && filteredTotal === 0) {
+      const baseWhere = baseWithStateConditions.length ? `WHERE ${baseWithStateConditions.join(' AND ')}` : '';
+
+      try {
+        const baseCountRow = await req.db
+          .prepare(
+            `
+              SELECT COUNT(*) AS total
+              ${effectiveFromClause}
+              ${baseWhere}
+            `,
+          )
+          .get(...baseWithStateParams);
+        const totalFound = Number(baseCountRow?.total ?? 0);
+
+        if (totalFound > 0) {
+          console.info('[opportunities] compliance fallback applied', {
+            request_id: req.requestId || null,
+            compliance_requested: normalizedCompliance,
+            geo_run_id: geoRunId ? String(geoRunId) : null,
+            state: normalizedState || null,
+            source: source || null,
+            is_national: isNational || null,
+            total_found: totalFound,
+          });
+
+          // Use the same FROM clause & ordering, but without compliance constraints.
+          const fallbackRows = await runQuery({
+            fromClause: effectiveFromClause,
+            whereClauseSql: baseWhere,
+            queryParams: baseWithStateParams,
+            baseConditionsSql: baseConditions,
+            baseParamsSql: baseParams,
+            useGeoIndex: effectiveUseGeoIndex,
+          });
+
+          const fallbackParsed = fallbackRows.map((opp) => decorateOpportunity(opp));
+
+          return res.json({
+            data: fallbackParsed,
+            total: totalFound,
+            total_found: totalFound,
+            included: fallbackParsed.length,
+            limit: parsedLimit,
+            offset: parsedOffset,
+            compliance_requested: normalizedCompliance,
+            compliance_effective: 'all',
+            fallback_applied: true,
+            fallback_reason: 'compliance_filter_eliminated_all_results',
+            removed_by_compliance: totalFound,
+          });
+        }
+      } catch (err) {
+        console.warn('[opportunities] compliance fallback failed:', err?.message || String(err));
       }
-      return opportunities
-    }
-
-    let opportunities;
-    try {
-      opportunities = await runQuery({ fromClause: primaryFromClause, whereClauseSql: whereClause, baseConditionsSql: baseConditions, useGeoIndex: Boolean(geoRunId) })
-    } catch (err) {
-      const msg = String(err?.message || err)
-      const missingGeoIndex =
-        geoRunId &&
-        (msg.includes('funding_opportunity_geo_index') || msg.includes('relation') || msg.includes('does not exist'))
-      if (!missingGeoIndex) throw err
-
-      // Fallback: older DB without geo index table
-      const fallbackBaseConditions = baseConditions.map((c) => (c === 'gi.geo_run_id = ?' ? 'fo.geo_run_id = ?' : c))
-      const fallbackConditions = conditions.map((c) => (c === 'gi.geo_run_id = ?' ? 'fo.geo_run_id = ?' : c))
-      const fallbackWhere = fallbackConditions.length ? `WHERE ${fallbackConditions.join(' AND ')}` : ''
-
-      // Replace the in-scope arrays used by runQuery
-      baseConditions.length = 0
-      baseConditions.push(...fallbackBaseConditions)
-      conditions.length = 0
-      conditions.push(...fallbackConditions)
-
-      opportunities = await runQuery({ fromClause: fallbackFromClause, whereClauseSql: fallbackWhere, baseConditionsSql: fallbackBaseConditions, useGeoIndex: false })
-    }
-
-    const parsed = opportunities.map((opp) => decorateOpportunity(opp));
-
-    let countRow = null
-    try {
-      countRow = await req.db
-        .prepare(
-          `
-            SELECT COUNT(*) AS total
-            ${primaryFromClause}
-            ${whereClause}
-          `,
-        )
-        .get(...filterParams);
-    } catch (err) {
-      const msg = String(err?.message || err)
-      const missingGeoIndex =
-        geoRunId &&
-        (msg.includes('funding_opportunity_geo_index') || msg.includes('relation') || msg.includes('does not exist'))
-      if (!missingGeoIndex) throw err
-      countRow = await req.db
-        .prepare(
-          `
-            SELECT COUNT(*) AS total
-            ${fallbackFromClause}
-            ${whereClause.replaceAll('gi.geo_run_id', 'fo.geo_run_id')}
-          `,
-        )
-        .get(...filterParams);
     }
 
     res.json({
       data: parsed,
-      total: countRow?.total ?? parsed.length,
+      total: filteredTotal,
+      total_found: filteredTotal,
+      included: parsed.length,
       limit: parsedLimit,
       offset: parsedOffset,
+      compliance_requested: normalizedCompliance,
+      compliance_effective: normalizedCompliance,
+      fallback_applied: false,
     });
   } catch (error) {
     console.error('Error listing opportunities:', error);
@@ -435,7 +575,7 @@ router.post('/', async (req, res) => {
     }
 
     const id = crypto.randomUUID();
-    let data = validateFundingTerms(req.body || {});
+    let data = normalizePayloadForDb(validateFundingTerms(req.body || {}), req.db);
     const normalizedData = Object.fromEntries(
       Object.entries(data).filter(([, value]) => value !== undefined),
     );
@@ -572,7 +712,7 @@ router.put('/:id', async (req, res) => {
       return res.status(403).json({ error: 'Admin privileges required' })
     }
 
-    let data = validateFundingTerms(req.body || {});
+    let data = normalizePayloadForDb(validateFundingTerms(req.body || {}), req.db);
     const normalizedData = Object.fromEntries(
       Object.entries(data).filter(([, value]) => value !== undefined),
     );
