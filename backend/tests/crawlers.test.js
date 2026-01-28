@@ -4,7 +4,6 @@ import {
   getAppAndDb,
   resetDb,
   waitForCrawlerJob,
-  pickAnyZipFromSeed,
   TEST_ADMIN_AUTH_HEADER,
 } from "./testServer.js"
 
@@ -23,14 +22,14 @@ describe("crawlers", () => {
   })
 
   it("runs comprehensive crawler and persists opportunities", async () => {
-    const zip = pickAnyZipFromSeed()
-
     const enqueue = await request(app)
       .post("/api/crawlers/jobs")
       .set(TEST_ADMIN_AUTH_HEADER)
       .send({
         type: "comprehensive",
-        parameters: { zip_list: [zip], limit_per_zip: 2 },
+        // Use a permissive threshold so the fixture dataset always yields results.
+        // NOTE: match_threshold=0 is falsy and would be treated as "unset" by the crawler.
+        parameters: { zip_list: ["10001"], match_threshold: 1, max_results: 3 },
       })
 
     expect(enqueue.status).toBe(201)
@@ -48,14 +47,15 @@ describe("crawlers", () => {
 
     const insertedCount = db
       .prepare("SELECT COUNT(*) AS count FROM funding_opportunities WHERE source = ?")
-      .get("comprehensive_crawler").count
+      .get("verified_real").count
 
     expect(insertedCount).toBeGreaterThanOrEqual(1)
 
     const meta = finalRow.result_meta ? JSON.parse(finalRow.result_meta) : null
     expect(meta).toBeTruthy()
-    expect(meta).toHaveProperty("inserted")
-    expect(meta).toHaveProperty("evaluated")
+    expect(meta).toHaveProperty("total_scored")
+    expect(meta.total_scored).toBeGreaterThanOrEqual(1)
+    expect(finalRow.result_count).toBeGreaterThanOrEqual(1)
   })
 })
 

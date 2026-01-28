@@ -1,0 +1,35 @@
+[
+  {
+    "id": "fixture-local-tn-1",
+    "title": "Fixture Local Community Foundation Grant (TN)",
+    "sponsor": "Fixture Local Foundation",
+    "description": "A fixture local opportunity used for deterministic crawler tests.",
+    "amount_min": 500,
+    "amount_max": 2000,
+    "deadline": null,
+    "application_url": "https://example.com/apply/local-tn-1",
+    "categories": ["community"],
+    "keywords": ["community", "local"],
+    "eligibility_bullets": ["Available to applicants in Tennessee."],
+    "requires_501c3": false,
+    "requires_match": false,
+    "state": "TN"
+  },
+  {
+    "id": "fixture-local-tn-2",
+    "title": "Fixture Nashville Neighborhood Mini Grant",
+    "sponsor": "Fixture Nashville Neighborhood Fund",
+    "description": "Another fixture local opportunity for TN.",
+    "amount_min": 250,
+    "amount_max": 750,
+    "deadline": null,
+    "application_url": "https://example.com/apply/local-tn-2",
+    "categories": ["neighborhood"],
+    "keywords": ["nashville", "neighborhood"],
+    "eligibility_bullets": ["Focused on Nashville community projects."],
+    "requires_501c3": false,
+    "requires_match": false,
+    "state": "TN"
+  }
+]
+
