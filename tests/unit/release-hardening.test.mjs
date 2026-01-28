@@ -27,8 +27,16 @@ test('geo endpoints no longer hard-fail when zip dataset missing', () => {
 test('uploads are configurable via UPLOADS_DIR', () => {
   const server = read('backend/server.js')
   const profiles = read('backend/routes/profiles.js')
+  const uploadsPath = read('backend/utils/uploadsPath.js')
   assert.ok(server.includes('process.env.UPLOADS_DIR'), 'backend/server.js should honor UPLOADS_DIR')
-  assert.ok(profiles.includes('process.env.UPLOADS_DIR'), 'backend/routes/profiles.js should honor UPLOADS_DIR')
+  assert.ok(
+    profiles.includes('resolveUploadsDir') || profiles.includes('getUploadsDir'),
+    'backend/routes/profiles.js should honor UPLOADS_DIR via uploadsPath utility',
+  )
+  assert.ok(
+    uploadsPath.includes('process.env.UPLOADS_DIR'),
+    'backend/utils/uploadsPath.js should honor process.env.UPLOADS_DIR',
+  )
 })
 
 test('crawler completion update does not use "CASE WHEN ? IS NULL" (breaks Postgres)', () => {

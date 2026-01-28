@@ -18,8 +18,118 @@ import {
   getAuthProfileId,
   getAccessibleProfileIds,
   getAccessibleOrganizationIds,
+  addProfileEmails,
+  ensureProfileEmailSchema,
 } from '../utils/accessControl.js'
 import { isAdminEmail } from '../config/constants.js'
+import crypto from 'crypto'
+
+let lastAdminSelfHealAtMs = 0
+const ADMIN_SELF_HEAL_INTERVAL_MS = 10 * 60 * 1000
+
+function normalizeEmail(value) {
+  const email = String(value ?? '').trim().toLowerCase()
+  if (!email || !email.includes('@')) return null
+  return email
+}
+
+async function upsertBasicInformationEmail(db, { profileId, email, actorUserId }) {
+  const normalized = normalizeEmail(email)
+  if (!normalized) return { updated: false }
+
+  const existing = await db
+    .prepare(`SELECT id, data FROM profile_sections WHERE profile_id = ? AND section_key = 'basic_information' LIMIT 1`)
+    .get(String(profileId))
+
+  let data = {}
+  if (existing?.data) {
+    try {
+      data = typeof existing.data === 'string' ? JSON.parse(existing.data) : existing.data
+    } catch {
+      data = {}
+    }
+  }
+
+  const current = normalizeEmail(data?.email)
+  if (current) return { updated: false }
+
+  const next = { ...(data && typeof data === 'object' ? data : {}), email: normalized }
+  const id = existing?.id || crypto.randomUUID()
+
+  // Works for both sqlite + postgres (ON CONFLICT supported in sqlite >= 3.24).
+  await db
+    .prepare(
+      `
+        INSERT INTO profile_sections (id, profile_id, section_key, data, updated_by)
+        VALUES (?, ?, 'basic_information', ?, ?)
+        ON CONFLICT(profile_id, section_key) DO UPDATE SET
+          data = excluded.data,
+          updated_at = CURRENT_TIMESTAMP,
+          updated_by = excluded.updated_by
+      `,
+    )
+    .run(String(id), String(profileId), JSON.stringify(next), actorUserId ? String(actorUserId) : null)
+
+  return { updated: true }
+}
+
+async function adminSelfHealOrgProfileEmails(db, { actorUserId } = {}) {
+  // Throttle (avoid heavy work on every request)
+  const now = Date.now()
+  if (now - lastAdminSelfHealAtMs < ADMIN_SELF_HEAL_INTERVAL_MS) return { ran: false }
+  lastAdminSelfHealAtMs = now
+
+  try {
+    await ensureProfileEmailSchema(db)
+  } catch {
+    // best-effort only
+  }
+
+  // Ensure org profiles that lack ownership are still shareable to the org email.
+  // This prevents "invisible" profiles for org users when only organizations.email is populated.
+  const rows = await db
+    .prepare(
+      `
+        SELECT p.id AS profile_id, p.organization_id, o.email AS org_email
+        FROM profiles p
+        JOIN organizations o ON o.id = p.organization_id
+        WHERE p.organization_id IS NOT NULL
+          AND (p.status IS NULL OR p.status <> 'deleted')
+          AND (p.user_id IS NULL OR TRIM(p.user_id) = '')
+          AND o.email IS NOT NULL
+          AND TRIM(o.email) <> ''
+        ORDER BY p.updated_at DESC
+        LIMIT 250
+      `,
+    )
+    .all()
+
+  let healed = 0
+  for (const row of rows || []) {
+    const email = normalizeEmail(row?.org_email)
+    if (!email) continue
+    const profileId = String(row.profile_id)
+
+    try {
+      const exists = await db
+        .prepare('SELECT 1 FROM profile_emails WHERE profile_id = ? AND lower(email) = ? LIMIT 1')
+        .get(profileId, email)
+      if (!exists) {
+        await addProfileEmails(db, { profileId, emails: [email], addedBy: actorUserId ?? 'admin_self_heal' })
+      }
+      // Also ensure basic_information.email exists when missing (idempotent).
+      await upsertBasicInformationEmail(db, { profileId, email, actorUserId: actorUserId ?? 'admin_self_heal' })
+      healed += 1
+    } catch {
+      // ignore per-profile failures (schema drift / bad data)
+    }
+  }
+
+  if (healed > 0) {
+    console.info('[requestContext] admin self-heal applied', { profiles: healed })
+  }
+  return { ran: true, profiles: healed }
+}
 
 /**
  * Build canonical request context from authenticated user.
@@ -103,6 +213,14 @@ export async function buildRequestContext(db, user) {
     // Admin can access everything
     ctx.accessibleProfileIds = null
     ctx.accessibleOrgIds = null
+
+    // Admin-only self-healing: ensure org profiles are shareable via organizations.email.
+    // Best-effort and throttled.
+    try {
+      await adminSelfHealOrgProfileEmails(db, { actorUserId: ctx.userId ?? null })
+    } catch {
+      // ignore (best-effort)
+    }
   } else {
     // Regular user - compute accessible resources
     try {

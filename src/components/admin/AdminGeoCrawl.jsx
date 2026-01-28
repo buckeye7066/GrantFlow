@@ -289,7 +289,7 @@ export default function AdminGeoCrawl() {
             <div className="space-y-2">
               <Label>State</Label>
               <Select value={selectedState} onValueChange={setSelectedState}>
-                <SelectTrigger>
+                <SelectTrigger className="bg-white text-slate-900 border-slate-300 placeholder:text-slate-400 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white">
                   <SelectValue placeholder={loading ? "Loading..." : "Select a state"} />
                 </SelectTrigger>
                 <SelectContent>
@@ -309,15 +309,26 @@ export default function AdminGeoCrawl() {
                 min={1}
                 value={minSources}
                 onChange={(e) => setMinSources(e.target.value)}
+                className="bg-white text-slate-900 border-slate-300 placeholder:text-slate-400 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
               />
             </div>
 
             <div className="flex items-end gap-2">
-              <Button variant="outline" onClick={handleIndexCounties} disabled={!selectedState || loading}>
+              <Button
+                variant="secondary"
+                onClick={handleIndexCounties}
+                disabled={!selectedState || loading}
+                className="bg-slate-100 text-slate-900 hover:bg-slate-200 disabled:opacity-60 disabled:text-slate-700"
+              >
                 <RefreshCw className="w-4 h-4 mr-2" />
                 Index counties
               </Button>
-              <Button onClick={handleStart} disabled={!selectedState || loading}>
+              <Button
+                variant="default"
+                onClick={handleStart}
+                disabled={!selectedState || loading}
+                className="bg-blue-600 text-white hover:bg-blue-700 disabled:bg-slate-300 disabled:text-slate-700"
+              >
                 {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Play className="w-4 h-4 mr-2" />}
                 Start crawl
               </Button>
@@ -357,6 +368,7 @@ export default function AdminGeoCrawl() {
                     value={countySearch}
                     onChange={(e) => setCountySearch(e.target.value)}
                     disabled={!counties?.length}
+                    className="bg-white text-slate-900 border-slate-300 placeholder:text-slate-400 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:opacity-60"
                   />
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-xs text-slate-500">
@@ -432,6 +444,7 @@ export default function AdminGeoCrawl() {
                     placeholder="Search ZIP or city..."
                     value={zipSearch}
                     onChange={(e) => setZipSearch(e.target.value)}
+                    className="bg-white text-slate-900 border-slate-300 placeholder:text-slate-400 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
                   />
 
                   <div className="space-y-2">
@@ -459,6 +472,7 @@ export default function AdminGeoCrawl() {
                       value={citySearch}
                       onChange={(e) => setCitySearch(e.target.value)}
                       disabled={!cities.length}
+                      className="bg-white text-slate-900 border-slate-300 placeholder:text-slate-400 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:opacity-60"
                     />
                     <div className="max-h-40 overflow-auto border rounded-md bg-white">
                       {!cities.length ? (

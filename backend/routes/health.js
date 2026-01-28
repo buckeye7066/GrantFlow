@@ -1,6 +1,7 @@
 import express from 'express'
 import fs from 'fs'
 import { getSafeHealthSummary } from '../services/diagnosticsService.js'
+import { ensureUploadsDirWritable, isLikelyPersistentPath } from '../utils/uploadsDir.js'
 
 const router = express.Router()
 
@@ -69,16 +70,16 @@ async function checkRequiredSchema(db) {
   }
 }
 
-function checkUploadsDir(req) {
+async function checkUploadsDir(req) {
   const uploadsDir = req.uploadsDir
   if (!uploadsDir) return { ok: true, configured: false }
-  try {
-    fs.mkdirSync(uploadsDir, { recursive: true })
-    fs.accessSync(uploadsDir, fs.constants.R_OK | fs.constants.W_OK)
-    return { ok: true, path: uploadsDir }
-  } catch (error) {
-    return { ok: false, reason: 'uploads_unwritable', path: uploadsDir, error: error?.message || String(error) }
+
+  const writable = await ensureUploadsDirWritable(uploadsDir)
+  if (!writable.ok) {
+    return { ok: false, reason: 'uploads_unwritable', path: uploadsDir, error: writable.error || 'unwritable' }
   }
+
+  return { ok: true, path: uploadsDir }
 }
 
 // Public health summary (safe, non-admin)
@@ -118,6 +119,51 @@ router.get('/healthz', (_req, res) => {
   res.status(200).json({ ok: true, status: 'ok', timestamp: new Date().toISOString() })
 })
 
+// Storage health (safe, read-only)
+router.get('/api/health/storage', async (req, res) => {
+  const uploadsDir = req.uploadsDir || null
+  const legacyUploadsDir = req.legacyUploadsDir || null
+  const configured = Boolean(uploadsDir)
+  const likelyPersistent = uploadsDir ? isLikelyPersistentPath(uploadsDir) : false
+  const writableCheck = uploadsDir ? await ensureUploadsDirWritable(uploadsDir) : { ok: false, error: 'uploads_not_configured' }
+
+  const storageStatus = req.storageStatus || null
+
+  let fileCount = null
+  const includeCount = String(req.query?.include_count || '').toLowerCase() === 'true'
+  if (includeCount && uploadsDir) {
+    try {
+      const entries = await fs.promises.readdir(uploadsDir)
+      fileCount = Array.isArray(entries) ? entries.length : null
+    } catch {
+      fileCount = null
+    }
+  }
+
+  const ok = Boolean(writableCheck?.ok)
+  const isProd = String(process.env.NODE_ENV || '').toLowerCase() === 'production'
+  const allowEphemeral = String(process.env.ALLOW_EPHEMERAL_UPLOADS || '').toLowerCase() === 'true'
+  const missingEnv = isProd && !String(process.env.UPLOADS_DIR || '').trim()
+
+  const degraded = !ok || (isProd && (!likelyPersistent || missingEnv) && !allowEphemeral)
+
+  return res.status(degraded ? 503 : 200).json({
+    ok: !degraded,
+    status: degraded ? 'degraded' : 'ok',
+    uploadsDir,
+    legacyUploadsDir,
+    configured,
+    writable: ok,
+    likely_persistent: likelyPersistent,
+    missing_uploads_dir_env: missingEnv,
+    allow_ephemeral_uploads: allowEphemeral,
+    file_count: fileCount,
+    last_error: ok ? null : (writableCheck?.error || null),
+    storage_status: storageStatus,
+    timestamp: new Date().toISOString(),
+  })
+})
+
 // Readiness checks DB + schema + secrets + uploads volume
 router.get('/readyz', async (req, res) => {
   const jwt = checkJwtSecret()
@@ -154,7 +200,7 @@ router.get('/readyz', async (req, res) => {
     })
   }
 
-  const uploads = checkUploadsDir(req)
+  const uploads = await checkUploadsDir(req)
   if (!uploads.ok) {
     return res.status(503).json({
       ok: false,

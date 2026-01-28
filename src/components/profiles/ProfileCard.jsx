@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { createPageUrl } from "@/utils";
 
-export default function ProfileCard({ profile, onViewInvoices, onDelete }) {
+export default function ProfileCard({ profile, onViewInvoices, onDelete, isAdmin, onHardDelete }) {
   const navigate = useNavigate();
   const billing = profile.billing || {};
   const tier = billing.tier || {};
@@ -67,6 +67,10 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete }) {
   };
 
   const isOrphanedProfile = !profile.organization_id && !profile.user_id;
+  const avatarSrc =
+    profile?.avatar_download_url ||
+    (profile?.avatar_url && String(profile.avatar_url).includes('/uploads/') ? `/api/profiles/${profile.id}/avatar/download` : profile?.avatar_url) ||
+    null
 
   const cardClassName = [
     "group relative border border-slate-200 bg-white shadow-sm transition-shadow hover:shadow-lg",
@@ -99,9 +103,9 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete }) {
           )}
           <div className="flex items-start justify-between gap-3">
             <div className="flex flex-1 items-start gap-3">
-              {profile.avatar_url ? (
+              {avatarSrc ? (
                 <img
-                  src={profile.avatar_url}
+                  src={avatarSrc}
                   alt={displayName}
                   className="h-12 w-12 rounded-lg object-cover"
                 />
@@ -208,6 +212,21 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete }) {
             <FileText className="mr-2 h-4 w-4" />
             Billing
           </Button>
+          {Boolean(isAdmin) && (isOrphanedProfile || String(profile?.status || '').toLowerCase() === 'deleted') ? (
+            <Button
+              variant="destructive"
+              size="sm"
+              className="shrink-0"
+              aria-label={`Hard delete profile ${displayName}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onHardDelete?.(profile);
+              }}
+            >
+              <AlertTriangle className="h-4 w-4" />
+              <span className="sr-only">Hard delete</span>
+            </Button>
+          ) : null}
           <Button
             variant="destructive"
             size="sm"

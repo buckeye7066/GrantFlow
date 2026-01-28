@@ -24,6 +24,7 @@ import {
   getAccessibleProfileIds,
 } from '../utils/accessControl.js'
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
+import { resolveUploadsDir } from '../utils/uploadsDir.js'
 
 const router = express.Router()
 
@@ -85,16 +86,30 @@ router.param('id', async (req, res, next, id) => {
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
-const uploadDir = process.env.UPLOADS_DIR
-  ? resolve(process.env.UPLOADS_DIR)
-  : join(__dirname, '..', 'uploads')
+function getUploadsDir(req) {
+  const fromApp = req?.app?.locals?.uploads?.uploadsDir
+  if (fromApp) return String(fromApp)
+  if (req?.uploadsDir) return String(req.uploadsDir)
+  const resolved = resolveUploadsDir({ baseDir: join(__dirname, '..') })
+  return resolved.uploadsDir
+}
 
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true })
+function requireUploadsWritable(req, res, next) {
+  const status = req?.storageStatus || req?.app?.locals?.uploads?.storageStatus || null
+  if (status && status.writable === false) {
+    return res.status(503).json({
+      ok: false,
+      error: 'Upload storage is unavailable',
+      code: 'UPLOAD_STORAGE_UNAVAILABLE',
+      uploads_dir: status.uploads_dir || null,
+      status: status.status || 'degraded',
+    })
+  }
+  return next()
 }
 
 const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadDir),
+  destination: (req, _file, cb) => cb(null, getUploadsDir(req)),
   filename: (_req, file, cb) => {
     const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`
     const extension = file.originalname.split('.').pop()
@@ -161,6 +176,7 @@ const profileSelect = `
 
 function mapProfile(row) {
   if (!row) return null
+  const rawAvatar = row.avatar_url ?? null
   return {
     id: row.id,
     created_at: row.created_at,
@@ -176,8 +192,11 @@ function mapProfile(row) {
     applicant_type: row.primary_type,
     status: row.status,
     tags: safeParseJSON(row.tags, []),
-    avatar_url: row.avatar_url ?? null,
-    profile_image_url: row.avatar_url ?? null,
+    avatar_url: rawAvatar,
+    // Prefer a stable, diagnostic endpoint for file-backed avatars (handles legacy dir + logs missing).
+    avatar_download_url:
+      rawAvatar && String(rawAvatar).includes('/uploads/') ? `/api/profiles/${String(row.id)}/avatar/download` : null,
+    profile_image_url: rawAvatar ?? null,
   }
 }
 
@@ -862,7 +881,7 @@ router.delete('/:id', async (req, res) => {
   if (existing.avatar_url && existing.avatar_url.startsWith('/uploads/')) {
     const filename = existing.avatar_url.replace('/uploads/', '')
     if (filename) {
-      const avatarPath = join(uploadDir, filename)
+      const avatarPath = join(getUploadsDir(req), filename)
       fs.unlink(avatarPath, (err) => {
         if (err) console.warn('Failed to delete avatar file:', err)
       })
@@ -872,14 +891,14 @@ router.delete('/:id', async (req, res) => {
   res.status(204).send()
 })
 
-router.post('/:id/avatar', runUploadSingle('avatar'), async (req, res, next) => {
+router.post('/:id/avatar', requireUploadsWritable, runUploadSingle('avatar'), async (req, res, next) => {
   const { id } = req.params
   const authUserId = req.ctx?.userId ?? null
   const authProfileId = req.ctx?.activeProfileId ? String(req.ctx.activeProfileId) : null
 
   const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!existing) {
-    if (req.file) fs.unlink(join(uploadDir, req.file.filename), () => {})
+    if (req.file) fs.unlink(join(getUploadsDir(req), req.file.filename), () => {})
     return res.status(404).json({ error: 'Profile not found' })
   }
 
@@ -888,7 +907,7 @@ router.post('/:id/avatar', runUploadSingle('avatar'), async (req, res, next) => 
   const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
 
   if (!userIsAdmin && !matchesProfileId && !matchesUserId) {
-    if (req.file) fs.unlink(join(uploadDir, req.file.filename), () => {})
+    if (req.file) fs.unlink(join(getUploadsDir(req), req.file.filename), () => {})
     return denyAuth(req, res)
   }
 
@@ -906,7 +925,7 @@ router.post('/:id/avatar', runUploadSingle('avatar'), async (req, res, next) => 
     if (previousAvatar && previousAvatar.startsWith('/uploads/')) {
       const previousFilename = previousAvatar.replace('/uploads/', '')
       if (previousFilename && previousFilename !== req.file.filename) {
-        const previousPath = join(uploadDir, previousFilename)
+        const previousPath = join(getUploadsDir(req), previousFilename)
         fs.unlink(previousPath, () => {})
       }
     }
@@ -914,7 +933,7 @@ router.post('/:id/avatar', runUploadSingle('avatar'), async (req, res, next) => 
     const updated = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
     res.json(mapProfile(updated))
   } catch (error) {
-    if (req.file) fs.unlink(join(uploadDir, req.file.filename), () => {})
+    if (req.file) fs.unlink(join(getUploadsDir(req), req.file.filename), () => {})
     next(error)
   }
 })
@@ -923,6 +942,18 @@ router.post('/:id/avatar/ai', async (req, res) => {
   const { id } = req.params
   const authUserId = req.ctx?.userId ?? null
   const authProfileId = req.ctx?.activeProfileId ? String(req.ctx.activeProfileId) : null
+
+  // Fail loudly if upload storage is unavailable; this job writes a file under /uploads.
+  const storage = req?.storageStatus || req?.app?.locals?.uploads?.storageStatus || null
+  if (storage && storage.writable === false) {
+    return res.status(503).json({
+      ok: false,
+      error: 'Upload storage is unavailable',
+      code: 'UPLOAD_STORAGE_UNAVAILABLE',
+      uploads_dir: storage.uploads_dir || null,
+      status: storage.status || 'degraded',
+    })
+  }
 
   const profileRow = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!profileRow) {
@@ -969,7 +1000,7 @@ router.post('/:id/avatar/ai', async (req, res) => {
   dispatchCrawlerJob({
     db: req.db,
     jobId: job.id,
-    uploadDir,
+    uploadDir: getUploadsDir(req),
     getOpenAI,
   })
 
@@ -978,6 +1009,86 @@ router.post('/:id/avatar/ai', async (req, res) => {
     status: job.status,
     type: job.type,
     created_at: job.created_at,
+  })
+})
+
+function guessImageContentType(filePath) {
+  const lower = String(filePath || '').toLowerCase()
+  if (lower.endsWith('.png')) return 'image/png'
+  if (lower.endsWith('.webp')) return 'image/webp'
+  if (lower.endsWith('.gif')) return 'image/gif'
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
+  if (lower.endsWith('.bmp')) return 'image/bmp'
+  if (lower.endsWith('.tif') || lower.endsWith('.tiff')) return 'image/tiff'
+  return 'application/octet-stream'
+}
+
+function extractUploadsFilename(rawUrl) {
+  const raw = String(rawUrl || '').trim()
+  if (!raw) return null
+  let pathname = raw
+  try {
+    if (/^https?:\/\//i.test(raw)) pathname = new URL(raw).pathname
+  } catch {
+    pathname = raw
+  }
+  if (!pathname.includes('/uploads/')) return null
+  const fileName = pathname.split('/uploads/').pop() || ''
+  const baseName = fileName.split('/').pop()
+  return baseName ? baseName.replace(/[^a-zA-Z0-9._-]/g, '') : null
+}
+
+// GET /api/profiles/:id/avatar/download
+// Streams avatar file with clear diagnostics when missing.
+router.get('/:id/avatar/download', async (req, res) => {
+  const { id } = req.params
+  const row = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!row) return res.status(404).json({ ok: false, error: 'Profile not found' })
+
+  if (!canAccessProfileRowFromCtx(req.ctx, row)) return denyAuth(req, res)
+
+  const avatarUrl = row.avatar_url ? String(row.avatar_url).trim() : ''
+  const fileName = extractUploadsFilename(avatarUrl)
+  if (!fileName) {
+    return res.status(404).json({
+      ok: false,
+      error: 'Avatar not set',
+      code: 'AVATAR_NOT_SET',
+      profile_id: String(id),
+    })
+  }
+
+  const uploadsDir = getUploadsDir(req)
+  const legacyDir = req?.legacyUploadsDir ? String(req.legacyUploadsDir) : null
+  const tried = []
+
+  const primary = join(uploadsDir, fileName)
+  tried.push(primary)
+  if (!fs.existsSync(primary) && legacyDir && legacyDir !== uploadsDir) {
+    const legacy = join(legacyDir, fileName)
+    tried.push(legacy)
+    if (fs.existsSync(legacy)) {
+      res.setHeader('Content-Type', guessImageContentType(legacy))
+      return fs.createReadStream(legacy).pipe(res)
+    }
+  }
+
+  if (fs.existsSync(primary)) {
+    res.setHeader('Content-Type', guessImageContentType(primary))
+    return fs.createReadStream(primary).pipe(res)
+  }
+
+  console.warn('[profiles] avatar file missing', {
+    requestId: req.requestId || null,
+    profileId: String(id),
+    avatar_url: avatarUrl || null,
+    tried,
+  })
+  return res.status(404).json({
+    ok: false,
+    error: 'Avatar file not found',
+    code: 'AVATAR_FILE_MISSING',
+    profile_id: String(id),
   })
 })
 

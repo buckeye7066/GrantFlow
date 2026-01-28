@@ -1,8 +1,9 @@
 // Inspired by react-hot-toast library
 import { useState, useEffect, createContext, useContext } from "react";
 
-const TOAST_LIMIT = 20;
-const TOAST_REMOVE_DELAY = 3000;
+// Keep toast UI calm: avoid "walls" of notifications.
+const TOAST_LIMIT = 4;
+const TOAST_REMOVE_DELAY = 3500;
 
 const actionTypes = {
   ADD_TOAST: "ADD_TOAST",
@@ -20,7 +21,7 @@ function genId() {
 
 const toastTimeouts = new Map();
 
-const addToRemoveQueue = (toastId) => {
+const addToRemoveQueue = (toastId, delayMs = TOAST_REMOVE_DELAY) => {
   if (toastTimeouts.has(toastId)) {
     return;
   }
@@ -31,7 +32,7 @@ const addToRemoveQueue = (toastId) => {
       type: actionTypes.REMOVE_TOAST,
       toastId,
     });
-  }, TOAST_REMOVE_DELAY);
+  }, Math.max(250, Number(delayMs) || TOAST_REMOVE_DELAY));
 
   toastTimeouts.set(toastId, timeout);
 };
@@ -110,8 +111,8 @@ function dispatch(action) {
   });
 }
 
-function toast({ ...props }) {
-  const id = genId();
+function toast({ id: providedId, duration, ...props }) {
+  const id = providedId ? String(providedId) : genId();
 
   const update = (props) =>
     dispatch({
@@ -122,19 +123,25 @@ function toast({ ...props }) {
   const dismiss = () =>
     dispatch({ type: actionTypes.DISMISS_TOAST, toastId: id });
 
-  dispatch({
-    type: actionTypes.ADD_TOAST,
-    toast: {
-      ...props,
-      id,
-      open: true,
-      onOpenChange: (open) => {
-        if (!open) dismiss();
-      },
+  const existing = memoryState?.toasts?.find?.((t) => String(t?.id) === String(id));
+  const nextToast = {
+    ...props,
+    id,
+    open: true,
+    onOpenChange: (open) => {
+      if (!open) dismiss();
     },
-  });
+  };
 
-  addToRemoveQueue(id);
+  if (existing) {
+    // Update-in-place (dedupe) so bulk operations don't spam.
+    clearFromRemoveQueue(id);
+    dispatch({ type: actionTypes.UPDATE_TOAST, toast: nextToast });
+  } else {
+    dispatch({ type: actionTypes.ADD_TOAST, toast: nextToast });
+  }
+
+  addToRemoveQueue(id, typeof duration === "number" ? duration : TOAST_REMOVE_DELAY);
 
   return {
     id,
