@@ -16,6 +16,7 @@ import {
   AlertTriangle
 } from "lucide-react";
 import { createPageUrl } from "@/utils";
+import { useAuthenticatedAvatar } from "@/hooks/useAuthenticatedAvatar";
 
 export default function ProfileCard({ profile, onViewInvoices, onDelete, isAdmin, onHardDelete }) {
   const navigate = useNavigate();
@@ -67,10 +68,13 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete, isAdmin
   };
 
   const isOrphanedProfile = !profile.organization_id && !profile.user_id;
-  const avatarSrc =
+  const avatarUrl =
     profile?.avatar_download_url ||
     (profile?.avatar_url && String(profile.avatar_url).includes('/uploads/') ? `/api/profiles/${profile.id}/avatar/download` : profile?.avatar_url) ||
     null
+  
+  // Use authenticated avatar hook to handle protected API endpoints
+  const { blobUrl: avatarSrc } = useAuthenticatedAvatar(avatarUrl)
 
   const cardClassName = [
     "group relative border border-slate-200 bg-white shadow-sm transition-shadow hover:shadow-lg",

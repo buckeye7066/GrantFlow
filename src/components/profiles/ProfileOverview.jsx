@@ -31,6 +31,7 @@ import {
 import { SECTION_CONFIG } from "@/components/profiles/ProfileSectionEditor.jsx"
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx"
 import EditableField from "@/components/shared/EditableField.jsx"
+import { useAuthenticatedAvatar } from "@/hooks/useAuthenticatedAvatar"
 
 const SECTION_ICONS = {
   basic_information: UserCircle,
@@ -520,6 +521,18 @@ export default function ProfileOverview({
     return words.slice(0, 2).map((word) => word.charAt(0).toUpperCase()).join("")
   }, [profile.display_name])
 
+  // Compute avatar URL, handling protected API endpoints
+  const avatarUrl = useMemo(() => {
+    if (profile.avatar_download_url) return profile.avatar_download_url
+    if (profile.avatar_url && String(profile.avatar_url).includes('/uploads/')) {
+      return `/api/profiles/${profile.id}/avatar/download`
+    }
+    return profile.avatar_url || null
+  }, [profile.avatar_download_url, profile.avatar_url, profile.id])
+  
+  // Use authenticated avatar hook to handle protected API endpoints
+  const { blobUrl: avatarSrc } = useAuthenticatedAvatar(avatarUrl)
+
   const formattedFundsTotal = useMemo(() => {
     const formatter = new Intl.NumberFormat("en-US", {
       style: "currency",
@@ -627,14 +640,9 @@ export default function ProfileOverview({
         <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-start gap-5">
             <div className="relative">
-              {(profile.avatar_download_url || profile.avatar_url) ? (
+              {avatarSrc ? (
                 <img
-                  src={
-                    profile.avatar_download_url ||
-                    (profile.avatar_url && String(profile.avatar_url).includes('/uploads/')
-                      ? `/api/profiles/${profile.id}/avatar/download`
-                      : profile.avatar_url)
-                  }
+                  src={avatarSrc}
                   alt={profile.display_name}
                   className="h-24 w-24 rounded-2xl border border-slate-200 object-cover shadow-md"
                 />
