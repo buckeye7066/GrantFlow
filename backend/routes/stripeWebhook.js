@@ -117,8 +117,11 @@ router.post('/', async (req, res) => {
       }
     }
   } catch (error) {
-    console.error('[stripe-webhook] handler failed', { message: error?.message || String(error), type: event.type })
-    return res.status(500).json({ ok: false, error: 'webhook_handler_failed' })
+    return res.status(500).json({
+      ok: false,
+      error: 'webhook_handler_failed',
+      type: event?.type || null,
+    })
   }
 
   return res.json({ ok: true, received: true })
