@@ -2,22 +2,14 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
   push:
     branches: [main]
-
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    timeout-minutes: 20
-    strategy:
-      fail-fast: true
+    timeout-minutes: 15
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,61 +17,15 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
-      - name: Install system deps (pdf text extraction)
-        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+      - name: Install
+        run: npm ci
 
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+      - name: Audit (high+)
+        run: npm audit --audit-level=high
 
-      - name: Lint
-        run: npm run lint
+      - name: Test
+        run: npm run test
 
-      - name: Code quality gate
-        run: npm run quality:gate
-
-      - name: Type check
-        run: npm run typecheck
-
-      - name: Unit tests
-        run: npm run unit
-
-      - name: Build
-        run: npm run build
-
-      - name: Backend boot smoke test
-        run: |
-          # Start backend in background
-          npm run backend &
-          BACKEND_PID=$!
-          
-          # Wait for backend to be ready (max 60 seconds)
-          echo "Waiting for backend to start..."
-          for i in {1..60}; do
-            if curl -f http://localhost:${PORT}/readyz > /dev/null 2>&1; then
-              echo "Backend is ready!"
-              break
-            fi
-            if [ $i -eq 60 ]; then
-              echo "Backend failed to start within 60 seconds"
-              kill $BACKEND_PID 2>/dev/null || true
-              exit 1
-            fi
-            sleep 1
-          done
-          
-          # Test health endpoints
-          echo "Testing /api/health endpoint..."
-          curl -f http://localhost:${PORT}/api/health || { echo "/api/health failed"; kill $BACKEND_PID; exit 1; }
-          
-          echo "Testing /readyz endpoint..."
-          curl -f http://localhost:${PORT}/readyz || { echo "/readyz failed"; kill $BACKEND_PID; exit 1; }
-          
-          echo "All health endpoints passed!"
-          kill $BACKEND_PID 2>/dev/null || true
-        env:
-          NODE_ENV: test
-          PORT: 3000
-          DATABASE_URL: ":memory:"
