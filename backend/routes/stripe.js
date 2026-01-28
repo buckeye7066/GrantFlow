@@ -116,7 +116,7 @@ router.post('/checkout/service', ensureAuth, async (req, res) => {
           FROM service_prices
           WHERE service_id = ?
             AND client_category = ?
-            AND milestone_phase IS NULL
+            AND COALESCE(milestone_phase, '') = ''
             AND active = 1
           LIMIT 1
         `,
@@ -214,7 +214,7 @@ router.post('/checkout/hourly', ensureAuth, async (req, res) => {
         FROM service_prices
         WHERE service_id = ?
           AND client_category = ?
-          AND milestone_phase IS NULL
+          AND COALESCE(milestone_phase, '') = ''
           AND active = 1
         LIMIT 1
       `,

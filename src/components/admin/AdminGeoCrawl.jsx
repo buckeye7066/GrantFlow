@@ -10,6 +10,8 @@ import { useToast } from "@/components/ui/use-toast"
 import { apiFetch } from "@/api/client"
 import GeoCrawlMonitor from "@/components/admin/GeoCrawlMonitor.jsx"
 
+const LS_LAST_RUN_ID = "gf_geo_crawl_last_run_id"
+
 async function fetchStates() {
   return apiFetch("/api/admin/geo/states")
 }
@@ -53,6 +55,16 @@ export default function AdminGeoCrawl() {
   const [minSources, setMinSources] = useState(3)
   const [status, setStatus] = useState(null)
   const [activeRunId, setActiveRunId] = useState("")
+
+  // Persist the most recent run id so the monitor survives refreshes.
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(LS_LAST_RUN_ID)
+      if (saved) setActiveRunId(String(saved))
+    } catch {
+      // ignore
+    }
+  }, [])
 
   useEffect(() => {
     let mounted = true
@@ -261,7 +273,15 @@ export default function AdminGeoCrawl() {
       })
       toast({ title: "Geo crawl started", description: `Job ${res?.job?.id || ""}` })
       setStatus((prev) => ({ ...(prev || {}), geo_crawl: res?.job }))
-      if (res?.run_id) setActiveRunId(String(res.run_id))
+      if (res?.run_id) {
+        const rid = String(res.run_id)
+        setActiveRunId(rid)
+        try {
+          window.localStorage.setItem(LS_LAST_RUN_ID, rid)
+        } catch {
+          // ignore
+        }
+      }
     } catch (err) {
       toast({ title: "Failed to start geo crawl", description: err.message, variant: "destructive" })
     }

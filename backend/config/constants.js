@@ -80,6 +80,7 @@ export const DISCOUNT_TYPES = {
 export const CRAWLER_JOB_TYPES = [
   'local',
   'scholarship',
+  'health_resources',
   'comprehensive',
   'national',
   'item_search',
