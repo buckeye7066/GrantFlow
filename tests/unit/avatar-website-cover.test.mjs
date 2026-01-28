@@ -66,6 +66,59 @@ test('avatar lookup prefers website og:image when present', async () => {
     assert.ok(result?.avatarUrl)
     assert.ok(result.avatarUrl.startsWith('/uploads/'))
     assert.equal(result?.result_meta?.method, 'website_cover')
+    assert.ok(result?.result_meta?.website_used)
+    assert.ok(result?.result_meta?.image_url_used)
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+    rmSync(uploadDir, { recursive: true, force: true })
+  }
+})
+
+test('avatar lookup uses organization.website and falls back to icon when no og:image', async () => {
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+8iUQAAAAASUVORK5CYII=',
+    'base64',
+  )
+  const server = http.createServer((req, res) => {
+    if (req.url === '/favicon.png') {
+      res.writeHead(200, { 'Content-Type': 'image/png' })
+      res.end(png)
+      return
+    }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+    res.end(`<!doctype html>
+<html>
+  <head>
+    <link rel="icon" href="/favicon.png" />
+  </head>
+  <body>hello</body>
+</html>`)
+  })
+
+  const started = await new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve(server.address().port))
+  })
+  const uploadDir = mkdtempSync(path.join(tmpdir(), 'grantflow-avatar-test-'))
+
+  try {
+    const profileContext = {
+      profile: { id: 'p2', display_name: 'Org Website Fallback', primary_type: 'organization' },
+      sections: { basic_information: {} },
+      organization: { website: `http://127.0.0.1:${started}/` },
+    }
+
+    const result = await processAvatarLookupJob({
+      profileContext,
+      uploadDir,
+      getOpenAI: () => null, // force website path
+    })
+
+    assert.equal(result?.inserted, 1)
+    assert.ok(result?.avatarUrl)
+    assert.ok(result.avatarUrl.startsWith('/uploads/'))
+    assert.equal(result?.result_meta?.method, 'website_icon')
+    assert.equal(result?.result_meta?.website_used, `http://127.0.0.1:${started}/`)
+    assert.ok(String(result?.result_meta?.image_url_used || '').includes('/favicon.png'))
   } finally {
     await new Promise((resolve) => server.close(resolve))
     rmSync(uploadDir, { recursive: true, force: true })

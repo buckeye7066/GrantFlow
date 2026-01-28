@@ -75,3 +75,10 @@ export async function requestProfileFieldAI(context) {
     body: JSON.stringify(context),
   })
 }
+
+export async function hardDeleteProfileAdmin(profileId, payload = {}) {
+  return apiFetch(`/api/admin/profiles/${profileId}/hard-delete`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
