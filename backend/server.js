@@ -73,6 +73,11 @@ import { dispatchCrawlerJob } from './services/crawlerDispatcher.js';
 import { findDuplicateProfileGroups, mergeProfiles } from './services/profileDedupeService.js'
 import { assertEnv, getJwtSecretOrThrow } from './config/env.js'
 import { resolveUploadsDir, ensureUploadsDirWritable, isLikelyPersistentPath } from './utils/uploadsDir.js'
+import servicesRouter from './routes/services.js'
+import stripeRouter from './routes/stripe.js'
+import stripeWebhookRouter from './routes/stripeWebhook.js'
+import { seedServiceCatalogFromExtract } from './services/serviceCatalogStore.js'
+import adminServiceCatalogRouter from './routes/adminServiceCatalog.js'
 
 // Validate environment variables early (fail-fast in production).
 const { env: ENV } = assertEnv()
@@ -291,10 +296,8 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: MAX_JSON_BODY_SIZE }));
-
-// Mount health check routes EARLY to ensure they're always available
-// Attach db and uploadsDir to req for health check handlers
+// Stripe webhook MUST be mounted before JSON parser (raw body required).
+// Ensure req.db is available to the webhook handler too.
 app.use((req, res, next) => {
   req.db = db;
   req.uploadsDir = uploadsDir;
@@ -302,6 +305,13 @@ app.use((req, res, next) => {
   req.storageStatus = app.locals.uploads?.storageStatus || null;
   next();
 });
+
+app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }), stripeWebhookRouter)
+
+app.use(express.json({ limit: MAX_JSON_BODY_SIZE }));
+
+// Mount health check routes EARLY to ensure they're always available
+// req.db is already attached above.
 app.use(healthRouter);
 
 // IMPORTANT: Missing uploads must return 404 (not SPA index.html).
@@ -741,6 +751,13 @@ if (IS_SMOKE_MODE) {
   await ensureUserPreferencesTable(db)
   await repairInvalidDocumentStatuses(db)
   await repairMissingUploadAvatars({ db, uploadsDir })
+}
+
+// Ensure the Payment Sheet service catalog + terms exist (fast + idempotent).
+try {
+  await seedServiceCatalogFromExtract(db)
+} catch (error) {
+  console.warn('[startup] Failed to seed service catalog from extract:', error?.message || error)
 }
 
 // Check funding opportunities count and provide guidance
@@ -1374,6 +1391,9 @@ app.use('/api/auth', authRouter);
 app.use('/api/service-application', serviceApplicationRouter);
 app.use('/api/billing', billingRouter);
 app.use('/api/stats', statsRouter);
+app.use('/api/services', servicesRouter);
+app.use('/api/stripe', stripeRouter);
+app.use('/api/admin/service-catalog', adminServiceCatalogRouter)
 app.use('/api/organizations', organizationsRouter);
 app.use('/api/grants', grantsRouter);
 app.use('/api/opportunities', opportunitiesRouter);

@@ -1,0 +1,147 @@
+import crypto from 'node:crypto'
+import Stripe from 'stripe'
+
+function safeHash(value) {
+  return crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('hex')
+}
+
+function getStripeSecretKeyOrNull() {
+  const key = String(process.env.STRIPE_SECRET_KEY || '').trim()
+  return key || null
+}
+
+export function isStripeConfigured() {
+  return Boolean(getStripeSecretKeyOrNull() && String(process.env.STRIPE_WEBHOOK_SECRET || '').trim())
+}
+
+function createStripe() {
+  const key = getStripeSecretKeyOrNull()
+  if (!key) return null
+  return new Stripe(key, {
+    // Keep to Stripe’s SDK defaults; do not log secrets.
+    // apiVersion is optional; Stripe SDK pins a default.
+    telemetry: false,
+  })
+}
+
+function isTruthy(value) {
+  const v = String(value || '').trim().toLowerCase()
+  return v === '1' || v === 'true' || v === 'yes' || v === 'y' || v === 'on'
+}
+
+export async function getOrCreateStripeCustomerId(db, { userId, email, name } = {}) {
+  const uid = String(userId || '').trim()
+  if (!uid) return { ok: false, error: 'missing_user_id' }
+
+  let row = null
+  try {
+    row = await db.prepare('SELECT stripe_customer_id FROM stripe_customers WHERE user_id = ? LIMIT 1').get(uid)
+  } catch {
+    row = null
+  }
+  if (row?.stripe_customer_id) {
+    return { ok: true, stripe_customer_id: String(row.stripe_customer_id) }
+  }
+
+  const stripe = createStripe()
+  if (!stripe) return { ok: false, error: 'stripe_not_configured' }
+
+  // In tests we allow a deterministic fake customer without making network calls.
+  if (isTruthy(process.env.STRIPE_MOCK)) {
+    const customerId = `cus_mock_${safeHash(uid).slice(0, 10)}`
+    await db
+      .prepare('INSERT INTO stripe_customers (user_id, stripe_customer_id) VALUES (?, ?)')
+      .run(uid, customerId)
+    return { ok: true, stripe_customer_id: customerId, mocked: true }
+  }
+
+  const customer = await stripe.customers.create({
+    email: email || undefined,
+    name: name || undefined,
+    metadata: { user_id: uid },
+  })
+
+  await db
+    .prepare('INSERT INTO stripe_customers (user_id, stripe_customer_id) VALUES (?, ?)')
+    .run(uid, customer.id)
+
+  return { ok: true, stripe_customer_id: customer.id }
+}
+
+export async function createCheckoutSessionForPrice({
+  priceId,
+  quantity = 1,
+  customerId,
+  successUrl,
+  cancelUrl,
+  metadata = {},
+  idempotencyKey,
+}) {
+  const stripe = createStripe()
+  if (!stripe) {
+    const err = new Error('Stripe is not configured (missing STRIPE_SECRET_KEY)')
+    err.code = 'STRIPE_NOT_CONFIGURED'
+    throw err
+  }
+
+  const qty = Math.max(1, Math.floor(Number(quantity) || 1))
+  const idem = idempotencyKey ? String(idempotencyKey) : undefined
+
+  if (isTruthy(process.env.STRIPE_MOCK)) {
+    const sid = `cs_mock_${safeHash(`${priceId}:${qty}:${customerId || ''}:${successUrl || ''}`).slice(0, 12)}`
+    return {
+      id: sid,
+      url: `https://checkout.stripe.test/session/${sid}`,
+      payment_intent: `pi_mock_${safeHash(sid).slice(0, 12)}`,
+      customer: customerId || null,
+    }
+  }
+
+  const session = await stripe.checkout.sessions.create(
+    {
+      mode: 'payment',
+      customer: customerId || undefined,
+      line_items: [{ price: priceId, quantity: qty }],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      metadata,
+    },
+    idem ? { idempotencyKey: idem } : undefined,
+  )
+  return session
+}
+
+export function verifyAndConstructStripeEvent({ rawBody, signatureHeader }) {
+  const secret = String(process.env.STRIPE_WEBHOOK_SECRET || '').trim()
+  if (!secret) {
+    const err = new Error('Missing STRIPE_WEBHOOK_SECRET')
+    err.code = 'MISSING_WEBHOOK_SECRET'
+    throw err
+  }
+
+  const stripe = createStripe()
+  if (!stripe) {
+    const err = new Error('Stripe is not configured (missing STRIPE_SECRET_KEY)')
+    err.code = 'STRIPE_NOT_CONFIGURED'
+    throw err
+  }
+
+  return stripe.webhooks.constructEvent(rawBody, signatureHeader, secret)
+}
+
+export async function recordStripeEventIfNew(db, event) {
+  const eventId = String(event?.id || '').trim()
+  if (!eventId) return { ok: false, error: 'missing_event_id' }
+
+  try {
+    await db.prepare('INSERT INTO stripe_webhook_events (event_id, type) VALUES (?, ?)').run(eventId, String(event?.type || ''))
+    return { ok: true, inserted: true }
+  } catch (error) {
+    const msg = String(error?.message || error)
+    if (msg.toLowerCase().includes('unique') || msg.toLowerCase().includes('duplicate')) {
+      return { ok: true, inserted: false, duplicate: true }
+    }
+    throw error
+  }
+}
+

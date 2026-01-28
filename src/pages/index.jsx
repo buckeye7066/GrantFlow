@@ -78,6 +78,7 @@ import OrganizationProfile from "./OrganizationProfile";
 const FundingOpportunities = lazy(() => import("./FundingOpportunities"));
 
 import Pricing from "./Pricing";
+import Services from "./Services";
 
 import Settings from "./Settings";
 
@@ -202,6 +203,7 @@ const PAGES = {
     OrganizationProfile: OrganizationProfile,
     
     Pricing: Pricing,
+    Services: Services,
     
     Settings: Settings,
     
