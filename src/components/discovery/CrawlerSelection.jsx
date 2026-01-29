@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { 
   MapPin, Building2, GraduationCap, Heart, 
+  HeartPulse,
   Package, Users, Loader2, CheckCircle, Info, AlertTriangle
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
@@ -27,6 +28,14 @@ const CRAWLER_CONFIGS = [
     description: 'Federal, state, and local government grants including NIH, FEMA, Medicare/Medicaid',
     details: 'Searches Grants.gov, state grant databases, and federal agency programs. Includes healthcare funding through CMS.',
     color: 'text-purple-600'
+  },
+  {
+    id: 'health_resources',
+    name: 'Health Resources',
+    icon: HeartPulse,
+    description: 'Reputable, directory-style health support resources (informational links)',
+    details: 'Always includes durable national directories; research studies/trials are gated behind explicit consent.',
+    color: 'text-rose-600',
   },
   {
     id: 'student_grants',
@@ -249,6 +258,44 @@ export default function CrawlerSelection({
               </AlertDescription>
             </Alert>
           )}
+
+          {/* Select All Control */}
+          <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <Checkbox
+                  id="select-all-crawlers"
+                  checked={allSelected}
+                  onCheckedChange={handleSelectAll}
+                />
+                <label htmlFor="select-all-crawlers" className="font-medium cursor-pointer">
+                  {allSelected ? 'Deselect All' : 'Select All Crawlers'}
+                </label>
+                {someSelected ? (
+                  <span className="text-sm text-slate-600">
+                    {selectedCrawlers.size} crawler{selectedCrawlers.size !== 1 ? 's' : ''} selected
+                  </span>
+                ) : null}
+              </div>
+
+              <div className="flex justify-end">
+                <Button onClick={handleRunCrawlers} disabled={!someSelected || isRunning} size="lg" className="min-w-[200px]">
+                  {isRunning ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Running Crawlers...
+                    </>
+                  ) : (
+                    <>
+                      Run Selected Crawlers
+                      {someSelected && ` (${selectedCrawlers.size})`}
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+          </div>
+
           {/* Match score threshold */}
           <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
             <div className="flex items-center justify-between">
@@ -270,28 +317,6 @@ export default function CrawlerSelection({
               disabled={isRunning}
               className="mt-3 w-full"
             />
-          </div>
-
-          {/* Select All Control */}
-          <div className="flex items-center justify-between p-4 bg-slate-50 rounded-lg">
-            <div className="flex items-center gap-3">
-              <Checkbox
-                id="select-all-crawlers"
-                checked={allSelected}
-                onCheckedChange={handleSelectAll}
-              />
-              <label 
-                htmlFor="select-all-crawlers" 
-                className="font-medium cursor-pointer"
-              >
-                {allSelected ? 'Deselect All' : 'Select All Crawlers'}
-              </label>
-            </div>
-            {someSelected && (
-              <span className="text-sm text-slate-600">
-                {selectedCrawlers.size} crawler{selectedCrawlers.size !== 1 ? 's' : ''} selected
-              </span>
-            )}
           </div>
 
           {/* Crawler Options */}
@@ -317,12 +342,17 @@ export default function CrawlerSelection({
                 >
                   <div className="flex items-start gap-3">
                     <Checkbox
+                      id={`crawler-${crawler.id}`}
+                      aria-label={`Select ${crawler.name}`}
                       checked={isSelected}
                       onCheckedChange={() => handleToggleCrawler(crawler.id)}
                       disabled={isRunning}
                       onClick={(e) => e.stopPropagation()}
                       className="mt-1"
                     />
+                    <label htmlFor={`crawler-${crawler.id}`} className="sr-only">
+                      Select {crawler.name}
+                    </label>
                     <div className="flex-1 space-y-2">
                       <div className="flex items-center gap-2">
                         <Icon className={`w-5 h-5 ${crawler.color}`} />
