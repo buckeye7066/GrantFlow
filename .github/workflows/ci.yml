@@ -17,11 +17,13 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
           cache: npm
 
       - name: Install
-        run: npm ci
+        # Work around occasional npm optional-deps resolution issues (rollup native bindings used by Vite).
+        # Explicitly include optional deps so `vite build` doesn't fail with missing @rollup/* binaries.
+        run: npm ci --include=optional
 
       - name: Audit (high+)
         run: npm audit --audit-level=high
