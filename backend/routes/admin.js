@@ -2236,6 +2236,225 @@ router.get('/db-stats', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/admin/profiles/integrity
+ *
+ * Admin-only: consolidated profile integrity report.
+ *
+ * Goals:
+ * - profiles never “disappear” silently
+ * - detect orphaned / unowned / dangling-link profiles
+ * - surface likely duplicates (email/phone keyed) without mutating data
+ *
+ * Query:
+ * - limitOwners: number (default 25)
+ * - limitOrphans: number (default 200)
+ * - limitDuplicateGroups: number (default 25)
+ * - includeInactive: boolean (default true) for duplicate detection
+ */
+router.get('/profiles/integrity', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+
+  const limitOwners = Math.max(1, Math.min(Number(req.query?.limitOwners) || 25, 200))
+  const limitOrphans = Math.max(1, Math.min(Number(req.query?.limitOrphans) || 200, 2000))
+  const limitDuplicateGroups = Math.max(1, Math.min(Number(req.query?.limitDuplicateGroups) || 25, 200))
+  const includeInactive = String(req.query?.includeInactive ?? 'true').toLowerCase() === 'true'
+
+  const generatedAt = new Date().toISOString()
+  const warnings = []
+  const errors = []
+
+  const safeCount = async (sql, params = []) => {
+    try {
+      const row = await req.db.prepare(sql).get(...params)
+      return Number(row?.count || 0)
+    } catch (e) {
+      errors.push({ type: 'query_failed', sql, message: e?.message || String(e) })
+      return null
+    }
+  }
+
+  const safeAll = async (sql, params = []) => {
+    try {
+      return await req.db.prepare(sql).all(...params)
+    } catch (e) {
+      errors.push({ type: 'query_failed', sql, message: e?.message || String(e) })
+      return null
+    }
+  }
+
+  const totalProfiles = await safeCount('SELECT COUNT(*) as count FROM profiles')
+  const totalOrganizations = await safeCount('SELECT COUNT(*) as count FROM organizations')
+  const totalUsers = await safeCount('SELECT COUNT(*) as count FROM users')
+
+  const byStatusRows = await safeAll(
+    `
+      SELECT
+        COALESCE(NULLIF(TRIM(status), ''), '(unset)') AS status,
+        COUNT(*) as count
+      FROM profiles
+      GROUP BY COALESCE(NULLIF(TRIM(status), ''), '(unset)')
+      ORDER BY count DESC
+    `,
+  )
+
+  const byPrimaryTypeRows = await safeAll(
+    `
+      SELECT
+        COALESCE(NULLIF(TRIM(primary_type), ''), '(unset)') AS primary_type,
+        COUNT(*) as count
+      FROM profiles
+      GROUP BY COALESCE(NULLIF(TRIM(primary_type), ''), '(unset)')
+      ORDER BY count DESC
+    `,
+  )
+
+  const unownedProfiles = await safeCount(
+    `
+      SELECT COUNT(*) as count
+      FROM profiles
+      WHERE user_id IS NULL OR TRIM(user_id) = ''
+    `,
+  )
+
+  const missingUserLinks = await safeCount(
+    `
+      SELECT COUNT(*) as count
+      FROM profiles p
+      LEFT JOIN users u ON u.id = p.user_id
+      WHERE p.user_id IS NOT NULL AND TRIM(p.user_id) <> ''
+        AND u.id IS NULL
+    `,
+  )
+
+  const missingOrgLinks = await safeCount(
+    `
+      SELECT COUNT(*) as count
+      FROM profiles p
+      LEFT JOIN organizations o ON o.id = p.organization_id
+      WHERE p.organization_id IS NOT NULL AND TRIM(p.organization_id) <> ''
+        AND o.id IS NULL
+    `,
+  )
+
+  // Owners (top N)
+  const owners = await safeAll(
+    `
+      SELECT
+        p.user_id,
+        COUNT(*) as count,
+        u.primary_email as user_email,
+        u.display_name as user_name,
+        MAX(p.updated_at) as last_profile_updated_at
+      FROM profiles p
+      LEFT JOIN users u ON u.id = p.user_id
+      WHERE p.user_id IS NOT NULL AND TRIM(p.user_id) <> ''
+      GROUP BY p.user_id, u.primary_email, u.display_name
+      ORDER BY count DESC
+      LIMIT ?
+    `,
+    [limitOwners],
+  )
+
+  // Orphan candidates (hard-deletable) – mirror `/api/admin/profiles/orphans` definition (sampled)
+  const orphanRows = await safeAll(
+    `
+      SELECT
+        p.id, p.display_name, p.primary_type, p.status, p.created_at, p.updated_at, p.user_id, p.organization_id,
+        (SELECT COUNT(*) FROM profile_sections ps WHERE ps.profile_id = p.id) AS section_count,
+        (SELECT COUNT(*) FROM profile_documents pd WHERE pd.profile_id = p.id) AS profile_document_count,
+        (SELECT COUNT(*) FROM documents d WHERE d.profile_id = p.id) AS document_count,
+        (SELECT COUNT(*) FROM grants g WHERE g.profile_id = p.id) AS grant_count
+      FROM profiles p
+      WHERE (p.status IS NOT NULL AND lower(p.status) = 'deleted')
+        AND (p.user_id IS NULL OR TRIM(p.user_id) = '')
+        AND (p.organization_id IS NULL OR TRIM(p.organization_id) = '')
+        AND (SELECT COUNT(*) FROM profile_sections ps WHERE ps.profile_id = p.id) < 2
+        AND (SELECT COUNT(*) FROM profile_documents pd WHERE pd.profile_id = p.id) = 0
+        AND (SELECT COUNT(*) FROM documents d WHERE d.profile_id = p.id) = 0
+        AND (SELECT COUNT(*) FROM grants g WHERE g.profile_id = p.id) = 0
+      ORDER BY p.updated_at DESC
+      LIMIT ?
+    `,
+    [limitOrphans],
+  )
+
+  const orphanCandidates = Array.isArray(orphanRows)
+    ? orphanRows.filter((r) => !isDesignatedProfileId(r?.id))
+    : null
+
+  // Duplicate groups (heuristic): group by email/phone when present, else name key.
+  let duplicates = null
+  try {
+    duplicates = await findDuplicateProfileGroups(req.db, {
+      strategy: 'email_or_phone',
+      limitGroups: limitDuplicateGroups,
+      minGroupSize: 2,
+      includeInactive,
+    })
+  } catch (e) {
+    errors.push({ type: 'dedupe_failed', message: e?.message || String(e) })
+  }
+
+  if (typeof unownedProfiles === 'number' && unownedProfiles > 0) {
+    warnings.push({
+      type: 'unowned_profiles',
+      message: `Found ${unownedProfiles} profiles with no user_id (ownership missing).`,
+    })
+  }
+  if (typeof missingUserLinks === 'number' && missingUserLinks > 0) {
+    warnings.push({
+      type: 'dangling_user_links',
+      message: `Found ${missingUserLinks} profiles whose user_id does not exist in users table.`,
+    })
+  }
+  if (typeof missingOrgLinks === 'number' && missingOrgLinks > 0) {
+    warnings.push({
+      type: 'dangling_org_links',
+      message: `Found ${missingOrgLinks} profiles whose organization_id does not exist in organizations table.`,
+    })
+  }
+  if (Array.isArray(orphanCandidates) && orphanCandidates.length > 0) {
+    warnings.push({
+      type: 'hard_deletable_orphans',
+      message: `Found ${orphanCandidates.length} hard-deletable orphan profiles (sampled up to limitOrphans).`,
+      hint: 'See /api/admin/profiles/orphans for a paginated list and /api/admin/profiles/orphans/cleanup to clean up.',
+    })
+  }
+
+  return res.json({
+    ok: true,
+    generated_at: generatedAt,
+    limits: { limitOwners, limitOrphans, limitDuplicateGroups, includeInactive },
+    totals: {
+      profiles: totalProfiles,
+      organizations: totalOrganizations,
+      users: totalUsers,
+    },
+    profiles: {
+      by_status: Array.isArray(byStatusRows) ? byStatusRows : null,
+      by_primary_type: Array.isArray(byPrimaryTypeRows) ? byPrimaryTypeRows : null,
+      unowned: unownedProfiles,
+      dangling_user_links: missingUserLinks,
+      dangling_org_links: missingOrgLinks,
+      top_owners: Array.isArray(owners) ? owners : null,
+    },
+    orphans: {
+      sampled: Array.isArray(orphanCandidates) ? orphanCandidates.length : null,
+      candidates: orphanCandidates,
+    },
+    duplicates: duplicates
+      ? {
+          strategy: 'email_or_phone',
+          includeInactive,
+          groups: duplicates.groups ?? [],
+        }
+      : null,
+    warnings,
+    errors,
+  })
+})
+
 // POST /api/admin/seed-opportunities - Seed real funding opportunities
 router.post('/seed-opportunities', async (req, res) => {
   try {
