@@ -497,6 +497,84 @@ export async function seedBaselineFromRepo(db, opts = {}) {
       ON CONFLICT(profile_id, document_id) DO NOTHING
     `)
 
+    const normalizeId = (value) => {
+      const v = String(value ?? '').trim()
+      return v ? v : null
+    }
+
+    async function selectExistingIds(table, ids) {
+      const list = Array.from(ids || []).map(normalizeId).filter(Boolean)
+      if (list.length === 0) return new Set()
+      // Safe table allowlist (prevents SQL injection).
+      const allowed = new Set([
+        'organizations',
+        'profiles',
+        'funding_opportunities',
+        'grants',
+        'documents',
+      ])
+      if (!allowed.has(table)) throw new Error(`[baseline-seed] invalid table lookup: ${table}`)
+      const placeholders = list.map(() => '?').join(', ')
+      const rows = await tx.prepare(`SELECT id FROM ${table} WHERE id IN (${placeholders})`).all(...list)
+      return new Set((rows || []).map((r) => normalizeId(r?.id)).filter(Boolean))
+    }
+
+    // FK-safe seeding:
+    // Seeding should never hard-fail on missing references (schema drift / partial seed tables).
+    // Instead, we either (a) skip the row, or (b) null out the FK when the column allows NULL.
+    const referencedOrgIds = new Set(
+      [
+        ...(seed.organizations || []).map((o) => normalizeId(o?.id)),
+        ...(seed.profiles || []).map((p) => normalizeId(p?.organization_id)),
+        ...(seed.grants || []).map((g) => normalizeId(g?.organization_id)),
+        ...(seed.documents || []).map((d) => normalizeId(d?.organization_id)),
+      ].filter(Boolean),
+    )
+    const referencedProfileIds = new Set(
+      [
+        ...(seed.profiles || []).map((p) => normalizeId(p?.id)),
+        ...(seed.sections || []).map((s) => normalizeId(s?.profile_id)),
+        ...(seed.documents || []).map((d) => normalizeId(d?.profile_id)),
+        ...(seed.profileDocuments || []).map((l) => normalizeId(l?.profile_id)),
+      ].filter(Boolean),
+    )
+    const referencedOppIds = new Set(
+      [
+        ...(seed.opportunities || []).map((o) => normalizeId(o?.id)),
+        ...(seed.grants || []).map((g) => normalizeId(g?.funding_opportunity_id)),
+      ].filter(Boolean),
+    )
+    const referencedGrantIds = new Set(
+      [
+        ...(seed.grants || []).map((g) => normalizeId(g?.id)),
+        ...(seed.documents || []).map((d) => normalizeId(d?.grant_id)),
+      ].filter(Boolean),
+    )
+    const referencedDocIds = new Set(
+      [
+        ...(seed.documents || []).map((d) => normalizeId(d?.id)),
+        ...(seed.profileDocuments || []).map((l) => normalizeId(l?.document_id)),
+      ].filter(Boolean),
+    )
+
+    const knownOrgIds = await selectExistingIds('organizations', referencedOrgIds)
+    const knownProfileIds = await selectExistingIds('profiles', referencedProfileIds)
+    const knownOppIds = await selectExistingIds('funding_opportunities', referencedOppIds)
+    const knownGrantIds = await selectExistingIds('grants', referencedGrantIds)
+    const knownDocIds = await selectExistingIds('documents', referencedDocIds)
+
+    const fkAdjustments = {
+      profiles_null_org: 0,
+      sections_skipped_missing_profile: 0,
+      grants_skipped_missing_org: 0,
+      grants_null_missing_opportunity: 0,
+      documents_null_missing_org: 0,
+      documents_null_missing_profile: 0,
+      documents_null_missing_grant: 0,
+      profile_docs_skipped_missing_profile: 0,
+      profile_docs_skipped_missing_doc: 0,
+    }
+
     if (shouldSeedProfiles) {
       for (const org of seed.organizations) {
         if (!org?.id || !org?.name) continue
@@ -514,6 +592,7 @@ export async function seedBaselineFromRepo(db, opts = {}) {
           state: org.state ?? null,
           zip: org.zip ?? null,
         })
+        knownOrgIds.add(String(org.id).trim())
         counts.organizations_upserted++
       }
 
@@ -524,6 +603,9 @@ export async function seedBaselineFromRepo(db, opts = {}) {
           console.warn('[seedBaselineFromRepo] Skipping tombstoned profile', { profile_id: profileId })
           continue
         }
+        const desiredOrgId = normalizeId(p.organization_id)
+        const safeOrgId = desiredOrgId && knownOrgIds.has(desiredOrgId) ? desiredOrgId : null
+        if (desiredOrgId && !safeOrgId) fkAdjustments.profiles_null_org++
         await upsertProfile.run({
           id: profileId,
           display_name: p.display_name,
@@ -531,8 +613,9 @@ export async function seedBaselineFromRepo(db, opts = {}) {
           status: p.status ?? 'active',
           tags: safeJsonString(p.tags, '[]'),
           avatar_url: p.avatar_url ?? null,
-          organization_id: p.organization_id ?? null,
+          organization_id: safeOrgId,
         })
+        knownProfileIds.add(profileId)
         counts.profiles_upserted++
       }
 
@@ -540,6 +623,10 @@ export async function seedBaselineFromRepo(db, opts = {}) {
         if (!s?.profile_id || !s?.section_key) continue
         const profileId = String(s.profile_id).trim()
         if (tombstonedProfileIds.has(profileId)) continue
+        if (!knownProfileIds.has(profileId)) {
+          fkAdjustments.sections_skipped_missing_profile++
+          continue
+        }
         await upsertSection.run({
           id: crypto.randomUUID(),
           profile_id: profileId,
@@ -588,6 +675,7 @@ export async function seedBaselineFromRepo(db, opts = {}) {
           notes: o.notes ?? null,
           profile_id: o.profile_id ?? null,
         })
+        knownOppIds.add(String(o.id).trim())
         counts.opportunities_upserted++
       }
     }
@@ -595,10 +683,19 @@ export async function seedBaselineFromRepo(db, opts = {}) {
     if (shouldSeedGrants) {
       for (const g of seed.grants) {
         if (!g?.id || !g?.title) continue
+        const orgId = normalizeId(g.organization_id)
+        if (orgId && !knownOrgIds.has(orgId)) {
+          fkAdjustments.grants_skipped_missing_org++
+          continue
+        }
+        const desiredOppId = normalizeId(g.funding_opportunity_id)
+        const safeOppId =
+          desiredOppId && knownOppIds.has(desiredOppId) ? desiredOppId : null
+        if (desiredOppId && !safeOppId) fkAdjustments.grants_null_missing_opportunity++
         await upsertGrant.run({
           id: g.id,
-          organization_id: g.organization_id ?? null,
-          funding_opportunity_id: g.funding_opportunity_id ?? null,
+          organization_id: orgId ?? null,
+          funding_opportunity_id: safeOppId,
           title: g.title,
           funder: g.funder ?? null,
           amount_requested: g.amount_requested ?? null,
@@ -617,6 +714,7 @@ export async function seedBaselineFromRepo(db, opts = {}) {
           assigned_to: g.assigned_to ?? null,
           priority: g.priority ?? null,
         })
+        knownGrantIds.add(String(g.id).trim())
         counts.grants_upserted++
       }
     }
@@ -624,11 +722,24 @@ export async function seedBaselineFromRepo(db, opts = {}) {
     if (shouldSeedDocuments) {
       for (const d of seed.documents) {
         if (!d?.id || !d?.name) continue
+        const desiredOrgId = normalizeId(d.organization_id)
+        const safeOrgId = desiredOrgId && knownOrgIds.has(desiredOrgId) ? desiredOrgId : null
+        if (desiredOrgId && !safeOrgId) fkAdjustments.documents_null_missing_org++
+
+        const desiredProfileId = normalizeId(d.profile_id)
+        const safeProfileId =
+          desiredProfileId && knownProfileIds.has(desiredProfileId) ? desiredProfileId : null
+        if (desiredProfileId && !safeProfileId) fkAdjustments.documents_null_missing_profile++
+
+        const desiredGrantId = normalizeId(d.grant_id)
+        const safeGrantId = desiredGrantId && knownGrantIds.has(desiredGrantId) ? desiredGrantId : null
+        if (desiredGrantId && !safeGrantId) fkAdjustments.documents_null_missing_grant++
+
         const payload = {
           id: d.id,
-          organization_id: d.organization_id ?? null,
-          grant_id: d.grant_id ?? null,
-          profile_id: d.profile_id ?? null,
+          organization_id: safeOrgId,
+          grant_id: safeGrantId,
+          profile_id: safeProfileId,
           name: d.name,
           type: d.type ?? null,
           file_url: d.file_url ?? null,
@@ -654,6 +765,7 @@ export async function seedBaselineFromRepo(db, opts = {}) {
             throw error
           }
         }
+        knownDocIds.add(String(d.id).trim())
         counts.documents_upserted++
       }
 
@@ -661,9 +773,24 @@ export async function seedBaselineFromRepo(db, opts = {}) {
         if (!link?.profile_id || !link?.document_id) continue
         const profileId = String(link.profile_id).trim()
         if (tombstonedProfileIds.has(profileId)) continue
-        await upsertProfileDoc.run(profileId, link.document_id)
+        const docId = String(link.document_id).trim()
+        if (!knownProfileIds.has(profileId)) {
+          fkAdjustments.profile_docs_skipped_missing_profile++
+          continue
+        }
+        if (!knownDocIds.has(docId)) {
+          fkAdjustments.profile_docs_skipped_missing_doc++
+          continue
+        }
+        await upsertProfileDoc.run(profileId, docId)
         counts.profile_documents_upserted++
       }
+    }
+
+    // Log FK adjustments if we had to relax/skip anything.
+    const hadAdjustments = Object.values(fkAdjustments).some((v) => Number(v) > 0)
+    if (hadAdjustments) {
+      console.info('[seedBaselineFromRepo] FK adjustments applied', fkAdjustments)
     }
   })
 
