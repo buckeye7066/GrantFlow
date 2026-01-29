@@ -172,8 +172,10 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
         params.run_all_states === true ||
         String(params.run_all_states || '').toLowerCase() === 'true' ||
         String(params.runAllStates || '').toLowerCase() === 'true'
-      const maxZips = Number(params.max_zips ?? params.maxZips ?? 50)
-      const batchSize = Number(params.batch_size ?? Math.min(50, Math.max(1, maxZips || 50)))
+      const maxZipsRaw = params.max_zips ?? params.maxZips ?? params.zip_limit ?? params.zipLimit ?? null
+      const maxZipsNum = Number(maxZipsRaw)
+      const maxZips = Number.isFinite(maxZipsNum) && maxZipsNum > 0 ? maxZipsNum : null
+      const batchSize = Number(params.batch_size ?? Math.min(50, Math.max(1, maxZips ?? 50)))
       const rateLimitMs = Number(params.rate_limit_ms ?? 250)
       const minSources = Number(params.min_sources_per_zip ?? 3)
       const zipList =
@@ -187,16 +189,22 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
       const overpassRadiusKm = Number(params.overpass_radius_km ?? 12)
       const overpassMaxResults = Number(params.overpass_max_results ?? 60)
 
+      const offlineOnly = params.offline_only ?? params.offlineOnly ?? true
+      const counties = Array.isArray(params.counties) && params.counties.length > 0 ? params.counties : undefined
+      const effectiveZipList = runAllStates ? undefined : zipList || undefined
+
       const jobId = contextOrDb?.job?.id ?? null
 
       const runOnce = async (stateArg) => {
         return await runNationalZipCrawl(db, {
           state: stateArg && /^[A-Z]{2}$/.test(stateArg) ? stateArg : undefined,
-          zip_list: zipList || undefined,
-          max_zips: Number.isFinite(maxZips) ? maxZips : 50,
+          zip_list: effectiveZipList,
+          max_zips: maxZips,
           batch_size: Number.isFinite(batchSize) ? batchSize : 25,
           rate_limit_ms: Number.isFinite(rateLimitMs) ? rateLimitMs : 250,
           min_sources_per_zip: Number.isFinite(minSources) ? minSources : 1,
+          counties,
+          offline_only: offlineOnly,
           discover_local_resources: Boolean(discoverLocal),
           overpass_radius_km: Number.isFinite(overpassRadiusKm) ? overpassRadiusKm : 12,
           overpass_max_results: Number.isFinite(overpassMaxResults) ? overpassMaxResults : 60,
