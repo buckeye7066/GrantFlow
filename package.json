@@ -58,7 +58,8 @@
     "test:keys": "node backend/scripts/test-keys.js",
     "test:auto-merge": "node ./scripts/test-auto-merge-workflow.mjs",
     "merge:all-branches": "node ./scripts/merge-all-branches.mjs",
-    "geo:dev-start": "node ./scripts/dev-start-geo-crawl.mjs"
+    "geo:dev-start": "node ./scripts/dev-start-geo-crawl.mjs",
+    "release:gates": "node ./scripts/release-gates.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.1",
