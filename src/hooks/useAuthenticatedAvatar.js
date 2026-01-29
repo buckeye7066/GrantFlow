@@ -51,8 +51,11 @@ export function useAuthenticatedAvatar(avatarUrl) {
       .catch(error => {
         if (cancelled) return
         console.error('[useAuthenticatedAvatar] Failed to fetch avatar:', error)
-        // Fallback to original URL on error
-        setBlobUrl(avatarUrl)
+        // IMPORTANT:
+        // If this was a protected API endpoint, falling back to the raw URL will render a broken <img>
+        // because <img> cannot attach Authorization headers. Instead, fall back to null so the UI can
+        // show initials / placeholder deterministically.
+        setBlobUrl(null)
         setIsLoading(false)
       })
 

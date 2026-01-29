@@ -73,8 +73,8 @@ export default function PipelineActionsCard() {
               <Sparkles className="w-3 h-3 mr-1" />
               AI Orchestrations
             </div>
-            <h2 className="text-lg font-semibold text-slate-900">Pipeline Command Center</h2>
-            <p className="text-sm text-slate-600 max-w-md">
+            <h2 className="text-lg font-semibold text-foreground">Pipeline Command Center</h2>
+            <p className="text-sm text-foreground max-w-md">
               Kick off the same automations the Base44 workspace runs behind the scenes. These flows coordinate AI
               matching, checklist generation, reminders, and deadline monitoring.
             </p>
@@ -93,8 +93,8 @@ export default function PipelineActionsCard() {
                 <action.icon className="w-4 h-4" />
               </span>
               <div>
-                <p className="text-sm font-semibold text-slate-900">{action.label}</p>
-                <p className="text-xs text-slate-500">{action.description}</p>
+                  <p className="text-sm font-semibold text-foreground">{action.label}</p>
+                  <p className="text-xs text-foreground">{action.description}</p>
               </div>
             </div>
             <Button

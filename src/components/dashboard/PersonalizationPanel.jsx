@@ -72,11 +72,11 @@ export default function PersonalizationPanel() {
       <CardHeader>
         <div className="flex items-start justify-between gap-4">
           <div>
-            <CardTitle className="text-slate-900 flex items-center gap-2">
+            <CardTitle className="text-foreground flex items-center gap-2">
               <SlidersHorizontal className="h-4 w-4 text-blue-600" />
               Personalize Dashboard
             </CardTitle>
-            <p className="text-sm text-slate-500 mt-1">
+            <p className="text-sm text-foreground mt-1">
               Customize your workspace with 10+ personalization options
             </p>
           </div>
@@ -199,7 +199,7 @@ export default function PersonalizationPanel() {
           {/* Widgets Tab */}
           <TabsContent value="widgets" className="space-y-4 mt-4">
             <div>
-              <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
                 <Eye className="h-4 w-4" />
                 Widget Visibility
               </h3>
@@ -229,7 +229,7 @@ export default function PersonalizationPanel() {
             </div>
 
             <div>
-              <h3 className="text-sm font-semibold text-slate-700 mb-3">
+              <h3 className="text-sm font-semibold text-foreground mb-3">
                 Widget Order (Drag to Reorder)
               </h3>
               <DragDropContext onDragEnd={handleDragEnd}>
@@ -279,7 +279,7 @@ export default function PersonalizationPanel() {
           {/* Preferences Tab */}
           <TabsContent value="preferences" className="space-y-4 mt-4">
             <div>
-              <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
                 <Bell className="h-4 w-4" />
                 Notification Preferences
               </h3>
@@ -389,7 +389,7 @@ export default function PersonalizationPanel() {
             </SettingRow>
 
             <div>
-              <h3 className="text-sm font-semibold text-slate-700 mb-3">Visible Table Columns</h3>
+              <h3 className="text-sm font-semibold text-foreground mb-3">Visible Table Columns</h3>
               <div className="grid sm:grid-cols-2 gap-2">
                 {fields.map((field) => (
                   <button
@@ -435,8 +435,8 @@ function SettingRow({ icon: Icon, title, description, children }) {
           <Icon className="h-4 w-4" />
         </span>
         <div>
-          <p className="text-sm font-semibold text-slate-800">{title}</p>
-          <p className="text-xs text-slate-500">{description}</p>
+          <p className="text-sm font-semibold text-foreground">{title}</p>
+          <p className="text-xs text-foreground">{description}</p>
         </div>
       </div>
       <div>{children}</div>

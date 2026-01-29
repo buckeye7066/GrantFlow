@@ -21,7 +21,7 @@ export default defineConfig({
   // Ensure DB migrations + deterministic seed run first so UI flows are reproducible.
   webServer: {
     command:
-      'node backend/db/migrate.js && node backend/scripts/seed-deterministic.mjs --reset && node backend/start.js',
+      'node backend/db/migrate.js && node backend/scripts/seed-deterministic.mjs --reset && npm run build && node backend/start.js',
     cwd: process.cwd(),
     port,
     reuseExistingServer: !process.env.CI,

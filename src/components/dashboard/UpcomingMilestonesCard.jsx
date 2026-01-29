@@ -31,8 +31,8 @@ export default function UpcomingMilestonesCard({ upcomingMilestones }) {
       </CardHeader>
       <CardContent className="p-6">
         {upcomingMilestones.length === 0 ? (
-          <div className="text-center py-8 text-slate-500">
-            <CalendarIcon className="w-12 h-12 mx-auto mb-3 text-slate-300" />
+          <div className="text-center py-8 text-foreground">
+            <CalendarIcon className="w-12 h-12 mx-auto mb-3 text-slate-700" />
             <p>No upcoming milestones</p>
           </div>
         ) : (
@@ -42,7 +42,7 @@ export default function UpcomingMilestonesCard({ upcomingMilestones }) {
                 <div className="w-2 h-2 rounded-full bg-blue-500" />
                 <div className="flex-1">
                   <p className="font-medium text-slate-900">{milestone.title}</p>
-                  <p className="text-sm text-slate-600">
+                  <p className="text-sm text-foreground">
                     {isValidDate(milestone.due_date) 
                       ? format(new Date(milestone.due_date), 'MMM d, yyyy') 
                       : 'No due date'}

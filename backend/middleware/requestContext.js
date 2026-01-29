@@ -146,8 +146,11 @@ export async function buildRequestContext(db, user) {
     email: null,
     isAdmin: false,
     activeProfileId: null,
-    accessibleProfileIds: null, // null = all (for admin), Set = specific IDs
-    accessibleOrgIds: null, // null = all (for admin), Set = specific IDs
+    // IMPORTANT:
+    // - `null` means "all" and MUST be reserved for authenticated admins only.
+    // - Guests MUST NOT default to null, or they will be treated as "admin sentinel" by access helpers.
+    accessibleProfileIds: new Set(), // null = all (admin only), Set = specific IDs
+    accessibleOrgIds: new Set(), // null = all (admin only), Set = specific IDs
   }
 
   // Guest user - return empty context
