@@ -70,7 +70,10 @@ For each assumption:
 - **How we enforce it**
   - Production invariant checks at boot (already present in `backend/server.js`)
   - Startup repair: clear missing avatar URLs to stop 404 storms (already present)
-  - Tests: avatar/download auth tests under `tests/unit/avatar-*.test.mjs`.
+  - Tests:
+    - `tests/unit/avatar-upload-and-download.test.mjs` (upload + immediate download)
+    - `tests/unit/avatar-upload-persistence-restart.test.mjs` (upload → restart → download still 200)
+  - Release gate: `npm run release:gates` includes the restart persistence check.
 
 ---
 
@@ -84,7 +87,13 @@ For each assumption:
   - Missing profiles after DB restore/import ⇒ auth gating blocks non-admin logins and flows collapse.
 - **How we enforce it**
   - Seed-on-boot for non-smoke mode (already present)
-  - Add “integrity report” endpoints/scripts and tests as guardrails (Phase 2A).
+  - Integrity report + repair guardrails:
+    - `GET /api/admin/profiles/integrity` (counts + dangling links + orphan sample + duplicate sample)
+    - `POST /api/admin/profiles/integrity/repair` (dry-run by default; audit-logged; can reattach ownership by email signals)
+    - Offline runner: `node backend/scripts/profile-integrity-report.mjs`
+    - Tests:
+      - `tests/unit/admin-profile-integrity-report.test.mjs`
+      - `tests/unit/admin-integrity-repair.test.mjs`
 
 ### Assumption: Opportunities exist and are discoverable for matching
 - **Where it lives**

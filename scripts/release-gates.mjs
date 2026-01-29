@@ -55,6 +55,7 @@ async function main() {
 
   // Gate 4: uploads persistence
   await run('node', ['--test', 'tests/unit/avatar-upload-and-download.test.mjs'], { label: 'uploads-avatar' })
+  await run('node', ['--test', 'tests/unit/avatar-upload-persistence-restart.test.mjs'], { label: 'uploads-avatar-restart' })
 
   // Gate 5: Discover Grants: local funding directory resources survive filtering
   await run('node', ['scripts/verify-discover-grants-local-funding.mjs'], { label: 'discover-local-funding' })
