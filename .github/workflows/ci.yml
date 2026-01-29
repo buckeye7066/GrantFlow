@@ -26,6 +26,6 @@ jobs:
       - name: Audit (high+)
         run: npm audit --audit-level=high
 
-      - name: Test
-        run: npm run test
+      - name: Release gates
+        run: npm run release:gates
 
