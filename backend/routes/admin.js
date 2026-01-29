@@ -2455,6 +2455,383 @@ router.get('/profiles/integrity', async (req, res) => {
   })
 })
 
+/**
+ * POST /api/admin/profiles/integrity/repair
+ *
+ * Admin-only: take action on integrity issues in a traceable + reversible way.
+ * - Dry-run by default.
+ * - Logs an audit summary event.
+ *
+ * Body:
+ * {
+ *   dry_run?: boolean = true,
+ *   actions?: {
+ *     reattach_unowned_by_email?: boolean = true,
+ *     fix_dangling_user_links_by_email?: boolean = true,
+ *     cleanup_orphan_profiles?: boolean = false,
+ *   },
+ *   limits?: {
+ *     reattach?: number = 2000,
+ *     cleanup_orphans?: number = 200,
+ *   },
+ *   options?: {
+ *     include_deleted_profiles?: boolean = false,
+ *     allow_attach_to_admin?: boolean = false,
+ *     tombstone_orphans?: boolean = true,
+ *     reason?: string,
+ *   }
+ * }
+ */
+router.post('/profiles/integrity/repair', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+
+  const dryRun = req.body?.dry_run !== false
+
+  const actions = req.body?.actions && typeof req.body.actions === 'object' ? req.body.actions : {}
+  const doReattach = actions.reattach_unowned_by_email !== false
+  const doFixDangling = actions.fix_dangling_user_links_by_email !== false
+  const doCleanupOrphans = actions.cleanup_orphan_profiles === true
+
+  const limits = req.body?.limits && typeof req.body.limits === 'object' ? req.body.limits : {}
+  const limitReattach = Math.max(1, Math.min(Number(limits.reattach) || 2000, 20_000))
+  const limitCleanupOrphans = Math.max(1, Math.min(Number(limits.cleanup_orphans) || 200, 2000))
+
+  const options = req.body?.options && typeof req.body.options === 'object' ? req.body.options : {}
+  const includeDeleted = options.include_deleted_profiles === true
+  const allowAttachToAdmin = options.allow_attach_to_admin === true
+  const tombstoneOrphans = options.tombstone_orphans !== false
+  const reason =
+    typeof options.reason === 'string' && options.reason.trim()
+      ? options.reason.trim()
+      : 'integrity_repair'
+
+  const actorUserId = req.ctx?.userId ?? req.user?.userId ?? null
+
+  const generatedAt = new Date().toISOString()
+  const warnings = []
+  const errors = []
+
+  const result = {
+    ok: true,
+    dry_run: dryRun,
+    generated_at: generatedAt,
+    actions: {
+      reattach_unowned_by_email: doReattach,
+      fix_dangling_user_links_by_email: doFixDangling,
+      cleanup_orphan_profiles: doCleanupOrphans,
+    },
+    limits: { reattach: limitReattach, cleanup_orphans: limitCleanupOrphans },
+    options: {
+      include_deleted_profiles: includeDeleted,
+      allow_attach_to_admin: allowAttachToAdmin,
+      tombstone_orphans: tombstoneOrphans,
+      reason,
+    },
+    reattach: null,
+    cleanup_orphans: null,
+    warnings,
+    errors,
+  }
+
+  const chooseUserForEmails = ({ emails, usersByEmail }) => {
+    const matched = []
+    for (const e of emails || []) {
+      const u = usersByEmail.get(String(e))
+      if (u) matched.push(u)
+    }
+    const uniqById = new Map(matched.map((u) => [String(u.id), u]))
+    const uniq = Array.from(uniqById.values())
+    const nonAdmin = uniq.filter((u) => !(u.is_admin === true || u.is_admin === 1))
+    const admin = uniq.filter((u) => u.is_admin === true || u.is_admin === 1)
+
+    if (nonAdmin.length === 1) return { user: nonAdmin[0], matched: uniq }
+    if (nonAdmin.length > 1) return { user: null, matched: uniq, ambiguous: true }
+
+    if (allowAttachToAdmin && admin.length === 1) return { user: admin[0], matched: uniq }
+    if (admin.length > 0) return { user: null, matched: uniq, blocked_admin: true }
+
+    return { user: null, matched: [] }
+  }
+
+  const safeAll = async (sql, params = []) => {
+    try {
+      return await req.db.prepare(sql).all(...params)
+    } catch (e) {
+      errors.push({ type: 'query_failed', sql, message: e?.message || String(e) })
+      return null
+    }
+  }
+
+  // ---- Action 1/2: reattach unowned + fix dangling user links via email signals ----
+  if (doReattach || doFixDangling) {
+    const whereNotDeleted = includeDeleted ? '' : "AND (p.status IS NULL OR lower(p.status) <> 'deleted')"
+
+    const unownedRows = doReattach
+      ? await safeAll(
+          `
+            SELECT p.id, p.display_name, p.status, p.user_id
+            FROM profiles p
+            WHERE (p.user_id IS NULL OR TRIM(p.user_id) = '')
+              ${whereNotDeleted}
+            ORDER BY COALESCE(p.updated_at, p.created_at) DESC
+            LIMIT ?
+          `,
+          [limitReattach],
+        )
+      : []
+
+    const danglingRows = doFixDangling
+      ? await safeAll(
+          `
+            SELECT p.id, p.display_name, p.status, p.user_id
+            FROM profiles p
+            LEFT JOIN users u ON u.id = p.user_id
+            WHERE p.user_id IS NOT NULL AND TRIM(p.user_id) <> ''
+              AND u.id IS NULL
+              ${whereNotDeleted}
+            ORDER BY COALESCE(p.updated_at, p.created_at) DESC
+            LIMIT ?
+          `,
+          [limitReattach],
+        )
+      : []
+
+    const candidates = []
+    for (const r of (unownedRows || [])) {
+      if (!r?.id || isDesignatedProfileId(r.id)) continue
+      candidates.push({ profile_id: String(r.id), display_name: r.display_name ?? null, status: r.status ?? null, current_user_id: null })
+    }
+    for (const r of (danglingRows || [])) {
+      if (!r?.id || isDesignatedProfileId(r.id)) continue
+      candidates.push({
+        profile_id: String(r.id),
+        display_name: r.display_name ?? null,
+        status: r.status ?? null,
+        current_user_id: r.user_id ? String(r.user_id) : null,
+      })
+    }
+
+    const uniqueProfileIds = Array.from(new Set(candidates.map((c) => c.profile_id)))
+    const emailSignalsByProfile = await loadProfileEmailSignals(req.db, uniqueProfileIds)
+
+    const allEmails = Array.from(
+      new Set(
+        Array.from(emailSignalsByProfile.values())
+          .flatMap((set) => Array.from(set || []))
+          .filter(Boolean),
+      ),
+    )
+
+    const usersByEmail = new Map()
+    if (allEmails.length > 0) {
+      const placeholders = allEmails.map(() => '?').join(', ')
+      const userRows = await safeAll(
+        `
+          SELECT id, primary_email, is_admin, display_name
+          FROM users
+          WHERE lower(primary_email) IN (${placeholders})
+        `,
+        allEmails,
+      )
+      for (const u of userRows || []) {
+        const email = normalizeEmail(u?.primary_email)
+        if (!email) continue
+        usersByEmail.set(email, u)
+      }
+    }
+
+    const plan = []
+    const skipped = {
+      no_email: 0,
+      no_match: 0,
+      ambiguous: 0,
+      blocked_admin: 0,
+    }
+
+    for (const c of candidates) {
+      const emails = Array.from(emailSignalsByProfile.get(c.profile_id) || [])
+      if (emails.length === 0) {
+        skipped.no_email += 1
+        continue
+      }
+      const pick = chooseUserForEmails({ emails, usersByEmail })
+      if (pick?.ambiguous) {
+        skipped.ambiguous += 1
+        continue
+      }
+      if (pick?.blocked_admin) {
+        skipped.blocked_admin += 1
+        continue
+      }
+      const user = pick?.user || null
+      if (!user?.id) {
+        skipped.no_match += 1
+        continue
+      }
+
+      plan.push({
+        action: 'set_profile_user_id',
+        profile_id: c.profile_id,
+        display_name: c.display_name ?? null,
+        status: c.status ?? null,
+        from_user_id: c.current_user_id,
+        to_user_id: String(user.id),
+        matched_email: normalizeEmail(user.primary_email),
+        reason: 'email_signal_match',
+      })
+    }
+
+    let applied = 0
+    const appliedIds = []
+
+    if (!dryRun && plan.length > 0) {
+      await req.db.withTransaction(async (tx) => {
+        const setUnowned = tx.prepare(
+          `
+            UPDATE profiles
+            SET user_id = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+              AND (user_id IS NULL OR TRIM(user_id) = '')
+          `,
+        )
+        const setDangling = tx.prepare(
+          `
+            UPDATE profiles
+            SET user_id = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+              AND user_id = ?
+          `,
+        )
+
+        for (const step of plan) {
+          const toId = String(step.to_user_id)
+          const pid = String(step.profile_id)
+          if (!toId || !pid) continue
+
+          const fromId = step.from_user_id ? String(step.from_user_id) : null
+          const res = fromId ? await setDangling.run(toId, pid, fromId) : await setUnowned.run(toId, pid)
+          if (Number(res?.changes || 0) > 0) {
+            applied += 1
+            appliedIds.push(pid)
+          }
+        }
+      })
+    }
+
+    result.reattach = {
+      planned: plan.length,
+      applied,
+      applied_profile_ids: appliedIds,
+      skipped,
+      plan: plan.slice(0, 500), // cap payload; full details can be re-run
+      note:
+        plan.length > 500
+          ? `Plan truncated to 500 items in response; re-run with tighter filters if needed.`
+          : null,
+    }
+
+    if (plan.length > 0 && dryRun) {
+      warnings.push({
+        type: 'dry_run',
+        message: `Dry-run: ${plan.length} profile ownership updates are planned. Re-run with dry_run=false to apply.`,
+      })
+    }
+  }
+
+  // ---- Action 3: orphan cleanup wrapper (hard-delete) ----
+  if (doCleanupOrphans) {
+    const orphanRows = await safeAll(
+      `
+        SELECT
+          p.id, p.display_name, p.primary_type, p.status, p.created_at, p.updated_at, p.user_id, p.organization_id,
+          (SELECT COUNT(*) FROM profile_sections ps WHERE ps.profile_id = p.id) AS section_count,
+          (SELECT COUNT(*) FROM profile_documents pd WHERE pd.profile_id = p.id) AS profile_document_count,
+          (SELECT COUNT(*) FROM documents d WHERE d.profile_id = p.id) AS document_count,
+          (SELECT COUNT(*) FROM grants g WHERE g.profile_id = p.id) AS grant_count
+        FROM profiles p
+        WHERE (p.status IS NOT NULL AND lower(p.status) = 'deleted')
+          AND (p.user_id IS NULL OR TRIM(p.user_id) = '')
+          AND (p.organization_id IS NULL OR TRIM(p.organization_id) = '')
+          AND (SELECT COUNT(*) FROM profile_sections ps WHERE ps.profile_id = p.id) < 2
+          AND (SELECT COUNT(*) FROM profile_documents pd WHERE pd.profile_id = p.id) = 0
+          AND (SELECT COUNT(*) FROM documents d WHERE d.profile_id = p.id) = 0
+          AND (SELECT COUNT(*) FROM grants g WHERE g.profile_id = p.id) = 0
+        ORDER BY p.updated_at DESC
+        LIMIT ?
+      `,
+      [limitCleanupOrphans],
+    )
+
+    const candidates = Array.isArray(orphanRows)
+      ? orphanRows.filter((r) => !isDesignatedProfileId(r?.id))
+      : null
+
+    if (dryRun) {
+      result.cleanup_orphans = {
+        dry_run: true,
+        would_delete: Array.isArray(candidates) ? candidates.length : 0,
+        candidates,
+      }
+    } else {
+      const ids = Array.isArray(candidates) ? candidates.map((c) => String(c.id)).filter(Boolean) : []
+      let deleted = 0
+      const deletedIds = []
+      for (const id of ids) {
+        await hardDeleteProfileById({
+          db: req.db,
+          profileId: id,
+          actorUserId,
+          reason,
+          tombstone: tombstoneOrphans,
+        })
+        deleted += 1
+        deletedIds.push(id)
+      }
+      result.cleanup_orphans = {
+        dry_run: false,
+        deleted,
+        deleted_ids: deletedIds,
+      }
+    }
+  }
+
+  // Audit summary (best-effort; do not block response)
+  try {
+    logAuditEvent(req.db, {
+      category: AUDIT_CATEGORIES.ADMIN,
+      action: 'integrity_repair',
+      severity: SEVERITY.INFO,
+      userId: actorUserId,
+      resourceType: 'profile',
+      resourceId: null,
+      details: {
+        dry_run: dryRun,
+        actions: result.actions,
+        limits: result.limits,
+        options: result.options,
+        reattach: result.reattach
+          ? {
+              planned: result.reattach.planned,
+              applied: result.reattach.applied,
+              skipped: result.reattach.skipped,
+            }
+          : null,
+        cleanup_orphans: result.cleanup_orphans
+          ? dryRun
+            ? { would_delete: result.cleanup_orphans.would_delete }
+            : { deleted: result.cleanup_orphans.deleted }
+          : null,
+      },
+      ipAddress: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+    })
+  } catch {
+    // ignore
+  }
+
+  return res.json(result)
+})
+
 // POST /api/admin/seed-opportunities - Seed real funding opportunities
 router.post('/seed-opportunities', async (req, res) => {
   try {
