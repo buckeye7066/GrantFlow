@@ -68,10 +68,24 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete, isAdmin
   };
 
   const isOrphanedProfile = !profile.organization_id && !profile.user_id;
-  const avatarUrl =
-    profile?.avatar_download_url ||
-    (profile?.avatar_url && String(profile.avatar_url).includes('/uploads/') ? `/api/profiles/${profile.id}/avatar/download` : profile?.avatar_url) ||
-    null
+  const avatarCacheBuster = React.useMemo(() => {
+    // Prefer avatar_url (changes per upload), then updated_at as fallback.
+    const raw = profile?.avatar_url || profile?.updated_at || ""
+    const trimmed = String(raw || "").trim()
+    return trimmed ? encodeURIComponent(trimmed) : null
+  }, [profile?.avatar_url, profile?.updated_at])
+
+  const avatarUrl = React.useMemo(() => {
+    if (profile?.avatar_download_url) {
+      const base = String(profile.avatar_download_url)
+      return avatarCacheBuster ? `${base}${base.includes("?") ? "&" : "?"}v=${avatarCacheBuster}` : base
+    }
+    if (profile?.avatar_url && String(profile.avatar_url).includes('/uploads/')) {
+      const base = `/api/profiles/${profile.id}/avatar/download`
+      return avatarCacheBuster ? `${base}?v=${avatarCacheBuster}` : base
+    }
+    return profile?.avatar_url || null
+  }, [profile?.avatar_download_url, profile?.avatar_url, profile?.id, avatarCacheBuster])
   
   // Use authenticated avatar hook to handle protected API endpoints
   const { blobUrl: avatarSrc } = useAuthenticatedAvatar(avatarUrl)

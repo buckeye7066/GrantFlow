@@ -217,30 +217,64 @@ function normalizeState(value) {
   return /^[A-Z]{2}$/.test(s) ? s : null
 }
 
-function resolveZipList({ zip_list, state, max_zips } = {}) {
-  let list = []
+async function resolveZipList({ zip_list, state, max_zips, counties }) {
+  // Resolve ZIP list for a geo crawl run.
+  // Priority:
+  // 1) Explicit ZIP list (city selection / manual ZIP selection)
+  // 2) State ZIP index
+  // Then optionally filter by counties (within the resolved base list).
+  const fromExplicit = Array.isArray(zip_list) ? zip_list : [];
+  let zips = fromExplicit
+    .map((z) => String(z || '').trim())
+    .filter((z) => /^\d{5}$/.test(z));
 
-  if (Array.isArray(zip_list) && zip_list.length > 0) {
-    list = zip_list.map(normalizeZip).filter(Boolean)
-  } else {
-    const st = normalizeState(state)
-    if (st) {
-      const byState = zipcodes.lookupByState(st) || []
-      list = byState.map((row) => normalizeZip(row?.zip)).filter(Boolean)
-    } else {
-      list = US_ZIP_CODES_SAMPLE.slice()
+  if (!zips.length) {
+    if (!state || typeof state !== 'string') return [];
+    const rows = zipcodes.lookupByState(state) || [];
+    zips = rows
+      .map((row) => String(row?.zip || '').padStart(5, '0'))
+      .filter((z) => /^\d{5}$/.test(z));
+  }
+
+  // County scoping (optional): filter ZIPs to those whose resolved county is in the selected set.
+  if (Array.isArray(counties) && counties.length) {
+    const normalize = (v) =>
+      String(v || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+county\s*$/, '');
+
+    const wanted = new Set(counties.map(normalize).filter(Boolean));
+    if (wanted.size) {
+      const filtered = [];
+      for (const zip of zips) {
+        // NOTE: resolveCountyForZip is cached; this loop is usually fast.
+        // We pass state as a hint to avoid ambiguous fallbacks.
+        // If county can't be resolved, we treat it as non-matching.
+        // (Explicit ZIP lists should still work even if a county is missing.)
+        const county = await resolveCountyForZip(zip, state);
+        if (!county) continue;
+        if (wanted.has(normalize(county))) filtered.push(zip);
+      }
+      zips = filtered;
     }
   }
 
-  list = Array.from(new Set(list)).sort()
+  // Apply ZIP cap last (after filtering).
+  const limit = Number.isFinite(Number(max_zips)) ? Number(max_zips) : null;
+  if (limit && limit > 0) zips = zips.slice(0, limit);
 
-  const lim = Number(max_zips)
-  if (Number.isFinite(lim) && lim > 0) {
-    list = list.slice(0, Math.min(lim, list.length))
+  // Deduplicate while preserving order.
+  const seen = new Set();
+  const out = [];
+  for (const z of zips) {
+    if (seen.has(z)) continue;
+    seen.add(z);
+    out.push(z);
   }
-
-  return list
+  return out;
 }
+
 
 function resolveFixturesDir(options = {}) {
   const candidate =
@@ -308,10 +342,10 @@ function buildBaselineDirectorySources({ zip, meta }) {
       sponsor: 'United Way',
       description:
         'Find your local United Way chapter for community support, emergency assistance programs, and local partner referrals.',
-      url: 'https://www.unitedway.org/find-your-united-way',
-      application_url: 'https://www.unitedway.org/find-your-united-way',
-      source_url: 'https://www.unitedway.org/find-your-united-way',
-      evidence_url: 'https://www.unitedway.org/find-your-united-way',
+      url: `https://www.unitedway.org/find-your-united-way?zip=${zip}`,
+      application_url: `https://www.unitedway.org/find-your-united-way?zip=${zip}`,
+      source_url: `https://www.unitedway.org/find-your-united-way?zip=${zip}`,
+      evidence_url: `https://www.unitedway.org/find-your-united-way?zip=${zip}`,
       opportunity_type: 'program',
       type: 'DIRECTORY',
       requires_match: false,
@@ -328,10 +362,10 @@ function buildBaselineDirectorySources({ zip, meta }) {
       title: city && state ? `Food Bank resources near ${city}, ${state}` : 'Food Bank Locator (Feeding America)',
       sponsor: 'Feeding America',
       description: 'Find local food bank partners and emergency food assistance resources near the profile ZIP.',
-      url: 'https://www.feedingamerica.org/find-your-local-foodbank',
-      application_url: 'https://www.feedingamerica.org/find-your-local-foodbank',
-      source_url: 'https://www.feedingamerica.org/find-your-local-foodbank',
-      evidence_url: 'https://www.feedingamerica.org/find-your-local-foodbank',
+      url: `https://www.feedingamerica.org/find-your-local-foodbank?postal-code=${zip}`,
+      application_url: `https://www.feedingamerica.org/find-your-local-foodbank?postal-code=${zip}`,
+      source_url: `https://www.feedingamerica.org/find-your-local-foodbank?postal-code=${zip}`,
+      evidence_url: `https://www.feedingamerica.org/find-your-local-foodbank?postal-code=${zip}`,
       opportunity_type: 'program',
       type: 'DIRECTORY',
       requires_match: false,
@@ -350,10 +384,10 @@ function buildBaselineDirectorySources({ zip, meta }) {
       sponsor: 'Community Action Partnership',
       description:
         'Locate a Community Action Agency (CAA/CAP) that can help with housing, utilities, food, and employment support.',
-      url: 'https://communityactionpartnership.com/find-a-cap/',
-      application_url: 'https://communityactionpartnership.com/find-a-cap/',
-      source_url: 'https://communityactionpartnership.com/find-a-cap/',
-      evidence_url: 'https://communityactionpartnership.com/find-a-cap/',
+      url: `https://communityactionpartnership.com/find-a-cap/?zip=${zip}`,
+      application_url: `https://communityactionpartnership.com/find-a-cap/?zip=${zip}`,
+      source_url: `https://communityactionpartnership.com/find-a-cap/?zip=${zip}`,
+      evidence_url: `https://communityactionpartnership.com/find-a-cap/?zip=${zip}`,
       opportunity_type: 'program',
       type: 'DIRECTORY',
       requires_match: false,
@@ -1366,10 +1400,11 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
     }
   }
 
-  const zipList = resolveZipList({
+  const zipList = await resolveZipList({
     zip_list: options.zip_list,
     state: options.state,
     max_zips: options.max_zips,
+    counties: options.counties,
   })
 
   if (zipList.length === 0) {

@@ -33,6 +33,7 @@ import { crawlECFBenefits } from '../services/crawlers/ecfBenefitsCrawler.js';
 import { findDuplicateProfileGroups, mergeProfiles } from '../services/profileDedupeService.js'
 import { ensureAdminUser, isAdminUser, addProfileEmails, listProfileEmails } from '../utils/accessControl.js'
 import zipcodes from 'zipcodes';
+import { resolveCountyForZip } from '../services/geo/zipCountyResolver.js';
 import { createGeoCrawlRun } from '../services/geoCrawlRunStore.js'
 import { resolveUploadsDir, ensureUploadsDirWritable } from '../utils/uploadsDir.js'
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
@@ -1896,21 +1897,65 @@ router.get('/geo/state/:state/zips', async (req, res) => {
   }
 });
 
+
+async function computeCountiesForState(stateCode) {
+  const state = String(stateCode || '').trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(state)) return [];
+
+  // Use the same ZIP index we expose to the admin UI (ensures city/state normalization matches).
+  const idx = buildZipStateIndex();
+  const rows = idx.get(state) || [];
+  if (!rows.length) return [];
+
+  const normalize = (v) =>
+    String(v || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+county\s*$/, '');
+
+  const seen = new Map(); // normalized -> original (first seen)
+  for (const row of rows) {
+    const zip = String(row?.zip_code || '').padStart(5, '0');
+    if (!/^\d{5}$/.test(zip)) continue;
+
+    const county = await resolveCountyForZip(zip, state);
+    if (!county) continue;
+
+    const norm = normalize(county);
+    if (!norm) continue;
+    if (!seen.has(norm)) seen.set(norm, String(county).trim());
+  }
+
+  return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
+}
+
 router.get('/geo/state/:state/counties', async (req, res) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return;
     const state = String(req.params.state || '').toUpperCase();
     const countiesByState = loadCountiesByState();
-    const list = Array.isArray(countiesByState?.[state]) ? countiesByState[state] : [];
+    let list = Array.isArray(countiesByState?.[state]) ? countiesByState[state] : [];
+
+    let source =
+      process.env.GEO_COUNTIES_BY_STATE_PATH && fs.existsSync(resolve(process.env.GEO_COUNTIES_BY_STATE_PATH))
+        ? 'GEO_COUNTIES_BY_STATE_PATH'
+        : fs.existsSync(countiesByStatePath)
+          ? 'fallback_file'
+          : 'missing';
+
+    // If we don't have a file-backed counties index, compute it from the ZIP->county resolver.
+    if (!list.length) {
+      list = await computeCountiesForState(state);
+      if (list.length) {
+        countiesByState[state] = list;
+        source = 'computed_from_zip_index';
+      }
+    }
+
     res.json({
       counties: list.map((county) => ({ county })),
       available: list.length > 0,
-      source:
-        process.env.GEO_COUNTIES_BY_STATE_PATH && fs.existsSync(resolve(process.env.GEO_COUNTIES_BY_STATE_PATH))
-          ? 'GEO_COUNTIES_BY_STATE_PATH'
-          : fs.existsSync(countiesByStatePath)
-            ? 'fallback_file'
-            : 'missing',
+      source,
     });
   } catch (error) {
     console.error('[admin/geo/state/counties] Error:', error);
@@ -1933,11 +1978,11 @@ router.post('/geo/state/:state/index-counties', async (req, res) => {
     }
 
     if (!list.length) {
-      const fetched = await fetchCountiesFromCensus(state)
-      if (fetched.length) {
-        countiesByState[state] = fetched
-        list = fetched
-        source = 'census_api'
+      const computed = await computeCountiesForState(state);
+      if (computed.length) {
+        countiesByState[state] = computed;
+        list = computed;
+        source = 'computed_from_zip_index';
       }
     }
 
@@ -1954,7 +1999,7 @@ router.post('/geo/state/:state/index-counties', async (req, res) => {
       warning:
         list.length > 0
           ? null
-          : 'No counties available for this state. If GEO_COUNTIES_BY_STATE_PATH is not set, ensure outbound HTTPS is allowed to reach the US Census API.',
+          : 'No counties could be resolved for this state from the ZIP index. (This usually means the ZIP dataset is missing or the county resolver is unavailable.)',
     });
   } catch (error) {
     console.error('[admin/geo/state/index-counties] Error:', error);
@@ -2151,6 +2196,8 @@ router.post('/geo/crawl/start', async (req, res) => {
       // Feature toggles (crawler reads these)
       discover_local_resources:
         incoming.discover_local_resources ?? incoming.discoverLocalResources ?? true,
+      // Geo crawl default: deterministic + scalable (skip per-ZIP web scraping unless explicitly enabled)
+      offline_only: incoming.offline_only ?? incoming.offlineOnly ?? true,
       // Conservative defaults; can be overridden per request
       overpass_radius_km: incoming.overpass_radius_km ?? 12,
       overpass_max_results: incoming.overpass_max_results ?? 60,
