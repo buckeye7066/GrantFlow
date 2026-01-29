@@ -389,6 +389,11 @@ export async function crawlHealthResources(profile, options = {}) {
         ...opp,
         match_score: score,
         match_reasons: reasons,
+        crawler_type: 'health_resources',
+        // Normalize a few fields so downstream logic can attribute results consistently.
+        source: opp.sponsor ?? 'Health resources',
+        record_origin: 'directory:health_resources',
+        is_directory_resource: true,
         source_url: opp.url,
         application_url: opp.url,
       }
