@@ -62,15 +62,15 @@ function ReminderItem({
       </span>
       <div className="flex-1 space-y-1">
         <div className="flex items-center justify-between gap-3">
-          <p className="text-sm font-semibold text-slate-800">{title}</p>
+          <p className="text-sm font-semibold text-foreground">{title}</p>
           {statusLabel ? (
             <Badge variant="outline" className="text-xs">
               {statusLabel}
             </Badge>
           ) : null}
         </div>
-        {description ? <p className="text-xs text-slate-500">{description}</p> : null}
-        {context ? <p className="text-xs text-slate-400">{context}</p> : null}
+        {description ? <p className="text-xs text-foreground">{description}</p> : null}
+        {context ? <p className="text-xs text-foreground">{context}</p> : null}
         {dueLine ? <p className="text-xs font-medium text-blue-600">{dueLine}</p> : null}
       </div>
     </div>
@@ -162,11 +162,11 @@ export default function ReminderCenterCard({
       <CardHeader className="pb-3 space-y-2">
         <div className="flex items-center justify-between gap-4">
           <div>
-            <CardTitle className="flex items-center gap-2 text-slate-900">
+            <CardTitle className="flex items-center gap-2 text-foreground">
               <Bell className="h-4 w-4 text-blue-600" />
               Reminders & Nudges
             </CardTitle>
-            <p className="text-xs text-slate-500 mt-1">
+            <p className="text-xs text-foreground mt-1">
               Keep teams aligned on deadlines, compliance, and document readiness.
             </p>
             {hasError ? (
@@ -196,7 +196,7 @@ export default function ReminderCenterCard({
           </Button>
         </div>
         {planGeneratedLabel ? (
-          <p className="text-xs text-slate-400">{planGeneratedLabel}</p>
+          <p className="text-xs text-foreground">{planGeneratedLabel}</p>
         ) : null}
       </CardHeader>
       <CardContent className="space-y-3">
@@ -214,9 +214,9 @@ export default function ReminderCenterCard({
           </>
         ) : reminders.length === 0 ? (
           <div className="rounded-xl border border-dashed border-slate-300 p-6 text-center">
-            <FileSearch className="h-10 w-10 mx-auto text-slate-300 mb-3" />
-            <p className="text-sm font-medium text-slate-700">No reminders yet</p>
-            <p className="text-xs text-slate-500 mt-1">
+            <FileSearch className="h-10 w-10 mx-auto text-slate-700 mb-3" />
+            <p className="text-sm font-medium text-foreground">No reminders yet</p>
+            <p className="text-xs text-foreground mt-1">
               Assign milestones or track grants to see intelligent reminders here.
             </p>
             <Button size="sm" className="mt-4">
@@ -231,7 +231,7 @@ export default function ReminderCenterCard({
           <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-4 space-y-3">
             <p className="text-sm font-semibold text-blue-900">AI Action Plan</p>
             {planData.summary ? (
-              <p className="text-sm text-slate-700 leading-relaxed">{planData.summary}</p>
+              <p className="text-sm text-foreground leading-relaxed">{planData.summary}</p>
             ) : null}
 
             {Array.isArray(planData.priority_actions) && planData.priority_actions.length > 0 ? (
@@ -245,15 +245,15 @@ export default function ReminderCenterCard({
                       key={`${action.title ?? "action"}-${index}`}
                       className="rounded-lg border border-white/60 bg-white/80 p-3 shadow-sm"
                     >
-                      <p className="text-sm font-semibold text-slate-800">{action.title}</p>
+                      <p className="text-sm font-semibold text-foreground">{action.title}</p>
                       {action.due ? (
                         <p className="text-xs text-blue-600 mt-1">Due {action.due}</p>
                       ) : null}
                       {action.type ? (
-                        <p className="text-xs text-slate-400 mt-1">Type: {action.type}</p>
+                        <p className="text-xs text-foreground mt-1">Type: {action.type}</p>
                       ) : null}
                       {action.notes ? (
-                        <p className="text-xs text-slate-600 mt-2 leading-relaxed">{action.notes}</p>
+                        <p className="text-xs text-foreground mt-2 leading-relaxed">{action.notes}</p>
                       ) : null}
                     </li>
                   ))}
@@ -272,12 +272,12 @@ export default function ReminderCenterCard({
                       key={`${item.title ?? "collab"}-${index}`}
                       className="rounded-lg border border-white/60 bg-white/70 p-3"
                     >
-                      <p className="text-sm font-semibold text-slate-800">{item.title}</p>
+                      <p className="text-sm font-semibold text-foreground">{item.title}</p>
                       {item.owner ? (
-                        <p className="text-xs text-slate-500 mt-1">Owner: {item.owner}</p>
+                        <p className="text-xs text-foreground mt-1">Owner: {item.owner}</p>
                       ) : null}
                       {item.notes ? (
-                        <p className="text-xs text-slate-600 mt-2 leading-relaxed">{item.notes}</p>
+                        <p className="text-xs text-foreground mt-2 leading-relaxed">{item.notes}</p>
                       ) : null}
                     </li>
                   ))}
@@ -296,9 +296,9 @@ export default function ReminderCenterCard({
                       key={`${item.title ?? "followup"}-${index}`}
                       className="rounded-lg border border-white/60 bg-white/60 p-3"
                     >
-                      <p className="text-sm font-semibold text-slate-800">{item.title}</p>
+                      <p className="text-sm font-semibold text-foreground">{item.title}</p>
                       {item.notes ? (
-                        <p className="text-xs text-slate-600 mt-1 leading-relaxed">{item.notes}</p>
+                        <p className="text-xs text-foreground mt-1 leading-relaxed">{item.notes}</p>
                       ) : null}
                     </li>
                   ))}
@@ -311,7 +311,7 @@ export default function ReminderCenterCard({
                 <p className="text-xs font-semibold uppercase tracking-wide text-blue-900">
                   AI Recommendations
                 </p>
-                <ul className="space-y-2 text-xs text-slate-600 leading-relaxed">
+                <ul className="space-y-2 text-xs text-foreground leading-relaxed">
                   {planData.ai_recommendations.map((tip, index) => (
                     <li key={`tip-${index}`} className="rounded-md border border-white/50 bg-white/60 p-2">
                       {tip}

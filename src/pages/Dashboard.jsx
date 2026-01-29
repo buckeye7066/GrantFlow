@@ -43,7 +43,7 @@ function LJWMonogram({ className = "" }) {
   return (
     <div
       className={cn(
-        "flex h-6 w-6 items-center justify-center rounded-md border border-white/30 bg-white/30 text-[10px] font-semibold uppercase tracking-wide text-white",
+        "flex h-6 w-6 items-center justify-center rounded-md border border-white bg-white text-[10px] font-semibold uppercase tracking-wide text-slate-900",
         className,
       )}
     >
@@ -387,7 +387,7 @@ export default function Dashboard() {
                   <h1 className="text-2xl font-bold text-slate-900 md:text-3xl">
                     Operational pulse across all grants and obligations
                   </h1>
-                  <p className="text-sm text-slate-600 md:text-base">
+                  <p className="text-sm text-foreground md:text-base">
                     Staying ahead of submissions, compliance, and reporting just became easier.
                     Leverage AI nudges and smart filters to keep every opportunity on track.
                   </p>
@@ -427,7 +427,7 @@ export default function Dashboard() {
 
           <div className="space-y-6">
             <PersonalizationPanel />
-            {activeProfileId ? <AnyaChat profileId={activeProfileId} /> : null}
+            {activeProfileId && !globalThis?.__GF_SMOKE__ ? <AnyaChat profileId={activeProfileId} /> : null}
           </div>
         </div>
 

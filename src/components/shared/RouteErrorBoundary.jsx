@@ -38,7 +38,7 @@ export default class RouteErrorBoundary extends React.Component {
           <AlertDescription>
             Something went wrong{routeLabel}. You can reload the page or return to your dashboard.
             {requestId ? (
-              <span className="mt-2 block text-xs text-slate-200/90">
+              <span className="mt-2 block text-xs text-slate-100">
                 Request ID: <span className="font-mono">{requestId}</span>
               </span>
             ) : null}

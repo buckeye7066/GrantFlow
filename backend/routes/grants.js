@@ -308,11 +308,18 @@ router.get('/', async (req, res) => {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return
 
+    // IMPORTANT:
+    // Many production DBs predate `grants.profile_id` (and the newer AI columns).
+    // If the UI sends `X-Profile-Id` (it does), referencing `g.profile_id` without this
+    // guard causes a hard 500. Keep this self-healing and non-fatal.
+    await ensureGrantAiColumns(req.db)
+
     const { organization_id, status } = req.query;
     const sortCol = normalizeSortColumn(req.query.sort)
     const sortOrder = normalizeSortOrder(req.query.order)
     const headerProfileId = typeof req.headers['x-profile-id'] === 'string' ? req.headers['x-profile-id'] : null
     const profile_id = (typeof req.query.profile_id === 'string' ? req.query.profile_id : null) || headerProfileId
+    const urlFilter = typeof req.query.url === 'string' ? req.query.url : null
     const { limit, offset } = validatePagination(req.query);
     
     let query = `
@@ -381,6 +388,13 @@ router.get('/', async (req, res) => {
         params.push(status);
       }
     }
+
+    // Back-compat for Base44 / older UI duplicate-checks: they pass `url=<opportunityUrl>`.
+    // In our schema, the canonical URL lives in `application_url`.
+    if (urlFilter) {
+      query += ' AND g.application_url = ?'
+      params.push(urlFilter)
+    }
     
     query += ` ORDER BY ${sortCol} ${sortOrder} LIMIT ? OFFSET ?`;
     params.push(limit, offset);
@@ -407,6 +421,7 @@ router.get('/pipeline', async (req, res) => {
     if (!user) return
 
     const { organization_id } = req.query;
+    await ensureGrantAiColumns(req.db)
     
     let query = `
       SELECT g.*, o.name as organization_name 
@@ -442,7 +457,12 @@ router.get('/pipeline', async (req, res) => {
       params.push(organization_id);
     }
     
-    query += ' ORDER BY g.deadline ASC NULLS LAST, g.created_at DESC';
+    // SQLite doesn't support `NULLS LAST`. Make ordering deterministic across dialects.
+    if (req.db?.dialect === 'sqlite') {
+      query += ' ORDER BY (g.deadline IS NULL) ASC, g.deadline ASC, g.created_at DESC'
+    } else {
+      query += ' ORDER BY g.deadline ASC NULLS LAST, g.created_at DESC'
+    }
     
     const grants = await req.db.prepare(query).all(...params);
     
@@ -890,6 +910,9 @@ router.post('/from-opportunity', async (req, res) => {
   try {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return
+
+    // Self-heal schema drift before we read/insert profile-scoped grants.
+    await ensureGrantAiColumns(req.db)
 
     let {
       opportunity_id, 
