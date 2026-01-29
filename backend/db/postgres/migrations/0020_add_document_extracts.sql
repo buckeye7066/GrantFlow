@@ -1,8 +1,9 @@
 -- Document ingestion: canonical extracted text + provenance + confidence
 
 CREATE TABLE IF NOT EXISTS document_extracts (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  -- Keep id types consistent with existing tables (documents.id is TEXT).
+  id TEXT PRIMARY KEY DEFAULT (gen_random_uuid()::text),
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
 
   status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','processing','ready','failed')),
   source_type TEXT CHECK(source_type IN ('docx','pdf','image','text')),
