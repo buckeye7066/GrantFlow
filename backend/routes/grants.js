@@ -989,6 +989,39 @@ router.post('/from-opportunity', async (req, res) => {
     const result = await req.db.withTransaction(async (tx) => {
       const hasProfileId = await grantsHasProfileIdColumn(tx)
 
+      async function ensureOrganizationRow({ organizationId, profileRow, reason }) {
+        const orgId = organizationId ? String(organizationId) : null
+        if (!orgId) return { ok: false, created: false, id: null }
+
+        // If the org already exists, do nothing.
+        const existing = await tx.prepare('SELECT id, name FROM organizations WHERE id = ? LIMIT 1').get(orgId)
+        if (existing?.id) return { ok: true, created: false, id: orgId }
+
+        // Self-heal: create a minimal org row so FK inserts to grants don't hard-fail.
+        // This is reversible (delete the org if it was created accidentally) and logged.
+        const displayName = String(profileRow?.display_name || '').trim()
+        const orgName = displayName || 'My Organization'
+        const applicantType = deriveOrganizationApplicantTypeFromProfile(profileRow)
+
+        await tx
+          .prepare(
+            `
+              INSERT INTO organizations (id, name, applicant_type, created_at, updated_at)
+              VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            `,
+          )
+          .run(orgId, orgName, applicantType)
+
+        console.warn('[grants] self-healed missing organization row', {
+          requestId: req.requestId || null,
+          organization_id: orgId,
+          profile_id: profileRow?.id ? String(profileRow.id) : null,
+          reason: reason || 'unknown',
+        })
+
+        return { ok: true, created: true, id: orgId }
+      }
+
       // If no organization_id but profile_id provided, auto-create organization
       let finalOrgId = normalizedOrgId
       let finalProfileId = normalizedProfileId
@@ -1016,7 +1049,25 @@ router.post('/from-opportunity', async (req, res) => {
               applicant_type: applicantType,
             });
           }
+
+          // Safety: if we inherited a profile.organization_id from legacy data, ensure the org row exists
+          // so `grants.organization_id` FK inserts cannot hard-fail.
+          if (finalOrgId) {
+            await ensureOrganizationRow({ organizationId: finalOrgId, profileRow: profile, reason: 'profile.organization_id' })
+          }
         }
+      }
+
+      // If the caller explicitly provided an org id, ensure the row exists before we insert into grants.
+      // This prevents 500s from FK violations when legacy data is missing the organizations row.
+      if (finalOrgId) {
+        const profileRowForOrgName =
+          finalProfileId ? await tx.prepare('SELECT * FROM profiles WHERE id = ?').get(finalProfileId) : null
+        await ensureOrganizationRow({
+          organizationId: finalOrgId,
+          profileRow: profileRowForOrgName,
+          reason: normalizedOrgId ? 'request.organization_id' : 'derived',
+        })
       }
       
       if (!finalOrgId) {

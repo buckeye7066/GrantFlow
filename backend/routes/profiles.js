@@ -177,6 +177,18 @@ const profileSelect = `
 function mapProfile(row) {
   if (!row) return null
   const rawAvatar = row.avatar_url ?? null
+  const avatarVersion =
+    rawAvatar && String(rawAvatar).includes('/uploads/')
+      ? (() => {
+          const s = String(rawAvatar)
+          // Accept /uploads/<file> or https://host/.../uploads/<file>
+          const parts = s.split('/uploads/')
+          const tail = parts.length > 1 ? parts[parts.length - 1] : ''
+          const file = tail.split('?')[0].split('#')[0].split('/').pop()
+          return file ? String(file).trim() : null
+        })()
+      : null
+
   return {
     id: row.id,
     created_at: row.created_at,
@@ -195,7 +207,9 @@ function mapProfile(row) {
     avatar_url: rawAvatar,
     // Prefer a stable, diagnostic endpoint for file-backed avatars (handles legacy dir + logs missing).
     avatar_download_url:
-      rawAvatar && String(rawAvatar).includes('/uploads/') ? `/api/profiles/${String(row.id)}/avatar/download` : null,
+      rawAvatar && String(rawAvatar).includes('/uploads/')
+        ? `/api/profiles/${String(row.id)}/avatar/download${avatarVersion ? `?v=${encodeURIComponent(avatarVersion)}` : ''}`
+        : null,
     profile_image_url: rawAvatar ?? null,
   }
 }
