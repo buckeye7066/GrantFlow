@@ -230,6 +230,61 @@ FROM billing_account_chosen c
 WHERE ba.id = c.keep_account_id
   AND ba.profile_id <> c.winner_profile_id;
 
+-- 4b) Resolve profile_emails uniqueness (ux_profile_emails_profile_email) safely.
+-- This table may have been created at runtime (ensureProfileEmailSchema) rather than by migrations,
+-- so guard the cleanup in case it doesn't exist in older environments.
+DO $$
+BEGIN
+  IF to_regclass('public.profile_emails') IS NOT NULL THEN
+    EXECUTE $SQL$
+      CREATE TEMP TABLE profile_emails_repoint ON COMMIT DROP AS
+      WITH impacted_profiles AS (
+        SELECT loser_id AS profile_id FROM profile_merge_map
+        UNION
+        SELECT winner_id AS profile_id FROM profile_merge_map
+      ),
+      rows AS (
+        SELECT
+          pe.id,
+          pe.profile_id AS source_profile_id,
+          COALESCE(m.winner_id, pe.profile_id) AS target_profile_id,
+          LOWER(pe.email) AS email_norm,
+          pe.created_at,
+          (pe.profile_id = COALESCE(m.winner_id, pe.profile_id)) AS is_winner_row
+        FROM profile_emails pe
+        JOIN impacted_profiles ip ON ip.profile_id = pe.profile_id
+        LEFT JOIN profile_merge_map m ON m.loser_id = pe.profile_id
+      ),
+      ranked AS (
+        SELECT
+          id,
+          source_profile_id,
+          target_profile_id,
+          email_norm,
+          ROW_NUMBER() OVER (
+            PARTITION BY target_profile_id, email_norm
+            ORDER BY is_winner_row DESC, created_at ASC NULLS LAST, id ASC
+          ) AS rn
+        FROM rows
+      )
+      SELECT * FROM ranked;
+
+      -- Delete any rows that would become duplicates after repointing.
+      DELETE FROM profile_emails pe
+      USING profile_emails_repoint r
+      WHERE pe.id = r.id
+        AND r.rn > 1;
+
+      -- Repoint remaining rows to the winner.
+      UPDATE profile_emails pe
+      SET profile_id = r.target_profile_id
+      FROM profile_emails_repoint r
+      WHERE pe.id = r.id
+        AND pe.profile_id <> r.target_profile_id;
+    $SQL$;
+  END IF;
+END $$;
+
 -- 5) Repoint all other FK references to profiles(id) dynamically.
 DO $$
 DECLARE
@@ -248,7 +303,7 @@ BEGIN
     WHERE con.contype = 'f'
       AND con.confrelid = 'profiles'::regclass
       AND n.nspname = 'public'
-      AND c.relname NOT IN ('profile_sections', 'profile_documents', 'billing_accounts')
+      AND c.relname NOT IN ('profile_sections', 'profile_documents', 'billing_accounts', 'profile_emails')
   LOOP
     EXECUTE format(
       'UPDATE %I.%I t SET %I = m.winner_id FROM profile_merge_map m WHERE t.%I = m.loser_id',
