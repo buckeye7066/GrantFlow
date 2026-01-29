@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "prebuild": "node scripts/ensure-rollup-native.mjs",
+    "prebuild": "node scripts/ensure-rollup-native.mjs && node scripts/ensure-esbuild-native.mjs",
     "build": "vite build",
     "check:submission-no-base44": "node scripts/check-submission-no-base44.mjs",
     "quality:gate": "node scripts/code-quality-gate.mjs",
