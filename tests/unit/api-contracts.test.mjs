@@ -1,41 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import net from 'node:net'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import fs from 'node:fs'
+import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 async function sleep(ms) {
   await new Promise((r) => setTimeout(r, ms))
-}
-
-async function isPortAvailable(port, host = '127.0.0.1') {
-  // Prefer connect-probing over bind-probing.
-  // On Windows, some listeners can allow a second bind probe to succeed (SO_REUSEADDR),
-  // but connect() will still succeed if a service is already bound and accepting.
-  return await new Promise((resolve) => {
-    const socket = net.connect({ port, host })
-    socket.once('connect', () => {
-      try { socket.destroy() } catch {}
-      resolve(false)
-    })
-    socket.once('error', (err) => {
-      try { socket.destroy() } catch {}
-      if (err?.code === 'ECONNREFUSED') return resolve(true)
-      // Conservative default: treat unknown errors as "in use" so we pick another port.
-      resolve(false)
-    })
-  })
-}
-
-async function pickPort({ start = 18080, count = 30 } = {}) {
-  for (let i = 0; i < count; i += 1) {
-    const port = start + i
-    // eslint-disable-next-line no-await-in-loop
-    if (await isPortAvailable(port)) return port
-  }
-  throw new Error('No available port found for backend test')
 }
 
 async function waitForHttpOk(url, { timeoutMs = 30_000 } = {}) {
@@ -62,13 +34,24 @@ async function stopProcess(proc) {
   }
 }
 
-async function startBackend({ rootDir, port }) {
+async function startBackend({ rootDir }) {
+  // IMPORTANT:
+  // Unit tests must NEVER use the repo default SQLite DB path (`backend/data/grantflow.db`),
+  // or parallel test runs can hit SQLITE_BUSY "database is locked" and crash the backend.
+  // Always isolate the DB per test run.
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'grantflow-contracts-'))
+  const sqlitePath = path.join(tempDir, 'grantflow-test.db')
+
   const env = {
     ...process.env,
     NODE_ENV: 'development',
     SMOKE_MODE: 'true',
-    PORT: String(port),
+    // IMPORTANT: Use ephemeral OS port to avoid race conditions in parallel test runs.
+    PORT: '0',
+    DB_PROVIDER: 'sqlite',
+    SQLITE_DB_PATH: sqlitePath,
     DB_AUTO_MIGRATE: 'true',
+    AUTH_JWT_SECRET: 'test-secret-contracts',
     ADMIN_TOKEN: process.env.ADMIN_TOKEN || 'test-admin-token',
     CORS_ORIGIN: process.env.CORS_ORIGIN || 'http://localhost:5173,http://127.0.0.1:5173',
     AUTH_FRONTEND_APP_BASE: process.env.VITE_APP_BASE || '/grantflow',
@@ -91,6 +74,14 @@ async function startBackend({ rootDir, port }) {
   let spawnError = null
   proc.once('error', (err) => {
     spawnError = err
+  })
+
+  let readyPort = null
+  proc.stdout?.on('data', () => {
+    if (readyPort) return
+    const combined = stdoutChunks.join('')
+    const match = combined.match(/\[Server\]\s+Ready on port\s+(\d+)/)
+    if (match) readyPort = Number(match[1])
   })
 
   const start = Date.now()
@@ -120,8 +111,10 @@ async function startBackend({ rootDir, port }) {
     if (Date.now() - start > timeoutMs) break
 
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/api/health`, { method: 'GET' })
-      if (res.ok) return proc
+      if (readyPort) {
+        const ok = await waitForHttpOk(`http://127.0.0.1:${readyPort}/api/health`, { timeoutMs: 2_000 })
+        if (ok) return { proc, tempDir, port: readyPort }
+      }
     } catch {
       // keep polling
     }
@@ -133,6 +126,9 @@ async function startBackend({ rootDir, port }) {
   const stdout = stdoutChunks.join('')
   const stderr = stderrChunks.join('')
   await stopProcess(proc)
+  try {
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  } catch {}
   throw new Error(
     `Backend did not become healthy for contract tests within ${timeoutMs}ms.\n` +
       `--- stdout ---\n${stdout || '(empty)'}\n` +
@@ -143,14 +139,15 @@ async function startBackend({ rootDir, port }) {
 test('backend /api/health contract + request id header', async () => {
   // Derive repo root from this test file location (more robust than process.cwd()).
   const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
-  const port = await pickPort()
 
   const entry = path.join(rootDir, 'backend', 'start.js')
   assert.ok(fs.existsSync(entry), `expected backend entry to exist at ${entry}`)
 
-  const proc = await startBackend({ rootDir, port })
+  const started = await startBackend({ rootDir })
+  const proc = started.proc
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/health`)
+    assert.ok(Number.isFinite(started.port) && started.port > 0, `expected backend to pick a real port, got ${started.port}`)
+    const res = await fetch(`http://127.0.0.1:${started.port}/api/health`)
     assert.equal(res.ok, true)
 
     const requestId = res.headers.get('x-request-id')
@@ -168,5 +165,8 @@ test('backend /api/health contract + request id header', async () => {
     )
   } finally {
     await stopProcess(proc)
+    try {
+      fs.rmSync(started.tempDir, { recursive: true, force: true })
+    } catch {}
   }
 })

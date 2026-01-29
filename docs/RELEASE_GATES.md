@@ -73,6 +73,19 @@ Expected:
 - Upload returns `avatar_url` under `/uploads/`.
 - `avatar_download_url` returns 200 and an `image/*` content-type.
 
+### Gate 4B — Upload persistence across restart (no “it worked until redeploy”)
+
+- **Goal**: uploaded avatar survives a server restart when `UPLOADS_DIR` is persistent.
+- **Command**:
+
+```bash
+node --test tests/unit/avatar-upload-persistence-restart.test.mjs
+```
+
+Expected:
+- Upload returns 200.
+- After restart (same DB + same `UPLOADS_DIR`), avatar download still returns 200 with `image/*`.
+
 ---
 
 ## Gate 5 — Discover Grants invariant (non-zero results + multiple sources)
@@ -119,4 +132,12 @@ npm run e2e
 Expected:
 - Discover Grants page renders results.
 - “Included X of Y found” counts are non-zero when opportunities exist.
+
+---
+
+## Notes — CI determinism (Rollup native optional deps)
+
+If CI fails with `Cannot find module '@rollup/rollup-linux-x64-gnu'` during `vite build`:
+- CI runs a guard in `scripts/ensure-rollup-native.mjs` as part of `npm run release:gates`.
+- GitHub Actions installs with optional deps enabled to keep builds deterministic.
 
