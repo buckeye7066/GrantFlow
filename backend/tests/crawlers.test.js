@@ -15,7 +15,7 @@ describe("crawlers", () => {
     const loaded = await getAppAndDb()
     app = loaded.app
     db = loaded.db
-  })
+  }, 60_000)
 
   beforeEach(() => {
     resetDb(db)
