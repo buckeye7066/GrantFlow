@@ -17,6 +17,8 @@
 
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
+import { existsSync } from 'node:fs'
+import path from 'node:path'
 
 const require = createRequire(import.meta.url)
 
@@ -31,6 +33,14 @@ function resolveRollupNativePackage() {
 }
 
 function hasModule(spec) {
+  // Prefer a filesystem check first: in some CI environments `require.resolve()`
+  // can behave unexpectedly after an in-process `npm i`.
+  try {
+    const pkgPath = path.join(process.cwd(), 'node_modules', ...String(spec).split('/'), 'package.json')
+    if (existsSync(pkgPath)) return true
+  } catch {
+    // ignore
+  }
   try {
     require.resolve(spec)
     return true
