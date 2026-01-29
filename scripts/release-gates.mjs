@@ -39,6 +39,9 @@ function run(cmd, args, { label } = {}) {
 }
 
 async function main() {
+  // Gate 0: CI/workstation guard — ensure Rollup native optional dep is present (npm optional-deps can be flaky on Linux CI).
+  await run('node', ['scripts/ensure-rollup-native.mjs'], { label: 'rollup-native' })
+
   // Gate 1: baseline quality + build
   await run(npmBin(), ['test'], { label: 'quality+build' })
 
