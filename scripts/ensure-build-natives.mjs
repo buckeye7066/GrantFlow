@@ -90,7 +90,13 @@ async function main() {
     return
   }
 
-  runNpmInstall(missing)
+  // IMPORTANT:
+  // Even if only ONE native package is missing right now, running `npm i --no-save <one>`
+  // can cause npm to prune the other as "extraneous" (because it's not in package.json),
+  // recreating the exact failure we're trying to prevent.
+  // So when we need to intervene at all, install/refresh ALL required native packages
+  // in a single npm command.
+  runNpmInstall(pkgs)
 
   const stillMissing = pkgs.filter((p) => !hasModule(p))
   if (stillMissing.length > 0) {
