@@ -92,8 +92,13 @@ button:focus-visible {
     --secondary: 0 0% 96.1%;
     --secondary-foreground: 0 0% 9%;
     --muted: 0 0% 96.1%;
-    /* Increase default contrast for muted text on white backgrounds */
-    --muted-foreground: 0 0% 32%;
+    /*
+      Contrast hardening (WCAG 2.1 AA):
+      - No informational text may rely on low-contrast "muted" colors on light backgrounds.
+      - Avoid opacity-based text utilities (e.g. text-foreground/70, text-sidebar-foreground/70) for content.
+      - Defaults must remain readable without per-component overrides.
+    */
+    --muted-foreground: 0 0% 20%;
     --accent: 0 0% 96.1%;
     --accent-foreground: 0 0% 9%;
     --destructive: 0 84.2% 60.2%;
@@ -108,7 +113,7 @@ button:focus-visible {
     --chart-5: 27 87% 67%;
     --radius: 0.5rem;
     --sidebar-background: 0 0% 98%;
-    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-foreground: 0 0% 3.9%;
     --sidebar-primary: 240 5.9% 10%;
     --sidebar-primary-foreground: 0 0% 98%;
     --sidebar-accent: 240 4.8% 95.9%;
@@ -175,6 +180,11 @@ button:focus-visible {
   :root:not(.dark) :is(.placeholder\\:text-slate-400, .placeholder\\:text-slate-500, .placeholder\\:text-slate-600, .placeholder\\:text-gray-400, .placeholder\\:text-gray-500, .placeholder\\:text-gray-600) {
     --tw-placeholder-opacity: 1 !important;
     color: rgb(71 85 105) !important; /* slate-600 */
+  }
+
+  /* `text-muted-foreground` must remain readable on light backgrounds (no low-contrast "subtle" text). */
+  :root:not(.dark) :is(.text-muted-foreground) {
+    color: hsl(var(--foreground)) !important;
   }
 
   .high-contrast :is(.text-slate-400, .text-slate-500, .text-slate-600, .text-gray-400, .text-gray-500, .text-gray-600, .text-muted-foreground) {

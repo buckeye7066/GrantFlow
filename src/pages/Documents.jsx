@@ -404,7 +404,7 @@ const latestDuration = describeDuration(latestEnrichmentJob)
                     {latestEnrichmentJob.status.replace(/_/g, " ")}
                   </Badge>
                   {latestDuration ? (
-                    <span className="text-[11px] font-medium text-blue-700/80">Duration {latestDuration}</span>
+                    <span className="text-[11px] font-medium text-blue-700">Duration {latestDuration}</span>
                   ) : null}
                   <Button variant="outline" size="xs" onClick={() => setSelectedJob(latestEnrichmentJob)}>
                     View details
@@ -424,7 +424,7 @@ const latestDuration = describeDuration(latestEnrichmentJob)
                         {entry.updated_fields?.length
                           ? ` • ${entry.updated_fields.join(", ")}`
                           : null}
-                        {entry.notes ? <span className="block text-blue-700/80">{entry.notes}</span> : null}
+                        {entry.notes ? <span className="block text-blue-700">{entry.notes}</span> : null}
                       </li>
                     ))}
                   </ul>
@@ -450,7 +450,7 @@ const latestDuration = describeDuration(latestEnrichmentJob)
                         >
                           <div className="flex flex-col gap-1">
                             <span className="font-mono text-[11px] text-blue-600">{job.id.slice(0, 8)}…</span>
-                            <span className="text-blue-700/80">
+                            <span className="text-blue-700">
                               {describeTimestamp(job.completed_at) ||
                                 describeTimestamp(job.started_at) ||
                                 describeTimestamp(job.created_at) ||
@@ -460,10 +460,10 @@ const latestDuration = describeDuration(latestEnrichmentJob)
                           <div className="flex flex-col items-end gap-1 text-right">
                             <Badge className={statusToBadgeClass(job.status)}>{job.status.replace(/_/g, " ")}</Badge>
                             {jobDuration ? (
-                              <span className="text-[11px] text-blue-700/80">Duration {jobDuration}</span>
+                              <span className="text-[11px] text-blue-700">Duration {jobDuration}</span>
                             ) : null}
                             {Array.isArray(job.result_meta?.sections) && job.result_meta.sections.length > 0 ? (
-                              <span className="text-[11px] text-blue-700/80">
+                              <span className="text-[11px] text-blue-700">
                                 {job.result_meta.sections.length} section
                                 {job.result_meta.sections.length === 1 ? "" : "s"} updated
                               </span>

@@ -31,8 +31,8 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
       <CardHeader className="pb-4">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <CardTitle className="text-slate-900 text-lg font-semibold">Pipeline Focus</CardTitle>
-            <p className="mt-1 text-sm text-slate-500">
+            <CardTitle className="text-foreground text-lg font-semibold">Pipeline Focus</CardTitle>
+            <p className="mt-1 text-sm text-foreground">
               {hasError
                 ? "Unable to sync pipeline metrics. Showing default workflow guidance."
                 : isLoading
@@ -61,8 +61,8 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
                   <status.icon className="h-5 w-5" />
                 </span>
                 <div className="flex flex-col">
-                  <span className="text-xs uppercase tracking-wide text-slate-500">{status.label}</span>
-                  <span className="text-lg font-semibold text-slate-900">
+                  <span className="text-xs uppercase tracking-wide text-foreground">{status.label}</span>
+                  <span className="text-lg font-semibold text-foreground">
                     {isLoading ? "…" : count}
                   </span>
                 </div>
@@ -71,8 +71,8 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
           })}
         </div>
         <div className="rounded-xl border border-dashed border-slate-300 p-4 bg-slate-50/70">
-          <h3 className="text-sm font-semibold text-slate-800 mb-2">Next recommended actions</h3>
-          <ul className="space-y-2 text-sm text-slate-600">
+          <h3 className="text-sm font-semibold text-foreground mb-2">Next recommended actions</h3>
+          <ul className="space-y-2 text-sm text-foreground">
             <li>• Review drafts due this week and assign final reviewers.</li>
             <li>• Nudge partners on outstanding documents for compliance checks.</li>
             <li>• Identify upcoming submissions to prep budgets and attachments.</li>
