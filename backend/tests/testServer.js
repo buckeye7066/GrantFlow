@@ -9,12 +9,18 @@ export async function getAppAndDb() {
   if (cached) return cached
 
   process.env.NODE_ENV = "test"
+  // Keep backend boot fast + deterministic for Vitest integration tests.
+  // Without this, importing `backend/server.js` can take long enough that Vitest's
+  // default hook timeout (10s) trips intermittently.
+  process.env.SMOKE_MODE = "true"
   process.env.PORT = "0"
   process.env.DB_AUTO_MIGRATE = "true"
   process.env.ADMIN_TOKEN = TEST_ADMIN_TOKEN
   process.env.ANYA_ADMIN_TOKEN = TEST_ADMIN_TOKEN
   process.env.SQLITE_DB_PATH = ":memory:"
   process.env.CRAWLER_DATA_DIR = path.join(process.cwd(), "backend", "tests", "fixtures", "crawlers")
+  process.env.ANYA_AUTONOMOUS_ENABLED = "false"
+  process.env.NATIONAL_PROGRAMS_CRAWLER_ENABLED = "false"
 
   const mod = await import("../server.js")
   const dbMod = await import("../db/index.js")

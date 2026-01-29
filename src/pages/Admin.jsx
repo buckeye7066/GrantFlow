@@ -9,6 +9,7 @@ import AdminAnyaConsole from '@/components/admin/AdminAnyaConsole';
 import AdminServiceApplications from '@/components/admin/AdminServiceApplications';
 import AdminLoginNotifications from '@/components/admin/AdminLoginNotifications.jsx';
 import AdminProfileDedupe from '@/components/admin/AdminProfileDedupe.jsx';
+import AdminProfileIntegrity from '@/components/admin/AdminProfileIntegrity.jsx';
 import AdminKnowledgeBase from '@/components/admin/AdminKnowledgeBase.jsx'
 import AdminServiceCatalog from '@/components/admin/AdminServiceCatalog.jsx'
 import Billing from '@/pages/Billing';
@@ -101,7 +102,10 @@ export default function Admin() {
           </TabsContent>
 
           <TabsContent value="profiles" className="mt-6">
-            <AdminProfileDedupe />
+            <div className="space-y-6">
+              <AdminProfileIntegrity />
+              <AdminProfileDedupe />
+            </div>
           </TabsContent>
 
           <TabsContent value="diagnostics" className="mt-6">
