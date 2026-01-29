@@ -112,6 +112,11 @@ const PORT = ENV?.PORT ?? process.env.PORT ?? 8080;
 // --- Upload storage health (single source of truth) ---
 const isProdEnv = String(process.env.NODE_ENV || '').toLowerCase() === 'production'
 const allowEphemeralUploads = String(process.env.ALLOW_EPHEMERAL_UPLOADS || '').toLowerCase() === 'true'
+const isRailwayRuntime = Boolean(
+  String(process.env.RAILWAY_ENVIRONMENT || '').trim() ||
+    String(process.env.RAILWAY_PROJECT_ID || '').trim() ||
+    String(process.env.RAILWAY_SERVICE_ID || '').trim(),
+)
 let storageStatus = {
   uploads_dir: uploadsDir,
   legacy_uploads_dir: legacyUploadsDir,
@@ -135,8 +140,13 @@ try {
     const missingEnv = !String(process.env.UPLOADS_DIR || '').trim()
     const persistentOk = storageStatus.likely_persistent === true
     const writableOk = storageStatus.writable === true
+    // Railway production deployments may temporarily lack a volume mount (or a configured UPLOADS_DIR),
+    // which would otherwise crash the process and fail healthchecks. If UPLOADS_DIR is missing entirely
+    // we allow a degraded boot on Railway so the service can still start; operators can then attach a
+    // volume and set UPLOADS_DIR without getting stuck in a deploy-fail loop.
+    const allowImplicitEphemeralOnRailway = missingEnv && isRailwayRuntime && !allowEphemeralUploads
 
-    if ((missingEnv || !persistentOk || !writableOk) && !allowEphemeralUploads) {
+    if ((missingEnv || !persistentOk || !writableOk) && !allowEphemeralUploads && !allowImplicitEphemeralOnRailway) {
       const reason = missingEnv
         ? 'UPLOADS_DIR is required in production'
         : !persistentOk
@@ -158,6 +168,8 @@ try {
       console.error('[storage] DEGRADED upload storage', {
         uploadsDir,
         missingEnv,
+        allowImplicitEphemeralOnRailway,
+        isRailwayRuntime,
         likely_persistent: storageStatus.likely_persistent,
         writable: storageStatus.writable,
         last_error: storageStatus.last_error,
