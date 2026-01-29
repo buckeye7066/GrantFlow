@@ -521,14 +521,27 @@ export default function ProfileOverview({
     return words.slice(0, 2).map((word) => word.charAt(0).toUpperCase()).join("")
   }, [profile.display_name])
 
+  const avatarCacheBuster = useMemo(() => {
+    // Prefer avatar_url (it changes per upload), then updated_at as a stable fallback.
+    const raw = profile.avatar_url || profile.updated_at || ""
+    const trimmed = String(raw || "").trim()
+    return trimmed ? encodeURIComponent(trimmed) : null
+  }, [profile.avatar_url, profile.updated_at])
+
   // Compute avatar URL, handling protected API endpoints
   const avatarUrl = useMemo(() => {
-    if (profile.avatar_download_url) return profile.avatar_download_url
+    if (profile.avatar_download_url) {
+      // IMPORTANT: avatar_download_url is stable across uploads, so add a cache-buster so the UI
+      // refetches after a successful upload (otherwise users see a "stuck" avatar / broken image).
+      const base = String(profile.avatar_download_url)
+      return avatarCacheBuster ? `${base}${base.includes("?") ? "&" : "?"}v=${avatarCacheBuster}` : base
+    }
     if (profile.avatar_url && String(profile.avatar_url).includes('/uploads/')) {
-      return `/api/profiles/${profile.id}/avatar/download`
+      const base = `/api/profiles/${profile.id}/avatar/download`
+      return avatarCacheBuster ? `${base}?v=${avatarCacheBuster}` : base
     }
     return profile.avatar_url || null
-  }, [profile.avatar_download_url, profile.avatar_url, profile.id])
+  }, [profile.avatar_download_url, profile.avatar_url, profile.id, avatarCacheBuster])
   
   // Use authenticated avatar hook to handle protected API endpoints
   const { blobUrl: avatarSrc } = useAuthenticatedAvatar(avatarUrl)

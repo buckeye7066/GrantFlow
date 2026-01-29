@@ -660,34 +660,55 @@ router.post('/run', ensureAuth, async (req, res) => {
     
     const duration = Date.now() - startTime
     
+    const currentCandidates = candidates.filter((row) => isOpportunityCurrent(row))
+    const expiredExcluded = Math.max(0, candidates.length - currentCandidates.length)
+
     // Score all candidates using the deterministic engine (uses full sections/signals).
-    const scored = candidates
-      .filter((row) => isOpportunityCurrent(row))
-      .map((row) => {
-        const { score, reasons } = calculateMatchScore(profileContext, row)
-        return {
-          ...row,
-          match_score: score,
-          match_reasons: reasons,
-          // Normalize sponsor/title for UI
-          sponsor: row.sponsor ?? row.funder ?? null,
-        }
-      })
+    // CRITICAL INVARIANT:
+    // - Directory-style resources must survive filtering (they are entry points, not competitive matches).
+    // - When total_found > 0, do not return included === 0 unless this is a fatal error.
+    const scored = currentCandidates.map((row) => {
+      const { score, reasons } = calculateMatchScore(profileContext, row)
+      const isDirectory = isDirectoryResource(row)
+      const finalScore = isDirectory ? Math.max(Number(min_match_score), score) : score
+      const finalReasons = isDirectory
+        ? mergeReasons(reasons, [
+            `Directory resource (always included at ${Number(min_match_score)}%+ threshold)`,
+          ])
+        : reasons
+
+      return {
+        ...row,
+        match_score: finalScore,
+        match_reasons: finalReasons,
+        // Normalize sponsor/title for UI
+        sponsor: row.sponsor ?? row.funder ?? null,
+      }
+    })
 
     const totalFound = scored.length
 
     // Filter by minimum match score (default lowered; UI can adjust).
-    const filteredOpportunities = scored
-      .filter((opp) => typeof opp.match_score === 'number' && opp.match_score >= Number(min_match_score))
+    let filteredOpportunities = scored
+      .filter((opp) => {
+        if (isDirectoryResource(opp)) return true
+        return typeof opp.match_score === 'number' && opp.match_score >= Number(min_match_score)
+      })
       .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
       .slice(0, 50)
+    const initiallyIncludedCount = filteredOpportunities.length
 
     debug.used_db_fallback = true
-    debug.db = { candidates: candidates.length, returned: filteredOpportunities.length }
+    debug.db = {
+      candidates: candidates.length,
+      current: currentCandidates.length,
+      expired_excluded: expiredExcluded,
+      returned: filteredOpportunities.length,
+    }
 
     // Guardrail: if something is being found but everything is filtered out, include score diagnostics.
     // This is additive (does not change the existing response shape); the UI can ignore it.
-    if (filteredOpportunities.length === 0 && totalFound > 0) {
+    if (initiallyIncludedCount === 0 && totalFound > 0) {
       const scores = scored
         .map((o) => (typeof o?.match_score === 'number' ? o.match_score : null))
         .filter((v) => typeof v === 'number')
@@ -715,7 +736,24 @@ router.post('/run', ensureAuth, async (req, res) => {
         score_stats: { min: minScore, max: maxScore, avg: avgScore },
         top_5: topScores,
         primary_reason: primaryReason,
+        removed_summary: {
+          expired_excluded: expiredExcluded,
+          below_min_match_score: totalFound,
+          directory_present: scored.some((row) => isDirectoryResource(row)),
+        },
       }
+    }
+
+    // Guardrail: "0 results" is a failure state.
+    // If we scored anything but filtered everything away, fall back to returning the best-scoring options.
+    // This preserves the response shape while preventing "total_found > 0, included === 0".
+    if (initiallyIncludedCount === 0 && totalFound > 0) {
+      filteredOpportunities = scored
+        .filter((o) => typeof o?.match_score === 'number' || isDirectoryResource(o))
+        .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+        .slice(0, 50)
+      debug.db.returned = filteredOpportunities.length
+      debug.db.fallback_applied = filteredOpportunities.length > 0 ? true : undefined
     }
 
     // If live had *some* results, merge + dedupe by URL/title so users see real results first.

@@ -58,8 +58,8 @@ export default function UrgentDeadlinesCard({ urgentDeadlines }) {
       </CardHeader>
       <CardContent className="p-6">
         {urgentDeadlines.length === 0 ? (
-          <div className="text-center py-8 text-slate-500">
-            <CalendarIcon className="w-12 h-12 mx-auto mb-3 text-slate-300" />
+          <div className="text-center py-8 text-foreground">
+            <CalendarIcon className="w-12 h-12 mx-auto mb-3 text-slate-700" />
             <p>No urgent deadlines</p>
           </div>
         ) : (
@@ -73,7 +73,7 @@ export default function UrgentDeadlinesCard({ urgentDeadlines }) {
                   <div className="flex items-start justify-between p-4 bg-slate-50 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer">
                     <div className="flex-1">
                       <h4 className="font-semibold text-slate-900">{grant.title}</h4>
-                      <p className="text-sm text-slate-600 mt-1">{grant.funder}</p>
+                      <p className="text-sm text-foreground mt-1">{grant.funder}</p>
                       <div className="flex gap-2 mt-2">
                         <Badge variant="outline" className={deadlineInfo.color}>
                           {deadlineInfo.text}
