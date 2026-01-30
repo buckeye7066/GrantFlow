@@ -484,7 +484,7 @@ export default function ItemFunding() {
             <h1 className="text-3xl md:text-4xl font-bold text-slate-900">Find funding for a specific item</h1>
             <p className="text-sm md:text-base text-slate-600 max-w-3xl">
               Search grants, scholarships, endowments, and local programs that underwrite tangible needs—vehicles, equipment,
-              technology, lab gear, adaptive devices. Results exclude loans or matching requirements automatically.
+              technology, lab gear, adaptive devices. By default we hide loans and match-required programs; you can toggle them on to review terms.
             </p>
           </div>
           <div className="rounded-2xl border border-emerald-200 bg-emerald-50/80 p-4 shadow-sm space-y-2 text-sm text-emerald-800 max-w-md">
@@ -493,7 +493,7 @@ export default function ItemFunding() {
               Grant-only guardrails
             </p>
             <ul className="list-disc list-inside space-y-1 text-xs">
-              <li>Loans, lease-to-own offers, and match-required programs are removed before results reach the catalog.</li>
+              <li>Loans, lease-to-own offers, and match-required programs are hidden by default (toggle “Show match/loan results” to review them).</li>
               <li>Local crawler searches within 50 miles (or the student&apos;s campus ZIP) for locality-specific aid.</li>
               <li>Scholarship and Geo Crawl augment the list with verified national gift-based funding.</li>
             </ul>
@@ -583,7 +583,7 @@ export default function ItemFunding() {
               {submittedItem ? (
                 <p className="text-xs text-slate-500">
                   Showing {totalResults} grant{totalResults === 1 ? "" : "s"} for{" "}
-                  <span className="font-semibold text-slate-700">{submittedItem}</span> (no match funds or repayment required)
+                  <span className="font-semibold text-slate-700">{submittedItem}</span>
                 </p>
               ) : null}
             </div>
@@ -659,7 +659,7 @@ export default function ItemFunding() {
             <h3 className="text-xl font-semibold text-slate-900">Search for a specific item or equipment</h3>
             <p className="text-sm text-slate-600">
               Enter exactly what you’re looking for and we’ll surface grants, endowments, and programs that can fund it – no
-              loans, no matching requirements.
+              loans by default, and match-required programs are flagged and hidden unless you opt in.
             </p>
           </CardContent>
         </Card>

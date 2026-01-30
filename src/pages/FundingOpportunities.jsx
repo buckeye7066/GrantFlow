@@ -974,8 +974,8 @@ export default function FundingOpportunities() {
   const autoDiscoveryStatus = autoDiscoveryQuery.data ?? null
   const complianceMessage =
     effectiveCompliance === "grant_only"
-      ? "Grant funds only — excluding loans and match requirements."
-      : "Including opportunities that may require matching funds or repayment."
+      ? "Grant funds only — loans excluded; opportunities with match/repayment terms are flagged for review."
+      : "Including loans and opportunities that may require matching funds or repayment."
 
   const clearGeoRunFilter = () => {
     setFilters((prev) => ({ ...prev, geo_run_id: "" }))
@@ -1411,7 +1411,7 @@ export default function FundingOpportunities() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="grant_only">Grant funds only</SelectItem>
-                    <SelectItem value="all">Include review-required</SelectItem>
+                  <SelectItem value="all">Include loans & review-required</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
