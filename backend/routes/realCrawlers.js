@@ -16,7 +16,7 @@ import { crawlStudentGrants } from '../services/crawlers/studentGrantsCrawler.js
 import { crawlHealthResources } from '../services/crawlers/healthResourcesCrawler.js'
 import { crawlSpecialNeeds } from '../services/crawlers/specialNeedsCrawler.js'
 import { crawlItemFunding } from '../services/crawlers/itemFundingCrawler.js'
-import { crawlECFBenefits } from '../services/crawlers/ecfBenefitsCrawler.js'
+import { crawlECFBenefits, evaluateEcfUnlockEligibility } from '../services/crawlers/ecfBenefitsCrawler.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
 
@@ -44,6 +44,8 @@ const HARD_FILTER_MATCH_PERCENTAGE = String(process.env.HARD_FILTER_MATCH_PERCEN
 // Token narrowing is a performance optimization but can incorrectly eliminate valid opportunities
 // (e.g., rows with sparse descriptions/keywords). Default OFF to avoid hard exclusions.
 const ENABLE_TOKEN_NARROWING = String(process.env.ENABLE_TOKEN_NARROWING ?? '').toLowerCase() === 'true'
+// Reversible: allow temporarily disabling ECF eligibility gating if needed.
+const DISABLE_ECF_UNLOCK_GATING = String(process.env.DISABLE_ECF_UNLOCK_GATING ?? '').toLowerCase() === 'true'
 
 function normalizeString(value) {
   if (typeof value !== 'string') return ''
@@ -560,6 +562,34 @@ router.post('/run', ensureAuth, async (req, res) => {
     const profileContextIncomplete = sectionCount === 0 || coveragePct < 1
     
     console.log(`[RealCrawlers] Running ${crawler_type} for profile ${profile_id || 'custom'}`)
+
+    // Hard lock: ECF crawler only runs for ECF CHOICES participants or their caretakers/providers.
+    if (crawler_type === 'ecf_benefits' && !DISABLE_ECF_UNLOCK_GATING) {
+      const ecf = evaluateEcfUnlockEligibility(profile)
+      if (!ecf.eligibleIndividual && !ecf.eligibleSupport) {
+        console.warn('[RealCrawlers] ECF crawler locked for profile', {
+          profile_id,
+          eligibleIndividual: ecf.eligibleIndividual,
+          eligibleSupport: ecf.eligibleSupport,
+          supportType: ecf.supportType,
+        })
+        return res.status(200).json({
+          success: false,
+          error: 'ECF_ELIGIBILITY',
+          message:
+            'ECF CHOICES Benefits crawler is only available for ECF CHOICES participants or their caretakers/providers.',
+          crawler_type,
+          count: 0,
+          total_found: 0,
+          filtered_count: 0,
+          min_match_score,
+          opportunities: [],
+          debug: {
+            ecf_unlock: ecf,
+          },
+        })
+      }
+    }
     
     // 1) Try live crawler first (real web sources), then fall back to DB matching.
     const startTime = Date.now()
@@ -919,6 +949,20 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
     try {
       const profileContext = profileContextBase
       const startAt = Date.now()
+
+      if (crawlerType === 'ecf_benefits' && !DISABLE_ECF_UNLOCK_GATING) {
+        const ecf = evaluateEcfUnlockEligibility(profile)
+        if (!ecf.eligibleIndividual && !ecf.eligibleSupport) {
+          failed.push({
+            crawler: crawlerType,
+            error:
+              'ECF CHOICES Benefits crawler is only available for ECF CHOICES participants or their caretakers/providers.',
+            status: 403,
+            debug: { ecf_unlock: ecf },
+          })
+          continue
+        }
+      }
 
       // Live-first: mirror /run behavior (real web sources), then fall back to DB matching.
       // This prevents DB-only limitations (e.g., older ingested rows, deadline formatting) from collapsing counts.

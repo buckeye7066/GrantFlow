@@ -42,20 +42,22 @@ const ECF_SOURCES = {
 export async function crawlECFBenefits(profile, options = {}) {
   const results = []
   
-  // Check if profile is ECF-eligible
-  const isECFEligible = checkECFEligibility(profile)
-  const isProvider = checkIfProvider(profile)
+  const { eligibleIndividual, eligibleSupport, supportType } = evaluateEcfUnlockEligibility(profile)
   
-  if (!isECFEligible && !isProvider) {
-    console.log('[ECFBenefitsCrawler] Profile not ECF-eligible or provider')
+  if (!eligibleIndividual && !eligibleSupport) {
+    console.log('[ECFBenefitsCrawler] Locked: profile not eligible for ECF CHOICES (participant/caregiver/provider)')
     return results
   }
   
   console.log(`[ECFBenefitsCrawler] Starting ECF benefits search`)
-  console.log(`[ECFBenefitsCrawler] Individual eligible: ${isECFEligible}, Provider: ${isProvider}`)
+  console.log(
+    `[ECFBenefitsCrawler] Individual eligible: ${eligibleIndividual}, Support eligible: ${eligibleSupport}${
+      eligibleSupport ? ` (${supportType})` : ''
+    }`,
+  )
   
   // Search individual benefits if eligible
-  if (isECFEligible) {
+  if (eligibleIndividual) {
     for (const source of ECF_SOURCES.individual) {
       try {
         const benefits = await searchIndividualBenefits(source, profile)
@@ -82,7 +84,7 @@ export async function crawlECFBenefits(profile, options = {}) {
   }
   
   // Search family/provider support if provider
-  if (isProvider) {
+  if (eligibleSupport) {
     for (const source of ECF_SOURCES.family_support) {
       try {
         const benefits = await searchFamilySupportBenefits(source, profile)
@@ -135,7 +137,7 @@ function keywordIncludes(signals, fragment) {
   return false
 }
 
-function checkECFEligibility(profile) {
+export function checkECFEligibility(profile) {
   // Use full profile context (sections + signals) first; fall back to legacy top-level fields.
   const signals = profile?.signals
   const sections = profile?.sections ?? {}
@@ -175,10 +177,16 @@ function checkECFEligibility(profile) {
 
   const explicitlyEligible = profile?.ecf_participant === true
 
-  return Boolean(explicitlyEligible || mentionsEcf || (hasMedicaid && hasIdDd))
+  const waiver =
+    profile?.medicaid_waiver_program ??
+    sections?.government_assistance?.medicaid_waiver_program ??
+    null
+  const hasWaiverFlag = String(waiver || '').toLowerCase() === 'ecf_choices'
+
+  return Boolean(explicitlyEligible || hasWaiverFlag || mentionsEcf || (hasMedicaid && hasIdDd))
 }
 
-function checkIfProvider(profile) {
+export function checkIfProvider(profile) {
   const signals = profile?.signals
   const sections = profile?.sections ?? {}
   const state = signals?.location?.state ?? profile?.state ?? null
@@ -217,6 +225,53 @@ function checkIfProvider(profile) {
       services.some((s) => String(s || '').toLowerCase().includes('residential')) ||
       strongProviderKeywords,
   )
+}
+
+export function checkIfCaretaker(profile) {
+  const signals = profile?.signals
+  const sections = profile?.sections ?? {}
+  const state = signals?.location?.state ?? profile?.state ?? null
+
+  // ECF CHOICES is TN-specific; don't classify profiles outside TN.
+  if (state && String(state).toUpperCase() !== 'TN') {
+    return false
+  }
+  if (!state) {
+    const tnMention = keywordIncludes(signals, 'tennessee') || hasKeyword(signals, 'tn')
+    if (!tnMention) return false
+  }
+
+  const family = sections?.family_life ?? {}
+  const caregiverFlag = family.family_caregiver === true || family.caregiver === true || profile?.caregiver === true
+  const caregiverKeyword = hasKeyword(signals, 'caregiver') || keywordIncludes(signals, 'caregiver')
+
+  // Require at least one ECF-specific hint so we don't unlock this crawler for generic caregivers.
+  const waiver =
+    profile?.medicaid_waiver_program ??
+    sections?.government_assistance?.medicaid_waiver_program ??
+    null
+  const hasWaiverFlag = String(waiver || '').toLowerCase() === 'ecf_choices'
+  const mentionsEcf =
+    signals?.keywordSet?.has?.('ecf') ||
+    keywordIncludes(signals, 'employment and community first') ||
+    keywordIncludes(signals, 'ecf choices') ||
+    (Array.isArray(profile?.tags) ? profile.tags : []).some((t) => String(t || '').toLowerCase().includes('ecf'))
+
+  return Boolean((caregiverFlag || caregiverKeyword) && (hasWaiverFlag || mentionsEcf))
+}
+
+export function evaluateEcfUnlockEligibility(profile) {
+  const eligibleIndividual = checkECFEligibility(profile)
+  const eligibleProvider = checkIfProvider(profile)
+  const eligibleCaretaker = checkIfCaretaker(profile)
+  const eligibleSupport = Boolean(eligibleProvider || eligibleCaretaker)
+  const supportType = eligibleProvider ? 'provider' : eligibleCaretaker ? 'caretaker' : null
+
+  return {
+    eligibleIndividual,
+    eligibleSupport,
+    supportType,
+  }
 }
 
 async function searchIndividualBenefits(source, profile) {

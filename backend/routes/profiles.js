@@ -226,15 +226,66 @@ async function enrichProfileWithSummary(db, profile) {
   profile.sections_complete = sections?.total ?? 0
   
   // Get pipeline funds total
-  const pipelineFunds = await db
-    .prepare(`
-      SELECT COALESCE(SUM(g.amount_requested), 0) as total
-      FROM grants g
-      WHERE g.organization_id = ?
-      AND g.status IN ('interested', 'drafting', 'app_prep', 'revision', 'submitted', 'under_review')
-    `)
-    .get(profile.organization_id)
-  profile.pipeline_funds_total = pipelineFunds?.total ?? 0
+  // Prefer profile-scoped totals when grants.profile_id exists; fall back to organization totals.
+  // This keeps the ProfileCard "Pipeline $X" consistent with the Pipeline page when a user switches profiles.
+  let pipelineTotal = 0
+  const activeStatuses = [
+    'discovery',
+    'discovered',
+    'interested',
+    'auto_applied',
+    'drafting',
+    'app_prep',
+    'application_prep',
+    'revision',
+    'portal',
+    'submitted',
+    'pending_review',
+    'under_review',
+    'follow_up',
+    'report',
+  ]
+  try {
+    const placeholders = activeStatuses.map(() => '?').join(',')
+    const row = await db
+      .prepare(
+        `
+        SELECT COALESCE(SUM(g.amount_requested), 0) as total
+        FROM grants g
+        WHERE g.profile_id = ?
+          AND g.status IN (${placeholders})
+      `,
+      )
+      .get(profile.id, ...activeStatuses)
+    pipelineTotal = row?.total ?? 0
+  } catch (error) {
+    // Older DBs may not have grants.profile_id yet; fall back.
+    const msg = error?.message || String(error)
+    if (!/profile_id/i.test(msg)) {
+      console.warn('[profiles] pipeline summary query failed; falling back to org total:', msg)
+    }
+    try {
+      const placeholders = activeStatuses.map(() => '?').join(',')
+      const row = await db
+        .prepare(
+          `
+          SELECT COALESCE(SUM(g.amount_requested), 0) as total
+          FROM grants g
+          WHERE g.organization_id = ?
+            AND g.status IN (${placeholders})
+        `,
+        )
+        .get(profile.organization_id, ...activeStatuses)
+      pipelineTotal = row?.total ?? 0
+    } catch (fallbackError) {
+      console.warn(
+        '[profiles] pipeline org summary query failed (returning 0):',
+        fallbackError?.message || String(fallbackError),
+      )
+      pipelineTotal = 0
+    }
+  }
+  profile.pipeline_funds_total = pipelineTotal
   
   // Get document count
   const docs = await db

@@ -21,9 +21,10 @@ import { useToast } from "@/components/ui/use-toast";
 import { useFilteredGrants } from "@/components/hooks/useFilteredGrants";
 import { isGrantExpired } from "@/components/shared/grantUtils";
 import { countBy } from "lodash";
+import { listProfiles } from "@/api/profiles";
 
 export default function Pipeline() {
-  const [selectedOrgId, setSelectedOrgId] = useState("all");
+  const [selectedProfileId, setSelectedProfileId] = useState("all");
   const [grantToDelete, setGrantToDelete] = useState(null);
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
   const [filters, setFilters] = useState({
@@ -43,32 +44,76 @@ export default function Pipeline() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Initialize selectedOrgId from URL
-  useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    const orgId = params.get('organization_id');
-    if (orgId) {
-      setSelectedOrgId(orgId);
-    }
-  }, [location.search]);
+  const profilesQuery = useQuery({
+    queryKey: ['profiles', 'pipeline-selector'],
+    queryFn: () => listProfiles({ summary: true }),
+  })
+  const profiles = Array.isArray(profilesQuery.data) ? profilesQuery.data : []
 
-  // Sync selectedOrgId to URL
+  const selectedProfile = useMemo(() => {
+    if (!selectedProfileId || selectedProfileId === 'all') return null
+    return profiles.find((p) => p.id === selectedProfileId) ?? null
+  }, [profiles, selectedProfileId])
+
+  const selectedProfileOrgId = selectedProfile?.organization_id ?? null
+
+  // Initialize selectedProfileId from URL.
+  // Back-compat: if older links passed organization_id, try mapping it to a profile id.
   useEffect(() => {
     const params = new URLSearchParams(location.search);
-    const currentOrgId = params.get('organization_id');
-    
-    if (selectedOrgId !== "all" && selectedOrgId !== currentOrgId) {
-      params.set('organization_id', selectedOrgId);
-      navigate(`?${params.toString()}`, { replace: true });
-    } else if (selectedOrgId === "all" && currentOrgId) {
-      params.delete('organization_id');
-      navigate(`?${params.toString()}`, { replace: true });
+    const profileId = params.get('profile_id');
+    const legacyOrgId = params.get('organization_id');
+
+    if (profileId) {
+      setSelectedProfileId(profileId);
+      return
     }
-  }, [selectedOrgId, navigate, location.search]);
+
+    if (legacyOrgId && profiles.length > 0) {
+      const mapped =
+        profiles.find((p) => p.organization_id === legacyOrgId) ??
+        profiles.find((p) => p.id === legacyOrgId) ??
+        null
+      if (mapped?.id) {
+        setSelectedProfileId(mapped.id)
+      }
+    }
+  }, [location.search, profiles]);
+
+  // Keep active profile in sync so API requests return the selected profile's pipeline.
+  useEffect(() => {
+    if (selectedProfileId && selectedProfileId !== 'all') {
+      base44.setActiveProfileId?.(String(selectedProfileId))
+    } else {
+      base44.setActiveProfileId?.(null)
+    }
+  }, [selectedProfileId])
+
+  // Sync selectedProfileId to URL (canonical param: profile_id).
+  // Also remove legacy organization_id param to avoid future confusion.
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const currentProfileId = params.get('profile_id')
+
+    if (selectedProfileId !== 'all' && selectedProfileId !== currentProfileId) {
+      params.set('profile_id', selectedProfileId)
+      params.delete('organization_id')
+      navigate(`?${params.toString()}`, { replace: true })
+    } else if (selectedProfileId === 'all' && currentProfileId) {
+      params.delete('profile_id')
+      params.delete('organization_id')
+      navigate(`?${params.toString()}`, { replace: true })
+    }
+  }, [selectedProfileId, navigate, location.search]);
 
   const { data: grants = [], isLoading: isLoadingGrants } = useQuery({
-    queryKey: ['grants'],
-    queryFn: () => base44.entities.Grant.list('-created_date'),
+    queryKey: ['grants', 'pipeline', selectedProfileId],
+    queryFn: () =>
+      base44.entities.Grant.list(
+        '-created_date',
+        2000,
+        selectedProfileId && selectedProfileId !== 'all' ? { profile_id: selectedProfileId } : {},
+      ),
     initialData: [],
   });
 
@@ -138,7 +183,17 @@ export default function Pipeline() {
   }, [grants]);
 
   // Use custom hook for filtering
-  const filteredGrants = useFilteredGrants(grants, filters, selectedOrgId);
+  const scopedGrants = useMemo(() => {
+    if (!selectedProfileId || selectedProfileId === 'all') return grants
+    return (Array.isArray(grants) ? grants : []).filter((g) => {
+      // Prefer profile_id when present; fall back to org_id for older rows.
+      if (g?.profile_id) return String(g.profile_id) === String(selectedProfileId)
+      if (selectedProfileOrgId) return String(g?.organization_id || '') === String(selectedProfileOrgId)
+      return false
+    })
+  }, [grants, selectedProfileId, selectedProfileOrgId])
+
+  const filteredGrants = useFilteredGrants(scopedGrants, filters, 'all');
 
   // Get all expired grants in "discovered" or "interested" status
   const expiredDiscoveredGrants = useMemo(() => {
@@ -192,7 +247,7 @@ export default function Pipeline() {
                           filters.tags.length > 0 ||
                           filters.hideExpired ||
                           filters.showOnlyExpired ||
-                          selectedOrgId !== "all";
+                          selectedProfileId !== "all";
 
   return (
     <div className="p-6 md:p-8 space-y-6">
@@ -202,19 +257,21 @@ export default function Pipeline() {
             <div>
               <h1 className="text-3xl font-bold text-slate-900">Master Grant Pipeline</h1>
               <p className="text-slate-600 mt-2">
-                Track all your grants across every profile • {filteredGrants.length} of {grants.length} grants
+                Track all your grants across every profile • {filteredGrants.length} of {scopedGrants.length} grants
               </p>
             </div>
             <div className="flex items-center gap-2">
               <Filter className="w-4 h-4 text-slate-500" />
-              <Select value={selectedOrgId} onValueChange={setSelectedOrgId}>
+              <Select value={selectedProfileId} onValueChange={setSelectedProfileId}>
                 <SelectTrigger className="w-56">
                   <SelectValue placeholder="Filter by profile..." />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Organizations & Profiles</SelectItem>
-                  {organizations.map(org => (
-                    <SelectItem key={org.id} value={org.id}>{org.name}</SelectItem>
+                  <SelectItem value="all">All profiles</SelectItem>
+                  {profiles.map((profile) => (
+                    <SelectItem key={profile.id} value={profile.id}>
+                      {profile.display_name || profile.organization_name || profile.name || profile.id}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -266,7 +323,7 @@ export default function Pipeline() {
                       hideExpired: false,
                       showOnlyExpired: false,
                     });
-                    setSelectedOrgId("all");
+                    setSelectedProfileId("all");
                   }}
                 >
                   Clear All Filters
