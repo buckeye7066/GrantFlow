@@ -944,6 +944,39 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
     
     try {
       const profileContext = profileContextBase
+      const startAt = Date.now()
+
+      // Live-first: mirror /run behavior (real web sources), then fall back to DB matching.
+      // This prevents DB-only limitations (e.g., older ingested rows, deadline formatting) from collapsing counts.
+      let live = null
+      try {
+        live = await runLiveCrawler({
+          crawlerType,
+          profile,
+          itemRequest: req.body?.item_request ?? null,
+          minMatchScore: Number(min_match_score),
+        })
+      } catch (liveError) {
+        live = { ok: false, opportunities: [], error: liveError?.message || String(liveError) }
+      }
+
+      if (live?.ok && Array.isArray(live.opportunities) && live.opportunities.length > 0) {
+        // Same threshold as /run: if live is "solid", skip DB fallback for this crawler.
+        const shouldSkipFallback = live.opportunities.length >= MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK
+        if (shouldSkipFallback) {
+          totalFound += Number(live.total_found ?? live.opportunities.length)
+          totalInserted += live.opportunities.length
+          succeeded.push({
+            crawler: crawlerType,
+            found: Number(live.total_found ?? live.opportunities.length),
+            inserted: live.opportunities.length,
+            duration_ms: Date.now() - startAt,
+            used_live: true,
+            used_db_fallback: false,
+          })
+          continue
+        }
+      }
 
       const tokens = buildSearchTokens(profileContext)
       const { sql, params } = buildCandidateOpportunityQuery({
@@ -988,13 +1021,31 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
           .slice(0, 50)
       }
 
-      totalFound += scored.length
-      totalInserted += filtered.length
+      // If live had *some* results, merge + dedupe so users get real results first.
+      // Note: response shape is preserved; we only adjust counts.
+      let merged = filtered
+      if (live?.ok && Array.isArray(live.opportunities) && live.opportunities.length > 0) {
+        const seen = new Set()
+        const keyOf = (o) => String(o?.url || o?.application_url || o?.source_url || o?.title || '').toLowerCase()
+        merged = [...live.opportunities, ...filtered].filter((o) => {
+          const key = keyOf(o)
+          if (!key) return true
+          if (seen.has(key)) return false
+          seen.add(key)
+          return true
+        }).slice(0, 50)
+      }
+
+      totalFound += live?.ok ? Number(live.total_found ?? 0) + scored.length : scored.length
+      totalInserted += merged.length
       
       succeeded.push({
         crawler: crawlerType,
-        found: scored.length,
-        inserted: filtered.length
+        found: live?.ok ? Number(live.total_found ?? 0) + scored.length : scored.length,
+        inserted: merged.length,
+        duration_ms: Date.now() - startAt,
+        used_live: Boolean(live?.ok && Array.isArray(live.opportunities) && live.opportunities.length > 0),
+        used_db_fallback: true,
       })
     } catch (error) {
       console.error(`[RealCrawlers] Error in ${crawlerType}:`, error)
