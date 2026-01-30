@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 export default function StatCard({ title, value, icon: Icon, color, link }) {
   const CardWrapper = link ? Link : 'div';
   const wrapperProps = link ? { to: link } : {};
+  const displayValue = typeof value === 'number' ? value.toLocaleString() : value;
 
   return (
     <CardWrapper {...wrapperProps}>
@@ -14,7 +15,7 @@ export default function StatCard({ title, value, icon: Icon, color, link }) {
           <div className="flex justify-between items-start">
             <div>
               <p className="text-sm font-medium text-slate-600">{title}</p>
-              <p className="text-3xl font-bold text-slate-900 mt-2">{value}</p>
+              <p className="text-3xl font-bold text-slate-900 mt-2">{displayValue}</p>
             </div>
             <div className={`p-3 rounded-xl bg-gradient-to-br ${color} shadow-lg`}>
               <Icon className="w-6 h-6 text-white" />

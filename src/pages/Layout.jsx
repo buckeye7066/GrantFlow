@@ -435,7 +435,11 @@ export default function Layout({ children, currentPageName }) {
             </div>
           </header>
 
-          <div className={`flex-1 overflow-auto ${dashboardPrefs.darkMode ? 'bg-slate-950' : 'bg-slate-50'}`}>
+          <div
+            className={`flex-1 overflow-auto ${
+              dashboardPrefs.darkMode ? 'bg-slate-950 text-slate-50' : 'bg-slate-50 text-slate-900'
+            }`}
+          >
             <div className="min-h-full">
               <AutoTimeTracker />
               {children}

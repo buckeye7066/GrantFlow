@@ -105,6 +105,7 @@ export async function createCrawlerJob(db, options) {
     'comprehensive',
     'national',
     'item_search',
+    'item_gift_search',
     'avatar_lookup',
     'document_ingest',
     'pipeline_automation',
@@ -335,6 +336,13 @@ export function validateJobParameters(type, parameters = {}) {
       // Requires item description
       if (!validated.item) {
         throw badRequest('Item search requires item parameter')
+      }
+      break
+
+    case 'item_gift_search':
+      // Requires item description (what the user needs donated/gifted)
+      if (!validated.item) {
+        throw badRequest('Item gift search requires item parameter')
       }
       break
 

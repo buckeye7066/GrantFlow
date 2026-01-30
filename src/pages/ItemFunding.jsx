@@ -29,6 +29,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { useToast } from "@/components/ui/use-toast"
 import { listOpportunities, listOpportunityStates } from "@/api/opportunities"
 import ProfileSelect from "@/components/shared/ProfileSelect"
+import { getItemSuggestions } from "@/api/items"
 
 const NOT_AVAILABLE = 'N/A'
 import { listProfiles, getProfile } from "@/api/profiles"
@@ -340,6 +341,12 @@ export default function ItemFunding() {
     enabled: Boolean(filters.profileId) && filters.profileId !== "all",
   })
 
+  const suggestionsQuery = useQuery({
+    queryKey: ["item-suggestions", filters.profileId],
+    queryFn: () => getItemSuggestions({ profileId: filters.profileId, limit: 10 }),
+    enabled: Boolean(filters.profileId) && filters.profileId !== "all",
+  })
+
   const opportunitiesQuery = useQuery({
     queryKey: ["item-funding", submittedItem, filters.state, filters.includeNational],
     queryFn: () =>
@@ -408,6 +415,13 @@ export default function ItemFunding() {
     setSubmittedItem(filters.item.trim())
   }
 
+  const applySuggestedItem = (name) => {
+    const next = String(name || "").trim()
+    if (!next) return
+    setFilters((prev) => ({ ...prev, item: next }))
+    setSubmittedItem(next)
+  }
+
   const handleReset = () => {
     setFilters({
       item: "",
@@ -472,6 +486,60 @@ export default function ItemFunding() {
     }
   }
 
+  const handleRequestItemGiftCrawler = async () => {
+    if (!submittedItem) {
+      toast({
+        variant: "destructive",
+        title: "Search for an item first",
+        description: "Enter the item or equipment name before searching donation/gift programs.",
+      })
+      return
+    }
+
+    if (!hasSelectedProfile) {
+      toast({
+        variant: "destructive",
+        title: "Select a profile first",
+        description: "Donation-source crawlers run against a specific profile. Choose a profile, then retry.",
+      })
+      return
+    }
+
+    if (!canItemFunding) {
+      toast({
+        variant: "destructive",
+        title: "Tier upgrade required",
+        description: "Item funding is not enabled for this profile’s billing tier.",
+      })
+      return
+    }
+
+    try {
+      const payload = {
+        type: "item_gift_search",
+        parameters: {
+          item: submittedItem,
+          match_threshold: 55,
+          max_results: 20,
+        },
+      }
+
+      payload.profile_id = filters.profileId
+
+      const job = await createCrawlerJob(payload)
+      toast({
+        title: "Donation-source crawler queued",
+        description: `We’ll find organizations that provide ${submittedItem}. Job ${job.id.slice(0, 8)}… is running.`,
+      })
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Unable to queue donation-source crawler",
+        description: error instanceof Error ? error.message : "Try again shortly.",
+      })
+    }
+  }
+
   return (
     <div className="p-6 md:p-8 space-y-8">
       <header className="space-y-6">
@@ -514,6 +582,24 @@ export default function ItemFunding() {
                   value={filters.item}
                   onChange={(event) => setFilters((prev) => ({ ...prev, item: event.target.value }))}
                 />
+                {filters.profileId && filters.profileId !== "all" && suggestionsQuery.data?.suggestions?.length ? (
+                  <div className="flex flex-wrap gap-2 pt-2">
+                    <span className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold mr-1">
+                      Suggested
+                    </span>
+                    {suggestionsQuery.data.suggestions.slice(0, 6).map((sugg) => (
+                      <Button
+                        key={sugg.name}
+                        type="button"
+                        variant="secondary"
+                        className="h-7 px-3 text-xs"
+                        onClick={() => applySuggestedItem(sugg.name)}
+                      >
+                        {sugg.name}
+                      </Button>
+                    ))}
+                  </div>
+                ) : null}
               </div>
 
               <div className="space-y-2">
@@ -642,9 +728,14 @@ export default function ItemFunding() {
                 <p>Try a broader keyword (e.g., “software”, “equipment”, “technology”, “vehicle”) or run the crawler sweep.</p>
               )}
             </div>
-            <Button variant="outline" onClick={handleRequestItemCrawler}>
-              Request crawler sweep
-            </Button>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <Button variant="outline" onClick={handleRequestItemCrawler}>
+                Request funding crawler
+              </Button>
+              <Button variant="outline" onClick={handleRequestItemGiftCrawler}>
+                Find donation / gift programs
+              </Button>
+            </div>
             {!canItemFunding ? (
               <p className="text-xs text-amber-700">
                 Item funding is gated by tier. Ask an admin to upgrade the billing tier to enable crawlers.
