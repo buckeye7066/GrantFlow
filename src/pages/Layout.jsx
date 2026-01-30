@@ -255,23 +255,23 @@ export default function Layout({ children, currentPageName }) {
 
   return (
     <SidebarProvider>
-      <div className="min-h-screen flex w-full bg-gradient-to-br from-slate-50 via-blue-50 to-slate-50">
-        <Sidebar className="border-r border-slate-200 bg-white">
+      <div className="min-h-screen flex w-full bg-gradient-to-br from-slate-50 via-blue-50 to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
+        <Sidebar className="border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
           <SidebarHeader className="border-b border-slate-200 p-6">
             <Link to={createPageUrl("Dashboard")} className="flex items-center gap-3">
               <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-blue-800 rounded-xl flex items-center justify-center shadow-lg">
                 <FileText className="w-6 h-6 text-white" />
               </div>
               <div>
-                <h2 className="font-bold text-slate-900 text-lg">GrantFlow</h2>
-                <p className="text-xs text-slate-500">Grant Management Suite</p>
+                <h2 className="font-bold text-slate-900 dark:text-slate-50 text-lg">GrantFlow</h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Grant Management Suite</p>
               </div>
             </Link>
           </SidebarHeader>
           
           <SidebarContent className="p-3">
             <SidebarGroup>
-              <SidebarGroupLabel className="text-xs font-semibold text-slate-500 uppercase tracking-wider px-3 py-2">
+              <SidebarGroupLabel className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider px-3 py-2">
                 Navigation
               </SidebarGroupLabel>
               <SidebarGroupContent>
@@ -295,7 +295,7 @@ export default function Layout({ children, currentPageName }) {
               </SidebarGroupContent>
             </SidebarGroup>
             <SidebarGroup className="mt-4">
-              <SidebarGroupLabel className="text-xs font-semibold text-slate-500 uppercase tracking-wider px-3 py-2">
+              <SidebarGroupLabel className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider px-3 py-2">
                 Developer
               </SidebarGroupLabel>
               <SidebarGroupContent>
@@ -435,11 +435,7 @@ export default function Layout({ children, currentPageName }) {
             </div>
           </header>
 
-          <div
-            className={`flex-1 overflow-auto ${
-              dashboardPrefs.darkMode ? 'bg-slate-950 text-slate-50' : 'bg-slate-50 text-slate-900'
-            }`}
-          >
+          <div className="flex-1 overflow-auto bg-background text-foreground">
             <div className="min-h-full">
               <AutoTimeTracker />
               {children}

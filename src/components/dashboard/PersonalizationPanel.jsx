@@ -68,7 +68,7 @@ export default function PersonalizationPanel() {
   }
 
   return (
-    <Card className="border-none shadow-lg shadow-blue-100/50 bg-gradient-to-br from-blue-50/80 via-white to-white/90 backdrop-blur">
+    <Card className="border-none shadow-lg shadow-blue-100/50 bg-gradient-to-br from-blue-50/80 via-white to-white/90 backdrop-blur dark:shadow-none dark:border dark:border-slate-800 dark:from-slate-900/80 dark:via-slate-950 dark:to-slate-950/90">
       <CardHeader>
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -207,7 +207,7 @@ export default function PersonalizationPanel() {
                 {widgets.map((widget) => (
                   <div
                     key={widget.key}
-                    className="flex items-center justify-between rounded-lg border border-slate-200 bg-white/80 px-3 py-2"
+                    className="flex items-center justify-between rounded-lg border border-slate-200 bg-white/80 px-3 py-2 dark:border-slate-800 dark:bg-slate-900/60"
                   >
                     <Label htmlFor={`widget-${widget.key}`} className="text-sm font-medium cursor-pointer">
                       {widget.label}
