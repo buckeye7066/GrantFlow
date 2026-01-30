@@ -68,20 +68,20 @@ export default function PersonalizationPanel() {
   }
 
   return (
-    <Card className="border-none shadow-lg shadow-blue-100/50 bg-gradient-to-br from-blue-50/80 via-white to-white/90 backdrop-blur dark:shadow-none dark:border dark:border-slate-800 dark:from-slate-900/80 dark:via-slate-950 dark:to-slate-950/90">
+    <Card className="relative border border-border/70 shadow-lg bg-card/80 text-card-foreground backdrop-blur">
       <CardHeader>
         <div className="flex items-start justify-between gap-4">
           <div>
             <CardTitle className="text-foreground flex items-center gap-2">
-              <SlidersHorizontal className="h-4 w-4 text-blue-600" />
+              <SlidersHorizontal className="h-4 w-4 text-primary" />
               Personalize Dashboard
             </CardTitle>
-            <p className="text-sm text-foreground mt-1">
+            <p className="text-sm text-muted-foreground mt-1">
               Customize your workspace with 10+ personalization options
             </p>
           </div>
           <button
-            className="text-xs font-medium text-blue-600 hover:text-blue-700 transition"
+            className="text-xs font-medium text-primary hover:opacity-90 transition"
             type="button"
             onClick={() => dispatch({ type: "RESET" })}
           >
@@ -127,7 +127,7 @@ export default function PersonalizationPanel() {
                       "w-8 h-8 rounded-full transition-all",
                       theme.color,
                       state.colorTheme === theme.value
-                        ? "ring-2 ring-offset-2 ring-slate-400 scale-110"
+                        ? "ring-2 ring-ring ring-offset-2 ring-offset-background scale-110"
                         : "opacity-60 hover:opacity-100"
                     )}
                     title={theme.label}
@@ -207,7 +207,7 @@ export default function PersonalizationPanel() {
                 {widgets.map((widget) => (
                   <div
                     key={widget.key}
-                    className="flex items-center justify-between rounded-lg border border-slate-200 bg-white/80 px-3 py-2 dark:border-slate-800 dark:bg-slate-900/60"
+                    className="flex items-center justify-between rounded-lg border border-border bg-background/60 px-3 py-2"
                   >
                     <Label htmlFor={`widget-${widget.key}`} className="text-sm font-medium cursor-pointer">
                       {widget.label}
@@ -252,14 +252,14 @@ export default function PersonalizationPanel() {
                               {...provided.draggableProps}
                               {...provided.dragHandleProps}
                               className={cn(
-                                "flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 cursor-move transition-shadow",
-                                snapshot.isDragging && "shadow-lg ring-2 ring-blue-500"
+                                "flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-2 cursor-move transition-shadow",
+                                snapshot.isDragging && "shadow-lg ring-2 ring-ring"
                               )}
                             >
                               <div className="flex flex-col gap-0.5">
-                                <div className="w-4 h-0.5 bg-slate-300 rounded" />
-                                <div className="w-4 h-0.5 bg-slate-300 rounded" />
-                                <div className="w-4 h-0.5 bg-slate-300 rounded" />
+                                <div className="w-4 h-0.5 bg-muted-foreground/40 rounded" />
+                                <div className="w-4 h-0.5 bg-muted-foreground/40 rounded" />
+                                <div className="w-4 h-0.5 bg-muted-foreground/40 rounded" />
                               </div>
                               <span className="text-sm font-medium flex-1">
                                 {index + 1}. {widget.label}
@@ -284,7 +284,7 @@ export default function PersonalizationPanel() {
                 Notification Preferences
               </h3>
               <div className="grid gap-2">
-                <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white/80 px-3 py-2">
+                <div className="flex items-center justify-between rounded-lg border border-border bg-background/60 px-3 py-2">
                   <Label htmlFor="notif-email" className="text-sm font-medium cursor-pointer">
                     Email Notifications
                   </Label>
@@ -300,7 +300,7 @@ export default function PersonalizationPanel() {
                     }
                   />
                 </div>
-                <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white/80 px-3 py-2">
+                <div className="flex items-center justify-between rounded-lg border border-border bg-background/60 px-3 py-2">
                   <Label htmlFor="notif-inapp" className="text-sm font-medium cursor-pointer">
                     In-App Notifications
                   </Label>
@@ -316,7 +316,7 @@ export default function PersonalizationPanel() {
                     }
                   />
                 </div>
-                <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white/80 px-3 py-2">
+                <div className="flex items-center justify-between rounded-lg border border-border bg-background/60 px-3 py-2">
                   <Label htmlFor="notif-deadlines" className="text-sm font-medium cursor-pointer">
                     Deadline Reminders
                   </Label>
@@ -332,7 +332,7 @@ export default function PersonalizationPanel() {
                     }
                   />
                 </div>
-                <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white/80 px-3 py-2">
+                <div className="flex items-center justify-between rounded-lg border border-border bg-background/60 px-3 py-2">
                   <Label htmlFor="notif-opportunities" className="text-sm font-medium cursor-pointer">
                     New Opportunities
                   </Label>
@@ -348,7 +348,7 @@ export default function PersonalizationPanel() {
                     }
                   />
                 </div>
-                <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white/80 px-3 py-2">
+                <div className="flex items-center justify-between rounded-lg border border-border bg-background/60 px-3 py-2">
                   <Label htmlFor="notif-status" className="text-sm font-medium cursor-pointer">
                     Status Changes
                   </Label>
@@ -405,15 +405,15 @@ export default function PersonalizationPanel() {
                     className={cn(
                       "flex items-center justify-between rounded-lg border px-3 py-2 text-sm transition",
                       field.visible
-                        ? "border-blue-200 bg-blue-50 text-blue-700"
-                        : "border-slate-200 hover:border-blue-200 hover:bg-blue-50/40 hover:text-blue-600",
+                        ? "border-primary/30 bg-primary/10 text-primary"
+                        : "border-border hover:border-primary/30 hover:bg-primary/5 hover:text-primary",
                     )}
                   >
                     <span className="capitalize">{field.label}</span>
                     <span
                       className={cn(
                         "h-2.5 w-2.5 rounded-full",
-                        field.visible ? "bg-blue-500" : "bg-slate-300",
+                        field.visible ? "bg-primary" : "bg-muted-foreground/40",
                       )}
                     />
                   </button>
@@ -429,14 +429,14 @@ export default function PersonalizationPanel() {
 
 function SettingRow({ icon: Icon, title, description, children }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white/80 px-4 py-3">
+    <div className="flex items-center justify-between gap-4 rounded-xl border border-border bg-background/60 px-4 py-3">
       <div className="flex items-start gap-3">
-        <span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-100 text-blue-600">
+        <span className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/15 text-primary">
           <Icon className="h-4 w-4" />
         </span>
         <div>
           <p className="text-sm font-semibold text-foreground">{title}</p>
-          <p className="text-xs text-foreground">{description}</p>
+          <p className="text-xs text-muted-foreground">{description}</p>
         </div>
       </div>
       <div>{children}</div>

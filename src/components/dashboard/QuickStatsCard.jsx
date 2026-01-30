@@ -11,8 +11,8 @@ export default function QuickStatsCard({ grants }) {
   }), [grants]);
 
   return (
-    <Card className="shadow-lg border-0">
-      <CardHeader className="border-b border-slate-100 pb-4">
+    <Card className="shadow-lg bg-card text-card-foreground">
+      <CardHeader className="border-b border-border pb-4">
         <CardTitle className="flex items-center gap-2 text-xl">
           <BarChart3 className="w-5 h-5 text-purple-500" />
           Quick Stats
@@ -21,20 +21,20 @@ export default function QuickStatsCard({ grants }) {
       <CardContent className="p-6">
         <div className="space-y-4">
           <div className="flex justify-between items-center">
-            <span className="text-slate-600">Discovered Grants</span>
-            <span className="font-bold text-slate-900">{stats.discovered}</span>
+            <span className="text-muted-foreground">Discovered Grants</span>
+            <span className="font-bold text-card-foreground">{stats.discovered}</span>
           </div>
           <div className="flex justify-between items-center">
-            <span className="text-slate-600">In Progress</span>
-            <span className="font-bold text-slate-900">{stats.inProgress}</span>
+            <span className="text-muted-foreground">In Progress</span>
+            <span className="font-bold text-card-foreground">{stats.inProgress}</span>
           </div>
           <div className="flex justify-between items-center">
-            <span className="text-slate-600">Submitted</span>
-            <span className="font-bold text-slate-900">{stats.submitted}</span>
+            <span className="text-muted-foreground">Submitted</span>
+            <span className="font-bold text-card-foreground">{stats.submitted}</span>
           </div>
           <div className="flex justify-between items-center">
-            <span className="text-slate-600">Awarded</span>
-            <span className="font-bold text-emerald-600">{stats.awarded}</span>
+            <span className="text-muted-foreground">Awarded</span>
+            <span className="font-bold text-emerald-600 dark:text-emerald-300">{stats.awarded}</span>
           </div>
         </div>
       </CardContent>

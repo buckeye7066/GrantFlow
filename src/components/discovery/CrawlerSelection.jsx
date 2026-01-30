@@ -260,7 +260,7 @@ export default function CrawlerSelection({
           )}
 
           {/* Select All Control */}
-          <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+          <div className="p-4 bg-muted/20 rounded-lg border border-border">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
               <div className="flex items-center gap-3">
                 <Checkbox
@@ -272,7 +272,7 @@ export default function CrawlerSelection({
                   {allSelected ? 'Deselect All' : 'Select All Crawlers'}
                 </label>
                 {someSelected ? (
-                  <span className="text-sm text-slate-600">
+                  <span className="text-sm text-muted-foreground">
                     {selectedCrawlers.size} crawler{selectedCrawlers.size !== 1 ? 's' : ''} selected
                   </span>
                 ) : null}
@@ -297,15 +297,15 @@ export default function CrawlerSelection({
           </div>
 
           {/* Match score threshold */}
-          <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+          <div className="p-4 bg-muted/20 rounded-lg border border-border">
             <div className="flex items-center justify-between">
               <div>
-                <div className="font-medium text-slate-900">Minimum match score</div>
-                <div className="text-xs text-slate-600">
+                <div className="font-medium text-foreground">Minimum match score</div>
+                <div className="text-xs text-muted-foreground">
                   Lower this to see more results; raise it to keep only the strongest matches.
                 </div>
               </div>
-              <div className="text-sm font-semibold text-slate-900">{minMatchScore}%</div>
+              <div className="text-sm font-semibold text-foreground">{minMatchScore}%</div>
             </div>
             <input
               type="range"
@@ -333,10 +333,10 @@ export default function CrawlerSelection({
                   key={crawler.id}
                   className={`
                     relative border rounded-lg p-4 transition-all cursor-pointer
-                    ${isSelected ? 'border-blue-500 bg-blue-50/50' : 'border-slate-200 hover:border-slate-300'}
+                    ${isSelected ? 'border-primary/60 bg-primary/10' : 'border-border hover:border-border/70'}
                     ${status === 'running' ? 'opacity-75' : ''}
-                    ${status === 'completed' ? 'border-green-500 bg-green-50/30' : ''}
-                    ${status === 'error' ? 'border-red-500 bg-red-50/30' : ''}
+                    ${status === 'completed' ? 'border-green-500/60 bg-green-500/10' : ''}
+                    ${status === 'error' ? 'border-red-500/60 bg-red-500/10' : ''}
                   `}
                   onClick={() => !isRunning && handleToggleCrawler(crawler.id)}
                 >
@@ -358,7 +358,7 @@ export default function CrawlerSelection({
                         <Icon className={`w-5 h-5 ${crawler.color}`} />
                         <h3 className="font-semibold">{crawler.name}</h3>
                         {status === 'running' && (
-                          <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                          <Loader2 className="w-4 h-4 animate-spin text-primary" />
                         )}
                         {status === 'completed' && (
                           <CheckCircle className="w-4 h-4 text-green-600" />
@@ -367,17 +367,17 @@ export default function CrawlerSelection({
                           <AlertTriangle className="w-4 h-4 text-red-600" />
                         )}
                       </div>
-                      <p className="text-sm text-slate-700">{crawler.description}</p>
-                      <p className="text-xs text-slate-500">{crawler.details}</p>
+                      <p className="text-sm text-muted-foreground">{crawler.description}</p>
+                      <p className="text-xs text-muted-foreground">{crawler.details}</p>
                       
                       {result && (
-                        <div className="mt-2 text-xs text-green-700 font-medium">
+                        <div className="mt-2 text-xs text-green-700 dark:text-green-300 font-medium">
                           Included {result.count || 0} of {result.total_found ?? (result.count || 0)} found
                         </div>
                       )}
                       
                       {error && (
-                        <div className="mt-2 p-2 bg-red-100 border border-red-300 rounded text-xs text-red-800">
+                        <div className="mt-2 p-2 bg-red-500/10 border border-red-500/30 rounded text-xs text-red-800 dark:text-red-200">
                           <strong>Error:</strong> {error}
                         </div>
                       )}

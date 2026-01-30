@@ -114,6 +114,8 @@ function deriveCompliance(opportunity) {
 function decorateOpportunity(row) {
   if (!row) return null;
   const parsed = { ...row };
+  // Internal query-only fields must never leak to API clients.
+  if (Object.prototype.hasOwnProperty.call(parsed, '__rn')) delete parsed.__rn;
 
   JSON_ARRAY_FIELDS.forEach((field) => {
     parsed[field] = safeParseJSON(parsed[field], []);
@@ -171,6 +173,73 @@ function applyComplianceFilters(compliance, conditions, params, options = {}) {
 
 function likeOperatorForDb(db) {
   return db?.dialect === 'postgres' ? 'ILIKE' : 'LIKE';
+}
+
+function normalizeUrlForDedupe(url) {
+  if (!url || typeof url !== 'string') return null;
+  const raw = url.trim();
+  if (!raw) return null;
+  try {
+    // Normalize scheme/host/path; drop hash + common tracking params.
+    const u = new URL(raw);
+    u.hash = '';
+    const drop = new Set([
+      'utm_source',
+      'utm_medium',
+      'utm_campaign',
+      'utm_term',
+      'utm_content',
+      'gclid',
+      'fbclid',
+      'mc_cid',
+      'mc_eid',
+    ]);
+    Array.from(u.searchParams.keys()).forEach((k) => {
+      if (drop.has(String(k).toLowerCase())) u.searchParams.delete(k);
+    });
+    const normalized =
+      `${u.protocol}//${u.host}${u.pathname}`.replace(/\/+$/g, '').toLowerCase() +
+      (u.search ? `?${u.searchParams.toString()}` : '');
+    return normalized || null;
+  } catch {
+    // Best-effort for malformed URLs.
+    return raw.replace(/\/+$/g, '').toLowerCase();
+  }
+}
+
+function dedupeKeyFromRow(row) {
+  if (!row) return null;
+  const url = normalizeUrlForDedupe(row.application_url) || normalizeUrlForDedupe(row.source_url);
+  const title = String(row.title || '').trim().toLowerCase();
+  const sponsor = String(row.sponsor || '').trim().toLowerCase();
+  const deadline = String(row.deadline || '').trim().toLowerCase();
+  // Primary: collapse cross-source duplicates (even when URLs/IDs differ).
+  if (title && sponsor) return `tsd:${title}::${sponsor}::${deadline}`;
+  if (title && deadline) return `td:${title}::${deadline}`;
+  const sourceId = row.source_id != null ? String(row.source_id).trim().toLowerCase() : '';
+  if (sourceId) return `sid:${sourceId}`;
+  if (url) return `url:${url}`;
+  return row.id ? `id:${String(row.id)}` : null;
+}
+
+function dedupeKeySql(prefix, { useGeoIndex }) {
+  // For geo runs, prevent duplicates from many geo_index rows per opportunity.
+  if (useGeoIndex) return `${prefix}id`;
+  // Otherwise, dedupe by strongest stable identifiers first:
+  // - source_id (shared across crawlers for the same government opportunity)
+  // - title+sponsor+deadline (collapses cross-source duplicates with different URLs)
+  // - URL (best-effort)
+  // - id (fallback)
+  //
+  // NOTE: we do not strip tracking params in SQL; we handle that in the JS guardrail below.
+  const titleExpr = `NULLIF(LOWER(TRIM(${prefix}title)), '')`;
+  const sponsorExpr = `COALESCE(LOWER(TRIM(${prefix}sponsor)), '')`;
+  const deadlineExpr = `COALESCE(LOWER(TRIM(CAST(${prefix}deadline AS TEXT))), '')`;
+  const tsdExpr = `CASE WHEN ${titleExpr} IS NOT NULL AND ${sponsorExpr} <> '' THEN (${titleExpr} || '::' || ${sponsorExpr} || '::' || ${deadlineExpr}) ELSE NULL END`;
+  const tdExpr = `CASE WHEN ${titleExpr} IS NOT NULL AND ${deadlineExpr} <> '' THEN (${titleExpr} || '::' || ${deadlineExpr}) ELSE NULL END`;
+  const sourceIdExpr = `NULLIF(LOWER(TRIM(${prefix}source_id)), '')`;
+  const urlExpr = `COALESCE(NULLIF(LOWER(TRIM(${prefix}application_url)), ''), NULLIF(LOWER(TRIM(${prefix}source_url)), ''))`;
+  return `COALESCE(${tsdExpr}, ${tdExpr}, ${sourceIdExpr}, ${urlExpr}, ${prefix}id)`;
 }
 
 function coerceBooleanToSqlite(value) {
@@ -316,6 +385,21 @@ router.get('/', async (req, res) => {
               created_at DESC
           `;
 
+    const deadlineColInner = hasGeoRun ? 'fo.deadline' : 'deadline';
+    const createdColInner = hasGeoRun ? 'fo.created_at' : 'created_at';
+    const orderColsInner =
+      dialect === 'postgres'
+        ? `
+            CASE WHEN ${deadlineColInner} IS NULL THEN 1 ELSE 0 END,
+            ${deadlineColInner} ASC,
+            ${createdColInner} DESC
+          `
+        : `
+            CASE WHEN ${deadlineColInner} IS NULL OR ${deadlineColInner} = '' THEN 1 ELSE 0 END,
+            ${deadlineColInner} ASC,
+            ${createdColInner} DESC
+          `;
+
     // If state-scoped and first page, guarantee >=3 national opportunities are included
     // (without changing total counts or hiding crawler failures).
     const minNationalVisible = Math.max(
@@ -339,56 +423,82 @@ router.get('/', async (req, res) => {
       baseParamsSql,
       useGeoIndex,
     }) {
+      const keyExpr = dedupeKeySql(hasGeoRun ? 'fo.' : '', { useGeoIndex: Boolean(useGeoIndex && hasGeoRun) });
+
+      async function runListQuery(whereSql, params, { limit: qLimit, offset: qOffset } = {}) {
+        const effectiveLimit = Number.isFinite(Number(qLimit)) ? Number(qLimit) : parsedLimit;
+        const effectiveOffset = Number.isFinite(Number(qOffset)) ? Number(qOffset) : parsedOffset;
+        // Prefer deterministic de-dupe at the SQL layer (window functions), so pagination stays stable.
+        // If a deployment uses an older SQLite build without window functions, we fall back to raw rows
+        // and de-dupe in JS later.
+        try {
+          return await req.db
+            .prepare(
+              `
+                SELECT t.*
+                FROM (
+                  SELECT
+                    ${selectFields(useGeoIndex)},
+                    ROW_NUMBER() OVER (PARTITION BY ${keyExpr} ORDER BY ${orderColsInner}) AS __rn
+                  ${fromClause}
+                  ${whereSql}
+                ) t
+                WHERE t.__rn = 1
+                ${orderClause}
+                LIMIT ?
+                OFFSET ?
+              `,
+            )
+            .all(...params, effectiveLimit, effectiveOffset);
+        } catch (err) {
+          const msg = String(err?.message || err);
+          const isWindowMissing =
+            msg.toLowerCase().includes('row_number') ||
+            msg.toLowerCase().includes('over') ||
+            msg.toLowerCase().includes('window') ||
+            msg.toLowerCase().includes('syntax error');
+          if (!isWindowMissing) throw err;
+          // Fallback: no SQL de-dupe.
+          return await req.db
+            .prepare(
+              `
+                SELECT ${selectFields(useGeoIndex)}
+                ${fromClause}
+                ${whereSql}
+                ${orderClause}
+                LIMIT ?
+                OFFSET ?
+              `,
+            )
+            .all(...params, effectiveLimit, effectiveOffset);
+        }
+      }
+
       if (normalizedState && parsedOffset === 0 && isNational !== 'true' && parsedLimit > 0 && minNationalVisible > 0) {
         const commonWhere = baseConditionsSql.length ? `WHERE ${baseConditionsSql.join(' AND ')}` : 'WHERE 1=1';
 
-        const nationals = await req.db
-          .prepare(
-            `
-              SELECT ${selectFields(useGeoIndex)}
-              ${fromClause}
-              ${commonWhere}
-                AND ${hasGeoRun ? 'fo.is_national' : 'is_national'} = ?
-              ${orderClause}
-              LIMIT ?
-            `,
-          )
-          .all(...baseParamsSql, sqlBool(true), minNationalVisible);
+        const nationals = await runListQuery(
+          `${commonWhere} AND ${hasGeoRun ? 'fo.is_national' : 'is_national'} = ?`,
+          [...baseParamsSql, sqlBool(true)],
+          { limit: minNationalVisible, offset: 0 },
+        );
 
         const remaining = Math.max(parsedLimit - nationals.length, 0);
-        const locals =
-          remaining > 0
-            ? await req.db
-                .prepare(
-                  `
-                    SELECT ${selectFields(useGeoIndex)}
-                    ${fromClause}
-                    ${commonWhere}
-                      AND ${hasGeoRun ? 'fo.state' : 'state'} = ?
-                      AND (${hasGeoRun ? 'fo.is_national' : 'is_national'} IS NULL OR ${hasGeoRun ? 'fo.is_national' : 'is_national'} = ?)
-                    ${orderClause}
-                    LIMIT ?
-                  `,
-                )
-                .all(...baseParamsSql, normalizedState, sqlBool(false), remaining)
-            : [];
+        const locals = remaining > 0
+          ? await (async () => {
+              const whereSql =
+                `${commonWhere}` +
+                ` AND ${hasGeoRun ? 'fo.state' : 'state'} = ?` +
+                ` AND (${hasGeoRun ? 'fo.is_national' : 'is_national'} IS NULL OR ${hasGeoRun ? 'fo.is_national' : 'is_national'} = ?)`;
+              return await runListQuery(whereSql, [...baseParamsSql, normalizedState, sqlBool(false)], { limit: remaining, offset: 0 });
+            })()
+          : [];
 
         // Return locals first, then nationals to guarantee visibility in the response.
         return [...locals, ...nationals];
       }
 
-      return req.db
-        .prepare(
-          `
-            SELECT ${selectFields(useGeoIndex)}
-            ${fromClause}
-            ${whereClauseSql}
-            ${orderClause}
-            LIMIT ?
-            OFFSET ?
-          `,
-        )
-        .all(...queryParams, parsedLimit, parsedOffset);
+      return await runListQuery(whereClauseSql, queryParams);
     }
 
     function isMissingGeoIndexError(err) {
@@ -422,12 +532,17 @@ router.get('/', async (req, res) => {
         useGeoIndex,
       });
 
+      const keyExpr = dedupeKeySql(hasGeoRun ? 'fo.' : '', { useGeoIndex: Boolean(useGeoIndex && hasGeoRun) });
       const countRow = await req.db
         .prepare(
           `
             SELECT COUNT(*) AS total
-            ${fromClause}
-            ${whereClauseSql}
+            FROM (
+              SELECT 1
+              ${fromClause}
+              ${whereClauseSql}
+              GROUP BY ${keyExpr}
+            ) t
           `,
         )
         .get(...queryParams);
@@ -483,8 +598,29 @@ router.get('/', async (req, res) => {
       baseWithStateConditions.push(...fallbackBaseWithStateConditions);
     }
 
-    const parsed = result.rows.map((opp) => decorateOpportunity(opp));
-    const filteredTotal = result.total ?? parsed.length;
+    // Final guardrail: dedupe in JS as well (handles tracking-param variants and older DBs).
+    const decorated = result.rows.map((opp) => decorateOpportunity(opp));
+    const seen = new Set();
+    const parsed = [];
+    let removed = 0;
+    for (const row of decorated) {
+      const key = dedupeKeyFromRow(row) || (row?.id ? `id:${String(row.id)}` : null);
+      if (!key) {
+        parsed.push(row);
+        continue;
+      }
+      if (seen.has(key)) {
+        removed += 1;
+        continue;
+      }
+      seen.add(key);
+      parsed.push(row);
+    }
+    if (removed > 0) {
+      console.info('[opportunities] de-duped duplicate rows', { removed, hasGeoRun, source: source ?? null });
+    }
+
+    const filteredTotal = Number(result.total ?? parsed.length);
 
     // Guardrail: if the user requested grant-only compliance but this filter eliminates everything,
     // fall back to returning review-required opportunities instead of an empty result set.
@@ -524,12 +660,42 @@ router.get('/', async (req, res) => {
             useGeoIndex: effectiveUseGeoIndex,
           });
 
-          const fallbackParsed = fallbackRows.map((opp) => decorateOpportunity(opp));
+          const fallbackDecorated = fallbackRows.map((opp) => decorateOpportunity(opp));
+          const fallbackSeen = new Set();
+          const fallbackParsed = [];
+          for (const row of fallbackDecorated) {
+            const key = dedupeKeyFromRow(row) || (row?.id ? `id:${String(row.id)}` : null);
+            if (key && fallbackSeen.has(key)) continue;
+            if (key) fallbackSeen.add(key);
+            fallbackParsed.push(row);
+          }
+
+          // Compute a distinct total that matches the de-dupe semantics (not raw row count).
+          let distinctTotalFound = fallbackParsed.length;
+          try {
+            const keyExpr = dedupeKeySql(hasGeoRun ? 'fo.' : '', { useGeoIndex: Boolean(effectiveUseGeoIndex && hasGeoRun) });
+            const distinctCountRow = await req.db
+              .prepare(
+                `
+                  SELECT COUNT(*) AS total
+                  FROM (
+                    SELECT 1
+                    ${effectiveFromClause}
+                    ${baseWhere}
+                    GROUP BY ${keyExpr}
+                  ) t
+                `,
+              )
+              .get(...baseWithStateParams);
+            distinctTotalFound = Number(distinctCountRow?.total ?? distinctTotalFound);
+          } catch {
+            // ignore (best-effort)
+          }
 
           return res.json({
             data: fallbackParsed,
-            total: totalFound,
-            total_found: totalFound,
+            total: distinctTotalFound,
+            total_found: distinctTotalFound,
             included: fallbackParsed.length,
             limit: parsedLimit,
             offset: parsedOffset,
@@ -537,7 +703,7 @@ router.get('/', async (req, res) => {
             compliance_effective: 'all',
             fallback_applied: true,
             fallback_reason: 'compliance_filter_eliminated_all_results',
-            removed_by_compliance: totalFound,
+            removed_by_compliance: Math.max(0, distinctTotalFound),
           });
         }
       } catch (err) {

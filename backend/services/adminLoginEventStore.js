@@ -28,8 +28,15 @@ function safeUuid() {
   return `evt_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`
 }
 
-export function recordClientSignInEvent({ identifier, method, userId, profileId, ip, userAgent } = {}) {
-  const db = arguments?.[0]?.db ?? null
+export function recordClientSignInEvent({
+  db = null,
+  identifier,
+  method,
+  userId,
+  profileId,
+  ip,
+  userAgent,
+} = {}) {
   const event = {
     id: safeUuid(),
     type: 'client_sign_in',

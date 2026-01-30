@@ -1,11 +1,44 @@
 import express from 'express'
 import crypto from 'crypto'
 import { sendServiceApplicationEmail } from '../services/email.js'
+import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 
 const router = express.Router()
 
 // Email recipient for service applications and contact forms
 const SERVICE_APPLICATION_EMAIL = process.env.SERVICE_APPLICATION_EMAIL || 'dr.johnwhite@axiombiolabs.org'
+
+function normalizeEmail(value) {
+  const v = String(value || '').trim().toLowerCase()
+  return v || null
+}
+
+async function hardDeleteProfileWithFallback(db, profileId) {
+  const id = String(profileId || '').trim()
+  if (!id) return { ok: false, error: 'profile_id_required' }
+
+  const dialect = db?.dialect || 'sqlite'
+  const nowSql = dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+
+  // Designated/demo profiles should never be hard-deleted (boot seeding may resurrect).
+  if (isDesignatedProfileId(id)) {
+    await db
+      .prepare(`UPDATE profiles SET status = 'deleted', updated_at = ${nowSql} WHERE id = ?`)
+      .run(id)
+    return { ok: true, deleted: 'soft', reason: 'designated_profile' }
+  }
+
+  try {
+    await db.prepare('DELETE FROM profiles WHERE id = ?').run(id)
+    return { ok: true, deleted: 'hard' }
+  } catch (error) {
+    // If FK constraints prevent delete, fall back to a durable soft-delete.
+    await db
+      .prepare(`UPDATE profiles SET status = 'deleted', updated_at = ${nowSql} WHERE id = ?`)
+      .run(id)
+    return { ok: true, deleted: 'soft', error: error?.message || String(error) }
+  }
+}
 
 /**
  * Helper to save application to database
@@ -311,6 +344,153 @@ router.patch('/:id', async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to update application',
+    })
+  }
+})
+
+/**
+ * DELETE /api/service-application/:id
+ * Delete a service application row (admin only)
+ */
+router.delete('/:id', async (req, res) => {
+  try {
+    if (!req.ctx?.isAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required',
+      })
+    }
+
+    const { id } = req.params
+    const row = await req.db.prepare('SELECT id FROM service_applications WHERE id = ?').get(id)
+    if (!row) {
+      return res.status(404).json({ success: false, message: 'Application not found' })
+    }
+
+    await req.db.prepare('DELETE FROM service_applications WHERE id = ?').run(id)
+    return res.json({ success: true, deleted: true })
+  } catch (error) {
+    console.error('[serviceApplication] Error deleting application:', error)
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to delete application',
+    })
+  }
+})
+
+/**
+ * POST /api/service-application/:id/delete-profile
+ *
+ * Admin-only: delete the profile created from an application.
+ *
+ * Strategy:
+ * - Prefer service_applications.profile_id when present.
+ * - Else, match by email against profile_sections.basic_information.email.
+ *   - If exactly 1 match: delete it.
+ *   - If 0 matches: 404
+ *   - If >1 matches: 409 with candidates (force manual selection via Profiles UI)
+ */
+router.post('/:id/delete-profile', async (req, res) => {
+  try {
+    if (!req.ctx?.isAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required',
+      })
+    }
+
+    const { id } = req.params
+    const app = await req.db.prepare('SELECT * FROM service_applications WHERE id = ?').get(id)
+    if (!app) {
+      return res.status(404).json({ success: false, message: 'Application not found' })
+    }
+
+    const dialect = req.db?.dialect || 'sqlite'
+    const email = normalizeEmail(app?.email)
+
+    let targetProfileId = app?.profile_id ? String(app.profile_id).trim() : null
+    let candidates = []
+
+    if (!targetProfileId) {
+      if (!email) {
+        return res.status(400).json({
+          success: false,
+          message: 'No linked profile_id and no email available to match',
+        })
+      }
+
+      try {
+        if (dialect === 'postgres') {
+          candidates = await req.db
+            .prepare(
+              `
+                SELECT DISTINCT p.id, p.display_name
+                FROM profiles p
+                JOIN profile_sections ps ON ps.profile_id = p.id
+                WHERE ps.section_key = 'basic_information'
+                  AND LOWER((ps.data::jsonb ->> 'email')) = ?
+                  AND (p.status IS NULL OR lower(p.status) <> 'deleted')
+                ORDER BY COALESCE(p.updated_at, p.created_at) DESC
+                LIMIT 25
+              `,
+            )
+            .all(email)
+        } else {
+          candidates = await req.db
+            .prepare(
+              `
+                SELECT DISTINCT p.id, p.display_name
+                FROM profiles p
+                JOIN profile_sections ps ON ps.profile_id = p.id
+                WHERE ps.section_key = 'basic_information'
+                  AND LOWER(json_extract(ps.data, '$.email')) = ?
+                  AND (p.status IS NULL OR lower(p.status) <> 'deleted')
+                ORDER BY COALESCE(p.updated_at, p.created_at) DESC
+                LIMIT 25
+              `,
+            )
+            .all(email)
+        }
+      } catch (queryError) {
+        console.warn('[serviceApplication] Failed to locate profile by email:', queryError?.message || queryError)
+        candidates = []
+      }
+
+      if (!Array.isArray(candidates) || candidates.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'No matching active profile found for this application email',
+        })
+      }
+
+      if (candidates.length > 1) {
+        return res.status(409).json({
+          success: false,
+          message: 'Multiple profiles match this application email; delete manually from Profiles.',
+          candidates: candidates.map((c) => ({ id: c.id, display_name: c.display_name })),
+        })
+      }
+
+      targetProfileId = String(candidates[0].id).trim()
+    }
+
+    // Delete the profile, then unlink the application record (keep the audit trail).
+    const deleted = await hardDeleteProfileWithFallback(req.db, targetProfileId)
+    await req.db
+      .prepare('UPDATE service_applications SET profile_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(id)
+
+    return res.json({
+      success: true,
+      profile_id: targetProfileId,
+      delete_result: deleted,
+      matched_candidates: candidates?.length ? candidates : undefined,
+    })
+  } catch (error) {
+    console.error('[serviceApplication] Error deleting linked profile:', error)
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to delete profile',
     })
   }
 })

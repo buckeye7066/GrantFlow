@@ -29,6 +29,8 @@ export const USER_PROFILE_MAPPINGS = {
   // Prefer stable IDs; if the DB already has a different ID, auth will match by email first.
   'angelikaps.rn@gmail.com': 'profile-angelika-ptak',
   'pjandcrdasher@att.net': 'profile-paul-jason-dasher',
+  // Liubov
+  'anyawhite@rocketmail.com': 'profile-luibov-samoylenko',
 }
 
 /**

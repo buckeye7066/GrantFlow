@@ -43,7 +43,7 @@ function LJWMonogram({ className = "" }) {
   return (
     <div
       className={cn(
-        "flex h-6 w-6 items-center justify-center rounded-md border border-white bg-white text-[10px] font-semibold uppercase tracking-wide text-slate-900",
+        "flex h-6 w-6 items-center justify-center rounded-md border border-border bg-card text-[10px] font-semibold uppercase tracking-wide text-card-foreground",
         className,
       )}
     >
@@ -393,17 +393,17 @@ export default function Dashboard() {
       <div className="mx-auto flex max-w-7xl flex-col gap-8">
         <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <div className="space-y-6">
-            <div className="relative overflow-hidden rounded-3xl border border-slate-200/70 bg-white/80 p-6 shadow-lg shadow-blue-100/40 md:p-8">
-              <div className="absolute -right-12 -top-12 h-52 w-52 rounded-full bg-gradient-to-br from-blue-100 via-blue-200/70 to-transparent blur-3xl" />
+            <div className="relative overflow-hidden rounded-3xl border border-border/70 bg-card/90 p-6 shadow-lg md:p-8">
+              <div className="absolute -right-12 -top-12 h-52 w-52 rounded-full bg-gradient-to-br from-primary/20 via-primary/15 to-transparent blur-3xl" />
               <div className="relative flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
                 <div className="max-w-xl space-y-4">
-                  <span className="inline-flex items-center rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-blue-700">
+                  <span className="inline-flex items-center rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-primary">
                     {today}
                   </span>
-                  <h1 className="text-2xl font-bold text-slate-900 md:text-3xl">
+                  <h1 className="text-2xl font-bold text-card-foreground md:text-3xl">
                     Operational pulse across all grants and obligations
                   </h1>
-                  <p className="text-sm text-foreground md:text-base">
+                  <p className="text-sm text-muted-foreground md:text-base">
                     Staying ahead of submissions, compliance, and reporting just became easier.
                     Leverage AI nudges and smart filters to keep every opportunity on track.
                   </p>

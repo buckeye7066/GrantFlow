@@ -6,14 +6,14 @@ import { createPageUrl } from "@/utils"
 import { Link } from "react-router-dom"
 
 const statusOrder = [
-  { key: "discovered", label: "Discovery", icon: Target, color: "bg-blue-100 text-blue-700" },
-  { key: "interested", label: "Interested", icon: ClipboardList, color: "bg-indigo-100 text-indigo-700" },
-  { key: "drafting", label: "Drafting", icon: Clock, color: "bg-amber-100 text-amber-700" },
-  { key: "app_prep", label: "Prep", icon: ClipboardList, color: "bg-sky-100 text-sky-700" },
-  { key: "submission_ready", label: "Ready to Submit", icon: ArrowRight, color: "bg-emerald-100 text-emerald-700" },
-  { key: "submitted", label: "Submitted", icon: CheckCircle2, color: "bg-green-100 text-green-700" },
-  { key: "awarded", label: "Awarded", icon: CheckCircle2, color: "bg-lime-100 text-lime-700" },
-  { key: "rejected", label: "Closed", icon: AlertTriangle, color: "bg-rose-100 text-rose-700" },
+  { key: "discovered", label: "Discovery", icon: Target, color: "bg-blue-500/15 text-blue-700 dark:bg-blue-500/20 dark:text-blue-200" },
+  { key: "interested", label: "Interested", icon: ClipboardList, color: "bg-indigo-500/15 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-200" },
+  { key: "drafting", label: "Drafting", icon: Clock, color: "bg-amber-500/15 text-amber-800 dark:bg-amber-500/20 dark:text-amber-200" },
+  { key: "app_prep", label: "Prep", icon: ClipboardList, color: "bg-sky-500/15 text-sky-800 dark:bg-sky-500/20 dark:text-sky-200" },
+  { key: "submission_ready", label: "Ready to Submit", icon: ArrowRight, color: "bg-emerald-500/15 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-200" },
+  { key: "submitted", label: "Submitted", icon: CheckCircle2, color: "bg-green-500/15 text-green-800 dark:bg-green-500/20 dark:text-green-200" },
+  { key: "awarded", label: "Awarded", icon: CheckCircle2, color: "bg-lime-500/15 text-lime-800 dark:bg-lime-500/20 dark:text-lime-200" },
+  { key: "rejected", label: "Closed", icon: AlertTriangle, color: "bg-rose-500/15 text-rose-800 dark:bg-rose-500/20 dark:text-rose-200" },
 ]
 
 function resolveCount(stats, key) {
@@ -27,12 +27,12 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
   const total = statusOrder.reduce((sum, status) => sum + resolveCount(stats, status.key), 0)
 
   return (
-    <Card className="h-full border-none shadow-none bg-gradient-to-br from-white/90 to-white/40 backdrop-blur-lg dark:from-slate-950/80 dark:to-slate-900/40 dark:border dark:border-slate-800">
+    <Card className="h-full bg-card/80 text-card-foreground backdrop-blur-lg border border-border/70 shadow-none">
       <CardHeader className="pb-4">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <CardTitle className="text-foreground text-lg font-semibold">Pipeline Focus</CardTitle>
-            <p className="mt-1 text-sm text-foreground">
+            <CardTitle className="text-card-foreground text-lg font-semibold">Pipeline Focus</CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">
               {hasError
                 ? "Unable to sync pipeline metrics. Showing default workflow guidance."
                 : isLoading
@@ -55,14 +55,14 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
             return (
               <div
                 key={status.key}
-                className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white/70 p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"
+                className="flex items-center gap-3 rounded-xl border border-border bg-background/60 p-3 shadow-sm"
               >
                 <span className={`flex h-10 w-10 items-center justify-center rounded-full text-sm font-semibold ${status.color}`}>
                   <status.icon className="h-5 w-5" />
                 </span>
                 <div className="flex flex-col">
-                  <span className="text-xs uppercase tracking-wide text-foreground">{status.label}</span>
-                  <span className="text-lg font-semibold text-foreground">
+                  <span className="text-xs uppercase tracking-wide text-muted-foreground">{status.label}</span>
+                  <span className="text-lg font-semibold text-card-foreground">
                     {isLoading ? "…" : count}
                   </span>
                 </div>
@@ -70,9 +70,9 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
             )
           })}
         </div>
-        <div className="rounded-xl border border-dashed border-slate-300 p-4 bg-slate-50/70 dark:border-slate-700 dark:bg-slate-900/40">
-          <h3 className="text-sm font-semibold text-foreground mb-2">Next recommended actions</h3>
-          <ul className="space-y-2 text-sm text-foreground">
+        <div className="rounded-xl border border-dashed border-border p-4 bg-muted/30">
+          <h3 className="text-sm font-semibold text-card-foreground mb-2">Next recommended actions</h3>
+          <ul className="space-y-2 text-sm text-muted-foreground">
             <li>• Review drafts due this week and assign final reviewers.</li>
             <li>• Nudge partners on outstanding documents for compliance checks.</li>
             <li>• Identify upcoming submissions to prep budgets and attachments.</li>

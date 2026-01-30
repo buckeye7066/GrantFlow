@@ -12,7 +12,7 @@ export default function UrgentDeadlinesCard({ urgentDeadlines }) {
     if (grant.deadline?.toLowerCase() === 'rolling') {
       return {
         text: 'Rolling',
-        color: "bg-blue-50 text-blue-700 border-blue-200"
+        color: "bg-blue-500/10 text-blue-800 border-blue-500/20 dark:bg-blue-500/15 dark:text-blue-200 dark:border-blue-500/30"
       };
     }
 
@@ -24,26 +24,28 @@ export default function UrgentDeadlinesCard({ urgentDeadlines }) {
     if (daysLeft === 0) {
       return {
         text: 'Due today',
-        color: "bg-red-50 text-red-700 border-red-200"
+        color: "bg-red-500/10 text-red-800 border-red-500/20 dark:bg-red-500/15 dark:text-red-200 dark:border-red-500/30"
       };
     }
     
     if (daysLeft === 1) {
       return {
         text: '1 day left',
-        color: "bg-red-50 text-red-700 border-red-200"
+        color: "bg-red-500/10 text-red-800 border-red-500/20 dark:bg-red-500/15 dark:text-red-200 dark:border-red-500/30"
       };
     }
     
     return {
       text: `${daysLeft} days left`,
-      color: daysLeft <= 7 ? "bg-red-50 text-red-700 border-red-200" : "bg-amber-50 text-amber-700 border-amber-200"
+      color: daysLeft <= 7
+        ? "bg-red-500/10 text-red-800 border-red-500/20 dark:bg-red-500/15 dark:text-red-200 dark:border-red-500/30"
+        : "bg-amber-500/10 text-amber-900 border-amber-500/20 dark:bg-amber-500/15 dark:text-amber-200 dark:border-amber-500/30"
     };
   };
 
   return (
-    <Card className="shadow-lg border-0 dark:bg-slate-950">
-      <CardHeader className="border-b border-slate-100 dark:border-slate-800 pb-4">
+    <Card className="shadow-lg bg-card text-card-foreground">
+      <CardHeader className="border-b border-border pb-4">
         <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-2 text-xl">
             <AlertCircle className="w-5 h-5 text-amber-500" />
@@ -58,8 +60,8 @@ export default function UrgentDeadlinesCard({ urgentDeadlines }) {
       </CardHeader>
       <CardContent className="p-6">
         {urgentDeadlines.length === 0 ? (
-          <div className="text-center py-8 text-foreground">
-            <CalendarIcon className="w-12 h-12 mx-auto mb-3 text-slate-700 dark:text-slate-300" />
+          <div className="text-center py-8 text-muted-foreground">
+            <CalendarIcon className="w-12 h-12 mx-auto mb-3 text-muted-foreground" />
             <p>No urgent deadlines</p>
           </div>
         ) : (
@@ -70,10 +72,10 @@ export default function UrgentDeadlinesCard({ urgentDeadlines }) {
 
               return (
                 <Link key={grant.id} to={createPageUrl("GrantDetail", { id: grant.id })}>
-                  <div className="flex items-start justify-between p-4 bg-slate-50 dark:bg-slate-900 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer">
+                  <div className="flex items-start justify-between p-4 bg-muted/30 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer">
                     <div className="flex-1">
-                      <h4 className="font-semibold text-slate-900 dark:text-slate-50">{grant.title}</h4>
-                      <p className="text-sm text-foreground mt-1">{grant.funder}</p>
+                      <h4 className="font-semibold text-card-foreground">{grant.title}</h4>
+                      <p className="text-sm text-muted-foreground mt-1">{grant.funder}</p>
                       <div className="flex gap-2 mt-2">
                         <Badge variant="outline" className={deadlineInfo.color}>
                           {deadlineInfo.text}

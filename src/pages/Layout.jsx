@@ -55,6 +55,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuthStore } from "@/stores/authStore";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import AnyaFloatingButton from "@/components/anya/AnyaFloatingButton";
+import { apiFetch } from "@/api/client";
 
 const navigationItems = [
   {
@@ -222,6 +223,7 @@ export default function Layout({ children, currentPageName }) {
     logout: state.logout,
     triggerOnboardingVideo: state.triggerOnboardingVideo,
   }));
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
 
   const toggleDarkMode = React.useCallback(() => {
     preferencesDispatch({
@@ -253,25 +255,46 @@ export default function Layout({ children, currentPageName }) {
     logout();
   };
 
+  // Lightweight analytics: record page views for admin reporting.
+  // Best-effort: never block UI.
+  React.useEffect(() => {
+    if (!isAuthenticated) return
+
+    const path = `${location.pathname}${location.search || ''}`
+    if (!path) return
+
+    // Avoid tracking auth screens.
+    if (path.startsWith('/login') || path.startsWith('/set-password') || path.startsWith('/auth')) return
+
+    apiFetch('/api/activity/page-view', {
+      method: 'POST',
+      body: JSON.stringify({
+        path,
+        title: typeof document !== 'undefined' ? document.title : undefined,
+        referrer: typeof document !== 'undefined' ? document.referrer : undefined,
+      }),
+    }).catch(() => {})
+  }, [isAuthenticated, location.pathname, location.search])
+
   return (
     <SidebarProvider>
-      <div className="min-h-screen flex w-full bg-gradient-to-br from-slate-50 via-blue-50 to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
-        <Sidebar className="border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
-          <SidebarHeader className="border-b border-slate-200 p-6">
+      <div className="min-h-screen flex w-full bg-gradient-to-br from-background via-background to-muted text-foreground">
+        <Sidebar className="border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
+          <SidebarHeader className="border-b border-sidebar-border p-6">
             <Link to={createPageUrl("Dashboard")} className="flex items-center gap-3">
               <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-blue-800 rounded-xl flex items-center justify-center shadow-lg">
                 <FileText className="w-6 h-6 text-white" />
               </div>
               <div>
-                <h2 className="font-bold text-slate-900 dark:text-slate-50 text-lg">GrantFlow</h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400">Grant Management Suite</p>
+                <h2 className="font-bold text-sidebar-foreground text-lg">GrantFlow</h2>
+                <p className="text-xs text-muted-foreground">Grant Management Suite</p>
               </div>
             </Link>
           </SidebarHeader>
           
           <SidebarContent className="p-3">
             <SidebarGroup>
-              <SidebarGroupLabel className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider px-3 py-2">
+              <SidebarGroupLabel className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-3 py-2">
                 Navigation
               </SidebarGroupLabel>
               <SidebarGroupContent>
@@ -280,8 +303,10 @@ export default function Layout({ children, currentPageName }) {
                     <SidebarMenuItem key={item.title}>
                       <SidebarMenuButton 
                         asChild 
-                        className={`hover:bg-blue-50 hover:text-blue-700 transition-all duration-200 rounded-lg mb-1 ${
-                          location.pathname === item.url ? 'bg-blue-600 text-white hover:bg-blue-700 hover:text-white shadow-md' : ''
+                        className={`transition-all duration-200 rounded-lg mb-1 ${
+                          location.pathname === item.url
+                            ? 'bg-primary text-primary-foreground shadow-sm'
+                            : 'hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
                         }`}
                       >
                         <Link to={item.url} className="flex items-center gap-3 px-3 py-2.5">
@@ -295,7 +320,7 @@ export default function Layout({ children, currentPageName }) {
               </SidebarGroupContent>
             </SidebarGroup>
             <SidebarGroup className="mt-4">
-              <SidebarGroupLabel className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider px-3 py-2">
+              <SidebarGroupLabel className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-3 py-2">
                 Developer
               </SidebarGroupLabel>
               <SidebarGroupContent>
@@ -304,8 +329,10 @@ export default function Layout({ children, currentPageName }) {
                     <SidebarMenuItem key={item.title}>
                       <SidebarMenuButton 
                         asChild 
-                        className={`hover:bg-blue-50 hover:text-blue-700 transition-all duration-200 rounded-lg mb-1 ${
-                          location.pathname === item.url ? 'bg-blue-600 text-white hover:bg-blue-700 hover:text-white shadow-md' : ''
+                        className={`transition-all duration-200 rounded-lg mb-1 ${
+                          location.pathname === item.url
+                            ? 'bg-primary text-primary-foreground shadow-sm'
+                            : 'hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
                         }`}
                       >
                         <Link to={item.url} className="flex items-center gap-3 px-3 py-2.5">
@@ -320,7 +347,7 @@ export default function Layout({ children, currentPageName }) {
             </SidebarGroup>
             {user?.is_admin && (
               <SidebarGroup className="mt-4">
-                <SidebarGroupLabel className="text-xs font-semibold text-amber-600 uppercase tracking-wider px-3 py-2">
+                <SidebarGroupLabel className="text-xs font-semibold text-amber-700 dark:text-amber-300 uppercase tracking-wider px-3 py-2">
                   Admin
                 </SidebarGroupLabel>
                 <SidebarGroupContent>
@@ -329,8 +356,10 @@ export default function Layout({ children, currentPageName }) {
                       <SidebarMenuItem key={item.title}>
                         <SidebarMenuButton 
                           asChild 
-                          className={`hover:bg-amber-50 hover:text-amber-700 transition-all duration-200 rounded-lg mb-1 ${
-                            location.pathname === item.url ? 'bg-amber-600 text-white hover:bg-amber-700 hover:text-white shadow-md' : ''
+                          className={`transition-all duration-200 rounded-lg mb-1 ${
+                            location.pathname === item.url
+                              ? 'bg-amber-600 text-white shadow-sm'
+                              : 'hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
                           }`}
                         >
                           <Link to={item.url} className="flex items-center gap-3 px-3 py-2.5">
@@ -346,23 +375,23 @@ export default function Layout({ children, currentPageName }) {
             )}
           </SidebarContent>
 
-          <SidebarFooter className="border-t border-slate-200 p-4 space-y-4">
+          <SidebarFooter className="border-t border-sidebar-border p-4 space-y-4">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 flex-1 min-w-0">
                 <div className="w-9 h-9 bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-full flex items-center justify-center">
                   <span className="text-white font-semibold text-sm">{initials}</span>
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-medium text-slate-900 text-sm truncate">{displayName}</p>
-                  {displayEmail ? <p className="text-xs text-slate-500 truncate">{displayEmail}</p> : null}
+                  <p className="font-medium text-sidebar-foreground text-sm truncate">{displayName}</p>
+                  {displayEmail ? <p className="text-xs text-muted-foreground truncate">{displayEmail}</p> : null}
                 </div>
               </div>
               <button
                 onClick={handleLogout}
-                className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+                className="p-2 hover:bg-sidebar-accent rounded-lg transition-colors"
                 title="Logout"
               >
-                <LogOut className="w-4 h-4 text-slate-600" />
+                <LogOut className="w-4 h-4 text-muted-foreground" />
               </button>
             </div>
             {profiles?.length > 0 ? (
@@ -379,9 +408,9 @@ export default function Layout({ children, currentPageName }) {
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="mt-2 text-[11px] text-slate-500">
+                <p className="mt-2 text-[11px] text-muted-foreground">
                   Workspace shows data for{' '}
-                  <span className="font-medium text-slate-700">
+                  <span className="font-medium text-sidebar-foreground">
                     {profiles.find((p) => p.id === activeProfileId)?.display_name ??
                       profiles[0]?.display_name ??
                       'your organization'}
@@ -389,19 +418,19 @@ export default function Layout({ children, currentPageName }) {
                 </p>
               </div>
             ) : null}
-            <div className="pt-3 border-t border-slate-100 text-center text-xs text-slate-400">
-              Created by <span className="font-semibold text-slate-600">John White</span>
+            <div className="pt-3 border-t border-sidebar-border text-center text-xs text-muted-foreground">
+              Created by <span className="font-semibold text-sidebar-foreground">John White</span>
             </div>
           </SidebarFooter>
         </Sidebar>
 
         <main className="flex-1 flex flex-col overflow-hidden">
-          <header className="bg-white/80 backdrop-blur border-b border-slate-200 px-4 md:px-6 py-3 flex items-center justify-between sticky top-0 z-20">
+          <header className="bg-background/80 backdrop-blur border-b border-border px-4 md:px-6 py-3 flex items-center justify-between sticky top-0 z-20">
             <div className="flex items-center gap-3 md:gap-4">
-              <SidebarTrigger className="hover:bg-slate-100 p-2 rounded-lg transition-colors duration-200 md:hidden" />
+              <SidebarTrigger className="hover:bg-muted p-2 rounded-lg transition-colors duration-200 md:hidden" />
               <div>
-                <h1 className="text-lg md:text-xl font-semibold text-slate-900 leading-tight">GrantFlow</h1>
-                <p className="text-xs text-slate-500">AI-assisted grant management workspace</p>
+                <h1 className="text-lg md:text-xl font-semibold text-foreground leading-tight">GrantFlow</h1>
+                <p className="text-xs text-muted-foreground">AI-assisted grant management workspace</p>
               </div>
             </div>
           <div className="flex items-center gap-2 md:gap-3">
@@ -428,8 +457,8 @@ export default function Layout({ children, currentPageName }) {
                   <AvatarFallback>{initials}</AvatarFallback>
                 </Avatar>
                 <div className="hidden md:block text-left">
-                  <p className="text-sm font-medium text-slate-900">{displayName}</p>
-                  {displayEmail ? <p className="text-xs text-slate-500">{displayEmail}</p> : null}
+                  <p className="text-sm font-medium text-foreground">{displayName}</p>
+                  {displayEmail ? <p className="text-xs text-muted-foreground">{displayEmail}</p> : null}
                 </div>
               </Button>
             </div>

@@ -17,11 +17,13 @@ function formatWhen(iso) {
 export default function AdminLoginNotifications() {
   const { toast } = useToast()
   const [events, setEvents] = useState([])
+  const [pageViews, setPageViews] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
 
   const lastSeenMsRef = useRef(0)
+  const lastSeenViewsMsRef = useRef(0)
   const seenIdsRef = useRef(new Set())
 
   const fetchEvents = async ({ isManual } = {}) => {
@@ -80,15 +82,50 @@ export default function AdminLoginNotifications() {
     }
   }
 
+  const fetchPageViews = async () => {
+    const sinceIso = lastSeenViewsMsRef.current ? new Date(lastSeenViewsMsRef.current).toISOString() : null
+    const qs = new URLSearchParams()
+    if (sinceIso) qs.set('since', sinceIso)
+    qs.set('limit', '100')
+
+    const url = `/api/admin/page-views?${qs.toString()}`
+    try {
+      const data = await apiFetch(url)
+      const incoming = Array.isArray(data?.page_views) ? data.page_views : []
+      if (incoming.length === 0) return
+
+      const maxMs = incoming.reduce((acc, e) => {
+        const ms = Date.parse(e?.at || '')
+        return Number.isFinite(ms) ? Math.max(acc, ms) : acc
+      }, lastSeenViewsMsRef.current || 0)
+      lastSeenViewsMsRef.current = maxMs
+
+      setPageViews((prev) => {
+        const next = [...incoming, ...prev]
+        const byId = new Map()
+        next.forEach((e) => {
+          if (e?.id && !byId.has(e.id)) byId.set(e.id, e)
+        })
+        return Array.from(byId.values()).slice(0, 200)
+      })
+    } catch (err) {
+      // Do not block the login list if page views fail.
+      console.warn('[admin/logins] page-views fetch failed', err?.message || err)
+    }
+  }
+
   useEffect(() => {
     fetchEvents().catch(() => {})
+    fetchPageViews().catch(() => {})
     const id = setInterval(() => {
       fetchEvents().catch(() => {})
+      fetchPageViews().catch(() => {})
     }, 15000)
     return () => clearInterval(id)
   }, [])
 
   const rows = useMemo(() => (Array.isArray(events) ? events : []), [events])
+  const viewRows = useMemo(() => (Array.isArray(pageViews) ? pageViews : []), [pageViews])
 
   return (
     <div className="space-y-6">
@@ -144,6 +181,56 @@ export default function AdminLoginNotifications() {
                         )}
                       </td>
                       <td className="p-2 text-slate-600">{e.ip || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="border border-slate-200 bg-white/70 backdrop-blur">
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle className="flex items-center gap-2 text-slate-900">
+            Page views (recent)
+          </CardTitle>
+          <Button variant="outline" size="sm" onClick={() => fetchPageViews()} disabled={refreshing}>
+            <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <div className="text-sm text-slate-600">Loading…</div>
+          ) : viewRows.length === 0 ? (
+            <div className="text-sm text-slate-600">No page views recorded yet.</div>
+          ) : (
+            <div className="overflow-auto rounded border border-slate-200 bg-white">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-slate-50 border-b">
+                  <tr>
+                    <th className="text-left p-2">When</th>
+                    <th className="text-left p-2">Client</th>
+                    <th className="text-left p-2">Page</th>
+                    <th className="text-left p-2">IP</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {viewRows.map((v) => (
+                    <tr key={v.id} className="border-b last:border-b-0">
+                      <td className="p-2 text-slate-600">{formatWhen(v.at)}</td>
+                      <td className="p-2">
+                        <div className="font-medium text-slate-900">{v.user_email || v.user_name || 'Unknown'}</div>
+                        {v.profile_id ? (
+                          <div className="text-xs text-slate-500">profile: {String(v.profile_id).slice(0, 8)}…</div>
+                        ) : null}
+                      </td>
+                      <td className="p-2">
+                        <div className="font-medium text-slate-900">{v.path || '—'}</div>
+                        {v.title ? <div className="text-xs text-slate-500">{v.title}</div> : null}
+                      </td>
+                      <td className="p-2 text-slate-600">{v.ip || '—'}</td>
                     </tr>
                   ))}
                 </tbody>

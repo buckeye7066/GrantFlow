@@ -1837,6 +1837,83 @@ router.get('/login-events', async (req, res) => {
   }
 })
 
+// GET /api/admin/page-views - Recent client page views (admin only)
+// Durable source: audit_logs (client_page_view).
+router.get('/page-views', async (req, res) => {
+  try {
+    if (!(await ensureAdminRequest(req, res))) return
+
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+    res.set('Pragma', 'no-cache')
+
+    const since = typeof req.query?.since === 'string' ? req.query.since : null
+    const limitRaw = typeof req.query?.limit === 'string' ? req.query.limit : null
+    const limit = Math.max(1, Math.min(200, limitRaw ? Number(limitRaw) : 50))
+
+    const sinceMs = since ? Date.parse(String(since)) : NaN
+    const startDateIso = Number.isFinite(sinceMs) ? new Date(sinceMs).toISOString() : null
+
+    const views = []
+
+    const auditRes = await queryAuditLogs(req.db, {
+      category: AUDIT_CATEGORIES.AUTH,
+      action: 'client_page_view',
+      startDate: startDateIso,
+      limit,
+      offset: 0,
+    })
+
+    // Resolve user emails in one query (best-effort).
+    const userIds = Array.from(
+      new Set((auditRes?.logs || []).map((r) => r?.user_id).filter(Boolean).map((v) => String(v))),
+    )
+    const usersById = new Map()
+    if (userIds.length > 0) {
+      const placeholders = userIds.map(() => '?').join(', ')
+      try {
+        const rows = await req.db
+          .prepare(
+            `
+              SELECT id, primary_email, display_name, is_admin
+              FROM users
+              WHERE id IN (${placeholders})
+            `,
+          )
+          .all(...userIds)
+        for (const u of rows || []) {
+          if (u?.id) usersById.set(String(u.id), u)
+        }
+      } catch {
+        // ignore user lookup failures
+      }
+    }
+
+    for (const row of auditRes?.logs || []) {
+      const details = row?.details && typeof row.details === 'object' ? row.details : {}
+      const userId = row?.user_id ? String(row.user_id) : null
+      const user = userId ? usersById.get(userId) : null
+      views.push({
+        id: row.id,
+        at: row.created_at,
+        user_id: userId,
+        user_email: user?.primary_email ?? null,
+        user_name: user?.display_name ?? null,
+        is_admin: user?.is_admin ?? null,
+        profile_id: row.profile_id ?? null,
+        path: details?.path ?? null,
+        title: details?.title ?? null,
+        referrer: details?.referrer ?? null,
+        ip: row.ip_address ?? null,
+      })
+    }
+
+    return res.json({ ok: true, page_views: views })
+  } catch (error) {
+    console.error('[admin/page-views] Error:', error)
+    return res.status(500).json({ error: 'Failed to load page views' })
+  }
+})
+
 // Lookup recent server-side error details by Request ID (admin-only).
 // This is stored in-memory (best-effort) to help non-technical admins debug production issues.
 router.get('/errors/:requestId', async (req, res) => {

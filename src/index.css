@@ -182,11 +182,6 @@ button:focus-visible {
     color: rgb(71 85 105) !important; /* slate-600 */
   }
 
-  /* `text-muted-foreground` must remain readable on light backgrounds (no low-contrast "subtle" text). */
-  :root:not(.dark) :is(.text-muted-foreground) {
-    color: hsl(var(--foreground)) !important;
-  }
-
   .high-contrast :is(.text-slate-400, .text-slate-500, .text-slate-600, .text-gray-400, .text-gray-500, .text-gray-600, .text-muted-foreground) {
     color: hsl(var(--foreground)) !important;
   }

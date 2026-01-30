@@ -29,7 +29,8 @@ import {
   XCircle,
   RefreshCw,
   UserPlus,
-  Eye
+  Eye,
+  Trash2
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { apiFetch } from '@/api/client';
@@ -107,6 +108,43 @@ export default function AdminServiceApplications() {
       });
     }
   };
+
+  const deleteApplication = async (id) => {
+    try {
+      await apiFetch(`/api/service-application/${id}`, { method: 'DELETE' })
+      toast({ title: 'Deleted', description: 'Application removed' })
+      setSelectedApp(null)
+      fetchApplications()
+    } catch (error) {
+      console.error('Failed to delete application:', error)
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: error?.message || 'Failed to delete application',
+      })
+    }
+  }
+
+  const deleteProfileForApplication = async (id) => {
+    try {
+      const res = await apiFetch(`/api/service-application/${id}/delete-profile`, { method: 'POST' })
+      toast({
+        title: 'Deleted',
+        description: res?.profile_id
+          ? `Deleted profile ${res.profile_id}`
+          : 'Deleted matching profile',
+      })
+      setSelectedApp(null)
+      fetchApplications()
+    } catch (error) {
+      console.error('Failed to delete profile for application:', error)
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: error?.message || 'Failed to delete profile',
+      })
+    }
+  }
 
   const formatDate = (dateStr) => {
     if (!dateStr) return 'N/A';
@@ -314,6 +352,13 @@ export default function AdminServiceApplications() {
                     <p className="text-sm">{selectedApp.notes}</p>
                   </div>
                 )}
+
+                {selectedApp.profile_id ? (
+                  <div>
+                    <label className="text-sm font-medium text-muted-foreground">Linked Profile</label>
+                    <p className="text-sm font-mono">{selectedApp.profile_id}</p>
+                  </div>
+                ) : null}
               </div>
             )}
 
@@ -347,14 +392,42 @@ export default function AdminServiceApplications() {
                   </Button>
                 )}
               </div>
-              {selectedApp?.status !== 'archived' && (
+
+              <div className="flex gap-2">
                 <Button
-                  variant="ghost"
-                  onClick={() => updateApplicationStatus(selectedApp.id, 'archived')}
+                  variant="destructive"
+                  onClick={() => {
+                    const ok = window.confirm(
+                      'Delete the matching profile for this application?\n\nThis is intended for test data cleanup. This cannot be undone.',
+                    )
+                    if (!ok) return
+                    deleteProfileForApplication(selectedApp.id)
+                  }}
                 >
-                  Archive
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete Profile
                 </Button>
-              )}
+
+                {selectedApp?.status !== 'archived' && (
+                  <Button
+                    variant="ghost"
+                    onClick={() => updateApplicationStatus(selectedApp.id, 'archived')}
+                  >
+                    Archive
+                  </Button>
+                )}
+
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    const ok = window.confirm('Delete this application entry?')
+                    if (!ok) return
+                    deleteApplication(selectedApp.id)
+                  }}
+                >
+                  Delete Entry
+                </Button>
+              </div>
             </DialogFooter>
           </DialogContent>
         </Dialog>

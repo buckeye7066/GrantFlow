@@ -33,7 +33,7 @@ function ReminderItem({
   title,
   description,
   date,
-  accent = "bg-blue-100 text-blue-700",
+  accent = "bg-primary/15 text-primary",
   statusLabel,
   context,
   daysRemaining,
@@ -56,7 +56,7 @@ function ReminderItem({
   const dueLine = dueParts.join(" • ")
 
   return (
-    <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white/80 p-3 shadow-sm">
+    <div className="flex items-start gap-3 rounded-xl border border-border bg-background/60 p-3 shadow-sm">
       <span className={cn("mt-1 flex h-9 w-9 items-center justify-center rounded-full", accent)}>
         <Icon className="h-4 w-4" />
       </span>
@@ -69,9 +69,9 @@ function ReminderItem({
             </Badge>
           ) : null}
         </div>
-        {description ? <p className="text-xs text-foreground">{description}</p> : null}
-        {context ? <p className="text-xs text-foreground">{context}</p> : null}
-        {dueLine ? <p className="text-xs font-medium text-blue-600">{dueLine}</p> : null}
+        {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
+        {context ? <p className="text-xs text-muted-foreground">{context}</p> : null}
+        {dueLine ? <p className="text-xs font-medium text-primary">{dueLine}</p> : null}
       </div>
     </div>
   )
@@ -79,7 +79,7 @@ function ReminderItem({
 
 function ReminderSkeleton() {
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white/60 p-3">
+    <div className="flex items-center gap-3 rounded-xl border border-border bg-background/40 p-3">
       <Skeleton className="h-9 w-9 rounded-full" />
       <div className="flex-1 space-y-2">
         <Skeleton className="h-3 w-1/3" />
@@ -131,7 +131,7 @@ export default function ReminderCenterCard({
       daysRemaining: deadline.daysRemaining ?? null,
       statusLabel: label,
       icon: BellRing,
-      accent: "bg-amber-100 text-amber-700",
+      accent: "bg-amber-500/15 text-amber-800 dark:text-amber-200",
     }
   }
 
@@ -148,7 +148,7 @@ export default function ReminderCenterCard({
       daysRemaining: milestone.daysRemaining ?? null,
       statusLabel: milestone.type ? toTitleCase(milestone.type) : undefined,
       icon: CalendarClock,
-      accent: "bg-emerald-100 text-emerald-700",
+      accent: "bg-emerald-500/15 text-emerald-800 dark:text-emerald-200",
     }
   }
 
@@ -158,19 +158,19 @@ export default function ReminderCenterCard({
   ].slice(0, 5)
 
   return (
-    <Card className="border-none shadow-none bg-gradient-to-br from-white/90 via-blue-50/70 to-white/60 backdrop-blur">
+    <Card className="border border-border/70 shadow-none bg-card/80 text-card-foreground backdrop-blur">
       <CardHeader className="pb-3 space-y-2">
         <div className="flex items-center justify-between gap-4">
           <div>
             <CardTitle className="flex items-center gap-2 text-foreground">
-              <Bell className="h-4 w-4 text-blue-600" />
+              <Bell className="h-4 w-4 text-primary" />
               Reminders & Nudges
             </CardTitle>
-            <p className="text-xs text-foreground mt-1">
+            <p className="text-xs text-muted-foreground mt-1">
               Keep teams aligned on deadlines, compliance, and document readiness.
             </p>
             {hasError ? (
-              <p className="text-xs text-amber-600 mt-2">
+              <p className="text-xs text-amber-700 dark:text-amber-300 mt-2">
                 Unable to sync latest reminders. Showing locally cached view.
               </p>
             ) : null}
@@ -196,12 +196,12 @@ export default function ReminderCenterCard({
           </Button>
         </div>
         {planGeneratedLabel ? (
-          <p className="text-xs text-foreground">{planGeneratedLabel}</p>
+          <p className="text-xs text-muted-foreground">{planGeneratedLabel}</p>
         ) : null}
       </CardHeader>
       <CardContent className="space-y-3">
         {planMutation.isError ? (
-          <div className="rounded-lg border border-rose-200 bg-rose-50/80 p-3 text-xs text-rose-700">
+          <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-800 dark:text-rose-200">
             {planMutation.error?.message ?? "Unable to generate an AI plan right now."}
           </div>
         ) : null}
@@ -213,10 +213,10 @@ export default function ReminderCenterCard({
             <ReminderSkeleton />
           </>
         ) : reminders.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-slate-300 p-6 text-center">
-            <FileSearch className="h-10 w-10 mx-auto text-slate-700 mb-3" />
-            <p className="text-sm font-medium text-foreground">No reminders yet</p>
-            <p className="text-xs text-foreground mt-1">
+          <div className="rounded-xl border border-dashed border-border p-6 text-center bg-muted/20">
+            <FileSearch className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
+            <p className="text-sm font-medium text-card-foreground">No reminders yet</p>
+            <p className="text-xs text-muted-foreground mt-1">
               Assign milestones or track grants to see intelligent reminders here.
             </p>
             <Button size="sm" className="mt-4">
@@ -228,32 +228,32 @@ export default function ReminderCenterCard({
         )}
 
         {planData ? (
-          <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-4 space-y-3">
-            <p className="text-sm font-semibold text-blue-900">AI Action Plan</p>
+          <div className="rounded-xl border border-primary/25 bg-primary/10 p-4 space-y-3">
+            <p className="text-sm font-semibold text-card-foreground">AI Action Plan</p>
             {planData.summary ? (
               <p className="text-sm text-foreground leading-relaxed">{planData.summary}</p>
             ) : null}
 
             {Array.isArray(planData.priority_actions) && planData.priority_actions.length > 0 ? (
               <div className="space-y-2">
-                <p className="text-xs font-semibold uppercase tracking-wide text-blue-900">
+                <p className="text-xs font-semibold uppercase tracking-wide text-primary">
                   Priority Actions
                 </p>
                 <ul className="space-y-2">
                   {planData.priority_actions.map((action, index) => (
                     <li
                       key={`${action.title ?? "action"}-${index}`}
-                      className="rounded-lg border border-white/60 bg-white/80 p-3 shadow-sm"
+                      className="rounded-lg border border-border bg-background/60 p-3 shadow-sm"
                     >
                       <p className="text-sm font-semibold text-foreground">{action.title}</p>
                       {action.due ? (
-                        <p className="text-xs text-blue-600 mt-1">Due {action.due}</p>
+                        <p className="text-xs text-primary mt-1">Due {action.due}</p>
                       ) : null}
                       {action.type ? (
-                        <p className="text-xs text-foreground mt-1">Type: {action.type}</p>
+                        <p className="text-xs text-muted-foreground mt-1">Type: {action.type}</p>
                       ) : null}
                       {action.notes ? (
-                        <p className="text-xs text-foreground mt-2 leading-relaxed">{action.notes}</p>
+                        <p className="text-xs text-muted-foreground mt-2 leading-relaxed">{action.notes}</p>
                       ) : null}
                     </li>
                   ))}
@@ -263,21 +263,21 @@ export default function ReminderCenterCard({
 
             {Array.isArray(planData.collaboration) && planData.collaboration.length > 0 ? (
               <div className="space-y-2">
-                <p className="text-xs font-semibold uppercase tracking-wide text-blue-900">
+                <p className="text-xs font-semibold uppercase tracking-wide text-primary">
                   Collaboration
                 </p>
                 <ul className="space-y-2">
                   {planData.collaboration.map((item, index) => (
                     <li
                       key={`${item.title ?? "collab"}-${index}`}
-                      className="rounded-lg border border-white/60 bg-white/70 p-3"
+                      className="rounded-lg border border-border bg-background/50 p-3"
                     >
                       <p className="text-sm font-semibold text-foreground">{item.title}</p>
                       {item.owner ? (
-                        <p className="text-xs text-foreground mt-1">Owner: {item.owner}</p>
+                        <p className="text-xs text-muted-foreground mt-1">Owner: {item.owner}</p>
                       ) : null}
                       {item.notes ? (
-                        <p className="text-xs text-foreground mt-2 leading-relaxed">{item.notes}</p>
+                        <p className="text-xs text-muted-foreground mt-2 leading-relaxed">{item.notes}</p>
                       ) : null}
                     </li>
                   ))}
@@ -287,18 +287,18 @@ export default function ReminderCenterCard({
 
             {Array.isArray(planData.follow_up) && planData.follow_up.length > 0 ? (
               <div className="space-y-2">
-                <p className="text-xs font-semibold uppercase tracking-wide text-blue-900">
+                <p className="text-xs font-semibold uppercase tracking-wide text-primary">
                   Follow Up
                 </p>
                 <ul className="space-y-2">
                   {planData.follow_up.map((item, index) => (
                     <li
                       key={`${item.title ?? "followup"}-${index}`}
-                      className="rounded-lg border border-white/60 bg-white/60 p-3"
+                      className="rounded-lg border border-border bg-background/40 p-3"
                     >
                       <p className="text-sm font-semibold text-foreground">{item.title}</p>
                       {item.notes ? (
-                        <p className="text-xs text-foreground mt-1 leading-relaxed">{item.notes}</p>
+                        <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{item.notes}</p>
                       ) : null}
                     </li>
                   ))}
@@ -308,12 +308,12 @@ export default function ReminderCenterCard({
 
             {Array.isArray(planData.ai_recommendations) && planData.ai_recommendations.length > 0 ? (
               <div className="space-y-2">
-                <p className="text-xs font-semibold uppercase tracking-wide text-blue-900">
+                <p className="text-xs font-semibold uppercase tracking-wide text-primary">
                   AI Recommendations
                 </p>
-                <ul className="space-y-2 text-xs text-foreground leading-relaxed">
+                <ul className="space-y-2 text-xs text-muted-foreground leading-relaxed">
                   {planData.ai_recommendations.map((tip, index) => (
-                    <li key={`tip-${index}`} className="rounded-md border border-white/50 bg-white/60 p-2">
+                    <li key={`tip-${index}`} className="rounded-md border border-border bg-background/40 p-2">
                       {tip}
                     </li>
                   ))}

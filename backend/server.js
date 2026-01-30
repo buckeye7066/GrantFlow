@@ -48,6 +48,7 @@ import healthRouter from './routes/health.js';
 import crawlLogsRouter from './routes/crawlLogs.js'
 import legacyFunctionsRouter from './routes/legacyFunctions.js'
 import sourceDirectoryRouter from './routes/sourceDirectory.js'
+import activityRouter from './routes/activity.js'
 import budgetsRouter from './routes/budgets.js'
 import contactsRouter from './routes/contacts.js'
 import applicationDraftsRouter from './routes/applicationDrafts.js'
@@ -57,6 +58,7 @@ import contactMethodsRouter from './routes/contactMethods.js'
 import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
+import { ensureProfileOrgLinks } from './utils/ensureProfileOrgLinks.js'
 import { runStartupOperations } from './services/anyaStartupOperations.js';
 import ensureMinimumNationalOpportunities from './utils/ensureMinimumNationalOpportunities.js';
 import seedAssistanceDirectories from './utils/seedAssistanceDirectories.js';
@@ -790,6 +792,17 @@ if (IS_SMOKE_MODE) {
   // Always ensure designated profiles exist (idempotent); baseline seed may not include newer fixtures.
   await ensureDesignatedProfiles(db)
   await linkAllProfilesToAdmin(db)
+  // Prevent "orphaned profiles" by ensuring every active profile has an organization_id.
+  // Bounded + idempotent so production startups stay safe.
+  try {
+    await ensureProfileOrgLinks(db, {
+      limit: Number(process.env.STARTUP_PROFILE_ORG_LINK_LIMIT || 5000),
+      includeDeleted: false,
+      dryRun: false,
+    })
+  } catch (error) {
+    console.warn('[startup] Failed to ensure profile organization links:', error?.message || error)
+  }
   await ensureUserPreferencesTable(db)
   await repairInvalidDocumentStatuses(db)
   await repairMissingUploadAvatars({ db, uploadsDir })
@@ -1455,6 +1468,7 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
 
 // API routes
 app.use('/api/auth', authRouter);
+app.use('/api/activity', activityRouter);
 app.use('/api/service-application', serviceApplicationRouter);
 app.use('/api/billing', billingRouter);
 app.use('/api/stats', statsRouter);
