@@ -268,39 +268,78 @@ async function main() {
 
   // 3) Geo crawl across all profile ZIP codes (offline + fast defaults).
   if (runGeoCrawl) {
-    const zipRows = await db
-      .prepare(
-        `
-          SELECT postal_code
-          FROM profiles
-          WHERE status = 'active'
-        `,
-      )
-      .all()
+    const geoScope = String(process.env.GEO_SCOPE || 'all_us').trim().toLowerCase()
 
-    const zips = Array.from(
-      new Set(
-        (zipRows || [])
-          .map((r) => String(r?.postal_code || '').trim())
-          .filter((z) => /^\d{5}$/.test(z)),
-      ),
-    ).sort()
+    // NOTE:
+    // - `profile_zips` keeps the run small (only ZIPs found in profile sections).
+    // - `all_us` runs across every state and therefore covers all US ZIPs.
+    //   (This is long-running; use CORE_TIMEOUT/GEO_TIMEOUT and consider running from Admin Geo Crawl UI.)
 
-    console.log('[full-test] starting geo crawl across profile ZIPs (offline)...', { zip_count: zips.length })
+    let runAllStates = geoScope !== 'profile_zips'
+    let zips = null
+
+    if (!runAllStates) {
+      // Extract ZIPs from sections (schema-safe; profiles table may not have a ZIP column).
+      const sections = await db
+        .prepare(
+          `
+            SELECT ps.profile_id, ps.section_key, ps.data
+            FROM profile_sections ps
+            JOIN profiles p ON p.id = ps.profile_id
+            WHERE p.status = 'active'
+              AND ps.section_key IN ('basic_information', 'location_focus')
+          `,
+        )
+        .all()
+
+      const zipsSet = new Set()
+      const tryAddZip = (value) => {
+        const zip = String(value || '').trim()
+        if (/^\d{5}$/.test(zip)) zipsSet.add(zip)
+      }
+
+      for (const row of sections || []) {
+        let parsed = null
+        try {
+          parsed = row?.data ? JSON.parse(String(row.data)) : null
+        } catch {
+          parsed = null
+        }
+        if (!parsed || typeof parsed !== 'object') continue
+
+        tryAddZip(parsed.zip)
+        tryAddZip(parsed.zip_code)
+        tryAddZip(parsed.zipcode)
+        tryAddZip(parsed.postal_code)
+        if (parsed.address && typeof parsed.address === 'object') {
+          tryAddZip(parsed.address.zip)
+          tryAddZip(parsed.address.zip_code)
+          tryAddZip(parsed.address.zipcode)
+          tryAddZip(parsed.address.postal_code)
+        }
+      }
+
+      zips = Array.from(zipsSet).sort()
+      console.log('[full-test] starting geo crawl across profile ZIPs (offline)...', { zip_count: zips.length })
+    } else {
+      console.log('[full-test] starting geo crawl across ALL US ZIPs (offline, all states)...')
+    }
 
     const geoJobId = crypto.randomUUID()
     const geoRunId = crypto.randomUUID()
     const parameters = {
       mode: 'geo',
       geo_run_id: geoRunId,
-      zip_list: zips,
-      max_zips: zips.length,
+      run_all_states: runAllStates || undefined,
+      zip_list: Array.isArray(zips) && zips.length ? zips : undefined,
+      max_zips: Array.isArray(zips) && zips.length ? zips.length : undefined,
       offline_only: true,
       discover_local_resources: false,
       rate_limit_ms: 0,
-      batch_size: Number(process.env.GEO_BATCH_SIZE ?? 50),
+      batch_size: Number(process.env.GEO_BATCH_SIZE ?? (runAllStates ? 200 : 50)),
       min_sources_per_zip: Number(process.env.GEO_MIN_SOURCES_PER_ZIP ?? 3),
-      resume: false,
+      // Full US runs are long; resumability helps. Profile-zip runs are short; keep resume off by default.
+      resume: runAllStates ? true : false,
     }
 
     await db
