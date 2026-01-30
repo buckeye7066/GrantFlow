@@ -84,6 +84,7 @@ export const CRAWLER_JOB_TYPES = [
   'comprehensive',
   'national',
   'item_search',
+  'item_gift_search',
   'avatar_lookup',
   'document_ingest',
   'pipeline_automation',

@@ -2,6 +2,7 @@ import { runAutonomousCodeCrawl } from './anyaAutonomousCrawler.js'
 import { runAutonomousCrawlers } from './anyaAutonomousFunctionRunner.js'
 import { runAutonomousFunctionTests } from './anyaAutonomousFunctionTesting.js'
 import { repairFailingTests } from './anyaTestRepair.js'
+import { discoverNewCatalogItems } from './itemCatalogService.js'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
@@ -31,6 +32,7 @@ const AUTONOMOUS_CONFIG = {
     codeCrawl: process.env.ANYA_CODE_CRAWL !== 'false',
     functionTests: process.env.ANYA_FUNCTION_TESTS !== 'false', 
     crawlers: process.env.ANYA_CRAWLERS !== 'false',
+    itemDiscovery: process.env.ANYA_ITEM_DISCOVERY !== 'false',
   },
   
   // Schedule (cron-like format)
@@ -52,6 +54,10 @@ const AUTONOMOUS_CONFIG = {
     functionTests: {
       fixErrors: process.env.ANYA_FIX_ERRORS === 'true',
       dryRun: process.env.ANYA_DRY_RUN === 'true',
+    },
+    itemDiscovery: {
+      minCount: parseInt(process.env.ANYA_ITEM_DISCOVERY_MIN_COUNT) || 3,
+      limit: parseInt(process.env.ANYA_ITEM_DISCOVERY_LIMIT) || 50,
     },
   },
 }
@@ -215,6 +221,24 @@ export async function runAllAutonomousOperations(context, trigger = 'manual') {
       } catch (error) {
         report.errors.push({ phase: 'crawlers', error: error.message })
         report.operations.crawlers = { status: 'failed', error: error.message }
+      }
+    }
+
+    // Phase 4: Discover new requestable items (deterministic; uses DB only)
+    if (AUTONOMOUS_CONFIG.operations.itemDiscovery) {
+      console.log('[Anya Scheduler] Phase 4: Discovering new requestable items...')
+      try {
+        const result = await discoverNewCatalogItems(context.db, AUTONOMOUS_CONFIG.params.itemDiscovery)
+        report.operations.itemDiscovery = {
+          status: 'completed',
+          inserted: result.inserted ?? 0,
+          scanned_opportunities: result.scanned_opportunities ?? null,
+          min_count: result.min_count ?? null,
+        }
+        console.log(`[Anya Scheduler] Item discovery complete: ${result.inserted ?? 0} new items`)
+      } catch (error) {
+        report.errors.push({ phase: 'itemDiscovery', error: error.message })
+        report.operations.itemDiscovery = { status: 'failed', error: error.message }
       }
     }
     

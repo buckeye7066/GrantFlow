@@ -850,7 +850,7 @@ async function processZip(zip, db, config) {
     const stateForZip = (coords?.state ?? meta?.state ?? null)
       ? String(coords?.state ?? meta?.state).toUpperCase()
       : null
-    const countyForZip = resolveCountyForZip(zip, stateForZip) ?? null
+    const countyForZip = stateForZip ? (await resolveCountyForZip(zip, stateForZip)) : null
 
     const reportSource = async (source, message) => {
       if (!runId) return

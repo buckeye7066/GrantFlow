@@ -25,6 +25,7 @@ import documentsRouter from './routes/documents.js';
 import expensesRouter from './routes/expenses.js';
 import aiRouter from './routes/ai.js';
 import anyaRouter from './routes/anya.js';
+import itemsRouter from './routes/items.js';
 import profilesRouter from './routes/profiles.js';
 import remindersRouter from './routes/reminders.js';
 import crawlersRouter from './routes/crawlers.js';
@@ -592,7 +593,22 @@ if (shouldAutoMigrate) {
 }
 
 function ensureCrawlerJobsSupportsAllTypes() {
-  const testTypes = ['profile_enrichment', 'national', 'national_zip_scan']
+  // SQLite-only safety: older local DBs may have an outdated CHECK constraint on crawler_jobs.type.
+  // If it rejects any currently-supported type, rebuild the table with the modern constraint.
+  const testTypes = [
+    'local',
+    'scholarship',
+    'health_resources',
+    'comprehensive',
+    'national',
+    'item_search',
+    'item_gift_search',
+    'avatar_lookup',
+    'document_ingest',
+    'pipeline_automation',
+    'profile_enrichment',
+    'national_zip_scan',
+  ]
   let needsRebuild = false
 
   for (const type of testTypes) {
@@ -631,9 +647,11 @@ function ensureCrawlerJobsSupportsAllTypes() {
           type TEXT NOT NULL CHECK(type IN (
             'local',
             'scholarship',
+            'health_resources',
             'comprehensive',
             'national',
             'item_search',
+            'item_gift_search',
             'avatar_lookup',
             'document_ingest',
             'pipeline_automation',
@@ -1322,46 +1340,71 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
       }
 
       try {
-        const emails = Array.from(
-          new Set(
-            [dbUser?.primary_email, user?.email]
-              .map((v) => String(v || '').trim().toLowerCase())
-              .filter(Boolean),
-          ),
-        )
+        const isAdminUser =
+          Boolean(dbUser?.is_admin) || user.role === 'admin' || user.is_admin === true
 
-        // Ensure schema exists (idempotent). If it fails, fall back to user_id only.
-        try {
-          await ensureProfileEmailSchema(req.db)
-        } catch {
-          // ignore
-        }
-
-        if (emails.length > 0) {
-          const placeholders = emails.map(() => '?').join(', ')
-          profiles = await req.db
-            .prepare(
-              `
-                SELECT DISTINCT p.id, p.display_name, p.organization_id, p.status
-                FROM profiles p
-                LEFT JOIN profile_emails pe ON pe.profile_id = p.id
-                WHERE p.user_id = ?
-                   OR lower(pe.email) IN (${placeholders})
-                ORDER BY p.created_at ASC
-              `,
-            )
-            .all(dbUser.id, ...emails);
-        } else {
+        if (isAdminUser) {
+          // Admin UX expects cross-org profile selection.
+          // Return a large (but bounded) list to avoid "missing profiles" in the UI.
           profiles = await req.db
             .prepare(
               `
                 SELECT id, display_name, organization_id, status
                 FROM profiles
-                WHERE user_id = ?
-                ORDER BY created_at ASC
+                ORDER BY created_at DESC
+                LIMIT 1000
               `,
             )
-            .all(dbUser.id);
+            .all()
+
+          // Lightweight, actionable logging for the "missing profiles" failure mode.
+          if (Array.isArray(profiles) && profiles.length === 0) {
+            console.warn('[/api/auth/me] Admin profile list is empty (expected baseline profiles)', {
+              user_id: dbUser?.id ?? null,
+            })
+          }
+        } else {
+          const emails = Array.from(
+            new Set(
+              [dbUser?.primary_email, user?.email]
+                .map((v) => String(v || '').trim().toLowerCase())
+                .filter(Boolean),
+            ),
+          )
+
+          // Ensure schema exists (idempotent). If it fails, fall back to user_id only.
+          try {
+            await ensureProfileEmailSchema(req.db)
+          } catch {
+            // ignore
+          }
+
+          if (emails.length > 0) {
+            const placeholders = emails.map(() => '?').join(', ')
+            profiles = await req.db
+              .prepare(
+                `
+                  SELECT DISTINCT p.id, p.display_name, p.organization_id, p.status
+                  FROM profiles p
+                  LEFT JOIN profile_emails pe ON pe.profile_id = p.id
+                  WHERE p.user_id = ?
+                     OR lower(pe.email) IN (${placeholders})
+                  ORDER BY p.created_at ASC
+                `,
+              )
+              .all(dbUser.id, ...emails)
+          } else {
+            profiles = await req.db
+              .prepare(
+                `
+                  SELECT id, display_name, organization_id, status
+                  FROM profiles
+                  WHERE user_id = ?
+                  ORDER BY created_at ASC
+                `,
+              )
+              .all(dbUser.id)
+          }
         }
       } catch (dbError) {
         console.error('[/api/auth/me] Database error fetching profiles:', dbError);
@@ -1432,6 +1475,7 @@ app.use('/api/applications', applicationsRouter);
 app.use('/api/billing-settings', billingSettingsRouter);
 app.use('/api/contact-methods', contactMethodsRouter);
 app.use('/api/source-directory', sourceDirectoryRouter);
+app.use('/api/items', itemsRouter);
 app.use('/api/ai', aiRouter);
 app.use('/api/anya', anyaRouter); // Keep existing Anya routes for compatibility
 app.use('/api/profiles', profilesRouter);

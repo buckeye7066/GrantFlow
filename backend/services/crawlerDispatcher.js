@@ -8,6 +8,7 @@ import { processScholarshipCrawlerJob } from './scholarshipCrawler.js'
 import { processHealthResourcesCrawlerJob } from './healthResourcesCrawler.js'
 import { runComprehensiveCrawler as processComprehensiveCrawlerJob } from './comprehensiveCrawlerOptimized.js'
 import { processItemCrawlerJob } from './itemCrawler.js'
+import { processItemGiftCrawlerJob } from './itemGiftCrawler.js'
 import { processDocumentIngestionJob } from './documentIngestion.js'
 import { processPipelineAutomationJob } from './pipelineAutomation.js'
 import { buildProfileContext } from './profileHelpers.js'
@@ -30,6 +31,7 @@ const HANDLERS = {
   comprehensive: processComprehensiveCrawlerJob,
   national: processNationalJob,
   item_search: processItemCrawlerJob,
+  item_gift_search: processItemGiftCrawlerJob,
   document_ingest: processDocumentIngestionJob,
   pipeline_automation: processPipelineAutomationJob,
   profile_enrichment: processProfileEnrichmentJob,

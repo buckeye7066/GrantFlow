@@ -40,6 +40,7 @@ import {
   saveCrawlerResultsToGlobal,
   getAutonomousCrawlersStatus,
 } from './anyaAutonomousFunctionRunner.js'
+import { discoverNewCatalogItems } from './itemCatalogService.js'
 import {
   runAutonomousFunctionTests,
   testButtonFunctionality,
@@ -1719,7 +1720,16 @@ registerTool({
         type: 'array',
         items: { 
           type: 'string',
-          enum: ['local', 'scholarship', 'comprehensive', 'profile_enrichment', 'avatar_lookup', 'item_search']
+          enum: [
+            'local',
+            'scholarship',
+            'health_resources',
+            'comprehensive',
+            'profile_enrichment',
+            'avatar_lookup',
+            'item_search',
+            'item_gift_search',
+          ]
         },
         description: 'Types of crawlers to run (default: [local, scholarship, comprehensive, profile_enrichment]). Use comprehensive with mode=geo for Geo Crawl.'
       },
@@ -1729,6 +1739,26 @@ registerTool({
     },
   },
   handler: runAutonomousCrawlers,
+})
+
+registerTool({
+  name: 'admin.items.discover',
+  description:
+    'Discover new requestable items by scanning existing opportunity keywords/categories. Deterministic and reversible; does not scrape the web. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      min_count: { type: 'integer', minimum: 1, maximum: 50, description: 'Minimum occurrences to consider (default: 3)' },
+      limit: { type: 'integer', minimum: 1, maximum: 200, description: 'Max items to insert (default: 50)' },
+    },
+  },
+  handler: async (params, context) => {
+    if (!context?.db) throw new Error('Database connection unavailable')
+    const minCount = Number(params?.min_count ?? 3)
+    const limit = Number(params?.limit ?? 50)
+    return discoverNewCatalogItems(context.db, { minCount, limit })
+  },
 })
 
 registerTool({
