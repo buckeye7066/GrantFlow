@@ -227,6 +227,7 @@ Refer to the QA checklist in [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_RE
 | `npm run seed:db` | Build `backend/data/grantflow.db` from curated baseline profiles |
 | `npm run seed:profiles` | Rehydrate the 11 curated profiles/sections into an existing DB (`--force` to reset) |
 | `npm run seed:demo` | Seed demo data (development only, uses bundled JSON files) |
+| `npm run opps:backfill` | One-time backfill: normalize deadlines / geo fields (safe + idempotent) |
 | `npm run build` / `npm run preview` | Build and preview the production frontend |
 | `npm run test:auto-merge` | Test auto-merge workflow logic locally (shows which PRs would be merged) |
 
@@ -712,6 +713,16 @@ $env:SMOKE_BASE_PATH='/'; npm run smoke:login
 
 ```bash
 git remote set-url origin https://github.com/buckeye7066/GrantFlow.git
+```
+
+- **Backfill production DB copy (dry-run)**:
+
+```powershell
+# Dry-run, show up to 50 proposed updates
+npm run opps:backfill -- --db "C:\path\to\grantflow.db" --limit 50 --dry-run
+
+# If the DB uses a legacy table name, override it
+npm run opps:backfill -- --db "C:\path\to\grantflow.db" --table funding_opportunities --limit 50 --dry-run
 ```
 - In hosted environments (Vercel), the default base path `/grantflow` is already configured—no override required.
 
