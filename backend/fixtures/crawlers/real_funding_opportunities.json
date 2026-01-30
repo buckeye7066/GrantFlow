@@ -1,0 +1,60 @@
+{
+  "federal_grants": [
+    {
+      "id": "grants-gov-search",
+      "title": "Grants.gov (Federal grant opportunities search)",
+      "sponsor": "U.S. Government",
+      "description": "Official entry point for federal grant opportunities. Use the search tool to find open and forecasted opportunities by keyword, agency, and eligibility.",
+      "source_url": "https://www.grants.gov/search-grants",
+      "application_url": "https://www.grants.gov/search-grants",
+      "state": "nationwide",
+      "categories": ["federal_grants", "directory"],
+      "keywords": ["grants.gov", "federal", "funding", "opportunities"],
+      "eligibility_bullets": ["Nationwide", "See listing for eligibility"],
+      "requires_501c3": false,
+      "requires_match": false,
+      "is_active": true,
+      "record_origin": "curated_verified"
+    }
+  ],
+  "foundation_grants": [
+    {
+      "id": "candid-funders",
+      "title": "Candid (Find funders and grantmakers)",
+      "sponsor": "Candid",
+      "description": "Directory-style resource to identify foundations and grantmakers. Use as a reliable starting point to locate non-federal funding sources.",
+      "source_url": "https://candid.org/find-us",
+      "application_url": "https://candid.org/find-us",
+      "state": "nationwide",
+      "categories": ["foundation_grants", "directory"],
+      "keywords": ["candid", "foundation directory", "grantmakers"],
+      "eligibility_bullets": ["Directory resource (no single application)"],
+      "requires_501c3": false,
+      "requires_match": false,
+      "is_active": true,
+      "record_origin": "curated_verified"
+    }
+  ],
+  "state_programs": [],
+  "disability_assistance": [
+    {
+      "id": "benefits-gov",
+      "title": "Benefits.gov (Find government benefit programs)",
+      "sponsor": "U.S. Government",
+      "description": "Search for benefits and assistance programs that may apply, including state-specific and local programs. Useful when eligibility is complex or profile data is incomplete.",
+      "source_url": "https://www.benefits.gov/",
+      "application_url": "https://www.benefits.gov/",
+      "state": "nationwide",
+      "categories": ["disability_assistance", "benefits", "directory"],
+      "keywords": ["benefits", "assistance", "eligibility", "disability"],
+      "eligibility_bullets": ["Nationwide", "Use search to locate programs"],
+      "requires_501c3": false,
+      "requires_match": false,
+      "is_active": true,
+      "record_origin": "curated_verified"
+    }
+  ],
+  "veteran_assistance": [],
+  "nonprofit_grants": []
+}
+

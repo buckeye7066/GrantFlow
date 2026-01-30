@@ -37,6 +37,10 @@ const LIVE_CRAWL_TIMEOUT_MS = Number.parseInt(process.env.LIVE_CRAWL_TIMEOUT_MS 
 const MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK = Number.parseInt(process.env.MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK ?? '8', 10) || 8
 const LIVE_CRAWL_PERSIST_OPPS = String(process.env.LIVE_CRAWL_PERSIST_OPPS ?? 'true').toLowerCase() !== 'false'
 
+// Reversible safety toggles: default to SOFT matching (prefer penalties over exclusions).
+const HARD_FILTER_REQUIRES_MATCH = String(process.env.HARD_FILTER_REQUIRES_MATCH ?? '').toLowerCase() === 'true'
+const HARD_FILTER_MATCH_PERCENTAGE = String(process.env.HARD_FILTER_MATCH_PERCENTAGE ?? '').toLowerCase() === 'true'
+
 function normalizeString(value) {
   if (typeof value !== 'string') return ''
   return value.trim().toLowerCase()
@@ -346,8 +350,22 @@ function buildCandidateOpportunityQuery({ crawlerType, profileContext, tokens, i
   const params = []
 
   // Avoid obviously non-grant programs by default.
-  conditions.push(isPostgres ? '(requires_match IS NULL OR requires_match = FALSE)' : "(requires_match IS NULL OR requires_match = 0 OR requires_match = '0' OR requires_match = 'false')")
-  conditions.push(isPostgres ? '(match_percentage IS NULL OR match_percentage = 0)' : "(match_percentage IS NULL OR match_percentage = 0 OR match_percentage = '0')")
+  // IMPORTANT:
+  // Matching-funds requirements are NOT exclusive. Do not hard-exclude them by default — penalize in scoring instead.
+  if (HARD_FILTER_REQUIRES_MATCH) {
+    conditions.push(
+      isPostgres
+        ? '(requires_match IS NULL OR requires_match = FALSE)'
+        : "(requires_match IS NULL OR requires_match = 0 OR requires_match = '0' OR requires_match = 'false')",
+    )
+  }
+  if (HARD_FILTER_MATCH_PERCENTAGE) {
+    conditions.push(
+      isPostgres
+        ? '(match_percentage IS NULL OR match_percentage = 0)'
+        : "(match_percentage IS NULL OR match_percentage = 0 OR match_percentage = '0')",
+    )
+  }
   conditions.push("(opportunity_type IS NULL OR LOWER(opportunity_type) NOT IN ('loan','loan_program','microloan'))")
 
   // Exclude expired deadlines by default (rolling/ongoing/NULL are allowed).

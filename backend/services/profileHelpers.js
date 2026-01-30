@@ -1,4 +1,5 @@
 import zipcodes from 'zipcodes'
+import { resolveCountyForZip } from './geo/zipCountyResolver.js'
 
 function safeParseJSON(value, fallback) {
   if (!value) return fallback
@@ -523,6 +524,7 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
       extractCityFromSections({ profile, sections }) ||
       extractCityFromAddress(basic.address) ||
       extractCityFromAddress(comprehensive.address),
+    county: null,
   }
 
   // If we have ZIP but not state/city, derive from local ZIP database.
@@ -532,6 +534,17 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
       const lookup = zipcodes.lookup(location.zip)
       if (lookup?.state) location.state = String(lookup.state).toUpperCase()
       if (lookup?.city && !location.city) location.city = String(lookup.city)
+    } catch {
+      // ignore
+    }
+  }
+
+  // County is a durable "expand outward" geography signal:
+  // city → county → state → national. Never fabricate it unless we can resolve from an offline dataset.
+  if (location.zip && !location.county) {
+    try {
+      const county = resolveCountyForZip(location.zip, location.state || null)
+      if (county) location.county = county
     } catch {
       // ignore
     }

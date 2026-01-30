@@ -27,22 +27,70 @@ export function calculateMatchScore(profile, opportunity) {
   const reasons = [];
   let score = 0;
   
-  // Geographic match (20 pts)
+  // Geographic match (expand outward: ZIP → county → state → national)
+  // IMPORTANT: location mismatches reduce score; they must NOT exclude results.
+  const profileLocation = effectiveSignals?.location || {}
+  const profileZip =
+    profileLocation?.zip ??
+    effectiveProfile?.postal_code ??
+    effectiveProfile?.zip_code ??
+    null
+  const profileCounty = profileLocation?.county ?? null
+  const profileCity = profileLocation?.city ?? effectiveProfile?.city ?? null
   const profileState =
-    effectiveSignals?.location?.state ??
+    profileLocation?.state ??
     effectiveProfile?.state ??
     null
-  if (opportunity.is_national || (opportunity.state && profileState && opportunity.state === profileState)) {
-    score += 20;
-    reasons.push(opportunity.is_national ? 'National eligibility' : 'Geographic eligibility');
-  } else if (opportunity.state && profileState) {
-    // Only penalize mismatches when the profile location is known.
-    score -= 10;
-    reasons.push(`State mismatch (opportunity in ${opportunity.state}, profile in ${profileState})`);
-  } else if (opportunity.state && !profileState) {
-    // Unknown location should be neutral (no penalty); otherwise sparse profiles get unfairly crushed.
-    reasons.push('Location unknown (no state provided)');
+
+  const oppState = opportunity?.state ?? null
+  const oppZip = opportunity?.geo_zip ?? null
+  const oppCounty = opportunity?.geo_county ?? null
+  const oppIsNational =
+    Boolean(opportunity?.is_national) ||
+    String(oppState || '').toLowerCase() === 'nationwide'
+
+  // Best-match tier (max 25)
+  let geoTier = null // zip|city|county|state|national|unknown
+  let geoPoints = 0
+
+  if (profileZip && oppZip && String(profileZip).trim() === String(oppZip).trim()) {
+    geoTier = 'zip'
+    geoPoints = 25
+  } else if (profileCounty && oppCounty && normalizeCounty(oppCounty) === normalizeCounty(profileCounty)) {
+    geoTier = 'county'
+    geoPoints = 22
+  } else if (
+    profileCity &&
+    typeof profileCity === 'string' &&
+    typeof opportunity?.description === 'string' &&
+    normalizeString(opportunity.description).includes(normalizeString(profileCity))
+  ) {
+    // City is not a canonical column today (we sometimes only see it in text).
+    geoTier = 'city'
+    geoPoints = 20
+  } else if (profileState && oppState && String(oppState).trim().toUpperCase() === String(profileState).trim().toUpperCase()) {
+    geoTier = 'state'
+    geoPoints = 18
+  } else if (oppIsNational) {
+    geoTier = 'national'
+    geoPoints = 12
+  } else if (!profileZip && !profileCounty && !profileCity && !profileState) {
+    geoTier = 'unknown'
+    geoPoints = 0
+  } else {
+    // Known profile location but no match signal on the opportunity.
+    geoTier = 'mismatch'
+    geoPoints = -5
   }
+
+  score += geoPoints
+  if (geoTier === 'zip') reasons.push('Geography: ZIP match')
+  else if (geoTier === 'county') reasons.push('Geography: County match')
+  else if (geoTier === 'city') reasons.push('Geography: City match (text)')
+  else if (geoTier === 'state') reasons.push('Geography: State match')
+  else if (geoTier === 'national') reasons.push('National eligibility')
+  else if (geoTier === 'unknown') reasons.push('Location unknown (neutral)')
+  else if (geoTier === 'mismatch') reasons.push('Geography mismatch (soft penalty)')
   
   // Applicant type match (25 pts)
   const applicantTypesSet =
@@ -110,6 +158,17 @@ export function calculateMatchScore(profile, opportunity) {
     score: Math.max(0, Math.min(100, score)), 
     reasons: reasons.length > 0 ? reasons : ['No specific matches found']
   };
+}
+
+function normalizeString(value) {
+  if (typeof value !== 'string') return ''
+  return value.trim().toLowerCase()
+}
+
+function normalizeCounty(value) {
+  const s = normalizeString(String(value || ''))
+  // Make "X County" comparisons stable.
+  return s.replace(/\bcounty\b/g, '').replace(/\s+/g, ' ').trim()
 }
 
 function applicantTypeSetHas(applicantTypesSet, values = []) {

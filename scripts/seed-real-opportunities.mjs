@@ -24,8 +24,23 @@ console.log('Database:', DB_PATH);
 const db = new Database(DB_PATH);
 
 // Load real opportunities data
-const realOppsPath = path.join(__dirname, '../backend/data/crawlers/real_funding_opportunities.json');
+const candidatePaths = [
+  // Primary (runtime) location; may be excluded from some repo distributions.
+  path.join(__dirname, '../backend/data/crawlers/real_funding_opportunities.json'),
+  // Repo-tracked fallback fixture so `npm run seed:demo` works on fresh clones.
+  path.join(__dirname, '../backend/fixtures/crawlers/real_funding_opportunities.json'),
+];
+const realOppsPath = candidatePaths.find((p) => fs.existsSync(p)) || null;
+if (!realOppsPath) {
+  console.error(
+    '[seed:demo] Missing real opportunities seed file. Expected one of:\n' +
+      candidatePaths.map((p) => `- ${p}`).join('\n') +
+      '\n\nFix: add the seed file (or run an ingestion pipeline).',
+  );
+  process.exit(1);
+}
 const realOpps = JSON.parse(fs.readFileSync(realOppsPath, 'utf-8'));
+console.log('[seed:demo] Using seed file:', realOppsPath);
 
 // Step 1: Remove fake/synthetic opportunities
 console.log('\n1. Removing fake opportunities...');
