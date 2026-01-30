@@ -500,6 +500,7 @@ export default function ProfileDetail() {
               onUploadDocument={handleUploadDocument}
               isUploadingDocument={uploadDocumentMutation.isPending}
               fundsTotal={profile.pipeline_funds_total ?? 0}
+              showAllSections={isAdmin}
             />
           </TabsContent>
 
