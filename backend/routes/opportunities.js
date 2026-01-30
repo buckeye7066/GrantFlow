@@ -7,6 +7,61 @@ const router = express.Router();
 const LOAN_TYPES = ['loan', 'loan_program', 'microloan'];
 const JSON_ARRAY_FIELDS = ['eligibility_bullets', 'categories', 'keywords', 'regions'];
 
+function stripOrdinalSuffixes(value) {
+  const text = typeof value === 'string' ? value : String(value ?? '');
+  if (!text) return '';
+  // 1st/2nd/3rd/4th → 1/2/3/4 (helps parse "April 14th, 2001")
+  return text.replace(/\b(\d{1,2})(st|nd|rd|th)\b/gi, '$1');
+}
+
+function parseLooseDate(value) {
+  if (!value) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  const raw = typeof value === 'string' ? value.trim() : String(value).trim();
+  if (!raw) return null;
+
+  // Fast path: ISO-ish
+  const iso = raw.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+  if (iso) {
+    const d = new Date(`${iso[1]}-${iso[2]}-${iso[3]}T00:00:00Z`);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  const cleaned = stripOrdinalSuffixes(raw)
+    .replace(/,/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const d = new Date(cleaned);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function isDirectoryLike(row) {
+  if (!row || typeof row !== 'object') return false;
+  const type = String(row.type || '').trim().toUpperCase();
+  if (type === 'DIRECTORY') return true;
+  const origin = String(row.record_origin || '').trim().toLowerCase();
+  if (origin.includes('directory')) return true;
+  const oppType = String(row.opportunity_type || '').trim().toLowerCase();
+  return oppType.includes('directory');
+}
+
+function isExpiredOpportunity(row, { now = new Date() } = {}) {
+  if (!row) return false;
+  if (isDirectoryLike(row)) return false;
+
+  const deadlineType = String(row.deadline_type || '').trim().toLowerCase();
+  if (deadlineType === 'rolling' || deadlineType === 'ongoing') return false;
+
+  const deadlineDate = parseLooseDate(row.deadline);
+  if (!deadlineDate) return false;
+
+  const cutoff = new Date(now);
+  cutoff.setHours(0, 0, 0, 0);
+  return deadlineDate.getTime() < cutoff.getTime();
+}
+
 function safeParseJSON(value, fallback = []) {
   if (value === null || value === undefined) return fallback;
   try {
@@ -212,13 +267,17 @@ function dedupeKeyFromRow(row) {
   const url = normalizeUrlForDedupe(row.application_url) || normalizeUrlForDedupe(row.source_url);
   const title = String(row.title || '').trim().toLowerCase();
   const sponsor = String(row.sponsor || '').trim().toLowerCase();
-  const deadline = String(row.deadline || '').trim().toLowerCase();
-  // Primary: collapse cross-source duplicates (even when URLs/IDs differ).
-  if (title && sponsor) return `tsd:${title}::${sponsor}::${deadline}`;
-  if (title && deadline) return `td:${title}::${deadline}`;
+  const deadlineIso = (() => {
+    const d = parseLooseDate(row.deadline);
+    return d ? d.toISOString().slice(0, 10) : String(row.deadline || '').trim().toLowerCase();
+  })();
+  // Primary: collapse cross-source duplicates via stable URLs first.
+  if (url) return `url:${url}`;
   const sourceId = row.source_id != null ? String(row.source_id).trim().toLowerCase() : '';
   if (sourceId) return `sid:${sourceId}`;
-  if (url) return `url:${url}`;
+  // Fallback: collapse cross-source duplicates (even when URLs/IDs differ).
+  if (title && sponsor) return `tsd:${title}::${sponsor}::${deadlineIso}`;
+  if (title && deadlineIso) return `td:${title}::${deadlineIso}`;
   return row.id ? `id:${String(row.id)}` : null;
 }
 
@@ -239,7 +298,8 @@ function dedupeKeySql(prefix, { useGeoIndex }) {
   const tdExpr = `CASE WHEN ${titleExpr} IS NOT NULL AND ${deadlineExpr} <> '' THEN (${titleExpr} || '::' || ${deadlineExpr}) ELSE NULL END`;
   const sourceIdExpr = `NULLIF(LOWER(TRIM(${prefix}source_id)), '')`;
   const urlExpr = `COALESCE(NULLIF(LOWER(TRIM(${prefix}application_url)), ''), NULLIF(LOWER(TRIM(${prefix}source_url)), ''))`;
-  return `COALESCE(${tsdExpr}, ${tdExpr}, ${sourceIdExpr}, ${urlExpr}, ${prefix}id)`;
+  // Prefer URL, then source_id, then text fallback.
+  return `COALESCE(${urlExpr}, ${sourceIdExpr}, ${tsdExpr}, ${tdExpr}, ${prefix}id)`;
 }
 
 function coerceBooleanToSqlite(value) {
@@ -311,6 +371,32 @@ router.get('/', async (req, res) => {
 
     const baseConditions = [`${prefix}is_active = ?`];
     const baseParams = [sqlBool(true)];
+
+    // Default guardrail: exclude expired fixed-deadline opportunities.
+    // Keep directory-style resources regardless of deadline, and keep rolling/ongoing.
+    // NOTE: SQLite can store non-ISO "DATE" strings; DATE(deadline) returns NULL for unparsable rows,
+    // which we treat as expired to prevent obviously outdated items from surfacing.
+    if (dialect === 'postgres') {
+      baseConditions.push(
+        `(
+          ${prefix}type = 'DIRECTORY'
+          OR LOWER(COALESCE(${prefix}record_origin, '')) LIKE '%directory%'
+          OR ${prefix}deadline_type IN ('rolling', 'ongoing')
+          OR ${prefix}deadline IS NULL
+          OR ${prefix}deadline >= CURRENT_DATE
+        )`,
+      );
+    } else {
+      baseConditions.push(
+        `(
+          ${prefix}type = 'DIRECTORY'
+          OR LOWER(COALESCE(${prefix}record_origin, '')) LIKE '%directory%'
+          OR ${prefix}deadline_type IN ('rolling', 'ongoing')
+          OR ${prefix}deadline IS NULL
+          OR DATE(${prefix}deadline) >= DATE('now')
+        )`,
+      );
+    }
 
     if (search) {
       const searchTerm = `%${search}%`;
@@ -620,7 +706,29 @@ router.get('/', async (req, res) => {
       console.info('[opportunities] de-duped duplicate rows', { removed, hasGeoRun, source: source ?? null });
     }
 
-    const filteredTotal = Number(result.total ?? parsed.length);
+    // Second guardrail: drop expired opportunities that slip through due to non-ISO dates.
+    // (Directory-style resources and rolling/ongoing are always allowed.)
+    const now = new Date();
+    const withoutExpired = [];
+    let removedExpired = 0;
+    for (const row of parsed) {
+      if (isExpiredOpportunity(row, { now })) {
+        removedExpired += 1;
+        continue;
+      }
+      withoutExpired.push(row);
+    }
+    if (removedExpired > 0) {
+      console.info('[opportunities] removed expired opportunities', {
+        removed: removedExpired,
+        request_id: req.requestId || null,
+        hasGeoRun,
+        state: normalizedState || null,
+        source: source || null,
+      });
+    }
+
+    const filteredTotal = Number(result.total ?? withoutExpired.length) - removedExpired;
 
     // Guardrail: if the user requested grant-only compliance but this filter eliminates everything,
     // fall back to returning review-required opportunities instead of an empty result set.
@@ -712,15 +820,16 @@ router.get('/', async (req, res) => {
     }
 
     res.json({
-      data: parsed,
-      total: filteredTotal,
-      total_found: filteredTotal,
-      included: parsed.length,
+      data: withoutExpired,
+      total: Math.max(0, filteredTotal),
+      total_found: Math.max(0, filteredTotal),
+      included: withoutExpired.length,
       limit: parsedLimit,
       offset: parsedOffset,
       compliance_requested: normalizedCompliance,
       compliance_effective: normalizedCompliance,
       fallback_applied: false,
+      removed_expired: removedExpired,
     });
   } catch (error) {
     console.error('Error listing opportunities:', error);
