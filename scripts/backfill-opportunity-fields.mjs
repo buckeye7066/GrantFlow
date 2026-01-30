@@ -60,7 +60,8 @@ function main() {
   // Deadlines that are likely non-ISO or have time suffixes.
   where.push("(deadline IS NOT NULL AND deadline != '' AND (deadline LIKE '%/%' OR deadline LIKE '____-__-__-__-__-__'))")
   if (fillCounty) {
-    where.push('(geo_zip IS NOT NULL AND geo_zip != \"\" AND (geo_county IS NULL OR geo_county = \"\"))')
+    // IMPORTANT: SQLite treats double quotes as identifiers. Use single quotes for string literals.
+    where.push("(geo_zip IS NOT NULL AND geo_zip != '' AND (geo_county IS NULL OR geo_county = ''))")
   }
   const whereSql = where.length ? `WHERE ${where.join(' OR ')}` : ''
   const limitSql = limit ? `LIMIT ${Number(limit)}` : ''
