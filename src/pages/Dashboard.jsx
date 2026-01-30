@@ -276,6 +276,15 @@ export default function Dashboard() {
     return profileOrganizationId ? 1 : 0
   }, [currentUser?.role, profiles.length, organizations.length, profileOrganizationId, dashboardStats])
 
+  const displayActiveGrantsCount = useMemo(() => {
+    // Use marketing stats for non-admin users when provided by backend.
+    if (currentUser?.role !== "admin" && dashboardStats && !dashboardStats.isRealData) {
+      const value = Number(dashboardStats.activeGrants)
+      if (Number.isFinite(value) && value >= 0) return value
+    }
+    return activeGrants.length
+  }, [currentUser?.role, dashboardStats, activeGrants.length])
+
   const stats = useMemo(
     () => [
       {
@@ -293,7 +302,7 @@ export default function Dashboard() {
       },
       {
         title: "Active Grants",
-        value: activeGrants.length,
+        value: displayActiveGrantsCount,
         icon: Target,
         color: "from-emerald-500 to-emerald-600",
         link: createPageUrl("Pipeline"),
@@ -313,7 +322,14 @@ export default function Dashboard() {
         link: createPageUrl("Calendar"),
       },
     ],
-    [displayOrganizationsCount, activeGrants.length, totalExpenses, urgentDeadlines.length, totalFundsSecured, isLoadingGrants],
+    [
+      displayOrganizationsCount,
+      displayActiveGrantsCount,
+      totalExpenses,
+      urgentDeadlines.length,
+      totalFundsSecured,
+      isLoadingGrants,
+    ],
   )
 
   const activeProfileId = useMemo(() => {

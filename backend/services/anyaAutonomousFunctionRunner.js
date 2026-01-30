@@ -4,6 +4,8 @@ import { randomUUID } from 'crypto'
 import { dispatchCrawlerJob } from './crawlerDispatcher.js'
 import { createCrawlerJob } from './crawlerJobCreation.js'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
+import { buildProfileContext } from './profileHelpers.js'
+import { saveToProfilePipeline } from './opportunityMatcher.js'
 
 const REPO_ROOT = path.resolve(process.cwd())
 
@@ -403,88 +405,6 @@ export async function runAutonomousCrawlers(options, context) {
 }
 
 /**
- * Calculate match score between opportunity and profile
- */
-function calculateMatchScore(opp, profile) {
-  let score = 0
-  let maxScore = 0
-  
-  // Location match (30 points)
-  maxScore += 30
-  if (opp.state && profile.state) {
-    if (opp.state.toLowerCase() === profile.state.toLowerCase()) {
-      score += 30
-    } else if (opp.state === 'nationwide' || opp.is_national) {
-      score += 15
-    }
-  } else if (opp.state === 'nationwide' || opp.is_national) {
-    score += 15
-  }
-  
-  // Category match (40 points)
-  maxScore += 40
-  if (opp.categories && profile.categories) {
-    try {
-      const oppCategories = JSON.parse(opp.categories)
-      const profileCategories = JSON.parse(profile.categories)
-      
-      if (Array.isArray(oppCategories) && Array.isArray(profileCategories)) {
-        const matches = oppCategories.filter(c => 
-          profileCategories.some(pc => 
-            c.toLowerCase().includes(pc.toLowerCase()) || 
-            pc.toLowerCase().includes(c.toLowerCase())
-          )
-        )
-        score += Math.min(40, matches.length * 10)
-      }
-    } catch (e) {
-      // Ignore JSON parse errors
-    }
-  }
-  
-  // Organization type match (20 points)
-  maxScore += 20
-  if (opp.eligibility_bullets && profile.organization_type) {
-    try {
-      const eligibility = JSON.parse(opp.eligibility_bullets)
-      if (Array.isArray(eligibility)) {
-        const hasMatch = eligibility.some(e => 
-          e.toLowerCase().includes(profile.organization_type.toLowerCase())
-        )
-        if (hasMatch) score += 20
-      }
-    } catch (e) {
-      // Ignore JSON parse errors
-    }
-  }
-  
-  // Special attributes (10 points)
-  maxScore += 10
-  if (profile.serves_veterans && opp.keywords) {
-    try {
-      const keywords = JSON.parse(opp.keywords)
-      if (Array.isArray(keywords) && keywords.some(k => k.toLowerCase().includes('veteran'))) {
-        score += 5
-      }
-    } catch (e) {
-      // Ignore
-    }
-  }
-  if (profile.serves_disabled && opp.keywords) {
-    try {
-      const keywords = JSON.parse(opp.keywords)
-      if (Array.isArray(keywords) && keywords.some(k => k.toLowerCase().includes('disabilit'))) {
-        score += 5
-      }
-    } catch (e) {
-      // Ignore
-    }
-  }
-  
-  return maxScore > 0 ? Math.round((score / maxScore) * 100) : 0
-}
-
-/**
  * Save opportunities with high match scores to profile pipeline
  * @param {Object} options
  * @param {string} options.jobId - Crawler job ID
@@ -501,106 +421,135 @@ async function saveHighMatchesToProfile(options, context) {
   }
   
   try {
-    // Get the profile
-    const profile = db.prepare(
-      'SELECT * FROM profiles WHERE id = ?'
-    ).get(profileId)
-    
-    if (!profile) {
-      throw new Error('Profile not found')
-    }
-    
+    const thresholdNum = Number(matchThreshold)
+    const threshold = Number.isFinite(thresholdNum) ? Math.max(0, Math.min(100, thresholdNum)) : 80
+
     // Get the crawler job
     const job = db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
-    
     if (!job || job.status !== 'completed') {
-      return { message: 'Job not completed or not found' }
+      return { job_id: jobId, profile_id: profileId, message: 'Job not completed or not found' }
     }
-    
-    // Get opportunities from this job (we'll need to track them somehow)
-    // For now, get recent opportunities
-    const since1hPredicate =
-      db?.dialect === 'postgres'
-        ? `created_at >= (NOW() - INTERVAL '1 hour')`
-        : `created_at >= datetime('now', '-1 hour')`
 
-    const opportunities = db.prepare(
-      `
-      SELECT * FROM funding_opportunities
-      WHERE ${since1hPredicate}
-        AND (profile_id = ? OR profile_id IS NULL)
-      ORDER BY created_at DESC
-      LIMIT 100
-      `
-    ).all(profileId)
-    
-    let savedToProfile = 0
-    let highMatchCount = 0
-    
-    for (const opp of opportunities) {
-      const matchScore = calculateMatchScore(opp, profile)
-      
-      if (matchScore >= matchThreshold) {
-        highMatchCount++
-        
-        // Check if already in profile pipeline
-        const existing = db.prepare(
-          'SELECT id FROM funding_opportunities WHERE title = ? AND sponsor = ? AND profile_id = ?'
-        ).get(opp.title, opp.sponsor, profileId)
-        
-        if (!existing) {
-          // Add to profile pipeline with match score
-          const pipelineId = Math.random().toString(36).substring(2, 15)
-          
-          const matchReasons = []
-          if (opp.state === profile.state) matchReasons.push('Location match')
-          if (matchScore >= 90) matchReasons.push('Excellent category alignment')
-          else if (matchScore >= 80) matchReasons.push('Strong category alignment')
-          
-          db.prepare(
-            `
-            INSERT INTO funding_opportunities (
-              id, title, sponsor, deadline, amount_min, amount_max, amount_description,
-              application_url, state, opportunity_type, requires_match, match_percentage,
-              eligibility_bullets, categories, source, source_url, is_active,
-              profile_id, match_score, match_reasons, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            `
-          ).run(
-            pipelineId,
-            opp.title,
-            opp.sponsor,
-            opp.deadline,
-            opp.amount_min,
-            opp.amount_max,
-            opp.amount_description,
-            opp.application_url,
-            opp.state,
-            opp.opportunity_type,
-            opp.requires_match,
-            opp.match_percentage,
-            opp.eligibility_bullets,
-            opp.categories,
-            opp.source,
-            opp.source_url,
-            profileId,
-            matchScore,
-            JSON.stringify(matchReasons)
-          )
-          
-          savedToProfile++
-        }
+    const parseJson = (value, fallback) => {
+      try {
+        return value && typeof value === 'string' ? JSON.parse(value) : (value ?? fallback)
+      } catch {
+        return fallback
       }
     }
-    
+
+    const jobParams = parseJson(job.parameters, {})
+
+    // Job type -> opportunity source(s)
+    const sourcesByJobType = {
+      local: ['local_foundation'],
+      scholarship: ['scholarship_crawler'],
+      health_resources: ['health_resources_crawler'],
+      comprehensive: ['verified_real'],
+      item_search: ['item_funding'],
+      item_gift_search: ['item_gift'],
+    }
+
+    const sources = sourcesByJobType[job.type] || null
+
+    // Build full profile context (sections + signals) for match scoring.
+    const profileContext = await buildProfileContext(db, profileId)
+
+    // Item crawlers are query-driven; boost match scoring with the item query terms.
+    const itemQuery =
+      typeof jobParams?.item === 'string'
+        ? jobParams.item
+        : typeof jobParams?.item_keywords === 'string'
+          ? jobParams.item_keywords
+          : typeof jobParams?.keywords === 'string'
+            ? jobParams.keywords
+            : null
+    if (itemQuery) {
+      const raw = String(itemQuery).trim().toLowerCase()
+      const tokens = raw.split(/\s+/g).filter(Boolean)
+      if (!profileContext.signals) profileContext.signals = {}
+      if (!profileContext.signals.keywordSet) profileContext.signals.keywordSet = new Set()
+      if (raw) profileContext.signals.keywordSet.add(raw)
+      tokens.forEach((t) => profileContext.signals.keywordSet.add(t))
+    }
+
+    // Get opportunities created/updated during this job for this profile.
+    // We scope by started_at to avoid accidentally pulling other profiles' results.
+    const since = job.started_at || job.created_at || null
+    // IMPORTANT:
+    // - Many crawlers upsert globally-deduped opportunities (update existing rows).
+    // - If we filter only by created_at >= job.started_at we will discard valid results.
+    // Use (created_at OR updated_at) window.
+    const sincePredicate =
+      db?.dialect === 'postgres'
+        ? `(created_at >= COALESCE(?, created_at) OR updated_at >= COALESCE(?, updated_at))`
+        : `(created_at >= COALESCE(?, created_at) OR updated_at >= COALESCE(?, updated_at))`
+
+    const sourceClause = Array.isArray(sources) && sources.length ? `AND source IN (${sources.map(() => '?').join(', ')})` : ''
+
+    const opportunities = db
+      .prepare(
+        `
+          SELECT *
+          FROM funding_opportunities
+          WHERE (profile_id = ? OR profile_id IS NULL)
+            AND ${sincePredicate}
+            ${sourceClause}
+          ORDER BY updated_at DESC
+          LIMIT 2000
+        `,
+      )
+      .all(profileId, since, since, ...(sources || []))
+
+    let checked = 0
+    let eligible = 0
+    let saved = 0
+    let below = 0
+    let already = 0
+    let errors = 0
+
+    for (const opp of opportunities || []) {
+      checked += 1
+      try {
+        const result = await saveToProfilePipeline(db, opp, profileId, profileContext, null, threshold)
+        const matchPct = typeof result?.matchPercentage === 'number' ? result.matchPercentage : null
+        if (matchPct != null && matchPct >= threshold) eligible += 1
+
+        if (result?.saved) {
+          saved += 1
+        } else if (String(result?.reason || '').toLowerCase().includes('already in pipeline')) {
+          already += 1
+        } else if (matchPct != null && matchPct < threshold) {
+          below += 1
+        }
+      } catch (e) {
+        errors += 1
+      }
+    }
+
+    // If we found opportunities but saved none, log why (failure-state visibility).
+    if (checked > 0 && saved === 0) {
+      console.info('[autonomous] no pipeline inserts for job', {
+        job_id: jobId,
+        profile_id: profileId,
+        checked,
+        eligible,
+        already,
+        below,
+        threshold,
+      })
+    }
+
     return {
       job_id: jobId,
       profile_id: profileId,
-      opportunities_checked: opportunities.length,
-      high_match_count: highMatchCount,
-      saved_to_profile: savedToProfile,
-      match_threshold: matchThreshold,
+      opportunities_checked: checked,
+      eligible_count: eligible,
+      saved_to_profile: saved,
+      already_in_pipeline: already,
+      below_threshold: below,
+      errors,
+      match_threshold: threshold,
     }
   } catch (error) {
     throw new Error(`Failed to save high matches to profile: ${error.message}`)

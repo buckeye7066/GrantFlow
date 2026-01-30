@@ -95,9 +95,32 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
   const maxResults = parameters.max_results || 20
   
   // Get item keywords from job parameters
-  let itemKeywords = parameters.item_keywords || parameters.keywords || []
+  // Back-compat: older callers used `item_keywords`/`keywords`, newer callers use `item`.
+  let itemKeywords = parameters.item_keywords || parameters.keywords || parameters.item || parameters.search || []
   if (typeof itemKeywords === 'string') {
-    itemKeywords = itemKeywords.split(',').map(k => k.trim()).filter(Boolean)
+    const raw = itemKeywords.trim()
+    // Accept both comma-delimited keyword lists and a single phrase like "wheelchair van".
+    itemKeywords = raw.includes(',')
+      ? raw.split(',').map((k) => k.trim()).filter(Boolean)
+      : raw
+        ? [raw]
+        : []
+  }
+
+  // Expand phrases into tokens too (score-based matching; no hard exclusion).
+  if (Array.isArray(itemKeywords) && itemKeywords.length > 0) {
+    const expanded = new Set()
+    for (const entry of itemKeywords) {
+      const phrase = String(entry || '').trim()
+      if (!phrase) continue
+      expanded.add(phrase)
+      phrase
+        .split(/\s+/g)
+        .map((t) => t.trim())
+        .filter(Boolean)
+        .forEach((t) => expanded.add(t))
+    }
+    itemKeywords = Array.from(expanded)
   }
   
   if (itemKeywords.length === 0) {

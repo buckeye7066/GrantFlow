@@ -1,0 +1,96 @@
+{
+  "version": "2026-01-30",
+  "sources": [
+    {
+      "id": "pcs_for_people",
+      "name": "PCs for People",
+      "website_url": "https://www.pcsforpeople.org/",
+      "contact_url": "https://www.pcsforpeople.org/contact/",
+      "contact_email": null,
+      "contact_phone": null,
+      "item_tags": ["computer", "computers", "laptop", "laptops", "technology", "internet"],
+      "notes": "Low-cost computers and internet; availability varies by location/eligibility."
+    },
+    {
+      "id": "human_it",
+      "name": "Human-I-T",
+      "website_url": "https://www.human-i-t.org/",
+      "contact_url": "https://www.human-i-t.org/contact-us/",
+      "contact_email": null,
+      "contact_phone": null,
+      "item_tags": ["computer", "computers", "laptop", "laptops", "technology", "internet", "hotspot"],
+      "notes": "Device and internet access programs; verify eligibility on site."
+    },
+    {
+      "id": "computers_with_causes",
+      "name": "Computers with Causes",
+      "website_url": "https://www.computerswithcauses.org/",
+      "contact_url": "https://www.computerswithcauses.org/contact-us/",
+      "contact_email": null,
+      "contact_phone": null,
+      "item_tags": ["computer", "computers", "laptop", "laptops", "technology"],
+      "notes": "Donation request flow via site; verify timeline and eligibility."
+    },
+    {
+      "id": "compudopt",
+      "name": "Comp-U-Dopt",
+      "website_url": "https://www.compudopt.org/",
+      "contact_url": "https://www.compudopt.org/contact/",
+      "contact_email": null,
+      "contact_phone": null,
+      "item_tags": ["computer", "computers", "laptop", "laptops", "technology", "students"],
+      "notes": "Provides technology access programs; verify eligibility on site."
+    },
+    {
+      "id": "on_it_foundation",
+      "name": "The On It Foundation",
+      "website_url": "https://theonitfoundation.org/",
+      "contact_url": "https://theonitfoundation.org/contact/",
+      "contact_email": null,
+      "contact_phone": null,
+      "item_tags": ["computer", "laptop", "students", "school", "technology"],
+      "notes": "Student-focused device program; verify eligibility requirements."
+    },
+    {
+      "id": "free_geek",
+      "name": "Free Geek (local chapters)",
+      "website_url": "https://www.freegeek.org/",
+      "contact_url": "https://www.freegeek.org/contact",
+      "contact_email": null,
+      "contact_phone": null,
+      "item_tags": ["computer", "computers", "laptop", "laptops", "technology", "refurbished"],
+      "notes": "Local availability depends on region; contact local chapter."
+    },
+    {
+      "id": "techsoup",
+      "name": "TechSoup",
+      "website_url": "https://www.techsoup.org/",
+      "contact_url": "https://www.techsoup.org/about-us/contact-us",
+      "contact_email": null,
+      "contact_phone": null,
+      "item_tags": ["software", "hardware", "technology", "computers", "nonprofit"],
+      "notes": "Nonprofit eligibility; discounted/donated tech catalog."
+    },
+    {
+      "id": "good360",
+      "name": "Good360",
+      "website_url": "https://good360.org/",
+      "contact_url": "https://good360.org/contact-us/",
+      "contact_email": null,
+      "contact_phone": null,
+      "item_tags": ["equipment", "supplies", "furniture", "technology", "computers", "nonprofit"],
+      "notes": "Nonprofit product philanthropy; verify eligibility and catalog."
+    },
+    {
+      "id": "vehicles_for_change",
+      "name": "Vehicles for Change",
+      "website_url": "https://www.vehiclesforchange.org/",
+      "contact_url": "https://www.vehiclesforchange.org/contact-us/",
+      "contact_email": null,
+      "contact_phone": null,
+      "item_tags": ["vehicle", "van", "car", "transportation", "mobility", "handicap van", "wheelchair van"],
+      "notes": "Vehicle assistance programs; verify local coverage and eligibility."
+    }
+  ]
+}
+

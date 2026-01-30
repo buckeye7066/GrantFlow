@@ -170,6 +170,25 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   notes TEXT
 );
 
+-- Item catalog (AI + deterministic suggestions)
+-- A durable list of "things people request" (devices, equipment, adaptive items, etc.)
+CREATE TABLE IF NOT EXISTS item_catalog (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  active BOOLEAN DEFAULT TRUE,
+  name TEXT NOT NULL,
+  category TEXT,
+  synonyms TEXT DEFAULT '[]', -- JSON array
+  tags TEXT DEFAULT '[]', -- JSON array
+  source TEXT DEFAULT 'curated' CHECK(source IN ('curated', 'anya_discovered', 'manual')),
+  evidence_url TEXT,
+  notes TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_item_catalog_name ON item_catalog(name);
+CREATE INDEX IF NOT EXISTS idx_item_catalog_active ON item_catalog(active);
+
 -- Geo Crawl run tracking (durable progress for live monitor)
 CREATE TABLE IF NOT EXISTS geo_crawl_runs (
   id TEXT PRIMARY KEY,
@@ -836,6 +855,7 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
     'comprehensive',
     'national',
     'item_search',
+    'item_gift_search',
     'avatar_lookup',
     'document_ingest',
     'pipeline_automation',
