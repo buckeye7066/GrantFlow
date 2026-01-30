@@ -882,15 +882,17 @@ async function processZip(zip, db, config) {
     let foundationResults = []
     let overpassResults = []
 
+    // Directory-style resources must survive "offline" mode.
+    // offline_only is intended to skip upstream network calls, not to eliminate deterministic directory links.
+    await reportSource('state_portal', 'Querying source: state portals')
+    stateResults = await searchStateGrantsByZip(zip, coords ?? meta ?? null)
+
+    await reportSource('foundation_locator', 'Querying source: foundation locators')
+    foundationResults = await searchFoundationLocator(zip, coords ?? meta ?? null)
+
     if (!offlineOnly) {
       await reportSource('grants.gov', 'Querying source: grants.gov')
       grantsGovResults = coords ? await searchGrantsGovByZip(zip, coords) : []
-
-      await reportSource('state_portal', 'Querying source: state portals')
-      stateResults = await searchStateGrantsByZip(zip, coords ?? meta ?? null)
-
-      await reportSource('foundation_locator', 'Querying source: foundation locators')
-      foundationResults = await searchFoundationLocator(zip, coords ?? meta ?? null)
 
       if (discoverLocal) {
         await reportSource('overpass', 'Querying source: overpass directories')
