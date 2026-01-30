@@ -272,16 +272,19 @@ export default function GrantCard({ grant, organization, organizationName, onSta
 
           {/* External Link for discovery results - only show if valid URL */}
           {showSummary && isValidExternalUrl(grant.url || grant.application_url || grant.source_url) && (
-            <a 
-              href={grant.url || grant.application_url || grant.source_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
-              className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700"
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const href = grant.url || grant.application_url || grant.source_url;
+                if (href) window.open(href, '_blank', 'noopener,noreferrer');
+              }}
+              className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 text-left"
             >
               <ExternalLink className="w-3 h-3" />
               <span>View full details</span>
-            </a>
+            </button>
           )}
         </div>
       </Link>

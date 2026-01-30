@@ -10,6 +10,18 @@ import { useToast } from "@/components/ui/use-toast";
 import { Progress } from "@/components/ui/progress";
 import { Checkbox } from '@/components/ui/checkbox';
 
+function getOpportunityKey(opp, idx) {
+  const raw =
+    opp?.id ??
+    opp?.source_id ??
+    opp?.url ??
+    opp?.application_url ??
+    opp?.source_url ??
+    `${opp?.title || 'untitled'}|${opp?.sponsor || opp?.funder || ''}`;
+  // Ensure uniqueness even when upstream data has duplicates/missing ids.
+  return `${String(raw)}|${idx}`;
+}
+
 const AddToPipelineButton = ({ opportunity, onAddToPipeline, organizationName }) => {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -93,13 +105,13 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  const handleToggleSelection = (opportunityId) => {
+  const handleToggleSelection = (opportunityKey) => {
     setSelectedOpportunities(prev => {
       const newSet = new Set(Array.from(prev)); // Create proper new Set from array
-      if (newSet.has(opportunityId)) {
-        newSet.delete(opportunityId);
+      if (newSet.has(opportunityKey)) {
+        newSet.delete(opportunityKey);
       } else {
-        newSet.add(opportunityId);
+        newSet.add(opportunityKey);
       }
       return newSet;
     });
@@ -109,15 +121,13 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
     if (selectedOpportunities.size === results.length && results.length > 0) {
       setSelectedOpportunities(new Set());
     } else {
-      const allIds = results.map(opp => opp.id || opp.source_id);
-      setSelectedOpportunities(new Set(allIds));
+      const allKeys = results.map((opp, idx) => getOpportunityKey(opp, idx));
+      setSelectedOpportunities(new Set(allKeys));
     }
   };
 
   const handleBulkAdd = async () => {
-    const selectedOpps = results.filter(opp => 
-      selectedOpportunities.has(opp.id || opp.source_id)
-    );
+    const selectedOpps = results.filter((opp, idx) => selectedOpportunities.has(getOpportunityKey(opp, idx)));
     
     if (selectedOpps.length === 0) return;
 
@@ -235,13 +245,13 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-        {results.map((opp) => {
-          const oppId = opp.id || opp.source_id;
-          const isSelected = selectedOpportunities.has(oppId);
+        {results.map((opp, idx) => {
+          const oppKey = getOpportunityKey(opp, idx);
+          const isSelected = selectedOpportunities.has(oppKey);
           
           return (
             <div 
-              key={oppId} 
+              key={oppKey} 
               className={`flex flex-col bg-white rounded-xl shadow-sm border overflow-hidden transition-all ${
                 isSelected ? 'ring-2 ring-blue-500 border-blue-500' : ''
               }`}
@@ -249,11 +259,11 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
               <div className="p-3 border-b bg-slate-50 flex items-center gap-2">
                 <Checkbox
                   checked={isSelected}
-                  onCheckedChange={() => handleToggleSelection(oppId)}
-                  id={`select-${oppId}`}
+                  onCheckedChange={() => handleToggleSelection(oppKey)}
+                  id={`select-${oppKey}`}
                 />
                 <label 
-                  htmlFor={`select-${oppId}`} 
+                  htmlFor={`select-${oppKey}`} 
                   className="text-sm font-medium cursor-pointer flex-1"
                 >
                   Select
