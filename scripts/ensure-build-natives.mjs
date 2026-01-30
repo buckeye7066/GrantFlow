@@ -84,9 +84,16 @@ async function main() {
     return
   }
 
+  const envHints = {
+    node: process.version,
+    ci: Boolean(process.env.CI),
+    vercel: Boolean(process.env.VERCEL),
+    github_actions: Boolean(process.env.GITHUB_ACTIONS),
+  }
+
   const missing = pkgs.filter((p) => !hasModule(p))
   if (missing.length === 0) {
-    console.log('[ensure-build-natives] ok (already present)', { pkgs })
+    console.log('[ensure-build-natives] ok (already present)', { pkgs, ...envHints })
     return
   }
 
@@ -96,14 +103,30 @@ async function main() {
   // recreating the exact failure we're trying to prevent.
   // So when we need to intervene at all, install/refresh ALL required native packages
   // in a single npm command.
-  runNpmInstall(pkgs)
+  try {
+    runNpmInstall(pkgs)
+  } catch (err) {
+    // Build guardrail:
+    // In some CI environments, attempting a secondary `npm i --no-save` can fail due to
+    // workspace restrictions, lockfile policies, or transient registry errors.
+    //
+    // If this helper fails, we allow the main build step (Vite/Rollup/esbuild) to run so the
+    // deployment fails with the *true* underlying error (if any), instead of masking it here.
+    console.warn('[ensure-build-natives] install failed; continuing build without intervention', {
+      pkgs,
+      missing,
+      error: err?.message || String(err),
+      ...envHints,
+    })
+    return
+  }
 
   const stillMissing = pkgs.filter((p) => !hasModule(p))
   if (stillMissing.length > 0) {
     throw new Error(`still missing after install: ${stillMissing.join(', ')}`)
   }
 
-  console.log('[ensure-build-natives] ok (installed)', { pkgs })
+  console.log('[ensure-build-natives] ok (installed)', { pkgs, ...envHints })
 }
 
 main().catch((err) => {
