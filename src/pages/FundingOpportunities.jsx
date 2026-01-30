@@ -293,7 +293,17 @@ function scoreOpportunity(opportunity, profileDetail) {
   }
 }
 
-function OpportunityCard({ opportunity, onSelect, match, onAddToPipeline, isAddingToPipeline, canAddToPipeline }) {
+function OpportunityCard({
+  opportunity,
+  onSelect,
+  match,
+  onAddToPipeline,
+  isAddingToPipeline,
+  canAddToPipeline,
+  profiles = [],
+  selectedProfileId,
+  onSelectProfileId,
+}) {
   const matchScore = match?.score ?? 0
   const complianceStatus = opportunity.compliance_status ?? "unknown"
   const complianceReasons = Array.isArray(opportunity.compliance_reasons)
@@ -486,9 +496,37 @@ function OpportunityCard({ opportunity, onSelect, match, onAddToPipeline, isAddi
             </Tooltip>
           </TooltipProvider>
         ) : (
-          <div className="rounded-lg border border-dashed border-slate-200 p-3 text-xs text-slate-500 text-center">
-            <Target className="w-4 h-4 mx-auto mb-1 opacity-50" />
-            Select a profile to see match score
+          <div className="rounded-lg border border-dashed border-slate-200 p-3 text-xs text-slate-500">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Target className="w-4 h-4 opacity-50" />
+                <span>Select a profile to see match score</span>
+              </div>
+              {Array.isArray(profiles) && profiles.length > 0 && typeof onSelectProfileId === "function" ? (
+                <div
+                  className="min-w-[180px]"
+                  onClick={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <Select
+                    value={selectedProfileId || "all"}
+                    onValueChange={(value) => onSelectProfileId(value)}
+                  >
+                    <SelectTrigger className="h-8 bg-white text-slate-900 border-slate-300">
+                      <SelectValue placeholder="Select profile" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All profiles</SelectItem>
+                      {profiles.map((profile) => (
+                        <SelectItem key={profile.id} value={profile.id}>
+                          {profile.display_name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
+            </div>
           </div>
         )}
 
@@ -538,6 +576,9 @@ function OpportunityDetail({
   isAddingToPipeline = false,
   canAddToPipeline = false,
   selectedProfileName,
+  profiles = [],
+  selectedProfileId,
+  onSelectProfileId,
   onSaveDocument,
   isSavingDocument = false,
   canSaveDocument = false,
@@ -826,11 +867,36 @@ function OpportunityDetail({
           ) : null}
         </ScrollArea>
         <div className="pt-2 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-xs text-slate-500">
-            {canAddToPipeline
-              ? `Grant will be added to ${selectedProfileName ?? "the selected profile"}'s pipeline.`
-              : "Select a profile to enable pipeline creation."}
-          </p>
+          <div className="flex flex-col gap-2">
+            <p className="text-xs text-slate-500">
+              {canAddToPipeline
+                ? `Grant will be added to ${selectedProfileName ?? "the selected profile"}'s pipeline.`
+                : "Select a profile to enable pipeline creation."}
+            </p>
+            {Array.isArray(profiles) && profiles.length > 0 && typeof onSelectProfileId === "function" ? (
+              <div className="max-w-xs">
+                <Label className="text-[11px] uppercase tracking-wide text-slate-500">Profile</Label>
+                <div className="mt-1">
+                  <Select
+                    value={selectedProfileId || "all"}
+                    onValueChange={(value) => onSelectProfileId(value)}
+                  >
+                    <SelectTrigger className="h-9 bg-white text-slate-900 border-slate-300">
+                      <SelectValue placeholder="Select profile" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All profiles</SelectItem>
+                      {profiles.map((profile) => (
+                        <SelectItem key={profile.id} value={profile.id}>
+                          {profile.display_name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            ) : null}
+          </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
             <Button variant="outline" size="sm" onClick={onClose}>
               Close
@@ -945,6 +1011,7 @@ export default function FundingOpportunities() {
     queryKey: ["profiles"],
     queryFn: listProfiles,
   })
+  const profiles = Array.isArray(profilesQuery.data) ? profilesQuery.data : []
 
   const selectedProfileQuery = useQuery({
     queryKey: ["profile-detail", filters.profileId],
@@ -1516,6 +1583,9 @@ export default function FundingOpportunities() {
                   filters.profileId &&
                   filters.profileId !== "all"
                 )}
+                profiles={profiles}
+                selectedProfileId={filters.profileId}
+                onSelectProfileId={(value) => setFilters((prev) => ({ ...prev, profileId: value }))}
               />
             ))}
           </div>
@@ -1633,6 +1703,9 @@ export default function FundingOpportunities() {
           )
         }
         selectedProfileName={selectedProfile?.display_name}
+        profiles={profiles}
+        selectedProfileId={filters.profileId}
+        onSelectProfileId={(value) => setFilters((prev) => ({ ...prev, profileId: value }))}
         onSaveDocument={handleSaveOpportunityDocument}
         isSavingDocument={
           Boolean(selectedOpportunity) && savingOpportunityId === selectedOpportunity.id
