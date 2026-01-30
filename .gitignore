@@ -42,6 +42,7 @@ seed/*.db-journal
 
 # Backup files and temporary artifacts
 *.bak
+tmp/
 
 # User uploads / local artifacts
 backend/temp_images/
