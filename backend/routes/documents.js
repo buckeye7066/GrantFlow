@@ -409,7 +409,7 @@ function ensureProfileAccess(res, context, profileId) {
 }
 
 // GET /api/documents
-router.get('/', async (req, res) => {
+router.get('/', async (req, res, next) => {
   try {
     const context = await buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) return;
@@ -422,6 +422,7 @@ router.get('/', async (req, res) => {
       type,
       status,
       processing_status,
+      scope,
     } = req.query ?? {};
 
     const normalizedProfileId = normalizeProfileId(rawProfileId);
@@ -435,20 +436,44 @@ router.get('/', async (req, res) => {
     if (status) { filters.push('status = ?'); params.push(status); }
     if (processing_status) { filters.push('processing_status = ?'); params.push(processing_status); }
 
-    if (context.isAdmin) {
-      if (normalizedProfileId) { filters.push('profile_id = ?'); params.push(normalizedProfileId); }
+    // SECURITY:
+    // We do NOT default to returning "all accessible profiles" documents when `profile_id` is omitted.
+    // That can cause cross-profile leakage in UIs that forgot to pass the profile_id (as reported).
+    //
+    // - Default behavior: require profile_id (or infer it from X-Profile-Id if present).
+    // - Escape hatch (admin-only): `?scope=all_accessible` returns across accessible profiles.
+    const allowAllAccessible = String(scope || '').trim().toLowerCase() === 'all_accessible'
+
+    // Best-effort fallback: if caller omitted profile_id but sent X-Profile-Id, scope to it.
+    const headerProfileId = normalizeProfileId(req.headers?.['x-profile-id'] || req.headers?.['X-Profile-Id'])
+    const effectiveProfileId = normalizedProfileId || headerProfileId || null
+
+    if (allowAllAccessible) {
+      if (!context.isAdmin) {
+        return res.status(403).json({ error: 'Not authorized for all-accessible document listing' })
+      }
+      // Admin explicitly requested broad listing. Keep legacy behavior.
+      const accessible = Array.from(context.accessibleProfiles || [])
+      if (accessible.length > 0) {
+        const placeholders = accessible.map(() => '?').join(', ')
+        filters.push(`profile_id IN (${placeholders})`)
+        params.push(...accessible)
+      }
     } else {
-      const accessible = Array.from(context.accessibleProfiles);
-      if (accessible.length === 0) return res.json([]);
-      
-      if (normalizedProfileId) {
-        if (!context.accessibleProfiles.has(normalizedProfileId)) return res.json([]);
-        filters.push('profile_id = ?');
-        params.push(normalizedProfileId);
+      if (!effectiveProfileId) {
+        return res.status(400).json({
+          error: 'profile_id is required',
+          message: 'Pass ?profile_id=... to scope documents to a single profile.',
+        })
+      }
+
+      if (context.isAdmin) {
+        filters.push('profile_id = ?')
+        params.push(effectiveProfileId)
       } else {
-        const placeholders = accessible.map(() => '?').join(', ');
-        filters.push(`profile_id IN (${placeholders})`);
-        params.push(...accessible);
+        if (!context.accessibleProfiles.has(effectiveProfileId)) return res.json([])
+        filters.push('profile_id = ?')
+        params.push(effectiveProfileId)
       }
     }
 
@@ -459,7 +484,7 @@ router.get('/', async (req, res) => {
     const rows = await req.db.prepare(query).all(...params)
     res.json((rows || []).map(addDownloadUrl));
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return next(error)
   }
 });
 

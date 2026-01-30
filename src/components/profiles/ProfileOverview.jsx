@@ -489,6 +489,7 @@ export default function ProfileOverview({
   isUploadingDocument,
   fundsTotal = 0,
   billing = null,
+  showAllSections = false,
 }) {
   const { state: dashboardPrefs } = useDashboardPreferences()
   const theme = THEME_PRESETS[dashboardPrefs.colorTheme] ?? THEME_PRESETS.blue
@@ -641,11 +642,16 @@ export default function ProfileOverview({
   }
 
   const orderedSectionKeys = useMemo(() => {
+    // Default UX: only show sections relevant to the profile type to avoid redundant questions.
+    // Admins can opt into seeing everything via `showAllSections`.
+    if (!showAllSections) {
+      return applicableSectionKeys
+    }
     const applicable = new Set(applicableSectionKeys)
     const applicableFirst = allSectionKeys.filter((key) => applicable.has(key))
     const rest = allSectionKeys.filter((key) => !applicable.has(key))
     return [...applicableFirst, ...rest]
-  }, [allSectionKeys, applicableSectionKeys])
+  }, [allSectionKeys, applicableSectionKeys, showAllSections])
 
   return (
     <div className="space-y-10">
