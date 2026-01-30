@@ -54,6 +54,13 @@ cp backend/env.example backend/.env
 cp env.example .env
 ```
 
+PowerShell equivalent:
+
+```powershell
+Copy-Item backend\env.example backend\.env
+Copy-Item env.example .env
+```
+
 At minimum set:
 
 - `OPENAI_API_KEY`, `TWILIO_*`, and OAuth client IDs/secrets inside `backend/.env`
@@ -71,6 +78,16 @@ FORCE=true npm run seed:db         # overwrite an existing database
 npm run seed:profiles -- --force   # uses seed/baseline-profiles.json
 # Preview the changes without touching the DB
 npm run seed:profiles -- --dry-run
+```
+
+PowerShell equivalents:
+
+```powershell
+# Overwrite an existing database
+$env:FORCE='true'; npm run seed:db
+
+# Point tools at a non-default SQLite path
+$env:DB_PATH='C:\absolute\path\grantflow.db'; npm run check:profiles
 ```
 
 > **Verification:** `npm run check:profiles` confirms the database contains all 11 baseline profiles and required sections. Use `DB_PATH=/absolute/path npm run check:profiles` if the database lives elsewhere.
@@ -680,6 +697,22 @@ npm run lint
 - `npm run smoke:login` validates that the login page renders in a headless browser.
 - Start the preview server in another terminal (`npm run preview`) before running the smoke script.
 - Local preview serves the app at `/`, so run `SMOKE_BASE_PATH=/ npm run smoke:login`.
+
+PowerShell equivalent:
+
+```powershell
+$env:SMOKE_BASE_PATH='/'; npm run smoke:login
+```
+
+### Windows notes
+
+- **Shell syntax**: README examples use `bash` syntax for inline env vars (`FOO=bar npm run ...`). In Windows PowerShell, prefer `$env:FOO='bar'`.
+- **Bash-only scripts**: `npm run setup:production` runs `bash ./scripts/setup-production-db.sh`. On Windows, run it via WSL or Git Bash.
+- **GitHub remote warning**: If you see “This repository moved…”, update your git remote:
+
+```bash
+git remote set-url origin https://github.com/buckeye7066/GrantFlow.git
+```
 - In hosted environments (Vercel), the default base path `/grantflow` is already configured—no override required.
 
 ## 📦 Building for Production
