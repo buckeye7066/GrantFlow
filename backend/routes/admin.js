@@ -102,6 +102,9 @@ let zipCoordinatesCache = null;
 let zipStateIndexCache = null;
 let countiesByStateCache = null;
 let zipCoordinatesMissing = false;
+// Some deployments accidentally package a tiny `zip_coordinates.json` (hundreds of ZIPs).
+// Geo Crawl must support the full US ZIP set; treat undersized datasets as "missing" and fall back to `zipcodes`.
+const MIN_ZIP_COORDINATES_ROWS = Number(process.env.GEO_MIN_ZIP_COORDINATES || 30_000)
 
 const STATE_FIPS = Object.freeze({
   AL: '01', AK: '02', AZ: '04', AR: '05', CA: '06', CO: '08', CT: '09', DE: '10', DC: '11',
@@ -317,6 +320,21 @@ function loadZipCoordinates() {
   }
   try {
     zipCoordinatesCache = JSON.parse(fs.readFileSync(zipCoordinatesPath, 'utf8'));
+    // If the dataset is present but incomplete, force fallback to `zipcodes` (all US ZIP codes).
+    try {
+      const size = Object.keys(zipCoordinatesCache || {}).length
+      if (size > 0 && size < MIN_ZIP_COORDINATES_ROWS) {
+        console.warn('[admin/geo] zip_coordinates dataset looks incomplete; falling back to zipcodes', {
+          zipCoordinatesPath,
+          size,
+          minRequired: MIN_ZIP_COORDINATES_ROWS,
+        })
+        zipCoordinatesMissing = true
+        zipCoordinatesCache = {}
+      }
+    } catch {
+      // ignore sizing issues
+    }
   } catch (error) {
     zipCoordinatesMissing = true;
     zipCoordinatesCache = {};
@@ -341,6 +359,8 @@ function buildZipStateIndex() {
           lng: row?.longitude ?? null,
         }))
         .filter((row) => row.zip_code);
+      // Stable order for consistent UI + deterministic selection.
+      entries.sort((a, b) => String(a.zip_code).localeCompare(String(b.zip_code)))
       if (entries.length > 0) index.set(state, entries);
     }
     zipStateIndexCache = index;
