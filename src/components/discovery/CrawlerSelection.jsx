@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -86,7 +86,123 @@ export default function CrawlerSelection({
   const { toast } = useToast();
   const log = React.useMemo(() => createLogger('CrawlerSelection'), [])
 
+  const ecfUnlock = useMemo(() => {
+    const profile = profileData ?? null
+    const sections = profile?.sections ?? {}
+    const signals = profile?.signals ?? null
+    const waiverSignalPresent =
+      profile?.medicaid_waiver_program !== undefined ||
+      sections?.government_assistance?.medicaid_waiver_program !== undefined
+    const hasAnySignals = Boolean(signals && (signals.keywordSet || signals.location))
+    const hasAnySections = Boolean(sections && Object.keys(sections).length > 0)
+    const tagList = Array.isArray(profile?.tags) ? profile.tags : []
+    const confident = Boolean(hasAnySignals || hasAnySections || waiverSignalPresent || tagList.length > 0)
+
+    const state =
+      signals?.location?.state ??
+      profile?.state ??
+      sections?.basic_information?.state ??
+      null
+
+    const waiver =
+      profile?.medicaid_waiver_program ??
+      sections?.government_assistance?.medicaid_waiver_program ??
+      null
+
+    const keywordSet = signals?.keywordSet
+    const keywordHas = (needle) =>
+      Boolean(needle) &&
+      keywordSet &&
+      typeof keywordSet.has === 'function' &&
+      keywordSet.has(String(needle).toLowerCase())
+
+    const keywordIncludes = (fragment) => {
+      const f = String(fragment || '').toLowerCase().trim()
+      if (!f) return false
+      if (!keywordSet || typeof keywordSet[Symbol.iterator] !== 'function') return false
+      for (const kw of keywordSet) {
+        if (String(kw || '').toLowerCase().includes(f)) return true
+      }
+      return false
+    }
+
+    const isTn =
+      !state
+        ? keywordIncludes('tennessee') || keywordHas('tn')
+        : String(state).toUpperCase() === 'TN'
+
+    const hasEcfWaiver = String(waiver || '').toLowerCase() === 'ecf_choices'
+    const mentionsEcf =
+      keywordHas('ecf') ||
+      keywordIncludes('employment and community first') ||
+      keywordIncludes('ecf choices') ||
+      tagList.some((t) => String(t || '').toLowerCase().includes('ecf'))
+
+    const eligibleIndividual = Boolean(isTn && (profile?.ecf_participant === true || hasEcfWaiver || mentionsEcf))
+
+    const family = sections?.family_life ?? {}
+    const caregiverFlag = family.family_caregiver === true || family.caregiver === true || profile?.caregiver === true
+    const caregiverKeyword = keywordHas('caregiver') || keywordIncludes('caregiver')
+    const eligibleCaretaker = Boolean(isTn && (caregiverFlag || caregiverKeyword) && (hasEcfWaiver || mentionsEcf))
+
+    const orgType =
+      profile?.organization_type ??
+      sections?.organization_details?.organization_type ??
+      null
+    const services = Array.isArray(profile?.services) ? profile.services : []
+    const providerFlag =
+      profile?.is_provider === true ||
+      profile?.provides_residential_support === true ||
+      String(orgType || '').toLowerCase() === 'cls_fm' ||
+      String(orgType || '').toLowerCase() === 'family_model' ||
+      services.some((s) => String(s || '').toLowerCase().includes('residential'))
+    const eligibleProvider = Boolean(isTn && providerFlag && (hasEcfWaiver || mentionsEcf))
+
+    const eligibleSupport = Boolean(eligibleCaretaker || eligibleProvider)
+    const supportType = eligibleProvider ? 'provider' : eligibleCaretaker ? 'caretaker' : null
+
+    const allowed = Boolean(eligibleIndividual || eligibleSupport)
+    let reason = null
+    if (!allowed) {
+      if (!profileId) reason = 'Select a profile to unlock this crawler.'
+      else if (!confident) reason = 'Loading profile eligibility…'
+      else if (!isTn) reason = 'ECF CHOICES is Tennessee-only; profile must be TN (or mention TN).'
+      else reason = 'Requires ECF CHOICES participant or caregiver/provider profile.'
+    }
+
+    return {
+      confident,
+      allowed,
+      eligibleIndividual,
+      eligibleSupport,
+      supportType,
+      reason,
+    }
+  }, [profileData, profileId])
+
+  // If user switches profiles and ECF is no longer eligible, auto-uncheck it.
+  useEffect(() => {
+    if (ecfUnlock.allowed) return
+    if (!ecfUnlock.confident) return
+    setSelectedCrawlers((prev) => {
+      if (!prev.has('ecf_benefits')) return prev
+      const next = new Set(prev)
+      next.delete('ecf_benefits')
+      return next
+    })
+  }, [ecfUnlock.allowed, profileId])
+
   const handleToggleCrawler = (crawlerId) => {
+    if (crawlerId === 'ecf_benefits' && !ecfUnlock.allowed) {
+      toast({
+        variant: ecfUnlock.confident ? 'destructive' : 'default',
+        title: ecfUnlock.confident ? 'ECF crawler locked' : 'Checking ECF eligibility…',
+        description:
+          ecfUnlock.reason ||
+          'This crawler is only available for ECF CHOICES participants or their caretakers/providers.',
+      })
+      return
+    }
     setSelectedCrawlers(prev => {
       const newSet = new Set(prev);
       if (newSet.has(crawlerId)) {
@@ -327,6 +443,7 @@ export default function CrawlerSelection({
               const status = progress[crawler.id];
               const result = results[crawler.id];
               const error = errors[crawler.id];
+              const isLocked = crawler.id === 'ecf_benefits' && !ecfUnlock.allowed
 
               return (
                 <div
@@ -337,8 +454,9 @@ export default function CrawlerSelection({
                     ${status === 'running' ? 'opacity-75' : ''}
                     ${status === 'completed' ? 'border-green-500/60 bg-green-500/10' : ''}
                     ${status === 'error' ? 'border-red-500/60 bg-red-500/10' : ''}
+                    ${isLocked ? 'opacity-60 cursor-not-allowed' : ''}
                   `}
-                  onClick={() => !isRunning && handleToggleCrawler(crawler.id)}
+                  onClick={() => !isRunning && !isLocked && handleToggleCrawler(crawler.id)}
                 >
                   <div className="flex items-start gap-3">
                     <Checkbox
@@ -346,7 +464,7 @@ export default function CrawlerSelection({
                       aria-label={`Select ${crawler.name}`}
                       checked={isSelected}
                       onCheckedChange={() => handleToggleCrawler(crawler.id)}
-                      disabled={isRunning}
+                      disabled={isRunning || isLocked}
                       onClick={(e) => e.stopPropagation()}
                       className="mt-1"
                     />
@@ -369,6 +487,12 @@ export default function CrawlerSelection({
                       </div>
                       <p className="text-sm text-muted-foreground">{crawler.description}</p>
                       <p className="text-xs text-muted-foreground">{crawler.details}</p>
+
+                      {isLocked ? (
+                        <div className="mt-2 p-2 bg-amber-500/10 border border-amber-500/30 rounded text-xs text-amber-900 dark:text-amber-100">
+                          <strong>Locked:</strong> {ecfUnlock.reason || 'Requires ECF CHOICES participant or caregiver/provider profile.'}
+                        </div>
+                      ) : null}
                       
                       {result && (
                         <div className="mt-2 text-xs text-green-700 dark:text-green-300 font-medium">

@@ -25,6 +25,96 @@ const calculateDistance = (lat1, lng1, lat2, lng2) => {
 
 const SEARCH_RADIUS_MILES = 50
 
+function normalizeZip(value) {
+  if (value === null || value === undefined) return null
+  const s = String(value).trim()
+  const match = s.match(/(\d{5})/)
+  return match ? match[1] : null
+}
+
+function extractInterestedSchoolZips(profile) {
+  const out = []
+  const sections = profile?.sections ?? {}
+  const signals = profile?.signals ?? null
+
+  // Only add these anchors for student profiles (or profiles that have explicit university applications).
+  const applicantTypes = signals?.applicantTypes ? Array.from(signals.applicantTypes) : []
+  const isStudent =
+    applicantTypes.some((t) => String(t || '').toLowerCase().includes('student')) ||
+    Boolean(signals?.academics?.gpa || signals?.academics?.sat || signals?.academics?.act)
+
+  const applications = Array.isArray(sections?.university_applications?.applications)
+    ? sections.university_applications.applications
+    : []
+
+  if (!isStudent && applications.length === 0) return []
+
+  for (const app of applications) {
+    if (!app || typeof app !== 'object') continue
+    const candidates = [
+      app.school_zip,
+      app.zip,
+      app.zip_code,
+      app.postal_code,
+      app.campus_zip,
+      app.campus_zip_code,
+    ]
+    for (const c of candidates) {
+      const z = normalizeZip(c)
+      if (z) out.push(z)
+    }
+    // Also scan any location-ish strings
+    const locationText = [app.location, app.address, app.city_state_zip, app.campus_location]
+      .filter(Boolean)
+      .map((v) => String(v))
+      .join(' ')
+    const z2 = normalizeZip(locationText)
+    if (z2) out.push(z2)
+  }
+
+  // Some profiles may store interested schools in education section with optional zip fields.
+  const education = sections?.education ?? {}
+  const interested = Array.isArray(education?.interested_schools) ? education.interested_schools : []
+  for (const entry of interested) {
+    if (!entry) continue
+    if (typeof entry === 'string') {
+      const z = normalizeZip(entry)
+      if (z) out.push(z)
+      continue
+    }
+    if (typeof entry === 'object') {
+      const z = normalizeZip(entry.zip || entry.zip_code || entry.postal_code || entry.school_zip)
+      if (z) out.push(z)
+      const z2 = normalizeZip(entry.location || entry.address || '')
+      if (z2) out.push(z2)
+    }
+  }
+
+  // De-dupe while preserving order.
+  const seen = new Set()
+  return out.filter((z) => {
+    if (!z) return false
+    if (seen.has(z)) return false
+    seen.add(z)
+    return true
+  })
+}
+
+function minDistanceToAnchors({ anchors, latitude, longitude }) {
+  if (!Array.isArray(anchors) || anchors.length === 0) return { distance: null, anchorZip: null }
+  if (typeof latitude !== 'number' || typeof longitude !== 'number') return { distance: null, anchorZip: null }
+
+  let best = { distance: null, anchorZip: null }
+  for (const a of anchors) {
+    if (!a?.coords?.lat || !a?.coords?.lng) continue
+    const d = calculateDistance(a.coords.lat, a.coords.lng, latitude, longitude)
+    if (best.distance === null || d < best.distance) {
+      best = { distance: d, anchorZip: a.zip }
+    }
+  }
+  return best
+}
+
 // Real (and reliable) local resource URLs.
 //
 // IMPORTANT:
@@ -75,16 +165,24 @@ export async function crawlLocalFunding(profile, options = {}) {
   }
 
   // Get ZIP from signals (extracted from all profile sections)
-  const targetZip = signals.location?.zip || profile.zip_code || profile.zip || profile.postal_code
+  const targetZip = normalizeZip(signals.location?.zip || profile.zip_code || profile.zip || profile.postal_code)
   const profileState = signals.location?.state || profile.state
   const profileCity = signals.location?.city || profile.city
   
   // Build search keywords from ALL profile signals
   const searchKeywords = buildSearchKeywords(profile, 25)
+  const schoolZips = extractInterestedSchoolZips(profile)
+
+  // Anchor ZIPs: profile ZIP + up to 3 interested-school ZIPs (student profiles).
+  const anchorZips = [targetZip, ...schoolZips].filter(Boolean)
+  const anchorZipLimit = typeof options.anchor_zip_limit === 'number' ? options.anchor_zip_limit : 4
+  const limitedAnchorZips = anchorZips.slice(0, Math.max(1, anchorZipLimit))
 
   if (targetZip) {
-    console.log(`[LocalFundingCrawler] Searching within ${SEARCH_RADIUS_MILES} miles of ${targetZip}`)
-    console.log(`[LocalFundingCrawler] Location: ${profileCity}, ${profileState} ${targetZip}`)
+    console.log(
+      `[LocalFundingCrawler] Searching within ${SEARCH_RADIUS_MILES} miles of ZIP anchors: ${limitedAnchorZips.join(', ')}`,
+    )
+    console.log(`[LocalFundingCrawler] Primary location: ${profileCity}, ${profileState} ${targetZip}`)
   } else {
     console.log('[LocalFundingCrawler] No ZIP code found; returning directory-style local resources only')
     console.log(`[LocalFundingCrawler] Location: ${profileCity || '(unknown city)'}, ${profileState || '(unknown state)'}`)
@@ -93,18 +191,30 @@ export async function crawlLocalFunding(profile, options = {}) {
   console.log(`[LocalFundingCrawler] Keywords: ${searchKeywords.slice(0, 10).join(', ')}...`)
   console.log(`[LocalFundingCrawler] Interests: ${Array.from(signals.interests || []).slice(0, 5).join(', ')}`)
   console.log(`[LocalFundingCrawler] Demographics: ${Array.from(signals.demographics || []).join(', ')}`)
+  if (schoolZips.length > 0) {
+    console.log(
+      `[LocalFundingCrawler] Student school ZIP anchors (interested schools): ${schoolZips.slice(0, 8).join(', ')}${
+        schoolZips.length > 8 ? '…' : ''
+      }`,
+    )
+  }
 
-  // ZIP-based coordinates (optional)
-  let coords = null
-  if (targetZip) {
+  // ZIP-based coordinates for each anchor ZIP (optional)
+  const anchors = []
+  for (const zip of limitedAnchorZips) {
     try {
-      coords = await getZipCoordinates(targetZip)
+      const coords = await getZipCoordinates(zip)
       if (!coords) {
-        console.log(`[LocalFundingCrawler] Could not resolve coordinates for ZIP ${targetZip} - will use directory resources only`)
+        console.log(`[LocalFundingCrawler] Could not resolve coordinates for ZIP ${zip}`)
+        continue
       }
+      anchors.push({
+        zip,
+        coords,
+        kind: zip === targetZip ? 'profile' : 'school',
+      })
     } catch (error) {
-      console.error(`[LocalFundingCrawler] Unexpected error resolving ZIP ${targetZip}:`, error)
-      // Continue with null coords - directory resources will still work
+      console.error(`[LocalFundingCrawler] Unexpected error resolving ZIP ${zip}:`, error)
     }
   }
 
@@ -113,7 +223,7 @@ export async function crawlLocalFunding(profile, options = {}) {
   if (includeDirectoryResources) {
     const directoryOpps = buildDirectoryResources({
       profile,
-      coords,
+      anchors,
       profileState,
       profileCity,
       targetZip,
@@ -128,6 +238,7 @@ export async function crawlLocalFunding(profile, options = {}) {
         match_reasons: ['Local resource directory (reliable entry point)'],
         matched_signals: [],
         distance_miles: 0,
+        distance_anchor_zip: opp.local_anchor_zip ?? targetZip ?? null,
         crawler_type: 'local_funding',
         source: opp.source ?? 'Local Resource Directory',
         state: opp.state || profileState,
@@ -135,8 +246,8 @@ export async function crawlLocalFunding(profile, options = {}) {
     }
   }
 
-  // If there is no ZIP or we couldn't resolve coordinates, don't attempt geo-radius crawling.
-  if (!targetZip || !coords) {
+  // If there is no ZIP or we couldn't resolve any coordinates, don't attempt geo-radius crawling.
+  if (!targetZip || anchors.length === 0) {
     console.log(`[LocalFundingCrawler] Found ${results.length} local opportunities with ${minMatchScore}%+ match`)
     return results
   }
@@ -144,7 +255,16 @@ export async function crawlLocalFunding(profile, options = {}) {
   // Search each source
   for (const source of LOCAL_FUNDING_SOURCES) {
     try {
-      const opportunities = await searchLocalSource(source, coords, profile, searchKeywords)
+      const opportunities = []
+      // Run geo searches for each anchor (profile ZIP + interested-school ZIPs)
+      for (const anchor of anchors) {
+        const fromAnchor = await searchLocalSource(source, anchor.coords, profile, searchKeywords, {
+          anchor_zip: anchor.zip,
+          anchor_kind: anchor.kind,
+          radius_miles: SEARCH_RADIUS_MILES,
+        })
+        for (const o of fromAnchor) opportunities.push(o)
+      }
       
       // Filter out expired deadlines
       const activeOpps = filterByDeadline(opportunities)
@@ -154,16 +274,33 @@ export async function crawlLocalFunding(profile, options = {}) {
         // Skip loans and matching funds
         if (isLoanOrMatchingFund(opp)) continue
         
-        // Calculate distance if coordinates available
+        // Calculate minimum distance to any anchor (profile ZIP or interested-school ZIPs).
         let distance = null
-        if (opp.latitude && opp.longitude) {
-          if (!coords || !coords.lat || !coords.lng) {
-            console.warn(`[LocalFundingCrawler] Cannot calculate distance - profile coordinates missing`)
-            continue
+        let distanceAnchorZip = null
+        if (typeof opp.latitude === 'number' && typeof opp.longitude === 'number') {
+          const best = minDistanceToAnchors({ anchors, latitude: opp.latitude, longitude: opp.longitude })
+          distance = best.distance
+          distanceAnchorZip = best.anchorZip
+          if (distance !== null && distance > SEARCH_RADIUS_MILES) continue // Hard 50-mile gate
+        } else if (opp.zip || opp.zip_code || opp.postal_code) {
+          // If the opportunity has a ZIP but no coordinates, use ZIP distance (in miles) when possible.
+          const oppZip = normalizeZip(opp.zip || opp.zip_code || opp.postal_code)
+          if (oppZip) {
+            let best = { distance: null, anchorZip: null }
+            for (const a of anchors) {
+              try {
+                const d = zipcodes.distance(String(a.zip), String(oppZip))
+                if (typeof d === 'number' && (best.distance === null || d < best.distance)) {
+                  best = { distance: d, anchorZip: a.zip }
+                }
+              } catch {
+                // Ignore; fallback to other anchors.
+              }
+            }
+            distance = best.distance
+            distanceAnchorZip = best.anchorZip
+            if (distance !== null && distance > SEARCH_RADIUS_MILES) continue // Hard 50-mile gate
           }
-          
-          distance = calculateDistance(coords.lat, coords.lng, opp.latitude, opp.longitude)
-          if (distance > SEARCH_RADIUS_MILES) continue // Skip if too far
         }
         
         // Use comprehensive scoring with 100% of profile signals
@@ -186,6 +323,7 @@ export async function crawlLocalFunding(profile, options = {}) {
             match_reasons: reasons,
             matched_signals: matchedSignals,
             distance_miles: distance !== null ? Math.round(distance) : null,
+            distance_anchor_zip: distanceAnchorZip,
             crawler_type: 'local_funding',
             source: source.name,
             state: opp.state || profileState,
@@ -203,111 +341,149 @@ export async function crawlLocalFunding(profile, options = {}) {
   return results
 }
 
-function buildDirectoryResources({ profile, coords, profileState, profileCity, targetZip, sources }) {
+function buildDirectoryResources({ profile, anchors, profileState, profileCity, targetZip, sources }) {
   const out = []
   const signals = profile?.signals
   const keywords = Array.from(signals?.keywordSet ?? []).slice(0, 12)
-  const city = profileCity || coords?.city || null
-  const state = profileState || coords?.state || null
+  const anchorList = Array.isArray(anchors) && anchors.length > 0 ? anchors : []
+  const fallbackCity = profileCity || null
+  const fallbackState = profileState || null
+  const effectiveAnchors =
+    anchorList.length > 0
+      ? anchorList
+      : [
+          {
+            zip: targetZip ?? null,
+            coords: { city: fallbackCity, state: fallbackState },
+            kind: 'profile',
+          },
+        ].filter((a) => a.zip || a.coords?.city || a.coords?.state)
 
-  for (const source of sources) {
-    if (!source?.type) continue
-    switch (source.type) {
-      case 'united_way':
-        out.push({
-          title: city && state ? `United Way near ${city}, ${state}` : 'United Way Locator (find local chapter)',
-          sponsor: 'United Way',
-          description:
-            'Find your local United Way chapter for community support, emergency assistance programs, and local partner referrals.',
-          url: source.baseUrl,
-          application_url: source.baseUrl,
-          source_url: source.baseUrl,
-          opportunity_type: 'program',
-          deadline_type: 'rolling',
-          is_national: false,
-          state,
-          categories: ['community', 'local', 'emergency_assistance'],
-          keywords: ['united way', 'emergency assistance', 'community', ...keywords],
-        })
-        break
-      case 'food_bank':
-        out.push({
-          title: city && state ? `Food Bank resources near ${city}, ${state}` : 'Food Bank Locator (Feeding America)',
-          sponsor: 'Feeding America',
-          description:
-            'Find local food bank partners and emergency food assistance resources near the profile ZIP.',
-          url: source.baseUrl,
-          application_url: source.baseUrl,
-          source_url: source.baseUrl,
-          opportunity_type: 'program',
-          deadline_type: 'rolling',
-          is_national: false,
-          state,
-          categories: ['food', 'local', 'emergency_assistance'],
-          keywords: ['food bank', 'food assistance', 'snap', ...keywords],
-        })
-        break
-      case 'community_action':
-        out.push({
-          title:
-            city && state
-              ? `Community Action Agency near ${city}, ${state}`
-              : 'Community Action Agency Locator (CAP)',
-          sponsor: 'Community Action Partnership',
-          description:
-            'Locate a Community Action Agency (CAA/CAP) that can help with housing, utilities, food, and employment support.',
-          url: source.baseUrl,
-          application_url: source.baseUrl,
-          source_url: source.baseUrl,
-          opportunity_type: 'program',
-          deadline_type: 'rolling',
-          is_national: false,
-          state,
-          categories: ['utilities', 'housing', 'local', 'community'],
-          keywords: ['community action', 'utilities assistance', 'rent assistance', ...keywords],
-        })
-        break
-      case 'housing_authority': {
-        const stateUrl =
-          state && typeof state === 'string' && state.length === 2
-            ? `${source.baseUrl}/${state.toLowerCase()}`
-            : source.baseUrl
-        out.push({
-          title: state ? `Housing Authority contacts (${state})` : 'Housing Authority contacts (HUD PHA directory)',
-          sponsor: 'HUD',
-          description:
-            'Public Housing Authority contacts (Section 8 vouchers, affordable housing programs, and related housing assistance).',
-          url: stateUrl,
-          application_url: stateUrl,
-          source_url: stateUrl,
-          opportunity_type: 'program',
-          deadline_type: 'rolling',
-          is_national: false,
-          state,
-          categories: ['housing', 'section8', 'local'],
-          keywords: ['housing authority', 'section 8', 'voucher', ...keywords],
-        })
-        break
+  for (const anchor of effectiveAnchors) {
+    const city = anchor?.coords?.city || fallbackCity || null
+    const state = anchor?.coords?.state || fallbackState || null
+    const anchorLabel =
+      anchor?.kind === 'school'
+        ? city && state
+          ? `Interested school area: ${city}, ${state}`
+          : anchor?.zip
+          ? `Interested school ZIP ${anchor.zip}`
+          : 'Interested school area'
+        : city && state
+        ? `${city}, ${state}`
+        : anchor?.zip
+        ? `ZIP ${anchor.zip}`
+        : 'Profile area'
+
+    for (const source of sources) {
+      if (!source?.type) continue
+      switch (source.type) {
+        case 'united_way':
+          out.push({
+            title: city && state ? `United Way near ${city}, ${state}` : `United Way Locator (${anchorLabel})`,
+            sponsor: 'United Way',
+            description:
+              'Find your local United Way chapter for community support, emergency assistance programs, and local partner referrals.',
+            url: source.baseUrl,
+            application_url: source.baseUrl,
+            source_url: source.baseUrl,
+            opportunity_type: 'program',
+            deadline_type: 'rolling',
+            is_national: false,
+            state,
+            categories: ['community', 'local', 'emergency_assistance'],
+            keywords: ['united way', 'emergency assistance', 'community', ...keywords],
+            local_anchor_zip: anchor?.zip ?? null,
+            local_anchor_kind: anchor?.kind ?? null,
+          })
+          break
+        case 'food_bank':
+          out.push({
+            title: city && state ? `Food Bank resources near ${city}, ${state}` : `Food Bank Locator (${anchorLabel})`,
+            sponsor: 'Feeding America',
+            description:
+              'Find local food bank partners and emergency food assistance resources near the selected ZIP anchor.',
+            url: source.baseUrl,
+            application_url: source.baseUrl,
+            source_url: source.baseUrl,
+            opportunity_type: 'program',
+            deadline_type: 'rolling',
+            is_national: false,
+            state,
+            categories: ['food', 'local', 'emergency_assistance'],
+            keywords: ['food bank', 'food assistance', 'snap', ...keywords],
+            local_anchor_zip: anchor?.zip ?? null,
+            local_anchor_kind: anchor?.kind ?? null,
+          })
+          break
+        case 'community_action':
+          out.push({
+            title:
+              city && state
+                ? `Community Action Agency near ${city}, ${state}`
+                : `Community Action Agency Locator (${anchorLabel})`,
+            sponsor: 'Community Action Partnership',
+            description:
+              'Locate a Community Action Agency (CAA/CAP) that can help with housing, utilities, food, and employment support.',
+            url: source.baseUrl,
+            application_url: source.baseUrl,
+            source_url: source.baseUrl,
+            opportunity_type: 'program',
+            deadline_type: 'rolling',
+            is_national: false,
+            state,
+            categories: ['utilities', 'housing', 'local', 'community'],
+            keywords: ['community action', 'utilities assistance', 'rent assistance', ...keywords],
+            local_anchor_zip: anchor?.zip ?? null,
+            local_anchor_kind: anchor?.kind ?? null,
+          })
+          break
+        case 'housing_authority': {
+          const stateUrl =
+            state && typeof state === 'string' && state.length === 2
+              ? `${source.baseUrl}/${state.toLowerCase()}`
+              : source.baseUrl
+          out.push({
+            title: state ? `Housing Authority contacts (${state})` : `Housing Authority contacts (${anchorLabel})`,
+            sponsor: 'HUD',
+            description:
+              'Public Housing Authority contacts (Section 8 vouchers, affordable housing programs, and related housing assistance).',
+            url: stateUrl,
+            application_url: stateUrl,
+            source_url: stateUrl,
+            opportunity_type: 'program',
+            deadline_type: 'rolling',
+            is_national: false,
+            state,
+            categories: ['housing', 'section8', 'local'],
+            keywords: ['housing authority', 'section 8', 'voucher', ...keywords],
+            local_anchor_zip: anchor?.zip ?? null,
+            local_anchor_kind: anchor?.kind ?? null,
+          })
+          break
+        }
+        case 'benefits_gov':
+          out.push({
+            title: 'Benefits.gov (find state/local benefits)',
+            sponsor: 'Benefits.gov',
+            description:
+              'Search for benefits and assistance programs that may apply (including state-specific and local programs).',
+            url: source.baseUrl,
+            application_url: source.baseUrl,
+            source_url: source.baseUrl,
+            opportunity_type: 'program',
+            deadline_type: 'rolling',
+            is_national: true,
+            state,
+            categories: ['benefits', 'government_assistance'],
+            keywords: ['benefits', 'assistance', 'eligibility', ...keywords],
+            local_anchor_zip: anchor?.zip ?? null,
+            local_anchor_kind: anchor?.kind ?? null,
+          })
+          break
+        default:
+          break
       }
-      case 'benefits_gov':
-        out.push({
-          title: 'Benefits.gov (find state/local benefits)',
-          sponsor: 'Benefits.gov',
-          description:
-            'Search for benefits and assistance programs that may apply (including state-specific and local programs).',
-          url: source.baseUrl,
-          application_url: source.baseUrl,
-          source_url: source.baseUrl,
-          opportunity_type: 'program',
-          deadline_type: 'rolling',
-          is_national: true,
-          state,
-          categories: ['benefits', 'government_assistance'],
-          keywords: ['benefits', 'assistance', 'eligibility', ...keywords],
-        })
-        break
-      default:
-        break
     }
   }
 
@@ -321,7 +497,7 @@ function buildDirectoryResources({ profile, coords, profileState, profileCity, t
   })
 }
 
-async function searchLocalSource(source, coords, profile, searchKeywords) {
+async function searchLocalSource(source, coords, profile, searchKeywords, meta = {}) {
   const opportunities = []
   
   // NOTE: Network scraping for local sources is intentionally minimal for reliability.
