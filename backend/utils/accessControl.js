@@ -46,6 +46,12 @@ export function isAdminUser(user) {
 export async function isAdminUserWithDb(db, user) {
   // Some tokens are profile-scoped and don't carry userId.
   // Resolve user_id via profile when needed, then check users.is_admin.
+  //
+  // IMPORTANT:
+  // Some auth sessions carry only email (and no userId/profileId), or carry a profileId whose
+  // profiles.user_id is NULL (legacy/Base44 data). In those cases, we must still be able to
+  // resolve the user record by email; otherwise admins can “lose” admin capabilities depending
+  // on which profile they’re currently scoped to.
   try {
     const userId = getAuthUserId(user)
     const profileId = getAuthProfileId(user)
@@ -56,7 +62,44 @@ export async function isAdminUserWithDb(db, user) {
       resolvedUserId = profileRow?.user_id
     }
 
-    if (!resolvedUserId) return false
+    // Fallback: resolve via email if present.
+    // This is still DB-backed (users table), not an allowlist.
+    if (!resolvedUserId) {
+      const emails = collectUserEmails(user)
+      if (emails.length > 0) {
+        const placeholders = emails.map(() => '?').join(', ')
+        let row = null
+        // Some deployments only have users.primary_email (SQLite schema), while others
+        // may also have a users.email column. Try the broader query first, then fall back.
+        try {
+          row = await db
+            .prepare(
+              `
+                SELECT id, is_admin
+                FROM users
+                WHERE lower(primary_email) IN (${placeholders})
+                   OR lower(email) IN (${placeholders})
+                LIMIT 1
+              `,
+            )
+            .get(...emails, ...emails)
+        } catch {
+          row = await db
+            .prepare(
+              `
+                SELECT id, is_admin
+                FROM users
+                WHERE lower(primary_email) IN (${placeholders})
+                LIMIT 1
+              `,
+            )
+            .get(...emails)
+        }
+        if (!row) return false
+        return Boolean(row.is_admin === true || row.is_admin === 1)
+      }
+      return false
+    }
 
     const row = await db.prepare('SELECT is_admin FROM users WHERE id = ?').get(resolvedUserId)
     if (!row) return false

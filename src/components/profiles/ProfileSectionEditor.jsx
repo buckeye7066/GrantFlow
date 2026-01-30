@@ -611,6 +611,8 @@ export const SECTION_CONFIG = {
     title: "Organization Details",
     description:
       "Entity registration, capacity indicators, and mission summary for Section 4 of the comprehensive application.",
+    // Avoid redundancy: organization-only fields should not appear for individual/family/student profiles.
+    applies_to: ["organization", "nonprofit", "small_business", "government"],
     schema: organizationDetailsSchema,
     defaults: {
       organization_type: "",
@@ -621,6 +623,13 @@ export const SECTION_CONFIG = {
       staff_count: "",
       mission: "",
     },
+    // Mission is captured in the Narrative section for all profile types; keep stored value but don't ask twice.
+    hidden_fields: [
+      {
+        name: "mission",
+        note: "Mission is captured in “Story & Goals” to avoid asking the same question twice.",
+      },
+    ],
     fields: [
       { name: "organization_type", label: "Organization type", component: Input },
       { name: "ein", label: "EIN (Tax ID)", component: Input },
@@ -628,7 +637,6 @@ export const SECTION_CONFIG = {
       { name: "cage_code", label: "CAGE Code", component: Input },
       { name: "annual_budget", label: "Annual budget", component: Input, props: { type: "number", min: 0 } },
       { name: "staff_count", label: "Staff count", component: Input, props: { type: "number", min: 0 } },
-      { name: "mission", label: "Mission", component: Textarea, props: { rows: 4 } },
     ],
   },
   financial_information: {
@@ -897,6 +905,8 @@ export const SECTION_CONFIG = {
     title: "Education",
     description:
       "Academic history and student qualifiers (GPA, tests, service hours) for scholarship and education-focused matching.",
+    // Avoid showing student-only questions to non-student profiles.
+    applies_to: ["student", "college_student", "high_school_student", "graduate_student"],
     schema: educationSchema,
     defaults: {
       highest_level: "",
@@ -979,8 +989,14 @@ export const SECTION_CONFIG = {
       support_system: "",
       notes: "",
     },
+    // Household size is already captured in Financial Situation; keep stored value but don't ask twice.
+    hidden_fields: [
+      {
+        name: "household_size",
+        note: "Household size is captured in “Financial Situation” to avoid redundancy.",
+      },
+    ],
     fields: [
-      { name: "household_size", label: "Household size", component: Input, props: { type: "number", min: 1 } },
       { name: "responsibilities", label: "Responsibilities", component: Textarea, props: { rows: 2 } },
       { name: "support_system", label: "Support system", component: Textarea, props: { rows: 2 } },
       { name: "notes", label: "Household notes", component: Textarea, props: { rows: 2 } },
@@ -1183,6 +1199,7 @@ export default function ProfileSectionEditor({
   const defaults = config?.defaults ?? {}
   const normalizedData = config ? normalizeInitialData(config, initialData) : {}
   const initialValues = config ? { ...defaults, ...(normalizedData ?? {}) } : {}
+  const hiddenFields = Array.isArray(config?.hidden_fields) ? config.hidden_fields : []
   const [aiStatus, setAiStatus] = useState('idle')
   const [aiError, setAiError] = useState(null)
 
@@ -1271,6 +1288,48 @@ export default function ProfileSectionEditor({
             </Alert>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
+              {hiddenFields.length > 0 ? (
+                <Alert variant="default">
+                  <Info className="w-4 h-4" />
+                  <AlertDescription className="text-sm text-slate-600">
+                    <div className="font-medium text-slate-800">Some fields are captured in other sections</div>
+                    <ul className="mt-1 list-disc list-inside space-y-1">
+                      {hiddenFields.map((hf) => (
+                        <li key={hf.name}>{hf.note || `${hf.name} captured elsewhere`}</li>
+                      ))}
+                    </ul>
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+
+              {/* Register hidden fields so existing saved values are preserved on save */}
+              {hiddenFields.map((hf) => (
+                <Controller
+                  // eslint-disable-next-line react/no-array-index-key
+                  key={hf.name}
+                  control={form.control}
+                  name={hf.name}
+                  render={({ field: controllerField }) => (
+                    <input
+                      type="hidden"
+                      name={controllerField.name}
+                      value={
+                        controllerField.value === null || controllerField.value === undefined
+                          ? ""
+                          : typeof controllerField.value === "string"
+                            ? controllerField.value
+                            : Array.isArray(controllerField.value)
+                              ? JSON.stringify(controllerField.value)
+                              : typeof controllerField.value === "object"
+                                ? JSON.stringify(controllerField.value)
+                                : String(controllerField.value)
+                      }
+                      onChange={(e) => controllerField.onChange(e.target.value)}
+                    />
+                  )}
+                />
+              ))}
+
               {config.fields.map((field) => {
                 if (field.type === 'boolean') {
                   return (

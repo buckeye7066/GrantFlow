@@ -906,7 +906,7 @@ router.delete('/:id', mutationRateLimiter, async (req, res) => {
 });
 
 // Add grant from opportunity (supports both database opportunities and direct data)
-router.post('/from-opportunity', async (req, res) => {
+router.post('/from-opportunity', async (req, res, next) => {
   try {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return
@@ -1250,8 +1250,19 @@ router.post('/from-opportunity', async (req, res) => {
     }
     res.status(statusCode).json(result);
   } catch (error) {
-    console.error('Error creating grant from opportunity:', error);
-    res.status(500).json(formatError(error));
+    // IMPORTANT:
+    // Do NOT swallow errors here. Forward to centralized errorHandler so we:
+    // - attach request_id + ok=false consistently
+    // - record the error in the in-memory requestIdErrorStore (admin lookup)
+    // - keep logs consistent across environments (dev/prod)
+    console.error('[grants/from-opportunity] failed', {
+      requestId: req.requestId || req.request_id || null,
+      profile_id: req.body?.profile_id ?? null,
+      organization_id: req.body?.organization_id ?? null,
+      opportunity_id: req.body?.opportunity_id ?? null,
+      message: error?.message || String(error),
+    })
+    return next(error)
   }
 });
 
