@@ -40,6 +40,9 @@ const LIVE_CRAWL_PERSIST_OPPS = String(process.env.LIVE_CRAWL_PERSIST_OPPS ?? 't
 // Reversible safety toggles: default to SOFT matching (prefer penalties over exclusions).
 const HARD_FILTER_REQUIRES_MATCH = String(process.env.HARD_FILTER_REQUIRES_MATCH ?? '').toLowerCase() === 'true'
 const HARD_FILTER_MATCH_PERCENTAGE = String(process.env.HARD_FILTER_MATCH_PERCENTAGE ?? '').toLowerCase() === 'true'
+// Token narrowing is a performance optimization but can incorrectly eliminate valid opportunities
+// (e.g., rows with sparse descriptions/keywords). Default OFF to avoid hard exclusions.
+const ENABLE_TOKEN_NARROWING = String(process.env.ENABLE_TOKEN_NARROWING ?? '').toLowerCase() === 'true'
 
 function normalizeString(value) {
   if (typeof value !== 'string') return ''
@@ -109,6 +112,33 @@ function isOpportunityCurrent(row) {
   return parsed >= new Date(now.getFullYear(), now.getMonth(), now.getDate())
 }
 
+function normalizeDateToIso(value) {
+  if (!value) return null
+  const raw = String(value).trim()
+  if (!raw) return null
+
+  // Grants.gov sometimes returns "YYYY-MM-DD-00-00-00" (keep date portion).
+  const ymdPrefix = raw.match(/^(\d{4}-\d{2}-\d{2})/)
+  if (ymdPrefix) return ymdPrefix[1]
+
+  // Common US format "MM/DD/YYYY"
+  const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+  if (mdy) {
+    const mm = Number.parseInt(mdy[1], 10)
+    const dd = Number.parseInt(mdy[2], 10)
+    const yyyy = Number.parseInt(mdy[3], 10)
+    if (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31 && yyyy >= 1900 && yyyy <= 2100) {
+      const iso = `${String(yyyy).padStart(4, '0')}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`
+      return iso
+    }
+  }
+
+  // Last resort: parseable Date → ISO date.
+  const parsed = new Date(raw)
+  if (Number.isNaN(parsed.getTime())) return null
+  return parsed.toISOString().slice(0, 10)
+}
+
 function normalizeLiveOpportunity(raw, { crawlerType }) {
   if (!raw || typeof raw !== 'object') return null
 
@@ -125,6 +155,7 @@ function normalizeLiveOpportunity(raw, { crawlerType }) {
   const existingReasons = Array.isArray(raw.match_reasons) ? raw.match_reasons : []
   const recordOriginRaw = normalizeString(raw.record_origin || '')
   const isDirectoryStyle = opportunityType === 'program' || recordOriginRaw.includes('directory') || Boolean(raw.is_directory_resource)
+  const normalizedDeadline = normalizeDateToIso(raw.deadline ?? null)
 
   return {
     id: raw.id ?? null,
@@ -138,8 +169,9 @@ function normalizeLiveOpportunity(raw, { crawlerType }) {
     amount_min: raw.amount_min ?? null,
     amount_max: raw.amount_max ?? null,
     amount_description: raw.amount_description ?? null,
-    deadline: raw.deadline ?? null,
-    deadline_type: raw.deadline_type ?? (raw.deadline ? 'fixed' : 'rolling'),
+    // Normalize deadline to ISO so SQLite DATE comparisons work (avoids false "expired" filtering).
+    deadline: normalizedDeadline,
+    deadline_type: raw.deadline_type ?? (normalizedDeadline ? 'fixed' : 'rolling'),
     is_national: Boolean(raw.is_national ?? true),
     state: raw.state ?? null,
     categories: Array.isArray(raw.categories) ? raw.categories : [],
@@ -385,27 +417,29 @@ function buildCandidateOpportunityQuery({ crawlerType, profileContext, tokens, i
   // Crawler-type hints (lightweight pre-filter).
   if (crawlerType === 'student_grants') {
     conditions.push(
-      "(LOWER(opportunity_type) IN ('scholarship','grant') OR LOWER(title) LIKE '%scholar%' OR LOWER(description) LIKE '%scholar%')",
+      "(LOWER(source) = 'student_grants' OR LOWER(opportunity_type) IN ('scholarship','grant') OR LOWER(title) LIKE '%scholar%' OR LOWER(description) LIKE '%scholar%')",
     )
   }
   if (crawlerType === 'ecf_benefits') {
     conditions.push(
-      "(LOWER(source) = 'ecf_choices_discovery' OR LOWER(title) LIKE '%ecf%' OR LOWER(description) LIKE '%ecf%')",
+      "(LOWER(source) IN ('ecf_benefits','ecf_choices_discovery') OR LOWER(title) LIKE '%ecf%' OR LOWER(description) LIKE '%ecf%')",
     )
   }
   if (crawlerType === 'special_needs') {
     conditions.push(
-      "(LOWER(title) LIKE '%disab%' OR LOWER(description) LIKE '%disab%' OR LOWER(title) LIKE '%cancer%' OR LOWER(description) LIKE '%cancer%')",
+      "(LOWER(source) = 'special_needs' OR LOWER(title) LIKE '%disab%' OR LOWER(description) LIKE '%disab%' OR LOWER(title) LIKE '%cancer%' OR LOWER(description) LIKE '%cancer%')",
     )
   }
   if (crawlerType === 'government_funding') {
     conditions.push(
-      "(LOWER(source) IN ('grants.gov','usaspending.gov','grants_gov','usa_spending','state_portal','hud_cdbg','liheap','snap_et') OR LOWER(title) LIKE '%federal%' OR LOWER(description) LIKE '%federal%')",
+      "(LOWER(source) IN ('government_funding','grants.gov','usaspending.gov','grants_gov','usa_spending','state_portal','hud_cdbg','liheap','snap_et') OR LOWER(title) LIKE '%federal%' OR LOWER(description) LIKE '%federal%')",
     )
   }
 
   // Keyword narrowing from profile (kept small to avoid huge SQL).
-  if (tokens.length > 0) {
+  // IMPORTANT: profile-derived tokens should improve ranking, not eliminate results.
+  // We keep this as an opt-in optimization for very large datasets.
+  if (ENABLE_TOKEN_NARROWING && tokens.length > 0) {
     const tokenClauses = tokens
       .map(() => '(LOWER(title) LIKE ? OR LOWER(description) LIKE ? OR LOWER(keywords) LIKE ? OR LOWER(categories) LIKE ?)')
       .join(' OR ')
@@ -924,13 +958,35 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
         .filter((row) => isOpportunityCurrent(row))
         .map((row) => {
           const { score, reasons } = calculateMatchScore(profileContext, row)
-          return { ...row, match_score: score, match_reasons: reasons }
+          const isDirectory = isDirectoryResource(row)
+          const finalScore = isDirectory ? Math.max(Number(min_match_score), score) : score
+          const finalReasons = isDirectory
+            ? mergeReasons(reasons, [
+                `Directory resource (always included at ${Number(min_match_score)}%+ threshold)`,
+              ])
+            : reasons
+          return { ...row, match_score: finalScore, match_reasons: finalReasons }
         })
 
-      const filtered = scored
-        .filter((opp) => typeof opp.match_score === 'number' && opp.match_score >= Number(min_match_score))
+      const totalFoundForCrawler = scored.length
+
+      // Filtering with guardrails:
+      // - Directory resources always survive.
+      // - "0 included" is a failure state when total_found > 0; fall back to best-scoring items.
+      let filtered = scored
+        .filter((opp) => {
+          if (isDirectoryResource(opp)) return true
+          return typeof opp.match_score === 'number' && opp.match_score >= Number(min_match_score)
+        })
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
         .slice(0, 50)
+
+      if (filtered.length === 0 && totalFoundForCrawler > 0) {
+        filtered = scored
+          .filter((o) => typeof o?.match_score === 'number' || isDirectoryResource(o))
+          .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+          .slice(0, 50)
+      }
 
       totalFound += scored.length
       totalInserted += filtered.length
