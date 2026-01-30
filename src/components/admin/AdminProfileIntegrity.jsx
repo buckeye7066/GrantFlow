@@ -102,10 +102,10 @@ export default function AdminProfileIntegrity() {
 
   return (
     <div className="space-y-6">
-      <Card className="border border-slate-200 bg-white/70 backdrop-blur">
+      <Card className="border border-border bg-card/80 text-card-foreground backdrop-blur">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-slate-900">
-            <Wrench className="w-5 h-5 text-blue-600" />
+          <CardTitle className="flex items-center gap-2 text-foreground">
+            <Wrench className="w-5 h-5 text-primary" />
             Profile integrity (report + repair)
           </CardTitle>
         </CardHeader>
@@ -148,17 +148,17 @@ export default function AdminProfileIntegrity() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="rounded-md border border-slate-200 bg-white p-3">
-              <div className="text-xs text-slate-600">Totals</div>
-              <div className="text-sm text-slate-900 mt-1">
+            <div className="rounded-md border border-border bg-background/60 p-3">
+              <div className="text-xs text-muted-foreground">Totals</div>
+              <div className="text-sm text-foreground mt-1">
                 Profiles: <span className="font-semibold">{summary.totalsProfiles}</span> · Users:{' '}
                 <span className="font-semibold">{summary.totalsUsers}</span> · Orgs:{' '}
                 <span className="font-semibold">{summary.totalsOrgs}</span>
               </div>
             </div>
-            <div className="rounded-md border border-slate-200 bg-white p-3">
-              <div className="text-xs text-slate-600">Signals</div>
-              <div className="text-sm text-slate-900 mt-1">
+            <div className="rounded-md border border-border bg-background/60 p-3">
+              <div className="text-xs text-muted-foreground">Signals</div>
+              <div className="text-sm text-foreground mt-1">
                 Unowned: <span className="font-semibold">{summary.unowned}</span> · Dangling users:{' '}
                 <span className="font-semibold">{summary.danglingUsers}</span> · Dangling orgs:{' '}
                 <span className="font-semibold">{summary.danglingOrgs}</span>
@@ -167,22 +167,22 @@ export default function AdminProfileIntegrity() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="rounded-md border border-slate-200 bg-white p-3">
-              <div className="text-xs text-slate-600">Orphans (sample)</div>
-              <div className="text-sm text-slate-900 mt-1">
+            <div className="rounded-md border border-border bg-background/60 p-3">
+              <div className="text-xs text-muted-foreground">Orphans (sample)</div>
+              <div className="text-sm text-foreground mt-1">
                 Hard-deletable candidates sampled: <span className="font-semibold">{summary.orphanSampled}</span>
               </div>
             </div>
-            <div className="rounded-md border border-slate-200 bg-white p-3">
-              <div className="text-xs text-slate-600">Duplicates (sample)</div>
-              <div className="text-sm text-slate-900 mt-1">
+            <div className="rounded-md border border-border bg-background/60 p-3">
+              <div className="text-xs text-muted-foreground">Duplicates (sample)</div>
+              <div className="text-sm text-foreground mt-1">
                 Duplicate groups sampled: <span className="font-semibold">{summary.duplicateGroups}</span>
               </div>
             </div>
           </div>
 
-          <div className="rounded-md border border-slate-200 bg-white p-3 space-y-2">
-            <div className="text-sm font-semibold text-slate-900">Repair configuration</div>
+          <div className="rounded-md border border-border bg-background/60 p-3 space-y-2">
+            <div className="text-sm font-semibold text-foreground">Repair configuration</div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
               <label className="flex items-center gap-2">
@@ -238,11 +238,11 @@ export default function AdminProfileIntegrity() {
           </div>
 
           {repairOutput ? (
-            <pre className="text-xs bg-slate-950 text-slate-50 rounded-md p-3 overflow-auto max-h-96">
+            <pre className="text-xs bg-muted text-foreground rounded-md p-3 overflow-auto max-h-96 border border-border">
               {JSON.stringify(repairOutput, null, 2)}
             </pre>
           ) : report ? (
-            <pre className="text-xs bg-slate-950 text-slate-50 rounded-md p-3 overflow-auto max-h-96">
+            <pre className="text-xs bg-muted text-foreground rounded-md p-3 overflow-auto max-h-96 border border-border">
               {JSON.stringify(report, null, 2)}
             </pre>
           ) : null}

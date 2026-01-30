@@ -8,8 +8,8 @@ import { TrendingUp, FileText, Plus } from "lucide-react";
 
 export default function RecentGrantsCard({ grants }) {
   return (
-    <Card className="shadow-lg border-0 dark:bg-slate-950">
-      <CardHeader className="border-b border-slate-100 dark:border-slate-800 pb-4">
+    <Card className="shadow-lg bg-card text-card-foreground">
+      <CardHeader className="border-b border-border pb-4">
         <CardTitle className="flex items-center gap-2 text-xl">
           <TrendingUp className="w-5 h-5 text-emerald-500" />
           Recent Grants
@@ -17,8 +17,8 @@ export default function RecentGrantsCard({ grants }) {
       </CardHeader>
       <CardContent className="p-6">
         {grants.length === 0 ? (
-          <div className="text-center py-8 text-foreground">
-            <FileText className="w-12 h-12 mx-auto mb-3 text-slate-700 dark:text-slate-300" />
+          <div className="text-center py-8 text-muted-foreground">
+            <FileText className="w-12 h-12 mx-auto mb-3 text-muted-foreground" />
             <p>No grants yet</p>
             <Link to={createPageUrl("DiscoverGrants")}>
               <Button variant="outline" size="sm" className="mt-3" aria-label="Discover new grants">
@@ -31,11 +31,11 @@ export default function RecentGrantsCard({ grants }) {
           <div className="space-y-3">
             {grants.slice(0, 5).map((grant) => (
               <Link key={grant.id} to={createPageUrl("Pipeline")}>
-                <div className="flex items-center gap-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer">
-                  <FileText className="w-5 h-5 text-slate-700 dark:text-slate-300" />
+                <div className="flex items-center gap-3 p-3 bg-muted/30 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer">
+                  <FileText className="w-5 h-5 text-muted-foreground" />
                   <div className="flex-1">
-                    <p className="font-medium text-slate-900 dark:text-slate-50">{grant.title}</p>
-                    <p className="text-sm text-foreground">{grant.funder}</p>
+                    <p className="font-medium text-card-foreground">{grant.title}</p>
+                    <p className="text-sm text-muted-foreground">{grant.funder}</p>
                   </div>
                   <Badge variant="outline">{grant.status}</Badge>
                 </div>

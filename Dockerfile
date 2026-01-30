@@ -31,6 +31,13 @@ FROM node:20-slim
 # Set working directory
 WORKDIR /app
 
+# Runtime deps for document ingestion:
+# - poppler-utils: pdftoppm/pdftotext (PDF raster + extraction)
+# - tesseract-ocr: OCR engine for scanned documents
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends poppler-utils tesseract-ocr \
+  && rm -rf /var/lib/apt/lists/*
+
 # Copy ONLY production dependencies from builder
 COPY --from=builder /app/node_modules ./node_modules
 

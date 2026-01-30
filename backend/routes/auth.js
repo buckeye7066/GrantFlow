@@ -30,6 +30,7 @@ const sendAuthAttemptNotification = typeof mainAuthNotify === 'function' ? mainA
 import { getDesignatedProfileForEmail } from '../config/userProfileMappings.js'
 import { ADMIN_EMAIL, isAdminEmail } from '../config/constants.js'
 import { ensureAdminUser, isAdminUserId } from '../utils/adminProfileLinks.js'
+import { ensureProfileEmailSchema } from '../utils/accessControl.js'
 import { triggerAutoDiscoveryCrawlers } from '../services/autoDiscoveryCrawlers.js'
 import bcrypt from 'bcryptjs'
 
@@ -233,6 +234,39 @@ const phoneStartLimiter = rateLimit({
 
 function normalizeEmail(email = '') {
   return email.trim().toLowerCase()
+}
+
+async function upsertProfileEmailLink(db, profileId, email, addedBy = 'auth-auto-assign') {
+  const normalized = normalizeEmail(email || '')
+  if (!profileId || !normalized) return
+  try {
+    await ensureProfileEmailSchema(db)
+  } catch {
+    return
+  }
+
+  if (db?.dialect === 'postgres') {
+    await db
+      .prepare(
+        `
+          INSERT INTO profile_emails (id, profile_id, email, added_by)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT (profile_id, email) DO NOTHING
+        `,
+      )
+      .run(crypto.randomUUID(), String(profileId), normalized, String(addedBy || 'auth-auto-assign'))
+    return
+  }
+
+  // sqlite
+  await db
+    .prepare(
+      `
+        INSERT OR IGNORE INTO profile_emails (id, profile_id, email, added_by)
+        VALUES (?, ?, ?, ?)
+      `,
+    )
+    .run(crypto.randomUUID(), String(profileId), normalized, String(addedBy || 'auth-auto-assign'))
 }
 
 function normalizeSixDigitCode(value) {
@@ -590,6 +624,9 @@ async function assignProfileToUser(db, userId, email) {
 
   if (email) {
     const normalizedEmail = normalizeEmail(email)
+    const existingOwned = userId
+      ? await db.prepare('SELECT id FROM profiles WHERE user_id = ? LIMIT 1').get(userId)
+      : null
 
     // 1) Best-effort match to an existing profile by email captured in profile sections.
     // This is the safest way to ensure returning users re-claim their original profile
@@ -597,15 +634,23 @@ async function assignProfileToUser(db, userId, email) {
     const byEmail = await findProfileRowForEmail(db, normalizedEmail)
     if (byEmail?.id) {
       if (!byEmail.user_id || byEmail.user_id === userId) {
-        await db
-          .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-          .run(userId, byEmail.id)
+        // Respect "one owned profile per user" unique constraint.
+        if (!existingOwned?.id || String(existingOwned.id) === String(byEmail.id)) {
+          await db
+            .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            .run(userId, byEmail.id)
+        }
+        // Persist the email mapping so future access is stable.
+        await upsertProfileEmailLink(db, byEmail.id, normalizedEmail, 'auth-auto-assign')
         return byEmail.id
       }
       if (await isAdminUserId(db, byEmail.user_id)) {
-        await db
-          .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-          .run(userId, byEmail.id)
+        if (!existingOwned?.id || String(existingOwned.id) === String(byEmail.id)) {
+          await db
+            .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            .run(userId, byEmail.id)
+        }
+        await upsertProfileEmailLink(db, byEmail.id, normalizedEmail, 'auth-auto-assign')
         return byEmail.id
       }
       return byEmail.id
@@ -619,15 +664,83 @@ async function assignProfileToUser(db, userId, email) {
         .get(designatedProfileId)
       if (designatedProfile) {
         if (!designatedProfile.user_id || designatedProfile.user_id === userId) {
-          await db
-            .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-            .run(userId, designatedProfileId)
+          if (!existingOwned?.id || String(existingOwned.id) === String(designatedProfileId)) {
+            await db
+              .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+              .run(userId, designatedProfileId)
+          }
+          // Ensure the profile's basic_information.email is set so downstream matching can work.
+          try {
+            const row = await db
+              .prepare(
+                `
+                  SELECT data
+                  FROM profile_sections
+                  WHERE profile_id = ?
+                    AND section_key = 'basic_information'
+                  LIMIT 1
+                `,
+              )
+              .get(designatedProfileId)
+            const parsed = row?.data ? JSON.parse(String(row.data)) : {}
+            if (parsed && typeof parsed === 'object' && !String(parsed.email || '').trim()) {
+              parsed.email = normalizedEmail
+              await db
+                .prepare(
+                  `
+                    UPDATE profile_sections
+                    SET data = ?, updated_at = CURRENT_TIMESTAMP, updated_by = ?
+                    WHERE profile_id = ?
+                      AND section_key = 'basic_information'
+                  `,
+                )
+                .run(JSON.stringify(parsed), 'auth-auto-assign', designatedProfileId)
+            }
+          } catch {
+            // ignore
+          }
+
+          // Persist the email mapping so future access is stable.
+          await upsertProfileEmailLink(db, designatedProfileId, normalizedEmail, 'auth-auto-assign')
           return designatedProfileId
         }
         if (await isAdminUserId(db, designatedProfile.user_id)) {
-          await db
-            .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-            .run(userId, designatedProfileId)
+          if (!existingOwned?.id || String(existingOwned.id) === String(designatedProfileId)) {
+            await db
+              .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+              .run(userId, designatedProfileId)
+          }
+          try {
+            const row = await db
+              .prepare(
+                `
+                  SELECT data
+                  FROM profile_sections
+                  WHERE profile_id = ?
+                    AND section_key = 'basic_information'
+                  LIMIT 1
+                `,
+              )
+              .get(designatedProfileId)
+            const parsed = row?.data ? JSON.parse(String(row.data)) : {}
+            if (parsed && typeof parsed === 'object' && !String(parsed.email || '').trim()) {
+              parsed.email = normalizedEmail
+              await db
+                .prepare(
+                  `
+                    UPDATE profile_sections
+                    SET data = ?, updated_at = CURRENT_TIMESTAMP, updated_by = ?
+                    WHERE profile_id = ?
+                      AND section_key = 'basic_information'
+                  `,
+                )
+                .run(JSON.stringify(parsed), 'auth-auto-assign', designatedProfileId)
+            }
+          } catch {
+            // ignore
+          }
+
+          await upsertProfileEmailLink(db, designatedProfileId, normalizedEmail, 'auth-auto-assign')
           return designatedProfileId
         }
         console.warn(`[auth] Designated profile ${designatedProfileId} already linked to another user`)
@@ -1895,19 +2008,17 @@ router.post('/email/verify', async (req, res) => {
     },
   }).catch(() => {})
 
-  // In-app admin notification (best-effort, stored in-memory).
-  // Record only non-admin sign-ins so the Admin panel highlights client activity.
-  if (!user?.is_admin) {
-    recordClientSignInEvent({
-      db: req.db,
-      identifier: email,
-      method: 'email',
-      userId: user?.id ?? null,
-      profileId: activeProfileId ?? null,
-      ip: req.ip,
-      userAgent: req.headers['user-agent'],
-    })
-  }
+  // In-app admin notification (best-effort, stored in-memory) + durable audit sink.
+  // Record ALL sign-ins (admins can filter in the UI). This is required for accurate "who logged in" reporting.
+  recordClientSignInEvent({
+    db: req.db,
+    identifier: email,
+    method: 'email',
+    userId: user?.id ?? null,
+    profileId: activeProfileId ?? null,
+    ip: req.ip,
+    userAgent: req.headers['user-agent'],
+  })
 
   return res.json(response)
 })
@@ -2173,17 +2284,15 @@ router.post('/phone/verify', async (req, res) => {
     },
   }).catch(() => {})
 
-  if (!user?.is_admin) {
-    recordClientSignInEvent({
-      db: req.db,
-      identifier: normalized,
-      method: 'phone',
-      userId: user?.id ?? null,
-      profileId: activeProfileId ?? null,
-      ip: req.ip,
-      userAgent: req.headers['user-agent'],
-    })
-  }
+  recordClientSignInEvent({
+    db: req.db,
+    identifier: normalized,
+    method: 'phone',
+    userId: user?.id ?? null,
+    profileId: activeProfileId ?? null,
+    ip: req.ip,
+    userAgent: req.headers['user-agent'],
+  })
 
   return res.json(response)
 })

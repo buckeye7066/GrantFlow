@@ -93,7 +93,7 @@ export async function linkProfileToAdmin(db, profileId) {
 
 export async function linkAllProfilesToAdmin(db) {
   // Phase 2: do not mutate profiles.user_id en masse (breaks unique ownership).
-  // Instead, attach ADMIN_EMAIL as an access email for profiles that have no owner.
+  // Instead, attach ADMIN_EMAIL as an access email so admin UIs can enumerate all profiles.
   try {
     await ensureProfileEmailSchema(db)
   } catch {
@@ -103,7 +103,9 @@ export async function linkAllProfilesToAdmin(db) {
   const normalized = String(ADMIN_EMAIL || '').trim().toLowerCase()
   if (!normalized) return
 
-  const rows = await db.prepare('SELECT id FROM profiles WHERE user_id IS NULL').all()
+  // Bounded batch to avoid surprising startup latency on huge datasets.
+  const limit = 25_000
+  const rows = await db.prepare('SELECT id FROM profiles ORDER BY created_at DESC LIMIT ?').all(limit)
   const profileIds = (rows || []).map((r) => r?.id).filter(Boolean)
   if (profileIds.length === 0) return
 

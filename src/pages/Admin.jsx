@@ -41,11 +41,11 @@ export default function Admin() {
     <div className="p-6 md:p-8">
       <div className="max-w-7xl mx-auto">
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-2">
-            <Shield className="w-8 h-8 text-blue-600" />
+          <h1 className="text-3xl font-bold text-foreground flex items-center gap-2">
+            <Shield className="w-8 h-8 text-primary" />
             Admin Panel
           </h1>
-          <p className="text-slate-600 mt-2">
+          <p className="text-muted-foreground mt-2">
             Administrative tools and features
           </p>
         </div>

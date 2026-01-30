@@ -128,6 +128,13 @@ export async function extractTextWithFallback({
         } else {
           warnings.push('OCR completed but produced little text; keeping PDF text extraction result.')
         }
+      } catch (error) {
+        // Do not hard-fail the entire ingestion just because OCR tooling is missing.
+        // If the PDF is scanned and OCR can't run (e.g., pdftoppm missing), keep the base extraction result
+        // and surface a clear warning so admins can fix the environment (or switch OCR providers).
+        warnings.push(
+          `OCR skipped: ${error?.message || String(error)}`.slice(0, 500),
+        )
       } finally {
         if (typeof raster?.cleanup === 'function') {
           await raster.cleanup()

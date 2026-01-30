@@ -235,19 +235,19 @@ export default function DiscoverGrants() {
     <div className="p-6 md:p-8">
       <div className="max-w-7xl mx-auto">
         <header className="mb-8">
-          <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-2">
-            <Search className="w-8 h-8 text-blue-600" />
+          <h1 className="text-3xl font-bold text-foreground flex items-center gap-2">
+            <Search className="w-8 h-8 text-primary" />
             Discover Funding Opportunities
           </h1>
-          <p className="text-slate-600 mt-2">
+          <p className="text-muted-foreground mt-2">
             Find scholarships, grants, benefits, and assistance programs that match your profile
           </p>
         </header>
 
-        <Card className="shadow-lg border-0 mb-8">
-          <CardHeader className="border-b border-slate-100">
+        <Card className="shadow-lg mb-8">
+          <CardHeader className="border-b border-border">
             <CardTitle className="flex items-center gap-2">
-              <User className="w-5 h-5 text-blue-600" />
+              <User className="w-5 h-5 text-primary" />
               Select Profile to Search
             </CardTitle>
             <CardDescription>
@@ -265,11 +265,11 @@ export default function DiscoverGrants() {
                 <SelectContent>
                   {isLoadingProfiles ? (
                     <div className="flex items-center justify-center p-4">
-                      <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
-                      <span className="ml-2 text-sm text-slate-500">Loading profiles...</span>
+                      <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                      <span className="ml-2 text-sm text-muted-foreground">Loading profiles...</span>
                     </div>
                   ) : profiles.length === 0 ? (
-                    <div className="p-4 text-center text-sm text-slate-500">
+                    <div className="p-4 text-center text-sm text-muted-foreground">
                       No profiles available. Create a profile first.
                     </div>
                   ) : (
@@ -284,15 +284,18 @@ export default function DiscoverGrants() {
                       return (
                         <SelectItem key={profile.id} value={profile.id}>
                           <div className="flex items-center gap-2">
-                            <User className="w-4 h-4 text-slate-500" />
+                            <User className="w-4 h-4 text-muted-foreground" />
                             {profile.display_name}
                             {profile.organization_name && (
-                              <span className="text-xs text-slate-500">
+                              <span className="text-xs text-muted-foreground">
                                 ({profile.organization_name})
                               </span>
                             )}
                             {isProfileECF && (
-                              <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 text-xs">
+                              <Badge
+                                variant="outline"
+                                className="bg-green-500/10 text-green-800 border-green-500/20 text-xs dark:bg-green-500/15 dark:text-green-200 dark:border-green-500/30"
+                              >
                                 ECF CHOICES
                               </Badge>
                             )}
@@ -309,21 +312,21 @@ export default function DiscoverGrants() {
             {selectedProfile && (
               <Alert className={
                 isECFProfile
-                  ? 'bg-green-50 border-green-200 mb-6'
-                  : 'bg-blue-50 border-blue-200 mb-6'
+                  ? 'bg-green-500/10 border-green-500/20 mb-6 dark:bg-green-500/15 dark:border-green-500/30'
+                  : 'bg-primary/10 border-primary/20 mb-6'
               }>
                 <User className={`h-4 w-4 ${
-                  isECFProfile ? 'text-green-600' : 'text-blue-600'
+                  isECFProfile ? 'text-green-600 dark:text-green-300' : 'text-primary'
                 }`} />
                 <AlertDescription className={
-                  isECFProfile ? 'text-green-900' : 'text-blue-800'
+                  isECFProfile ? 'text-green-800 dark:text-green-100' : 'text-foreground'
                 }>
                   <strong>Selected:</strong> {selectedProfile.display_name}
                   {selectedProfile.organization_name && (
                     <span className="ml-2">({selectedProfile.organization_name})</span>
                   )}
                   {selectedProfile.primary_type && (
-                    <span className="ml-2 text-xs">• {selectedProfile.primary_type.replace(/_/g, ' ')}</span>
+                    <span className="ml-2 text-xs text-muted-foreground">• {selectedProfile.primary_type.replace(/_/g, ' ')}</span>
                   )}
                   {selectedOrg?.state && <span className="ml-2">• {selectedOrg.state}</span>}
                   {isECFProfile && (

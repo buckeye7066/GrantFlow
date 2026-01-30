@@ -65,36 +65,36 @@ export default function PipelineActionsCard() {
   }
 
   return (
-    <Card className="border-none shadow-none bg-gradient-to-br from-indigo-500/10 via-white/80 to-white/60 backdrop-blur-lg">
+    <Card className="border border-border/70 shadow-none bg-card/80 text-card-foreground backdrop-blur-lg">
       <CardHeader className="pb-0">
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-1">
-            <div className="inline-flex items-center rounded-full bg-indigo-100 text-indigo-700 px-3 py-1 text-xs font-semibold uppercase">
+            <div className="inline-flex items-center rounded-full border border-primary/20 bg-primary/10 text-primary px-3 py-1 text-xs font-semibold uppercase">
               <Sparkles className="w-3 h-3 mr-1" />
               AI Orchestrations
             </div>
-            <h2 className="text-lg font-semibold text-foreground">Pipeline Command Center</h2>
-            <p className="text-sm text-foreground max-w-md">
+            <h2 className="text-lg font-semibold text-card-foreground">Pipeline Command Center</h2>
+            <p className="text-sm text-muted-foreground max-w-md">
               Kick off the same automations the Base44 workspace runs behind the scenes. These flows coordinate AI
               matching, checklist generation, reminders, and deadline monitoring.
             </p>
           </div>
-          <CircleCheck className="w-8 h-8 text-indigo-500 hidden md:block" />
+          <CircleCheck className="w-8 h-8 text-primary hidden md:block" />
         </div>
       </CardHeader>
       <CardContent className="pt-4 space-y-3">
         {ACTIONS.map((action) => (
           <div
             key={action.key}
-            className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 rounded-xl border border-indigo-100/60 bg-white/70 px-4 py-3"
+            className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 rounded-xl border border-border bg-background/60 px-4 py-3"
           >
             <div className="flex items-start gap-3">
-              <span className="p-2 rounded-lg bg-indigo-50 text-indigo-600">
+              <span className="p-2 rounded-lg bg-primary/15 text-primary">
                 <action.icon className="w-4 h-4" />
               </span>
               <div>
-                  <p className="text-sm font-semibold text-foreground">{action.label}</p>
-                  <p className="text-xs text-foreground">{action.description}</p>
+                  <p className="text-sm font-semibold text-card-foreground">{action.label}</p>
+                  <p className="text-xs text-muted-foreground">{action.description}</p>
               </div>
             </div>
             <Button
