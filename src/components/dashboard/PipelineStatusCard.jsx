@@ -27,7 +27,7 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
   const total = statusOrder.reduce((sum, status) => sum + resolveCount(stats, status.key), 0)
 
   return (
-    <Card className="h-full border-none shadow-none bg-gradient-to-br from-white/90 to-white/40 backdrop-blur-lg">
+    <Card className="h-full border-none shadow-none bg-gradient-to-br from-white/90 to-white/40 backdrop-blur-lg dark:from-slate-950/80 dark:to-slate-900/40 dark:border dark:border-slate-800">
       <CardHeader className="pb-4">
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -55,7 +55,7 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
             return (
               <div
                 key={status.key}
-                className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white/70 p-3 shadow-sm"
+                className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white/70 p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"
               >
                 <span className={`flex h-10 w-10 items-center justify-center rounded-full text-sm font-semibold ${status.color}`}>
                   <status.icon className="h-5 w-5" />
@@ -70,7 +70,7 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
             )
           })}
         </div>
-        <div className="rounded-xl border border-dashed border-slate-300 p-4 bg-slate-50/70">
+        <div className="rounded-xl border border-dashed border-slate-300 p-4 bg-slate-50/70 dark:border-slate-700 dark:bg-slate-900/40">
           <h3 className="text-sm font-semibold text-foreground mb-2">Next recommended actions</h3>
           <ul className="space-y-2 text-sm text-foreground">
             <li>• Review drafts due this week and assign final reviewers.</li>
