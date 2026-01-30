@@ -9,13 +9,13 @@ export default function StatCard({ title, value, icon: Icon, color, link }) {
 
   return (
     <CardWrapper {...wrapperProps}>
-      <Card className={`relative overflow-hidden hover:shadow-xl transition-all duration-300 border-0 bg-white ${link ? 'cursor-pointer' : ''}`}>
+      <Card className={`relative overflow-hidden hover:shadow-xl transition-all duration-300 border-0 bg-white dark:bg-slate-900 ${link ? 'cursor-pointer' : ''}`}>
         <div className={`absolute inset-0 bg-gradient-to-br ${color} opacity-5`} />
         <CardContent className="p-6">
           <div className="flex justify-between items-start">
             <div>
-              <p className="text-sm font-medium text-slate-600">{title}</p>
-              <p className="text-3xl font-bold text-slate-900 mt-2">{displayValue}</p>
+              <p className="text-sm font-medium text-slate-600 dark:text-slate-300">{title}</p>
+              <p className="text-3xl font-bold text-slate-900 dark:text-white mt-2">{displayValue}</p>
             </div>
             <div className={`p-3 rounded-xl bg-gradient-to-br ${color} shadow-lg`}>
               <Icon className="w-6 h-6 text-white" />
