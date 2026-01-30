@@ -958,7 +958,8 @@ router.post('/from-opportunity', async (req, res) => {
     
     // If not found in DB, use provided opportunity_data
     if (!opportunity && opportunity_data) {
-      const normalizedDeadline = normalizeDateForDb(opportunity_data.deadline || opportunity_data.deadlineAt || null)
+      const rawDeadline = opportunity_data.deadline || opportunity_data.deadlineAt || null
+      const normalizedDeadline = normalizeDateForDb(rawDeadline)
       const amountMin = normalizeMoney(opportunity_data.awardMin ?? opportunity_data.amount_min ?? null)
       const amountMax = normalizeMoney(opportunity_data.awardMax ?? opportunity_data.amount_max ?? null)
       const applicationUrl = coerceString(opportunity_data.url || opportunity_data.application_url, { maxLen: 2000 })
@@ -970,7 +971,10 @@ router.post('/from-opportunity', async (req, res) => {
       opportunity = {
         title,
         sponsor: coerceString(opportunity_data.sponsor, { maxLen: 500 }),
+        // Preserve raw deadline for expiry checks (normalizeDateForDb may return null for non-ISO formats)
+        deadline_raw: rawDeadline,
         deadline: normalizedDeadline,
+        deadline_type: coerceString(opportunity_data.deadline_type, { maxLen: 50 }) || null,
         application_url: applicationUrl,
         amount_min: amountMin,
         amount_max: amountMax,
@@ -983,6 +987,53 @@ router.post('/from-opportunity', async (req, res) => {
     
     if (!opportunity) {
       return res.status(404).json({ error: 'Opportunity not found and no opportunity_data provided' });
+    }
+
+    // Guardrail: don't allow expired opportunities into pipelines.
+    // Directory-style resources are allowed; rolling/ongoing deadlines are allowed.
+    const stripOrdinalSuffixes = (value) => {
+      const text = typeof value === 'string' ? value : String(value ?? '')
+      return text.replace(/\b(\d{1,2})(st|nd|rd|th)\b/gi, '$1')
+    }
+    const parseLooseDate = (value) => {
+      if (!value) return null
+      const raw = typeof value === 'string' ? value.trim() : String(value).trim()
+      if (!raw) return null
+      const iso = raw.match(/\b(\d{4})-(\d{2})-(\d{2})\b/)
+      if (iso) {
+        const d = new Date(`${iso[1]}-${iso[2]}-${iso[3]}T00:00:00Z`)
+        return Number.isNaN(d.getTime()) ? null : d
+      }
+      const cleaned = stripOrdinalSuffixes(raw).replace(/,/g, ' ').replace(/\s+/g, ' ').trim()
+      const d = new Date(cleaned)
+      return Number.isNaN(d.getTime()) ? null : d
+    }
+    const isDirectoryLike = (row) => {
+      const type = String(row?.type || '').trim().toUpperCase()
+      if (type === 'DIRECTORY') return true
+      const origin = String(row?.record_origin || '').trim().toLowerCase()
+      if (origin.includes('directory')) return true
+      const oppType = String(row?.opportunity_type || '').trim().toLowerCase()
+      return oppType.includes('directory')
+    }
+    const deadlineType = String(opportunity.deadline_type || '').trim().toLowerCase()
+    const expired = (() => {
+      if (isDirectoryLike(opportunity)) return false
+      if (deadlineType === 'rolling' || deadlineType === 'ongoing') return false
+      const deadlineValue = opportunity.deadline_raw ?? opportunity.deadline
+      const d = parseLooseDate(deadlineValue)
+      if (!d) return false
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+      return d.getTime() < today.getTime()
+    })()
+    if (expired) {
+      return res.status(400).json({
+        error: 'opportunity_expired',
+        message: 'This funding opportunity appears to be expired and cannot be added to the pipeline.',
+        deadline: opportunity.deadline ?? null,
+        deadline_type: opportunity.deadline_type ?? null,
+      })
     }
     
     // TRANSACTION: Wrap multi-step grant pipeline creation
@@ -1074,7 +1125,9 @@ router.post('/from-opportunity', async (req, res) => {
         throw new Error('Organization ID or Profile ID is required');
       }
       
-      // Check for duplicate grants by title for this organization
+      // Check for duplicate grants for this profile/org.
+      // Avoid duplicates even when the opportunity exists multiple times in the catalog (different IDs).
+      const oppUrl = opportunity?.application_url ? String(opportunity.application_url) : null
       const existingGrant = hasProfileId && finalProfileId
         ? await tx
             .prepare(
@@ -1085,11 +1138,19 @@ router.post('/from-opportunity', async (req, res) => {
                   AND (
                     (? IS NOT NULL AND funding_opportunity_id = ?)
                     OR (funding_opportunity_id IS NULL AND title = ?)
+                    OR (? IS NOT NULL AND application_url = ?)
                   )
                 LIMIT 1
               `,
             )
-            .get(String(finalProfileId), opportunity_id ?? null, opportunity_id ?? null, opportunity.title)
+            .get(
+              String(finalProfileId),
+              opportunity_id ?? null,
+              opportunity_id ?? null,
+              opportunity.title,
+              oppUrl,
+              oppUrl,
+            )
         : await tx
             .prepare(
               `
@@ -1099,11 +1160,19 @@ router.post('/from-opportunity', async (req, res) => {
                   AND (
                     (? IS NOT NULL AND funding_opportunity_id = ?)
                     OR (funding_opportunity_id IS NULL AND title = ?)
+                    OR (? IS NOT NULL AND application_url = ?)
                   )
                 LIMIT 1
               `,
             )
-            .get(String(finalOrgId), opportunity_id ?? null, opportunity_id ?? null, opportunity.title);
+            .get(
+              String(finalOrgId),
+              opportunity_id ?? null,
+              opportunity_id ?? null,
+              opportunity.title,
+              oppUrl,
+              oppUrl,
+            );
       
       if (existingGrant) {
         return { 
