@@ -176,7 +176,6 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
       const maxZipsNum = Number(maxZipsRaw)
       const maxZips = Number.isFinite(maxZipsNum) && maxZipsNum > 0 ? maxZipsNum : null
       const batchSize = Number(params.batch_size ?? Math.min(50, Math.max(1, maxZips ?? 50)))
-      const rateLimitMs = Number(params.rate_limit_ms ?? 250)
       const minSources = Number(params.min_sources_per_zip ?? 3)
       const zipList =
         Array.isArray(params.zip_list) && params.zip_list.length > 0
@@ -190,6 +189,16 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
       const overpassMaxResults = Number(params.overpass_max_results ?? 60)
 
       const offlineOnly = params.offline_only ?? params.offlineOnly ?? true
+      // Performance default:
+      // - When offline_only=true, we are not hitting upstream APIs and should not sleep per ZIP.
+      // - When offline_only=false, we apply a small default delay unless overridden.
+      const rateLimitMs = Number(
+        params.rate_limit_ms ??
+          (offlineOnly ? 0 : 250),
+      )
+      const resume =
+        params.resume === true ||
+        String(params.resume || '').toLowerCase() === 'true'
       const counties = Array.isArray(params.counties) && params.counties.length > 0 ? params.counties : undefined
       const effectiveZipList = runAllStates ? undefined : zipList || undefined
 
@@ -201,14 +210,14 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
           zip_list: effectiveZipList,
           max_zips: maxZips,
           batch_size: Number.isFinite(batchSize) ? batchSize : 25,
-          rate_limit_ms: Number.isFinite(rateLimitMs) ? rateLimitMs : 250,
+          rate_limit_ms: Number.isFinite(rateLimitMs) ? rateLimitMs : (offlineOnly ? 0 : 250),
           min_sources_per_zip: Number.isFinite(minSources) ? minSources : 1,
           counties,
           offline_only: offlineOnly,
           discover_local_resources: Boolean(discoverLocal),
           overpass_radius_km: Number.isFinite(overpassRadiusKm) ? overpassRadiusKm : 12,
           overpass_max_results: Number.isFinite(overpassMaxResults) ? overpassMaxResults : 60,
-          resume: false,
+          resume,
           job_id: jobId,
           geo_run_id: params.geo_run_id ?? params.geoRunId ?? null,
           fixtures_dir: process.env.GEO_CRAWL_FIXTURES_DIR || undefined,

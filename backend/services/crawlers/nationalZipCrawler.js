@@ -33,10 +33,10 @@ import {
 } from '../geoCrawlRunStore.js'
 import { resolveCountyForZip } from '../geo/zipCountyResolver.js'
 
-// All US ZIP codes (43,859 total)
-// In production, this would be loaded from a file or database
-// For now, we load from the local `zipcodes` dataset to avoid network lookups.
-const US_ZIP_CODES_SAMPLE = generateUSZipCodes()
+// All US ZIP codes (~43k total).
+// We load from the local `zipcodes` dataset to avoid network lookups.
+// NOTE: This list is used when Geo Crawl is run without a state scope.
+const US_ZIP_CODES_ALL = generateUSZipCodes()
 
 // Default configuration
 const DEFAULT_CONFIG = {
@@ -222,6 +222,7 @@ async function resolveZipList({ zip_list, state, max_zips, counties }) {
   // Priority:
   // 1) Explicit ZIP list (city selection / manual ZIP selection)
   // 2) State ZIP index
+  // 3) All US ZIPs (when no state is provided)
   // Then optionally filter by counties (within the resolved base list).
   const fromExplicit = Array.isArray(zip_list) ? zip_list : [];
   let zips = fromExplicit
@@ -229,11 +230,15 @@ async function resolveZipList({ zip_list, state, max_zips, counties }) {
     .filter((z) => /^\d{5}$/.test(z));
 
   if (!zips.length) {
-    if (!state || typeof state !== 'string') return [];
-    const rows = zipcodes.lookupByState(state) || [];
-    zips = rows
-      .map((row) => String(row?.zip || '').padStart(5, '0'))
-      .filter((z) => /^\d{5}$/.test(z));
+    if (state && typeof state === 'string') {
+      const rows = zipcodes.lookupByState(state) || [];
+      zips = rows
+        .map((row) => String(row?.zip || '').padStart(5, '0'))
+        .filter((z) => /^\d{5}$/.test(z));
+    } else {
+      // National scope: run across all ZIPs (caller can still cap via max_zips).
+      zips = Array.isArray(US_ZIP_CODES_ALL) ? US_ZIP_CODES_ALL.slice() : []
+    }
   }
 
   // County scoping (optional): filter ZIPs to those whose resolved county is in the selected set.
