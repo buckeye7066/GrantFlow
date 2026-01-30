@@ -212,6 +212,8 @@ router.get('/', async (req, res) => {
     const parsedOffset = Math.max(Number.parseInt(offset, 10) || 0, 0);
 
     const dialect = req.db?.dialect;
+    const sqliteBool = (value) => (value ? 1 : 0)
+    const sqlBool = (value) => (dialect === 'sqlite' ? sqliteBool(value) : Boolean(value))
     const requestedCompliance = (compliance || 'grant_only').toLowerCase();
 
     const geoRunId = geoRunIdParam ?? runIdParam ?? null;
@@ -230,7 +232,7 @@ router.get('/', async (req, res) => {
     const fallbackFromClause = hasGeoRun ? `FROM funding_opportunities fo` : `FROM funding_opportunities`;
 
     const baseConditions = [`${prefix}is_active = ?`];
-    const baseParams = [true];
+    const baseParams = [sqlBool(true)];
 
     if (search) {
       const searchTerm = `%${search}%`;
@@ -243,7 +245,7 @@ router.get('/', async (req, res) => {
 
     if (isNational === 'true') {
       baseConditions.push(`${prefix}is_national = ?`);
-      baseParams.push(true);
+      baseParams.push(sqlBool(true));
     }
 
     if (source) {
@@ -252,7 +254,9 @@ router.get('/', async (req, res) => {
     }
 
     if (deadlineAfter) {
-      baseConditions.push(`(${prefix}deadline_type = "rolling" OR (${prefix}deadline IS NOT NULL AND ${prefix}deadline >= ?))`);
+      // SQLite treats double-quoted strings as identifiers, not string literals.
+      // Use single quotes so deadline filters do not break Discover Grants.
+      baseConditions.push(`(${prefix}deadline_type = 'rolling' OR (${prefix}deadline IS NOT NULL AND ${prefix}deadline >= ?))`);
       baseParams.push(deadlineAfter);
     }
 
@@ -281,9 +285,9 @@ router.get('/', async (req, res) => {
 
     if (stateCondition) {
       baseWithStateConditions.push(stateCondition);
-      baseWithStateParams.push(normalizedState, true);
+      baseWithStateParams.push(normalizedState, sqlBool(true));
       filteredWithStateConditions.push(stateCondition);
-      filteredWithStateParams.push(normalizedState, true);
+      filteredWithStateParams.push(normalizedState, sqlBool(true));
     }
 
     const whereClause = filteredWithStateConditions.length ? `WHERE ${filteredWithStateConditions.join(' AND ')}` : '';
@@ -340,7 +344,7 @@ router.get('/', async (req, res) => {
               LIMIT ?
             `,
           )
-          .all(...baseParamsSql, true, minNationalVisible);
+          .all(...baseParamsSql, sqlBool(true), minNationalVisible);
 
         const remaining = Math.max(parsedLimit - nationals.length, 0);
         const locals =
@@ -357,7 +361,7 @@ router.get('/', async (req, res) => {
                     LIMIT ?
                   `,
                 )
-                .all(...baseParamsSql, normalizedState, false, remaining)
+                .all(...baseParamsSql, normalizedState, sqlBool(false), remaining)
             : [];
 
         // Return locals first, then nationals to guarantee visibility in the response.
