@@ -8,15 +8,25 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const REAL_OPPS_PATH = join(__dirname, '../data/crawlers/real_funding_opportunities.json');
+// Repo-tracked fallback fixtures (backend/data is often excluded in production images / ignored in some IDE setups).
+const REAL_OPPS_FALLBACK_PATHS = [
+  join(__dirname, '../fixtures/crawlers/real_funding_opportunities.json'),
+]
+
 const LOCAL_OPPS_PATH = join(__dirname, '../data/crawlers/local_opportunities.json');
 const SCHOLARSHIP_OPPS_PATH = join(__dirname, '../data/crawlers/scholarship_opportunities.json');
 const ITEM_OPPS_PATH = join(__dirname, '../data/crawlers/item_funding_sources.json');
 
 const missingOnce = new Set();
 
-function loadJSON(path) {
+function loadJSON(path, { required = false } = {}) {
   if (!existsSync(path)) {
-    if (!missingOnce.has(path)) {
+    if (required) {
+      if (!missingOnce.has(path)) {
+        missingOnce.add(path)
+        console.info(`[seedRealOpportunities] Seed file not found: ${path}`)
+      }
+    } else if (!missingOnce.has(path)) {
       missingOnce.add(path);
       console.info(
         `[seedRealOpportunities] Seed file not found; skipping: ${path} (run "npm run seed:demo" or "npm run ingest" to populate opportunities)`,
@@ -42,22 +52,26 @@ function ensureArray(value) {
 }
 
 export async function seedRealOpportunities(db) {
+  const resolvedRealOppsPath = existsSync(REAL_OPPS_PATH)
+    ? REAL_OPPS_PATH
+    : (REAL_OPPS_FALLBACK_PATHS.find((p) => existsSync(p)) || null)
+
   const anySeedFileExists =
-    existsSync(REAL_OPPS_PATH) ||
+    Boolean(resolvedRealOppsPath) ||
     existsSync(LOCAL_OPPS_PATH) ||
     existsSync(SCHOLARSHIP_OPPS_PATH) ||
     existsSync(ITEM_OPPS_PATH);
 
   if (!anySeedFileExists) {
     console.info(
-      '[seedRealOpportunities] No seed files found under backend/data/crawlers; skipping (run "npm run seed:demo" or "npm run ingest")',
+      '[seedRealOpportunities] No seed files found; skipping (run "npm run seed:demo" or "npm run ingest")',
     );
     return { totalLoaded: 0, skipped: true };
   }
 
   console.log('[seedRealOpportunities] Starting to seed real funding opportunities...');
 
-  const realData = loadJSON(REAL_OPPS_PATH) || {};
+  const realData = (resolvedRealOppsPath ? loadJSON(resolvedRealOppsPath, { required: true }) : null) || {};
   const realFederalGrants = realData.federal_grants || [];
   const realFoundationGrants = realData.foundation_grants || [];
   const realStateGrants = realData.state_programs || [];

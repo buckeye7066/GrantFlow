@@ -140,18 +140,27 @@ function applyComplianceFilters(compliance, conditions, params, options = {}) {
   if (normalized === 'grant_only') {
     conditions.push(`(${prefix}opportunity_type IS NULL OR LOWER(${prefix}opportunity_type) NOT IN (?, ?, ?))`);
     params.push(...LOAN_TYPES);
+  }
 
+  // Optional stricter mode: exclude matching-funds requirements.
+  // IMPORTANT: matching funds are not an exclusive eligibility gate; default behavior should not filter them out.
+  // Reversible via env var for deployments that still want the legacy behavior.
+  const legacyGrantOnlyExcludesMatch =
+    String(process.env.LEGACY_GRANT_ONLY_EXCLUDES_MATCHING ?? '').toLowerCase() === 'true'
+  const wantsNoMatch =
+    normalized === 'no_match' ||
+    normalized === 'grant_no_match' ||
+    (normalized === 'grant_only' && legacyGrantOnlyExcludesMatch)
+
+  if (wantsNoMatch) {
     if (params.__dialect === 'postgres') {
       conditions.push(`(${prefix}requires_match IS NULL OR ${prefix}requires_match = FALSE)`);
+      conditions.push(`(${prefix}match_percentage IS NULL OR ${prefix}match_percentage = 0)`);
     } else {
       // Explicitly allow NULL, 0, '0', false, 'false'
       conditions.push(
         `(${prefix}requires_match IS NULL OR ${prefix}requires_match = 0 OR ${prefix}requires_match = '0' OR ${prefix}requires_match = 'false')`,
       );
-    }
-    if (params.__dialect === 'postgres') {
-      conditions.push(`(${prefix}match_percentage IS NULL OR ${prefix}match_percentage = 0)`);
-    } else {
       conditions.push(
         `(${prefix}match_percentage IS NULL OR ${prefix}match_percentage = 0 OR ${prefix}match_percentage = '0')`,
       );
