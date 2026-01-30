@@ -5,7 +5,8 @@ const router = express.Router()
 // Marketing stats for non-admin users
 const MARKETING_STATS = {
   organizations: 3144,
-  fundsSecured: 22515850,
+  fundsSecured: 22895000,
+  activeGrants: 31560,
   activeProfiles: 3144,
   opportunitiesFound: 15000,
 }

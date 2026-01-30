@@ -192,20 +192,34 @@ function calculateMatchPercentage(opportunity, profileContext) {
 }
 
 /**
- * Save opportunity to profile pipeline if match > 80%
+ * Save opportunity to profile pipeline if match >= threshold.
+ *
+ * Back-compat: `minMatchThreshold` defaults to 80 to preserve prior behavior.
  */
-export async function saveToProfilePipeline(db, opportunity, profileId, profileContext, matchPercentage = null) {
+export async function saveToProfilePipeline(
+  db,
+  opportunity,
+  profileId,
+  profileContext,
+  matchPercentage = null,
+  minMatchThreshold = 80,
+) {
   try {
     // Calculate match if not provided
     if (matchPercentage === null) {
       matchPercentage = calculateMatchPercentage(opportunity, profileContext)
     }
     
-    // Only save to pipeline if match > 80%
-    if (matchPercentage < 80) {
+    const thresholdNum = Number(minMatchThreshold)
+    const threshold = Number.isFinite(thresholdNum) ? Math.max(0, Math.min(100, thresholdNum)) : 80
+
+    // Only save to pipeline if match meets threshold
+    if (matchPercentage < threshold) {
       return {
         saved: false,
-        reason: `Match score ${matchPercentage}% below 80% threshold`
+        reason: `Match score ${matchPercentage}% below ${threshold}% threshold`,
+        matchPercentage,
+        threshold,
       }
     }
     
@@ -241,7 +255,9 @@ export async function saveToProfilePipeline(db, opportunity, profileId, profileC
     if (existing) {
       return {
         saved: false,
-        reason: 'Already in pipeline'
+        reason: 'Already in pipeline',
+        matchPercentage,
+        threshold,
       }
     }
     
@@ -276,7 +292,7 @@ export async function saveToProfilePipeline(db, opportunity, profileId, profileC
         opportunity.deadline ?? null,
         matchPercentage,
         JSON.stringify(profileContext?.match_reasons ?? opportunity.match_reasons ?? []),
-        `Auto-added: ${matchPercentage}% match for profile ${profileId}`,
+        `Auto-added: ${matchPercentage}% match for profile ${profileId} (threshold ${threshold}%)`,
       )
     
     console.log(`[opportunityMatcher] Added to pipeline: ${opportunity.title} (${matchPercentage}% match for profile ${profileId})`)
@@ -284,14 +300,17 @@ export async function saveToProfilePipeline(db, opportunity, profileId, profileC
     return {
       saved: true,
       matchPercentage,
-      pipelineId: grantId
+      threshold,
+      pipelineId: grantId,
     }
   } catch (error) {
     console.error('[opportunityMatcher] Error saving to pipeline:', error)
     // If we raced another insert (unique constraint), treat as idempotent success=false.
     const msg = String(error?.message || '')
     if (msg.toLowerCase().includes('unique') || msg.toLowerCase().includes('duplicate')) {
-      return { saved: false, reason: 'Already in pipeline' }
+      const thresholdNum = Number(minMatchThreshold)
+      const threshold = Number.isFinite(thresholdNum) ? Math.max(0, Math.min(100, thresholdNum)) : 80
+      return { saved: false, reason: 'Already in pipeline', matchPercentage, threshold }
     }
     return {
       saved: false,
