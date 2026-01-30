@@ -484,12 +484,17 @@ router.post('/comprehensiveMatch', async (req, res) => {
     
     const isPostgres = req.db?.dialect === 'postgres'
 
-    // Exclude opportunities that require matching funds
+  // IMPORTANT:
+  // Matching funds are not an exclusive eligibility gate — they should reduce score, not eliminate results.
+  // Reversible safety toggle exists for admins who want the old behavior.
+  const hardFilterRequiresMatch = String(process.env.HARD_FILTER_REQUIRES_MATCH ?? '').toLowerCase() === 'true'
+  if (hardFilterRequiresMatch) {
     conditions.push(
       isPostgres
         ? '(requires_match IS NULL OR requires_match = FALSE)'
         : '(requires_match = 0 OR requires_match IS NULL)',
     );
+  }
     
     // State filtering
     if (profileStates.length > 0) {
