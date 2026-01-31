@@ -98,7 +98,11 @@ export default function Organizations() {
   })
 
   const handleNewApplication = () => {
-    showComingSoon("The full comprehensive application builder is under active development.")
+    toast({
+      title: "Coming soon",
+      description:
+        "The full comprehensive application builder is under development. Please open a specific profile to create an application.",
+    })
   }
 
   const handleQuickAdd = async (formData) => {
@@ -200,8 +204,8 @@ export default function Organizations() {
 
   const showComingSoon = (message) => {
     toast({
-      title: "Form uploaded",
-      description: "The form has been uploaded and will be processed shortly.",
+      title: "Coming soon",
+      description: message,
     })
   }
 
@@ -243,7 +247,7 @@ export default function Organizations() {
           <OrganizationActions
             onQuickAdd={() => setQuickAddOpen(true)}
             onUpload={() => setUploadFormOpen(true)}
-            onNewApplication={() => navigate(createPageUrl("OrganizationProfile"))}
+            onNewApplication={handleNewApplication}
           />
         </header>
 
