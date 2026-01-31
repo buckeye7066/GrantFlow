@@ -17,10 +17,7 @@
 
 import crypto from 'crypto'
 import { db } from '../db/index.js'
-import { ADMIN_EMAIL, isAdminEmail } from '../config/constants.js'
-import { USER_PROFILE_MAPPINGS } from '../config/userProfileMappings.js'
-import { ensureProfileEmailSchema } from '../utils/accessControl.js'
-import { linkProfileToAdmin } from '../utils/adminProfileLinks.js'
+import { repairProfileOwnership } from '../utils/profileOwnershipRepair.js'
 
 function normalizeEmail(email) {
   const v = String(email || '').trim().toLowerCase()
@@ -170,81 +167,12 @@ async function main() {
   const apply = String(process.env.APPLY || '').trim() === '1'
   const limit = Math.max(1, Math.min(50_000, Number(process.env.LIMIT || 5000) || 5000))
 
-  await ensureProfileEmailSchema(db)
-
-  // Always ensure admin user row exists + is_admin is true.
-  await getOrCreateUserByEmail(ADMIN_EMAIL)
-
-  const profiles = await db
-    .prepare(
-      `
-        SELECT id, display_name, user_id, status
-        FROM profiles
-        ORDER BY created_at DESC
-        LIMIT ?
-      `,
-    )
-    .all(limit)
-
-  const report = {
-    ok: true,
-    mode: apply ? 'apply' : 'dry_run',
-    scanned: profiles.length,
-    ownership_assigned: 0,
-    basic_info_email_filled: 0,
-    profile_email_links_added: 0,
-    admin_links_added: 0,
-    unmapped_active_profiles: 0,
-    sample_unmapped: [],
-  }
-
-  // First: apply designated mappings (fills blank emails + assigns ownership when possible).
-  for (const [rawEmail, mappedProfileId] of Object.entries(USER_PROFILE_MAPPINGS || {})) {
-    const email = normalizeEmail(rawEmail)
-    if (!email) continue
-    if (!mappedProfileId) continue
-    if (isAdminEmail(email)) continue
-
-    const profile = await db.prepare('SELECT id FROM profiles WHERE id = ?').get(mappedProfileId)
-    if (!profile?.id) continue
-
-    const fill = await setProfileSectionEmailIfEmpty(mappedProfileId, email, { apply })
-    if (fill.updated) report.basic_info_email_filled += 1
-
-    const link = await upsertProfileEmail(mappedProfileId, email, { apply, addedBy: 'repair-profile-ownership.mapped' })
-    if (link.inserted) report.profile_email_links_added += 1
-
-    const assigned = await maybeAssignOwner(mappedProfileId, email, { apply })
-    if (assigned.assigned) report.ownership_assigned += 1
-  }
-
-  // Second: for all profiles, ensure basic_information.email links exist + ownership is set when possible.
-  for (const p of profiles || []) {
-    const profileId = String(p.id)
-
-    // Ensure admin can enumerate every profile.
-    if (apply) {
-      await linkProfileToAdmin(db, profileId)
-      report.admin_links_added += 1
-    }
-
-    const email = await extractProfileEmail(profileId)
-    if (email) {
-      const link = await upsertProfileEmail(profileId, email, { apply, addedBy: 'repair-profile-ownership.profile' })
-      if (link.inserted) report.profile_email_links_added += 1
-      const assigned = await maybeAssignOwner(profileId, email, { apply })
-      if (assigned.assigned) report.ownership_assigned += 1
-      continue
-    }
-
-    // Track active profiles that still have no usable email mapping (true orphans).
-    if (String(p.status || '').toLowerCase() === 'active') {
-      report.unmapped_active_profiles += 1
-      if (report.sample_unmapped.length < 10) {
-        report.sample_unmapped.push({ id: profileId, display_name: p.display_name ?? null })
-      }
-    }
-  }
+  const report = await repairProfileOwnership(db, {
+    apply,
+    limit,
+    includeDeleted: true,
+    updatedBy: 'repair-profile-ownership',
+  })
 
   console.log(JSON.stringify(report, null, 2))
 }
