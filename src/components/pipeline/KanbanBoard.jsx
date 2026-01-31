@@ -30,23 +30,24 @@ const STATUSES = [
   { value: "closed", label: "Closed", icon: Archive },
 ];
 
+// Adjusted status colors for improved contrast
 const statusColors = {
-  discovery: "bg-gray-200 text-gray-800",
-  discovered: "bg-slate-100 text-slate-700",
-  interested: "bg-blue-100 text-blue-700",
-  auto_applied: "bg-green-100 text-green-700",
-  drafting: "bg-purple-100 text-purple-700",
-  application_prep: "bg-yellow-100 text-yellow-700",
-  revision: "bg-orange-200 text-orange-800",
-  portal: "bg-orange-100 text-orange-700",
-  submitted: "bg-amber-100 text-amber-700",
-  pending_review: "bg-indigo-100 text-indigo-700",
-  follow_up: "bg-green-100 text-green-700",
-  awarded: "bg-emerald-100 text-emerald-700",
-  report: "bg-teal-100 text-teal-700",
-  declined_no_review: "bg-red-200 text-red-800",
-  declined: "bg-red-100 text-red-700",
-  closed: "bg-gray-100 text-gray-700",
+  discovery: "bg-gray-100 text-gray-900",
+  discovered: "bg-slate-100 text-slate-900",
+  interested: "bg-blue-100 text-blue-800",
+  auto_applied: "bg-green-100 text-green-800",
+  drafting: "bg-purple-100 text-purple-800",
+  application_prep: "bg-yellow-100 text-yellow-800",
+  revision: "bg-orange-100 text-orange-800",
+  portal: "bg-orange-100 text-orange-800",
+  submitted: "bg-amber-100 text-amber-800",
+  pending_review: "bg-indigo-100 text-indigo-800",
+  follow_up: "bg-green-100 text-green-800",
+  awarded: "bg-emerald-100 text-emerald-800",
+  report: "bg-teal-100 text-teal-800",
+  declined_no_review: "bg-red-100 text-red-800",
+  declined: "bg-red-100 text-red-800",
+  closed: "bg-gray-100 text-gray-900",
 };
 
 // New function to run AI analysis and requirement extraction
