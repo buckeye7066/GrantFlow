@@ -154,6 +154,29 @@ function normalizeValue(value) {
   return value
 }
 
+function isLikelyIdentifier(value) {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  if (!raw) return false
+  if (raw.length < 5 || raw.length > 40) return false
+  if (/\s/.test(raw)) return false
+  if (!/[0-9]/.test(raw)) return false
+  if (!/^[A-Za-z0-9-]+$/.test(raw)) return false
+  return true
+}
+
+function shouldOverrideString({ key, existingValue, incomingValue }) {
+  const existing = typeof existingValue === 'string' ? existingValue.trim() : ''
+  const incoming = typeof incomingValue === 'string' ? incomingValue.trim() : ''
+  if (!incoming) return false
+
+  // Sensitive identifier fields: prefer explicit, id-like tokens over narrative text.
+  if (key === 'member_id' || key === 'group_id') {
+    if (isLikelyIdentifier(incoming) && !isLikelyIdentifier(existing)) return true
+  }
+
+  return false
+}
+
 function mergeSectionData(existing = {}, incoming = {}) {
   const merged = { ...existing }
   const updatedFields = new Set()
@@ -165,7 +188,7 @@ function mergeSectionData(existing = {}, incoming = {}) {
 
     if (typeof value === 'string') {
       if (!value) return
-      if (!existingValue || !normalizeValue(existingValue)) {
+      if (!existingValue || !normalizeValue(existingValue) || shouldOverrideString({ key, existingValue, incomingValue: value })) {
         merged[key] = value
         updatedFields.add(key)
       }
@@ -224,6 +247,66 @@ function mergeSectionData(existing = {}, incoming = {}) {
   })
 
   return { data: merged, updatedFields }
+}
+
+function extractMedicalInsuranceHeuristics(text) {
+  const raw = String(text || '')
+  const singleLine = raw.replace(/[\r\n]+/g, ' ').replace(/\s{2,}/g, ' ').trim()
+
+  const extractLineValue = (labelRegex) => {
+    const re = new RegExp(`(?:^|[\\r\\n])\\s*${labelRegex.source}\\s*[:#\\-]?\\s*([^\\r\\n]+)`, labelRegex.flags)
+    const m = raw.match(re)
+    return m?.[1]?.trim() || null
+  }
+
+  const extractIdFromRemainder = (remainder) => {
+    if (!remainder) return null
+    return extractFirstMatch(String(remainder), /([A-Z0-9-]{6,40})/i)
+  }
+
+  const medicaidNumber =
+    extractIdFromRemainder(
+      extractLineValue(/\bMedicaid\s*(?:Number|No\.|ID|#|Member\s*ID)\b/i) ||
+        extractFirstMatch(singleLine, /\bMedicaid\s*(?:Number|No\.|ID|#|Member\s*ID)\b\s*[:#-]?\s*([A-Z0-9-]{6,40})\b/i),
+    ) ||
+    extractFirstMatch(singleLine, /\bMedicaid\s+([A-Z]{2,6}\d{4,20})\b/i) ||
+    null
+
+  const memberId =
+    extractIdFromRemainder(
+      extractLineValue(/\b(?:Member|Subscriber)\s*(?:ID|Number|No\.|#)\b/i) ||
+        extractFirstMatch(singleLine, /\b(?:Member|Subscriber)\s*(?:ID|Number|No\.|#)\b\s*[:#-]?\s*([A-Z0-9-]{6,40})\b/i),
+    ) ||
+    medicaidNumber
+
+  const groupId =
+    extractIdFromRemainder(
+      extractLineValue(/\bGroup\s*(?:ID|Number|No\.|#)\b/i) ||
+        extractFirstMatch(singleLine, /\bGroup\s*(?:ID|Number|No\.|#)\b\s*[:#-]?\s*([A-Z0-9-]{4,40})\b/i),
+    ) || null
+
+  const provider =
+    extractLineValue(/\bInsurance\s+provider\b/i) ||
+    extractFirstMatch(singleLine, /\bInsurance\s+provider\b\s*[:#-]?\s*([A-Za-z][A-Za-z0-9 .,'/-]{2,60})/i) ||
+    (/\bMedicaid\b/i.test(singleLine) ? 'Medicaid' : null)
+
+  const planType =
+    extractFirstMatch(extractLineValue(/\bPlan\s+type\b/i) || '', /\b(Medicaid|Medicare|Marketplace|HMO|PPO)\b/i) ||
+    extractFirstMatch(singleLine, /\bPlan\s+type\b\s*[:#-]?\s*(Medicaid|Medicare|Marketplace|HMO|PPO)\b/i) ||
+    (/\bMedicaid\b/i.test(singleLine) ? 'Medicaid' : null)
+
+  const planName =
+    extractLineValue(/\bPlan\s+name\b/i) ||
+    extractFirstMatch(singleLine, /\bPlan\s+name\b\s*[:#-]?\s*([A-Za-z0-9][A-Za-z0-9 .,'/-]{2,80})/i) ||
+    null
+
+  return {
+    insurance_provider: provider ? String(provider).replace(/\bPlan\s+name\b.*$/i, '').trim() : '',
+    plan_name: planName ? String(planName).replace(/\bPlan\s+type\b.*$/i, '').trim() : '',
+    plan_type: planType || '',
+    member_id: memberId || '',
+    group_id: groupId || '',
+  }
 }
 
 async function upsertProfileSection(db, profileId, sectionKey, data, documentId) {
@@ -609,6 +692,18 @@ export async function processDocumentIngestionJob({
         sections.organization_details = mergedOrg
         updates.push({ section_key: 'organization_details', updated_fields: Array.from(updatedOrg) })
         aiSectionsLog.organization_details = { ...(aiSectionsLog.organization_details || {}), heuristic: heuristicOrg }
+      }
+
+      const heuristicInsurance = extractMedicalInsuranceHeuristics(document.extracted_text ?? document.notes ?? '')
+      const { data: mergedIns, updatedFields: updatedIns } = mergeSectionData(
+        sections.medical_insurance ?? {},
+        heuristicInsurance,
+      )
+      if (updatedIns.size > 0) {
+        await upsertProfileSection(db, profile.id, 'medical_insurance', mergedIns, document.id)
+        sections.medical_insurance = mergedIns
+        updates.push({ section_key: 'medical_insurance', updated_fields: Array.from(updatedIns) })
+        aiSectionsLog.medical_insurance = { ...(aiSectionsLog.medical_insurance || {}), heuristic: heuristicInsurance }
       }
     } catch {
       // best-effort
