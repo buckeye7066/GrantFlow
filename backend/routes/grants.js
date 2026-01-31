@@ -1251,6 +1251,105 @@ router.post('/from-opportunity', async (req, res, next) => {
     res.status(statusCode).json(result);
   } catch (error) {
     // IMPORTANT:
+    // Provide more user-friendly errors for common failure cases instead of always
+    // returning a generic 500. Certain errors (like a missing organization or
+    // profile) can be thrown inside the transaction and would normally be caught
+    // by the global error handler. Detect and convert these into appropriate
+    // 400/409-style responses so the UI can display a meaningful message.
+    const msg = String(error?.message || '')
+
+    // Missing org/profile error can be thrown within the transaction when no
+    // organization_id could be derived. Treat it as a bad request.
+    if (/Organization ID or Profile ID is required/i.test(msg)) {
+      return res.status(400).json({
+        error: 'missing_org_or_profile',
+        message: 'You must specify either a profile_id or organization_id to add a grant to the pipeline.',
+      })
+    }
+
+    // Catch unique/foreign key constraint errors. SQLite uses error.code
+    // 'SQLITE_CONSTRAINT', Postgres uses '23505' for unique violations and
+    // '23503' for foreign key violations. If we can locate an existing grant,
+    // return a backwards-compatible "already_exists" response instead of a 500.
+    const code = error?.code || null
+    const constraintConflict = code === 'SQLITE_CONSTRAINT' || code === '23505' || code === '23503'
+    if (constraintConflict) {
+      try {
+        const body = req.body || {}
+        const profileId = body.profile_id ? String(body.profile_id) : null
+        const organizationId = body.organization_id ? String(body.organization_id) : null
+        const opportunityId = body.opportunity_id ? String(body.opportunity_id) : null
+        const oppTitle =
+          body?.opportunity_data?.title !== undefined && body?.opportunity_data?.title !== null
+            ? String(body.opportunity_data.title)
+            : null
+        const oppUrlRaw =
+          body?.opportunity_data?.url ||
+          body?.opportunity_data?.application_url ||
+          body?.opportunity_data?.source_url ||
+          null
+        const oppUrl = oppUrlRaw ? String(oppUrlRaw) : null
+
+        const hasProfileId = await grantsHasProfileIdColumn(req.db).catch(() => true)
+
+        const clauses = []
+        const params = []
+
+        if (hasProfileId && profileId) {
+          clauses.push('profile_id = ?')
+          params.push(profileId)
+        } else if (organizationId) {
+          clauses.push('organization_id = ?')
+          params.push(organizationId)
+        } else {
+          // Nothing to scope lookup; bail out to normal error handling.
+          throw new Error('no_lookup_scope')
+        }
+
+        const matchClauses = []
+        if (opportunityId) {
+          matchClauses.push('(funding_opportunity_id = ?)')
+          params.push(opportunityId)
+        }
+        if (oppUrl) {
+          matchClauses.push('(application_url = ?)')
+          params.push(oppUrl)
+        }
+        if (oppTitle) {
+          matchClauses.push('(title = ?)')
+          params.push(oppTitle)
+        }
+
+        if (matchClauses.length === 0) {
+          throw new Error('no_lookup_keys')
+        }
+
+        const row = await req.db
+          .prepare(
+            `
+              SELECT id, title, organization_id${hasProfileId ? ', profile_id' : ''}
+              FROM grants
+              WHERE ${clauses.join(' AND ')}
+                AND (${matchClauses.join(' OR ')})
+              LIMIT 1
+            `,
+          )
+          .get(...params)
+
+        if (row) {
+          return res.status(200).json({
+            ...row,
+            already_exists: true,
+            message: 'Grant already in pipeline',
+          })
+        }
+      } catch (lookupErr) {
+        // Fall through to generic error if lookup fails
+        console.warn('[grants/from-opportunity] duplicate lookup failed', lookupErr?.message || lookupErr)
+      }
+    }
+
+    // For all other errors, continue to centralized error handler for consistent logging.
     // Do NOT swallow errors here. Forward to centralized errorHandler so we:
     // - attach request_id + ok=false consistently
     // - record the error in the in-memory requestIdErrorStore (admin lookup)
@@ -1260,6 +1359,7 @@ router.post('/from-opportunity', async (req, res, next) => {
       profile_id: req.body?.profile_id ?? null,
       organization_id: req.body?.organization_id ?? null,
       opportunity_id: req.body?.opportunity_id ?? null,
+      code: error?.code || null,
       message: error?.message || String(error),
     })
     return next(error)
