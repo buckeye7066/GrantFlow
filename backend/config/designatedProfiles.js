@@ -571,7 +571,7 @@ export const DESIGNATED_PROFILES = [
     sections: {
       basic_information: {
         full_name: 'Anastasia Nicole White',
-        email: '',
+        email: 'Tishka1201@icloud.com',
         phone: '',
         address: 'Cleveland, TN',
         notes:
