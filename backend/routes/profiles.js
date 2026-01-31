@@ -1253,6 +1253,35 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
 
   await upsert.run(id, sectionKey, JSON.stringify(data), updated_by ?? null)
 
+  // Keep profile_emails in sync with the profile's own email (basic_information.email).
+  // Product requirement: the email on the profile implies access for that user.
+  //
+  // Safety:
+  // - For non-admins, only auto-link when the email matches the caller's email (prevents accidental sharing).
+  // - For admins, always link (admin actions are trusted and audited elsewhere).
+  try {
+    if (sectionKey === 'basic_information') {
+      const email = normalizeEmail(data?.email)
+      if (email && isValidEmail(email)) {
+        const user = req.user ?? {}
+        const isAdmin = req.ctx?.isAdmin === true
+        const primary = normalizeEmail(user?.primary_email)
+        const secondary = normalizeEmail(user?.email)
+        const canAutoLink = isAdmin || email === primary || email === secondary
+
+        if (canAutoLink) {
+          await addProfileEmails(req.db, {
+            profileId: String(id),
+            emails: [email],
+            addedBy: req.ctx?.userId ?? req.ctx?.email ?? 'system-profile-email-sync',
+          })
+        }
+      }
+    }
+  } catch {
+    // Best-effort only; profile section save must not fail if profile_emails schema isn't ready.
+  }
+
   const section = await req.db
     .prepare(
       `
