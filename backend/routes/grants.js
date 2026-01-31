@@ -1349,19 +1349,33 @@ router.post('/from-opportunity', async (req, res, next) => {
       }
     }
 
-    // For all other errors, continue to centralized error handler for consistent logging.
-    // Do NOT swallow errors here. Forward to centralized errorHandler so we:
-    // - attach request_id + ok=false consistently
-    // - record the error in the in-memory requestIdErrorStore (admin lookup)
-    // - keep logs consistent across environments (dev/prod)
+    // Enhanced error logging with stack trace and detailed context
     console.error('[grants/from-opportunity] failed', {
       requestId: req.requestId || req.request_id || null,
       profile_id: req.body?.profile_id ?? null,
       organization_id: req.body?.organization_id ?? null,
       opportunity_id: req.body?.opportunity_id ?? null,
+      opportunity_title: req.body?.opportunity_data?.title ?? null,
       code: error?.code || null,
       message: error?.message || String(error),
+      stack: error?.stack || null,
+      // Include additional context to help diagnose the issue
+      errorName: error?.name || null,
+      sqlState: error?.sqlState || null,
+      constraint: error?.constraint || null,
     })
+    
+    // Return a more informative 500 error when we can't handle it gracefully
+    if (process.env.NODE_ENV !== 'production') {
+      return res.status(500).json({
+        error: 'internal_server_error',
+        message: 'Failed to add grant to pipeline',
+        code: error?.code || null,
+        details: error?.message || String(error),
+        requestId: req.requestId || req.request_id || null,
+      })
+    }
+    
     return next(error)
   }
 });
