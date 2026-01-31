@@ -84,6 +84,7 @@ router.get('/', async (req, res) => {
   
   try {
     await ensureUserPreferencesTable(req.db)
+    const dialect = req.db?.dialect || 'sqlite'
 
     let preferences = await req.db
       .prepare('SELECT * FROM user_preferences WHERE user_id = ?')
@@ -92,10 +93,17 @@ router.get('/', async (req, res) => {
     if (!preferences) {
       // Create default preferences for user
       const id = `pref-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-      await req.db.prepare(`
-        INSERT INTO user_preferences (id, user_id, custom_preferences)
-        VALUES (?, ?, ?)
-      `).run(id, userId, JSON.stringify({}))
+      const insertSql =
+        dialect === 'postgres'
+          ? `
+              INSERT INTO user_preferences (id, user_id, custom_preferences)
+              VALUES (?, ?, ?::jsonb)
+            `
+          : `
+              INSERT INTO user_preferences (id, user_id, custom_preferences)
+              VALUES (?, ?, ?)
+            `
+      await req.db.prepare(insertSql).run(id, userId, JSON.stringify({}))
       
       preferences = await req.db
         .prepare('SELECT * FROM user_preferences WHERE id = ?')
@@ -118,19 +126,23 @@ router.put('/', async (req, res) => {
   
   try {
     await ensureUserPreferencesTable(req.db)
+    const dialect = req.db?.dialect || 'sqlite'
 
     // Ensure row exists before update.
     let existing = await req.db.prepare('SELECT id FROM user_preferences WHERE user_id = ?').get(userId)
     if (!existing?.id) {
       const id = `pref-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-      await req.db
-        .prepare(
-          `
-            INSERT INTO user_preferences (id, user_id, custom_preferences)
-            VALUES (?, ?, ?)
-          `,
-        )
-        .run(id, userId, JSON.stringify({}))
+      const insertSql =
+        dialect === 'postgres'
+          ? `
+              INSERT INTO user_preferences (id, user_id, custom_preferences)
+              VALUES (?, ?, ?::jsonb)
+            `
+          : `
+              INSERT INTO user_preferences (id, user_id, custom_preferences)
+              VALUES (?, ?, ?)
+            `
+      await req.db.prepare(insertSql).run(id, userId, JSON.stringify({}))
     }
 
     const updates = []
@@ -140,7 +152,7 @@ router.put('/', async (req, res) => {
     Object.entries(req.body).forEach(([key, value]) => {
       if (allowedFields.includes(key) && value !== undefined) {
         if (key === 'custom_preferences') {
-          updates.push('custom_preferences = ?')
+          updates.push(dialect === 'postgres' ? 'custom_preferences = ?::jsonb' : 'custom_preferences = ?')
           values.push(JSON.stringify(value))
         } else if (typeof value === 'boolean') {
           updates.push(`${key} = ?`)
@@ -160,7 +172,7 @@ router.put('/', async (req, res) => {
     
     await req.db.prepare(`
       UPDATE user_preferences 
-      SET ${updates.join(', ')} 
+      SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP
       WHERE user_id = ?
     `).run(...values)
     
@@ -184,14 +196,22 @@ router.post('/reset', async (req, res) => {
   
   try {
     await ensureUserPreferencesTable(req.db)
+    const dialect = req.db?.dialect || 'sqlite'
 
     await req.db.prepare('DELETE FROM user_preferences WHERE user_id = ?').run(userId)
     
     const id = `pref-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-    await req.db.prepare(`
-      INSERT INTO user_preferences (id, user_id, custom_preferences)
-      VALUES (?, ?, ?)
-    `).run(id, userId, JSON.stringify({}))
+    const insertSql =
+      dialect === 'postgres'
+        ? `
+            INSERT INTO user_preferences (id, user_id, custom_preferences)
+            VALUES (?, ?, ?::jsonb)
+          `
+        : `
+            INSERT INTO user_preferences (id, user_id, custom_preferences)
+            VALUES (?, ?, ?)
+          `
+    await req.db.prepare(insertSql).run(id, userId, JSON.stringify({}))
     
     const preferences = await req.db
       .prepare('SELECT * FROM user_preferences WHERE id = ?')
