@@ -1010,6 +1010,20 @@ function safeDeleteFile(req, filePath) {
   }
 }
 
+// Helper to trigger KB document AI analysis asynchronously
+function triggerKBAnalysis(db, docId, extractedText) {
+  if (extractedText && extractedText.trim().length > 50) {
+    // Run analysis asynchronously - don't block the response
+    analyzeKnowledgeBaseDocument({
+      documentId: docId,
+      extractedText,
+      db,
+    }).catch(error => {
+      console.error('[KB Upload] AI analysis failed for', docId, error)
+    })
+  }
+}
+
 // GET /api/admin/knowledge
 // Query params: q, limit, offset
 router.get('/knowledge', async (req, res) => {
@@ -1124,16 +1138,7 @@ router.post('/knowledge/upload', knowledgeUpload.single('document'), async (req,
       )
 
     // Trigger AI analysis if we have extracted text
-    if (extractedText && extractedText.trim().length > 50) {
-      // Run analysis asynchronously - don't block the response
-      analyzeKnowledgeBaseDocument({
-        documentId: docId,
-        extractedText,
-        db: req.db,
-      }).catch(error => {
-        console.error('[KB Upload] AI analysis failed for', docId, error)
-      })
-    }
+    triggerKBAnalysis(req.db, docId, extractedText)
 
     const doc = await req.db.prepare(`SELECT * FROM documents WHERE id = ? LIMIT 1`).get(docId)
     res.status(201).json({ ok: true, document: doc })
@@ -1203,16 +1208,7 @@ router.post('/knowledge/ingest-url', async (req, res) => {
       )
 
     // Trigger AI analysis if we have extracted text
-    if (extractedText && extractedText.trim().length > 50) {
-      // Run analysis asynchronously - don't block the response
-      analyzeKnowledgeBaseDocument({
-        documentId: docId,
-        extractedText,
-        db: req.db,
-      }).catch(error => {
-        console.error('[KB Upload] AI analysis failed for', docId, error)
-      })
-    }
+    triggerKBAnalysis(req.db, docId, extractedText)
 
     const doc = await req.db.prepare(`SELECT * FROM documents WHERE id = ? LIMIT 1`).get(docId)
     res.status(201).json({ ok: true, document: doc })

@@ -59,7 +59,10 @@ export async function analyzeKnowledgeBaseDocument({ documentId, extractedText, 
     const { openai } = createOpenAIClient()
     
     // Truncate very long documents to manage token usage
-    const maxLength = 50000 // ~12.5k tokens
+    // Note: Character-to-token ratio varies by content (typically 3-5 chars per token).
+    // We use a conservative 4:1 estimate. For 50,000 chars, this is ~12,500 tokens,
+    // well within the model's context window while leaving room for the response.
+    const maxLength = 50000
     const textToAnalyze = extractedText.length > maxLength 
       ? extractedText.substring(0, maxLength) + '\n\n[Document truncated for analysis]'
       : extractedText
