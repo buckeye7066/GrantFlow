@@ -6,9 +6,11 @@ import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useQuery } from "@tanstack/react-query"
 import { apiFetch } from "@/api/client"
+import { useToast } from "@/components/ui/use-toast"
 
 export default function Outreach() {
   const [searchQuery, setSearchQuery] = useState("")
+  const { toast } = useToast()
 
   // Fetch grants to show funder contacts
   const { data: grants = [] } = useQuery({
@@ -177,15 +179,42 @@ export default function Outreach() {
                   <Calendar className="w-12 h-12 mx-auto text-slate-300 mb-4" />
                   <p className="text-slate-600">Communication logging feature</p>
                   <div className="flex gap-2 justify-center mt-4">
-                    <Button variant="outline" size="sm">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        toast({
+                          title: "Coming soon",
+                          description: "Logging email interactions is under development.",
+                        })
+                      }
+                    >
                       <Mail className="w-4 h-4 mr-2" />
                       Log Email
                     </Button>
-                    <Button variant="outline" size="sm">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        toast({
+                          title: "Coming soon",
+                          description: "Logging calls is under development.",
+                        })
+                      }
+                    >
                       <Phone className="w-4 h-4 mr-2" />
                       Log Call
                     </Button>
-                    <Button variant="outline" size="sm">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        toast({
+                          title: "Coming soon",
+                          description: "Logging meetings is under development.",
+                        })
+                      }
+                    >
                       <Calendar className="w-4 h-4 mr-2" />
                       Log Meeting
                     </Button>
