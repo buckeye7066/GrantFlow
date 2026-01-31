@@ -50,9 +50,46 @@ async function fetchPdfTextFromUrl(fileUrl) {
     throw err
   }
   const contentType = String(resp.headers.get('content-type') || '').toLowerCase()
+
+  // Some callers pass a web page URL (e.g. grants.gov detail pages). In those cases,
+  // pdf-parse will throw because the payload is HTML. Treat non-PDF content as text/HTML
+  // and extract a best-effort plain-text representation.
   const buf = Buffer.from(await resp.arrayBuffer())
-  const parsed = await pdfParse(buf)
-  const text = String(parsed?.text || '').trim()
+  const asString = () => {
+    try {
+      return buf.toString('utf8')
+    } catch {
+      return ''
+    }
+  }
+
+  const looksLikePdf =
+    contentType.includes('application/pdf') ||
+    (buf.length >= 5 && buf.subarray(0, 5).toString('utf8') === '%PDF-')
+
+  if (looksLikePdf) {
+    const parsed = await pdfParse(buf)
+    const text = String(parsed?.text || '').trim()
+    return { text, contentType, bytes: buf.length }
+  }
+
+  // HTML/text fallback
+  const raw = asString()
+  const withoutScripts = raw
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<\/(p|div|br|li|tr|h\d)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+  const text = withoutScripts
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/\s+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim()
+
   return { text, contentType, bytes: buf.length }
 }
 
@@ -71,16 +108,21 @@ router.post('/parseNOFO', async (req, res) => {
   try {
     const fileUrl = typeof req.body?.file_url === 'string' ? req.body.file_url.trim() : ''
     const schema = req.body?.json_schema && typeof req.body.json_schema === 'object' ? req.body.json_schema : null
+    const isUrl = req.body?.is_url === true || req.body?.is_url === 'true'
 
     if (!fileUrl) {
       return res.status(400).json({ success: false, message: 'file_url is required' })
     }
 
-    const { text } = await fetchPdfTextFromUrl(fileUrl)
+    const { text, contentType } = await fetchPdfTextFromUrl(fileUrl)
     if (!text) {
       return res.status(422).json({
         success: false,
-        message: 'No extractable text found in document (may be scanned images).',
+        message: contentType.includes('pdf')
+          ? 'No extractable text found in document (may be scanned images).'
+          : isUrl
+            ? 'No extractable text found at the provided URL.'
+            : 'No extractable text found in document.',
       })
     }
 
