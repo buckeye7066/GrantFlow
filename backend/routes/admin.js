@@ -32,6 +32,7 @@ import { crawlItemFunding } from '../services/crawlers/itemFundingCrawler.js';
 import { crawlECFBenefits } from '../services/crawlers/ecfBenefitsCrawler.js';
 import { findDuplicateProfileGroups, mergeProfiles } from '../services/profileDedupeService.js'
 import { ensureAdminUser, isAdminUser, addProfileEmails, listProfileEmails } from '../utils/accessControl.js'
+import { repairProfileOwnership } from '../utils/profileOwnershipRepair.js'
 import zipcodes from 'zipcodes';
 import { resolveCountyForZip } from '../services/geo/zipCountyResolver.js';
 import { createGeoCrawlRun } from '../services/geoCrawlRunStore.js'
@@ -2974,6 +2975,84 @@ router.post('/profiles/integrity/repair', async (req, res) => {
   }
 
   return res.json(result)
+})
+
+/**
+ * POST /api/admin/profiles/ownership/repair
+ *
+ * Admin-only: enforce the ownership/linking rules:
+ * - Every profile is linked to ADMIN_EMAIL via profile_emails (so "My Profiles" can show all for the operator).
+ * - Individual profiles are linked to their basic_information.email via profile_emails.
+ * - Ownership (profiles.user_id) is assigned to the user matching that email when safe (respects unique ownership).
+ *
+ * Body:
+ * {
+ *   dry_run?: boolean = true,
+ *   limit?: number = 5000,
+ *   include_deleted_profiles?: boolean = true
+ * }
+ */
+router.post('/profiles/ownership/repair', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+
+  const dryRun = req.body?.dry_run !== false
+  const limit = Math.max(1, Math.min(Number(req.body?.limit) || 5000, 50_000))
+  const includeDeleted = req.body?.include_deleted_profiles !== false
+
+  const actorUserId = req.ctx?.userId ?? req.user?.userId ?? null
+  const generatedAt = new Date().toISOString()
+
+  let report = null
+  try {
+    report = await repairProfileOwnership(req.db, {
+      apply: !dryRun,
+      limit,
+      includeDeleted,
+      updatedBy: actorUserId || 'admin-ownership-repair',
+    })
+  } catch (error) {
+    console.error('[admin/profiles/ownership/repair] failed', error)
+    return res.status(500).json({
+      ok: false,
+      error: error?.message || String(error),
+      error_type: 'ownership_repair_failed',
+    })
+  }
+
+  // Audit summary (best-effort; do not block response)
+  try {
+    logAuditEvent(req.db, {
+      category: AUDIT_CATEGORIES.ADMIN,
+      action: 'profile_ownership_repair',
+      severity: SEVERITY.INFO,
+      userId: actorUserId,
+      resourceType: 'profile',
+      resourceId: null,
+      details: {
+        dry_run: dryRun,
+        include_deleted_profiles: includeDeleted,
+        limit,
+        report: {
+          scanned: report?.scanned ?? null,
+          admin_links_added: report?.admin_links_added ?? null,
+          profile_email_links_added: report?.profile_email_links_added ?? null,
+          ownership_assigned: report?.ownership_assigned ?? null,
+          ownership_skipped: report?.ownership_skipped ?? null,
+        },
+      },
+      ipAddress: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+    })
+  } catch {
+    // ignore
+  }
+
+  return res.json({
+    ok: true,
+    generated_at: generatedAt,
+    dry_run: dryRun,
+    ...report,
+  })
 })
 
 // POST /api/admin/seed-opportunities - Seed real funding opportunities
