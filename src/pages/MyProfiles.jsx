@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { listProfiles, deleteProfile, hardDeleteProfileAdmin } from "@/api/profiles";
+import { listProfiles, deleteProfile, hardDeleteProfileAdmin, restoreProfileAccessAdmin } from "@/api/profiles";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -109,6 +109,26 @@ export default function MyProfiles() {
       });
     },
   });
+
+  const restoreMutation = useMutation({
+    mutationFn: async ({ id }) => {
+      return restoreProfileAccessAdmin(id, { restore_deleted: true })
+    },
+    onSuccess: () => {
+      toast({
+        title: "Profile restored",
+        description: "The profile was restored and should now appear in the main list.",
+      })
+      queryClient.invalidateQueries({ queryKey: ['profiles'] })
+    },
+    onError: (error) => {
+      toast({
+        title: "Error restoring profile",
+        description: error.message || "Failed to restore the profile. Please try again.",
+        variant: "destructive",
+      })
+    },
+  })
   
   const handleViewInvoices = (profile) => {
     navigate(createPageUrl("CreateInvoice", { organization_id: profile.organization_id, profile_id: profile.id }));
@@ -123,6 +143,13 @@ export default function MyProfiles() {
     setHardDeleteConfirmText("");
     setHardDeleteReason("orphan_cleanup");
   };
+
+  const handleRestoreProfile = (profile) => {
+    if (!profile?.id) return
+    const ok = window.confirm(`Restore "${profile.display_name || profile.name || profile.id}"?\n\nThis will clear the deleted status so it appears again.`)
+    if (!ok) return
+    restoreMutation.mutate({ id: profile.id })
+  }
   
   const confirmDelete = () => {
     if (profileToDelete) {
@@ -253,6 +280,7 @@ export default function MyProfiles() {
                   onViewInvoices={handleViewInvoices}
                   onDelete={handleDeleteProfile}
                   onHardDelete={handleHardDeleteProfile}
+                  onRestore={handleRestoreProfile}
                 />
               ))}
             </div>
