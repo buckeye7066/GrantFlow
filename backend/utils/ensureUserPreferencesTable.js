@@ -1,7 +1,38 @@
 export default async function ensureUserPreferencesTable(db) {
-  // Postgres environments should be migrated deterministically via SQL migrations.
-  // This SQLite-specific self-healing utility is a no-op on Postgres.
   if (db?.dialect === 'postgres') {
+    // Postgres environments are ideally migrated deterministically via SQL migrations, but
+    // production stability requires that the app can self-heal when the table is missing.
+    // This is idempotent and safe to run on every request.
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS user_preferences (
+        id TEXT PRIMARY KEY,
+        created_at TIMESTAMPTZ DEFAULT now(),
+        updated_at TIMESTAMPTZ DEFAULT now(),
+        user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+        sidebar_position TEXT DEFAULT 'left',
+        sidebar_collapsed BOOLEAN DEFAULT FALSE,
+        dashboard_layout TEXT DEFAULT 'grid',
+        card_density TEXT DEFAULT 'comfortable',
+        table_row_density TEXT DEFAULT 'medium',
+        theme TEXT DEFAULT 'system',
+        accent_color TEXT DEFAULT 'blue',
+        sidebar_color_scheme TEXT DEFAULT 'default',
+        high_contrast BOOLEAN DEFAULT FALSE,
+        default_landing_page TEXT DEFAULT '/Dashboard',
+        items_per_page INTEGER DEFAULT 25,
+        date_format TEXT DEFAULT 'MM/DD/YYYY',
+        currency_display TEXT DEFAULT 'USD',
+        timezone TEXT DEFAULT 'America/New_York',
+        email_notifications BOOLEAN DEFAULT TRUE,
+        grant_deadline_reminder_days INTEGER DEFAULT 7,
+        weekly_digest BOOLEAN DEFAULT TRUE,
+        browser_notifications BOOLEAN DEFAULT FALSE,
+        font_size TEXT DEFAULT 'medium',
+        reduce_motion BOOLEAN DEFAULT FALSE,
+        screen_reader_optimized BOOLEAN DEFAULT FALSE,
+        custom_preferences JSONB DEFAULT '{}'::jsonb
+      );
+    `)
     return
   }
 
