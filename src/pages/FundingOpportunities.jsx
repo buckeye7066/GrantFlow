@@ -40,6 +40,7 @@ import { listProfiles, getProfile } from "@/api/profiles"
 import { createCrawlerJob, fetchCrawlerStatus } from "@/api/crawlers"
 import { createGrant } from "@/api/grants"
 import { createDocument } from "@/api/documents"
+import { apiFetch } from "@/api/client"
 import { cn } from "@/lib/utils"
 
 const NOT_AVAILABLE = 'N/A'
@@ -1166,11 +1167,13 @@ export default function FundingOpportunities() {
         new Set(preferredReasons.filter(Boolean).map((reason) => String(reason))),
       )
 
-      // Use the from-opportunity endpoint which auto-creates org if needed
-      // Include full opportunity_data for synthetic/discovered opportunities
-      const response = await fetch('/api/grants/from-opportunity', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      // IMPORTANT: use apiFetch so Authorization + refresh are applied (prevents 401s).
+      const created = await apiFetch("/api/grants/from-opportunity", {
+        method: "POST",
+        headers: {
+          // Scope the request to the selected profile (helps with profile-scoped sessions).
+          "X-Profile-Id": selectedProfile.id,
+        },
         body: JSON.stringify({
           opportunity_id: opportunity.id || null,
           profile_id: selectedProfile.id,
@@ -1187,17 +1190,10 @@ export default function FundingOpportunities() {
             awardMax: opportunity.award_ceiling || opportunity.amount_max,
             descriptionMd: opportunity.description,
             eligibilityBullets: opportunity.eligibility_bullets || [],
-            source: opportunity.source || 'database'
-          }
-        })
+            source: opportunity.source || "database",
+          },
+        }),
       })
-      
-      if (!response.ok) {
-        const err = await response.json()
-        throw new Error(err.error || 'Failed to add to pipeline')
-      }
-      
-      const created = await response.json()
 
       toast({
         title: "Added to pipeline",
