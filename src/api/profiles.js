@@ -82,3 +82,10 @@ export async function hardDeleteProfileAdmin(profileId, payload = {}) {
     body: JSON.stringify(payload),
   })
 }
+
+export async function restoreProfileAccessAdmin(profileId, payload = {}) {
+  return apiFetch(`/api/admin/profiles/${profileId}/restore-access`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
