@@ -360,8 +360,9 @@ router.post('/', ensureAuth, mutationRateLimiter, async (req, res) => {
     const org = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(id);
 
     // Keep profile_sections (and matching/crawlers) in sync with comprehensive application data.
+    let profileId = null
     try {
-      await syncOrganizationToProfileSections(req.db, {
+      profileId = await syncOrganizationToProfileSections(req.db, {
         organizationId: id,
         orgRow: org,
         payload: data,
@@ -371,7 +372,7 @@ router.post('/', ensureAuth, mutationRateLimiter, async (req, res) => {
       console.warn('[organizations] Failed to sync org -> profile sections:', syncError?.message || syncError)
     }
 
-    res.status(201).json(org);
+    res.status(201).json({ ...(org || {}), profile_id: profileId });
   } catch (error) {
     console.error('Error creating organization:', error);
     res.status(500).json(formatError(error));
@@ -413,8 +414,9 @@ router.put('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
     const org = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(req.params.id);
 
     // Keep profile_sections (and matching/crawlers) in sync with comprehensive application data.
+    let profileId = null
     try {
-      await syncOrganizationToProfileSections(req.db, {
+      profileId = await syncOrganizationToProfileSections(req.db, {
         organizationId: req.params.id,
         orgRow: org,
         payload: data,
@@ -424,7 +426,7 @@ router.put('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
       console.warn('[organizations] Failed to sync org -> profile sections:', syncError?.message || syncError)
     }
 
-    res.json(org);
+    res.json({ ...(org || {}), profile_id: profileId });
   } catch (error) {
     console.error('Error updating organization:', error);
     res.status(500).json(formatError(error));

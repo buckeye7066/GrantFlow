@@ -108,6 +108,7 @@ export default function CrawlerSelection({
       profile?.medicaid_waiver_program ??
       sections?.government_assistance?.medicaid_waiver_program ??
       null
+    const ecfRole = String(sections?.government_assistance?.ecf_choices_role ?? '').toLowerCase().trim()
 
     const keywordSet = signals?.keywordSet
     const keywordHas = (needle) =>
@@ -126,24 +127,31 @@ export default function CrawlerSelection({
       return false
     }
 
+    const hasEcfWaiver = String(waiver || '').toLowerCase() === 'ecf_choices'
+    const hasExplicitEcf = Boolean(ecfRole)
+
     const isTn =
       !state
-        ? keywordIncludes('tennessee') || keywordHas('tn')
+        ? hasEcfWaiver || hasExplicitEcf
+          ? true
+          : keywordIncludes('tennessee') || keywordHas('tn')
         : String(state).toUpperCase() === 'TN'
-
-    const hasEcfWaiver = String(waiver || '').toLowerCase() === 'ecf_choices'
     const mentionsEcf =
       keywordHas('ecf') ||
       keywordIncludes('employment and community first') ||
       keywordIncludes('ecf choices') ||
       tagList.some((t) => String(t || '').toLowerCase().includes('ecf'))
 
-    const eligibleIndividual = Boolean(isTn && (profile?.ecf_participant === true || hasEcfWaiver || mentionsEcf))
+    const eligibleIndividual = Boolean(
+      isTn && (profile?.ecf_participant === true || ecfRole === 'participant' || hasEcfWaiver || mentionsEcf),
+    )
 
     const family = sections?.family_life ?? {}
     const caregiverFlag = family.family_caregiver === true || family.caregiver === true || profile?.caregiver === true
     const caregiverKeyword = keywordHas('caregiver') || keywordIncludes('caregiver')
-    const eligibleCaretaker = Boolean(isTn && (caregiverFlag || caregiverKeyword) && (hasEcfWaiver || mentionsEcf))
+    const eligibleCaretaker = Boolean(
+      isTn && (ecfRole === 'caregiver' || caregiverFlag || caregiverKeyword) && (hasEcfWaiver || mentionsEcf || ecfRole === 'caregiver'),
+    )
 
     const orgType =
       profile?.organization_type ??
@@ -151,12 +159,13 @@ export default function CrawlerSelection({
       null
     const services = Array.isArray(profile?.services) ? profile.services : []
     const providerFlag =
+      ecfRole === 'provider' ||
       profile?.is_provider === true ||
       profile?.provides_residential_support === true ||
       String(orgType || '').toLowerCase() === 'cls_fm' ||
       String(orgType || '').toLowerCase() === 'family_model' ||
       services.some((s) => String(s || '').toLowerCase().includes('residential'))
-    const eligibleProvider = Boolean(isTn && providerFlag && (hasEcfWaiver || mentionsEcf))
+    const eligibleProvider = Boolean(isTn && providerFlag && (hasEcfWaiver || mentionsEcf || ecfRole === 'provider'))
 
     const eligibleSupport = Boolean(eligibleCaretaker || eligibleProvider)
     const supportType = eligibleProvider ? 'provider' : eligibleCaretaker ? 'caretaker' : null

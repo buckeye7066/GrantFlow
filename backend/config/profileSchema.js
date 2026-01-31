@@ -82,6 +82,18 @@ export const PROFILE_SCHEMA = {
     description: 'Public benefits (eligibility flags for many assistance programs).',
     fields: {
       medicaid_enrolled: { type: 'boolean', default: false, description: 'True if enrolled in Medicaid.' },
+      medicaid_waiver_program: {
+        type: 'string',
+        default: 'none',
+        description:
+          "Medicaid waiver program when applicable. Use 'ecf_choices' for Tennessee ECF CHOICES participants/providers; otherwise 'none' or another short label.",
+      },
+      ecf_choices_role: {
+        type: 'string',
+        default: '',
+        description:
+          "ECF CHOICES role for unlocking the crawler. Use: 'participant', 'caregiver', or 'provider'. Leave blank if not applicable.",
+      },
       medicare_recipient: { type: 'boolean', default: false, description: 'True if receiving Medicare.' },
       ssi_recipient: { type: 'boolean', default: false, description: 'True if receiving SSI.' },
       ssdi_recipient: { type: 'boolean', default: false, description: 'True if receiving SSDI.' },

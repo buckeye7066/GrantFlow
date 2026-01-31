@@ -222,6 +222,8 @@ const financialInformationSchema = z.object({
 
 const assistanceSchema = z.object({
   medicaid_enrolled: booleanField,
+  medicaid_waiver_program: z.string().optional().or(z.literal("")),
+  ecf_choices_role: z.string().optional().or(z.literal("")),
   medicare_recipient: booleanField,
   ssi_recipient: booleanField,
   ssdi_recipient: booleanField,
@@ -680,6 +682,8 @@ export const SECTION_CONFIG = {
     schema: assistanceSchema,
     defaults: {
       medicaid_enrolled: false,
+      medicaid_waiver_program: "none",
+      ecf_choices_role: "",
       medicare_recipient: false,
       ssi_recipient: false,
       ssdi_recipient: false,
@@ -690,6 +694,20 @@ export const SECTION_CONFIG = {
     },
     fields: [
       { name: "medicaid_enrolled", label: "Medicaid enrolled", type: "boolean" },
+      {
+        name: "medicaid_waiver_program",
+        label: "Medicaid waiver program",
+        component: Input,
+        description: "Use 'ecf_choices' for ECF CHOICES. Otherwise: none / other short label.",
+        props: { placeholder: "none | ecf_choices | other" },
+      },
+      {
+        name: "ecf_choices_role",
+        label: "ECF CHOICES role (for crawler unlock)",
+        component: Input,
+        description: "Use: participant | caregiver | provider (leave blank if not applicable).",
+        props: { placeholder: "participant | caregiver | provider" },
+      },
       { name: "medicare_recipient", label: "Medicare recipient", type: "boolean" },
       { name: "ssi_recipient", label: "SSI recipient", type: "boolean" },
       { name: "ssdi_recipient", label: "SSDI recipient", type: "boolean" },
@@ -1305,7 +1323,6 @@ export default function ProfileSectionEditor({
               {/* Register hidden fields so existing saved values are preserved on save */}
               {hiddenFields.map((hf) => (
                 <Controller
-                  // eslint-disable-next-line react/no-array-index-key
                   key={hf.name}
                   control={form.control}
                   name={hf.name}
