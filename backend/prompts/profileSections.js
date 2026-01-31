@@ -87,6 +87,8 @@ Return JSON with keys: ${Object.keys(PROFILE_SCHEMA.medical_insurance.fields).jo
 
 Rules:
 - Do NOT invent member_id or group_id. Leave them empty if not explicitly present.
+- member_id and group_id must be raw identifier strings only (no sentences, no extra commentary).
+- If the document says "Medicaid Number", that is the member_id.
 - plan_type should be a short label (e.g., "Medicaid", "Medicare", "Marketplace", "HMO", "PPO") when known.
 - Keep notes high-level and non-speculative (avoid medical advice).
     `.trim(),

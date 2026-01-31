@@ -36,6 +36,8 @@ export default function Organizations() {
   const [typeFilter, setTypeFilter] = useState("all")
   const [quickAddOpen, setQuickAddOpen] = useState(false)
   const [uploadFormOpen, setUploadFormOpen] = useState(false)
+  const [comprehensiveOpen, setComprehensiveOpen] = useState(false)
+  const [comprehensiveSubmitting, setComprehensiveSubmitting] = useState(false)
   const { toast } = useToast()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -98,11 +100,48 @@ export default function Organizations() {
   })
 
   const handleNewApplication = () => {
-    toast({
-      title: "Coming soon",
-      description:
-        "The full comprehensive application builder is under development. Please open a specific profile to create an application.",
-    })
+    setComprehensiveOpen(true)
+  }
+
+  const handleComprehensiveSubmit = async (applicationData) => {
+    setComprehensiveSubmitting(true)
+    try {
+      const result = await apiFetch('/api/organizations', {
+        method: 'POST',
+        body: JSON.stringify(applicationData ?? {}),
+      })
+
+      const profileId = result?.profile_id ?? null
+
+      queryClient.invalidateQueries({ queryKey: ['profiles'] })
+
+      toast({
+        title: 'Profile created',
+        description: 'Your comprehensive application has been saved as a new profile.',
+      })
+
+      setComprehensiveOpen(false)
+
+      if (profileId) {
+        navigate(createPageUrl("OrganizationProfile", { id: profileId }))
+      } else {
+        // Non-fatal: profile sync failed, but org row was created.
+        toast({
+          title: 'Saved, but profile link missing',
+          description:
+            'Your application was saved, but we could not open the profile automatically. Please refresh and look for it in the list.',
+          variant: 'destructive',
+        })
+      }
+    } catch (error) {
+      toast({
+        title: 'Failed to create profile',
+        description: error?.message || 'An error occurred while saving the application.',
+        variant: 'destructive',
+      })
+    } finally {
+      setComprehensiveSubmitting(false)
+    }
   }
 
   const handleQuickAdd = async (formData) => {
@@ -301,6 +340,19 @@ export default function Organizations() {
         onOpenChange={setUploadFormOpen}
         onUpload={handleUploadForm}
       />
+
+      <Dialog open={comprehensiveOpen} onOpenChange={setComprehensiveOpen}>
+        <DialogContent className="max-w-5xl w-[95vw] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>New Comprehensive Application</DialogTitle>
+          </DialogHeader>
+          <ComprehensiveApplicationForm
+            onSubmit={handleComprehensiveSubmit}
+            onCancel={() => setComprehensiveOpen(false)}
+            isSubmitting={comprehensiveSubmitting}
+          />
+        </DialogContent>
+      </Dialog>
     </section>
   )
 }
