@@ -39,6 +39,7 @@ export default function ProfileDetail() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
   const user = useAuthStore((state) => state.user)
+  const activeProfileId = useAuthStore((state) => state.activeProfileId)
   const isAdmin = Boolean(user?.is_admin || user?.id === "admin")
   const { state: dashboardPrefs, dispatch: preferencesDispatch } = useDashboardPreferences()
   const preferences = useSettingsStore((state) => state.preferences)
@@ -75,6 +76,11 @@ export default function ProfileDetail() {
   const [editingSection, setEditingSection] = React.useState(null)
   const [savingSectionKey, setSavingSectionKey] = React.useState(null)
   const [aiLoadingKey, setAiLoadingKey] = React.useState(null)
+  const canDeleteDocuments = Boolean(
+    isAdmin ||
+      (profile?.user_id && user?.id && String(profile.user_id) === String(user.id)) ||
+      (activeProfileId && profileId && String(activeProfileId) === String(profileId)),
+  )
 
   const upsertSectionMutation = useMutation({
     mutationFn: ({ sectionKey, values }) => upsertProfileSection(profileId, sectionKey, values),
@@ -571,6 +577,7 @@ export default function ProfileDetail() {
                 profileId={profileId}
                 profileName={profile.display_name}
                 canDocumentAI={canDocumentAI}
+                canDeleteDocuments={canDeleteDocuments}
               />
             </div>
           </TabsContent>
@@ -581,6 +588,7 @@ export default function ProfileDetail() {
                 profileId={profileId}
                 profileName={profile.display_name}
                 canDocumentAI={canDocumentAI}
+                canDeleteDocuments={canDeleteDocuments}
               />
               <ProfileAppliedFundingPrint organizationId={profile.organization_id} profileName={profile.display_name} />
             </div>

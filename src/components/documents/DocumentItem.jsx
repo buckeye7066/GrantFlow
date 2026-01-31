@@ -279,13 +279,18 @@ export default function DocumentItem({ document, onDelete }) {
         >
           <Printer className="w-3 h-3 mr-2" /> Print
         </Button>
-        <Button
-          variant="destructive-outline"
-          size="icon"
-          onClick={() => onDelete(document)}
-        >
-          <Trash2 className="w-4 h-4" />
-        </Button>
+        {typeof onDelete === "function" ? (
+          <Button
+            variant="outline"
+            size="icon"
+            className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
+            onClick={() => onDelete(document)}
+            aria-label={`Delete ${String(document?.name || "document")}`}
+            title="Delete"
+          >
+            <Trash2 className="w-4 h-4" />
+          </Button>
+        ) : null}
       </CardFooter>
     </Card>
   );
