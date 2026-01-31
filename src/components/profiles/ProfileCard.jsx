@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { 
+import {
   Building2, 
   DollarSign, 
   FileText, 
@@ -13,12 +13,13 @@ import {
   Church,
   Receipt,
   Trash2,
-  AlertTriangle
+  AlertTriangle,
+  RotateCcw,
 } from "lucide-react";
 import { createPageUrl } from "@/utils";
 import { useAuthenticatedAvatar } from "@/hooks/useAuthenticatedAvatar";
 
-export default function ProfileCard({ profile, onViewInvoices, onDelete, isAdmin, onHardDelete }) {
+export default function ProfileCard({ profile, onViewInvoices, onDelete, isAdmin, onHardDelete, onRestore }) {
   const navigate = useNavigate();
   const billing = profile.billing || {};
   const tier = billing.tier || {};
@@ -68,6 +69,7 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete, isAdmin
   };
 
   const isOrphanedProfile = !profile.organization_id && !profile.user_id;
+  const isDeletedProfile = String(profile?.status || '').toLowerCase() === 'deleted'
   const avatarCacheBuster = React.useMemo(() => {
     // Prefer avatar_url (changes per upload), then updated_at as fallback.
     const raw = profile?.avatar_url || profile?.updated_at || ""
@@ -230,7 +232,22 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete, isAdmin
             <FileText className="mr-2 h-4 w-4" />
             Billing
           </Button>
-          {Boolean(isAdmin) && (isOrphanedProfile || String(profile?.status || '').toLowerCase() === 'deleted') ? (
+          {Boolean(isAdmin) && isDeletedProfile ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="shrink-0"
+              aria-label={`Restore profile ${displayName}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onRestore?.(profile);
+              }}
+            >
+              <RotateCcw className="h-4 w-4" />
+              <span className="sr-only">Restore</span>
+            </Button>
+          ) : null}
+          {Boolean(isAdmin) && (isOrphanedProfile || isDeletedProfile) ? (
             <Button
               variant="destructive"
               size="sm"
