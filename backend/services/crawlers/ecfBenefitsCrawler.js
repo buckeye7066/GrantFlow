@@ -143,13 +143,28 @@ export function checkECFEligibility(profile) {
   const sections = profile?.sections ?? {}
   const state = signals?.location?.state ?? profile?.state ?? null
 
+  const waiver =
+    profile?.medicaid_waiver_program ??
+    sections?.government_assistance?.medicaid_waiver_program ??
+    null
+  const hasWaiverFlag = String(waiver || '').toLowerCase() === 'ecf_choices'
+
+  const ecfRole = String(sections?.government_assistance?.ecf_choices_role ?? '').toLowerCase().trim()
+  const hasExplicitEcf = Boolean(ecfRole)
+
   // ECF CHOICES is TN-specific; don't classify profiles outside TN.
   if (state && String(state).toUpperCase() !== 'TN') {
     return false
   }
   if (!state) {
+    // If the user explicitly marked the profile as ECF, don't require a TN keyword to unlock.
+    // (Still blocked if state is explicitly non-TN above.)
+    if (hasWaiverFlag || hasExplicitEcf) {
+      // proceed
+    } else {
     const tnMention = keywordIncludes(signals, 'tennessee') || hasKeyword(signals, 'tn')
     if (!tnMention) return false
+    }
   }
 
   const hasMedicaid =
@@ -175,13 +190,9 @@ export function checkECFEligibility(profile) {
     keywordIncludes(signals, 'employment and community first') ||
     (Array.isArray(profile?.tags) ? profile.tags : []).some((t) => String(t || '').toLowerCase().includes('ecf'))
 
-  const explicitlyEligible = profile?.ecf_participant === true
-
-  const waiver =
-    profile?.medicaid_waiver_program ??
-    sections?.government_assistance?.medicaid_waiver_program ??
-    null
-  const hasWaiverFlag = String(waiver || '').toLowerCase() === 'ecf_choices'
+  const explicitlyEligible =
+    profile?.ecf_participant === true ||
+    ecfRole === 'participant'
 
   return Boolean(explicitlyEligible || hasWaiverFlag || mentionsEcf || (hasMedicaid && hasIdDd))
 }
@@ -191,13 +202,25 @@ export function checkIfProvider(profile) {
   const sections = profile?.sections ?? {}
   const state = signals?.location?.state ?? profile?.state ?? null
 
+  const waiver =
+    profile?.medicaid_waiver_program ??
+    sections?.government_assistance?.medicaid_waiver_program ??
+    null
+  const hasWaiverFlag = String(waiver || '').toLowerCase() === 'ecf_choices'
+  const ecfRole = String(sections?.government_assistance?.ecf_choices_role ?? '').toLowerCase().trim()
+  const hasExplicitEcf = Boolean(ecfRole)
+
   // CLS-FM / ECF provider programs are TN-specific.
   if (state && String(state).toUpperCase() !== 'TN') {
     return false
   }
   if (!state) {
+    if (hasWaiverFlag || hasExplicitEcf) {
+      // proceed
+    } else {
     const tnMention = keywordIncludes(signals, 'tennessee') || hasKeyword(signals, 'tn')
     if (!tnMention) return false
+    }
   }
 
   const orgType =
@@ -218,7 +241,8 @@ export function checkIfProvider(profile) {
     keywordIncludes(signals, 'ecf provider')
 
   return Boolean(
-    profile?.is_provider === true ||
+    ecfRole === 'provider' ||
+      profile?.is_provider === true ||
       orgType === 'cls_fm' ||
       orgType === 'family_model' ||
       profile?.provides_residential_support === true ||
@@ -232,13 +256,25 @@ export function checkIfCaretaker(profile) {
   const sections = profile?.sections ?? {}
   const state = signals?.location?.state ?? profile?.state ?? null
 
+  const waiver =
+    profile?.medicaid_waiver_program ??
+    sections?.government_assistance?.medicaid_waiver_program ??
+    null
+  const hasWaiverFlag = String(waiver || '').toLowerCase() === 'ecf_choices'
+  const ecfRole = String(sections?.government_assistance?.ecf_choices_role ?? '').toLowerCase().trim()
+  const hasExplicitEcf = Boolean(ecfRole)
+
   // ECF CHOICES is TN-specific; don't classify profiles outside TN.
   if (state && String(state).toUpperCase() !== 'TN') {
     return false
   }
   if (!state) {
+    if (hasWaiverFlag || hasExplicitEcf) {
+      // proceed
+    } else {
     const tnMention = keywordIncludes(signals, 'tennessee') || hasKeyword(signals, 'tn')
     if (!tnMention) return false
+    }
   }
 
   const family = sections?.family_life ?? {}
@@ -246,18 +282,16 @@ export function checkIfCaretaker(profile) {
   const caregiverKeyword = hasKeyword(signals, 'caregiver') || keywordIncludes(signals, 'caregiver')
 
   // Require at least one ECF-specific hint so we don't unlock this crawler for generic caregivers.
-  const waiver =
-    profile?.medicaid_waiver_program ??
-    sections?.government_assistance?.medicaid_waiver_program ??
-    null
-  const hasWaiverFlag = String(waiver || '').toLowerCase() === 'ecf_choices'
   const mentionsEcf =
     signals?.keywordSet?.has?.('ecf') ||
     keywordIncludes(signals, 'employment and community first') ||
     keywordIncludes(signals, 'ecf choices') ||
     (Array.isArray(profile?.tags) ? profile.tags : []).some((t) => String(t || '').toLowerCase().includes('ecf'))
 
-  return Boolean((caregiverFlag || caregiverKeyword) && (hasWaiverFlag || mentionsEcf))
+  return Boolean(
+    (ecfRole === 'caregiver' || caregiverFlag || caregiverKeyword) &&
+      (hasWaiverFlag || mentionsEcf || ecfRole === 'caregiver'),
+  )
 }
 
 export function evaluateEcfUnlockEligibility(profile) {

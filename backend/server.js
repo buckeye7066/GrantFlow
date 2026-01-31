@@ -55,6 +55,7 @@ import applicationDraftsRouter from './routes/applicationDrafts.js'
 import applicationsRouter from './routes/applications.js'
 import billingSettingsRouter from './routes/billingSettings.js'
 import contactMethodsRouter from './routes/contactMethods.js'
+import outreachLogsRouter from './routes/outreachLogs.js'
 import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
@@ -1484,6 +1485,7 @@ app.use('/api/documents', documentsRouter);
 app.use('/api/expenses', expensesRouter);
 app.use('/api/budgets', budgetsRouter);
 app.use('/api/contacts', contactsRouter);
+app.use('/api/outreach-logs', outreachLogsRouter);
 app.use('/api/application-drafts', applicationDraftsRouter);
 app.use('/api/applications', applicationsRouter);
 app.use('/api/billing-settings', billingSettingsRouter);
