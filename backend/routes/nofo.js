@@ -43,7 +43,13 @@ function tryExtractFirstJson(text) {
 }
 
 async function fetchPdfTextFromUrl(fileUrl) {
-  const resp = await fetch(fileUrl)
+  const resp = await fetch(fileUrl, {
+    headers: {
+      // Grants.gov and some provider sites require a User-Agent to return the full document/page.
+      'User-Agent': 'GrantFlow NOFO Parser (+https://app.axiombiolabs.org)',
+      Accept: 'text/html,application/pdf;q=0.9,*/*;q=0.8',
+    },
+  })
   if (!resp.ok) {
     const err = new Error(`Failed to fetch file (HTTP ${resp.status})`)
     err.status = resp.status
@@ -192,6 +198,17 @@ router.post('/parseNOFO', async (req, res) => {
     })
   } catch (error) {
     console.error('[parseNOFO] Failed:', error)
+    const status = Number(error?.status)
+    if (Number.isFinite(status) && status >= 400 && status < 500) {
+      return res.status(status).json({
+        success: false,
+        message:
+          status === 403
+            ? 'The source site blocked the request (403). Try using a direct PDF URL instead of a webpage.'
+            : error?.message || 'Unable to fetch the provided URL',
+        error_type: 'nofo_fetch_failed',
+      })
+    }
     return res.status(500).json({
       success: false,
       message: 'parseNOFO failed',

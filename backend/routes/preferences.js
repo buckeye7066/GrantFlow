@@ -1,5 +1,6 @@
 import express from 'express'
 import crypto from 'crypto'
+import ensureUserPreferencesTable from '../utils/ensureUserPreferencesTable.js'
 
 const router = express.Router()
 
@@ -31,9 +32,18 @@ const DEFAULT_PREFERENCES = {
 function mapPreferencesRow(row) {
   if (!row) return null
   
-  const customPreferences = row.custom_preferences ? 
-    (typeof row.custom_preferences === 'string' ? JSON.parse(row.custom_preferences) : row.custom_preferences) : 
-    {}
+  let customPreferences = {}
+  if (row.custom_preferences) {
+    if (typeof row.custom_preferences === 'string') {
+      try {
+        customPreferences = JSON.parse(row.custom_preferences)
+      } catch {
+        customPreferences = {}
+      }
+    } else {
+      customPreferences = row.custom_preferences
+    }
+  }
   
   return {
     id: row.id,
@@ -73,6 +83,8 @@ router.get('/', async (req, res) => {
   }
   
   try {
+    await ensureUserPreferencesTable(req.db)
+
     let preferences = await req.db
       .prepare('SELECT * FROM user_preferences WHERE user_id = ?')
       .get(userId)
@@ -105,6 +117,22 @@ router.put('/', async (req, res) => {
   }
   
   try {
+    await ensureUserPreferencesTable(req.db)
+
+    // Ensure row exists before update.
+    let existing = await req.db.prepare('SELECT id FROM user_preferences WHERE user_id = ?').get(userId)
+    if (!existing?.id) {
+      const id = `pref-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+      await req.db
+        .prepare(
+          `
+            INSERT INTO user_preferences (id, user_id, custom_preferences)
+            VALUES (?, ?, ?)
+          `,
+        )
+        .run(id, userId, JSON.stringify({}))
+    }
+
     const updates = []
     const values = []
     const allowedFields = Object.keys(DEFAULT_PREFERENCES)
@@ -155,6 +183,8 @@ router.post('/reset', async (req, res) => {
   }
   
   try {
+    await ensureUserPreferencesTable(req.db)
+
     await req.db.prepare('DELETE FROM user_preferences WHERE user_id = ?').run(userId)
     
     const id = `pref-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
