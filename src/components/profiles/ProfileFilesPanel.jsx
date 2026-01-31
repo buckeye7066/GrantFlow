@@ -52,10 +52,16 @@ function isLikelyParseable(file) {
   return parseableMimes.has(file?.type) || parseableExt.has(extension)
 }
 
-export default function ProfileFilesPanel({ profileId, profileName, canDocumentAI = true }) {
+export default function ProfileFilesPanel({
+  profileId,
+  profileName,
+  canDocumentAI = true,
+  canDeleteDocuments = false,
+}) {
   const { toast } = useToast()
   const queryClient = useQueryClient()
   const fileInputRef = useRef(null)
+  const allowDelete = Boolean(canDeleteDocuments)
 
   const [uploadFile, setUploadFile] = useState(null)
   const [uploadError, setUploadError] = useState(null)
@@ -342,18 +348,18 @@ export default function ProfileFilesPanel({ profileId, profileName, canDocumentA
   }
 
   return (
-    <Card className="border-slate-200 bg-white">
+    <Card className="border-border">
       <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <CardTitle className="text-lg">Files for {profileName ?? "this profile"}</CardTitle>
-          <p className="text-sm text-slate-600">
+          <CardTitle className="text-lg text-foreground">Files for {profileName ?? "this profile"}</CardTitle>
+          <p className="text-sm text-muted-foreground">
             Upload PDFs, images, spreadsheets, screenshots, and more. Files are private and scoped to this profile.
           </p>
         </div>
         <Badge variant="outline">{documents.length} total</Badge>
       </CardHeader>
       <CardContent className="space-y-5">
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
+        <div className="rounded-lg border border-border bg-muted/40 p-4 space-y-3">
           <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div className="space-y-2">
               <div className="flex items-center gap-2">
@@ -378,7 +384,7 @@ export default function ProfileFilesPanel({ profileId, profileName, canDocumentA
                   Handwritten / scanned form (OCR)
                 </Label>
               </div>
-              <p className="text-xs text-slate-600">
+              <p className="text-xs text-muted-foreground">
                 For sensitive uploads (PHI/HIPAA/identifiers), you can leave parsing off and just store the file.
               </p>
             </div>
@@ -427,8 +433,8 @@ export default function ProfileFilesPanel({ profileId, profileName, canDocumentA
           </div>
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             <div
-              className={`rounded-lg border border-dashed p-4 text-sm text-slate-700 bg-white ${
-                profileId ? "border-slate-200" : "border-slate-100 opacity-70"
+              className={`rounded-lg border border-dashed p-4 text-sm bg-card ${
+                profileId ? "border-border text-foreground" : "border-border text-muted-foreground opacity-70"
               }`}
               tabIndex={0}
               role="button"
@@ -439,19 +445,19 @@ export default function ProfileFilesPanel({ profileId, profileName, canDocumentA
                 }
               }}
             >
-              <p className="font-medium text-slate-900">Paste (Ctrl+V)</p>
-              <p className="text-xs text-slate-600 mt-1">
+              <p className="font-medium text-foreground">Paste (Ctrl+V)</p>
+              <p className="text-xs text-muted-foreground mt-1">
                 Paste screenshots/images or copied text. We’ll save it directly to this profile (and optionally parse it).
               </p>
-              <p className="text-xs text-slate-500 mt-2">
+              <p className="text-xs text-muted-foreground mt-2">
                 Tip: Click here first, then paste.
                 {isUploading || isPastingText ? " (working…)" : ""}
               </p>
             </div>
 
-            <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-2">
-              <p className="font-medium text-slate-900 text-sm">Import from URL</p>
-              <p className="text-xs text-slate-600">
+            <div className="rounded-lg border border-border bg-card p-4 space-y-2">
+              <p className="font-medium text-foreground text-sm">Import from URL</p>
+              <p className="text-xs text-muted-foreground">
                 Paste a direct link to a file (PDF/DOCX/image). Max 50MB; download timeout ~20s.
               </p>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -469,7 +475,7 @@ export default function ProfileFilesPanel({ profileId, profileName, canDocumentA
             </div>
           </div>
           {uploadFile ? (
-            <p className="text-xs text-slate-600">
+            <p className="text-xs text-muted-foreground">
               Ready: <span className="font-medium">{uploadFile.name}</span>
             </p>
           ) : null}
@@ -481,7 +487,7 @@ export default function ProfileFilesPanel({ profileId, profileName, canDocumentA
             <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
           </div>
         ) : grouped.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-slate-200 p-10 text-center text-sm text-slate-600">
+          <div className="rounded-lg border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
             No files uploaded yet.
           </div>
         ) : (
@@ -490,7 +496,15 @@ export default function ProfileFilesPanel({ profileId, profileName, canDocumentA
               <DocumentItem
                 key={doc.id}
                 document={doc}
-                onDelete={() => deleteMutation.mutate(doc.id)}
+                onDelete={
+                  allowDelete
+                    ? () => {
+                        const ok = window.confirm(`Delete "${doc?.name ?? "this document"}"? This cannot be undone.`)
+                        if (!ok) return
+                        deleteMutation.mutate(doc.id)
+                      }
+                    : undefined
+                }
               />
             ))}
           </div>

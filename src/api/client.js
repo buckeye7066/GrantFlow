@@ -349,10 +349,13 @@ class APIClient {
       clearTimeout(timeoutId);
 
       if (response.status === 401) {
-        // IMPORTANT: auth endpoints should not trigger refresh/reauth logic.
-        // For login/setup endpoints we want to surface the backend error payload (e.g. invalid_credentials)
-        // instead of converting it into a generic "Authentication required" error.
-        if (endpoint.startsWith('/api/auth/')) {
+        // IMPORTANT:
+        // Most auth endpoints should NOT trigger refresh/reauth logic (we want to surface
+        // specific backend payloads like invalid_credentials).
+        //
+        // EXCEPTION: `/api/auth/me` is the canonical "who am I" bootstrap and SHOULD
+        // attempt refresh+retry when the access token expires.
+        if (endpoint.startsWith('/api/auth/') && !endpoint.startsWith('/api/auth/me')) {
           const errorBody = await response.json().catch(() => ({ error: response.statusText }))
           const message =
             typeof errorBody?.message === 'string' && errorBody.message.trim()
@@ -615,6 +618,26 @@ class APIClient {
       if (!token) return null;
 
       try {
+        // Proactive refresh:
+        // If we have a refresh token and the stored access expiry is near/over due,
+        // refresh before calling `/api/auth/me` so we avoid noisy 401s.
+        try {
+          if (typeof window !== 'undefined') {
+            const refreshToken = this.getRefreshToken?.()
+            const expiryRaw = window.localStorage.getItem('grantflow:access-expiry')
+            const expiryMs = expiryRaw ? Number(expiryRaw) : NaN
+            const leewayMs = 60 * 1000
+            if (refreshToken && Number.isFinite(expiryMs) && expiryMs <= Date.now() + leewayMs) {
+              await this.fetch('/api/auth/refresh', {
+                method: 'POST',
+                body: JSON.stringify({ refreshToken }),
+              })
+            }
+          }
+        } catch {
+          // Best-effort only. If refresh fails, `/api/auth/me` will handle it.
+        }
+
         return await this.fetch('/api/auth/me');
       } catch (error) {
         // If it's an auth error (401 or session expired), return null gracefully

@@ -15,6 +15,7 @@ import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js
 import { detectFileType } from '../services/documentIngestion/index.js'
 import { ensureDocumentExtract } from '../services/documentIngestion/documentExtractStore.js'
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
+import { ensureProfileEmailSchema } from '../utils/accessControl.js'
 
 // OpenAI client helper
 function getOpenAI() {
@@ -374,6 +375,121 @@ function ensureDocumentAccess(res, context, document) {
   }
   res.status(403).json({ error: 'Not authorized for this document' });
   return false;
+}
+
+function normalizeEmail(value) {
+  const v = String(value ?? '').trim().toLowerCase()
+  if (!v || !v.includes('@')) return null
+  return v
+}
+
+async function isProfileOwnerForDelete(req, { profileId, actorUserId, actorEmail }) {
+  if (!profileId || !actorUserId) return false
+  const row = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(String(profileId))
+  const ownerUserId = row?.user_id ? String(row.user_id) : null
+
+  // If the profile has an explicit owner, only that user can delete (unless admin).
+  if (ownerUserId) {
+    return ownerUserId === String(actorUserId)
+  }
+
+  // Legacy profiles may have NULL user_id. Treat a matching saved email as ownership.
+  const email = normalizeEmail(actorEmail)
+  if (!email) return false
+
+  // 1) profile_emails allowlist (self-healing / explicit share)
+  try {
+    await ensureProfileEmailSchema(req.db)
+    const exists = await req.db
+      .prepare('SELECT 1 FROM profile_emails WHERE profile_id = ? AND lower(email) = ? LIMIT 1')
+      .get(String(profileId), email)
+    if (exists) return true
+  } catch {
+    // ignore (best-effort)
+  }
+
+  // 2) basic_information.email (JSON) fallback
+  try {
+    if (req.db?.dialect === 'postgres') {
+      const exists = await req.db
+        .prepare(
+          `
+            SELECT 1
+            FROM profile_sections
+            WHERE profile_id = ?
+              AND section_key = 'basic_information'
+              AND LOWER((data::jsonb ->> 'email')) = ?
+            LIMIT 1
+          `,
+        )
+        .get(String(profileId), email)
+      if (exists) return true
+    } else {
+      // SQLite: prefer json_extract when json1 is available, fall back to LIKE otherwise.
+      try {
+        const exists = await req.db
+          .prepare(
+            `
+              SELECT 1
+              FROM profile_sections
+              WHERE profile_id = ?
+                AND section_key = 'basic_information'
+                AND LOWER(json_extract(data, '$.email')) = ?
+              LIMIT 1
+            `,
+          )
+          .get(String(profileId), email)
+        if (exists) return true
+      } catch {
+        const escaped = email.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+        const exists = await req.db
+          .prepare(
+            `
+              SELECT 1
+              FROM profile_sections
+              WHERE profile_id = ?
+                AND section_key = 'basic_information'
+                AND LOWER(data) LIKE ?
+              LIMIT 1
+            `,
+          )
+          .get(String(profileId), `%"email"%${escaped}%`)
+        if (exists) return true
+      }
+    }
+  } catch {
+    // ignore (best-effort)
+  }
+
+  return false
+}
+
+async function ensureDocumentDeleteAccess(req, res, context, document) {
+  if (context.isAdmin) return true
+  const profileId = document?.profile_id ? String(document.profile_id) : null
+  if (!profileId) {
+    res.status(403).json({ error: 'Not authorized to delete this document' })
+    return false
+  }
+
+  const actorUserId = context.ctx?.userId ?? null
+  const actorEmail = context.ctx?.email ?? req.user?.email ?? req.user?.primary_email ?? null
+  const actorActiveProfileId = context.ctx?.activeProfileId ? String(context.ctx.activeProfileId) : null
+
+  // Legacy/Base44 sessions can be profile-scoped without a durable profiles.user_id mapping.
+  // Treat "active profile" as ownership for destructive actions on that same profile.
+  if (actorActiveProfileId && actorActiveProfileId === profileId) return true
+
+  const ok = await isProfileOwnerForDelete(req, { profileId, actorUserId, actorEmail })
+  if (ok) return true
+
+  console.warn('[documents] delete denied', {
+    document_id: document?.id ?? null,
+    profile_id: profileId,
+    actor_user_id: actorUserId,
+  })
+  res.status(403).json({ error: 'Not authorized to delete this document' })
+  return false
 }
 
 function normalizeProfileId(value) {
@@ -854,6 +970,7 @@ router.delete('/:id', async (req, res) => {
 
     const existing = await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
     if (!ensureDocumentAccess(res, context, existing)) return;
+    if (!(await ensureDocumentDeleteAccess(req, res, context, existing))) return
 
     await req.db.prepare('DELETE FROM profile_documents WHERE document_id = ?').run(req.params.id);
     await req.db.prepare('DELETE FROM documents WHERE id = ?').run(req.params.id);
