@@ -56,6 +56,7 @@ import applicationsRouter from './routes/applications.js'
 import billingSettingsRouter from './routes/billingSettings.js'
 import contactMethodsRouter from './routes/contactMethods.js'
 import outreachLogsRouter from './routes/outreachLogs.js'
+import versionRouter from './routes/version.js'
 import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
@@ -1539,6 +1540,7 @@ app.use('/api/grant-monitoring', grantMonitoringRouter);
 app.use('/api/crawlers', crawlersRouter);
 app.use('/api/real-crawlers', realCrawlersRouter);
 app.use('/api/preferences', preferencesRouter);
+app.use('/api/version', versionRouter);
 // Base44 function-style endpoints (used by NOFO Parser + Diagnostics)
 app.use('/api', nofoRouter);
 // Base44 legacy function-style endpoints (legacy UI flows: DataSources/SourceDirectory)

@@ -74,7 +74,7 @@ export default function PipelineActionsCard() {
               AI Orchestrations
             </div>
             <h2 className="text-lg font-semibold text-card-foreground">Pipeline Command Center</h2>
-            <p className="text-sm text-muted-foreground max-w-md">
+            <p className="text-sm text-foreground max-w-md">
               Kick off the same automations the Base44 workspace runs behind the scenes. These flows coordinate AI
               matching, checklist generation, reminders, and deadline monitoring.
             </p>
@@ -94,7 +94,7 @@ export default function PipelineActionsCard() {
               </span>
               <div>
                   <p className="text-sm font-semibold text-card-foreground">{action.label}</p>
-                  <p className="text-xs text-muted-foreground">{action.description}</p>
+                  <p className="text-xs text-foreground">{action.description}</p>
               </div>
             </div>
             <Button

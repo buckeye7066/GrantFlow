@@ -76,7 +76,7 @@ export default function PersonalizationPanel() {
               <SlidersHorizontal className="h-4 w-4 text-primary" />
               Personalize Dashboard
             </CardTitle>
-            <p className="text-sm text-muted-foreground mt-1">
+            <p className="text-sm text-foreground mt-1">
               Customize your workspace with 10+ personalization options
             </p>
           </div>
@@ -436,7 +436,7 @@ function SettingRow({ icon: Icon, title, description, children }) {
         </span>
         <div>
           <p className="text-sm font-semibold text-foreground">{title}</p>
-          <p className="text-xs text-muted-foreground">{description}</p>
+          <p className="text-xs text-foreground">{description}</p>
         </div>
       </div>
       <div>{children}</div>

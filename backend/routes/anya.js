@@ -304,6 +304,58 @@ router.patch('/sessions/:sessionId/tasks/:taskId', (req, res) => {
     .catch((error) => handleError(res, error))
 })
 
+// POST /api/anya/sessions/:sessionId/tasks/:taskId/execute
+// Mark a task as executed and log the action
+router.post('/sessions/:sessionId/tasks/:taskId/execute', async (req, res) => {
+  try {
+    const { markTaskExecuted } = await import('../services/anyaTaskExecutionHelper.js')
+    
+    const result = await markTaskExecuted({
+      db: req.db,
+      user: req.ctx,
+      sessionId: req.params.sessionId,
+      taskId: req.params.taskId,
+      executionNotes: req.body?.notes || null,
+      executionResult: req.body?.result || null,
+    })
+    
+    res.json({ ok: true, ...result })
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
+// GET /api/anya/tasks/executable
+// List all tasks that can be executed (open or in_progress)
+router.get('/tasks/executable', adminAuth, async (req, res) => {
+  try {
+    const { listExecutableTasks } = await import('../services/anyaTaskExecutionHelper.js')
+    
+    const profileId = req.query.profile_id || null
+    // Validate and bound the limit parameter
+    const rawLimit = parseInt(req.query.limit || '50', 10)
+    const limit = Math.max(1, Math.min(rawLimit, 500)) // Clamp between 1 and 500
+    
+    const tasks = await listExecutableTasks(req.db, { profileId, limit })
+    res.json({ ok: true, tasks, count: tasks.length })
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
+// GET /api/anya/tasks/:taskId/execution-history
+// Get execution history for a specific task
+router.get('/tasks/:taskId/execution-history', async (req, res) => {
+  try {
+    const { getTaskExecutionHistory } = await import('../services/anyaTaskExecutionHelper.js')
+    
+    const history = await getTaskExecutionHistory(req.db, req.params.taskId)
+    res.json({ ok: true, ...history })
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
 router.get('/profiles/:profileId/tasks', async (req, res) => {
   try {
     const requestedProfileId = req.params.profileId?.toLowerCase()
