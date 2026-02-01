@@ -335,180 +335,202 @@ function extractAnthropicText(response) {
 }
 
 router.get('/', async (req, res) => {
-  // Canonical truth is req.ctx, but harden against any transient ctx-building issues
-  // by falling back to a DB-backed admin check (never token-only).
-  const user = req.user ?? { role: 'guest' }
-  const isAdmin =
-    req.ctx?.isAdmin === true ? true : await isAdminUserWithDb(req.db, user)
-  const includeSummary = req.query.summary === 'true'
-  const includeDeleted = req.query.includeDeleted === 'true'
-  const scopeMine = req.query.scope === 'mine' || req.query.mine === 'true'
-  const userId = req.ctx?.userId ?? getAuthUserId(user) ?? null
-  
-  // Validate pagination parameters.
-  // For admins, default to the max page size unless a limit is explicitly provided.
-  // This prevents "missing profiles" in the UI when admins expect to see everything.
-  const paginationQuery = { ...req.query }
-  const limitProvided = Object.prototype.hasOwnProperty.call(req.query ?? {}, 'limit')
-  if (isAdmin && !scopeMine && !limitProvided) {
-    paginationQuery.limit = 1000
-    paginationQuery.offset = 0
-  }
-  const { limit, offset } = validatePagination(paginationQuery);
+  try {
+    // Canonical truth is req.ctx, but harden against any transient ctx-building issues
+    // by falling back to a DB-backed admin check (never token-only).
+    const user = req.user ?? { role: 'guest' }
+    const isAdmin = req.ctx?.isAdmin === true ? true : await isAdminUserWithDb(req.db, user)
+    const includeSummary = req.query.summary === 'true'
+    const includeDeleted = req.query.includeDeleted === 'true'
+    const scopeMine = req.query.scope === 'mine' || req.query.mine === 'true'
+    const userId = req.ctx?.userId ?? getAuthUserId(user) ?? null
 
-  // "My Profiles" scope: return only profiles owned-by or shared-to this user,
-  // even if the caller is an admin (admins otherwise see ALL profiles).
-  if (scopeMine) {
-    const emails = []
-    const primary = normalizeEmail(user?.primary_email)
-    const secondary = normalizeEmail(user?.email)
-    if (primary) emails.push(primary)
-    if (secondary && secondary !== primary) emails.push(secondary)
-
-    if (!userId && emails.length === 0) return res.status(401).json({ error: 'Authentication required' })
-
-    const ids = new Set()
-
-    if (userId) {
-      const owned = await req.db.prepare('SELECT id FROM profiles WHERE user_id = ?').all(String(userId))
-      for (const row of owned || []) {
-        if (row?.id) ids.add(String(row.id))
-      }
+    // Validate pagination parameters.
+    // For admins, default to the max page size unless a limit is explicitly provided.
+    // This prevents "missing profiles" in the UI when admins expect to see everything.
+    const paginationQuery = { ...req.query }
+    const limitProvided = Object.prototype.hasOwnProperty.call(req.query ?? {}, 'limit')
+    if (isAdmin && !scopeMine && !limitProvided) {
+      paginationQuery.limit = 1000
+      paginationQuery.offset = 0
     }
+    const { limit, offset } = validatePagination(paginationQuery)
 
-    if (emails.length > 0) {
-      // 1) Explicit allowlist table (profile_emails).
-      try {
-        const placeholders = emails.map(() => '?').join(', ')
-        const rows = await req.db
-          .prepare(
-            `
-              SELECT DISTINCT profile_id
-              FROM profile_emails
-              WHERE lower(email) IN (${placeholders})
-            `,
-          )
-          .all(...emails)
-        for (const row of rows || []) {
-          if (row?.profile_id) ids.add(String(row.profile_id))
+    // "My Profiles" scope: return only profiles owned-by or shared-to this user,
+    // even if the caller is an admin (admins otherwise see ALL profiles).
+    if (scopeMine) {
+      const emails = []
+      const primary = normalizeEmail(user?.primary_email)
+      const secondary = normalizeEmail(user?.email)
+      if (primary) emails.push(primary)
+      if (secondary && secondary !== primary) emails.push(secondary)
+
+      if (!userId && emails.length === 0) return res.status(401).json({ error: 'Authentication required' })
+
+      const ids = new Set()
+
+      if (userId) {
+        const owned = await req.db.prepare('SELECT id FROM profiles WHERE user_id = ?').all(String(userId))
+        for (const row of owned || []) {
+          if (row?.id) ids.add(String(row.id))
         }
-      } catch {
-        // ignore (schema may not exist yet)
       }
 
-      // 2) Backfill: match profile basic_information.email against the user (like accessControl fallback).
-      try {
-        const placeholders = emails.map(() => '?').join(', ')
-        if (req.db?.dialect === 'postgres') {
+      if (emails.length > 0) {
+        // 1) Explicit allowlist table (profile_emails).
+        try {
+          const placeholders = emails.map(() => '?').join(', ')
           const rows = await req.db
             .prepare(
               `
-                SELECT DISTINCT ps.profile_id
-                FROM profile_sections ps
-                WHERE ps.section_key = 'basic_information'
-                  AND LOWER((ps.data::jsonb ->> 'email')) IN (${placeholders})
+                SELECT DISTINCT profile_id
+                FROM profile_emails
+                WHERE lower(email) IN (${placeholders})
               `,
             )
             .all(...emails)
           for (const row of rows || []) {
             if (row?.profile_id) ids.add(String(row.profile_id))
           }
-        } else {
-          const rows = await req.db
-            .prepare(
-              `
-                SELECT DISTINCT ps.profile_id
-                FROM profile_sections ps
-                WHERE ps.section_key = 'basic_information'
-                  AND LOWER(json_extract(ps.data, '$.email')) IN (${placeholders})
-              `,
-            )
-            .all(...emails)
-          for (const row of rows || []) {
-            if (row?.profile_id) ids.add(String(row.profile_id))
-          }
+        } catch {
+          // ignore (schema may not exist yet)
         }
-      } catch {
-        // ignore
+
+        // 2) Backfill: match profile basic_information.email against the user (like accessControl fallback).
+        try {
+          const placeholders = emails.map(() => '?').join(', ')
+          if (req.db?.dialect === 'postgres') {
+            const rows = await req.db
+              .prepare(
+                `
+                  SELECT DISTINCT ps.profile_id
+                  FROM profile_sections ps
+                  WHERE ps.section_key = 'basic_information'
+                    AND LOWER((ps.data::jsonb ->> 'email')) IN (${placeholders})
+                `,
+              )
+              .all(...emails)
+            for (const row of rows || []) {
+              if (row?.profile_id) ids.add(String(row.profile_id))
+            }
+          } else {
+            const rows = await req.db
+              .prepare(
+                `
+                  SELECT DISTINCT ps.profile_id
+                  FROM profile_sections ps
+                  WHERE ps.section_key = 'basic_information'
+                    AND LOWER(json_extract(ps.data, '$.email')) IN (${placeholders})
+                `,
+              )
+              .all(...emails)
+            for (const row of rows || []) {
+              if (row?.profile_id) ids.add(String(row.profile_id))
+            }
+          }
+        } catch {
+          // ignore
+        }
       }
+
+      const idList = Array.from(ids)
+      if (idList.length === 0) return res.json([])
+
+      const placeholders = idList.map(() => '?').join(', ')
+      const whereDeleted = includeDeleted ? '' : " AND (p.status IS NULL OR p.status <> 'deleted')"
+
+      const rows = await req.db
+        .prepare(
+          `${profileSelect} WHERE p.id IN (${placeholders})${whereDeleted} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`,
+        )
+        .all(...idList, limit, offset)
+
+      const profiles = rows.map(mapProfile)
+      if (includeSummary) {
+        for (const profile of profiles) {
+          await enrichProfileWithSummary(req.db, profile)
+        }
+      }
+      return res.json(profiles)
     }
 
-    const idList = Array.from(ids)
-    if (idList.length === 0) return res.json([])
+    // Check if user is admin
+    if (!isAdmin) {
+      // Enduser: return all profiles the user can access.
+      // This includes ownership (profiles.user_id) AND shared access via profile_emails.
+      if (!userId) return res.status(401).json({ error: 'Authentication required' })
 
-    const placeholders = idList.map(() => '?').join(', ')
-    const whereDeleted = includeDeleted ? '' : " AND (p.status IS NULL OR p.status <> 'deleted')"
+      // Prefer the canonical access set computed by requestContext.
+      // If it's missing for some reason, recompute it (still DB-backed and safe).
+      let accessibleProfileIds = req.ctx?.accessibleProfileIds
+      if (accessibleProfileIds == null) {
+        try {
+          accessibleProfileIds = await getAccessibleProfileIds(req.db, user)
+        } catch {
+          accessibleProfileIds = new Set()
+        }
+      }
 
-    const rows = await req.db
-      .prepare(
-        `${profileSelect} WHERE p.id IN (${placeholders})${whereDeleted} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`,
-      )
-      .all(...idList, limit, offset)
+      const ids = accessibleProfileIds instanceof Set ? Array.from(accessibleProfileIds) : []
 
-    const profiles = rows.map(mapProfile)
+      if (ids.length === 0) {
+        return res.json([])
+      }
+
+      const placeholders = ids.map(() => '?').join(', ')
+      const whereDeleted = includeDeleted ? '' : " AND (p.status IS NULL OR p.status <> 'deleted')"
+
+      // Get all accessible profiles (with pagination)
+      const rows = await req.db
+        .prepare(
+          `${profileSelect} WHERE p.id IN (${placeholders})${whereDeleted} ORDER BY p.created_at ASC LIMIT ? OFFSET ?`,
+        )
+        .all(...ids, limit, offset)
+
+      const profiles = rows.map(mapProfile)
+      if (includeSummary) {
+        for (const profile of profiles) {
+          await enrichProfileWithSummary(req.db, profile)
+        }
+      }
+      return res.json(profiles)
+    }
+
+    // Admin: return ALL profiles with pagination
+    const adminWhere = includeDeleted ? '' : "WHERE (p.status IS NULL OR p.status <> 'deleted')"
+    const stmt = req.db.prepare(`${profileSelect} ${adminWhere} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`)
+    const profiles = (await stmt.all(limit, offset)).map(mapProfile)
+
     if (includeSummary) {
       for (const profile of profiles) {
         await enrichProfileWithSummary(req.db, profile)
       }
     }
+
     return res.json(profiles)
+  } catch (error) {
+    const message = String(error?.message || error)
+    const schemaMissing =
+      message.toLowerCase().includes('no such table') ||
+      message.toLowerCase().includes('relation') && message.toLowerCase().includes('profiles')
+
+    console.error('[profiles] list failed', {
+      requestId: req.requestId || null,
+      schemaMissing,
+      error: message,
+    })
+
+    if (schemaMissing) {
+      // Avoid 502s from upstream proxies by returning a clean, explicit 503.
+      return res.status(503).json({
+        ok: false,
+        error: 'Profiles are temporarily unavailable (database schema not ready)',
+        code: 'DB_SCHEMA_MISSING',
+      })
+    }
+
+    return res.status(500).json(formatError(error))
   }
-
-  // Check if user is admin
-  if (!isAdmin) {
-    // Enduser: return all profiles the user can access.
-    // This includes ownership (profiles.user_id) AND shared access via profile_emails.
-    if (!userId) return res.status(401).json({ error: 'Authentication required' })
-
-    // Prefer the canonical access set computed by requestContext.
-    // If it's missing for some reason, recompute it (still DB-backed and safe).
-    let accessibleProfileIds = req.ctx?.accessibleProfileIds
-    if (accessibleProfileIds == null) {
-      try {
-        accessibleProfileIds = await getAccessibleProfileIds(req.db, user)
-      } catch {
-        accessibleProfileIds = new Set()
-      }
-    }
-
-    const ids =
-      accessibleProfileIds instanceof Set ? Array.from(accessibleProfileIds) : []
-
-    if (ids.length === 0) {
-      return res.json([])
-    }
-
-    const placeholders = ids.map(() => '?').join(', ')
-    const whereDeleted = includeDeleted ? '' : " AND (p.status IS NULL OR p.status <> 'deleted')"
-
-    // Get all accessible profiles (with pagination)
-    const rows = await req.db
-      .prepare(
-        `${profileSelect} WHERE p.id IN (${placeholders})${whereDeleted} ORDER BY p.created_at ASC LIMIT ? OFFSET ?`,
-      )
-      .all(...ids, limit, offset)
-    
-    const profiles = rows.map(mapProfile)
-    if (includeSummary) {
-      for (const profile of profiles) {
-        await enrichProfileWithSummary(req.db, profile)
-      }
-    }
-    return res.json(profiles)
-  }
-
-  // Admin: return ALL profiles with pagination
-  const adminWhere = includeDeleted ? '' : "WHERE (p.status IS NULL OR p.status <> 'deleted')"
-  const stmt = req.db.prepare(`${profileSelect} ${adminWhere} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`)
-  const profiles = (await stmt.all(limit, offset)).map(mapProfile)
-  
-  if (includeSummary) {
-    for (const profile of profiles) {
-      await enrichProfileWithSummary(req.db, profile)
-    }
-  }
-  
-  res.json(profiles)
 })
 
 // Canonical profile schema (data points + explanations)
@@ -649,7 +671,12 @@ router.post('/', async (req, res) => {
   }
 
   // Determine user_id for the new profile
-  const profileUserId = isAdmin ? (user_id || userId) : userId
+  //
+  // IMPORTANT:
+  // profiles.user_id is UNIQUE (one "owned" profile per user). Admin-created profiles should NOT
+  // default to being owned by the admin user/token, or subsequent creates will 500 and can surface as 502
+  // behind a reverse proxy. Admins may explicitly set user_id to create an owned profile for a user.
+  const profileUserId = isAdmin ? (user_id || null) : userId
 
   const profileId = crypto.randomUUID()
   // Ensure every newly created profile starts with all canonical sections + canonical keys.
