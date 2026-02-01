@@ -1211,32 +1211,39 @@ router.post('/from-opportunity', async (req, res, next) => {
         return { ok: true, created: true, id: orgId }
       }
 
-      // If no organization_id but profile_id provided, auto-create organization
+      // Resolve organization and validate profile
       let finalOrgId = normalizedOrgId
       let finalProfileId = normalizedProfileId
+      let profileRow = null
 
-      if (!finalOrgId && finalProfileId) {
-        const profile = await tx.prepare('SELECT * FROM profiles WHERE id = ?').get(finalProfileId);
-        if (!profile) {
-          // Profile doesn't exist - provide clear error message
+      // CRITICAL: Always validate profile exists when profile_id is provided.
+      // This prevents FK violations in Postgres when the profile doesn't exist.
+      // Previously, this validation was only done when organization_id was NOT provided,
+      // causing 500 errors when both were provided with an invalid profile_id.
+      if (finalProfileId) {
+        profileRow = await tx.prepare('SELECT * FROM profiles WHERE id = ?').get(finalProfileId);
+        if (!profileRow) {
           throw new Error(`Profile '${finalProfileId}' not found. Please verify the profile_id and try again.`);
         }
-        
-        if (profile.organization_id) {
+      }
+
+      // If no organization_id provided, derive it from profile or create new
+      if (!finalOrgId && finalProfileId) {
+        if (profileRow.organization_id) {
           // Profile already has an organization
-          finalOrgId = profile.organization_id;
+          finalOrgId = profileRow.organization_id;
         } else {
           // Create organization for this profile
           const orgId = crypto.randomUUID();
-          const applicantType = deriveOrganizationApplicantTypeFromProfile(profile)
+          const applicantType = deriveOrganizationApplicantTypeFromProfile(profileRow)
           await tx.prepare(`
             INSERT INTO organizations (id, name, applicant_type, created_at, updated_at)
             VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-          `).run(orgId, profile.display_name || 'My Organization', applicantType);
-          
+          `).run(orgId, profileRow.display_name || 'My Organization', applicantType);
+
           // Link profile to organization
           await tx.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, finalProfileId);
-          
+
           finalOrgId = orgId;
           console.log(`[grants] Auto-created organization ${orgId} for profile ${finalProfileId}`, {
             applicant_type: applicantType,
@@ -1246,18 +1253,16 @@ router.post('/from-opportunity', async (req, res, next) => {
         // Safety: if we inherited a profile.organization_id from legacy data, ensure the org row exists
         // so `grants.organization_id` FK inserts cannot hard-fail.
         if (finalOrgId) {
-          await ensureOrganizationRow({ organizationId: finalOrgId, profileRow: profile, reason: 'profile.organization_id' })
+          await ensureOrganizationRow({ organizationId: finalOrgId, profileRow, reason: 'profile.organization_id' })
         }
       }
 
       // If the caller explicitly provided an org id, ensure the row exists before we insert into grants.
       // This prevents 500s from FK violations when legacy data is missing the organizations row.
       if (finalOrgId) {
-        const profileRowForOrgName =
-          finalProfileId ? await tx.prepare('SELECT * FROM profiles WHERE id = ?').get(finalProfileId) : null
         await ensureOrganizationRow({
           organizationId: finalOrgId,
-          profileRow: profileRowForOrgName,
+          profileRow,
           reason: normalizedOrgId ? 'request.organization_id' : 'derived',
         })
       }
