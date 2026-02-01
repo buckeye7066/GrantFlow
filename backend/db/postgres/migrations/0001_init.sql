@@ -187,7 +187,7 @@ CREATE TABLE IF NOT EXISTS geo_crawl_runs (
   found_opportunity_count INTEGER DEFAULT 0,
   last_heartbeat_at TIMESTAMPTZ NULL,
   last_error TEXT NULL,
-  crawler_job_id TEXT NULL REFERENCES crawler_jobs(id) ON DELETE SET NULL
+  crawler_job_id TEXT NULL
 );
 
 CREATE TABLE IF NOT EXISTS geo_crawl_events (
@@ -821,6 +821,24 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
   retry_count INTEGER DEFAULT 0,
   last_retry_at TIMESTAMPTZ
 );
+
+-- Init ordering fix:
+-- geo_crawl_runs references crawler_jobs, but geo_crawl_runs is created earlier in this file.
+-- Add the FK after crawler_jobs exists so a fresh Postgres DB can apply 0001_init.sql cleanly.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'fk_geo_crawl_runs_crawler_job_id'
+  ) THEN
+    ALTER TABLE geo_crawl_runs
+      ADD CONSTRAINT fk_geo_crawl_runs_crawler_job_id
+      FOREIGN KEY (crawler_job_id)
+      REFERENCES crawler_jobs(id)
+      ON DELETE SET NULL;
+  END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_status ON crawler_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_profile ON crawler_jobs(profile_id);
