@@ -1268,7 +1268,7 @@ router.post('/from-opportunity', async (req, res, next) => {
         } else {
           // Create organization for this profile
           const orgId = crypto.randomUUID();
-          const applicantType = deriveOrganizationApplicantTypeFromProfile(profile)
+          const applicantType = deriveOrganizationApplicantTypeFromProfile(profileRow)
           // Same schema-drift tolerance as ensureOrganizationRow: prefer applicant_type, but fall back safely.
           try {
             if (applicantType) {
@@ -1279,7 +1279,7 @@ router.post('/from-opportunity', async (req, res, next) => {
                     VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                   `,
                 )
-                .run(orgId, profile.display_name || 'My Organization', applicantType)
+                .run(orgId, profileRow.display_name || 'My Organization', applicantType)
             } else {
               await tx
                 .prepare(
@@ -1288,7 +1288,7 @@ router.post('/from-opportunity', async (req, res, next) => {
                     VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                   `,
                 )
-                .run(orgId, profile.display_name || 'My Organization')
+                .run(orgId, profileRow.display_name || 'My Organization')
             }
           } catch (insertErr) {
             console.warn('[grants] auto-create org failed; retrying without applicant_type', {
@@ -1306,9 +1306,9 @@ router.post('/from-opportunity', async (req, res, next) => {
                   VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 `,
               )
-              .run(orgId, profile.display_name || 'My Organization')
+              .run(orgId, profileRow.display_name || 'My Organization')
           }
-          
+
           // Link profile to organization
           await tx.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, finalProfileId);
 
