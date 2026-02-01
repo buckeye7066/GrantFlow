@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  postgres-test:
+    image: postgres:15-alpine
+    container_name: grantflow-postgres-test
+    environment:
+      POSTGRES_USER: grantflow_test
+      POSTGRES_PASSWORD: grantflow_test_password
+      POSTGRES_DB: grantflow_test
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U grantflow_test -d grantflow_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    tmpfs:
+      - /var/lib/postgresql/data
