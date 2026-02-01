@@ -69,8 +69,8 @@ function ReminderItem({
             </Badge>
           ) : null}
         </div>
-        {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
-        {context ? <p className="text-xs text-muted-foreground">{context}</p> : null}
+        {description ? <p className="text-xs text-foreground">{description}</p> : null}
+        {context ? <p className="text-xs text-foreground">{context}</p> : null}
         {dueLine ? <p className="text-xs font-medium text-primary">{dueLine}</p> : null}
       </div>
     </div>
@@ -166,7 +166,7 @@ export default function ReminderCenterCard({
               <Bell className="h-4 w-4 text-primary" />
               Reminders & Nudges
             </CardTitle>
-            <p className="text-xs text-muted-foreground mt-1">
+            <p className="text-xs text-foreground mt-1">
               Keep teams aligned on deadlines, compliance, and document readiness.
             </p>
             {hasError ? (
@@ -196,7 +196,7 @@ export default function ReminderCenterCard({
           </Button>
         </div>
         {planGeneratedLabel ? (
-          <p className="text-xs text-muted-foreground">{planGeneratedLabel}</p>
+          <p className="text-xs text-foreground">{planGeneratedLabel}</p>
         ) : null}
       </CardHeader>
       <CardContent className="space-y-3">
@@ -214,9 +214,9 @@ export default function ReminderCenterCard({
           </>
         ) : reminders.length === 0 ? (
           <div className="rounded-xl border border-dashed border-border p-6 text-center bg-muted/20">
-            <FileSearch className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
+            <FileSearch className="h-10 w-10 mx-auto text-foreground mb-3" />
             <p className="text-sm font-medium text-card-foreground">No reminders yet</p>
-            <p className="text-xs text-muted-foreground mt-1">
+            <p className="text-xs text-foreground mt-1">
               Assign milestones or track grants to see intelligent reminders here.
             </p>
             <Button size="sm" className="mt-4">
@@ -250,10 +250,10 @@ export default function ReminderCenterCard({
                         <p className="text-xs text-primary mt-1">Due {action.due}</p>
                       ) : null}
                       {action.type ? (
-                        <p className="text-xs text-muted-foreground mt-1">Type: {action.type}</p>
+                        <p className="text-xs text-foreground mt-1">Type: {action.type}</p>
                       ) : null}
                       {action.notes ? (
-                        <p className="text-xs text-muted-foreground mt-2 leading-relaxed">{action.notes}</p>
+                        <p className="text-xs text-foreground mt-2 leading-relaxed">{action.notes}</p>
                       ) : null}
                     </li>
                   ))}
@@ -274,10 +274,10 @@ export default function ReminderCenterCard({
                     >
                       <p className="text-sm font-semibold text-foreground">{item.title}</p>
                       {item.owner ? (
-                        <p className="text-xs text-muted-foreground mt-1">Owner: {item.owner}</p>
+                        <p className="text-xs text-foreground mt-1">Owner: {item.owner}</p>
                       ) : null}
                       {item.notes ? (
-                        <p className="text-xs text-muted-foreground mt-2 leading-relaxed">{item.notes}</p>
+                        <p className="text-xs text-foreground mt-2 leading-relaxed">{item.notes}</p>
                       ) : null}
                     </li>
                   ))}
@@ -298,7 +298,7 @@ export default function ReminderCenterCard({
                     >
                       <p className="text-sm font-semibold text-foreground">{item.title}</p>
                       {item.notes ? (
-                        <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{item.notes}</p>
+                        <p className="text-xs text-foreground mt-1 leading-relaxed">{item.notes}</p>
                       ) : null}
                     </li>
                   ))}
@@ -311,7 +311,7 @@ export default function ReminderCenterCard({
                 <p className="text-xs font-semibold uppercase tracking-wide text-primary">
                   AI Recommendations
                 </p>
-                <ul className="space-y-2 text-xs text-muted-foreground leading-relaxed">
+                <ul className="space-y-2 text-xs text-foreground leading-relaxed">
                   {planData.ai_recommendations.map((tip, index) => (
                     <li key={`tip-${index}`} className="rounded-md border border-border bg-background/40 p-2">
                       {tip}
