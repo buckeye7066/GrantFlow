@@ -225,11 +225,17 @@ async function resolveZipList({ zip_list, state, max_zips, counties }) {
   // 3) All US ZIPs (when no state is provided)
   // Then optionally filter by counties (within the resolved base list).
   const fromExplicit = Array.isArray(zip_list) ? zip_list : [];
+  const explicitProvided = Array.isArray(zip_list) && zip_list.length > 0
   let zips = fromExplicit
     .map((z) => String(z || '').trim())
     .filter((z) => /^\d{5}$/.test(z));
 
   if (!zips.length) {
+    // If the caller explicitly provided a zip_list, do NOT silently fall back to state/all-zip scope.
+    // Invalid lists should be treated as "no work" so callers can validate input safely.
+    if (explicitProvided) {
+      zips = []
+    } else
     if (state && typeof state === 'string') {
       const rows = zipcodes.lookupByState(state) || [];
       zips = rows
@@ -1386,9 +1392,6 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   const ownsDb = typeof dbPath === 'string'
   const db = ownsDb ? new Database(dbPath) : dbPath
 
-  // Ensure Phase-6 geo tables exist (prod safety).
-  await ensureGeoCrawlTables(db)
-
   const geoRunId = config.geo_run_id ?? options.geo_run_id ?? null
   if (geoRunId) {
     // Mark run as running; do not hard-fail if run tables are missing.
@@ -1416,8 +1419,19 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
 
   if (zipList.length === 0) {
     // Nothing to do. Important: do NOT close shared DB connections.
+    if (ownsDb) {
+      try {
+        db.close()
+      } catch {
+        // ignore
+      }
+    }
     return { processed: 0, sources: 0, duration: 0 }
   }
+
+  // Ensure Phase-6 geo tables exist (prod safety).
+  // IMPORTANT: only do this when we actually have work to do; empty/invalid zip lists should not touch DB.
+  await ensureGeoCrawlTables(db)
 
   console.log('='.repeat(80))
   console.log('Geo Crawl Starting')
