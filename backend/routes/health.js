@@ -5,6 +5,21 @@ import { ensureUploadsDirWritable, isLikelyPersistentPath } from '../utils/uploa
 
 const router = express.Router()
 
+function getBuildInfo() {
+  const commit =
+    process.env.RAILWAY_GIT_COMMIT_SHA ||
+    process.env.GIT_COMMIT_SHA ||
+    process.env.COMMIT_SHA ||
+    process.env.VERCEL_GIT_COMMIT_SHA ||
+    null
+
+  return {
+    commit_sha: commit ? String(commit) : null,
+    node_env: process.env.NODE_ENV ? String(process.env.NODE_ENV) : null,
+    runtime: process.env.RAILWAY_ENVIRONMENT ? 'railway' : process.env.VERCEL ? 'vercel' : null,
+  }
+}
+
 async function checkDb(db) {
   if (!db) return { ok: false, reason: 'db_missing' }
   try {
@@ -102,7 +117,10 @@ router.get('/api/health', async (req, res) => {
         ? healthSummary
         : { ...healthSummary, status, legacy_status: rawStatus }
 
-    return res.status(statusCode).json(body)
+    return res.status(statusCode).json({
+      ...body,
+      build: getBuildInfo(),
+    })
   } catch (error) {
     return res.status(500).json({
       ok: false,
