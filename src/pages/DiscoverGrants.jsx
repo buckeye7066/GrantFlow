@@ -250,6 +250,12 @@ export default function DiscoverGrants() {
         userMessage = 'A database error occurred. Please try again in a moment.'
       } else if (errorCode === 'opportunity_expired') {
         userMessage = 'This opportunity has expired and cannot be added to your pipeline.'
+      } else if (errorCode === 'profile_not_found') {
+        userMessage = 'The selected profile was not found. Please refresh and try again.'
+      } else if (errorCode === 'opportunity_not_found') {
+        userMessage = 'The opportunity was not found in the database. Please try again.'
+      } else if (errorCode === 'invalid_reference') {
+        userMessage = 'One or more references are invalid. Please verify the opportunity and profile exist.'
       } else if (error?.message) {
         // Use the error message if available
         userMessage = error.message

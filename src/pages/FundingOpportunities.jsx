@@ -1205,10 +1205,24 @@ export default function FundingOpportunities() {
       setSelectedOpportunity(null)
       return created
     } catch (error) {
+      // Extract error code for better user messaging
+      const errorCode = error?.errorCode || error?.error || 'unknown_error'
+      let description = 'Try again in a moment.'
+      
+      if (errorCode === 'profile_not_found') {
+        description = 'The selected profile was not found. Please refresh the page.'
+      } else if (errorCode === 'opportunity_expired') {
+        description = 'This opportunity has expired and cannot be added.'
+      } else if (errorCode === 'opportunity_not_found') {
+        description = 'The opportunity could not be found. It may have been removed.'
+      } else if (error instanceof Error && error.message) {
+        description = error.message
+      }
+      
       toast({
         variant: "destructive",
         title: "Unable to add to pipeline",
-        description: error instanceof Error ? error.message : "Try again in a moment.",
+        description,
       })
       throw error
     } finally {

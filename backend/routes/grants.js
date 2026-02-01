@@ -1011,16 +1011,35 @@ router.post('/from-opportunity', async (req, res, next) => {
     let opportunity = null;
     let resolvedOpportunityId = null;  // Track the actual opportunity ID to use
     if (opportunity_id) {
+      console.log('[grants/from-opportunity] Attempting to fetch opportunity from DB', {
+        requestId,
+        opportunity_id,
+        has_fallback_data: Boolean(opportunity_data),
+      })
       try {
         opportunity = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunity_id);
         if (opportunity) {
           resolvedOpportunityId = opportunity_id;
+          console.log('[grants/from-opportunity] Found opportunity in DB', {
+            requestId,
+            opportunity_id,
+            title: opportunity.title,
+          })
         } else if (!opportunity_data) {
           // opportunity_id provided but not found, and no fallback data
+          console.warn('[grants/from-opportunity] opportunity_id not found and no fallback', {
+            requestId,
+            opportunity_id,
+          })
           return res.status(404).json({
             error: 'opportunity_not_found',
             message: 'The specified opportunity_id was not found in the database.',
             requestId,
+          })
+        } else {
+          console.log('[grants/from-opportunity] opportunity_id not found, using fallback data', {
+            requestId,
+            opportunity_id,
           })
         }
         // If opportunity not found but opportunity_data is provided, we'll use the fallback below
@@ -1346,6 +1365,19 @@ router.post('/from-opportunity', async (req, res, next) => {
     
     // If grant already exists, return 200, otherwise 201
     const statusCode = result.already_exists ? 200 : 201;
+    
+    // Log successful grant creation with key details (no sensitive data)
+    console.log('[grants/from-opportunity] success', {
+      requestId,
+      status: statusCode,
+      grant_id: result.id,
+      already_exists: Boolean(result.already_exists),
+      profile_id: normalizedProfileId || null,
+      organization_id: result.organization_id || null,
+      opportunity_source: resolvedOpportunityId ? 'database' : 'direct_data',
+      opportunity_title: result.title || null,
+    })
+    
     // Trigger non-blocking application approach advisor for newly created grants.
     if (!result.already_exists && result?.id) {
       scheduleGrantApplicationApproach({ db: req.db, grantId: result.id })
