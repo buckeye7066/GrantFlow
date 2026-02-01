@@ -1308,7 +1308,7 @@ router.post('/from-opportunity', async (req, res, next) => {
               )
               .run(orgId, profileRow.display_name || 'My Organization')
           }
-          
+
           // Link profile to organization
           await tx.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, finalProfileId);
 
