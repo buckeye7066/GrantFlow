@@ -1227,21 +1227,23 @@ router.post('/from-opportunity', async (req, res, next) => {
       // If no organization_id but profile_id provided, auto-create organization
       let finalOrgId = normalizedOrgId
       let finalProfileId = normalizedProfileId
+      // Keep a stable reference for later safety checks/logging (avoid block-scope surprises).
+      let profileRow = null
 
       if (!finalOrgId && finalProfileId) {
-        const profile = await tx.prepare('SELECT * FROM profiles WHERE id = ?').get(finalProfileId);
-        if (!profile) {
+        profileRow = await tx.prepare('SELECT * FROM profiles WHERE id = ?').get(finalProfileId);
+        if (!profileRow) {
           // Profile doesn't exist - provide clear error message
           throw new Error(`Profile '${finalProfileId}' not found. Please verify the profile_id and try again.`);
         }
         
-        if (profile.organization_id) {
+        if (profileRow.organization_id) {
           // Profile already has an organization
-          finalOrgId = profile.organization_id;
+          finalOrgId = profileRow.organization_id;
         } else {
           // Create organization for this profile
           const orgId = crypto.randomUUID();
-          const applicantType = deriveOrganizationApplicantTypeFromProfile(profile)
+          const applicantType = deriveOrganizationApplicantTypeFromProfile(profileRow)
           // Same schema-drift tolerance as ensureOrganizationRow: prefer applicant_type, but fall back safely.
           try {
             if (applicantType) {
@@ -1252,7 +1254,7 @@ router.post('/from-opportunity', async (req, res, next) => {
                     VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                   `,
                 )
-                .run(orgId, profile.display_name || 'My Organization', applicantType)
+                .run(orgId, profileRow.display_name || 'My Organization', applicantType)
             } else {
               await tx
                 .prepare(
@@ -1261,7 +1263,7 @@ router.post('/from-opportunity', async (req, res, next) => {
                     VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                   `,
                 )
-                .run(orgId, profile.display_name || 'My Organization')
+                .run(orgId, profileRow.display_name || 'My Organization')
             }
           } catch (insertErr) {
             console.warn('[grants] auto-create org failed; retrying without applicant_type', {
@@ -1279,7 +1281,7 @@ router.post('/from-opportunity', async (req, res, next) => {
                   VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 `,
               )
-              .run(orgId, profile.display_name || 'My Organization')
+              .run(orgId, profileRow.display_name || 'My Organization')
           }
           
           // Link profile to organization
@@ -1294,7 +1296,11 @@ router.post('/from-opportunity', async (req, res, next) => {
         // Safety: if we inherited a profile.organization_id from legacy data, ensure the org row exists
         // so `grants.organization_id` FK inserts cannot hard-fail.
         if (finalOrgId) {
-          await ensureOrganizationRow({ organizationId: finalOrgId, profileRow: profile, reason: 'profile.organization_id' })
+          await ensureOrganizationRow({
+            organizationId: finalOrgId,
+            profileRow: profileRow,
+            reason: 'profile.organization_id',
+          })
         }
       }
 
