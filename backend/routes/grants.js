@@ -1172,14 +1172,47 @@ router.post('/from-opportunity', async (req, res, next) => {
         const orgName = displayName || 'My Organization'
         const applicantType = deriveOrganizationApplicantTypeFromProfile(profileRow)
 
-        await tx
-          .prepare(
-            `
-              INSERT INTO organizations (id, name, applicant_type, created_at, updated_at)
-              VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            `,
-          )
-          .run(orgId, orgName, applicantType)
+        // Some deployments have schema drift around organizations.applicant_type (enum/check constraints).
+        // We try the richer insert first, then fall back to omitting applicant_type (DB default / nullable),
+        // instead of hard-failing the whole pipeline insert with a 500.
+        try {
+          if (applicantType) {
+            await tx
+              .prepare(
+                `
+                  INSERT INTO organizations (id, name, applicant_type, created_at, updated_at)
+                  VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                `,
+              )
+              .run(orgId, orgName, applicantType)
+          } else {
+            await tx
+              .prepare(
+                `
+                  INSERT INTO organizations (id, name, created_at, updated_at)
+                  VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                `,
+              )
+              .run(orgId, orgName)
+          }
+        } catch (insertErr) {
+          console.warn('[grants] org self-heal insert failed; retrying without applicant_type', {
+            requestId: req.requestId || null,
+            organization_id: orgId,
+            profile_id: profileRow?.id ? String(profileRow.id) : null,
+            applicant_type: applicantType,
+            code: insertErr?.code || null,
+            message: insertErr?.message || String(insertErr),
+          })
+          await tx
+            .prepare(
+              `
+                INSERT INTO organizations (id, name, created_at, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+              `,
+            )
+            .run(orgId, orgName)
+        }
 
         console.warn('[grants] self-healed missing organization row', {
           requestId: req.requestId || null,
@@ -1209,10 +1242,45 @@ router.post('/from-opportunity', async (req, res, next) => {
           // Create organization for this profile
           const orgId = crypto.randomUUID();
           const applicantType = deriveOrganizationApplicantTypeFromProfile(profile)
-          await tx.prepare(`
-            INSERT INTO organizations (id, name, applicant_type, created_at, updated_at)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-          `).run(orgId, profile.display_name || 'My Organization', applicantType);
+          // Same schema-drift tolerance as ensureOrganizationRow: prefer applicant_type, but fall back safely.
+          try {
+            if (applicantType) {
+              await tx
+                .prepare(
+                  `
+                    INSERT INTO organizations (id, name, applicant_type, created_at, updated_at)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                  `,
+                )
+                .run(orgId, profile.display_name || 'My Organization', applicantType)
+            } else {
+              await tx
+                .prepare(
+                  `
+                    INSERT INTO organizations (id, name, created_at, updated_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                  `,
+                )
+                .run(orgId, profile.display_name || 'My Organization')
+            }
+          } catch (insertErr) {
+            console.warn('[grants] auto-create org failed; retrying without applicant_type', {
+              requestId,
+              organization_id: orgId,
+              profile_id: finalProfileId ? String(finalProfileId) : null,
+              applicant_type: applicantType,
+              code: insertErr?.code || null,
+              message: insertErr?.message || String(insertErr),
+            })
+            await tx
+              .prepare(
+                `
+                  INSERT INTO organizations (id, name, created_at, updated_at)
+                  VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                `,
+              )
+              .run(orgId, profile.display_name || 'My Organization')
+          }
           
           // Link profile to organization
           await tx.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, finalProfileId);
