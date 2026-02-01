@@ -595,6 +595,44 @@ if (shouldAutoMigrate) {
   }
 }
 
+// Production hardening (SQLite): if the DB was created before profiles existed (or after an ephemeral reset),
+// `/api/profiles` will 5xx and upstream proxies often surface it as 502. We self-heal by applying schema.sql
+// when core tables are missing. This is intentionally SQLite-only; Postgres must use deterministic migrations.
+if (db.dialect === 'sqlite') {
+  try {
+    let missingCore = false
+    const tablesToCheck = ['profiles', 'profile_sections', 'documents', 'crawler_jobs', 'users']
+    for (const table of tablesToCheck) {
+      try {
+        db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get()
+      } catch (error) {
+        const msg = String(error?.message || error)
+        if (msg.includes('no such table') || msg.includes('SQLITE_ERROR')) {
+          missingCore = true
+          console.warn('[database] Detected missing core table; will apply schema.sql', {
+            table,
+            error: msg,
+          })
+          break
+        }
+      }
+    }
+
+    if (missingCore) {
+      const schemaPath = join(__dirname, 'db', 'schema.sql')
+      if (fs.existsSync(schemaPath)) {
+        const schema = fs.readFileSync(schemaPath, 'utf8')
+        await db.exec(schema)
+        console.info('[database] Schema applied (self-heal)', { dialect: db.dialect })
+      } else {
+        console.error('[database] schema.sql missing; cannot self-heal sqlite schema', { schemaPath })
+      }
+    }
+  } catch (error) {
+    console.error('[database] Failed during sqlite schema self-heal:', error?.message || error)
+  }
+}
+
 function ensureCrawlerJobsSupportsAllTypes() {
   // SQLite-only safety: older local DBs may have an outdated CHECK constraint on crawler_jobs.type.
   // If it rejects any currently-supported type, rebuild the table with the modern constraint.

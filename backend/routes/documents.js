@@ -11,6 +11,8 @@ import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js';
 import fetch from 'node-fetch';
 import { classifyUniversityApplicationForDocument, loadUniversityApplicationsForProfile } from '../services/universityDocumentClassifier.js';
+import { supportedSectionKeys } from '../prompts/profileSections.js'
+import { getDefaultSectionData } from '../config/profileSchema.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { detectFileType } from '../services/documentIngestion/index.js'
 import { ensureDocumentExtract } from '../services/documentIngestion/documentExtractStore.js'
@@ -727,6 +729,10 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
       grant_id: rawGrantId,
       name: rawName,
       type: rawType,
+      display_name: rawDisplayName,
+      displayName: rawDisplayNameAlt,
+      primary_type: rawPrimaryType,
+      primaryType: rawPrimaryTypeAlt,
       university_application_id: rawUniversityApplicationId,
       university_application_name: rawUniversityApplicationName,
       extracted_text: rawExtractedText,
@@ -748,8 +754,62 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
       return res.status(400).json({ error: 'document file is required' });
     }
 
-    const profileId = normalizeProfileId(rawProfileId);
+    let profileId = normalizeProfileId(rawProfileId);
     let resolvedOrganizationId = rawOrganizationId ?? null;
+
+    // If no profile_id is provided, create a new profile from this uploaded form.
+    // This is the critical path for "Upload Form" on the Organizations page.
+    if (!profileId) {
+      const fromBody = rawDisplayName ?? rawDisplayNameAlt ?? null
+      const fromFile =
+        file?.originalname && typeof file.originalname === 'string'
+          ? file.originalname.replace(/\.[^/.]+$/, '')
+          : null
+      const displayName = String(fromBody || fromFile || rawName || 'New Profile').trim()
+      const primaryType = String(rawPrimaryType ?? rawPrimaryTypeAlt ?? 'individual').trim() || 'individual'
+
+      const createdBy = context?.ctx?.userId ?? context?.ctx?.email ?? req?.ctx?.userId ?? req?.ctx?.email ?? null
+      // IMPORTANT:
+      // profiles.user_id is UNIQUE (one "owned" profile per user). Admin-created profiles should NOT
+      // default to being "owned" by the admin user/token, or subsequent creates will 500.
+      // Endusers can still own their single profile; additional access is via profile_emails.
+      const userId = context?.isAdmin ? null : (context?.ctx?.userId ?? req?.ctx?.userId ?? null)
+      const createdProfileId = crypto.randomUUID()
+
+      await req.db.withTransaction(async (tx) => {
+        await tx
+          .prepare(
+            `
+              INSERT INTO profiles (id, display_name, primary_type, status, tags, created_by, user_id)
+              VALUES (?, ?, ?, 'active', ?, ?, ?)
+            `,
+          )
+          .run(createdProfileId, displayName, primaryType, JSON.stringify([]), createdBy, userId)
+
+        // Ensure every profile has all canonical sections so downstream crawlers/matching never hit missing keys.
+        const upsertSection = tx.prepare(
+          `
+            INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(profile_id, section_key) DO NOTHING
+          `,
+        )
+        for (const sectionKey of supportedSectionKeys) {
+          const defaults = getDefaultSectionData(sectionKey)
+          await upsertSection.run(createdProfileId, sectionKey, JSON.stringify(defaults ?? {}), 'system-create')
+        }
+      })
+
+      await linkProfileToAdmin(req.db, createdProfileId)
+      profileId = createdProfileId
+
+      console.info('[documents/ingest] created profile from upload', {
+        requestId: req.requestId || null,
+        profile_id: createdProfileId,
+        display_name: displayName,
+        primary_type: primaryType,
+      })
+    }
 
     if (profileId) {
       const profile = await req.db.prepare('SELECT id, organization_id FROM profiles WHERE id = ?').get(profileId);
@@ -925,6 +985,8 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
       success: true,
       id: docId,
       profile_id: profileId,
+      // Back-compat alias for some clients that expect camelCase.
+      profileId: profileId,
       processing_status: processingStatus,
       enable_ai: !skipParsing,
     });
