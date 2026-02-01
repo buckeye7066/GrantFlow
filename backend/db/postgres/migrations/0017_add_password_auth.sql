@@ -4,9 +4,9 @@ BEGIN;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT;
 
 CREATE TABLE IF NOT EXISTS password_setup_tokens (
-  id UUID PRIMARY KEY,
+  id TEXT PRIMARY KEY DEFAULT (gen_random_uuid()::text),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   token_hash TEXT NOT NULL,
   expires_at TIMESTAMPTZ NOT NULL,
   consumed_at TIMESTAMPTZ NULL,
