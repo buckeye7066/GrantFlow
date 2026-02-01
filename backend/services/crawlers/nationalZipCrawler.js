@@ -225,14 +225,14 @@ async function resolveZipList({ zip_list, state, max_zips, counties }) {
   // 3) All US ZIPs (when no state is provided)
   // Then optionally filter by counties (within the resolved base list).
   const fromExplicit = Array.isArray(zip_list) ? zip_list : [];
-  const hasExplicitZipList = fromExplicit.length > 0;
+  const wasZipListProvided = Array.isArray(zip_list) && zip_list.length > 0;
   let zips = fromExplicit
     .map((z) => String(z || '').trim())
     .filter((z) => /^\d{5}$/.test(z));
 
   // Only fall back to state/national ZIPs if NO explicit zip_list was provided.
   // If user provides ['BADZIP'], respect that intent (return empty after filtering).
-  if (!zips.length && !hasExplicitZipList) {
+  if (!zips.length && !wasZipListProvided) {
     if (state && typeof state === 'string') {
       const rows = zipcodes.lookupByState(state) || [];
       zips = rows

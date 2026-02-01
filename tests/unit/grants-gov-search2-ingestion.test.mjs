@@ -60,7 +60,7 @@ function createInMemoryDb() {
 test(
   'Grants.gov search2 ingestion: ingests at least one opportunity (no auth)',
   { timeout: 60_000 },
-  async () => {
+  async (t) => {
     const db = createInMemoryDb()
     try {
       let opportunities, metadata
@@ -69,8 +69,8 @@ test(
       } catch (error) {
         // Skip test if grants.gov is unreachable (common in CI environments)
         if (error?.message?.includes('ENOTFOUND') || error?.message?.includes('ETIMEDOUT')) {
-          console.log('[grants.gov test] Skipped: grants.gov API not accessible')
-          return // Skip test gracefully
+          t.skip('grants.gov API not accessible in this environment')
+          return
         }
         throw error // Re-throw other errors
       }
