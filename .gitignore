@@ -39,6 +39,9 @@ seed/*.db
 seed/*.db-shm
 seed/*.db-wal
 seed/*.db-journal
+*.db-shm
+*.db-wal
+*.db-journal
 
 # Backup files and temporary artifacts
 *.bak
