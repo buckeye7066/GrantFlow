@@ -1397,7 +1397,16 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   })
 
   if (zipList.length === 0) {
-    // Nothing to do. Important: do NOT touch DB or close shared DB connections.
+    // Nothing to do.
+    // IMPORTANT: do NOT touch DB or close shared DB connections.
+    // If we opened the DB (sqlite file-path mode), close it on the way out.
+    if (ownsDb) {
+      try {
+        db.close()
+      } catch {
+        // ignore
+      }
+    }
     return { processed: 0, sources: 0, duration: 0 }
   }
 
@@ -1421,7 +1430,6 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
       // ignore (schema drift / migrations not applied yet)
     }
   }
-
   console.log('='.repeat(80))
   console.log('Geo Crawl Starting')
   console.log('='.repeat(80))
