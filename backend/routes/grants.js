@@ -1009,9 +1009,21 @@ router.post('/from-opportunity', async (req, res, next) => {
     
     // Try to get opportunity from database first
     let opportunity = null;
+    let resolvedOpportunityId = null;  // Track the actual opportunity ID to use
     if (opportunity_id) {
       try {
         opportunity = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunity_id);
+        if (opportunity) {
+          resolvedOpportunityId = opportunity_id;
+        } else if (!opportunity_data) {
+          // opportunity_id provided but not found, and no fallback data
+          return res.status(404).json({
+            error: 'opportunity_not_found',
+            message: 'The specified opportunity_id was not found in the database.',
+            requestId,
+          })
+        }
+        // If opportunity not found but opportunity_data is provided, we'll use the fallback below
       } catch (dbError) {
         console.error('[grants/from-opportunity] failed to fetch opportunity', {
           requestId,
@@ -1166,33 +1178,36 @@ router.post('/from-opportunity', async (req, res, next) => {
 
       if (!finalOrgId && finalProfileId) {
         const profile = await tx.prepare('SELECT * FROM profiles WHERE id = ?').get(finalProfileId);
-        if (profile) {
-          if (profile.organization_id) {
-            // Profile already has an organization
-            finalOrgId = profile.organization_id;
-          } else {
-            // Create organization for this profile
-            const orgId = crypto.randomUUID();
-            const applicantType = deriveOrganizationApplicantTypeFromProfile(profile)
-            await tx.prepare(`
-              INSERT INTO organizations (id, name, applicant_type, created_at, updated_at)
-              VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            `).run(orgId, profile.display_name || 'My Organization', applicantType);
-            
-            // Link profile to organization
-            await tx.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, finalProfileId);
-            
-            finalOrgId = orgId;
-            console.log(`[grants] Auto-created organization ${orgId} for profile ${finalProfileId}`, {
-              applicant_type: applicantType,
-            });
-          }
+        if (!profile) {
+          // Profile doesn't exist - provide clear error message
+          throw new Error(`Profile '${finalProfileId}' not found. Please verify the profile_id and try again.`);
+        }
+        
+        if (profile.organization_id) {
+          // Profile already has an organization
+          finalOrgId = profile.organization_id;
+        } else {
+          // Create organization for this profile
+          const orgId = crypto.randomUUID();
+          const applicantType = deriveOrganizationApplicantTypeFromProfile(profile)
+          await tx.prepare(`
+            INSERT INTO organizations (id, name, applicant_type, created_at, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          `).run(orgId, profile.display_name || 'My Organization', applicantType);
+          
+          // Link profile to organization
+          await tx.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, finalProfileId);
+          
+          finalOrgId = orgId;
+          console.log(`[grants] Auto-created organization ${orgId} for profile ${finalProfileId}`, {
+            applicant_type: applicantType,
+          });
+        }
 
-          // Safety: if we inherited a profile.organization_id from legacy data, ensure the org row exists
-          // so `grants.organization_id` FK inserts cannot hard-fail.
-          if (finalOrgId) {
-            await ensureOrganizationRow({ organizationId: finalOrgId, profileRow: profile, reason: 'profile.organization_id' })
-          }
+        // Safety: if we inherited a profile.organization_id from legacy data, ensure the org row exists
+        // so `grants.organization_id` FK inserts cannot hard-fail.
+        if (finalOrgId) {
+          await ensureOrganizationRow({ organizationId: finalOrgId, profileRow: profile, reason: 'profile.organization_id' })
         }
       }
 
@@ -1290,7 +1305,7 @@ router.post('/from-opportunity', async (req, res, next) => {
           id, 
           finalOrgId,
           finalProfileId ? String(finalProfileId) : null,
-          opportunity_id || null,
+          resolvedOpportunityId || null,
           opportunity.title,
           opportunity.sponsor,
           insertDeadline,
@@ -1311,7 +1326,7 @@ router.post('/from-opportunity', async (req, res, next) => {
         `).run(
           id, 
           finalOrgId,
-          opportunity_id || null,
+          resolvedOpportunityId || null,
           opportunity.title,
           opportunity.sponsor,
           insertDeadline,
@@ -1345,12 +1360,22 @@ router.post('/from-opportunity', async (req, res, next) => {
     // 400/409-style responses so the UI can display a meaningful message.
     const msg = String(error?.message || '')
 
+    // Profile not found error - provide clear feedback
+    if (/Profile '.*' not found/i.test(msg)) {
+      return res.status(404).json({
+        error: 'profile_not_found',
+        message: msg,
+        requestId,
+      })
+    }
+
     // Missing org/profile error can be thrown within the transaction when no
     // organization_id could be derived. Treat it as a bad request.
     if (/Organization ID or Profile ID is required/i.test(msg)) {
       return res.status(400).json({
         error: 'missing_org_or_profile',
         message: 'You must specify either a profile_id or organization_id to add a grant to the pipeline.',
+        requestId,
       })
     }
 
@@ -1359,7 +1384,28 @@ router.post('/from-opportunity', async (req, res, next) => {
     // '23503' for foreign key violations. If we can locate an existing grant,
     // return a backwards-compatible "already_exists" response instead of a 500.
     const code = error?.code || null
-    const constraintConflict = code === 'SQLITE_CONSTRAINT' || code === '23505' || code === '23503'
+    const constraintConflict = code === 'SQLITE_CONSTRAINT' || code === 'SQLITE_CONSTRAINT_FOREIGNKEY' || 
+                               code === '23505' || code === '23503'
+    
+    // Specific handling for FK constraint violations
+    if (code === 'SQLITE_CONSTRAINT_FOREIGNKEY' || code === '23503') {
+      console.error('[grants/from-opportunity] Foreign key constraint violation', {
+        requestId,
+        profile_id: req.body?.profile_id ?? null,
+        organization_id: req.body?.organization_id ?? null,
+        opportunity_id: req.body?.opportunity_id ?? null,
+        error: error?.message || String(error),
+        code,
+        // This helps identify which FK failed (opportunity, organization, or profile)
+        hint: 'Check that all referenced IDs (opportunity_id, organization_id, profile_id) exist in their respective tables',
+      })
+      return res.status(400).json({
+        error: 'invalid_reference',
+        message: 'One or more referenced IDs (opportunity, organization, or profile) do not exist. Please verify and try again.',
+        requestId,
+      })
+    }
+    
     if (constraintConflict) {
       try {
         const body = req.body || {}
