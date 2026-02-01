@@ -183,8 +183,28 @@ function normalizeDateForDb(value) {
     return null
   }
 
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw
-  if (/^\d{4}-\d{2}-\d{2}t/i.test(raw)) return raw.slice(0, 10)
+  // Extract date-like string but ALWAYS validate by parsing
+  let candidate = null
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    candidate = raw
+  } else if (/^\d{4}-\d{2}-\d{2}t/i.test(raw)) {
+    candidate = raw.slice(0, 10)
+  }
+
+  if (candidate) {
+    // Validate the extracted date is actually valid (e.g., not 2026-13-45)
+    const [year, month, day] = candidate.split('-').map(Number)
+    const testDate = new Date(Date.UTC(year, month - 1, day))
+    if (
+      !Number.isNaN(testDate.getTime()) &&
+      testDate.getUTCFullYear() === year &&
+      testDate.getUTCMonth() === month - 1 &&
+      testDate.getUTCDate() === day
+    ) {
+      return candidate
+    }
+    // Invalid date like 2026-02-30 - fall through to Date parsing
+  }
 
   const parsed = new Date(raw)
   if (Number.isNaN(parsed.getTime())) return null
@@ -1224,20 +1244,27 @@ router.post('/from-opportunity', async (req, res, next) => {
         return { ok: true, created: true, id: orgId }
       }
 
-      // If no organization_id but profile_id provided, auto-create organization
+      // Resolve organization and validate profile
       let finalOrgId = normalizedOrgId
       let finalProfileId = normalizedProfileId
+      let profileRow = null
 
-      if (!finalOrgId && finalProfileId) {
-        const profile = await tx.prepare('SELECT * FROM profiles WHERE id = ?').get(finalProfileId);
-        if (!profile) {
-          // Profile doesn't exist - provide clear error message
+      // CRITICAL: Always validate profile exists when profile_id is provided.
+      // This prevents FK violations in Postgres when the profile doesn't exist.
+      // Previously, this validation was only done when organization_id was NOT provided,
+      // causing 500 errors when both were provided with an invalid profile_id.
+      if (finalProfileId) {
+        profileRow = await tx.prepare('SELECT * FROM profiles WHERE id = ?').get(finalProfileId);
+        if (!profileRow) {
           throw new Error(`Profile '${finalProfileId}' not found. Please verify the profile_id and try again.`);
         }
-        
-        if (profile.organization_id) {
+      }
+
+      // If no organization_id provided, derive it from profile or create new
+      if (!finalOrgId && finalProfileId) {
+        if (profileRow.organization_id) {
           // Profile already has an organization
-          finalOrgId = profile.organization_id;
+          finalOrgId = profileRow.organization_id;
         } else {
           // Create organization for this profile
           const orgId = crypto.randomUUID();
@@ -1284,7 +1311,7 @@ router.post('/from-opportunity', async (req, res, next) => {
           
           // Link profile to organization
           await tx.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, finalProfileId);
-          
+
           finalOrgId = orgId;
           console.log(`[grants] Auto-created organization ${orgId} for profile ${finalProfileId}`, {
             applicant_type: applicantType,
@@ -1294,18 +1321,16 @@ router.post('/from-opportunity', async (req, res, next) => {
         // Safety: if we inherited a profile.organization_id from legacy data, ensure the org row exists
         // so `grants.organization_id` FK inserts cannot hard-fail.
         if (finalOrgId) {
-          await ensureOrganizationRow({ organizationId: finalOrgId, profileRow: profile, reason: 'profile.organization_id' })
+          await ensureOrganizationRow({ organizationId: finalOrgId, profileRow, reason: 'profile.organization_id' })
         }
       }
 
       // If the caller explicitly provided an org id, ensure the row exists before we insert into grants.
       // This prevents 500s from FK violations when legacy data is missing the organizations row.
       if (finalOrgId) {
-        const profileRowForOrgName =
-          finalProfileId ? await tx.prepare('SELECT * FROM profiles WHERE id = ?').get(finalProfileId) : null
         await ensureOrganizationRow({
           organizationId: finalOrgId,
-          profileRow: profileRowForOrgName,
+          profileRow,
           reason: normalizedOrgId ? 'request.organization_id' : 'derived',
         })
       }
@@ -1503,6 +1528,45 @@ router.post('/from-opportunity', async (req, res, next) => {
         error: 'invalid_reference',
         message: 'One or more referenced IDs (opportunity, organization, or profile) do not exist. Please verify and try again.',
         requestId,
+      })
+    }
+
+    // Handle data validation errors from Postgres
+    // 22007: invalid_datetime_format, 22008: datetime_field_overflow
+    // 23502: not_null_violation, 23514: check_violation
+    // 22001: string_data_right_truncation (value too long)
+    // 22003: numeric_value_out_of_range
+    const dataValidationCodes = ['22007', '22008', '23502', '23514', '22001', '22003', '22P02']
+    if (dataValidationCodes.includes(code)) {
+      console.error('[grants/from-opportunity] Data validation error', {
+        requestId,
+        profile_id: req.body?.profile_id ?? null,
+        organization_id: req.body?.organization_id ?? null,
+        opportunity_title: req.body?.opportunity_data?.title ?? null,
+        opportunity_deadline: req.body?.opportunity_data?.deadline ?? null,
+        error: error?.message || String(error),
+        code,
+        column: error?.column || null,
+        constraint: error?.constraint || null,
+      })
+
+      // Provide user-friendly messages based on error code
+      let userMessage = 'The provided data contains invalid values. Please check and try again.'
+      if (code === '22007' || code === '22008') {
+        userMessage = 'The deadline date format is invalid. Please provide a valid date.'
+      } else if (code === '22001') {
+        userMessage = 'One of the text fields is too long. Please shorten the values and try again.'
+      } else if (code === '22003' || code === '22P02') {
+        userMessage = 'One of the numeric fields contains an invalid value.'
+      } else if (code === '23502') {
+        userMessage = 'A required field is missing. Please ensure all required fields are filled.'
+      }
+
+      return res.status(400).json({
+        error: 'invalid_data',
+        message: userMessage,
+        requestId,
+        ...(process.env.NODE_ENV !== 'production' ? { code, details: error?.message } : {}),
       })
     }
     
