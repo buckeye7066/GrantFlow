@@ -1268,7 +1268,7 @@ router.post('/from-opportunity', async (req, res, next) => {
         } else {
           // Create organization for this profile
           const orgId = crypto.randomUUID();
-          const applicantType = deriveOrganizationApplicantTypeFromProfile(profile)
+          const applicantType = deriveOrganizationApplicantTypeFromProfile(profileRow)
           // Same schema-drift tolerance as ensureOrganizationRow: prefer applicant_type, but fall back safely.
           try {
             if (applicantType) {
@@ -1279,7 +1279,7 @@ router.post('/from-opportunity', async (req, res, next) => {
                     VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                   `,
                 )
-                .run(orgId, profile.display_name || 'My Organization', applicantType)
+                .run(orgId, profileRow.display_name || 'My Organization', applicantType)
             } else {
               await tx
                 .prepare(
@@ -1288,7 +1288,7 @@ router.post('/from-opportunity', async (req, res, next) => {
                     VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                   `,
                 )
-                .run(orgId, profile.display_name || 'My Organization')
+                .run(orgId, profileRow.display_name || 'My Organization')
             }
           } catch (insertErr) {
             console.warn('[grants] auto-create org failed; retrying without applicant_type', {
@@ -1306,7 +1306,7 @@ router.post('/from-opportunity', async (req, res, next) => {
                   VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 `,
               )
-              .run(orgId, profile.display_name || 'My Organization')
+              .run(orgId, profileRow.display_name || 'My Organization')
           }
           
           // Link profile to organization
@@ -1342,51 +1342,45 @@ router.post('/from-opportunity', async (req, res, next) => {
       // Check for duplicate grants for this profile/org.
       // Avoid duplicates even when the opportunity exists multiple times in the catalog (different IDs).
       const oppUrl = opportunity?.application_url ? String(opportunity.application_url) : null
-      const existingGrant = hasProfileId && finalProfileId
-        ? await tx
-            .prepare(
-              `
-                SELECT id, title
-                FROM grants
-                WHERE profile_id = ?
-                  AND (
-                    (? IS NOT NULL AND funding_opportunity_id = ?)
-                    OR (funding_opportunity_id IS NULL AND title = ?)
-                    OR (? IS NOT NULL AND application_url = ?)
-                  )
-                LIMIT 1
-              `,
-            )
-            .get(
-              String(finalProfileId),
-              opportunity_id ?? null,
-              opportunity_id ?? null,
-              opportunity.title,
-              oppUrl,
-              oppUrl,
-            )
-        : await tx
-            .prepare(
-              `
-                SELECT id, title
-                FROM grants
-                WHERE organization_id = ?
-                  AND (
-                    (? IS NOT NULL AND funding_opportunity_id = ?)
-                    OR (funding_opportunity_id IS NULL AND title = ?)
-                    OR (? IS NOT NULL AND application_url = ?)
-                  )
-                LIMIT 1
-              `,
-            )
-            .get(
-              String(finalOrgId),
-              opportunity_id ?? null,
-              opportunity_id ?? null,
-              opportunity.title,
-              oppUrl,
-              oppUrl,
-            );
+      // NOTE (Postgres):
+      // Avoid `? IS NOT NULL` checks. Postgres cannot infer the type of a parameter used only in `IS NOT NULL`,
+      // and will throw 42P18 ("could not determine data type of parameter $N") when the value is null.
+      // Build the duplicate lookup dynamically instead.
+      const dupParams = []
+      const dupWhere = []
+
+      if (hasProfileId && finalProfileId) {
+        dupWhere.push('profile_id = ?')
+        dupParams.push(String(finalProfileId))
+      } else {
+        dupWhere.push('organization_id = ?')
+        dupParams.push(String(finalOrgId))
+      }
+
+      const dupMatch = []
+      if (resolvedOpportunityId) {
+        dupMatch.push('funding_opportunity_id = ?')
+        dupParams.push(String(resolvedOpportunityId))
+      }
+      // Always match on title for synthetic/direct opportunities (funding_opportunity_id NULL).
+      dupMatch.push('(funding_opportunity_id IS NULL AND title = ?)')
+      dupParams.push(opportunity.title)
+      if (oppUrl) {
+        dupMatch.push('(application_url = ?)')
+        dupParams.push(oppUrl)
+      }
+
+      const existingGrant = await tx
+        .prepare(
+          `
+            SELECT id, title
+            FROM grants
+            WHERE ${dupWhere.join(' AND ')}
+              AND (${dupMatch.join(' OR ')})
+            LIMIT 1
+          `,
+        )
+        .get(...dupParams)
       
       if (existingGrant) {
         return { 

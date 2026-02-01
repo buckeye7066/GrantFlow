@@ -1242,13 +1242,14 @@ app.use(async (req, _res, next) => {
         .prepare(
           `
             INSERT INTO users (id, display_name, primary_email, is_admin)
-            VALUES (?, ?, ?, 1)
+            VALUES (?, ?, ?, ?)
           `,
         )
         .run(
           user.userId,
           user.full_name || ADMIN_NAME || 'Admin User',
           user.email || ADMIN_EMAIL || null,
+          true,
         )
     }
   } catch {
@@ -1365,12 +1366,13 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
             db.prepare(
               `
                 INSERT INTO users (id, display_name, primary_email, is_admin)
-                VALUES (?, ?, ?, 1)
+                VALUES (?, ?, ?, ?)
               `,
             ).run(
               user.userId,
               user.full_name || ADMIN_NAME || 'Admin User',
               user.email || ADMIN_EMAIL || null,
+              true,
             )
 
             dbUser = db
