@@ -1392,6 +1392,30 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   const ownsDb = typeof dbPath === 'string'
   const db = ownsDb ? new Database(dbPath) : dbPath
 
+  const zipList = await resolveZipList({
+    zip_list: options.zip_list,
+    state: options.state,
+    max_zips: options.max_zips,
+    counties: options.counties,
+  })
+
+  if (zipList.length === 0) {
+    // Nothing to do.
+    // IMPORTANT: do NOT touch DB or close shared DB connections.
+    // If we opened the DB (sqlite file-path mode), close it on the way out.
+    if (ownsDb) {
+      try {
+        db.close()
+      } catch {
+        // ignore
+      }
+    }
+    return { processed: 0, sources: 0, duration: 0 }
+  }
+
+  // Ensure Phase-6 geo tables exist (prod safety).
+  await ensureGeoCrawlTables(db)
+
   const geoRunId = config.geo_run_id ?? options.geo_run_id ?? null
   if (geoRunId) {
     // Mark run as running; do not hard-fail if run tables are missing.
@@ -1409,30 +1433,6 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
       // ignore (schema drift / migrations not applied yet)
     }
   }
-
-  const zipList = await resolveZipList({
-    zip_list: options.zip_list,
-    state: options.state,
-    max_zips: options.max_zips,
-    counties: options.counties,
-  })
-
-  if (zipList.length === 0) {
-    // Nothing to do. Important: do NOT close shared DB connections.
-    if (ownsDb) {
-      try {
-        db.close()
-      } catch {
-        // ignore
-      }
-    }
-    return { processed: 0, sources: 0, duration: 0 }
-  }
-
-  // Ensure Phase-6 geo tables exist (prod safety).
-  // IMPORTANT: only do this when we actually have work to do; empty/invalid zip lists should not touch DB.
-  await ensureGeoCrawlTables(db)
-
   console.log('='.repeat(80))
   console.log('Geo Crawl Starting')
   console.log('='.repeat(80))

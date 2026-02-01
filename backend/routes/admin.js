@@ -38,6 +38,7 @@ import { resolveCountyForZip } from '../services/geo/zipCountyResolver.js';
 import { createGeoCrawlRun } from '../services/geoCrawlRunStore.js'
 import { resolveUploadsDir, ensureUploadsDirWritable } from '../utils/uploadsDir.js'
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
+import { analyzeKnowledgeBaseDocument, processPendingKBDocuments, extractFundingOpportunitiesFromKB } from '../services/knowledgeBaseProcessor.js'
 
 const router = express.Router();
 
@@ -1009,6 +1010,20 @@ function safeDeleteFile(req, filePath) {
   }
 }
 
+// Helper to trigger KB document AI analysis asynchronously
+function triggerKBAnalysis(db, docId, extractedText) {
+  if (extractedText && extractedText.trim().length > 50) {
+    // Run analysis asynchronously - don't block the response
+    analyzeKnowledgeBaseDocument({
+      documentId: docId,
+      extractedText,
+      db,
+    }).catch(error => {
+      console.error('[KB Upload] AI analysis failed for', docId, error)
+    })
+  }
+}
+
 // GET /api/admin/knowledge
 // Query params: q, limit, offset
 router.get('/knowledge', async (req, res) => {
@@ -1122,6 +1137,9 @@ router.post('/knowledge/upload', knowledgeUpload.single('document'), async (req,
         notes,
       )
 
+    // Trigger AI analysis if we have extracted text
+    triggerKBAnalysis(req.db, docId, extractedText)
+
     const doc = await req.db.prepare(`SELECT * FROM documents WHERE id = ? LIMIT 1`).get(docId)
     res.status(201).json({ ok: true, document: doc })
   } catch (error) {
@@ -1189,6 +1207,9 @@ router.post('/knowledge/ingest-url', async (req, res) => {
         notes,
       )
 
+    // Trigger AI analysis if we have extracted text
+    triggerKBAnalysis(req.db, docId, extractedText)
+
     const doc = await req.db.prepare(`SELECT * FROM documents WHERE id = ? LIMIT 1`).get(docId)
     res.status(201).json({ ok: true, document: doc })
   } catch (error) {
@@ -1211,6 +1232,31 @@ router.delete('/knowledge/:id', async (req, res) => {
     const deletedFile = doc.file_path ? safeDeleteFile(req, doc.file_path) : false
 
     res.json({ ok: true, deleted: true, deleted_file: deletedFile })
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message || String(error) })
+  }
+})
+
+// POST /api/admin/knowledge/process-pending
+// Trigger AI analysis for pending KB documents
+router.post('/knowledge/process-pending', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  try {
+    const limit = parseInt(req.body?.limit || '10', 10)
+    const result = await processPendingKBDocuments(req.db, limit)
+    res.json({ ok: true, ...result })
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message || String(error) })
+  }
+})
+
+// GET /api/admin/knowledge/opportunities
+// Extract funding opportunities from analyzed KB documents
+router.get('/knowledge/opportunities', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  try {
+    const opportunities = await extractFundingOpportunitiesFromKB(req.db)
+    res.json({ ok: true, opportunities, count: opportunities.length })
   } catch (error) {
     res.status(500).json({ ok: false, error: error?.message || String(error) })
   }

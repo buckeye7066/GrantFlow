@@ -403,7 +403,7 @@ export default function Dashboard() {
                   <h1 className="text-2xl font-bold text-card-foreground md:text-3xl">
                     Operational pulse across all grants and obligations
                   </h1>
-                  <p className="text-sm text-muted-foreground md:text-base">
+                  <p className="text-sm text-foreground md:text-base">
                     Staying ahead of submissions, compliance, and reporting just became easier.
                     Leverage AI nudges and smart filters to keep every opportunity on track.
                   </p>

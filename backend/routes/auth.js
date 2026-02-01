@@ -517,7 +517,7 @@ async function getUserProfiles(db, userId) {
   return await db
     .prepare(
       `
-        SELECT id, display_name, organization_id, status
+        SELECT id, display_name, organization_id, status, avatar_url
         FROM profiles
         WHERE user_id = ?
         ORDER BY created_at ASC
