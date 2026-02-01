@@ -5,6 +5,7 @@ import multer from 'multer'
 import fs from 'fs'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
+import rateLimit from 'express-rate-limit'
 import { buildProfileSectionPrompt, supportedSectionKeys } from '../prompts/profileSections.js'
 import { PROFILE_SCHEMA, getDefaultSectionData } from '../config/profileSchema.js'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
@@ -27,6 +28,16 @@ import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
 
 const router = express.Router()
+
+// Rate limit the profile listing endpoint (defense-in-depth).
+// This is a read-heavy query that can touch multiple tables (and can be abused).
+const listProfilesLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  limit: 300, // generous for interactive UI + admin usage
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: 'Too many profile list requests, please try again later.',
+})
 
 function isAuthenticatedFromCtx(ctx) {
   return Boolean(ctx && (ctx.userId || ctx.activeProfileId || ctx.email))
@@ -334,7 +345,7 @@ function extractAnthropicText(response) {
     .trim()
 }
 
-router.get('/', async (req, res) => {
+router.get('/', listProfilesLimiter, async (req, res) => {
   try {
     // Canonical truth is req.ctx, but harden against any transient ctx-building issues
     // by falling back to a DB-backed admin check (never token-only).
