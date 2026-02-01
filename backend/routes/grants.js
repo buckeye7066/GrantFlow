@@ -907,6 +907,8 @@ router.delete('/:id', mutationRateLimiter, async (req, res) => {
 
 // Add grant from opportunity (supports both database opportunities and direct data)
 router.post('/from-opportunity', async (req, res, next) => {
+  const requestId = req.requestId || req.request_id || null
+  
   try {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return
@@ -924,65 +926,150 @@ router.post('/from-opportunity', async (req, res, next) => {
       opportunity_data
     } = req.body;
 
+    // Enhanced input validation with detailed error messages
+    if (!req.body || typeof req.body !== 'object') {
+      return res.status(400).json({
+        error: 'invalid_request',
+        message: 'Request body must be a valid JSON object.',
+        requestId,
+      })
+    }
+
     const normalizedProfileId = profile_id ? String(profile_id) : null
     const normalizedOrgId = organization_id ? String(organization_id) : null
 
     if (!normalizedProfileId && !normalizedOrgId) {
       return res.status(400).json({
-        error: 'Profile ID or Organization ID is required',
+        error: 'missing_required_field',
         message: 'Provide profile_id (preferred) or organization_id to add a grant to the pipeline.',
+        requestId,
+      })
+    }
+
+    // Validate opportunity data if provided
+    if (!opportunity_id && opportunity_data) {
+      if (typeof opportunity_data !== 'object' || Array.isArray(opportunity_data)) {
+        return res.status(400).json({
+          error: 'invalid_opportunity_data',
+          message: 'opportunity_data must be a valid object.',
+          requestId,
+        })
+      }
+      
+      // Validate required fields in opportunity_data
+      const title = opportunity_data.title ? String(opportunity_data.title).trim() : ''
+      if (!title) {
+        return res.status(400).json({
+          error: 'missing_opportunity_title',
+          message: 'opportunity_data.title is required when adding a grant from opportunity data.',
+          requestId,
+        })
+      }
+    }
+
+    // Validate that at least one way to identify an opportunity exists
+    if (!opportunity_id && !opportunity_data) {
+      return res.status(400).json({
+        error: 'missing_opportunity',
+        message: 'Provide either opportunity_id or opportunity_data to add a grant to the pipeline.',
+        requestId,
       })
     }
 
     // Authorization:
     // - If profile_id provided, profile access is the source of truth (org may be auto-created/linked).
     // - If only organization_id provided, require org access.
-    if (normalizedProfileId) {
-      if (!(await ensureProfileAccess(req, res, normalizedProfileId))) return
-    } else if (normalizedOrgId) {
-      if (!(await ensureOrganizationAccess(req, res, normalizedOrgId))) return
-    }
+    try {
+      if (normalizedProfileId) {
+        if (!(await ensureProfileAccess(req, res, normalizedProfileId))) return
+      } else if (normalizedOrgId) {
+        if (!(await ensureOrganizationAccess(req, res, normalizedOrgId))) return
+      }
 
-    // If a caller provided organization_id explicitly (even alongside profile_id),
-    // enforce org access using the real request context. This avoids passing synthetic
-    // req objects that can crash (missing req.db/req.ctx) and cause 500s.
-    if (normalizedOrgId) {
-      if (!(await ensureOrganizationAccess(req, res, normalizedOrgId))) return
+      // If a caller provided organization_id explicitly (even alongside profile_id),
+      // enforce org access using the real request context. This avoids passing synthetic
+      // req objects that can crash (missing req.db/req.ctx) and cause 500s.
+      if (normalizedOrgId) {
+        if (!(await ensureOrganizationAccess(req, res, normalizedOrgId))) return
+      }
+    } catch (accessError) {
+      console.error('[grants/from-opportunity] access control check failed', {
+        requestId,
+        profile_id: normalizedProfileId,
+        organization_id: normalizedOrgId,
+        error: accessError?.message || String(accessError),
+        stack: accessError?.stack || null,
+      })
+      return res.status(500).json({
+        error: 'access_control_error',
+        message: 'Failed to verify access permissions. Please try again.',
+        requestId,
+      })
     }
     
     // Try to get opportunity from database first
     let opportunity = null;
     if (opportunity_id) {
-      opportunity = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunity_id);
+      try {
+        opportunity = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunity_id);
+      } catch (dbError) {
+        console.error('[grants/from-opportunity] failed to fetch opportunity', {
+          requestId,
+          opportunity_id,
+          error: dbError?.message || String(dbError),
+        })
+        return res.status(500).json({
+          error: 'database_error',
+          message: 'Failed to fetch opportunity from database. Please try again.',
+          requestId,
+        })
+      }
     }
     
     // If not found in DB, use provided opportunity_data
     if (!opportunity && opportunity_data) {
-      const rawDeadline = opportunity_data.deadline || opportunity_data.deadlineAt || null
-      const normalizedDeadline = normalizeDateForDb(rawDeadline)
-      const amountMin = normalizeMoney(opportunity_data.awardMin ?? opportunity_data.amount_min ?? null)
-      const amountMax = normalizeMoney(opportunity_data.awardMax ?? opportunity_data.amount_max ?? null)
-      const applicationUrl = coerceString(opportunity_data.url || opportunity_data.application_url, { maxLen: 2000 })
-      const title = coerceString(opportunity_data.title, { maxLen: 500 })
-      if (!title) {
-        return res.status(400).json({ error: 'Opportunity title is required' })
-      }
+      try {
+        const rawDeadline = opportunity_data.deadline || opportunity_data.deadlineAt || null
+        const normalizedDeadline = normalizeDateForDb(rawDeadline)
+        const amountMin = normalizeMoney(opportunity_data.awardMin ?? opportunity_data.amount_min ?? null)
+        const amountMax = normalizeMoney(opportunity_data.awardMax ?? opportunity_data.amount_max ?? null)
+        const applicationUrl = coerceString(opportunity_data.url || opportunity_data.application_url, { maxLen: 2000 })
+        const title = coerceString(opportunity_data.title, { maxLen: 500 })
+        if (!title) {
+          return res.status(400).json({
+            error: 'missing_opportunity_title',
+            message: 'Opportunity title is required',
+            requestId,
+          })
+        }
 
-      opportunity = {
-        title,
-        sponsor: coerceString(opportunity_data.sponsor, { maxLen: 500 }),
-        // Preserve raw deadline for expiry checks (normalizeDateForDb may return null for non-ISO formats)
-        deadline_raw: rawDeadline,
-        deadline: normalizedDeadline,
-        deadline_type: coerceString(opportunity_data.deadline_type, { maxLen: 50 }) || null,
-        application_url: applicationUrl,
-        amount_min: amountMin,
-        amount_max: amountMax,
-        description: coerceString(opportunity_data.descriptionMd || opportunity_data.description, { maxLen: 50_000 }),
-        eligibility_bullets: JSON.stringify(coerceArray(opportunity_data.eligibilityBullets)),
-        source: coerceString(opportunity_data.source, { maxLen: 200 }) || 'discovery',
-      };
-      console.log('[grants] Using direct opportunity data for:', opportunity.title);
+        opportunity = {
+          title,
+          sponsor: coerceString(opportunity_data.sponsor, { maxLen: 500 }),
+          // Preserve raw deadline for expiry checks (normalizeDateForDb may return null for non-ISO formats)
+          deadline_raw: rawDeadline,
+          deadline: normalizedDeadline,
+          deadline_type: coerceString(opportunity_data.deadline_type, { maxLen: 50 }) || null,
+          application_url: applicationUrl,
+          amount_min: amountMin,
+          amount_max: amountMax,
+          description: coerceString(opportunity_data.descriptionMd || opportunity_data.description, { maxLen: 50_000 }),
+          eligibility_bullets: JSON.stringify(coerceArray(opportunity_data.eligibilityBullets)),
+          source: coerceString(opportunity_data.source, { maxLen: 200 }) || 'discovery',
+        };
+        console.log('[grants/from-opportunity] Using direct opportunity data for:', opportunity.title);
+      } catch (parseError) {
+        console.error('[grants/from-opportunity] failed to parse opportunity_data', {
+          requestId,
+          error: parseError?.message || String(parseError),
+          stack: parseError?.stack || null,
+        })
+        return res.status(400).json({
+          error: 'invalid_opportunity_data',
+          message: 'Failed to parse opportunity data. Please check the format and try again.',
+          requestId,
+        })
+      }
     }
     
     if (!opportunity) {
@@ -1350,8 +1437,9 @@ router.post('/from-opportunity', async (req, res, next) => {
     }
 
     // Enhanced error logging with stack trace and detailed context
+    const userId = req.user?.id || req.ctx?.userId || null
     console.error('[grants/from-opportunity] failed', {
-      requestId: req.requestId || req.request_id || null,
+      requestId,
       profile_id: req.body?.profile_id ?? null,
       organization_id: req.body?.organization_id ?? null,
       opportunity_id: req.body?.opportunity_id ?? null,
@@ -1363,20 +1451,26 @@ router.post('/from-opportunity', async (req, res, next) => {
       errorName: error?.name || null,
       sqlState: error?.sqlState || null,
       constraint: error?.constraint || null,
+      userId,
     })
     
-    // Return a more informative 500 error when we can't handle it gracefully
+    // Return a more informative error response
     if (process.env.NODE_ENV !== 'production') {
       return res.status(500).json({
         error: 'internal_server_error',
-        message: 'Failed to add grant to pipeline',
+        message: 'Failed to add grant to pipeline. Please try again or contact support.',
         code: error?.code || null,
         details: error?.message || String(error),
-        requestId: req.requestId || req.request_id || null,
+        requestId,
       })
     }
     
-    return next(error)
+    // Production: return user-friendly error without exposing internals
+    return res.status(500).json({
+      error: 'internal_server_error',
+      message: 'An unexpected error occurred while adding the grant to your pipeline. Please try again. If the problem persists, contact support.',
+      requestId,
+    })
   }
 });
 

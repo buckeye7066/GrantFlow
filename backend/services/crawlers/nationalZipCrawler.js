@@ -1386,6 +1386,18 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   const ownsDb = typeof dbPath === 'string'
   const db = ownsDb ? new Database(dbPath) : dbPath
 
+  const zipList = await resolveZipList({
+    zip_list: options.zip_list,
+    state: options.state,
+    max_zips: options.max_zips,
+    counties: options.counties,
+  })
+
+  if (zipList.length === 0) {
+    // Nothing to do. Important: do NOT touch DB or close shared DB connections.
+    return { processed: 0, sources: 0, duration: 0 }
+  }
+
   // Ensure Phase-6 geo tables exist (prod safety).
   await ensureGeoCrawlTables(db)
 
@@ -1405,18 +1417,6 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
     } catch {
       // ignore (schema drift / migrations not applied yet)
     }
-  }
-
-  const zipList = await resolveZipList({
-    zip_list: options.zip_list,
-    state: options.state,
-    max_zips: options.max_zips,
-    counties: options.counties,
-  })
-
-  if (zipList.length === 0) {
-    // Nothing to do. Important: do NOT close shared DB connections.
-    return { processed: 0, sources: 0, duration: 0 }
   }
 
   console.log('='.repeat(80))

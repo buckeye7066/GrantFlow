@@ -32,7 +32,7 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
         <div className="flex items-start justify-between gap-4">
           <div>
             <CardTitle className="text-card-foreground text-lg font-semibold">Pipeline Focus</CardTitle>
-            <p className="mt-1 text-sm text-muted-foreground">
+            <p className="mt-1 text-sm text-foreground">
               {hasError
                 ? "Unable to sync pipeline metrics. Showing default workflow guidance."
                 : isLoading
@@ -61,7 +61,7 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
                   <status.icon className="h-5 w-5" />
                 </span>
                 <div className="flex flex-col">
-                  <span className="text-xs uppercase tracking-wide text-muted-foreground">{status.label}</span>
+                  <span className="text-xs uppercase tracking-wide text-foreground">{status.label}</span>
                   <span className="text-lg font-semibold text-card-foreground">
                     {isLoading ? "…" : count}
                   </span>
@@ -72,7 +72,7 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
         </div>
         <div className="rounded-xl border border-dashed border-border p-4 bg-muted/30">
           <h3 className="text-sm font-semibold text-card-foreground mb-2">Next recommended actions</h3>
-          <ul className="space-y-2 text-sm text-muted-foreground">
+          <ul className="space-y-2 text-sm text-foreground">
             <li>• Review drafts due this week and assign final reviewers.</li>
             <li>• Nudge partners on outstanding documents for compliance checks.</li>
             <li>• Identify upcoming submissions to prep budgets and attachments.</li>

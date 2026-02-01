@@ -17,8 +17,8 @@ export default function RecentGrantsCard({ grants }) {
       </CardHeader>
       <CardContent className="p-6">
         {grants.length === 0 ? (
-          <div className="text-center py-8 text-muted-foreground">
-            <FileText className="w-12 h-12 mx-auto mb-3 text-muted-foreground" />
+          <div className="text-center py-8 text-foreground">
+            <FileText className="w-12 h-12 mx-auto mb-3 text-foreground" />
             <p>No grants yet</p>
             <Link to={createPageUrl("DiscoverGrants")}>
               <Button variant="outline" size="sm" className="mt-3" aria-label="Discover new grants">
@@ -32,10 +32,10 @@ export default function RecentGrantsCard({ grants }) {
             {grants.slice(0, 5).map((grant) => (
               <Link key={grant.id} to={createPageUrl("Pipeline")}>
                 <div className="flex items-center gap-3 p-3 bg-muted/30 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer">
-                  <FileText className="w-5 h-5 text-muted-foreground" />
+                  <FileText className="w-5 h-5 text-foreground" />
                   <div className="flex-1">
                     <p className="font-medium text-card-foreground">{grant.title}</p>
-                    <p className="text-sm text-muted-foreground">{grant.funder}</p>
+                    <p className="text-sm text-foreground">{grant.funder}</p>
                   </div>
                   <Badge variant="outline">{grant.status}</Badge>
                 </div>
