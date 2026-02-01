@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useState } from "react";
+import React, { Suspense, useState } from "react";
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import Layout from "./Layout.jsx";
 import OnboardingFlow from "@/components/onboarding/OnboardingFlow";
@@ -21,11 +21,11 @@ import GrantDeadline from "./GrantDeadline";
 
 import Budgets from "./Budgets";
 
-const Documents = lazy(() => import("./Documents"));
+import Documents from "./Documents";
 
 import Calendar from "./Calendar";
 
-const Reports = lazy(() => import("./Reports"));
+import Reports from "./Reports";
 import AdvancedAnalytics from "./AdvancedAnalytics";
 
 import Billing from "./Billing";
@@ -57,9 +57,9 @@ import SourceRegistry from "./SourceRegistry";
 import BackfillContacts from "./BackfillContacts";
 
 import Stewardship from "./Stewardship";
-const ProfileDetail = lazy(() => import("./ProfileDetail"));
+import ProfileDetail from "./ProfileDetail";
 
-const Diagnostics = lazy(() => import("./Diagnostics"));
+import Diagnostics from "./Diagnostics";
 
 import ComplianceReportDetail from "./ComplianceReportDetail";
 
@@ -67,7 +67,7 @@ import ProfileMatcher from "./ProfileMatcher";
 
 import SourceDirectory from "./SourceDirectory";
 
-const GrantMonitoring = lazy(() => import("./GrantMonitoring"));
+import GrantMonitoring from "./GrantMonitoring";
 
 import PrintableApplication from "./PrintableApplication";
 
@@ -75,14 +75,14 @@ import BillingSheet from "./BillingSheet";
 
 import OrganizationProfile from "./OrganizationProfile";
 
-const FundingOpportunities = lazy(() => import("./FundingOpportunities"));
+import FundingOpportunities from "./FundingOpportunities";
 
 import Pricing from "./Pricing";
 import Services from "./Services";
 
 import Settings from "./Settings";
 
-const Admin = lazy(() => import("./Admin"));
+import Admin from "./Admin";
 
 import Login from "./Login";
 import AuthCallback from "./AuthCallback";
