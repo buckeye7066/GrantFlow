@@ -168,6 +168,18 @@ export default function DiscoverGrants() {
     }
 
     try {
+      // Validate required data before sending
+      if (!opportunity.title) {
+        if (!silent) {
+          toast({
+            variant: 'destructive',
+            title: 'Invalid opportunity',
+            description: 'The opportunity is missing required information (title).',
+          })
+        }
+        return { status: 'failed', error: 'missing_title' }
+      }
+
       // IMPORTANT: use apiFetch so Authorization is attached (prevents 401s).
       const newGrant = await apiFetch('/api/grants/from-opportunity', {
         method: 'POST',
@@ -219,15 +231,47 @@ export default function DiscoverGrants() {
       return { status: 'added', grant: newGrant }
     } catch (error) {
       console.error('Failed to add grant to pipeline:', error);
-      const message = error instanceof Error ? error.message : 'Unknown error';
+      
+      // Extract error details from the response
+      // Backend returns error info at top level: { error, message, requestId }
+      const errorCode = error?.errorCode || error?.error || 'unknown_error'
+      const requestId = error?.requestId || null
+      
+      // Provide user-friendly messages based on error type
+      let userMessage = 'An unexpected error occurred. Please try again.'
+      
+      if (errorCode === 'missing_required_field' || errorCode === 'missing_opportunity_title') {
+        userMessage = 'The opportunity is missing required information. Please check and try again.'
+      } else if (errorCode === 'invalid_opportunity_data') {
+        userMessage = 'The opportunity data format is invalid. Please try again or contact support.'
+      } else if (errorCode === 'access_control_error') {
+        userMessage = 'Access denied. You may not have permission to add grants to this profile.'
+      } else if (errorCode === 'database_error') {
+        userMessage = 'A database error occurred. Please try again in a moment.'
+      } else if (errorCode === 'opportunity_expired') {
+        userMessage = 'This opportunity has expired and cannot be added to your pipeline.'
+      } else if (error?.message) {
+        // Use the error message if available
+        userMessage = error.message
+      }
+      
       if (!silent) {
         toast({
           variant: 'destructive',
           title: 'Failed to add grant',
-          description: message,
+          description: userMessage,
         })
       }
-      return { status: 'failed', error: message }
+      
+      // Log error details for debugging
+      log.debug('add to pipeline failed', {
+        errorCode,
+        requestId,
+        opportunityTitle: opportunity.title,
+        profileId: selectedProfileId,
+      })
+      
+      return { status: 'failed', error: errorCode, message: userMessage, requestId }
     }
   };
 

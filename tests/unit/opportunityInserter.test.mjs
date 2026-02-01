@@ -40,7 +40,8 @@ function createDb() {
       match_reasons TEXT DEFAULT '[]',
       notes TEXT,
       is_active INTEGER DEFAULT 1,
-      last_crawled DATETIME
+      last_crawled DATETIME,
+      contact_info TEXT DEFAULT NULL
     );
 
     CREATE UNIQUE INDEX funding_opportunities_source_source_id_uniq
