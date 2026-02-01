@@ -907,6 +907,8 @@ router.delete('/:id', mutationRateLimiter, async (req, res) => {
 
 // Add grant from opportunity (supports both database opportunities and direct data)
 router.post('/from-opportunity', async (req, res, next) => {
+  const requestId = req.requestId || req.request_id || null
+  
   try {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return
@@ -929,7 +931,7 @@ router.post('/from-opportunity', async (req, res, next) => {
       return res.status(400).json({
         error: 'invalid_request',
         message: 'Request body must be a valid JSON object.',
-        requestId: req.requestId || req.request_id || null,
+        requestId,
       })
     }
 
@@ -940,7 +942,7 @@ router.post('/from-opportunity', async (req, res, next) => {
       return res.status(400).json({
         error: 'missing_required_field',
         message: 'Provide profile_id (preferred) or organization_id to add a grant to the pipeline.',
-        requestId: req.requestId || req.request_id || null,
+        requestId,
       })
     }
 
@@ -950,7 +952,7 @@ router.post('/from-opportunity', async (req, res, next) => {
         return res.status(400).json({
           error: 'invalid_opportunity_data',
           message: 'opportunity_data must be a valid object.',
-          requestId: req.requestId || req.request_id || null,
+          requestId,
         })
       }
       
@@ -960,7 +962,7 @@ router.post('/from-opportunity', async (req, res, next) => {
         return res.status(400).json({
           error: 'missing_opportunity_title',
           message: 'opportunity_data.title is required when adding a grant from opportunity data.',
-          requestId: req.requestId || req.request_id || null,
+          requestId,
         })
       }
     }
@@ -970,7 +972,7 @@ router.post('/from-opportunity', async (req, res, next) => {
       return res.status(400).json({
         error: 'missing_opportunity',
         message: 'Provide either opportunity_id or opportunity_data to add a grant to the pipeline.',
-        requestId: req.requestId || req.request_id || null,
+        requestId,
       })
     }
 
@@ -992,7 +994,7 @@ router.post('/from-opportunity', async (req, res, next) => {
       }
     } catch (accessError) {
       console.error('[grants/from-opportunity] access control check failed', {
-        requestId: req.requestId || req.request_id || null,
+        requestId,
         profile_id: normalizedProfileId,
         organization_id: normalizedOrgId,
         error: accessError?.message || String(accessError),
@@ -1001,7 +1003,7 @@ router.post('/from-opportunity', async (req, res, next) => {
       return res.status(500).json({
         error: 'access_control_error',
         message: 'Failed to verify access permissions. Please try again.',
-        requestId: req.requestId || req.request_id || null,
+        requestId,
       })
     }
     
@@ -1012,14 +1014,14 @@ router.post('/from-opportunity', async (req, res, next) => {
         opportunity = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunity_id);
       } catch (dbError) {
         console.error('[grants/from-opportunity] failed to fetch opportunity', {
-          requestId: req.requestId || req.request_id || null,
+          requestId,
           opportunity_id,
           error: dbError?.message || String(dbError),
         })
         return res.status(500).json({
           error: 'database_error',
           message: 'Failed to fetch opportunity from database. Please try again.',
-          requestId: req.requestId || req.request_id || null,
+          requestId,
         })
       }
     }
@@ -1037,7 +1039,7 @@ router.post('/from-opportunity', async (req, res, next) => {
           return res.status(400).json({
             error: 'missing_opportunity_title',
             message: 'Opportunity title is required',
-            requestId: req.requestId || req.request_id || null,
+            requestId,
           })
         }
 
@@ -1058,14 +1060,14 @@ router.post('/from-opportunity', async (req, res, next) => {
         console.log('[grants/from-opportunity] Using direct opportunity data for:', opportunity.title);
       } catch (parseError) {
         console.error('[grants/from-opportunity] failed to parse opportunity_data', {
-          requestId: req.requestId || req.request_id || null,
+          requestId,
           error: parseError?.message || String(parseError),
           stack: parseError?.stack || null,
         })
         return res.status(400).json({
           error: 'invalid_opportunity_data',
           message: 'Failed to parse opportunity data. Please check the format and try again.',
-          requestId: req.requestId || req.request_id || null,
+          requestId,
         })
       }
     }
@@ -1435,8 +1437,9 @@ router.post('/from-opportunity', async (req, res, next) => {
     }
 
     // Enhanced error logging with stack trace and detailed context
+    const userId = req.user?.id || req.ctx?.userId || null
     console.error('[grants/from-opportunity] failed', {
-      requestId: req.requestId || req.request_id || null,
+      requestId,
       profile_id: req.body?.profile_id ?? null,
       organization_id: req.body?.organization_id ?? null,
       opportunity_id: req.body?.opportunity_id ?? null,
@@ -1448,11 +1451,10 @@ router.post('/from-opportunity', async (req, res, next) => {
       errorName: error?.name || null,
       sqlState: error?.sqlState || null,
       constraint: error?.constraint || null,
-      userId: req.user?.id || req.ctx?.userId || null,
+      userId,
     })
     
     // Return a more informative error response
-    const requestId = req.requestId || req.request_id || null
     if (process.env.NODE_ENV !== 'production') {
       return res.status(500).json({
         error: 'internal_server_error',

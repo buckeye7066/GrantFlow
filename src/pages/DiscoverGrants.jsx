@@ -233,9 +233,9 @@ export default function DiscoverGrants() {
       console.error('Failed to add grant to pipeline:', error);
       
       // Extract error details from the response
-      const errorDetails = error?.details || {}
-      const errorCode = errorDetails?.error || error?.errorCode || 'unknown_error'
-      const requestId = errorDetails?.requestId || error?.requestId || null
+      // Backend returns error info at top level: { error, message, requestId }
+      const errorCode = error?.errorCode || error?.error || 'unknown_error'
+      const requestId = error?.requestId || null
       
       // Provide user-friendly messages based on error type
       let userMessage = 'An unexpected error occurred. Please try again.'
