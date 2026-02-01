@@ -18,14 +18,31 @@
  */
 const baseUrl = process.argv[2] || 'http://localhost:8080'
 
+function resolveBearerToken() {
+  // Prefer explicit env vars; fall back to ADMIN_TOKEN for local/dev convenience.
+  const candidates = [
+    process.env.GRANTFLOW_BEARER_TOKEN,
+    process.env.BEARER_TOKEN,
+    process.env.ACCESS_TOKEN,
+    process.env.AUTH_TOKEN,
+    process.env.ADMIN_TOKEN,
+  ]
+  for (const c of candidates) {
+    const t = String(c || '').trim()
+    if (t) return t
+  }
+  return null
+}
+
+const bearerToken = resolveBearerToken()
+
 async function test(name, payload, expectedStatus) {
   try {
     const res = await fetch(`${baseUrl}/api/grants/from-opportunity`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        // NOTE: If your backend uses bearer tokens locally, add:
-        authorization: `Bearer ${process.env.ADMIN_TOKEN || ''}`,
+        authorization: `Bearer ${bearerToken}`,
       },
       body: JSON.stringify(payload),
     })
@@ -55,7 +72,23 @@ async function main() {
   console.log('[verify] Testing /api/grants/from-opportunity endpoint')
   console.log(`[verify] Base URL: ${baseUrl}`)
   console.log(`[verify] Profile ID: ${profileId}`)
+  console.log(`[verify] Auth: ${bearerToken ? 'bearer token provided' : 'missing bearer token'}`)
   console.log('')
+
+  if (!bearerToken) {
+    console.error(
+      [
+        '[verify] Missing auth token for /api/grants/from-opportunity.',
+        '[verify] Set one of: GRANTFLOW_BEARER_TOKEN, BEARER_TOKEN, ACCESS_TOKEN, AUTH_TOKEN, ADMIN_TOKEN',
+        '[verify] Example (PowerShell):',
+        '  $env:PROFILE_ID="<real-profile-id>"',
+        '  $env:ADMIN_TOKEN="<real-admin-token-or-bearer>"',
+        `  node .\\scripts\\verify-add-to-pipeline-from-opportunity.mjs ${baseUrl}`,
+      ].join('\n'),
+    )
+    process.exitCode = 1
+    return
+  }
 
   const results = []
 
