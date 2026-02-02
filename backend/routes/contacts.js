@@ -19,6 +19,16 @@ router.get('/', async (req, res) => {
     const orgId = req.query.organization_id ? String(req.query.organization_id) : null
     const id = req.query.id ? String(req.query.id) : null
 
+    // SECURITY: Contacts are org-scoped (table has no profile_id). If the user is operating under an
+    // active profile context, log for audit/debugging to make cross-profile intent explicit.
+    if (!req.ctx?.isAdmin && req.ctx?.activeProfileId) {
+      console.info('[contacts] list accessed by profile', {
+        userId: req.ctx.userId,
+        profileId: req.ctx.activeProfileId,
+        orgId,
+      })
+    }
+
     if (orgId) {
       if (!(await ensureOrganizationAccess(req, res, orgId))) return
     }
