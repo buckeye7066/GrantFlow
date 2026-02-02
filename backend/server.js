@@ -53,6 +53,7 @@ import budgetsRouter from './routes/budgets.js'
 import contactsRouter from './routes/contacts.js'
 import applicationDraftsRouter from './routes/applicationDrafts.js'
 import applicationsRouter from './routes/applications.js'
+import vnextApplicationsRouter from './routes/vnextApplications.js'
 import billingSettingsRouter from './routes/billingSettings.js'
 import contactMethodsRouter from './routes/contactMethods.js'
 import outreachLogsRouter from './routes/outreachLogs.js'
@@ -1529,6 +1530,7 @@ app.use('/api/contacts', contactsRouter);
 app.use('/api/outreach-logs', outreachLogsRouter);
 app.use('/api/application-drafts', applicationDraftsRouter);
 app.use('/api/applications', applicationsRouter);
+app.use('/api/vnext/applications', vnextApplicationsRouter);
 app.use('/api/billing-settings', billingSettingsRouter);
 app.use('/api/contact-methods', contactMethodsRouter);
 app.use('/api/source-directory', sourceDirectoryRouter);

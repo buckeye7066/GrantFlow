@@ -107,6 +107,31 @@ CREATE TABLE IF NOT EXISTS organizations (
 );
 
 -- Funding Opportunities (master list of available grants)
+-- vNext backbone: funders + form_schemas are created before opportunities so FKs are valid.
+CREATE TABLE IF NOT EXISTS funders (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  name TEXT NOT NULL,
+  type TEXT,
+  urls TEXT DEFAULT '{}' ,        -- JSON: { homepage, apply, guidelines }
+  geography TEXT DEFAULT '{}' ,   -- JSON
+  domains TEXT DEFAULT '[]'       -- JSON array
+);
+CREATE INDEX IF NOT EXISTS idx_funders_name ON funders(name);
+
+CREATE TABLE IF NOT EXISTS form_schemas (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  name TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'manual' CHECK(source IN ('manual','scraped','inferred')),
+  fields TEXT NOT NULL DEFAULT '[]',           -- JSON array of field defs
+  validation_rules TEXT DEFAULT '{}'           -- JSON
+);
+CREATE INDEX IF NOT EXISTS idx_form_schemas_name ON form_schemas(name);
+CREATE INDEX IF NOT EXISTS idx_form_schemas_source ON form_schemas(source);
+
 CREATE TABLE IF NOT EXISTS funding_opportunities (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -130,9 +155,17 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   deadline_type TEXT CHECK(deadline_type IN ('fixed', 'rolling', 'ongoing', 'unknown')),
   
   application_url TEXT,
+  -- vNext canonical apply links (keep legacy application_url for compatibility)
+  apply_url TEXT,
+  apply_guidelines_url TEXT,
+  application_mode TEXT CHECK(application_mode IN ('portal','email','paper','unknown')),
   
   -- Contact information (JSON: { name, email, phone, address, website })
   contact_info TEXT DEFAULT NULL,
+
+  -- vNext schema authority + canonical funder link
+  funder_id TEXT REFERENCES funders(id) ON DELETE SET NULL,
+  schema_id TEXT REFERENCES form_schemas(id) ON DELETE SET NULL,
   
   -- Geographic
   is_national BOOLEAN DEFAULT FALSE,
@@ -162,6 +195,10 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   -- Status
   is_active BOOLEAN DEFAULT TRUE,
   last_crawled DATETIME,
+  status TEXT DEFAULT 'active' CHECK(status IN ('active','paused','expired')),
+  fingerprint TEXT,
+  last_seen_at DATETIME,
+  deadline_at DATETIME,
   
   -- For tracking which profiles this was matched to
   profile_id TEXT,
@@ -169,6 +206,13 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   -- Misc
   notes TEXT
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_funding_opportunities_fingerprint
+  ON funding_opportunities(fingerprint)
+  WHERE fingerprint IS NOT NULL AND TRIM(fingerprint) <> '';
+CREATE INDEX IF NOT EXISTS idx_funding_opportunities_funder_id ON funding_opportunities(funder_id);
+CREATE INDEX IF NOT EXISTS idx_funding_opportunities_schema_id ON funding_opportunities(schema_id);
+CREATE INDEX IF NOT EXISTS idx_funding_opportunities_status ON funding_opportunities(status);
 
 -- Item catalog (AI + deterministic suggestions)
 -- A durable list of "things people request" (devices, equipment, adaptive items, etc.)
@@ -304,6 +348,53 @@ CREATE TABLE IF NOT EXISTS milestones (
   reminder_days INTEGER DEFAULT 7
 );
 
+-- vNext applications (deterministic state machine execution unit)
+CREATE TABLE IF NOT EXISTS vnext_applications (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  opportunity_id TEXT NOT NULL REFERENCES funding_opportunities(id) ON DELETE CASCADE,
+
+  stage TEXT NOT NULL DEFAULT 'DISCOVERED',
+  state TEXT NOT NULL DEFAULT 'DISCOVERED',
+
+  boundary_type TEXT CHECK(boundary_type IN ('print','portal','paper','none')),
+  boundary_url TEXT,
+
+  assigned_to_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+
+  risk_score REAL,
+  expected_value REAL,
+  score_breakdown TEXT,        -- JSON
+  missing_requirements TEXT,   -- JSON
+
+  UNIQUE(profile_id, opportunity_id)
+);
+CREATE INDEX IF NOT EXISTS idx_vnext_applications_profile_id ON vnext_applications(profile_id);
+CREATE INDEX IF NOT EXISTS idx_vnext_applications_opportunity_id ON vnext_applications(opportunity_id);
+CREATE INDEX IF NOT EXISTS idx_vnext_applications_state ON vnext_applications(state);
+
+CREATE TABLE IF NOT EXISTS vnext_application_tasks (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  application_id TEXT NOT NULL REFERENCES vnext_applications(id) ON DELETE CASCADE,
+  task_key TEXT NOT NULL,
+  type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN ('todo','doing','blocked','done')),
+  due_at DATETIME,
+  blocking_reason TEXT,
+  payload TEXT DEFAULT '{}' , -- JSON
+
+  UNIQUE(application_id, task_key)
+);
+CREATE INDEX IF NOT EXISTS idx_vnext_tasks_application_id ON vnext_application_tasks(application_id);
+CREATE INDEX IF NOT EXISTS idx_vnext_tasks_status ON vnext_application_tasks(status);
+
 -- Documents
 CREATE TABLE IF NOT EXISTS documents (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
@@ -327,6 +418,7 @@ CREATE TABLE IF NOT EXISTS documents (
   file_size INTEGER,
   mime_type TEXT,
   extracted_text TEXT,
+  extracted_structured TEXT, -- JSON (vNext mapping)
   ai_summary TEXT,
   ai_sections TEXT,
   processing_status TEXT DEFAULT 'pending' CHECK(processing_status IN ('pending', 'processing', 'completed', 'failed')),
@@ -334,9 +426,17 @@ CREATE TABLE IF NOT EXISTS documents (
   
   status TEXT DEFAULT 'draft' CHECK(status IN ('draft', 'review', 'final', 'submitted')),
   version INTEGER DEFAULT 1,
+
+  -- vNext linkages (optional)
+  vnext_application_id TEXT REFERENCES vnext_applications(id) ON DELETE SET NULL,
+  storage_uri TEXT,
+  content_hash TEXT,
   
   notes TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_documents_vnext_app ON documents(vnext_application_id);
+CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash);
 
 -- Grant monitoring alert configs (used by Grant Monitoring page)
 CREATE TABLE IF NOT EXISTS grant_monitoring_alerts (
@@ -381,6 +481,21 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT,
   metadata TEXT
 );
+
+-- vNext fine-grained audit events (before/after snapshots for state transitions, tasks, scoring, etc.)
+CREATE TABLE IF NOT EXISTS audit_events (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  actor_type TEXT NOT NULL CHECK(actor_type IN ('user','ai','system')),
+  actor_id TEXT,
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  before_json TEXT,
+  after_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_events_entity ON audit_events(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_audit_events_created_at ON audit_events(created_at);
 
 -- Many-to-many user ↔ organization membership (used by admin tooling and access control).
 CREATE TABLE IF NOT EXISTS user_organizations (
