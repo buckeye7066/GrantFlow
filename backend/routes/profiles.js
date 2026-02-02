@@ -54,7 +54,6 @@ function canAccessProfileIdFromCtx(ctx, profileId) {
   const id = String(profileId)
   if (ctx?.isAdmin === true) return true
   if (ctx?.accessibleProfileIds === null) return true // admin sentinel (all)
-  if (ctx?.activeProfileId && String(ctx.activeProfileId) === id) return true
   if (ctx?.accessibleProfileIds instanceof Set && ctx.accessibleProfileIds.has(id)) return true
   return false
 }

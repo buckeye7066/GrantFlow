@@ -236,6 +236,24 @@ export async function buildRequestContext(db, user) {
     }
   }
 
+  // SECURITY: Never trust token-scoped activeProfileId blindly.
+  // If the claimed activeProfileId is not in the DB-backed accessible set, drop it.
+  // This prevents "profile bleed" across users when stale tokens/local storage carry an old profile id.
+  if (!ctx.isAdmin && ctx.activeProfileId && ctx.accessibleProfileIds instanceof Set) {
+    const active = String(ctx.activeProfileId)
+    if (!ctx.accessibleProfileIds.has(active)) {
+      const replacement = ctx.accessibleProfileIds.size > 0 ? Array.from(ctx.accessibleProfileIds)[0] : null
+      console.warn('[requestContext] Invalid activeProfileId claim (not accessible); resetting', {
+        userId: ctx.userId ?? null,
+        email: ctx.email ?? null,
+        claimedActiveProfileId: active,
+        replacementActiveProfileId: replacement,
+        accessibleProfileCount: ctx.accessibleProfileIds.size,
+      })
+      ctx.activeProfileId = replacement
+    }
+  }
+
   return ctx
 }
 

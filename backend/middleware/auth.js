@@ -70,11 +70,6 @@ export function ensureProfileAccess(profileIdParam = 'id') {
         return next();
       }
       
-      // User must match profile or user ID
-      if (user.profileId === profileId) {
-        return next();
-      }
-      
       // Check if profile belongs to user via user_id (async DB call)
       if (user.userId) {
         const profile = await new Promise((resolve, reject) => {
