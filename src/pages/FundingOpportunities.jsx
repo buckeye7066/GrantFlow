@@ -1596,8 +1596,9 @@ export default function FundingOpportunities() {
                   Reset filters
                 </Button>
               </div>
-              <p className="text-xs text-slate-500">
-                Showing {totalResults} opportunity{totalResults === 1 ? "" : "ies"}. {complianceMessage}
+              <p className="text-[12px] text-slate-500">
+                Showing {Number(totalResults || 0).toLocaleString()} opportunity
+                {Number(totalResults || 0) === 1 ? "" : "ies"}. {complianceMessage}
               </p>
             </div>
           </CardContent>
