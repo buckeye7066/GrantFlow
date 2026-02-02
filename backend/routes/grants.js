@@ -441,6 +441,8 @@ router.get('/pipeline', async (req, res) => {
     if (!user) return
 
     const { organization_id } = req.query;
+    const headerProfileId = typeof req.headers['x-profile-id'] === 'string' ? req.headers['x-profile-id'] : null
+    const profile_id = (typeof req.query.profile_id === 'string' ? req.query.profile_id : null) || headerProfileId
     await ensureGrantAiColumns(req.db)
     
     let query = `
@@ -451,29 +453,39 @@ router.get('/pipeline', async (req, res) => {
     const params = [];
 
     if (!isAdminUser(user)) {
-      const orgIds = await getAccessibleOrganizationIds(req.db, user)
-      if (!orgIds || orgIds.size === 0) {
-        return res.json({
-          discovered: [],
-          interested: [],
-          drafting: [],
-          app_prep: [],
-          revision: [],
-          submitted: [],
-          awarded: [],
-          rejected: [],
-        })
+      // If a profile is selected (query or X-Profile-Id), scope the pipeline strictly to it.
+      if (profile_id) {
+        if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
+        query += ` WHERE g.profile_id = ?`
+        params.push(String(profile_id))
+      } else {
+        const orgIds = await getAccessibleOrganizationIds(req.db, user)
+        if (!orgIds || orgIds.size === 0) {
+          return res.json({
+            discovered: [],
+            interested: [],
+            drafting: [],
+            app_prep: [],
+            revision: [],
+            submitted: [],
+            awarded: [],
+            rejected: [],
+          })
+        }
+        if (organization_id && !orgIds.has(String(organization_id))) {
+          return res.status(403).json({ error: 'Not authorized to access this organization' })
+        }
+        const placeholders = Array.from(orgIds).map(() => '?').join(',')
+        query += ` WHERE g.organization_id IN (${placeholders})`
+        params.push(...Array.from(orgIds))
       }
-      if (organization_id && !orgIds.has(String(organization_id))) {
-        return res.status(403).json({ error: 'Not authorized to access this organization' })
-      }
-      const placeholders = Array.from(orgIds).map(() => '?').join(',')
-      query += ` WHERE g.organization_id IN (${placeholders})`
-      params.push(...Array.from(orgIds))
+    } else if (profile_id) {
+      query += ` WHERE g.profile_id = ?`
+      params.push(String(profile_id))
     }
     
     if (organization_id) {
-      query += isAdminUser(user) ? ' WHERE g.organization_id = ?' : ' AND g.organization_id = ?';
+      query += query.includes('WHERE') ? ' AND g.organization_id = ?' : ' WHERE g.organization_id = ?';
       params.push(organization_id);
     }
     
