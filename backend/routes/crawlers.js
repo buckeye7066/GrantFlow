@@ -1334,6 +1334,143 @@ router.post('/jobs/:id/cancel', async (req, res) => {
   }
 })
 
+/**
+ * Admin: release stuck crawler locks (running jobs) for a profile or job id.
+ *
+ * This is a safety valve for cases where a worker crashed and left a job in "running"
+ * forever, blocking new crawls for that profile.
+ *
+ * POST /api/crawlers/jobs/unlock
+ * Body:
+ *  - profile_id?: string
+ *  - job_id?: string
+ *  - force?: boolean (when true, ignores age gating)
+ *  - max_age_hours?: number (default 24; only applies when force=false)
+ *  - status?: 'failed' | 'cancelled' (default 'failed')
+ *  - reason?: string
+ */
+router.post('/jobs/unlock', async (req, res) => {
+  const ctx = ensureAuth(req, res)
+  if (!ctx) return
+  if (!ctx.isAdmin) return res.status(403).json({ error: 'Only admin can unlock crawler jobs' })
+
+  const body = req.body ?? {}
+  const profileId = body.profile_id ? String(body.profile_id) : null
+  const jobId = body.job_id ? String(body.job_id) : null
+  const force = body.force === true || String(body.force || '').toLowerCase() === 'true'
+  const maxAgeHoursRaw = body.max_age_hours
+  const maxAgeHours =
+    Number.isFinite(Number(maxAgeHoursRaw)) && Number(maxAgeHoursRaw) > 0 ? Number(maxAgeHoursRaw) : 24
+  const targetStatus = String(body.status || 'failed').toLowerCase()
+  const status = targetStatus === 'cancelled' ? 'cancelled' : 'failed'
+  const reason = body.reason ? String(body.reason) : 'Admin unlock: stale running crawler job'
+
+  if (!profileId && !jobId) {
+    return res.status(400).json({ error: 'profile_id or job_id is required' })
+  }
+
+  try {
+    const now = Date.now()
+    const cutoffIso = new Date(now - maxAgeHours * 60 * 60 * 1000).toISOString()
+
+    // Find candidates (running only).
+    const where = []
+    const params = []
+    if (jobId) {
+      where.push('id = ?')
+      params.push(jobId)
+    }
+    if (profileId) {
+      where.push('profile_id = ?')
+      params.push(profileId)
+    }
+    where.push("status = 'running'")
+
+    const candidates = await req.db
+      .prepare(
+        `
+          SELECT id, type, profile_id, started_at, created_at, status
+          FROM crawler_jobs
+          WHERE ${where.join(' AND ')}
+        `,
+      )
+      .all(...params)
+
+    const toUnlock = (candidates || []).filter((job) => {
+      if (force) return true
+      const started = job.started_at ? new Date(job.started_at) : null
+      const created = job.created_at ? new Date(job.created_at) : null
+      const ref = started && !Number.isNaN(started.getTime()) ? started : created
+      if (!ref || Number.isNaN(ref.getTime())) {
+        // If we can't parse timestamps, err on unlocking only when force=true.
+        return false
+      }
+      return ref.toISOString() < cutoffIso
+    })
+
+    if (toUnlock.length === 0) {
+      return res.json({
+        ok: true,
+        unlocked: [],
+        message: force
+          ? 'No running jobs found for unlock.'
+          : `No running jobs older than ${maxAgeHours}h found. Use force=true to override.`,
+      })
+    }
+
+    const unlocked = []
+    for (const job of toUnlock) {
+      await req.db
+        .prepare(
+          `
+            UPDATE crawler_jobs
+            SET status = ?,
+                completed_at = CURRENT_TIMESTAMP,
+                error = COALESCE(?, error),
+                result_meta = COALESCE(?, result_meta)
+            WHERE id = ?
+              AND status = 'running'
+          `,
+        )
+        .run(
+          status,
+          reason,
+          JSON.stringify({
+            admin_unlock: {
+              at: new Date().toISOString(),
+              by: ctx.userId ?? ctx.email ?? 'admin',
+              force,
+              max_age_hours: maxAgeHours,
+            },
+          }),
+          job.id,
+        )
+      unlocked.push({ id: job.id, profile_id: job.profile_id ?? null, type: job.type ?? null })
+    }
+
+    console.warn('[crawlers/jobs] admin unlock', {
+      request_id: req.requestId || null,
+      by: ctx.userId ?? ctx.email ?? 'admin',
+      profile_id: profileId,
+      job_id: jobId,
+      force,
+      max_age_hours: maxAgeHours,
+      status,
+      unlocked_count: unlocked.length,
+      unlocked_ids: unlocked.map((j) => j.id).slice(0, 20),
+    })
+
+    return res.json({ ok: true, unlocked })
+  } catch (error) {
+    console.error('[crawlers/jobs] admin unlock failed', {
+      request_id: req.requestId || null,
+      message: error?.message || String(error),
+      stack: error?.stack,
+    })
+    return res.status(500).json(formatError(error))
+  }
+})
+
 router.patch('/jobs/:id', async (req, res) => {
   const ctx = ensureAuth(req, res)
   if (!ctx) return
