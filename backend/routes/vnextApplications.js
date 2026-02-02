@@ -13,6 +13,7 @@ import { attemptTransition } from '../vnext/stateMachine.js'
 import { computeMissingRequirements } from '../vnext/missingnessService.js'
 import { scoreApplication } from '../vnext/scoringService.js'
 import { writeAuditEvent } from '../vnext/auditEventsService.js'
+import { standardRateLimiter, mutationRateLimiter } from '../middleware/rateLimiting.js'
 
 const router = express.Router()
 
@@ -64,7 +65,7 @@ function normalizeAppRow(db, row) {
   }
 }
 
-router.get('/', async (req, res) => {
+router.get('/', standardRateLimiter, async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
   if (!requireVNext(req, res)) return
@@ -95,7 +96,7 @@ router.get('/', async (req, res) => {
   return res.json((rows || []).map((r) => normalizeAppRow(req.db, r)))
 })
 
-router.post('/', async (req, res) => {
+router.post('/', mutationRateLimiter, async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
   if (!requireVNext(req, res)) return
@@ -161,7 +162,7 @@ router.post('/', async (req, res) => {
   }
 })
 
-router.get('/:id', async (req, res) => {
+router.get('/:id', standardRateLimiter, async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
   if (!requireVNext(req, res)) return
@@ -176,7 +177,7 @@ router.get('/:id', async (req, res) => {
   return res.json(normalizeAppRow(req.db, row))
 })
 
-router.post('/:id/transition', async (req, res) => {
+router.post('/:id/transition', mutationRateLimiter, async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
   if (!requireVNext(req, res)) return
@@ -228,7 +229,7 @@ router.post('/:id/transition', async (req, res) => {
   return res.json({ ok: true, state: result.newState, application: normalizeAppRow(req.db, updated) })
 })
 
-router.get('/:id/finish-packet', async (req, res) => {
+router.get('/:id/finish-packet', standardRateLimiter, async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
   if (!requireVNext(req, res)) return
