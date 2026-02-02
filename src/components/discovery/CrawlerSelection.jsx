@@ -6,7 +6,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { 
   MapPin, Building2, GraduationCap, Heart, 
   HeartPulse,
-  Package, Users, Loader2, CheckCircle, Info, AlertTriangle
+  Users, Loader2, CheckCircle, Info, AlertTriangle
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { apiFetch } from '@/api/client';
@@ -52,14 +52,6 @@ const CRAWLER_CONFIGS = [
     description: 'Benefits for ECF CHOICES participants and support providers',
     details: 'Two branches: Individual benefits for participants and funding for family model CLS-FM homes and support services.',
     color: 'text-pink-600'
-  },
-  {
-    id: 'item_matching',
-    name: 'Item-Specific Funding',
-    icon: Package,
-    description: 'Finds funding for specific items like vehicles, equipment, or supplies',
-    details: 'Matches both the item request and profile criteria. Example: 15-passenger van for mission-minded nonprofit.',
-    color: 'text-orange-600'
   },
   {
     id: 'special_needs',
@@ -264,7 +256,8 @@ export default function CrawlerSelection({
             crawler_type: crawlerId,
             profile_id: profileId,
             profile_data: profileData,
-            item_request: itemRequest,
+            // Item-specific crawlers are only runnable from the Item Funding page.
+            item_request: null,
             min_match_score: minMatchScore
           })
         });
@@ -520,20 +513,6 @@ export default function CrawlerSelection({
               );
             })}
           </div>
-
-          {/* Item Request Alert */}
-          {itemRequest && (
-            <Alert>
-              <Package className="w-4 h-4" />
-              <AlertDescription>
-                <strong>Item Request:</strong> {itemRequest}
-                <br />
-                <span className="text-sm">
-                  Item-specific crawler will search for funding matching both this item and your profile.
-                </span>
-              </AlertDescription>
-            </Alert>
-          )}
 
           {/* Run Button */}
           <div className="flex justify-end pt-4 border-t">
