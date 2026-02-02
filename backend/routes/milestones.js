@@ -96,80 +96,77 @@ router.get('/', async (req, res) => {
   }
 })
 
-router.get('/:id', (req, res) => {
-  Promise.resolve()
-    .then(async () => {
-      const milestone = await ensureMilestoneAccess(req, res, req.params.id)
-      if (!milestone) return
-      res.json(milestone)
-    })
-    .catch((error) => res.status(500).json({ error: error.message }))
-});
+router.get('/:id', async (req, res) => {
+  try {
+    const milestone = await ensureMilestoneAccess(req, res, req.params.id)
+    if (!milestone) return
+    res.json(milestone)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
 
-router.post('/', (req, res) => {
-  Promise.resolve()
-    .then(async () => {
-      const user = requireAuthenticatedUser(req, res)
-      if (!user) return
+router.post('/', async (req, res) => {
+  try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
+    const id = crypto.randomUUID()
+    const { grant_id, title, description, due_date, type } = req.body
+    if (!grant_id) return res.status(400).json({ error: 'grant_id is required' })
+    const grant = await ensureGrantAccess(req, res, String(grant_id))
+    if (!grant) return
+    await req.db
+      .prepare('INSERT INTO milestones (id, grant_id, title, description, due_date, type) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, grant_id, title, description, due_date, type)
+    const milestone = await req.db.prepare('SELECT * FROM milestones WHERE id = ?').get(id)
+    res.status(201).json(milestone)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
 
-      const id = crypto.randomUUID();
-      const { grant_id, title, description, due_date, type } = req.body;
-      if (!grant_id) return res.status(400).json({ error: 'grant_id is required' })
+router.put('/:id', async (req, res) => {
+  try {
+    const existing = await ensureMilestoneAccess(req, res, req.params.id)
+    if (!existing) return
+    const { title, description, due_date, completed, type } = req.body
+    const completed_date = completed ? new Date().toISOString().split('T')[0] : null
+    await req.db
+      .prepare(
+        'UPDATE milestones SET title = ?, description = ?, due_date = ?, completed = ?, completed_date = ?, type = ? WHERE id = ?'
+      )
+      .run(title, description, due_date, Boolean(completed), completed_date, type, req.params.id)
+    const milestone = await req.db.prepare('SELECT * FROM milestones WHERE id = ?').get(req.params.id)
+    res.json(milestone)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
 
-      const grant = await ensureGrantAccess(req, res, String(grant_id))
-      if (!grant) return
+router.patch('/:id/complete', async (req, res) => {
+  try {
+    const existing = await ensureMilestoneAccess(req, res, req.params.id)
+    if (!existing) return
+    const completed_date = new Date().toISOString().split('T')[0]
+    await req.db
+      .prepare('UPDATE milestones SET completed = ?, completed_date = ? WHERE id = ?')
+      .run(true, completed_date, req.params.id)
+    const milestone = await req.db.prepare('SELECT * FROM milestones WHERE id = ?').get(req.params.id)
+    res.json(milestone)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
 
-      await req.db
-        .prepare('INSERT INTO milestones (id, grant_id, title, description, due_date, type) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(id, grant_id, title, description, due_date, type);
-      const milestone = await req.db.prepare('SELECT * FROM milestones WHERE id = ?').get(id);
-      res.status(201).json(milestone);
-    })
-    .catch((error) => res.status(500).json({ error: error.message }))
-});
-
-router.put('/:id', (req, res) => {
-  Promise.resolve()
-    .then(async () => {
-      const existing = await ensureMilestoneAccess(req, res, req.params.id)
-      if (!existing) return
-      const { title, description, due_date, completed, type } = req.body;
-      const completed_date = completed ? new Date().toISOString().split('T')[0] : null;
-      await req.db
-        .prepare(
-          'UPDATE milestones SET title = ?, description = ?, due_date = ?, completed = ?, completed_date = ?, type = ? WHERE id = ?',
-        )
-        .run(title, description, due_date, Boolean(completed), completed_date, type, req.params.id);
-      const milestone = await req.db.prepare('SELECT * FROM milestones WHERE id = ?').get(req.params.id);
-      res.json(milestone);
-    })
-    .catch((error) => res.status(500).json({ error: error.message }))
-});
-
-router.patch('/:id/complete', (req, res) => {
-  Promise.resolve()
-    .then(async () => {
-      const existing = await ensureMilestoneAccess(req, res, req.params.id)
-      if (!existing) return
-      const completed_date = new Date().toISOString().split('T')[0];
-      await req.db
-        .prepare('UPDATE milestones SET completed = ?, completed_date = ? WHERE id = ?')
-        .run(true, completed_date, req.params.id);
-      const milestone = await req.db.prepare('SELECT * FROM milestones WHERE id = ?').get(req.params.id);
-      res.json(milestone);
-    })
-    .catch((error) => res.status(500).json({ error: error.message }))
-});
-
-router.delete('/:id', (req, res) => {
-  Promise.resolve()
-    .then(async () => {
-      const existing = await ensureMilestoneAccess(req, res, req.params.id)
-      if (!existing) return
-      await req.db.prepare('DELETE FROM milestones WHERE id = ?').run(req.params.id);
-      res.json({ success: true });
-    })
-    .catch((error) => res.status(500).json({ error: error.message }))
-});
+router.delete('/:id', async (req, res) => {
+  try {
+    const existing = await ensureMilestoneAccess(req, res, req.params.id)
+    if (!existing) return
+    await req.db.prepare('DELETE FROM milestones WHERE id = ?').run(req.params.id)
+    res.json({ success: true })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
 
 export default router;
