@@ -35,6 +35,8 @@ import NewProject from "./NewProject";
 
 import GrantDetail from "./GrantDetail";
 import Apply from "./Apply";
+import VNextApplication from "./VNextApplication";
+import VNextFinishPacket from "./VNextFinishPacket";
 
 import InvoiceView from "./InvoiceView";
 
@@ -159,6 +161,8 @@ const PAGES = {
     NewProject: NewProject,
     
     GrantDetail: GrantDetail,
+    VNextApplication: VNextApplication,
+    VNextFinishPacket: VNextFinishPacket,
     
     InvoiceView: InvoiceView,
     
@@ -307,6 +311,8 @@ function LayoutRoutes() {
 
                 <Route path="/GrantDetail" element={withBoundary(<GrantDetail />, "GrantDetail")} />
                 <Route path="/Apply" element={withBoundary(<Apply />, "Apply")} />
+                <Route path="/VNextApplication" element={withBoundary(<VNextApplication />, "VNextApplication")} />
+                <Route path="/VNextFinishPacket" element={withBoundary(<VNextFinishPacket />, "VNextFinishPacket")} />
 
                 <Route path="/InvoiceView" element={withBoundary(<InvoiceView />, "InvoiceView")} />
 

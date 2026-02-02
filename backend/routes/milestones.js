@@ -52,75 +52,49 @@ router.get('/', async (req, res) => {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return
 
-    const { grant_id, completed, upcoming } = req.query;
-    let query = 'SELECT m.*, g.title as grant_title, g.organization_id as grant_organization_id FROM milestones m LEFT JOIN grants g ON m.grant_id = g.id WHERE 1=1';
-    const params = [];
-    
+    const { grant_id, completed, upcoming } = req.query
+    let query =
+      'SELECT m.*, g.title as grant_title, g.organization_id as grant_organization_id FROM milestones m LEFT JOIN grants g ON m.grant_id = g.id WHERE 1=1'
+    const params = []
+
+    // If grant_id specified, validate access to that grant
     if (grant_id) {
-      Promise.resolve()
-        .then(async () => {
-          const grant = await ensureGrantAccess(req, res, String(grant_id))
-          if (!grant) return
-          query += ' AND m.grant_id = ?'
-          params.push(String(grant_id))
-          // continue building below
-          if (completed === 'true') query += ' AND m.completed = 1';
-          if (completed === 'false') query += req.db?.dialect === 'postgres' ? ' AND m.completed = FALSE' : ' AND m.completed = 0';
-          if (upcoming === 'true')
-            query +=
-              req.db?.dialect === 'postgres'
-                ? ' AND m.due_date >= CURRENT_DATE AND m.completed = FALSE'
-                : " AND m.due_date >= date('now') AND m.completed = 0";
-
-          query += ' ORDER BY m.due_date ASC';
-          const milestones = await req.db.prepare(query).all(...params);
-          res.json(milestones);
-        })
-        .catch((error) => res.status(500).json({ error: error.message }))
-      return
+      const grant = await ensureGrantAccess(req, res, String(grant_id))
+      if (!grant) return // ensureGrantAccess already sent 403/404
+      query += ' AND m.grant_id = ?'
+      params.push(String(grant_id))
+    } else if (!isAdminUser(user)) {
+      // No grant specified: limit to accessible organizations
+      const orgIds = await getAccessibleOrganizationIds(req.db, user)
+      if (!orgIds || orgIds.size === 0) return res.json([])
+      const placeholders = Array.from(orgIds)
+        .map(() => '?')
+        .join(',')
+      // Milestones can be org-scoped or grant-scoped; filter by either
+      query += ` AND (COALESCE(m.organization_id, g.organization_id) IN (${placeholders}) OR m.grant_id IN (SELECT id FROM grants WHERE organization_id IN (${placeholders})))`
+      params.push(...Array.from(orgIds))
+      params.push(...Array.from(orgIds))
     }
 
-    // No grant filter: restrict to accessible organizations for non-admins.
-    if (!isAdminUser(user)) {
-      Promise.resolve()
-        .then(async () => {
-          const orgIds = await getAccessibleOrganizationIds(req.db, user)
-          if (!orgIds || orgIds.size === 0) return res.json([])
-          const placeholders = Array.from(orgIds).map(() => '?').join(',')
-          query += ` AND g.organization_id IN (${placeholders})`
-          params.push(...Array.from(orgIds))
-
-          if (completed === 'true') query += ' AND m.completed = 1';
-          if (completed === 'false') query += req.db?.dialect === 'postgres' ? ' AND m.completed = FALSE' : ' AND m.completed = 0';
-          if (upcoming === 'true')
-            query +=
-              req.db?.dialect === 'postgres'
-                ? ' AND m.due_date >= CURRENT_DATE AND m.completed = FALSE'
-                : " AND m.due_date >= date('now') AND m.completed = 0";
-
-          query += ' ORDER BY m.due_date ASC';
-          const milestones = await req.db.prepare(query).all(...params);
-          res.json(milestones);
-        })
-        .catch((error) => res.status(500).json({ error: error.message }))
-      return
+    // Apply filter conditions
+    if (completed === 'true') query += ' AND m.completed = 1'
+    if (completed === 'false') {
+      query += req.db?.dialect === 'postgres' ? ' AND m.completed = FALSE' : ' AND m.completed = 0'
     }
-
-    if (completed === 'true') query += ' AND m.completed = 1';
-    if (completed === 'false') query += req.db?.dialect === 'postgres' ? ' AND m.completed = FALSE' : ' AND m.completed = 0';
-    if (upcoming === 'true')
+    if (upcoming === 'true') {
       query +=
         req.db?.dialect === 'postgres'
           ? ' AND m.due_date >= CURRENT_DATE AND m.completed = FALSE'
-          : " AND m.due_date >= date('now') AND m.completed = 0";
-    
-    query += ' ORDER BY m.due_date ASC';
-    const milestones = await req.db.prepare(query).all(...params);
-    res.json(milestones);
+          : " AND m.due_date >= date('now') AND m.completed = 0"
+    }
+
+    query += ' ORDER BY m.due_date ASC'
+    const milestones = await req.db.prepare(query).all(...params)
+    res.json(milestones)
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message })
   }
-});
+})
 
 router.get('/:id', (req, res) => {
   Promise.resolve()
