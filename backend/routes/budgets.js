@@ -1,6 +1,7 @@
 import express from 'express'
 import crypto from 'crypto'
 import { requireAuthenticatedUser, ensureGrantAccess, getAccessibleOrganizationIds } from '../utils/accessControl.js'
+import { ensureProfileAccess } from '../utils/accessControl.js'
 
 const router = express.Router()
 
@@ -66,14 +67,22 @@ router.get('/', async (req, res) => {
     }
 
     if (!req.ctx?.isAdmin) {
-      const allowed = req.ctx?.accessibleOrgIds ?? (await getAccessibleOrganizationIds(req.db, user))
-      const allowedList = allowed === null ? null : Array.from(allowed || [])
-      if (allowedList && allowedList.length === 0) return res.json([])
-      if (allowedList) {
-        const placeholders = allowedList.map(() => '?').join(', ')
-        clauses.push(`g.organization_id IN (${placeholders})`)
-        params.push(...allowedList)
+      // Profile-scoped access: Only show budgets for grants in the active profile
+      const profileId = req.ctx?.activeProfileId
+      if (!profileId) {
+        return res.json([]) // No active profile context = no budgets visible
       }
+
+      // Validate that the user can actually access this profile
+      const canAccess = await ensureProfileAccess(req, res, String(profileId))
+      if (!canAccess) {
+        return // ensureProfileAccess already sent 403
+      }
+
+      // Filter by profile_id: only grants belonging to the active profile
+      // The JOIN on grants ensures we get the correct profile_id from the grant
+      clauses.push('g.profile_id = ?')
+      params.push(String(profileId))
     }
 
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
