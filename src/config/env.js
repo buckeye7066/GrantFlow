@@ -16,6 +16,9 @@ const EnvSchema = z.object({
 
   VITE_CANONICAL_HOST: z.string().optional(),
   VITE_CANONICAL_HOST_STRICT: z.string().optional(),
+
+  // Feature flags (frontend-gated UI only; backend remains authoritative)
+  VITE_SHOULDERS_VNEXT: z.string().optional(),
 })
 
 export const env = (() => {
@@ -27,6 +30,7 @@ export const env = (() => {
     VITE_API_URL: import.meta.env.VITE_API_URL,
     VITE_CANONICAL_HOST: import.meta.env.VITE_CANONICAL_HOST,
     VITE_CANONICAL_HOST_STRICT: import.meta.env.VITE_CANONICAL_HOST_STRICT,
+    VITE_SHOULDERS_VNEXT: import.meta.env.VITE_SHOULDERS_VNEXT,
   }
 
   const parsed = EnvSchema.safeParse(raw)
@@ -41,6 +45,9 @@ export const env = (() => {
   const apiUrlRaw = String(raw.VITE_API_URL || '').trim()
   const apiUrl = apiUrlRaw ? apiUrlRaw : ''
 
+  const shouldersVnext =
+    String(raw.VITE_SHOULDERS_VNEXT || '').trim().toLowerCase() === 'true'
+
   return {
     isDev: !!raw.DEV,
     isProd: !!raw.PROD,
@@ -48,5 +55,6 @@ export const env = (() => {
     apiUrl,
     canonicalHost,
     canonicalStrict,
+    shouldersVnext,
   }
 })()

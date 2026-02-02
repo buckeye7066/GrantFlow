@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { useSearchParams } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router-dom"
 import {
   AlertTriangle,
   Building,
@@ -42,6 +42,7 @@ import { createGrant } from "@/api/grants"
 import { createDocument } from "@/api/documents"
 import { apiFetch } from "@/api/client"
 import { cn } from "@/lib/utils"
+import { env } from "@/config/env.js"
 
 const NOT_AVAILABLE = 'N/A'
 
@@ -576,6 +577,9 @@ function OpportunityDetail({
   onAddToPipeline,
   isAddingToPipeline = false,
   canAddToPipeline = false,
+  onCreateVNext,
+  isCreatingVNext = false,
+  canCreateVNext = false,
   selectedProfileName,
   profiles = [],
   selectedProfileId,
@@ -616,6 +620,15 @@ function OpportunityDetail({
       await onAddToPipeline(opportunity)
     } catch {
       // Errors are surfaced via toast in the caller.
+    }
+  }
+
+  const handleCreateVNextClick = async () => {
+    if (!onCreateVNext) return
+    try {
+      await onCreateVNext(opportunity)
+    } catch {
+      // surfaced in caller
     }
   }
 
@@ -929,6 +942,17 @@ function OpportunityDetail({
                 </>
               )}
             </Button>
+            {env.shouldersVnext ? (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!canCreateVNext || isCreatingVNext || !onCreateVNext}
+                onClick={handleCreateVNextClick}
+              >
+                {isCreatingVNext ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                vNext: Create application
+              </Button>
+            ) : null}
             <Button
               variant="default"
               size="sm"
@@ -947,6 +971,7 @@ function OpportunityDetail({
 
 export default function FundingOpportunities() {
   const { toast } = useToast()
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const geoRunIdFromUrl = String(searchParams.get("geo_run_id") || searchParams.get("run_id") || "").trim()
 
@@ -962,6 +987,7 @@ export default function FundingOpportunities() {
   const [selectedOpportunity, setSelectedOpportunity] = useState(null)
   const [addingOpportunityId, setAddingOpportunityId] = useState(null)
   const [savingOpportunityId, setSavingOpportunityId] = useState(null)
+  const [creatingVNextOpportunityId, setCreatingVNextOpportunityId] = useState(null)
   const [currentPage, setCurrentPage] = useState(1)
   const ITEMS_PER_PAGE = 50
 
@@ -1227,6 +1253,52 @@ export default function FundingOpportunities() {
       throw error
     } finally {
       setAddingOpportunityId(null)
+    }
+  }
+
+  const handleCreateVNextApplication = async (opportunity) => {
+    if (!env.shouldersVnext) return
+    if (!selectedProfile || !filters.profileId || filters.profileId === "all") {
+      toast({
+        variant: "destructive",
+        title: "Select a profile first",
+        description: "Choose a single profile to create a vNext application.",
+      })
+      return
+    }
+
+    setCreatingVNextOpportunityId(opportunity.id)
+    try {
+      const created = await apiFetch("/api/vnext/applications", {
+        method: "POST",
+        headers: {
+          "X-Profile-Id": selectedProfile.id,
+        },
+        body: JSON.stringify({
+          profile_id: selectedProfile.id,
+          opportunity_id: opportunity.id,
+        }),
+      })
+
+      if (!created?.id) throw new Error("Create failed (missing id)")
+
+      toast({
+        title: "vNext application created",
+        description: "Opening vNext application view.",
+      })
+      setSelectedOpportunity(null)
+      navigate(`/VNextApplication?id=${encodeURIComponent(created.id)}`)
+      return created
+    } catch (error) {
+      const msg = error?.details?.error?.message || error?.details?.message || error?.message || "Create failed"
+      toast({
+        variant: "destructive",
+        title: "vNext create failed",
+        description: String(msg),
+      })
+      throw error
+    } finally {
+      setCreatingVNextOpportunityId(null)
     }
   }
 
@@ -1712,6 +1784,12 @@ export default function FundingOpportunities() {
               filters.profileId !== "all",
           )
         }
+        onCreateVNext={handleCreateVNextApplication}
+        isCreatingVNext={
+          Boolean(selectedOpportunity) &&
+          creatingVNextOpportunityId === selectedOpportunity.id
+        }
+        canCreateVNext={Boolean(selectedProfile && filters.profileId && filters.profileId !== "all")}
         selectedProfileName={selectedProfile?.display_name}
         profiles={profiles}
         selectedProfileId={filters.profileId}
