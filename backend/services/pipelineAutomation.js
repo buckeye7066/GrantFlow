@@ -205,12 +205,53 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
   const parameters = job.parameters ?? {}
   const grantId = parameters.grant_id
   const organizationId = parameters.organization_id
+  const profileId = job?.profile_id ?? parameters.profile_id ?? null
+  const wantsAll =
+    parameters.process_all === true ||
+    String(parameters.process_all || '').toLowerCase() === 'true' ||
+    parameters.all === true ||
+    String(parameters.all || '').toLowerCase() === 'true'
 
   let grants = []
 
   if (grantId) {
     const context = await fetchGrantContext(db, grantId)
     grants.push(context)
+  } else if (profileId) {
+    // Profile-scoped automation: process grants for a single profile.
+    // This is the expected behavior for the Pipeline UI "Process All" action.
+    const limitRaw = parameters.limit
+    const defaultLimit = wantsAll ? 2000 : 200
+    const limit =
+      Number.isFinite(Number(limitRaw)) && Number(limitRaw) > 0 ? Number(limitRaw) : defaultLimit
+
+    let rows = []
+    try {
+      rows = await db
+        .prepare(
+          `
+            SELECT id
+            FROM grants
+            WHERE profile_id = ?
+              AND status IN ('discovered', 'interested', 'drafting', 'app_prep', 'revision')
+            ORDER BY deadline IS NULL, deadline ASC
+            LIMIT ?
+          `,
+        )
+        .all(profileId, limit)
+    } catch (error) {
+      // Back-compat: if older DBs don't have grants.profile_id, fall back to organizationId path.
+      console.warn('[pipeline_automation] profile-scoped query failed; falling back', {
+        profile_id: profileId,
+        error: error?.message || String(error),
+      })
+      rows = []
+    }
+
+    grants = []
+    for (const row of rows) {
+      grants.push(await fetchGrantContext(db, row.id))
+    }
   } else if (organizationId) {
     const rows = await db
       .prepare(
@@ -238,7 +279,15 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
           LIMIT ?
         `,
       )
-      .all(parameters.limit ?? 10)
+      .all(
+        (() => {
+          const limitRaw = parameters.limit
+          const defaultLimit = wantsAll ? 2000 : 10
+          const limit =
+            Number.isFinite(Number(limitRaw)) && Number(limitRaw) > 0 ? Number(limitRaw) : defaultLimit
+          return limit
+        })(),
+      )
 
     grants = []
     for (const row of rows) {

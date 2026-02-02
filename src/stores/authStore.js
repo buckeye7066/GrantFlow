@@ -191,6 +191,48 @@ export const useAuthStore = create((set, get) => ({
     set({ ...initialState, preferredAuthMethod })
   },
 
+  refreshProfiles: async ({ reason = 'manual', force = false } = {}) => {
+    const state = get()
+    const isAdmin = Boolean(state?.user?.is_admin)
+    const prevCount = Array.isArray(state?.profiles) ? state.profiles.length : 0
+
+    if (!state?.isAuthenticated) return []
+    if (!force && !isAdmin && prevCount > 0) return state.profiles
+
+    try {
+      // Admins should see all profiles; backend will scope automatically for non-admins.
+      const url = isAdmin ? '/api/profiles?limit=1000' : '/api/profiles'
+      const data = await apiFetch(url)
+      const profiles = Array.isArray(data) ? data : []
+
+      set({ profiles })
+
+      // Safety: if the active profile no longer exists in the accessible list, reset it.
+      const active = state.activeProfileId
+      if (active && !profiles.some((p) => String(p?.id) === String(active))) {
+        const nextActive = isAdmin ? null : (profiles[0]?.id ?? null)
+        base44.setActiveProfileId?.(nextActive)
+        set({ activeProfileId: nextActive })
+      }
+
+      if (isAdmin && (force || profiles.length !== prevCount)) {
+        console.info('[authStore] refreshed profiles', {
+          reason,
+          previous_count: prevCount,
+          count: profiles.length,
+        })
+      }
+
+      return profiles
+    } catch (error) {
+      console.warn('[authStore] failed to refresh profiles', {
+        reason,
+        error: error?.message || String(error),
+      })
+      return Array.isArray(state?.profiles) ? state.profiles : []
+    }
+  },
+
   setAuthenticatedUser: (payload) => {
     if (!payload) {
       const preferredAuthMethod = get().preferredAuthMethod
@@ -228,6 +270,12 @@ export const useAuthStore = create((set, get) => ({
         sessionMessage: null,
         needsProfileCreation,
       }))
+
+      // Always refresh profiles after canonical auth bootstrap.
+      // This keeps the sidebar selector accurate (admins should see ALL profiles).
+      get()
+        .refreshProfiles({ reason: 'auth_bootstrap', force: isAdmin })
+        .catch(() => {})
       return
     }
 
@@ -261,6 +309,11 @@ export const useAuthStore = create((set, get) => ({
           needsProfileCreation: false, // Admins don't need profiles
           hasSeenOnboarding: true, // Skip onboarding for admins
         })
+
+        // Ensure admins see all profiles (server-backed).
+        get()
+          .refreshProfiles({ reason: 'admin_login', force: true })
+          .catch(() => {})
         
         // Trigger crawler jobs asynchronously (fire-and-forget)
         triggerAdminCrawlers().catch(err => {
@@ -283,6 +336,13 @@ export const useAuthStore = create((set, get) => ({
         preferredAuthMethod: get().preferredAuthMethod,
         needsProfileCreation,
       })
+
+      // If login payload looks sparse, refresh from server so profile dropdown matches reality.
+      if (profiles.length <= 1) {
+        get()
+          .refreshProfiles({ reason: 'post_login_refresh', force: false })
+          .catch(() => {})
+      }
       return
     }
 
@@ -306,6 +366,11 @@ export const useAuthStore = create((set, get) => ({
         needsProfileCreation: false, // Admins don't need profiles
         hasSeenOnboarding: true, // Skip onboarding for admins
       })
+
+      // Legacy admin payload: still hydrate the full profile list for the sidebar selector.
+      get()
+        .refreshProfiles({ reason: 'legacy_admin_login', force: true })
+        .catch(() => {})
       
       // Trigger crawler jobs asynchronously (fire-and-forget)
       triggerAdminCrawlers().catch(err => {
