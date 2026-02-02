@@ -57,6 +57,22 @@ export default function Pipeline() {
 
   const selectedProfileOrgId = selectedProfile?.organization_id ?? null
 
+  // SECURITY / DATA INTEGRITY:
+  // If the URL/local state carries an invalid profile id (not in the accessible profile list),
+  // do NOT apply it. This prevents cross-profile bleed from stale links/localStorage.
+  useEffect(() => {
+    if (!selectedProfileId || selectedProfileId === 'all') return
+    if (profiles.length === 0) return
+    const ok = profiles.some((p) => String(p?.id) === String(selectedProfileId))
+    if (!ok) {
+      console.warn('[Pipeline] Invalid selectedProfileId (not in accessible profiles); resetting', {
+        selectedProfileId,
+        profileCount: profiles.length,
+      })
+      setSelectedProfileId('all')
+    }
+  }, [profiles, selectedProfileId])
+
   // Initialize selectedProfileId from URL.
   // Back-compat: if older links passed organization_id, try mapping it to a profile id.
   useEffect(() => {
@@ -186,12 +202,11 @@ export default function Pipeline() {
   const scopedGrants = useMemo(() => {
     if (!selectedProfileId || selectedProfileId === 'all') return grants
     return (Array.isArray(grants) ? grants : []).filter((g) => {
-      // Prefer profile_id when present; fall back to org_id for older rows.
-      if (g?.profile_id) return String(g.profile_id) === String(selectedProfileId)
-      if (selectedProfileOrgId) return String(g?.organization_id || '') === String(selectedProfileOrgId)
-      return false
+      // CRITICAL: When a specific profile is selected, ONLY show grants explicitly assigned to it.
+      // Do NOT fall back to organization_id, which can cause cross-profile leakage when orgs are shared.
+      return Boolean(g?.profile_id) && String(g.profile_id) === String(selectedProfileId)
     })
-  }, [grants, selectedProfileId, selectedProfileOrgId])
+  }, [grants, selectedProfileId])
 
   const filteredGrants = useFilteredGrants(scopedGrants, filters, 'all');
 
