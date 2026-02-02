@@ -1,8 +1,42 @@
 import express from 'express'
 import crypto from 'crypto'
-import { requireAuthenticatedUser, ensureOrganizationAccess, getAccessibleOrganizationIds } from '../utils/accessControl.js'
+import {
+  requireAuthenticatedUser,
+  ensureOrganizationAccess,
+  ensureProfileAccess,
+  getAccessibleOrganizationIds,
+} from '../utils/accessControl.js'
 
 const router = express.Router()
+
+let contactsHasProfileIdColumnCache = null
+async function contactsHasProfileIdColumn(db) {
+  if (contactsHasProfileIdColumnCache !== null) return contactsHasProfileIdColumnCache
+  try {
+    if (db?.dialect === 'postgres') {
+      const row = await db
+        .prepare(
+          `
+            SELECT 1 AS ok
+            FROM information_schema.columns
+            WHERE table_name = 'contacts' AND column_name = 'profile_id'
+            LIMIT 1
+          `,
+        )
+        .get()
+      contactsHasProfileIdColumnCache = Boolean(row?.ok)
+      return contactsHasProfileIdColumnCache
+    }
+
+    // sqlite
+    const rows = await db.prepare(`PRAGMA table_info(contacts)`).all()
+    contactsHasProfileIdColumnCache = (rows || []).some((r) => String(r?.name || '') === 'profile_id')
+    return contactsHasProfileIdColumnCache
+  } catch {
+    contactsHasProfileIdColumnCache = false
+    return false
+  }
+}
 
 function normalizeLimit(val, fallback = 200) {
   const n = Number.parseInt(String(val ?? ''), 10)
@@ -18,9 +52,11 @@ router.get('/', async (req, res) => {
     const limit = normalizeLimit(req.query.limit, 500)
     const orgId = req.query.organization_id ? String(req.query.organization_id) : null
     const id = req.query.id ? String(req.query.id) : null
+    const queryProfileIdRaw = req.query.profile_id ? String(req.query.profile_id) : null
+    const activeProfileId = req.ctx?.activeProfileId ? String(req.ctx.activeProfileId) : null
 
-    // SECURITY: Contacts are org-scoped (table has no profile_id). If the user is operating under an
-    // active profile context, log for audit/debugging to make cross-profile intent explicit.
+    // SECURITY: Contacts are org-scoped by default. When `contacts.profile_id` is set, contacts become
+    // profile-scoped. We log access under active profile context to make intent explicit.
     if (!req.ctx?.isAdmin && req.ctx?.activeProfileId) {
       console.info('[contacts] list accessed by profile', {
         userId: req.ctx.userId,
@@ -53,6 +89,23 @@ router.get('/', async (req, res) => {
         const placeholders = allowedList.map(() => '?').join(', ')
         clauses.push(`organization_id IN (${placeholders})`)
         params.push(...allowedList)
+      }
+
+      // Profile-aware filtering (Option B):
+      // - If contacts.profile_id is set, only allow it to appear when it matches the active/requested profile.
+      // - If contacts.profile_id is NULL, treat as org-shared (legacy) and allow it for all profiles in org.
+      // This prevents cross-profile confusion/leakage once profile_id is populated, without breaking legacy rows.
+      const effectiveProfileId = queryProfileIdRaw || activeProfileId || null
+      if (effectiveProfileId) {
+        const hasColumn = await contactsHasProfileIdColumn(req.db)
+        if (!hasColumn) {
+          // Migration not applied yet; keep legacy org-scoped behavior (but logging above still records profile context).
+        } else {
+          const canAccess = await ensureProfileAccess(req, res, String(effectiveProfileId))
+          if (!canAccess) return
+          clauses.push('(profile_id IS NULL OR profile_id = ?)')
+          params.push(String(effectiveProfileId))
+        }
       }
     }
 
@@ -104,27 +157,64 @@ router.post('/', async (req, res) => {
     const id = data.id ? String(data.id) : crypto.randomUUID()
     const name = String(data.name || '').trim()
     if (!name) return res.status(400).json({ error: 'name required' })
+    const profileId = data.profile_id ? String(data.profile_id) : null
 
-    await req.db
-      .prepare(
-        `
-          INSERT INTO contacts (
-            id, organization_id,
-            name, title, email, phone,
-            type, notes
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-      )
-      .run(
-        id,
-        orgId,
-        name,
-        data.title ?? null,
-        data.email ?? null,
-        data.phone ?? null,
-        data.type ?? null,
-        data.notes ?? null,
-      )
+    if (profileId) {
+      const hasColumn = await contactsHasProfileIdColumn(req.db)
+      if (!hasColumn) return res.status(400).json({ error: 'profile_id is not supported (migration pending)' })
+      const ok = await ensureProfileAccess(req, res, profileId)
+      if (!ok) return
+      const row = await req.db.prepare('SELECT organization_id FROM profiles WHERE id = ?').get(profileId)
+      if (!row) return res.status(400).json({ error: 'profile_id not found' })
+      if (String(row.organization_id || '') !== String(orgId)) {
+        return res.status(400).json({ error: 'profile_id must belong to the same organization_id' })
+      }
+    }
+
+    if (profileId) {
+      await req.db
+        .prepare(
+          `
+            INSERT INTO contacts (
+              id, organization_id, profile_id,
+              name, title, email, phone,
+              type, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `,
+        )
+        .run(
+          id,
+          orgId,
+          profileId,
+          name,
+          data.title ?? null,
+          data.email ?? null,
+          data.phone ?? null,
+          data.type ?? null,
+          data.notes ?? null,
+        )
+    } else {
+      await req.db
+        .prepare(
+          `
+            INSERT INTO contacts (
+              id, organization_id,
+              name, title, email, phone,
+              type, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `,
+        )
+        .run(
+          id,
+          orgId,
+          name,
+          data.title ?? null,
+          data.email ?? null,
+          data.phone ?? null,
+          data.type ?? null,
+          data.notes ?? null,
+        )
+    }
 
     const row = await req.db.prepare('SELECT * FROM contacts WHERE id = ?').get(id)
     return res.status(201).json(row)
@@ -147,12 +237,34 @@ router.put('/:id', async (req, res) => {
     const name = data.name !== undefined ? String(data.name || '').trim() : null
     if (data.name !== undefined && !name) return res.status(400).json({ error: 'name required' })
 
+    const wantsProfileUpdate = Object.prototype.hasOwnProperty.call(data, 'profile_id')
+    const profileId = wantsProfileUpdate ? (data.profile_id ? String(data.profile_id) : null) : null
+
+    if (wantsProfileUpdate) {
+      const hasColumn = await contactsHasProfileIdColumn(req.db)
+      if (!hasColumn) return res.status(400).json({ error: 'profile_id is not supported (migration pending)' })
+    }
+
+    if (wantsProfileUpdate && profileId) {
+      const ok = await ensureProfileAccess(req, res, String(profileId))
+      if (!ok) return
+      const row = await req.db.prepare('SELECT organization_id FROM profiles WHERE id = ?').get(String(profileId))
+      if (!row) return res.status(400).json({ error: 'profile_id not found' })
+      if (String(row.organization_id || '') !== String(existing.organization_id || '')) {
+        return res.status(400).json({ error: 'profile_id must belong to the same organization_id' })
+      }
+    }
+
+    const setProfileSql = wantsProfileUpdate ? 'profile_id = ?,' : ''
+    const profileParamList = wantsProfileUpdate ? [profileId] : []
+
     await req.db
       .prepare(
         `
           UPDATE contacts
           SET updated_at = CURRENT_TIMESTAMP,
               name = COALESCE(?, name),
+              ${setProfileSql}
               title = COALESCE(?, title),
               email = COALESCE(?, email),
               phone = COALESCE(?, phone),
@@ -163,6 +275,7 @@ router.put('/:id', async (req, res) => {
       )
       .run(
         name,
+        ...profileParamList,
         data.title ?? null,
         data.email ?? null,
         data.phone ?? null,
