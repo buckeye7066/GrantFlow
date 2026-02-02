@@ -67,6 +67,16 @@ export default function ProposalEditor({ grant, organization }) {
   const sectionKeySet = useMemo(() => new Set((sections || []).map((s) => String(s.section_key))), [sections])
 
   useEffect(() => {
+    const handler = (event) => {
+      const sectionKey = event?.detail?.sectionKey
+      if (!sectionKey) return
+      setActiveSectionKey(String(sectionKey))
+    }
+    window.addEventListener('applyEngine:focusSection', handler)
+    return () => window.removeEventListener('applyEngine:focusSection', handler)
+  }, [])
+
+  useEffect(() => {
     if (!activeSectionKey && sections.length > 0) {
       setActiveSectionKey(String(sections[0].section_key))
     }
@@ -259,9 +269,71 @@ export default function ProposalEditor({ grant, organization }) {
                 Validation {validationResult.ready ? 'Ready' : 'Needs work'}
               </AlertTitle>
               <AlertDescription className="text-sm mt-2">
-                {validationResult.ready
-                  ? 'All checklist items are complete and sections are filled.'
-                  : 'Some checklist items are incomplete or sections are empty. See the Submission Assistant for details.'}
+                {validationResult.ready ? (
+                  'All checklist items are complete and sections are filled.'
+                ) : (
+                  <div className="space-y-3">
+                    <p>Fix the items below, then click Validate again.</p>
+
+                    {validationResult?.missing?.no_sections ? (
+                      <div>
+                        <p className="font-medium">No sections created</p>
+                        <p className="text-xs text-amber-800">
+                          Use <span className="font-semibold">Auto-populate</span> or add a section to begin drafting.
+                        </p>
+                      </div>
+                    ) : null}
+
+                    {Array.isArray(validationResult?.missing?.empty_sections) && validationResult.missing.empty_sections.length > 0 ? (
+                      <div>
+                        <p className="font-medium">Empty sections</p>
+                        <ul className="mt-1 space-y-1 list-disc ml-5">
+                          {validationResult.missing.empty_sections.map((s) => (
+                            <li key={s.section_key}>
+                              <button
+                                type="button"
+                                className="underline underline-offset-2 hover:no-underline"
+                                onClick={() => setActiveSectionKey(String(s.section_key))}
+                              >
+                                {s.title || s.section_key}
+                              </button>
+                              <span className="text-xs text-amber-800"> — add at least a few sentences</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+
+                    {Array.isArray(validationResult?.missing?.checklist) && validationResult.missing.checklist.length > 0 ? (
+                      <div>
+                        <p className="font-medium">Incomplete checklist items</p>
+                        <ul className="mt-1 space-y-1 list-disc ml-5">
+                          {validationResult.missing.checklist.map((i) => (
+                            <li key={i.key}>
+                              <span className="font-medium">{i.label || i.key}</span>
+                              <span className="text-xs text-amber-800"> — status: {i.status || 'pending'}</span>
+                            </li>
+                          ))}
+                        </ul>
+                        <p className="text-xs text-amber-800 mt-1">Use “Submit / Mark Submitted” to review checklist + exports.</p>
+                      </div>
+                    ) : null}
+
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <Button size="sm" variant="outline" onClick={() => setShowSubmissionAssistant(true)} disabled={!applicationId}>
+                        View details
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => autoPopulateMutation.mutate()}
+                        disabled={!applicationId || autoPopulateMutation.isPending}
+                      >
+                        Auto-populate
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </AlertDescription>
             </Alert>
           ) : null}
