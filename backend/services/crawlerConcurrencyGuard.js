@@ -13,6 +13,41 @@ import { logFailedJob } from './deadLetterQueue.js'
 const MAX_GLOBAL_CONCURRENT_CRAWLERS = parseInt(process.env.MAX_CONCURRENT_CRAWLERS || '10', 10)
 
 /**
+ * Stale running-job cleanup
+ *
+ * We treat "running" jobs older than a threshold as orphaned (server crash, lost worker, etc).
+ * This prevents permanent per-profile locks.
+ *
+ * Defaults:
+ * - stale threshold: 24h (matches product expectation: "running > 24 hours" is stale)
+ * - cleanup interval: 5 minutes (best-effort; throttled per process)
+ */
+const STALE_RUNNING_MS = parseInt(process.env.CRAWLER_STALE_RUNNING_MS || String(24 * 60 * 60 * 1000), 10)
+const STALE_CLEANUP_INTERVAL_MS = parseInt(process.env.CRAWLER_STALE_CLEANUP_INTERVAL_MS || String(5 * 60 * 1000), 10)
+let lastStaleCleanupAtMs = 0
+
+async function maybeCleanupStaleRunningJobs(db) {
+  // Throttle cleanup to keep dispatch cheap.
+  const now = Date.now()
+  if (STALE_CLEANUP_INTERVAL_MS > 0 && now - lastStaleCleanupAtMs < STALE_CLEANUP_INTERVAL_MS) return 0
+  lastStaleCleanupAtMs = now
+
+  try {
+    const cleaned = await cleanupStaleCrawlers(db, STALE_RUNNING_MS)
+    if (cleaned > 0) {
+      console.warn('[crawler-concurrency] Cleaned stale running jobs (unblocked locks)', {
+        cleaned,
+        stale_running_ms: STALE_RUNNING_MS,
+      })
+    }
+    return cleaned
+  } catch (error) {
+    console.error('[crawler-concurrency] Stale cleanup failed (ignored)', error?.message || String(error))
+    return 0
+  }
+}
+
+/**
  * Check if a profile already has a running crawler
  * @param {object} db - Database connection
  * @param {string} profileId - Profile ID
@@ -20,6 +55,7 @@ const MAX_GLOBAL_CONCURRENT_CRAWLERS = parseInt(process.env.MAX_CONCURRENT_CRAWL
  */
 export async function hasRunningCrawler(db, profileId, { excludeJobId } = {}) {
   if (!profileId) return false
+  await maybeCleanupStaleRunningJobs(db)
   
   const hasExclude = Boolean(excludeJobId)
   const sql = hasExclude
@@ -76,6 +112,8 @@ export async function getRunningCrawlerCount(db) {
  * @returns {Promise<object|null>} { allowed: boolean, reason?: string, existingJobId?: string }
  */
 export async function acquireCrawlerLock(db, profileId, jobType, { jobId } = {}) {
+  await maybeCleanupStaleRunningJobs(db)
+
   // Check profile-level concurrency
   const hasJobId = Boolean(jobId)
   const sql = hasJobId
@@ -139,26 +177,40 @@ export async function acquireCrawlerLock(db, profileId, jobType, { jobId } = {})
  * Jobs stuck in 'running' for > staleThresholdMs are considered orphaned
  * 
  * @param {object} db - Database connection
- * @param {number} staleThresholdMs - Time in ms before a job is considered stale (default: 30 minutes)
+ * @param {number} staleThresholdMs - Time in ms before a job is considered stale
  * @returns {Promise<number>} Number of jobs marked as failed
  */
 export async function cleanupStaleCrawlers(db, staleThresholdMs = 30 * 60 * 1000) {
-  const staleThreshold = new Date(Date.now() - staleThresholdMs).toISOString()
+  const thresholdDate = new Date(Date.now() - staleThresholdMs)
+  const thresholdIso = thresholdDate.toISOString()
+  const thresholdSqlite = thresholdIso.replace('T', ' ').replace('Z', '').replace(/\.\d+$/, '')
   
   try {
+    const isPostgres = db?.dialect === 'postgres'
+    const threshold = isPostgres ? thresholdIso : thresholdSqlite
     const staleJobs = await db
       .prepare(
-        `
-          SELECT id, type, profile_id, started_at, created_at
-          FROM crawler_jobs
-          WHERE status = 'running'
-            AND (
-              (started_at IS NOT NULL AND started_at < ?)
-              OR (started_at IS NULL AND created_at < ?)
-            )
-        `
+        isPostgres
+          ? `
+              SELECT id, type, profile_id, started_at, created_at
+              FROM crawler_jobs
+              WHERE status = 'running'
+                AND (
+                  (started_at IS NOT NULL AND started_at < ?)
+                  OR (started_at IS NULL AND created_at < ?)
+                )
+            `
+          : `
+              SELECT id, type, profile_id, started_at, created_at
+              FROM crawler_jobs
+              WHERE status = 'running'
+                AND (
+                  (started_at IS NOT NULL AND datetime(started_at) < datetime(?))
+                  OR (started_at IS NULL AND datetime(created_at) < datetime(?))
+                )
+            `,
       )
-      .all(staleThreshold, staleThreshold)
+      .all(threshold, threshold)
     
     let cleaned = 0
     for (const job of staleJobs) {
