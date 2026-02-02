@@ -43,6 +43,17 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete, isAdmin
     return `$${(cents / 100).toFixed(0)}`;
   };
 
+  const formatUsd = (amount) => {
+    const n = Number(amount ?? 0)
+    if (!Number.isFinite(n)) return "$0.00"
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(n)
+  }
+
   const getTierColor = (tierId) => {
     switch (tierId) {
       case "foundation":
@@ -195,7 +206,7 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete, isAdmin
             <div className="text-center">
               <div className="mb-1 text-xs text-slate-600">Pipeline</div>
               <div className="text-lg font-bold text-emerald-600">
-                ${Math.round((profile.pipeline_funds_total || 0) / 1000)}k
+                {formatUsd(profile.pipeline_funds_total)}
               </div>
             </div>
             <div className="text-center">
