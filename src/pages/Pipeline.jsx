@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useLocation } from "react-router-dom";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { Filter, Loader2, Trash2 } from "lucide-react";
+import { Filter, Loader2, RefreshCcw, Trash2 } from "lucide-react";
 import KanbanBoard from "@/components/pipeline/KanbanBoard";
 import AdvancedFilters from "@/components/pipeline/AdvancedFilters";
 import {
@@ -24,11 +24,13 @@ import { countBy } from "lodash";
 import { listProfiles } from "@/api/profiles";
 import { apiFetch } from "@/api/apiClient";
 import { env } from "@/config/env.js";
+import { useAuthStore } from "@/stores/authStore";
 
 export default function Pipeline() {
   const [selectedProfileId, setSelectedProfileId] = useState("all");
   const [grantToDelete, setGrantToDelete] = useState(null);
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const [isProcessAllPending, setIsProcessAllPending] = useState(false);
   const [filters, setFilters] = useState({
     search: '',
     minAmount: '',
@@ -45,6 +47,7 @@ export default function Pipeline() {
   const { toast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
+  const isAdmin = useAuthStore((state) => Boolean(state?.user?.is_admin));
 
   const profilesQuery = useQuery({
     queryKey: ['profiles', 'pipeline-selector'],
@@ -246,6 +249,53 @@ export default function Pipeline() {
     bulkDeleteMutation.mutate(expiredIds);
   };
 
+  const handleProcessAll = async () => {
+    if (!isAdmin) return
+    if (isProcessAllPending) return
+
+    // If a specific profile is selected, process that profile’s pipeline.
+    // If "All profiles" is selected, run globally (bounded by a server-side limit).
+    const forProfile = selectedProfileId && selectedProfileId !== 'all' ? String(selectedProfileId) : null
+
+    setIsProcessAllPending(true)
+    toast({
+      title: 'Process All queued',
+      description: forProfile
+        ? 'Queuing pipeline automation for the selected profile…'
+        : 'Queuing pipeline automation across all profiles…',
+    })
+
+    try {
+      const payload = {
+        type: 'pipeline_automation',
+        ...(forProfile ? { profile_id: forProfile } : {}),
+        parameters: {
+          process_all: true,
+          // Global runs can be heavy; keep this bounded unless explicitly overridden.
+          ...(forProfile ? { limit: 2000 } : { limit: 500 }),
+        },
+      }
+
+      const job = await apiFetch('/api/crawlers/jobs', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      })
+
+      toast({
+        title: 'Pipeline automation started',
+        description: job?.id ? `Job ${job.id} queued.` : 'Job queued.',
+      })
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Process All failed',
+        description: error?.message || 'Unable to queue pipeline automation.',
+      })
+    } finally {
+      setIsProcessAllPending(false)
+    }
+  }
+
   // Handle filter conflicts - ensure hideExpired and showOnlyExpired are mutually exclusive
   const handleFiltersChange = (newFilters) => {
     if (newFilters.hideExpired && filters.showOnlyExpired) {
@@ -303,6 +353,26 @@ export default function Pipeline() {
                   ))}
                 </SelectContent>
               </Select>
+              {isAdmin && (
+                <Button
+                  variant="default"
+                  onClick={handleProcessAll}
+                  disabled={isProcessAllPending}
+                  aria-label="Process all pipeline grants"
+                >
+                  {isProcessAllPending ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Processing…
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCcw className="w-4 h-4 mr-2" />
+                      Process All
+                    </>
+                  )}
+                </Button>
+              )}
               {expiredDiscoveredGrants.length > 0 && (
                 <Button
                   variant="outline"
