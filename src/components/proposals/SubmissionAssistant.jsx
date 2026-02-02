@@ -90,6 +90,17 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
 
   const validation = validateMutation.data ?? null
   const ready = Boolean(validation?.ready)
+  const missingChecklist = Array.isArray(validation?.missing?.checklist) ? validation.missing.checklist : []
+  const emptySections = Array.isArray(validation?.missing?.empty_sections) ? validation.missing.empty_sections : []
+  const noSections = Boolean(validation?.missing?.no_sections)
+
+  const focusSection = (sectionKey) => {
+    if (!sectionKey) return
+    // Lightweight + reversible cross-panel navigation (no API changes).
+    console.log('[SubmissionAssistant] focus section', sectionKey)
+    window.dispatchEvent(new CustomEvent('applyEngine:focusSection', { detail: { sectionKey: String(sectionKey) } }))
+    onClose?.()
+  }
 
   const checklistDone = useMemo(
     () => (checklist || []).filter((i) => String(i.status || '').toLowerCase() === 'done').length,
@@ -157,7 +168,56 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
                 ready ? (
                   'Ready to submit.'
                 ) : (
-                  'Not ready yet — run Validate to see what’s missing.'
+                  <div className="space-y-3">
+                    <p>Not ready yet — fix the items below.</p>
+
+                    {noSections ? (
+                      <div>
+                        <p className="font-medium">No sections created</p>
+                        <p className="text-xs text-amber-800">Use Auto-populate, then fill in each section.</p>
+                      </div>
+                    ) : null}
+
+                    {emptySections.length > 0 ? (
+                      <div>
+                        <p className="font-medium">Empty sections</p>
+                        <ul className="mt-1 space-y-1 list-disc ml-5">
+                          {emptySections.slice(0, 10).map((s) => (
+                            <li key={s.section_key}>
+                              <button
+                                type="button"
+                                className="underline underline-offset-2 hover:no-underline"
+                                onClick={() => focusSection(s.section_key)}
+                              >
+                                {s.title || s.section_key}
+                              </button>
+                              <span className="text-xs text-amber-800"> — add content</span>
+                            </li>
+                          ))}
+                        </ul>
+                        {emptySections.length > 10 ? (
+                          <p className="text-xs text-amber-800 mt-1">+{emptySections.length - 10} more</p>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {missingChecklist.length > 0 ? (
+                      <div>
+                        <p className="font-medium">Incomplete checklist items</p>
+                        <ul className="mt-1 space-y-1 list-disc ml-5">
+                          {missingChecklist.slice(0, 10).map((i) => (
+                            <li key={i.key}>
+                              <span className="font-medium">{i.label || i.key}</span>
+                              <span className="text-xs text-amber-800"> — status: {i.status || 'pending'}</span>
+                            </li>
+                          ))}
+                        </ul>
+                        {missingChecklist.length > 10 ? (
+                          <p className="text-xs text-amber-800 mt-1">+{missingChecklist.length - 10} more</p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
                 )
               ) : (
                 'Run Validate to compute readiness.'
