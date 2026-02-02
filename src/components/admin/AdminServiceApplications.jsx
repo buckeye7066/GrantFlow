@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { apiFetch } from '@/api/client';
+import { parseTimestamp } from '@/lib/utils'
 
 const STATUS_COLORS = {
   new: 'bg-blue-500',
@@ -147,8 +148,10 @@ export default function AdminServiceApplications() {
   }
 
   const formatDate = (dateStr) => {
-    if (!dateStr) return 'N/A';
-    return new Date(dateStr + 'Z').toLocaleString();
+    if (!dateStr) return 'N/A'
+    const date = parseTimestamp(dateStr)
+    if (!date) return 'N/A'
+    return date.toLocaleString()
   };
 
   const newCount = applications.filter(a => a.status === 'new').length;
