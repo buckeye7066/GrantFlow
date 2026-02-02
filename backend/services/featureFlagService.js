@@ -38,6 +38,11 @@ const DEFAULT_FLAGS = {
   // Experimental features
   'experimental.ai_matching': { enabled: false, description: 'Enable AI-powered grant matching (experimental)', percentage: 0 },
   'experimental.real_time_alerts': { enabled: false, description: 'Enable real-time deadline alerts (experimental)', percentage: 0 },
+
+  // vNext backbone
+  // NOTE: In Postgres deployments, feature flags are currently defaults-only (in-memory).
+  // Use SHOULDERS_VNEXT=true as an emergency override if you need to enable without DB-backed flags.
+  'shoulders.vnext': { enabled: false, description: 'Enable vNext Shoulders of Giants backbone (applications state machine)' },
 }
 
 // In-memory cache for flags (refreshed periodically)

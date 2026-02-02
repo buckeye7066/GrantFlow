@@ -22,6 +22,8 @@ import { useFilteredGrants } from "@/components/hooks/useFilteredGrants";
 import { isGrantExpired } from "@/components/shared/grantUtils";
 import { countBy } from "lodash";
 import { listProfiles } from "@/api/profiles";
+import { apiFetch } from "@/api/apiClient";
+import { env } from "@/config/env.js";
 
 export default function Pipeline() {
   const [selectedProfileId, setSelectedProfileId] = useState("all");
@@ -104,6 +106,17 @@ export default function Pipeline() {
       base44.setActiveProfileId?.(null)
     }
   }, [selectedProfileId])
+
+  const vnextAppsQuery = useQuery({
+    queryKey: ["vnext-applications", selectedProfileId],
+    enabled: env.shouldersVnext && Boolean(selectedProfileId) && selectedProfileId !== "all",
+    queryFn: () =>
+      apiFetch(
+        `/api/vnext/applications?profile_id=${encodeURIComponent(String(selectedProfileId))}&limit=200`,
+      ),
+  })
+  const vnextApps = Array.isArray(vnextAppsQuery.data) ? vnextAppsQuery.data : []
+  const vnextCounts = useMemo(() => countBy(vnextApps, (a) => a?.state || "UNKNOWN"), [vnextApps])
 
   // Sync selectedProfileId to URL (canonical param: profile_id).
   // Also remove legacy organization_id param to avoid future confusion.
@@ -311,6 +324,53 @@ export default function Pipeline() {
             allTags={allTags}
           />
         </div>
+
+        {env.shouldersVnext && selectedProfileId !== "all" ? (
+          <div className="rounded-lg border border-slate-200 bg-white p-4">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">vNext Applications</h2>
+                <p className="text-sm text-slate-600">
+                  {vnextAppsQuery.isLoading ? "Loading…" : `${vnextApps.length} applications`}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-700">
+                {Object.entries(vnextCounts).slice(0, 8).map(([state, count]) => (
+                  <span key={state} className="rounded-full bg-slate-100 px-2 py-1">
+                    {state}: {count}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            {vnextApps.length > 0 ? (
+              <ul className="mt-3 space-y-2">
+                {vnextApps.slice(0, 10).map((a) => (
+                  <li key={a.id} className="flex items-center justify-between gap-2">
+                    <div className="text-sm">
+                      <span className="font-medium">{a.state}</span>
+                      <span className="text-slate-500"> — EV: </span>
+                      <span className="text-slate-700">
+                        {a.expected_value != null ? Number(a.expected_value).toFixed(2) : "—"}
+                      </span>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => navigate(`/VNextApplication?id=${encodeURIComponent(a.id)}`)}
+                    >
+                      Open
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-3 text-sm text-slate-600">
+                Create a vNext application from Funding Opportunities (when enabled).
+              </p>
+            )}
+          </div>
+        ) : null}
 
         <div className="mt-4 flex-1 overflow-x-auto">
           {filteredGrants.length === 0 ? (

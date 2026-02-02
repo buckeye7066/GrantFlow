@@ -32,6 +32,9 @@ export function resetDb(db) {
   // Best-effort cleanup for isolation across tests.
   // Keep order from most-dependent to least-dependent.
   const statements = [
+    "DELETE FROM audit_events",
+    "DELETE FROM vnext_application_tasks",
+    "DELETE FROM vnext_applications",
     "DELETE FROM profile_documents",
     "DELETE FROM documents",
     "DELETE FROM profile_sections",
@@ -44,6 +47,8 @@ export function resetDb(db) {
     "DELETE FROM budgets",
     "DELETE FROM grants",
     "DELETE FROM funding_opportunities",
+    "DELETE FROM form_schemas",
+    "DELETE FROM funders",
     "DELETE FROM crawler_jobs",
     "DELETE FROM user_verification_codes",
     "DELETE FROM user_credentials",
