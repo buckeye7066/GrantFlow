@@ -121,7 +121,7 @@ ${organization.staff_count ? `Staff Count: ${organization.staff_count}` : ''}
   Funder: ${grant.funder}
   Status: ${statusLabels[grant.status] || grant.status}
   ${deadlineText}
-  ${grant.award_ceiling ? `Award Amount: Up to $${grant.award_ceiling.toLocaleString()}` : ''}
+  ${grant.amount_max ? `Award Amount: Up to $${grant.amount_max.toLocaleString()}` : ''}
             `.trim();
         }).join('\n\n') : 'No grants currently in the pipeline.';
 

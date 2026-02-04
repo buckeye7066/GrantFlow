@@ -548,7 +548,7 @@ router.post('/analyzeGrant', async (req, res) => {
       .prepare(
         `
           SELECT id, organization_id, profile_id, title, funder, deadline,
-                 award_ceiling, program_description, eligibility_summary, selection_criteria
+                 amount_max, program_description, eligibility_summary, selection_criteria
           FROM grants
           WHERE id = ?
           LIMIT 1

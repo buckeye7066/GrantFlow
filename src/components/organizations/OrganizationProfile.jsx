@@ -658,7 +658,7 @@ Return a single JSON object with the key "logo_url" containing the absolute, dir
                     <div className="space-y-2">
                       {grants.map((grant) => {
                         const statusBadge = getStatusBadge(grant.status);
-                        const amount = grant.typical_award || grant.award_ceiling || grant.award_floor;
+                        const amount = grant.typical_award || grant.amount_max || grant.amount_min;
 
                         return (
                           <Link key={grant.id} to={createPageUrl("GrantDetail", { id: grant.id })}>

@@ -43,7 +43,7 @@ const Diagnostics = () => {
         grantId: grant.id,
         title: grant.title,
         deadline: grant.deadline,
-        awardCeiling: grant.award_ceiling,
+        awardCeiling: grant.amount_max,
         description: grant.program_description,
         eligibility: grant.eligibility_summary,
         selectionCriteria: grant.selection_criteria,
