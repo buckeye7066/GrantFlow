@@ -139,12 +139,12 @@ export default function Reports() {
   
   const submittedCount = (grantsByStatus['submitted'] || 0) + (grantsByStatus['awarded'] || 0) + (grantsByStatus['declined'] || 0);
   const successRate = submittedCount > 0 ? (grantsByStatus['awarded'] || 0) / submittedCount * 100 : 0;
-  const totalAwarded = sumBy(awardedGrants, 'typical_award') || sumBy(awardedGrants, 'award_ceiling') || 0;
+  const totalAwarded = sumBy(awardedGrants, 'typical_award') || sumBy(awardedGrants, 'amount_max') || 0;
 
   const fundingByFunderType = Object.entries(groupBy(awardedGrants, 'funder_type'))
     .map(([name, grants]) => ({
       name: name.charAt(0).toUpperCase() + name.slice(1),
-      value: sumBy(grants, 'typical_award') || sumBy(grants, 'award_ceiling') || 0
+      value: sumBy(grants, 'typical_award') || sumBy(grants, 'amount_max') || 0
     }))
     .filter(d => d.value > 0);
 

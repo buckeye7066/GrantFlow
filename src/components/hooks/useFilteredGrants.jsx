@@ -41,13 +41,13 @@ export function useFilteredGrants(grants, filters, selectedOrgId) {
     if (filters.minAmount !== '') {
       const minAmount = parseFloat(filters.minAmount);
       filtered = filtered.filter(grant => 
-        grant.award_ceiling && grant.award_ceiling >= minAmount
+        grant.amount_max && grant.amount_max >= minAmount
       );
     }
     if (filters.maxAmount !== '') {
       const maxAmount = parseFloat(filters.maxAmount);
       filtered = filtered.filter(grant =>
-        grant.award_ceiling && grant.award_ceiling <= maxAmount
+        grant.amount_max && grant.amount_max <= maxAmount
       );
     }
 

@@ -77,8 +77,8 @@ function normalizeSimplerOpportunity(row) {
     toTrimmedStringOrNull(row?.closeDate) ||
     null
 
-  const awardFloor = toNumberOrNull(row?.award_floor) ?? toNumberOrNull(row?.awardFloor)
-  const awardCeiling = toNumberOrNull(row?.award_ceiling) ?? toNumberOrNull(row?.awardCeiling)
+  const awardFloor = toNumberOrNull(row?.amount_min) ?? toNumberOrNull(row?.awardFloor)
+  const awardCeiling = toNumberOrNull(row?.amount_max) ?? toNumberOrNull(row?.awardCeiling)
 
   const synopsis = toTrimmedStringOrNull(row?.synopsis) || toTrimmedStringOrNull(row?.summary)
   const category = toTrimmedStringOrNull(row?.funding_category) || toTrimmedStringOrNull(row?.category)

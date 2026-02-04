@@ -151,9 +151,9 @@ export default function PrintableProfile({ organization, grants = [], contactMet
                       <article key={grant.id} className="gf-item">
                         <h3 className="gf-item-title">{grant.title}</h3>
                         <p className="gf-item-summary">{buildSummary(grant)}</p>
-                        {(grant.award_ceiling || grant.deadline || grant.opportunity_type) && (
+                        {(grant.amount_max || grant.deadline || grant.opportunity_type) && (
                             <ul className="gf-item-meta">
-                              {grant.award_ceiling && <li>Typical Award: {formatMoney(grant.award_ceiling)}</li>}
+                              {grant.amount_max && <li>Typical Award: {formatMoney(grant.amount_max)}</li>}
                               {grant.deadline && !isNaN(new Date(grant.deadline)) && <li>Deadline: {format(new Date(grant.deadline), 'P')}</li>}
                               {grant.opportunity_type && <li>Category: {grant.opportunity_type.replace(/_/g, ' ')}</li>}
                             </ul>

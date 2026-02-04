@@ -97,13 +97,13 @@ export default function Proposals() {
     if (filters.minAmount !== '') {
       const minAmount = parseFloat(filters.minAmount);
       filtered = filtered.filter(proposal => 
-        proposal.award_ceiling && proposal.award_ceiling >= minAmount
+        proposal.amount_max && proposal.amount_max >= minAmount
       );
     }
     if (filters.maxAmount !== '') {
       const maxAmount = parseFloat(filters.maxAmount);
       filtered = filtered.filter(proposal =>
-        proposal.award_ceiling && proposal.award_ceiling <= maxAmount
+        proposal.amount_max && proposal.amount_max <= maxAmount
       );
     }
 
@@ -243,11 +243,11 @@ export default function Proposals() {
                         <span>Deadline: {format(new Date(proposal.deadline), 'MMM d, yyyy')}</span>
                       </div>
                     )}
-                    {(proposal.award_ceiling || proposal.typical_award) && (
+                    {(proposal.amount_max || proposal.typical_award) && (
                         <div className="flex items-center gap-2 text-sm text-slate-600">
                             <DollarSign className="w-4 h-4 shrink-0" />
                             <span>
-                                Award: ~${(proposal.typical_award || proposal.award_ceiling).toLocaleString()}
+                                Award: ~${(proposal.typical_award || proposal.amount_max).toLocaleString()}
                             </span>
                         </div>
                     )}

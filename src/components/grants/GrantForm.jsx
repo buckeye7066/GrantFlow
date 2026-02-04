@@ -27,8 +27,8 @@ export default function GrantForm({ grant, organization, onSubmit, onCancel, isS
         application_method: grant?.application_method || 'standard', // New field
         application_instructions: grant?.application_instructions || '', // New field
         deadline: grant?.deadline || '', // New field
-        award_ceiling: grant?.award_ceiling || '', // New field
-        award_floor: grant?.award_floor || '', // New field
+        amount_max: grant?.amount_max || '', // New field
+        amount_min: grant?.amount_min || '', // New field
         url: grant?.url || '', // New field
         eligibility_summary: grant?.eligibility_summary || '',
         program_description: grant?.program_description || '',

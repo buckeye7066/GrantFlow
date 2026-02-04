@@ -102,7 +102,7 @@ export default function Stewardship() {
             {selectedGrant && filteredData ? (
                  <div className="space-y-6">
                     <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-                        <KPIWidget icon={DollarSign} title="Award Amount" value={`$${(selectedGrant.award_ceiling || 0).toLocaleString()}`} />
+                        <KPIWidget icon={DollarSign} title="Award Amount" value={`$${(selectedGrant.amount_max || 0).toLocaleString()}`} />
                         <KPIWidget icon={CalendarCheck} title="Days Left in Period" value={selectedGrant.end_date ? `${Math.max(0, new Date(selectedGrant.end_date).getTime() - new Date().getTime()) / (1000 * 3600 * 24).toFixed(0)}` : 'N/A'} />
                         <KPIWidget icon={BarChart3} title="Burn Rate" value={`${( (filteredData.expenses.reduce((s,e) => s+e.amount, 0) / filteredData.budgets.reduce((s,b) => s+b.total, 0) * 100) || 0).toFixed(1)}%`} />
                         <KPIWidget icon={ShieldCheck} title="Next Report Due" value={filteredData.reports.length > 0 ? new Date(filteredData.reports[0].due_date).toLocaleDateString() : 'None'} />

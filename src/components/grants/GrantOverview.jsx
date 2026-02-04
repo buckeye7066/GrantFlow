@@ -349,7 +349,7 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                 <CardContent className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <StatCard 
                         label="Max Award"
-                        value={grant.award_ceiling ? `$${grant.award_ceiling.toLocaleString()}` : 'N/A'}
+                        value={grant.amount_max ? `$${grant.amount_max.toLocaleString()}` : 'N/A'}
                         icon={DollarSign}
                         color="text-emerald-600"
                     />

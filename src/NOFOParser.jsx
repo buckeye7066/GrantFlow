@@ -21,8 +21,8 @@ const grantSchemaForExtraction = {
     funder: { type: "string" },
     opportunity_number: { type: "string" },
     deadline: { type: "string", format: "date", description: "The application deadline. Standardize to YYYY-MM-DD format." },
-    award_floor: { type: "number" },
-    award_ceiling: { type: "number" },
+    amount_min: { type: "number" },
+    amount_max: { type: "number" },
     eligibility_summary: { type: "string", description: "A concise summary of who is eligible to apply." },
     program_description: { type: "string", description: "A detailed summary of the grant's purpose and goals." },
     selection_criteria: { type: "string", description: "A summary of how applications will be judged or scored." },
@@ -181,7 +181,7 @@ export default function NOFOParser() {
             programDescription: newGrant.program_description,
             eligibilitySummary: newGrant.eligibility_summary,
             selectionCriteria: newGrant.selection_criteria,
-            awardCeiling: newGrant.award_ceiling,
+            awardCeiling: newGrant.amount_max,
             deadline: newGrant.deadline,
         };
 
@@ -369,7 +369,7 @@ export default function NOFOParser() {
                             <p><strong>Funder:</strong> {extractedData.funder || 'N/A'}</p>
                             <p><strong>Deadline:</strong> {extractedData.deadline || 'N/A'}</p>
                             <p><strong>Opportunity #:</strong> {extractedData.opportunity_number || 'N/A'}</p>
-                            <p><strong>Award Range:</strong> ${extractedData.award_floor?.toLocaleString() || 'N/A'} - ${extractedData.award_ceiling?.toLocaleString() || 'N/A'}</p>
+                            <p><strong>Award Range:</strong> ${extractedData.amount_min?.toLocaleString() || 'N/A'} - ${extractedData.amount_max?.toLocaleString() || 'N/A'}</p>
                             {extractedData.funder_email && <p><strong>Email:</strong> {extractedData.funder_email}</p>}
                             {extractedData.funder_phone && <p><strong>Phone:</strong> {extractedData.funder_phone}</p>}
                             {extractedData.funder_fax && <p><strong>Fax:</strong> {extractedData.funder_fax}</p>}

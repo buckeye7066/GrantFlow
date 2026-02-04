@@ -553,8 +553,8 @@ router.post('/comprehensiveMatch', async (req, res) => {
         sponsor: opp.sponsor || opp.funder,
         url: url,
         deadline: opp.deadline,
-        amount_min: opp.award_floor || opp.amount_min,
-        amount_max: opp.award_ceiling || opp.amount_max,
+        amount_min: opp.amount_min || opp.amount_min,
+        amount_max: opp.amount_max || opp.amount_max,
         description: opp.description || opp.summary,
         eligibility_summary: Array.isArray(opp.eligibility_bullets) 
           ? opp.eligibility_bullets.join('; ')
@@ -649,12 +649,12 @@ router.post('/searchOpportunities', async (req, res) => {
     }
     
     if (filters.min_award) {
-      conditions.push('(award_ceiling IS NULL OR award_ceiling >= ?)');
+      conditions.push('(amount_max IS NULL OR amount_max >= ?)');
       params.push(filters.min_award);
     }
     
     if (filters.max_award) {
-      conditions.push('(award_floor IS NULL OR award_floor <= ?)');
+      conditions.push('(amount_min IS NULL OR amount_min <= ?)');
       params.push(filters.max_award);
     }
     
@@ -693,8 +693,8 @@ router.post('/searchOpportunities', async (req, res) => {
         sponsor: opp.sponsor || opp.funder,
         url: url,
         deadline: opp.deadline,
-      award_min: opp.award_floor || opp.min_award,
-      award_max: opp.award_ceiling || opp.max_award,
+      award_min: opp.amount_min || opp.min_award,
+      award_max: opp.amount_max || opp.max_award,
       description: opp.description || opp.summary,
       state: opp.state,
       source: opp.source || 'database',

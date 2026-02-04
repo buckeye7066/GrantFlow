@@ -36,7 +36,7 @@ export default function ComplianceTab({ grant }) {
     mutationFn: () => base44.entities.GrantAward.create({
       grant_id: grant.id,
       organization_id: grant.organization_id,
-      award_amount: grant.typical_award || grant.award_ceiling || 0,
+      award_amount: grant.typical_award || grant.amount_max || 0,
       funder_name: grant.funder,
       start_date: new Date().toISOString().split('T')[0],
       policy_json: JSON.stringify(defaultPolicy),

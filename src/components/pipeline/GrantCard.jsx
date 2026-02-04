@@ -248,10 +248,10 @@ export default function GrantCard({ grant, organization, organizationName, onSta
               </Badge>
             )}
 
-            {(grant.award_ceiling || grant.typical_award || grant.awardMax) && (
+            {(grant.amount_max || grant.typical_award || grant.awardMax) && (
               <div className="flex items-center gap-1 text-xs text-slate-600">
                 <DollarSign className="w-3 h-3" />
-                <span>~${(grant.typical_award || grant.award_ceiling || grant.awardMax)?.toLocaleString()}</span>
+                <span>~${(grant.typical_award || grant.amount_max || grant.awardMax)?.toLocaleString()}</span>
               </div>
             )}
           </div>

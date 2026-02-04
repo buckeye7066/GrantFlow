@@ -93,7 +93,7 @@ export default function PrintablePipeline({ grants = [], organization }) {
                           <ul className="gf-card-meta">
                             {grant.funder && <li>{grant.funder}</li>}
                             {grant.deadline && !isNaN(new Date(grant.deadline)) && <li>Deadline: {format(new Date(grant.deadline), 'P')}</li>}
-                            {grant.award_ceiling && <li>Award: {formatMoney(grant.award_ceiling)}</li>}
+                            {grant.amount_max && <li>Award: {formatMoney(grant.amount_max)}</li>}
                           </ul>
                         </article>
                       ))}
