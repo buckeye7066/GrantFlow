@@ -553,9 +553,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
         sponsor: opp.sponsor || opp.funder,
         url: url,
         deadline: opp.deadline,
-        amount_min: opp.amount_min || opp.amount_min,
-        amount_max: opp.amount_max || opp.amount_max,
-        description: opp.description || opp.summary,
+    amount_min: null,    amount_max: null,        description: opp.description || opp.summary,
         eligibility_summary: Array.isArray(opp.eligibility_bullets) 
           ? opp.eligibility_bullets.join('; ')
           : (opp.eligibility_bullets || ''),
@@ -682,7 +680,7 @@ router.post('/searchOpportunities', async (req, res) => {
     // Format results
     const results = (opportunities || []).map(opp => {
       // Filter out placeholder URLs
-      let url = opp.url || opp.application_url;
+      let url = opp.url || opp.application_url;null
       if (url && (url.includes('example.org') || url.includes('example.com') || url.includes('placeholder'))) {
         url = null;
       }
@@ -693,8 +691,8 @@ router.post('/searchOpportunities', async (req, res) => {
         sponsor: opp.sponsor || opp.funder,
         url: url,
         deadline: opp.deadline,
-      award_min: opp.amount_min || opp.min_award,
-      award_max: opp.amount_max || opp.max_award,
+      award_min: null,
+      award_max: null,
       description: opp.description || opp.summary,
       state: opp.state,
       source: opp.source || 'database',
