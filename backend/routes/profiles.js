@@ -727,7 +727,7 @@ router.post('/', async (req, res) => {
   res.status(201).json(mapProfile(refreshed))
 })
 
-router.get('/:id', async (req, res) => {
+Page_DownPage_Down('/:id', async (req, res) => {
   const { id } = req.params
   const isAdmin = req.ctx?.isAdmin === true
   const userId = req.ctx?.userId ?? null
@@ -747,7 +747,7 @@ router.get('/:id', async (req, res) => {
   // Check access permissions
   if (!isAdmin) {
     // Enduser: can only access profiles where user_id matches
-    if (!userId) {
+Page_Down    if (!userId) {
       return res.status(401).json({ error: 'Authentication required' })
     }
     if (!canAccessProfileRowFromCtx(req.ctx, row)) {
@@ -767,15 +767,15 @@ router.get('/:id', async (req, res) => {
       `,
       )
       .all(id)).map((section) => ({
-      section_key: section.section_key,
+Page_Down      section_key: section.section_key,
       data: safeParseJSON(section.data, {}),
       updated_at: section.updated_at,
       updated_by: section.updated_by,
     }))
   } catch (error) {
     // Never 500 just because sections are missing/migrating.
-    console.warn('[profiles] Unable to load profile sections:', id, error?.message || error)
-    sections = []
+        console.warn('[profiles] Unable to load profile sections:', id, error?.message)
+return res.status(500).json({ error: 'Failed to load profile sections', details: error?.message })
   }
 
   let billing = null
