@@ -438,8 +438,7 @@ router.get('/jobs', async (req, res) => {
     res.json(rows.map(mapJob))
   } catch (error) {
     console.error('Error listing crawler jobs:', error)
-    res.status(500).json(formatError(error))
-  }
+if (!res.headersSent) res.status(500).json({ error: error.message || 'Error listing crawler jobs' })  }
 })
 
 router.get('/jobs/metrics', async (req, res) => {
@@ -951,8 +950,7 @@ router.get('/jobs/metrics', async (req, res) => {
     })
   } catch (error) {
     console.error('Error building crawler job metrics:', error)
-    res.status(500).json(formatError(error))
-  }
+if (!res.headersSent) res.status(500).json({ error: error.message || 'Error building crawler job metrics' })  }
 })
 
 router.get('/jobs/:id', async (req, res) => {
