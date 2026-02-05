@@ -418,7 +418,7 @@ router.get('/jobs', async (req, res) => {
     const { clause, params } = buildJobFilter(ctx, {
       profileId: profileFilter,
       organizationId: organizationFilter,
-      type: typeFilter,h
+      type: typeFilter
       status: statusFilter,
       accessibleProfileIds,
     })
