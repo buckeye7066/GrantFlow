@@ -400,6 +400,7 @@ router.get('/jobs', async (req, res) => {
   if (!ctx) return
 
   try {
+        if (!req.db) return res.status(500).json({ error: 'Database connection not available' })
     const limit = Number.parseInt(req.query.limit ?? 100, 10)
     const offset = Number.parseInt(req.query.offset ?? 0, 10)
     const typeFilter = typeof req.query.type === 'string' ? req.query.type.toLowerCase() : null
@@ -431,9 +432,9 @@ router.get('/jobs', async (req, res) => {
           FROM crawler_jobs
           ${clause}
           ORDER BY created_at DESC
-          LIMIT COALESCE(?, 100)
-          OFFSET COALESCE(?, 0)
-        `,
+            LIMIT ?
+                      OFFSET ?
+h        `,
       )
       .all(...params, limitValue, offsetValue)
 const mappedRows = rows.map(row => {
