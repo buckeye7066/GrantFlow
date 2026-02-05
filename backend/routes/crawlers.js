@@ -1,4 +1,5 @@
-import express from 'express'
+397
+  import express from 'express'
 import crypto from 'crypto'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
@@ -435,8 +436,16 @@ router.get('/jobs', async (req, res) => {
         `,
       )
       .all(...params, limitValue, offsetValue)
-    res.json(rows.map(mapJob))
-  } catch (error) {
+const mappedRows = rows.map(row => {
+        try {
+                  return mapJob(row)
+        } catch (err) {
+                  console.error('Error mapping job row:', err)
+                  return { error: err.message, id: row?.id }
+        }
+})
+        res.json(mappedRows)
+} catch (error) {
     console.error('Error listing crawler jobs:', error)
 if (!res.headersSent) res.status(500).json({ error: error.message || 'Error listing crawler jobs' })  }
 })
