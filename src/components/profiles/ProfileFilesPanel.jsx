@@ -335,7 +335,9 @@ export default function ProfileFilesPanel({
       return
     }
     try {
-      const parsed = new URL(raw)
+      // Auto-prepend https:// if no protocol specified
+      const url = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`
+      const parsed = new URL(url)
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
         setUrlError("Only http(s) URLs are supported.")
         return
@@ -344,7 +346,7 @@ export default function ProfileFilesPanel({
       setUrlError("That doesn’t look like a valid URL.")
       return
     }
-    urlIngestMutation.mutate({ url: raw })
+    urlIngestMutation.mutate({ url })
   }
 
   return (

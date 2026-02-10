@@ -744,6 +744,10 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
 
     let file = req.file;
     let fileUrl = req.body?.file_url ?? null;
+    // Auto-prepend https:// if no protocol specified
+    if (fileUrl && !/^https?:\/\//i.test(String(fileUrl))) {
+      fileUrl = `https://${String(fileUrl).trim()}`;
+    }
     if (!file && fileUrl && (String(fileUrl).startsWith('http://') || String(fileUrl).startsWith('https://'))) {
       const downloaded = await downloadRemoteFileToUploads({ url: String(fileUrl), req });
       file = downloaded.file;
