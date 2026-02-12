@@ -100,10 +100,10 @@ const BulkGrantEligibilityUpdater = () => {
               width: '30%',
               render: (text, record) => (
                         <div className="grant-title-cell">
-                                  <strong>{text}</strong>strong>
+                                  <strong>{text}</strong>
                                   <br />
-                                  <small>{record.funder}</small>small>
-                        </div>div>
+                                  <small>{record.funder}</small>
+                        </div>
                       )
       },
       {
@@ -111,7 +111,7 @@ const BulkGrantEligibilityUpdater = () => {
               dataIndex: 'category',
               key: 'category',
               width: '15%',
-              render: (text) => <Tag color="blue">{text || 'uncategorized'}</Tag>Tag>
+              render: (text) => <Tag color="blue">{text || 'uncategorized'}</Tag>
                 },
       {
               title: 'Eligibility Status',
@@ -124,13 +124,13 @@ const BulkGrantEligibilityUpdater = () => {
                         
                         return (
                                     <div className="eligibility-status">
-                                      {hasDescription && <Tag color="green"><CheckOutlined /> Description</Tag>Tag>}
-                                      {hasSummary && <Tag color="green"><CheckOutlined /> Summary</Tag>Tag>}
-                                      {hasCriteria && <Tag color="green"><CheckOutlined /> Criteria</Tag>Tag>}
+                                      {hasDescription && <Tag color="green"><CheckOutlined /> Description</Tag>}
+                                      {hasSummary && <Tag color="green"><CheckOutlined /> Summary</Tag>}
+                                      {hasCriteria && <Tag color="green"><CheckOutlined /> Criteria</Tag>}
                                       {!hasDescription && !hasSummary && !hasCriteria && (
-                                                    <Tag color="red">Missing All</Tag>Tag>
+                                                    <Tag color="red">Missing All</Tag>
                                                 )}
-                                    </div>div>
+                                    </div>
                                   );
               }
         },
@@ -146,9 +146,9 @@ const BulkGrantEligibilityUpdater = () => {
     return (
           <div className="bulk-grant-updater">
                 <div className="header">
-                        <h2><EditOutlined /> Bulk Grant Eligibility Updates</h2>h2>
-                        <p>Update program descriptions, eligibility criteria, and selection criteria for multiple grants at once</p>p>
-                </div>div>
+                        <h2><EditOutlined /> Bulk Grant Eligibility Updates</h2>
+                        <p>Update program descriptions, eligibility criteria, and selection criteria for multiple grants at once</p>
+                </div>
           
                 <div className="controls">
                         <Input.Search
@@ -173,8 +173,8 @@ const BulkGrantEligibilityUpdater = () => {
                 
                         <Button type="primary" onClick={fetchGrants} loading={loading}>
                                   <UploadOutlined /> Load Grants
-                        </Button>Button>
-                </div>div>
+                        </Button>
+                </div>
           
                 <Spin spinning={loading}>
                         <div className="grants-table">
@@ -188,8 +188,8 @@ const BulkGrantEligibilityUpdater = () => {
                                                 pagination={{ pageSize: 20 }}
                                                 size="small"
                                               />
-                        </div>div>
-                </Spin>Spin>
+                        </div>
+                </Spin>
           
                 <div className="actions">
                         <Button 
@@ -199,8 +199,8 @@ const BulkGrantEligibilityUpdater = () => {
                                     disabled={selectedGrants.length === 0}
                                   >
                                   Edit {selectedGrants.length} Selected Grants
-                        </Button>Button>
-                </div>div>
+                        </Button>
+                </div>
           
                 <Modal
                           title="Bulk Edit Grant Eligibility"
@@ -213,50 +213,50 @@ const BulkGrantEligibilityUpdater = () => {
                         >
                         <div className="bulk-edit-form">
                                   <div className="form-group">
-                                              <label>Program Description</label>label>
+                                              <label>Program Description</label>
                                               <textarea
                                                               value={bulkEditData.programDescription}
                                                               onChange={(e) => setBulkEditData({...bulkEditData, programDescription: e.target.value})}
                                                               placeholder="Enter program description..."
                                                               rows={3}
                                                             />
-                                  </div>div>
+                                  </div>
                         
                                   <div className="form-group">
-                                              <label>Eligibility Summary</label>label>
+                                              <label>Eligibility Summary</label>
                                               <textarea
                                                               value={bulkEditData.eligibilitySummary}
                                                               onChange={(e) => setBulkEditData({...bulkEditData, eligibilitySummary: e.target.value})}
                                                               placeholder="Enter eligibility criteria summary..."
                                                               rows={4}
                                                             />
-                                  </div>div>
+                                  </div>
                         
                                   <div className="form-group">
-                                              <label>Selection Criteria</label>label>
+                                              <label>Selection Criteria</label>
                                               <textarea
                                                               value={bulkEditData.selectionCriteria}
                                                               onChange={(e) => setBulkEditData({...bulkEditData, selectionCriteria: e.target.value})}
                                                               placeholder="Enter selection criteria..."
                                                               rows={4}
                                                             />
-                                  </div>div>
+                                  </div>
                         
                                   <div className="preview">
-                                              <h4>Preview (will be applied to {selectedGrants.length} grants):</h4>h4>
+                                              <h4>Preview (will be applied to {selectedGrants.length} grants):</h4>
                                     {Object.entries(bulkEditData).map(([key, value]) => (
                                         value && (
                                                           <div key={key} className="preview-item">
-                                                                            <strong>{key.replace(/([A-Z])/g, ' $1').trim()}:</strong>strong>
-                                                                            <p>{value}</p>p>
-                                                          </div>div>
+                                                                            <strong>{key.replace(/([A-Z])/g, ' $1').trim()}:</strong>
+                                                                            <p>{value}</p>
+                                                          </div>
                                                         )
                                       ))}
-                                  </div>div>
-                        </div>div>
-                </Modal>Modal>
-          </div>div>
+                                  </div>
+                        </div>
+                </Modal>
+          </div>
         );
 };
 
-export default BulkGrantEligibilityUpdater;</div>
+export default BulkGrantEligibilityUpdater;

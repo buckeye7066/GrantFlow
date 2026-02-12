@@ -727,7 +727,7 @@ router.post('/', async (req, res) => {
   res.status(201).json(mapProfile(refreshed))
 })
 
-Page_DownPage_Down('/:id', async (req, res) => {
+router.get('/:id', async (req, res) => {
   const { id } = req.params
   const isAdmin = req.ctx?.isAdmin === true
   const userId = req.ctx?.userId ?? null

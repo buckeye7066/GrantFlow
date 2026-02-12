@@ -27,10 +27,10 @@ const StudentStatusSelector = ({ value = '', onChange, required = true, disabled
           <div className="student-status-selector">
                 <div className="status-selector-header">
                         <label className="status-selector-label">
-                                  Student Status {required && <span className="required-indicator">*</span>span>}
-                        </label>label>
-                        <p>Select your student status for accurate grant matching.</p>p>
-                </div>div>
+                                  Student Status {required && <span className="required-indicator">*</span>}
+                        </label>
+                        <p>Select your student status for accurate grant matching.</p>
+                </div>
           
                 <div className="status-options-container">
                   {statusOptions.map((option) => (
@@ -47,26 +47,26 @@ const StudentStatusSelector = ({ value = '', onChange, required = true, disabled
                                                   className="status-radio"
                                                 />
                                   <label htmlFor={option.id} className="status-option-label">
-                                                <span className="option-title">{option.label}</span>span>
-                                                <span className="option-description">{option.description}</span>span>
-                                  </label>label>
-                      </div>div>
+                                                <span className="option-title">{option.label}</span>
+                                                <span className="option-description">{option.description}</span>
+                                  </label>
+                      </div>
                     ))}
-                </div>div>
+                </div>
           
             {currentSelected && (
                     <div className="status-selection-summary">
-                              <p className="summary-label">Selected: {currentSelected.label}</p>p>
-                    </div>div>
+                              <p className="summary-label">Selected: {currentSelected.label}</p>
+                    </div>
                 )}
           
             {selectedStatus === 'not_student' && (
                     <div className="student-status-warning">
-                              <p>Non-student status may limit eligibility for education-focused grants.</p>p>
-                    </div>div>
+                              <p>Non-student status may limit eligibility for education-focused grants.</p>
+                    </div>
                 )}
-          </div>div>
+          </div>
         );
 };
 
-export default StudentStatusSelector;</div>
+export default StudentStatusSelector;
