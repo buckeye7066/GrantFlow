@@ -1,13 +1,11 @@
-437
-  397
-  import express from 'express'
+import express from 'express'
 import crypto from 'crypto'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
 import { createCrawlerJob, validateJobParameters, generateIdempotencyKey } from '../services/crawlerJobCreation.js'
-import { buildProfileContext } from '../servicehs/profileHelpers.js'
+import { buildProfileContext } from '../services/profileHelpers.js'
 import { validatePagination } from '../utils/validation.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'
 import { formatError } from '../middleware/errorHandler.js'
@@ -433,10 +431,9 @@ router.get('/jobs', async (req, res) => {
           FROM crawler_jobs
           ${clause}
           ORDER BY created_at DESC
-          LIMIT ?
-          OFFSET ?
-        `,
-      )
+            LIMIT ?
+                      OFFSET ?
+      `)
       .all(...params, limitValue, offsetValue)
 const mappedRows = rows.map(row => {
         try {
