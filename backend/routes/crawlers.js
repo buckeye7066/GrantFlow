@@ -433,7 +433,7 @@ router.get('/jobs', async (req, res) => {
           ORDER BY created_at DESC
             LIMIT ?
                       OFFSET ?
-      )
+      `)
       .all(...params, limitValue, offsetValue)
 const mappedRows = rows.map(row => {
         try {
