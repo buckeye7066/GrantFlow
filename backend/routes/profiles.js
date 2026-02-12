@@ -727,7 +727,7 @@ router.post('/', async (req, res) => {
   res.status(201).json(mapProfile(refreshed))
 })
 
-Page_DownPage_Down('/:id', async (req, res) => {
+router.get('/:id', async (req, res) => {
   const { id } = req.params
   const isAdmin = req.ctx?.isAdmin === true
   const userId = req.ctx?.userId ?? null
@@ -747,7 +747,7 @@ Page_DownPage_Down('/:id', async (req, res) => {
   // Check access permissions
   if (!isAdmin) {
     // Enduser: can only access profiles where user_id matches
-Page_Down    if (!userId) {
+    if (!userId) {
       return res.status(401).json({ error: 'Authentication required' })
     }
     if (!canAccessProfileRowFromCtx(req.ctx, row)) {
@@ -767,7 +767,7 @@ Page_Down    if (!userId) {
       `,
       )
       .all(id)).map((section) => ({
-Page_Down      section_key: section.section_key,
+      section_key: section.section_key,
       data: safeParseJSON(section.data, {}),
       updated_at: section.updated_at,
       updated_by: section.updated_by,
