@@ -7,7 +7,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import { Loader2, UploadCloud } from "lucide-react"
-import { useToast } from "@/components/ui/use-toast"
+import { useToast } from "@/components/ui/use-toast"h
 import { listDocuments, ingestDocument, deleteDocument, parseAllProfileDocuments } from "@/api/documents"
 import DocumentItem from "@/components/documents/DocumentItem"
 
