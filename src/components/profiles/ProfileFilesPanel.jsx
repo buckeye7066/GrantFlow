@@ -334,9 +334,9 @@ export default function ProfileFilesPanel({
       setUrlError("Paste a URL to import.")
       return
     }
+    // Auto-prepend https:// if no protocol specified
+    const url = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`
     try {
-      // Auto-prepend https:// if no protocol specified
-      const url = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`
       const parsed = new URL(url)
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
         setUrlError("Only http(s) URLs are supported.")
