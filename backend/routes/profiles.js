@@ -767,7 +767,7 @@ router.get('/:id', async (req, res) => {
       `,
       )
       .all(id)).map((section) => ({
-        section_key: section.section_key,
+      section_key: section.section_key,
       data: safeParseJSON(section.data, {}),
       updated_at: section.updated_at,
       updated_by: section.updated_by,

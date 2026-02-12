@@ -433,9 +433,9 @@ router.get('/jobs', async (req, res) => {
           FROM crawler_jobs
           ${clause}
           ORDER BY created_at DESC
-            LIMIT ?
-                      OFFSET ?
-        `
+          LIMIT ?
+          OFFSET ?
+        `,
       )
       .all(...params, limitValue, offsetValue)
 const mappedRows = rows.map(row => {

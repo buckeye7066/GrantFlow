@@ -259,4 +259,4 @@ const BulkGrantEligibilityUpdater = () => {
         );
 };
 
-export default BulkGrantEligibilityUpdater;</div>
+export default BulkGrantEligibilityUpdater;

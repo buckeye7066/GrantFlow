@@ -46,4 +46,4 @@ const GrantProgressMeter = ({ progress = 50, stage = 'Processing' }) => {
             );
 };
 
-export default GrantProgressMeter;</div>
+export default GrantProgressMeter;
