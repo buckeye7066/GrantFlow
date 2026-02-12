@@ -34,4 +34,11 @@ class ValidationRulesEngine {
                                     ],
                           requiredStatuses: [
                                       'currently_enrolled_full_time',
-                                      'current
+                                      'currently_enrolled_part_time'
+                                    ]
+                        }
+                };
+        }
+}
+
+export default ValidationRulesEngine;

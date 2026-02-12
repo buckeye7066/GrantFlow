@@ -27,10 +27,10 @@ const StudentStatusSelector = ({ value = '', onChange, required = true, disabled
           <div className="student-status-selector">
                 <div className="status-selector-header">
                         <label className="status-selector-label">
-                                  Student Status {required && <span className="required-indicator">*</span>span>}
-                        </label>label>
-                        <p>Select your student status for accurate grant matching.</p>p>
-                </div>div>
+                                  Student Status {required && <span className="required-indicator">*</span>}
+                        </label>
+                        <p>Select your student status for accurate grant matching.</p>
+                </div>
           
                 <div className="status-options-container">
                   {statusOptions.map((option) => (
