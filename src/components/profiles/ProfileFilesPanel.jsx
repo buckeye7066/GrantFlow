@@ -7,7 +7,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import { Loader2, UploadCloud } from "lucide-react"
-import { useToast } from "@/components/ui/use-toast"h
+import { useToast } from "@/components/ui/use-toast"
 import { listDocuments, ingestDocument, deleteDocument, parseAllProfileDocuments } from "@/api/documents"
 import DocumentItem from "@/components/documents/DocumentItem"
 
@@ -334,9 +334,10 @@ export default function ProfileFilesPanel({
       setUrlError("Paste a URL to import.")
       return
     }
+    let url
     try {
       // Auto-prepend https:// if no protocol specified
-      const url = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`
+      url = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`
       const parsed = new URL(url)
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
         setUrlError("Only http(s) URLs are supported.")
