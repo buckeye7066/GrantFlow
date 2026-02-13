@@ -318,22 +318,23 @@ export default function Pipeline() {
         ...(forProfile ? { profile_id: forProfile } : {}),
         parameters: {
           process_all: true,
-          ...(forProfile ? { limit: 2000 } : { limit: 500 }),
+          // All profiles: process up to 2000 grants so "864 of 864" is fully covered
+          ...(forProfile ? { limit: 2000 } : { limit: 2000 }),
         },
       }
 
       const job = await createCrawlerJob(payload)
-      const jobId = job?.id
+      const jobId = job?.id ?? job?.jobId
 
       if (jobId) {
         setProcessAllJobId(jobId)
       } else {
-        setIsProcessAllPending(false)
         toast({
           title: 'Pipeline automation started',
           description: 'Job queued. Progress cannot be tracked.',
         })
       }
+      setIsProcessAllPending(false)
     } catch (error) {
       setIsProcessAllPending(false)
       toast({
