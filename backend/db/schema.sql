@@ -296,6 +296,8 @@ CREATE TABLE IF NOT EXISTS grants (
   
   amount_requested REAL,
   amount_awarded REAL,
+  amount_min REAL,
+  amount_max REAL,
   
   status TEXT DEFAULT 'discovered' CHECK(status IN (
     'discovered', 'interested', 'drafting', 'app_prep', 'revision', 

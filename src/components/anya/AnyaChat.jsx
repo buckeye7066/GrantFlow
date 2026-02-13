@@ -318,8 +318,15 @@ export default function AnyaChat({ profileId }) {
       setMessages((prev) => [...prev, optimisticMessage])
       setInput("")
 
-      await postAnyaMessage(sessionId, trimmed)
-      await refreshMessages(sessionId)
+      const response = await postAnyaMessage(sessionId, trimmed)
+      if (Array.isArray(response?.messages) && response.messages.length > 0) {
+        setMessages((prev) => {
+          const withoutOptimistic = prev.filter((m) => m.id !== optimisticId)
+          return [...withoutOptimistic, ...response.messages]
+        })
+      } else {
+        await refreshMessages(sessionId)
+      }
       log.debug('messages refreshed')
     } catch (error) {
       console.error("[AnyaChat] send failed:", error)
