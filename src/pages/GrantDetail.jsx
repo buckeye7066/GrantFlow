@@ -153,19 +153,19 @@ export default function GrantDetail() {
       });
       
       try {
-        const response = await base44.functions.invoke('analyzeGrant', payload);
+        // Client returns parsed JSON body: { success, analysis } (no .data wrapper)
+        const body = await base44.functions.invoke('analyzeGrant', payload);
         log.debug('analyzeGrant response', {
-          status: response.status,
-          hasData: !!response.data,
-          success: response.data?.success
+          success: body?.success,
+          hasAnalysis: !!body?.analysis
         });
         
-        if (response.data && !response.data.success) {
-          console.error('[GrantDetail] Function returned error:', response.data);
-          throw new Error(response.data.message || response.data.error || 'Analysis failed');
+        if (body && body.success === false) {
+          console.error('[GrantDetail] Function returned error:', body);
+          throw new Error(body.message || body.error || 'Analysis failed');
         }
         
-        return response;
+        return body;
       } catch (error) {
         console.error('[GrantDetail] Function invocation failed:', {
           message: error.message,
@@ -188,7 +188,8 @@ export default function GrantDetail() {
         log.debug('analysis mutation succeeded; persisting results');
         
         try {
-            const analysis = data.data?.analysis;
+            // API returns { success, analysis }; client returns parsed JSON (no .data wrapper)
+            const analysis = data?.analysis ?? data?.data?.analysis;
             
             if (!analysis || !analysis.analysis_markdown) {
                 throw new Error('No analysis data in response or analysis_markdown missing.');

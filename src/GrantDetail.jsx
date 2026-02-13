@@ -143,14 +143,15 @@ export default function GrantDetail() {
   const analyzeGrantMutation = useMutation({
     mutationFn: async (payload) => {
       try {
-        const response = await base44.functions.invoke('analyzeGrant', payload);
+        // Client returns parsed JSON body: { success, analysis } (no .data wrapper)
+        const body = await base44.functions.invoke('analyzeGrant', payload);
         
-        if (response.data && !response.data.success) {
-          console.error('[GrantDetail] Function returned error:', response.data);
-          throw new Error(response.data.message || response.data.error || 'Analysis failed');
+        if (body && body.success === false) {
+          console.error('[GrantDetail] Function returned error:', body);
+          throw new Error(body.message || body.error || 'Analysis failed');
         }
         
-        return response;
+        return body;
       } catch (error) {
         console.error('[GrantDetail] Function invocation failed:', {
           message: error.message,
@@ -172,7 +173,8 @@ export default function GrantDetail() {
     onSuccess: async (data) => {
         
         try {
-            const analysis = data.data?.analysis;
+            // API returns { success, analysis }; client returns parsed JSON (no .data wrapper)
+            const analysis = data?.analysis ?? data?.data?.analysis;
             
             if (!analysis || !analysis.analysis_markdown) {
                 throw new Error('No analysis data in response or analysis_markdown missing.');
