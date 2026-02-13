@@ -284,7 +284,14 @@ async function downloadRemoteFileToUploads({ url, req }) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20_000);
   try {
-    const resp = await fetch(initial.toString(), { signal: controller.signal });
+    const resp = await fetch(initial.toString(), {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; GrantFlow/1.0; +https://grantflow.app)',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+      redirect: 'follow',
+    });
     if (!resp.ok) {
       throw new Error(`Unable to download file (${resp.status})`);
     }
