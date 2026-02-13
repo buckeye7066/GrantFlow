@@ -54,6 +54,11 @@ export default function DocumentItem({ document, onDelete }) {
     const data = extractQuery.data
     if (!data) return null
 
+    // Show "Processing" for documents still being extracted
+    if (data.status === 'pending' || data.status === 'processing') {
+      return { label: 'Processing…', tone: 'warn', confidence: null }
+    }
+
     const confidence = typeof data.confidence === 'number' ? data.confidence : 0
     const ocrUsed = Boolean(data.ocr_used)
 
