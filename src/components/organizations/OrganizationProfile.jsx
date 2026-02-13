@@ -553,7 +553,7 @@ Return a single JSON object with the key "logo_url" containing the absolute, dir
             </TabsList>
             <TabsContent value="details" className="mt-4 print:mt-0">
               <OrganizationProfileDetails
-                organization={orgflatOrgDataData}
+                            organization={flatOrgData}
                 contactMethods={contactMethods}
                 onUpdate={handleUpdate}
                 isUpdating={updateOrgMutation.isPending}
