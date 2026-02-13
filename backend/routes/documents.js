@@ -1000,7 +1000,8 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
     // - always extracts text (PDF/DOCX/TXT)
     // - OCR fallback for scanned PDFs + images
     // - AI parsing runs only if enable_ai is true (tier-gated)
-    if (!extractedText && file?.path) {
+    // - Also queues for HTML-imported docs when parsing is enabled (cheerio text already extracted)
+    if ((!extractedText && file?.path) || (extractedTextFromHtml && !skipParsing && profileId)) {
       if (!skipParsing && profileId) {
         if (!(await requireTierCapability(req, res, profileId, TIER_CAPABILITIES.DOCUMENT_AI))) return
       }
