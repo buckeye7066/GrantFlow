@@ -151,13 +151,16 @@ export default function DocumentItem({ document, onDelete }) {
           fallbackFileName: String(document.file_name || document.name || 'document').trim() || 'document',
         })
       } catch (error) {
-        toast({
-          variant: 'destructive',
-          title: 'Download failed',
-          description: error?.message || 'Unable to download this document right now.',
-        })
+        // If authenticated download fails (e.g. 404 for URL-imported docs), fall through to extracted_text
+        if (!document.extracted_text) {
+          toast({
+            variant: 'destructive',
+            title: 'Download failed',
+            description: error?.message || 'Unable to download this document right now.',
+          })
+          return
+        }
       }
-      return
     }
     if (document.extracted_text) {
       const blob = new Blob([document.extracted_text], { type: 'text/plain;charset=utf-8' });
@@ -181,13 +184,16 @@ export default function DocumentItem({ document, onDelete }) {
       try {
         await openAuthenticatedUrlForPrint(url)
       } catch (error) {
-        toast({
-          variant: 'destructive',
-          title: 'Print failed',
-          description: error?.message || 'Unable to open printable view right now.',
-        })
+        // If authenticated print fails, fall through to extracted_text
+        if (!document.extracted_text) {
+          toast({
+            variant: 'destructive',
+            title: 'Print failed',
+            description: error?.message || 'Unable to open printable view right now.',
+          })
+          return
+        }
       }
-      return
     }
     if (document.extracted_text) {
       openTextPrintWindow(document.name ?? 'Document', document.extracted_text);
