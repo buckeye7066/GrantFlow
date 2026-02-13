@@ -4,7 +4,9 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useLocation } from "react-router-dom";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Filter, Loader2, RefreshCcw, Trash2 } from "lucide-react";
+import { getCrawlerJob } from "@/api/crawlers";
 import KanbanBoard from "@/components/pipeline/KanbanBoard";
 import AdvancedFilters from "@/components/pipeline/AdvancedFilters";
 import {
@@ -31,6 +33,7 @@ export default function Pipeline() {
   const [grantToDelete, setGrantToDelete] = useState(null);
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
   const [isProcessAllPending, setIsProcessAllPending] = useState(false);
+  const [processAllJobId, setProcessAllJobId] = useState(null);
   const [filters, setFilters] = useState({
     search: '',
     minAmount: '',
@@ -109,6 +112,49 @@ export default function Pipeline() {
       base44.setActiveProfileId?.(null)
     }
   }, [selectedProfileId])
+
+  // Poll Process All job status for progress display
+  const processAllJobQuery = useQuery({
+    queryKey: ["crawler-job", processAllJobId],
+    queryFn: () => getCrawlerJob(processAllJobId),
+    enabled: Boolean(processAllJobId),
+    refetchInterval: 3000,
+  });
+  const processAllJob = processAllJobQuery?.data ?? null;
+  const processAllJobStatus = processAllJob?.status ?? "";
+  const processAllJobMeta = processAllJob?.result_meta ?? {};
+
+  // When Process All job completes, refresh grants and show result
+  useEffect(() => {
+    if (!processAllJobId || !processAllJob) return;
+    if (!["completed", "failed", "cancelled"].includes(processAllJobStatus)) return;
+
+    queryClient.invalidateQueries({ queryKey: ["grants"] });
+    queryClient.invalidateQueries({ queryKey: ["grants-pipeline"] });
+    setProcessAllJobId(null);
+    setIsProcessAllPending(false);
+
+    if (processAllJobStatus === "completed") {
+      const { evaluated = 0, advanced = 0, handoffs = 0 } = processAllJobMeta;
+      toast({
+        title: "Process All completed",
+        description: `Evaluated ${evaluated} grant(s). ${advanced} advanced, ${handoffs} need review.`,
+      });
+    } else if (processAllJobStatus === "failed") {
+      toast({
+        variant: "destructive",
+        title: "Process All failed",
+        description: processAllJob?.error || "Pipeline automation job failed.",
+      });
+    }
+  }, [
+    processAllJobId,
+    processAllJob,
+    processAllJobStatus,
+    processAllJobMeta,
+    queryClient,
+    toast,
+  ]);
 
   const vnextAppsQuery = useQuery({
     queryKey: ["vnext-applications", selectedProfileId],
@@ -271,7 +317,6 @@ export default function Pipeline() {
         ...(forProfile ? { profile_id: forProfile } : {}),
         parameters: {
           process_all: true,
-          // Global runs can be heavy; keep this bounded unless explicitly overridden.
           ...(forProfile ? { limit: 2000 } : { limit: 500 }),
         },
       }
@@ -280,19 +325,24 @@ export default function Pipeline() {
         method: 'POST',
         body: JSON.stringify(payload),
       })
+      const jobId = job?.id
 
-      toast({
-        title: 'Pipeline automation started',
-        description: job?.id ? `Job ${job.id} queued.` : 'Job queued.',
-      })
+      if (jobId) {
+        setProcessAllJobId(jobId)
+      } else {
+        setIsProcessAllPending(false)
+        toast({
+          title: 'Pipeline automation started',
+          description: 'Job queued. Progress cannot be tracked.',
+        })
+      }
     } catch (error) {
+      setIsProcessAllPending(false)
       toast({
         variant: 'destructive',
         title: 'Process All failed',
         description: error?.message || 'Unable to queue pipeline automation.',
       })
-    } finally {
-      setIsProcessAllPending(false)
     }
   }
 
@@ -393,6 +443,26 @@ export default function Pipeline() {
             onFiltersChange={handleFiltersChange}
             allTags={allTags}
           />
+
+          {/* Process All progress */}
+          {processAllJobId && (
+            <Alert>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <AlertDescription className="ml-2">
+                {processAllJobStatus === "queued" && "Pipeline automation queued. Waiting for worker…"}
+                {processAllJobStatus === "running" && "Processing pipeline grants…"}
+                {processAllJobStatus === "completed" && (
+                  <>
+                    Done: {processAllJobMeta.evaluated ?? 0} evaluated, {processAllJobMeta.advanced ?? 0} advanced,{" "}
+                    {processAllJobMeta.handoffs ?? 0} need review.
+                  </>
+                )}
+                {processAllJobStatus === "failed" && `Failed: ${processAllJob?.error ?? "Unknown error"}`}
+                {!["queued", "running", "completed", "failed"].includes(processAllJobStatus) &&
+                  `Status: ${processAllJobStatus || "…"}`}
+              </AlertDescription>
+            </Alert>
+          )}
         </div>
 
         {env.shouldersVnext && selectedProfileId !== "all" ? (
