@@ -10,6 +10,7 @@ import { createOpenAIClient } from '../utils/openaiClient.js';
 import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js';
 import fetch from 'node-fetch';
+import * as cheerio from 'cheerio';
 import { classifyUniversityApplicationForDocument, loadUniversityApplicationsForProfile } from '../services/universityDocumentClassifier.js';
 import { supportedSectionKeys } from '../prompts/profileSections.js'
 import { getDefaultSectionData } from '../config/profileSchema.js'
@@ -60,6 +61,9 @@ function requireUploadsWritable(req, res, next) {
 
 function addDownloadUrl(doc) {
   if (!doc || !doc.id) return doc
+  // Only add download_url if the document has a local file (not just extracted text from a URL import)
+  const hasLocalFile = doc.file_path || (doc.file_url && String(doc.file_url).startsWith('/uploads/'))
+  if (!hasLocalFile) return doc
   return { ...doc, download_url: `/api/documents/${String(doc.id)}/download` }
 }
 
@@ -283,7 +287,14 @@ async function downloadRemoteFileToUploads({ url, req }) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20_000);
   try {
-    const resp = await fetch(initial.toString(), { signal: controller.signal });
+    const resp = await fetch(initial.toString(), {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; GrantFlow/1.0; +https://grantflow.app)',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+      redirect: 'follow',
+    });
     if (!resp.ok) {
       throw new Error(`Unable to download file (${resp.status})`);
     }
@@ -321,6 +332,36 @@ async function downloadRemoteFileToUploads({ url, req }) {
     if (buf.length > 50 * 1024 * 1024) {
       throw new Error('Remote file is too large (max 50MB).');
     }
+    // Detect HTML content (webpage URL rather than direct file link)
+    const ct = (contentType || '').toLowerCase();
+    const isHtml = ct.includes('text/html') || ct.includes('application/xhtml');
+    if (isHtml) {
+      const html = buf.toString('utf-8');
+      const $ = cheerio.load(html);
+      $('script, style, nav, footer, header, iframe, noscript, svg').remove();
+      const pageTitle = $('title').first().text().trim() || $('h1').first().text().trim() || '';
+      let bodyText = '';
+      const mainEl = $('main, article, [role="main"]').first();
+      if (mainEl.length) {
+        bodyText = mainEl.text();
+      } else {
+        bodyText = $('body').text();
+      }
+      const extractedText = bodyText.replace(/[ \t]+/g, ' ').replace(/(\n\s*){3,}/g, '\n\n').trim();
+      if (!extractedText) {
+        throw new Error('URL points to a webpage but no readable text could be extracted.');
+      }
+      const finalUrl = resp.url || url;
+      return {
+        file: null,
+        publicUrl: null,
+        htmlExtracted: true,
+        extractedText,
+        pageTitle: pageTitle || null,
+        source: { downloaded: true, url, finalUrl, contentType, isHtml: true },
+      };
+    }
+
     await fs.promises.writeFile(absPath, buf);
 
     const publicUrl = `/uploads/${filename}`;
@@ -744,13 +785,27 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
 
     let file = req.file;
     let fileUrl = req.body?.file_url ?? null;
+    let extractedTextFromHtml = null;
+    let htmlPageTitle = null;
+
+    // Auto-prepend https:// if no protocol specified
+    if (fileUrl && !/^https?:\/\//i.test(String(fileUrl))) {
+      fileUrl = `https://${String(fileUrl).trim()}`;
+    }
     if (!file && fileUrl && (String(fileUrl).startsWith('http://') || String(fileUrl).startsWith('https://'))) {
       const downloaded = await downloadRemoteFileToUploads({ url: String(fileUrl), req });
-      file = downloaded.file;
-      fileUrl = downloaded.publicUrl;
+      if (downloaded.htmlExtracted) {
+        // URL pointed to a webpage, not a file
+        extractedTextFromHtml = downloaded.extractedText;
+        htmlPageTitle = downloaded.pageTitle || null;
+        fileUrl = downloaded.source.finalUrl || downloaded.source.url || fileUrl;
+      } else {
+        file = downloaded.file;
+        fileUrl = downloaded.publicUrl;
+      }
     }
 
-    if (!file && !rawExtractedText && !fileUrl) {
+    if (!file && !rawExtractedText && !extractedTextFromHtml && !fileUrl) {
       return res.status(400).json({ error: 'document file is required' });
     }
 
@@ -822,13 +877,13 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
 
     const docId = crypto.randomUUID();
     const publicUrl = file ? (fileUrl || `/uploads/${file.filename}`) : fileUrl;
-    const docName = (file?.originalname || rawName || 'Uploaded Document').trim();
+    const docName = (file?.originalname || rawName || htmlPageTitle || 'Uploaded Document').trim();
     let universityApplicationId = rawUniversityApplicationId ? String(rawUniversityApplicationId).trim() : null;
     let universityApplicationName = rawUniversityApplicationName
       ? String(rawUniversityApplicationName).trim()
       : null;
     
-    let extractedText = rawExtractedText || null;
+    let extractedText = rawExtractedText || extractedTextFromHtml || null;
     // IMPORTANT: Text extraction (including OCR) is async and handled by the `document_ingest` worker.
 
     const hasEnableAiField = rawEnableAi !== undefined;
@@ -945,7 +1000,8 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
     // - always extracts text (PDF/DOCX/TXT)
     // - OCR fallback for scanned PDFs + images
     // - AI parsing runs only if enable_ai is true (tier-gated)
-    if (!extractedText && file?.path) {
+    // - Also queues for HTML-imported docs when parsing is enabled (cheerio text already extracted)
+    if ((!extractedText && file?.path) || (extractedTextFromHtml && !skipParsing && profileId)) {
       if (!skipParsing && profileId) {
         if (!(await requireTierCapability(req, res, profileId, TIER_CAPABILITIES.DOCUMENT_AI))) return
       }
@@ -1383,6 +1439,27 @@ router.get('/:id/extract', async (req, res) => {
       .get(document.id);
 
     if (!extract) {
+      // If the document already has extracted_text (e.g. HTML import via cheerio),
+      // return a synthetic completed extract instead of misleading "pending" status.
+      const fallbackText = (document.extracted_text || '').trim();
+      if (fallbackText.length > 0) {
+        const charCount = fallbackText.length;
+        const wordCount = fallbackText.split(/\s+/).filter(Boolean).length;
+        // Assign confidence based on text quality: >=500 chars → 0.85, >=100 → 0.7, else 0.5
+        const confidence = charCount >= 500 ? 0.85 : charCount >= 100 ? 0.7 : 0.5;
+        return res.json({
+          document_id: document.id,
+          status: 'completed',
+          confidence,
+          warnings: [],
+          char_count: charCount,
+          word_count: wordCount,
+          pages: null,
+          ocr_used: false,
+          methods_used: ['html_scrape'],
+          source_type: 'html',
+        });
+      }
       return res.json({
         document_id: document.id,
         status: 'pending',

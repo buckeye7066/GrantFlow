@@ -334,8 +334,11 @@ export default function ProfileFilesPanel({
       setUrlError("Paste a URL to import.")
       return
     }
+    let url
     try {
-      const parsed = new URL(raw)
+      // Auto-prepend https:// if no protocol specified
+      url = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`
+      const parsed = new URL(url)
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
         setUrlError("Only http(s) URLs are supported.")
         return
@@ -344,7 +347,7 @@ export default function ProfileFilesPanel({
       setUrlError("That doesn’t look like a valid URL.")
       return
     }
-    urlIngestMutation.mutate({ url: raw })
+    urlIngestMutation.mutate({ url })
   }
 
   return (
@@ -458,7 +461,7 @@ export default function ProfileFilesPanel({
             <div className="rounded-lg border border-border bg-card p-4 space-y-2">
               <p className="font-medium text-foreground text-sm">Import from URL</p>
               <p className="text-xs text-muted-foreground">
-                Paste a direct link to a file (PDF/DOCX/image). Max 50MB; download timeout ~20s.
+                Paste a link to a file (PDF/DOCX/image) or any webpage. Max 50MB; download timeout ~20s.
               </p>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 <Input

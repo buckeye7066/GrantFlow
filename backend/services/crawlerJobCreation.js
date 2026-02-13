@@ -125,7 +125,7 @@ export async function createCrawlerJob(db, options) {
   // IMPORTANT:
   // When callers explicitly skip idempotency (force-rerun), we must not reuse the same key,
   // otherwise the UNIQUE index on crawler_jobs.idempotency_key will throw and the job can't be created.
-  const idempotencyKey = skipIdempotencyCheck ? null : generateIdempotencyKey(type, profileId, parameters)
+  let idempotencyKey = skipIdempotencyCheck ? null : generateIdempotencyKey(type, profileId, parameters)
 
   // Check for existing job with same idempotency key (unless explicitly skipped)
   if (!skipIdempotencyCheck) {
@@ -145,6 +145,21 @@ export async function createCrawlerJob(db, options) {
         existing: true,
         job: existing,
       }
+    }
+
+    // If a completed/failed job exists with the same idempotency key,
+    // generate a new unique key to avoid unique-constraint violations (23505)
+    const completedExisting = await db
+      .prepare('SELECT id FROM crawler_jobs WHERE idempotency_key = ?')
+      .get(idempotencyKey)
+    if (completedExisting) {
+      const suffix = '_' + Date.now().toString(36)
+      idempotencyKey = idempotencyKey.substring(0, 32 - suffix.length) + suffix
+      console.log('[createCrawlerJob] Regenerated idempotency key to avoid collision with completed job', {
+        existingJobId: completedExisting.id,
+        type,
+        newKey: idempotencyKey,
+      })
     }
   }
 
