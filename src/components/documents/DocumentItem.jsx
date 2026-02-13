@@ -54,6 +54,11 @@ export default function DocumentItem({ document, onDelete }) {
     const data = extractQuery.data
     if (!data) return null
 
+    // Show "Processing" for documents still being extracted
+    if (data.status === 'pending' || data.status === 'processing') {
+      return { label: 'Processing…', tone: 'warn', confidence: null }
+    }
+
     const confidence = typeof data.confidence === 'number' ? data.confidence : 0
     const ocrUsed = Boolean(data.ocr_used)
 
@@ -151,13 +156,16 @@ export default function DocumentItem({ document, onDelete }) {
           fallbackFileName: String(document.file_name || document.name || 'document').trim() || 'document',
         })
       } catch (error) {
-        toast({
-          variant: 'destructive',
-          title: 'Download failed',
-          description: error?.message || 'Unable to download this document right now.',
-        })
+        // If authenticated download fails (e.g. 404 for URL-imported docs), fall through to extracted_text
+        if (!document.extracted_text) {
+          toast({
+            variant: 'destructive',
+            title: 'Download failed',
+            description: error?.message || 'Unable to download this document right now.',
+          })
+          return
+        }
       }
-      return
     }
     if (document.extracted_text) {
       const blob = new Blob([document.extracted_text], { type: 'text/plain;charset=utf-8' });
@@ -181,13 +189,16 @@ export default function DocumentItem({ document, onDelete }) {
       try {
         await openAuthenticatedUrlForPrint(url)
       } catch (error) {
-        toast({
-          variant: 'destructive',
-          title: 'Print failed',
-          description: error?.message || 'Unable to open printable view right now.',
-        })
+        // If authenticated print fails, fall through to extracted_text
+        if (!document.extracted_text) {
+          toast({
+            variant: 'destructive',
+            title: 'Print failed',
+            description: error?.message || 'Unable to open printable view right now.',
+          })
+          return
+        }
       }
-      return
     }
     if (document.extracted_text) {
       openTextPrintWindow(document.name ?? 'Document', document.extracted_text);
@@ -197,7 +208,8 @@ export default function DocumentItem({ document, onDelete }) {
   };
 
   return (
-    <Card className="flex flex-col">
+    <Card className="flex flex-col cursor-pointer hover:shadow-md hover:border-primary/30 transition-shadow">
+      <div onClick={handleDownload} className="flex-1 min-w-0" role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleDownload() }}>
       <CardHeader className="flex-row items-center gap-4 space-y-0 pb-4">
         <div className="p-3 bg-blue-50 rounded-lg">
           <FileText className="w-6 h-6 text-blue-600" />
@@ -233,6 +245,11 @@ export default function DocumentItem({ document, onDelete }) {
                 {confidenceMeter.label}
               </Badge>
             ) : null}
+            {document.ai_sections ? (
+              <Badge variant="default" className="text-[10px] bg-violet-600 hover:bg-violet-700">
+                <Wand2 className="w-3 h-3 mr-0.5" /> AI Parsed
+              </Badge>
+            ) : null}
           </div>
         </div>
       </CardHeader>
@@ -249,6 +266,7 @@ export default function DocumentItem({ document, onDelete }) {
           </p>
         ) : null}
       </CardContent>
+      </div>
       <CardFooter className="flex gap-2">
         {isUnparsed && (
           <Button

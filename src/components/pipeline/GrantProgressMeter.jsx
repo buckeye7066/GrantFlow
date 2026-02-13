@@ -34,16 +34,16 @@ const GrantProgressMeter = ({ progress = 50, stage = 'Processing' }) => {
                                                       aria-valuemax="100"
                                                       role="progressbar"
                                                     />
-                            </div>div>
+                            </div>
                             <div className="progress-percentage">
                                 {normalizedProgress}%
-                            </div>div>
-                    </div>div>
+                            </div>
+                    </div>
                     <div className="progress-label">
                         {stage} • Processing Progress
-                    </div>div>
-              </div>div>
+                    </div>
+              </div>
             );
 };
 
-export default GrantProgressMeter;</div>
+export default GrantProgressMeter;
