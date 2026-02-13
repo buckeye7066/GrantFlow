@@ -1,6 +1,7 @@
-import React from "react"
+import React, { useRef, useEffect } from "react"
 import { useSearchParams, useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { syncTargetCollegesToApplications } from "@/utils/targetCollegesSync"
 import { AlertCircle, Loader2, Palette } from "lucide-react"
 import {
   getProfile,
@@ -409,6 +410,8 @@ export default function ProfileDetail() {
     profileTypeLabel.includes("medical") ||
     hasHealthSignals
 
+  const [activeTab, setActiveTab] = React.useState("profile")
+
   const studentState =
     basicInfo?.address?.state ??
     basicInfo?.state ??
@@ -426,6 +429,51 @@ export default function ProfileDetail() {
   const universityApplications = Array.isArray(universitySectionData?.applications)
     ? universitySectionData.applications
     : []
+
+  // One-time sync: target_colleges -> university_applications (avoids duplicates, no infinite loop)
+  const hasSyncedTargetColleges = useRef(false)
+  const lastSyncedProfileId = useRef(null)
+  useEffect(() => {
+    if (!profileId || !profile) return
+    if (!isStudentProfile) return
+    if (lastSyncedProfileId.current !== profileId) {
+      hasSyncedTargetColleges.current = false
+      lastSyncedProfileId.current = profileId
+    }
+    if (hasSyncedTargetColleges.current) return
+
+    hasSyncedTargetColleges.current = true
+    const educationData =
+      profile.sections?.find((s) => s.section_key === "education")?.data ?? {}
+    const { applications, addedCount } = syncTargetCollegesToApplications(
+      educationData,
+      universityApplications,
+    )
+    if (addedCount === 0) return
+
+    upsertSectionMutation
+      .mutateAsync({
+        sectionKey: "university_applications",
+        values: { applications },
+      })
+      .catch((err) => {
+        hasSyncedTargetColleges.current = false
+        const msg = err instanceof Error ? err.message : "Sync failed"
+        console.error("[ProfileDetail] target_colleges sync save failed:", msg)
+        toast({
+          variant: "destructive",
+          title: "Target colleges sync failed",
+          description: msg,
+        })
+      })
+  }, [
+    profileId,
+    profile,
+    isStudentProfile,
+    universityApplications,
+    upsertSectionMutation,
+    toast,
+  ])
 
   const handleSaveUniversityApplications = async (nextApplications) => {
     try {
@@ -472,7 +520,7 @@ export default function ProfileDetail() {
           </div>
         </div>
 
-        <Tabs defaultValue="profile" className="w-full">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <TabsList
             // Responsive tabs: NEVER overlap. Scroll horizontally on narrow widths.
             className="w-full justify-start gap-2 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
@@ -507,6 +555,7 @@ export default function ProfileDetail() {
               isUploadingDocument={uploadDocumentMutation.isPending}
               fundsTotal={profile.pipeline_funds_total ?? 0}
               showAllSections={isAdmin}
+              onNavigateToUniversities={isStudentProfile ? () => setActiveTab("universities") : undefined}
             />
           </TabsContent>
 
