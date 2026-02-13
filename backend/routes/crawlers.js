@@ -399,7 +399,10 @@ router.get('/jobs', async (req, res) => {
   if (!ctx) return
 
   try {
-        if (!req.db) return res.status(500).json({ error: 'Database connection not available' })
+    if (!req.db) {
+      return res.status(500).json({ error: 'Database connection not available' })
+    }
+
     const limit = Number.parseInt(req.query.limit ?? 100, 10)
     const offset = Number.parseInt(req.query.offset ?? 0, 10)
     const typeFilter = typeof req.query.type === 'string' ? req.query.type.toLowerCase() : null
@@ -426,27 +429,28 @@ router.get('/jobs', async (req, res) => {
 
     const rows = await req.db
       .prepare(
-        `
-          SELECT *
-          FROM crawler_jobs
-          ${clause}
-          ORDER BY created_at DESC
-            LIMIT ?
-                      OFFSET ?
-      `)
+        `SELECT * FROM crawler_jobs ${clause} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      )
       .all(...params, limitValue, offsetValue)
-const mappedRows = rows.map(row => {
+
+    const mappedRows = rows
+      .map((row) => {
         try {
-                  return mapJob(row)
+          return mapJob(row)
         } catch (err) {
-                  console.error('Error mapping job row:', err)
-                  return { error: err.message, id: row?.id }
+          console.error('Error mapping job row:', err)
+          return { error: err.message, id: row?.id }
         }
-})
-        res.json(mappedRows)
-} catch (error) {
+      })
+      .filter(Boolean)
+
+    res.json(mappedRows)
+  } catch (error) {
     console.error('Error listing crawler jobs:', error)
-if (!res.headersSent) res.status(500).json({ error: error.message || 'Error listing crawler jobs' })  }
+    if (!res.headersSent) {
+      res.status(500).json({ error: error.message || 'Error listing crawler jobs' })
+    }
+  }
 })
 
 router.get('/jobs/metrics', async (req, res) => {
@@ -958,7 +962,10 @@ router.get('/jobs/metrics', async (req, res) => {
     })
   } catch (error) {
     console.error('Error building crawler job metrics:', error)
-if (!res.headersSent) res.status(500).json({ error: error.message || 'Error building crawler job metrics' })  }
+    if (!res.headersSent) {
+      res.status(500).json({ error: error.message || 'Error building crawler job metrics' })
+    }
+  }
 })
 
 router.get('/jobs/:id', async (req, res) => {

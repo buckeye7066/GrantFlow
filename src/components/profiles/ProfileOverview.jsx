@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import {
+  ArrowRight,
   CalendarClock,
   ClipboardList,
   FileText,
@@ -28,6 +29,7 @@ import {
   Upload,
   UploadCloud,
 } from "lucide-react"
+import { normalizeTargetColleges } from "@/utils/targetCollegesSync"
 import { SECTION_CONFIG } from "@/components/profiles/ProfileSectionEditor.jsx"
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx"
 import EditableField from "@/components/shared/EditableField.jsx"
@@ -302,6 +304,35 @@ function formatCurrencyFromCents(cents) {
   }).format(cents / 100)
 }
 
+function TargetCollegesCards({ colleges, onViewInUniversities }) {
+  const list = normalizeTargetColleges(colleges)
+  if (list.length === 0) return null
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">Target colleges</span>
+        {onViewInUniversities ? (
+          <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); onViewInUniversities() }}>
+            <ArrowRight className="w-3.5 h-3.5 mr-1.5" />
+            View in Universities
+          </Button>
+        ) : null}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {list.map((name, idx) => (
+          <div
+            key={`${name}-${idx}`}
+            className="rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2.5 flex items-center gap-2"
+          >
+            <GraduationCap className="w-4 h-4 text-indigo-500 shrink-0" />
+            <span className="text-sm font-medium text-slate-800 truncate">{name}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function SectionPreview({
   sectionKey,
   section,
@@ -310,6 +341,7 @@ function SectionPreview({
   onSaveField,
   isSaving,
   isAIProcessing,
+  onNavigateToUniversities,
 }) {
   const config = SECTION_CONFIG[sectionKey]
   const SectionIcon = SECTION_ICONS[sectionKey] ?? FolderOpen
@@ -368,6 +400,26 @@ function SectionPreview({
             {dataEntries.slice(0, 8).map(([key, value]) => {
               const label = titleCase(key)
               const isBoolean = typeof value === "boolean"
+
+              if (sectionKey === "education" && key === "target_colleges") {
+                const colleges = normalizeTargetColleges(value)
+                if (colleges.length > 0) {
+                  return (
+                    <div key={key} onClick={(e) => e.stopPropagation()}>
+                      <TargetCollegesCards
+                        colleges={value}
+                        onViewInUniversities={onNavigateToUniversities}
+                      />
+                    </div>
+                  )
+                }
+                return (
+                  <div key={key} className="flex items-start justify-between gap-4">
+                    <dt className="text-xs font-medium text-slate-500 uppercase tracking-wide">{label}</dt>
+                    <dd className="flex-1 text-right">{renderValue(key, value)}</dd>
+                  </div>
+                )
+              }
 
               if (!canInlineEdit) {
                 return (
@@ -490,6 +542,7 @@ export default function ProfileOverview({
   fundsTotal = 0,
   billing = null,
   showAllSections = false,
+  onNavigateToUniversities,
 }) {
   const { state: dashboardPrefs } = useDashboardPreferences()
   const theme = THEME_PRESETS[dashboardPrefs.colorTheme] ?? THEME_PRESETS.blue
@@ -895,6 +948,7 @@ export default function ProfileOverview({
               onSaveField={onSaveField}
               isSaving={savingSectionKey === sectionKey}
               isAIProcessing={aiLoadingKey === sectionKey}
+              onNavigateToUniversities={onNavigateToUniversities}
             />
           ))}
         </div>

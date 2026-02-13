@@ -18,6 +18,7 @@ import {
   Edit,
   GraduationCap,
   Mail,
+  MapPin,
   Phone,
   Target,
   Trash2,
@@ -28,7 +29,9 @@ import {
   Layers,
   ListChecks,
   FileUp,
+  Loader2,
 } from "lucide-react"
+import { fetchLocalFundingByZip } from "@/api/colleges.js"
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter } from "@/components/ui/alert-dialog"
 import { useToast } from "@/components/ui/use-toast"
 import UniversityApplicationForm from "./UniversityApplicationForm.jsx"
@@ -376,6 +379,7 @@ function normaliseApplications(applications) {
     })),
     interests: safeArray(application.interests),
     activity_catalog: normalizeActivityCatalog(application.activity_catalog),
+    local_funding: safeArray(application.local_funding),
     actions: {
       apply_url: application.actions?.apply_url ?? "",
       pay_fee_url: application.actions?.pay_fee_url ?? "",
@@ -894,6 +898,7 @@ function ApplicationCard({
       .sort((a, b) => String(b?.created_at || "").localeCompare(String(a?.created_at || "")))
   }, [documents, application.id])
 
+  const { toast } = useToast()
   const [interestDialogOpen, setInterestDialogOpen] = useState(false)
   const [interestSearch, setInterestSearch] = useState("")
   const [customInterest, setCustomInterest] = useState("")
@@ -904,6 +909,7 @@ function ApplicationCard({
   const [schoolUploadFile, setSchoolUploadFile] = useState(null)
   const [schoolUploadType, setSchoolUploadType] = useState(UNIVERSITY_DOC_TYPES[0].value)
   const maxFileSize = 50 * 1024 * 1024
+  const [localFundingLoading, setLocalFundingLoading] = useState(false)
 
   useEffect(() => {
     if (!interestDialogOpen) return
@@ -971,6 +977,40 @@ function ApplicationCard({
     await onQuickUpdate(application.id, patch, "Updated interests for this school.")
     setInterestDialogOpen(false)
   }
+
+  const handleFetchLocalFunding = async () => {
+    const zip = (application.zip || application.zip_code || "").trim()
+    const m = zip.match(/\b\d{5}(?:-\d{4})?\b/)
+    const effectiveZip = m ? m[0] : ""
+    if (!effectiveZip) {
+      return
+    }
+    if (!onQuickUpdate) return
+    setLocalFundingLoading(true)
+    try {
+      const res = await fetchLocalFundingByZip({ zip: effectiveZip, radiusMiles: 25 })
+      const results = Array.isArray(res?.results) ? res.results : []
+      const mapped = results.map((r) => ({
+        title: r.title ?? "",
+        url: r.url ?? "",
+        source: r.source ?? "",
+        distanceMiles: r.distanceMiles,
+      }))
+      await onQuickUpdate(
+        application.id,
+        { local_funding: mapped },
+        `Found ${mapped.length} local funding resource(s) within 25 miles.`,
+      )
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to fetch local funding"
+      toast({ variant: "destructive", title: "Local funding fetch failed", description: msg })
+      throw err
+    } finally {
+      setLocalFundingLoading(false)
+    }
+  }
+
+  const localFunding = safeArray(application.local_funding)
 
   const handleSchoolFileSelect = (event) => {
     const file = event.target.files?.[0] ?? null
@@ -1366,6 +1406,68 @@ function ApplicationCard({
               })
             )}
           </div>
+        </div>
+
+        <div className="lg:col-span-12 space-y-4">
+          <h4 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+            <MapPin className="w-4 h-4 text-indigo-600" />
+            Local funding (25 miles)
+          </h4>
+          {(() => {
+            const z = (application.zip || application.zip_code || "").trim()
+            const hasZip = /\b\d{5}(?:-\d{4})?\b/.test(z)
+            if (!hasZip) {
+              return (
+                <p className="text-sm text-slate-500">
+                  ZIP needed to fetch local funding. Add campus ZIP in Edit to fetch nearby resources.
+                </p>
+              )
+            }
+            return (
+              <div className="space-y-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleFetchLocalFunding}
+                  disabled={disabled || localFundingLoading}
+                >
+                  {localFundingLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Fetching…
+                    </>
+                  ) : (
+                    "Fetch local funding (25 miles)"
+                  )}
+                </Button>
+                {localFunding.length > 0 ? (
+                  <div className="space-y-2">
+                    <p className="text-xs text-slate-500">{localFunding.length} resource(s) found</p>
+                    <div className="flex flex-wrap gap-2">
+                      {localFunding.slice(0, 8).map((r, i) => (
+                        <div key={i} className="border border-slate-100 rounded-lg px-3 py-2 text-sm">
+                          {r.url ? (
+                            <a href={r.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                              {r.title || r.source || "Resource"}
+                            </a>
+                          ) : (
+                            <span>{r.title || r.source || "Resource"}</span>
+                          )}
+                          {r.source ? (
+                            <span className="text-slate-500 text-xs ml-1">({r.source})</span>
+                          ) : null}
+                        </div>
+                      ))}
+                      {localFunding.length > 8 ? (
+                        <span className="text-xs text-slate-500">+{localFunding.length - 8} more</span>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            )
+          })()}
         </div>
       </div>
 
