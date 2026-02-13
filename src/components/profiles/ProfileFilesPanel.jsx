@@ -461,7 +461,7 @@ export default function ProfileFilesPanel({
             <div className="rounded-lg border border-border bg-card p-4 space-y-2">
               <p className="font-medium text-foreground text-sm">Import from URL</p>
               <p className="text-xs text-muted-foreground">
-                Paste a URL to a file (PDF/DOCX/image) or a webpage (PDF/DOCX/image). Max 50MB; download timeout ~20s.
+                Paste a link to a file (PDF/DOCX/image) or any webpage. Max 50MB; download timeout ~20s.
               </p>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 <Input
