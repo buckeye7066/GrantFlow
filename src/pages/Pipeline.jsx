@@ -6,7 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Filter, Loader2, RefreshCcw, Trash2 } from "lucide-react";
-import { getCrawlerJob } from "@/api/crawlers";
+import { getCrawlerJob, createCrawlerJob } from "@/api/crawlers";
 import KanbanBoard from "@/components/pipeline/KanbanBoard";
 import AdvancedFilters from "@/components/pipeline/AdvancedFilters";
 import {
@@ -131,6 +131,7 @@ export default function Pipeline() {
 
     queryClient.invalidateQueries({ queryKey: ["grants"] });
     queryClient.invalidateQueries({ queryKey: ["grants-pipeline"] });
+    queryClient.invalidateQueries({ queryKey: ["grants", "pipeline"] });
     setProcessAllJobId(null);
     setIsProcessAllPending(false);
 
@@ -321,10 +322,7 @@ export default function Pipeline() {
         },
       }
 
-      const job = await apiFetch('/api/crawlers/jobs', {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      })
+      const job = await createCrawlerJob(payload)
       const jobId = job?.id
 
       if (jobId) {

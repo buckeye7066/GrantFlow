@@ -21,7 +21,8 @@ const router = express.Router();
 // Whitelist of allowed columns for UPDATE operations
 const ALLOWED_GRANT_COLUMNS = new Set([
   'organization_id', 'funding_opportunity_id', 'title', 'funder', 'deadline',
-  'status', 'priority', 'amount_requested', 'amount_awarded', 'application_url',
+  'status', 'priority', 'amount_requested', 'amount_awarded', 'amount_min', 'amount_max',
+  'application_url',
   'match_score', 'match_reasons', 'notes', 'requirements', 'eligibility',
   'application_steps', 'contact_name', 'contact_email', 'contact_phone',
 
@@ -97,6 +98,8 @@ async function ensureGrantAiColumns(db) {
       { name: 'ai_summary', pg: 'TEXT', sqlite: 'TEXT' },
       { name: 'ai_error', pg: 'TEXT', sqlite: 'TEXT' },
       { name: 'ai_updated_at', pg: 'TIMESTAMPTZ', sqlite: 'DATETIME' },
+      { name: 'amount_min', pg: 'DOUBLE PRECISION', sqlite: 'REAL' },
+      { name: 'amount_max', pg: 'DOUBLE PRECISION', sqlite: 'REAL' },
     ]
 
     // Ensure profile_id exists too (many code paths expect it).
