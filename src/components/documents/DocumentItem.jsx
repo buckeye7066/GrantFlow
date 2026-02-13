@@ -197,7 +197,8 @@ export default function DocumentItem({ document, onDelete }) {
   };
 
   return (
-    <Card className="flex flex-col">
+    <Card className="flex flex-col cursor-pointer hover:shadow-md hover:border-primary/30 transition-shadow">
+      <div onClick={handleDownload} className="flex-1 min-w-0" role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleDownload() }}>
       <CardHeader className="flex-row items-center gap-4 space-y-0 pb-4">
         <div className="p-3 bg-blue-50 rounded-lg">
           <FileText className="w-6 h-6 text-blue-600" />
@@ -249,6 +250,7 @@ export default function DocumentItem({ document, onDelete }) {
           </p>
         ) : null}
       </CardContent>
+      </div>
       <CardFooter className="flex gap-2">
         {isUnparsed && (
           <Button
