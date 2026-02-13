@@ -58,6 +58,11 @@ function validateAdvance(current, suggested) {
     const delta = compareStatuses(currentMapped, suggestedMapped)
     // If AI suggests moving backward or staying, keep current
   if (delta <= 0) return currentMapped
+        // Safety net: if AI suggests an intermediate prep stage, override to 'portal'
+        const PREP_STAGES = ['drafting', 'application_prep', 'revision', 'app_prep']
+        if (PREP_STAGES.includes(suggestedMapped) && PREP_STAGES.includes(currentMapped)) {
+                    return 'portal'
+        }
     // Allow forward movement to whatever stage the AI recommends
   return suggestedMapped
 }
