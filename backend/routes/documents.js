@@ -1438,6 +1438,27 @@ router.get('/:id/extract', async (req, res) => {
       .get(document.id);
 
     if (!extract) {
+      // If the document already has extracted_text (e.g. HTML import via cheerio),
+      // return a synthetic completed extract instead of misleading "pending" status.
+      const fallbackText = (document.extracted_text || '').trim();
+      if (fallbackText.length > 0) {
+        const charCount = fallbackText.length;
+        const wordCount = fallbackText.split(/\s+/).filter(Boolean).length;
+        // Assign confidence based on text quality: >=500 chars → 0.85, >=100 → 0.7, else 0.5
+        const confidence = charCount >= 500 ? 0.85 : charCount >= 100 ? 0.7 : 0.5;
+        return res.json({
+          document_id: document.id,
+          status: 'completed',
+          confidence,
+          warnings: [],
+          char_count: charCount,
+          word_count: wordCount,
+          pages: null,
+          ocr_used: false,
+          methods_used: ['html_scrape'],
+          source_type: 'html',
+        });
+      }
       return res.json({
         document_id: document.id,
         status: 'pending',
