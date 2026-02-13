@@ -61,6 +61,9 @@ function requireUploadsWritable(req, res, next) {
 
 function addDownloadUrl(doc) {
   if (!doc || !doc.id) return doc
+  // Only add download_url if the document has a local file (not just extracted text from a URL import)
+  const hasLocalFile = doc.file_path || (doc.file_url && String(doc.file_url).startsWith('/uploads/'))
+  if (!hasLocalFile) return doc
   return { ...doc, download_url: `/api/documents/${String(doc.id)}/download` }
 }
 
