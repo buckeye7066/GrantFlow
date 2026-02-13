@@ -240,6 +240,11 @@ export default function DocumentItem({ document, onDelete }) {
                 {confidenceMeter.label}
               </Badge>
             ) : null}
+            {document.ai_sections ? (
+              <Badge variant="default" className="text-[10px] bg-violet-600 hover:bg-violet-700">
+                <Wand2 className="w-3 h-3 mr-0.5" /> AI Parsed
+              </Badge>
+            ) : null}
           </div>
         </div>
       </CardHeader>
