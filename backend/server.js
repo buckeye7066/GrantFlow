@@ -84,6 +84,7 @@ import stripeRouter from './routes/stripe.js'
 import stripeWebhookRouter from './routes/stripeWebhook.js'
 import { seedServiceCatalogFromExtract } from './services/serviceCatalogStore.js'
 import adminServiceCatalogRouter from './routes/adminServiceCatalog.js'
+import collegesRouter from './routes/colleges.js'
 
 // Validate environment variables early (fail-fast in production).
 const { env: ENV } = assertEnv()
@@ -1553,6 +1554,7 @@ app.use('/api', legacyFunctionsRouter);
 app.use('/api/crawl-logs', crawlLogsRouter);
 // Geo Crawl monitor + start endpoints (admin-only)
 app.use('/api/geo-crawl', createGeoCrawlRouter({ uploadDir: uploadsDir, getOpenAI: null }));
+app.use('/api/colleges', collegesRouter);
 
 function resolveBuildSha() {
   return (

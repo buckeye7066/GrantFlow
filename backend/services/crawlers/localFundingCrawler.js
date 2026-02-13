@@ -23,7 +23,7 @@ const calculateDistance = (lat1, lng1, lat2, lng2) => {
   return R * c
 }
 
-const SEARCH_RADIUS_MILES = 50
+const DEFAULT_SEARCH_RADIUS_MILES = 50
 
 function normalizeZip(value) {
   if (value === null || value === undefined) return null
@@ -154,6 +154,7 @@ const LOCAL_FUNDING_SOURCES = [
 export async function crawlLocalFunding(profile, options = {}) {
   const results = []
   const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 50
+  const radiusMiles = typeof options.radius_miles === 'number' ? Math.max(1, Math.min(100, options.radius_miles)) : DEFAULT_SEARCH_RADIUS_MILES
   const includeDirectoryResources =
     String(options.include_directory_resources ?? 'true').toLowerCase() !== 'false'
   
@@ -180,7 +181,7 @@ export async function crawlLocalFunding(profile, options = {}) {
 
   if (targetZip) {
     console.log(
-      `[LocalFundingCrawler] Searching within ${SEARCH_RADIUS_MILES} miles of ZIP anchors: ${limitedAnchorZips.join(', ')}`,
+      `[LocalFundingCrawler] Searching within ${radiusMiles} miles of ZIP anchors: ${limitedAnchorZips.join(', ')}`,
     )
     console.log(`[LocalFundingCrawler] Primary location: ${profileCity}, ${profileState} ${targetZip}`)
   } else {
@@ -261,7 +262,7 @@ export async function crawlLocalFunding(profile, options = {}) {
         const fromAnchor = await searchLocalSource(source, anchor.coords, profile, searchKeywords, {
           anchor_zip: anchor.zip,
           anchor_kind: anchor.kind,
-          radius_miles: SEARCH_RADIUS_MILES,
+          radius_miles: radiusMiles,
         })
         for (const o of fromAnchor) opportunities.push(o)
       }
@@ -281,7 +282,7 @@ export async function crawlLocalFunding(profile, options = {}) {
           const best = minDistanceToAnchors({ anchors, latitude: opp.latitude, longitude: opp.longitude })
           distance = best.distance
           distanceAnchorZip = best.anchorZip
-          if (distance !== null && distance > SEARCH_RADIUS_MILES) continue // Hard 50-mile gate
+          if (distance !== null && distance > radiusMiles) continue // Hard radius gate
         } else if (opp.zip || opp.zip_code || opp.postal_code) {
           // If the opportunity has a ZIP but no coordinates, use ZIP distance (in miles) when possible.
           const oppZip = normalizeZip(opp.zip || opp.zip_code || opp.postal_code)
@@ -299,7 +300,7 @@ export async function crawlLocalFunding(profile, options = {}) {
             }
             distance = best.distance
             distanceAnchorZip = best.anchorZip
-            if (distance !== null && distance > SEARCH_RADIUS_MILES) continue // Hard 50-mile gate
+            if (distance !== null && distance > radiusMiles) continue // Hard radius gate
           }
         }
         
