@@ -1,5 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { base44 } from '@/api/base44Client';
 import { getProfile, listProfiles } from '@/api/profiles';
 import { apiFetch } from '@/api/client';
@@ -17,7 +18,21 @@ import { createLogger } from '@/utils/logger'
 
 
 
+/**
+ * Resolve profile_id: 1) explicit UI selection, 2) URL ?profile_id=, 3) null.
+ * Does NOT auto-select first profile (product blocks add-to-pipeline without explicit choice).
+ */
+function resolveSelectedProfileId(selectedProfileId, searchParams, profiles) {
+  const fromUi = typeof selectedProfileId === 'string' ? selectedProfileId.trim() : null
+  if (fromUi) return fromUi
+  const fromUrl = searchParams?.get?.('profile_id') ?? null
+  if (!fromUrl) return null
+  const valid = Array.isArray(profiles) && profiles.some((p) => String(p?.id) === String(fromUrl))
+  return valid ? fromUrl : null
+}
+
 export default function DiscoverGrants() {
+  const [searchParams] = useSearchParams()
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   
@@ -47,10 +62,24 @@ export default function DiscoverGrants() {
     enabled: authReady,
   });
 
+  const effectiveProfileId = useMemo(
+    () => resolveSelectedProfileId(selectedProfileId, searchParams, profiles),
+    [selectedProfileId, searchParams, profiles]
+  );
+
+  useEffect(() => {
+    const urlProfileId = searchParams.get('profile_id')
+    if (!urlProfileId || profiles.length === 0) return
+    const valid = profiles.some((p) => String(p?.id) === String(urlProfileId))
+    if (valid && !selectedProfileId) {
+      setSelectedProfileId(urlProfileId)
+    }
+  }, [searchParams, profiles, selectedProfileId])
+
   const { data: profileDetail } = useQuery({
-    queryKey: ['discover-profile', selectedProfileId],
-    queryFn: () => getProfile(selectedProfileId),
-    enabled: authReady && Boolean(selectedProfileId),
+    queryKey: ['discover-profile', effectiveProfileId ?? selectedProfileId],
+    queryFn: () => getProfile(effectiveProfileId || selectedProfileId),
+    enabled: authReady && Boolean(effectiveProfileId || selectedProfileId),
   });
 
   // Also fetch organizations to get detailed org data for selected profile
@@ -60,10 +89,9 @@ export default function DiscoverGrants() {
     enabled: authReady,
   });
 
-  // Memoized selected profile and organization
-  const selectedProfile = useMemo(() => 
-    profiles.find(p => p.id === selectedProfileId),
-    [profiles, selectedProfileId]
+  const selectedProfile = useMemo(() =>
+    profiles.find(p => p.id === (effectiveProfileId || selectedProfileId)),
+    [profiles, effectiveProfileId, selectedProfileId]
   );
 
   const selectedOrg = useMemo(
@@ -131,7 +159,8 @@ export default function DiscoverGrants() {
       return { status: 'failed', error: 'not_authenticated' }
     }
     
-    if (!selectedProfileId) {
+    const profileIdForAdd = effectiveProfileId || selectedProfileId
+    if (!profileIdForAdd) {
       if (!silent) {
         toast({
           variant: 'destructive',
@@ -141,7 +170,7 @@ export default function DiscoverGrants() {
       }
       return { status: 'failed', error: 'missing_profile' }
     }
-    
+
     const orgId = selectedProfile?.organization_id;
     
     // Check for duplicates if we have an org
@@ -185,7 +214,7 @@ export default function DiscoverGrants() {
         method: 'POST',
         body: JSON.stringify({
           opportunity_id: opportunity.id || null,
-          profile_id: selectedProfileId,
+          profile_id: profileIdForAdd,
           organization_id: orgId || null,
           match_score: opportunity.match || opportunity.match_score,
           match_reasons: opportunity.matchReasons || opportunity.matched_fields || [],
@@ -274,7 +303,7 @@ export default function DiscoverGrants() {
         errorCode,
         requestId,
         opportunityTitle: opportunity.title,
-        profileId: selectedProfileId,
+        profileId: profileIdForAdd,
       })
       
       return { status: 'failed', error: errorCode, message: userMessage, requestId }
@@ -390,7 +419,7 @@ export default function DiscoverGrants() {
 
             {/* Crawler Selection */}
             <CrawlerSelection
-              profileId={selectedProfileId}
+              profileId={effectiveProfileId ?? selectedProfileId}
               profileData={profileForSearch}
               onCrawlComplete={handleCrawlerResults}
             />
@@ -399,9 +428,9 @@ export default function DiscoverGrants() {
 
         {/* Results Display */}
         {searchResults.length > 0 && (
-          <SearchResults
-            results={searchResults}
-            profileId={selectedProfileId}
+        <SearchResults
+          results={searchResults}
+          profileId={effectiveProfileId ?? selectedProfileId}
             onAddToPipeline={handleAddToPipeline}
             organizationName={selectedProfile?.display_name}
           />
