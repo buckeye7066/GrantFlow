@@ -592,7 +592,7 @@ export default function AnyaChat({ profileId }) {
                   {openTaskCount} open
                 </Badge>
               </div>
-              {isTasksExpanded && <div className="mt-3 space-y-2">
+              {isTasksExpanded && (<div><div className="mt-3 space-y-2">
                 {isLoadingTasks ? (
                   <div className="flex items-center gap-2 text-xs text-slate-500">
                     <Loader2 className="h-3 w-3 animate-spin text-blue-600" />
@@ -694,7 +694,8 @@ export default function AnyaChat({ profileId }) {
                   </Button>
                 </div>
               </form>
-            </div>}
+            </div>)}
+          </div>
           ) : null}
         </div>
       </div>
