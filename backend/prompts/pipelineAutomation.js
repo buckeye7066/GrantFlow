@@ -85,7 +85,15 @@ export function buildPipelineAutomationPrompt({
                                            - Named foundation or nonprofit funder → "portal" (most foundations now use online portals)
                                            - Unknown or unclear funder → "portal"
 
-                                           DO NOT leave grants in "application_prep" or "drafting". The purpose of this automation
+                                           DO NOT leave grants in "application_prep" or "drafting".
+
+=== MANDATORY HANDOFF DETAIL ===
+When handoff_required is true, the "application_steps" field MUST contain a detailed, numbered, step-by-step guide that tells the team member EXACTLY how to complete and submit this specific application. Generic instructions like "visit the application URL and follow the instructions" are NOT acceptable. Instead:
+- For federal grants: Reference the specific portal (Grants.gov, SAM.gov, eRA Commons, etc.), explain registration steps if needed, list required standard forms (SF-424, SF-424A, etc.), and specify required attachments.
+- For state/local grants: Reference the state agency portal, explain any pre-registration, and list typical required documents.
+- For foundation/portal grants: Reference the specific foundation portal, explain the online form sections, and list required uploads.
+- Always include what information from the organization profile the team member should have ready (EIN, UEI, annual budget, mission statement, staff count, etc.).
+ The purpose of this automation
                                            is to advance grants to the correct submission stage. "application_prep" and "revision"
                                            are intermediate steps that should be skipped when routing from Process All.
 
@@ -100,13 +108,15 @@ export function buildPipelineAutomationPrompt({
                                                      "reasoning": "short explanation summarizing the evidence",
                                                        "recommended_actions": [
                                                            {
-                                                                 "description": "clear next action",
+                                                                 "step": 1,
+                                                                       "description": "Specific actionable step (e.g. Go to grants.gov and search for opportunity CFDA-12.345)",
                                                                        "owner": "ai" | "team" | "client",
                                                                              "due_in_days": number | null
                                                                                  }
                                                                                    ],
                                                                                      "handoff_required": true | false,
-                                                                                       "handoff_reason": "if handoff_required is true, explain what the human must do"
+                                                                                       "handoff_reason": "if handoff_required is true, give a brief one-line reason why human intervention is needed",
+                                                                                       "application_steps": "if handoff_required is true AND the grant needs portal/online submission, provide a detailed numbered step-by-step guide for completing and submitting the application. Include: (1) the specific portal URL to visit, (2) whether to create an account, (3) what forms/sections to complete, (4) what documents to upload (budget narrative, 501c3 letter, etc.), (5) key org info needed from the profile (EIN, UEI, name, address, budget, mission), (6) any formatting or page limits, (7) how to finalize and submit. Be as specific as possible using the grant and profile context provided."
                                                                                        }
 
                                                                                        Current context (JSON):
