@@ -213,7 +213,12 @@ async function recordAutomationEvent(db, payload) {
           payload.confidence ?? null,
           payload.handoffRequired ? true : false,
           payload.handoffReason ?? null,
-          payload.recommendedActions ? JSON.stringify(payload.recommendedActions) : null,
+          (() => {
+        const actions = payload.recommendedActions ?? []
+        const steps = payload.applicationSteps ?? null
+        if (!actions.length && !steps) return null
+        return JSON.stringify({ actions, application_steps: steps })
+      })(),
           payload.aiSummary ?? null,
         )
 }
@@ -488,6 +493,9 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
               recommendedActions: Array.isArray(parsed.recommended_actions)
                 ? parsed.recommended_actions
                         : null,
+              applicationSteps: typeof parsed.application_steps === 'string'
+                ? parsed.application_steps.trim()
+                : null,
               aiSummary: typeof parsed.reasoning === 'string' ? parsed.reasoning : null,
       })
 
@@ -502,6 +510,9 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
               confidence: typeof parsed.confidence === 'number' ? parsed.confidence : null,
               recommended_actions: Array.isArray(parsed.recommended_actions)
                 ? parsed.recommended_actions
+                        : null,
+      application_steps: typeof parsed.application_steps === 'string'
+                ? parsed.application_steps.trim()
                         : null,
       })
         }
