@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react"
 import { v4 as uuid } from "uuid"
-import { Loader2, Search, Send, Sparkles, Plus, Shield, Database, Activity, Code, Wrench } from "lucide-react"
+import { Loader2, Search, Send, Sparkles, Plus, Shield, Database, Activity, Code, Wrench, ChevronDown, ChevronRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -95,6 +95,7 @@ export default function AnyaChat({ profileId }) {
   const [isLoadingTasks, setIsLoadingTasks] = useState(false)
   const [isSavingTask, setIsSavingTask] = useState(false)
   const [taskForm, setTaskForm] = useState({ title: "", dueDate: "" })
+  const [isTasksExpanded, setIsTasksExpanded] = useState(false)
   const [updatingTaskId, setUpdatingTaskId] = useState(null)
   const [isAdminToolsOpen, setIsAdminToolsOpen] = useState(false)
   const [adminToolForm, setAdminToolForm] = useState({})
@@ -487,7 +488,7 @@ export default function AnyaChat({ profileId }) {
 
   return (
     <div className="flex h-full flex-col rounded-xl border border-slate-200 bg-white/80 shadow-sm">
-      <div className="border-b border-slate-200 px-4 py-3">
+      <div className="border-b border-slate-200 px-4 py-3 max-h-[40%] overflow-y-auto shrink-0">
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -568,19 +569,30 @@ export default function AnyaChat({ profileId }) {
           {sessionId ? (
             <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50/70 p-3">
               <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                    Session tasks
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    Capture action items so nothing falls through.
-                  </p>
-                </div>
+                <button
+                  type="button"
+                  className="flex items-center gap-2 text-left"
+                  onClick={() => setIsTasksExpanded((prev) => !prev)}
+                >
+                  {isTasksExpanded ? (
+                    <ChevronDown className="h-3 w-3 text-slate-500 shrink-0" />
+                  ) : (
+                    <ChevronRight className="h-3 w-3 text-slate-500 shrink-0" />
+                  )}
+                  <div>
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                      Session tasks
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      {isTasksExpanded ? "Capture action items so nothing falls through." : "Click to expand"}
+                    </p>
+                  </div>
+                </button>
                 <Badge variant={openTaskCount > 0 ? "secondary" : "outline"} className="text-[10px]">
                   {openTaskCount} open
                 </Badge>
               </div>
-              <div className="mt-3 space-y-2">
+              {isTasksExpanded && <div className="mt-3 space-y-2">
                 {isLoadingTasks ? (
                   <div className="flex items-center gap-2 text-xs text-slate-500">
                     <Loader2 className="h-3 w-3 animate-spin text-blue-600" />
@@ -682,12 +694,12 @@ export default function AnyaChat({ profileId }) {
                   </Button>
                 </div>
               </form>
-            </div>
+            </div>}
           ) : null}
         </div>
       </div>
 
-      <ScrollArea className="flex-1 px-4 py-4">
+      <ScrollArea className="flex-1 min-h-[200px] px-4 py-4">
         {!isLoading && !hasMessages ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-slate-500">
             <p>Anya is ready. Start by asking about a grant or automation job.</p>
