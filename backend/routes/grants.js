@@ -563,7 +563,8 @@ router.get('/automation/summary', async (req, res) => {
             e.applied_status AS automation_status,
             e.handoff_required,
             e.handoff_reason,
-            e.ai_summary
+            e.ai_summary,
+          e.recommended_actions
           FROM grants g
           LEFT JOIN latest l ON l.grant_id = g.id
           LEFT JOIN grant_pipeline_events e
@@ -588,6 +589,839 @@ router.get('/automation/summary', async (req, res) => {
               handoff_required: Boolean(row.handoff_required),
               handoff_reason: row.handoff_reason,
               summary: row.ai_summary,
+              recommended_actions: safeParseJSON(row.recommended_actions, []),
+            }
+          : null,
+      })),
+    )
+  } catch (error) {
+    console.error('Error building automation summary:', error)
+    res.status(500).json(formatError(error))
+  }
+});
+
+router.get('/:id/automation/events', async (req, res) => {
+  const grant = await ensureGrantAccessUtil(req, res, req.params.id)
+  if (!grant) return
+
+  try {
+    const limit = Number.parseInt(req.query.limit ?? 25, 10)
+    const events = await req.db
+      .prepare(
+        `
+          SELECT *
+          FROM grant_pipeline_events
+          WHERE grant_id = ?
+          ORDER BY created_at DESC
+          LIMIT ?
+        `,
+      )
+      .all(grant.id, Number.isFinite(limit) ? limit : 25)
+
+    res.json(events.map(mapAutomationEvent))
+  } catch (error) {
+    console.error('Error listing automation events:', error)
+    res.status(500).json(formatError(error))
+  }
+});
+
+router.get('/:id/automation/latest', async (req, res) => {
+  const grant = await ensureGrantAccessUtil(req, res, req.params.id)
+  if (!grant) return
+
+  try {
+    const row = await req.db
+      .prepare(
+        `
+          SELECT *
+          FROM grant_pipeline_events
+          WHERE grant_id = ?
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+      )
+      .get(grant.id)
+
+    res.json(mapAutomationEvent(row))
+  } catch (error) {
+    console.error('Error fetching latest automation event:', error)
+    res.status(500).json(formatError(error))
+  }
+});
+
+// Get single grant
+router.get('/:id', async (req, res) => {
+  try {
+    await ensureGrantAiColumns(req.db)
+    const grantAccess = await ensureGrantAccessUtil(req, res, req.params.id)
+    if (!grantAccess) return
+
+    const grant = await req.db.prepare(`
+      SELECT g.*, o.name as organization_name 
+      FROM grants g
+      LEFT JOIN organizations o ON g.organization_id = o.id
+      WHERE g.id = ?
+    `).get(req.params.id);
+    
+    if (!grant) {
+      return res.status(404).json({ error: 'Grant not found' });
+    }
+    
+    // Parse JSON fields
+    const parsed = {
+      ...grant,
+      match_reasons: safeParseJSON(grant.match_reasons, [])
+    };
+    
+    // Get related data
+    const milestones = await req.db.prepare('SELECT * FROM milestones WHERE grant_id = ? ORDER BY due_date ASC').all(req.params.id);
+    const documents = await req.db.prepare('SELECT * FROM documents WHERE grant_id = ? ORDER BY created_at DESC').all(req.params.id);
+    const expenses = await req.db.prepare('SELECT * FROM expenses WHERE grant_id = ? ORDER BY date DESC').all(req.params.id);
+    const drafts = await req.db.prepare('SELECT * FROM application_drafts WHERE grant_id = ? ORDER BY section_order ASC').all(req.params.id);
+    
+    res.json({
+      ...parsed,
+      milestones,
+      documents,
+      expenses,
+      application_drafts: drafts
+    });
+  } catch (error) {
+    console.error('Error getting grant:', error);
+    res.status(500).json(formatError(error));
+  }
+});
+
+// AI helper: draft missing Program Description / Eligibility Summary / Selection Criteria
+router.post('/:id/ai/draft-details', mutationRateLimiter, async (req, res) => {
+  const grantAccess = await ensureGrantAccessUtil(req, res, req.params.id)
+  if (!grantAccess) return
+
+  try {
+    await ensureGrantAiColumns(req.db)
+
+    const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(req.params.id)
+    if (!grant) return res.status(404).json({ error: 'Grant not found' })
+
+    const opp = grant.funding_opportunity_id
+      ? await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(grant.funding_opportunity_id)
+      : null
+
+    const oppEligibilityBullets = safeParseJSON(opp?.eligibility_bullets, [])
+    const eligibilityFromBullets =
+      Array.isArray(oppEligibilityBullets) && oppEligibilityBullets.length > 0
+        ? oppEligibilityBullets.map((b) => `- ${String(b).trim()}`).join('\n')
+        : ''
+
+    let program_description = String(grant.program_description || '').trim()
+    let eligibility_summary = String(grant.eligibility_summary || '').trim()
+    let selection_criteria = String(grant.selection_criteria || '').trim()
+
+    // Deterministic backfill from the linked opportunity (preferred to AI hallucination)
+    if (!program_description) {
+      const fromOpp = String(opp?.description || '').trim()
+      if (fromOpp) program_description = fromOpp
+    }
+    if (!eligibility_summary) {
+      if (eligibilityFromBullets) eligibility_summary = eligibilityFromBullets
+    }
+
+    const needsAi = !program_description || !eligibility_summary || !selection_criteria
+    if (needsAi) {
+      const { openai } = createOpenAIClient({ allowMissing: true })
+      if (!openai) {
+        return res.status(503).json({
+          error: 'ai_unavailable',
+          message: 'OpenAI is not configured on the server (OPENAI_API_KEY missing).',
+          draft: { program_description, eligibility_summary, selection_criteria },
+        })
+      }
+
+      const evidence = {
+        title: grant.title,
+        funder: grant.funder ?? null,
+        application_url: grant.application_url ?? opp?.application_url ?? opp?.source_url ?? null,
+        opportunity_description: String(opp?.description || '').trim() || null,
+        opportunity_eligibility_bullets: Array.isArray(oppEligibilityBullets) ? oppEligibilityBullets : [],
+        existing_program_description: program_description || null,
+        existing_eligibility_summary: eligibility_summary || null,
+        existing_selection_criteria: selection_criteria || null,
+      }
+
+      const prompt = `You are helping fill missing grant listing fields so an AI coach can analyze the grant.
+
+RULES:
+- Use ONLY the provided evidence JSON.
+- If evidence is insufficient, write a minimal neutral placeholder like: "Not provided in the listing. Review the application URL for details."
+- Return STRICT JSON with keys: program_description, eligibility_summary, selection_criteria (strings).
+- Keep it concise and readable. Prefer bullets for eligibility_summary and selection_criteria.
+
+EVIDENCE JSON:
+${JSON.stringify(evidence, null, 2)}
+`
+
+      try {
+        const completion = await openai.chat.completions.create({
+          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.2,
+          max_tokens: 800,
+        })
+
+        const raw = String(completion?.choices?.[0]?.message?.content || '').trim()
+        const match = raw.match(/\{[\s\S]*\}/)
+        const parsed = match ? JSON.parse(match[0]) : JSON.parse(raw)
+
+        if (!program_description) program_description = String(parsed?.program_description || '').trim()
+        if (!eligibility_summary) eligibility_summary = String(parsed?.eligibility_summary || '').trim()
+        if (!selection_criteria) selection_criteria = String(parsed?.selection_criteria || '').trim()
+      } catch (error) {
+        const summary = summarizeOpenAIError(error)
+        return res.status(502).json({
+          error: 'ai_failed',
+          message: summary?.message || 'AI drafting failed',
+          draft: { program_description, eligibility_summary, selection_criteria },
+        })
+      }
+    }
+
+    const now = new Date().toISOString()
+    await req.db
+      .prepare(
+        `
+          UPDATE grants
+          SET program_description = ?,
+              eligibility_summary = ?,
+              selection_criteria = ?,
+              updated_at = CURRENT_TIMESTAMP,
+              ai_updated_at = ?
+          WHERE id = ?
+        `,
+      )
+      .run(program_description || null, eligibility_summary || null, selection_criteria || null, now, req.params.id)
+
+    const updated = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(req.params.id)
+    res.json({ ok: true, grant: updated })
+  } catch (error) {
+    console.error('[grants/ai/draft-details] Error:', error)
+    res.status(500).json(formatError(error))
+  }
+})
+
+// Create grant
+router.post('/', mutationRateLimiter, async (req, res) => {
+  try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
+
+    const data = req.body;
+    
+    // Validate required fields
+    const validation = validateRequiredFields(data, ['title', 'organization_id']);
+    if (!validation.valid) {
+      return res.status(400).json({ 
+        error: 'Missing required fields', 
+        missingFields: validation.missingFields 
+      });
+    }
+    
+    if (!(await ensureOrganizationAccess(req, res, String(data.organization_id)))) return
+
+    const id = crypto.randomUUID();
+    
+    // Sanitize columns against whitelist
+    const sanitizedData = sanitizeColumns(data, ALLOWED_GRANT_COLUMNS);
+    
+    // Stringify JSON fields
+    if (sanitizedData.match_reasons && Array.isArray(sanitizedData.match_reasons)) {
+      sanitizedData.match_reasons = JSON.stringify(sanitizedData.match_reasons);
+    }
+    
+    const columns = ['id', ...Object.keys(sanitizedData)];
+    const placeholders = columns.map(() => '?').join(', ');
+    const values = [id, ...Object.values(sanitizedData)];
+    
+    await req.db.prepare(`
+      INSERT INTO grants (${columns.join(', ')})
+      VALUES (${placeholders})
+    `).run(...values);
+    
+    const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(id);
+    res.status(201).json(grant);
+  } catch (error) {
+    console.error('Error creating grant:', error);
+    res.status(500).json(formatError(error));
+  }
+});
+
+// Update grant
+router.put('/:id', mutationRateLimiter, async (req, res) => {
+  try {
+    await ensureGrantAiColumns(req.db)
+    const grantAccess = await ensureGrantAccessUtil(req, res, req.params.id)
+    if (!grantAccess) return
+
+    const data = req.body;
+    
+    // Sanitize columns against whitelist
+    const sanitizedData = sanitizeColumns(data, ALLOWED_GRANT_COLUMNS);
+    
+    if (Object.keys(sanitizedData).length === 0) {
+      return res.status(400).json({ error: 'No valid fields to update' });
+    }
+    
+    // Stringify JSON fields
+    if (sanitizedData.match_reasons && Array.isArray(sanitizedData.match_reasons)) {
+      sanitizedData.match_reasons = JSON.stringify(sanitizedData.match_reasons);
+    }
+    
+    const setClause = Object.keys(sanitizedData).map(key => `${key} = ?`).join(', ');
+    const values = [...Object.values(sanitizedData), req.params.id];
+    
+    await req.db.prepare(`
+      UPDATE grants 
+      SET ${setClause}, updated_at = CURRENT_TIMESTAMP 
+      WHERE id = ?
+    `).run(...values);
+    
+    const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(req.params.id);
+    res.json(grant);
+  } catch (error) {
+    console.error('Error updating grant:', error);
+    res.status(500).json(formatError(error));
+  }
+});
+
+// Update grant status (quick update for drag-and-drop)
+router.patch('/:id/status', mutationRateLimiter, async (req, res) => {
+  try {
+    const grantAccess = await ensureGrantAccessUtil(req, res, req.params.id)
+    if (!grantAccess) return
+
+    const { status } = req.body;
+    
+    if (!GRANT_STATUSES.includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+    
+    await req.db.prepare(`
+      UPDATE grants 
+      SET status = ?, updated_at = CURRENT_TIMESTAMP 
+      WHERE id = ?
+    `).run(status, req.params.id);
+    
+    const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(req.params.id);
+    res.json(grant);
+  } catch (error) {
+    console.error('Error updating grant status:', error);
+    res.status(500).json(formatError(error));
+  }
+});
+
+// Delete grant
+router.delete('/:id', mutationRateLimiter, async (req, res) => {
+  try {
+    const grantAccess = await ensureGrantAccessUtil(req, res, req.params.id)
+    if (!grantAccess) return
+
+    // Delete related records first
+    await req.db.prepare('DELETE FROM milestones WHERE grant_id = ?').run(req.params.id);
+    await req.db.prepare('DELETE FROM expenses WHERE grant_id = ?').run(req.params.id);
+    await req.db.prepare('DELETE FROM application_drafts WHERE grant_id = ?').run(req.params.id);
+    
+    // Update documents to remove grant_id
+    await req.db.prepare('UPDATE documents SET grant_id = NULL WHERE grant_id = ?').run(req.params.id);
+    
+    // Delete the grant
+    await req.db.prepare('DELETE FROM grants WHERE id = ?').run(req.params.id);
+    
+    res.json({ success: true, message: 'Grant deleted' });
+  } catch (error) {
+    console.error('Error deleting grant:', error);
+    res.status(500).json(formatError(error));
+  }
+});
+
+// Add grant from opportunity (supports both database opportunities and direct data)
+router.post('/from-opportunity', async (req, res, next) => {
+  const requestId = req.requestId || req.request_id || null
+  
+  try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
+
+    // Self-heal schema drift before we read/insert profile-scoped grants.
+    await ensureGrantAiColumns(req.db)
+
+    let {
+      opportunity_id, 
+      organization_id, 
+      profile_id, 
+      match_score, 
+      match_reasons,
+      // Direct opportunity data (for synthetic/discovered opportunities)
+      opportunity_data
+    } = req.body;
+
+    // Enhanced input validation with detailed error messages
+    if (!req.body || typeof req.body !== 'object') {
+      return res.status(400).json({
+        error: 'invalid_request',
+        message: 'Request body must be a valid JSON object.',
+        requestId,
+      })
+    }
+
+    const normalizedProfileId = profile_id ? String(profile_id) : null
+    const normalizedOrgId = organization_id ? String(organization_id) : null
+
+    if (!normalizedProfileId && !normalizedOrgId) {
+      return res.status(400).json({
+        error: 'missing_required_field',
+        message: 'Provide profile_id (preferred) or organization_id to add a grant to the pipeline.',
+        requestId,
+      })
+    }
+
+    // Validate opportunity data if provided
+    if (!opportunity_id && opportunity_data) {
+      if (typeof opportunity_data !== 'object' || Array.isArray(opportunity_data)) {
+        return res.status(400).json({
+          error: 'invalid_opportunity_data',
+          message: 'opportunity_data must be a valid object.',
+          requestId,
+        })
+      }
+      
+      // Validate required fields in opportunity_data
+      const title = opportunity_data.title ? String(opportunity_data.title).trim() : ''
+      if (!title) {
+        return res.status(400).json({
+          error: 'missing_opportunity_title',
+          message: 'opportunity_data.title is required when adding a grant from opportunity data.',
+          requestId,
+        })
+      }
+    }
+
+    // Validate that at least one way to identify an opportunity exists
+    if (!opportunity_id && !opportunity_data) {
+      return res.status(400).json({
+        error: 'missing_opportunity',
+        message: 'Provide either opportunity_id or opportunity_data to add a grant to the pipeline.',
+        requestId,
+      })
+    }
+
+    // Authorization:
+    // - If profile_id provided, profile access is the source of truth (org may be auto-created/linked).
+    // - If only organization_id provided, require org access.
+    try {
+      if (normalizedProfileId) {
+        if (!(await ensureProfileAccess(req, res, normalizedProfileId))) return
+      } else if (normalizedOrgId) {
+        if (!(await ensureOrganizationAccess(req, res, normalizedOrgId))) return
+      }
+
+      // If a caller provided organization_id explicitly (even alongside profile_id),
+      // enforce org access using the real request context. This avoids passing synthetic
+      // req objects that can crash (missing req.db/req.ctx) and cause 500s.
+      if (normalizedOrgId) {
+        if (!(await ensureOrganizationAccess(req, res, normalizedOrgId))) return
+      }
+    } catch (accessError) {
+      console.error('[grants/from-opportunity] access control check failed', {
+        requestId,
+        profile_id: normalizedProfileId,
+        organization_id: normalizedOrgId,
+        error: accessError?.message || String(accessError),
+        stack: accessError?.stack || null,
+      })
+      return res.status(500).json({
+        error: 'access_control_error',
+        message: 'Failed to verify access permissions. Please try again.',
+        requestId,
+      })
+    }
+    
+    // Try to get opportunity from database first
+    let opportunity = null;
+    let resolvedOpportunityId = null;  // Track the actual opportunity ID to use
+    if (opportunity_id) {
+      console.log('[grants/from-opportunity] Attempting to fetch opportunity from DB', {
+        requestId,
+        opportunity_id,
+        has_fallback_data: Boolean(opportunity_data),
+      })
+      try {
+        opportunity = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunity_id);
+        if (opportunity) {
+          resolvedOpportunityId = opportunity_id;
+          console.log('[grants/from-opportunity] Found opportunity in DB', {
+            requestId,
+            opportunity_id,
+            title: opportunity.title,
+          })
+        } else if (!opportunity_data) {
+          // opportunity_id provided but not found, and no fallback data
+          console.warn('[grants/from-opportunity] opportunity_id not found and no fallback', {
+            requestId,
+            opportunity_id,
+          })
+          return res.status(404).json({
+            error: 'opportunity_not_found',
+            message: 'The specified opportunity_id was not found in the database.',
+            requestId,
+          })
+        } else {
+          console.log('[grants/from-opportunity] opportunity_id not found, using fallback data', {
+            requestId,
+            opportunity_id,
+          })
+        }
+        // If opportunity not found but opportunity_data is provided, we'll use the fallback below
+      } catch (dbError) {
+        console.error('[grants/from-opportunity] failed to fetch opportunity', {
+          requestId,
+          opportunity_id,
+          error: dbError?.message || String(dbError),
+        })
+        return res.status(500).json({
+          error: 'database_error',
+          message: 'Failed to fetch opportunity from database. Please try again.',
+          requestId,
+        })
+      }
+    }
+    
+    // If not found in DB, use provided opportunity_data
+    if (!opportunity && opportunity_data) {
+      try {
+        const rawDeadline = opportunity_data.deadline || opportunity_data.deadlineAt || null
+        const normalizedDeadline = normalizeDateForDb(rawDeadline)
+        const amountMin = normalizeMoney(opportunity_data.awardMin ?? opportunity_data.amount_min ?? null)
+        const amountMax = normalizeMoney(opportunity_data.awardMax ?? opportunity_data.amount_max ?? null)
+        const applicationUrl = coerceString(opportunity_data.url || opportunity_data.application_url, { maxLen: 2000 })
+        const title = coerceString(opportunity_data.title, { maxLen: 500 })
+        if (!title) {
+          return res.status(400).json({
+            error: 'missing_opportunity_title',
+            message: 'Opportunity title is required',
+            requestId,
+          })
+        }
+
+        opportunity = {
+          title,
+          sponsor: coerceString(opportunity_data.sponsor, { maxLen: 500 }),
+          // Preserve raw deadline for expiry checks (normalizeDateForDb may return null for non-ISO formats)
+          deadline_raw: rawDeadline,
+          deadline: normalizedDeadline,
+          deadline_type: coerceString(opportunity_data.deadline_type, { maxLen: 50 }) || null,
+          application_url: applicationUrl,
+          amount_min: amountMin,
+          amount_max: amountMax,
+          description: coerceString(opportunity_data.descriptionMd || opportunity_data.description, { maxLen: 50_000 }),
+          eligibility_bullets: JSON.stringify(coerceArray(opportunity_data.eligibilityBullets)),
+          source: coerceString(opportunity_data.source, { maxLen: 200 }) || 'discovery',
+        };
+        console.log('[grants/from-opportunity] Using direct opportunity data for:', opportunity.title);
+      } catch (parseError) {
+        console.error('[grants/from-opportunity] failed to parse opportunity_data', {
+          requestId,
+          error: parseError?.message || String(parseError),
+          stack: parseError?.stack || null,
+        })
+        return res.status(400).json({
+          error: 'invalid_opportunity_data',
+          message: 'Failed to parse opportunity data. Please check the format and try again.',
+          requestI
+
+function mapAutomationEvent(row) {
+  if (!row) return null
+  const actions = safeParseJSON(row.recommended_actions, []);
+
+  return {
+    id: row.id,
+    created_at: row.created_at,
+    grant_id: row.grant_id,
+    job_id: row.job_id,
+    previous_status: row.previous_status,
+    suggested_status: row.suggested_status,
+    applied_status: row.applied_status,
+    confidence: row.confidence,
+    handoff_required: Boolean(row.handoff_required),
+    handoff_reason: row.handoff_reason,
+    recommended_actions: actions,
+    ai_summary: row.ai_summary,
+  }
+}
+
+// List all grants
+router.get('/', async (req, res) => {
+  try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
+
+    // IMPORTANT:
+    // Many production DBs predate `grants.profile_id` (and the newer AI columns).
+    // If the UI sends `X-Profile-Id` (it does), referencing `g.profile_id` without this
+    // guard causes a hard 500. Keep this self-healing and non-fatal.
+    await ensureGrantAiColumns(req.db)
+
+    const { organization_id, status } = req.query;
+    const sortCol = normalizeSortColumn(req.query.sort)
+    const sortOrder = normalizeSortOrder(req.query.order)
+    const headerProfileId = typeof req.headers['x-profile-id'] === 'string' ? req.headers['x-profile-id'] : null
+    const profile_id = (typeof req.query.profile_id === 'string' ? req.query.profile_id : null) || headerProfileId
+    const urlFilter = typeof req.query.url === 'string' ? req.query.url : null
+    const { limit, offset } = validatePagination(req.query);
+    
+    let query = `
+      SELECT g.*, o.name as organization_name 
+      FROM grants g
+      LEFT JOIN organizations o ON g.organization_id = o.id
+      WHERE 1=1
+    `;
+    const params = [];
+
+    if (!isAdminUser(user)) {
+      // If an active profile is selected, list the profile-scoped pipeline.
+      if (profile_id) {
+        if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
+        query += ` AND g.profile_id = ?`
+        params.push(String(profile_id))
+      } else {
+        // Backward compatible: fall back to organization-scoped listing.
+        // Also include any profile-scoped grants the user can access (in case org_id is null).
+        const ctxProfiles = req.ctx?.accessibleProfileIds instanceof Set ? Array.from(req.ctx.accessibleProfileIds) : []
+        const orgIds = await getAccessibleOrganizationIds(req.db, user)
+        const ctxOrgs = orgIds instanceof Set ? Array.from(orgIds) : []
+
+        if (ctxProfiles.length === 0 && ctxOrgs.length === 0) {
+          return res.json([])
+        }
+
+        const clauses = []
+        if (ctxProfiles.length > 0) {
+          clauses.push(`g.profile_id IN (${ctxProfiles.map(() => '?').join(',')})`)
+          params.push(...ctxProfiles)
+        }
+        if (ctxOrgs.length > 0) {
+          clauses.push(`g.organization_id IN (${ctxOrgs.map(() => '?').join(',')})`)
+          params.push(...ctxOrgs)
+        }
+        query += ` AND (${clauses.join(' OR ')})`
+      }
+
+      if (organization_id) {
+        // If organization_id filter is requested, require explicit access.
+        const orgIds = await getAccessibleOrganizationIds(req.db, user)
+        if (organization_id && (!orgIds || !orgIds.has(String(organization_id)))) {
+          return res.status(403).json({ error: 'Not authorized to access this organization' })
+        }
+      }
+    } else {
+      if (profile_id) {
+        query += ` AND g.profile_id = ?`
+        params.push(String(profile_id))
+      }
+    }
+    
+    if (organization_id) {
+      query += ' AND g.organization_id = ?';
+      params.push(organization_id);
+    }
+    
+    if (status) {
+      if (status.includes(',')) {
+        const statuses = status.split(',');
+        query += ` AND g.status IN (${statuses.map(() => '?').join(',')})`;
+        params.push(...statuses);
+      } else {
+        query += ' AND g.status = ?';
+        params.push(status);
+      }
+    }
+
+    // Back-compat for Base44 / older UI duplicate-checks: they pass `url=<opportunityUrl>`.
+    // In our schema, the canonical URL lives in `application_url`.
+    if (urlFilter) {
+      query += ' AND g.application_url = ?'
+      params.push(urlFilter)
+    }
+    
+    query += ` ORDER BY ${sortCol} ${sortOrder} LIMIT ? OFFSET ?`;
+    params.push(limit, offset);
+    
+    const grants = await req.db.prepare(query).all(...params);
+    
+    // Parse JSON fields safely
+    const parsed = grants.map(grant => ({
+      ...grant,
+      match_reasons: safeParseJSON(grant.match_reasons, [])
+    }));
+    
+    res.json(parsed);
+  } catch (error) {
+    console.error('Error listing grants:', error);
+    res.status(500).json(formatError(error));
+  }
+});
+
+// Get grants grouped by status (for pipeline view)
+router.get('/pipeline', async (req, res) => {
+  try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
+
+    const { organization_id } = req.query;
+    const headerProfileId = typeof req.headers['x-profile-id'] === 'string' ? req.headers['x-profile-id'] : null
+    const profile_id = (typeof req.query.profile_id === 'string' ? req.query.profile_id : null) || headerProfileId
+    await ensureGrantAiColumns(req.db)
+    
+    let query = `
+      SELECT g.*, o.name as organization_name 
+      FROM grants g
+      LEFT JOIN organizations o ON g.organization_id = o.id
+    `;
+    const params = [];
+
+    if (!isAdminUser(user)) {
+      // If a profile is selected (query or X-Profile-Id), scope the pipeline strictly to it.
+      if (profile_id) {
+        if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
+        query += ` WHERE g.profile_id = ?`
+        params.push(String(profile_id))
+      } else {
+        const orgIds = await getAccessibleOrganizationIds(req.db, user)
+        if (!orgIds || orgIds.size === 0) {
+          return res.json({
+            discovered: [],
+            interested: [],
+            drafting: [],
+            app_prep: [],
+            revision: [],
+            submitted: [],
+            awarded: [],
+            rejected: [],
+          })
+        }
+        if (organization_id && !orgIds.has(String(organization_id))) {
+          return res.status(403).json({ error: 'Not authorized to access this organization' })
+        }
+        const placeholders = Array.from(orgIds).map(() => '?').join(',')
+        query += ` WHERE g.organization_id IN (${placeholders})`
+        params.push(...Array.from(orgIds))
+      }
+    } else if (profile_id) {
+      query += ` WHERE g.profile_id = ?`
+      params.push(String(profile_id))
+    }
+    
+    if (organization_id) {
+      query += query.includes('WHERE') ? ' AND g.organization_id = ?' : ' WHERE g.organization_id = ?';
+      params.push(organization_id);
+    }
+    
+    // SQLite doesn't support `NULLS LAST`. Make ordering deterministic across dialects.
+    if (req.db?.dialect === 'sqlite') {
+      query += ' ORDER BY (g.deadline IS NULL) ASC, g.deadline ASC, g.created_at DESC'
+    } else {
+      query += ' ORDER BY g.deadline ASC NULLS LAST, g.created_at DESC'
+    }
+    
+    const grants = await req.db.prepare(query).all(...params);
+    
+    // Group by status
+    const pipeline = {
+      discovered: [],
+      interested: [],
+      drafting: [],
+      app_prep: [],
+      revision: [],
+      submitted: [],
+      awarded: [],
+      rejected: []
+    };
+    
+    grants.forEach(grant => {
+      const parsed = {
+        ...grant,
+        match_reasons: safeParseJSON(grant.match_reasons, [])
+      };
+      
+      if (pipeline.hasOwnProperty(grant.status)) {
+        pipeline[grant.status].push(parsed);
+      }
+    });
+    
+    res.json(pipeline);
+  } catch (error) {
+    console.error('Error getting pipeline:', error);
+    res.status(500).json(formatError(error));
+  }
+});
+
+router.get('/automation/summary', async (req, res) => {
+  const auth = requireAuthenticatedUser(req, res)
+  if (!auth) return
+
+  const organizationId = req.query.organization_id
+  if (!organizationId) {
+    return res.status(400).json({ error: 'organization_id query parameter is required' })
+  }
+
+  if (!isAdminUser(auth)) {
+    if (!(await ensureOrganizationAccess(req, res, String(organizationId)))) return
+  }
+
+  try {
+    const rows = await req.db
+      .prepare(
+        `
+          WITH latest AS (
+            SELECT grant_id, MAX(created_at) AS created_at
+            FROM grant_pipeline_events
+            GROUP BY grant_id
+          )
+          SELECT
+            g.id,
+            g.title,
+            g.status,
+            g.deadline,
+            g.priority,
+            e.created_at AS automation_at,
+            e.applied_status AS automation_status,
+            e.handoff_required,
+            e.handoff_reason,
+            e.ai_summary,
+          e.recommended_actions
+          FROM grants g
+          LEFT JOIN latest l ON l.grant_id = g.id
+          LEFT JOIN grant_pipeline_events e
+            ON e.grant_id = l.grant_id AND e.created_at = l.created_at
+          WHERE g.organization_id = ?
+          ORDER BY g.status ASC, g.updated_at DESC
+        `,
+      )
+      .all(organizationId)
+
+    res.json(
+      rows.map((row) => ({
+        id: row.id,
+        title: row.title,
+        status: row.status,
+        deadline: row.deadline,
+        priority: row.priority,
+        automation: row.automation_at
+          ? {
+              processed_at: row.automation_at,
+              status: row.automation_status,
+              handoff_required: Boolean(row.handoff_required),
+              handoff_reason: row.handoff_reason,
+              summary: row.ai_summary,
+              recommended_actions: safeParseJSON(row.recommended_actions, []),
             }
           : null,
       })),
@@ -1694,3 +2528,4 @@ router.post('/from-opportunity', async (req, res, next) => {
 });
 
 export default router;
+
