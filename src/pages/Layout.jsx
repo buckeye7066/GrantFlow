@@ -245,10 +245,15 @@ export default function Layout({ children, currentPageName }) {
       .toUpperCase() || 'U';
 
   const handleProfileChange = (value) => {
-    setActiveProfileId(value || null);
-    if (value) {
-      navigate(`/OrganizationProfile?id=${value}`);
-    }
+        // Admin view: set activeProfileId to __admin__ but don't navigate
+            if (value === '__admin__') {
+                  setActiveProfileId('__admin__');
+                        return;
+                            }
+                                setActiveProfileId(value || null);
+                                    if (value) {
+                                          navigate(`/OrganizationProfile?id=${value}`);
+                                              }
   };
 
   const handleLogout = () => {
@@ -406,14 +411,19 @@ export default function Layout({ children, currentPageName }) {
                         {profile.display_name ?? profile.id}
                       </SelectItem>
                     ))}
+                                  {user?.is_admin && (
+                                                    <SelectItem key="__admin__" value="__admin__">
+                                                                        buckeye7066 (Admin View)
+                                                                                        </SelectItem>
+                                  )}
                   </SelectContent>
                 </Select>
                 <p className="mt-2 text-[11px] text-muted-foreground">
                   Workspace shows data for{' '}
                   <span className="font-medium text-sidebar-foreground">
-                    {profiles.find((p) => p.id === activeProfileId)?.display_name ??
-                      profiles[0]?.display_name ??
-                      'your organization'}
+                                    {activeProfileId === '__admin__' ? 'buckeye7066 (Admin)' : (profiles.find((p) => p.id === activeProfileId)?.display_name ??
+                                                      profiles[0]?.display_name ??
+                                                                        'your organization')}
                   </span>
                 </p>
               </div>
