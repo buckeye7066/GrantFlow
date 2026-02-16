@@ -5,6 +5,7 @@ import { useAuthStore } from "@/stores/authStore"
 import { apiFetch } from "@/api/client"
 
 const DISMISS_KEY = "grantflow:pro-bono-banner-dismissed"
+const PDF_URL = `${import.meta.env.BASE_URL}docs/Payment_sheet_Grantflow.pdf`
 
 /**
  * ProBonoBanner
@@ -60,7 +61,7 @@ export default function ProBonoBanner() {
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <a
-              href="/docs/Payment_sheet_Grantflow.pdf"
+              href={PDF_URL}
               download="Payment_sheet_Grantflow.pdf"
               className="inline-flex items-center gap-1.5 rounded-md bg-amber-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-amber-700 transition-colors"
             >
