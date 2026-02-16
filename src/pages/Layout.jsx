@@ -55,6 +55,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuthStore } from "@/stores/authStore";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import AnyaFloatingButton from "@/components/anya/AnyaFloatingButton";
+import ProBonoBanner from "@/components/banners/ProBonoBanner.jsx";
 import { apiFetch } from "@/api/client";
 
 const navigationItems = [
@@ -477,6 +478,7 @@ export default function Layout({ children, currentPageName }) {
           <div className="flex-1 overflow-auto bg-background text-foreground">
             <div className="min-h-full">
               <AutoTimeTracker />
+              <ProBonoBanner />
               {children}
             </div>
           </div>
