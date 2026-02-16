@@ -592,7 +592,9 @@ export default function AnyaChat({ profileId }) {
                   {openTaskCount} open
                 </Badge>
               </div>
-              {isTasksExpanded && (<div><div className="mt-3 space-y-2">
+              {isTasksExpanded && (
+                <>
+                  <div className="mt-3 space-y-2">
                 {isLoadingTasks ? (
                   <div className="flex items-center gap-2 text-xs text-slate-500">
                     <Loader2 className="h-3 w-3 animate-spin text-blue-600" />
@@ -651,8 +653,8 @@ export default function AnyaChat({ profileId }) {
                     No tasks yet. Log a follow-up below to keep momentum.
                   </p>
                 )}
-              </div>
-              <form onSubmit={handleTaskSubmit} className="mt-3 space-y-3">
+                  </div>
+                  <form onSubmit={handleTaskSubmit} className="mt-3 space-y-3">
                 <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_150px]">
                   <div className="space-y-1">
                     <Label htmlFor="anya-task-title" className="text-[11px] text-slate-500">
@@ -694,8 +696,9 @@ export default function AnyaChat({ profileId }) {
                   </Button>
                 </div>
               </form>
-            </div>)}
-          </div>
+                </>
+              )}
+            </div>
           ) : null}
         </div>
       </div>
