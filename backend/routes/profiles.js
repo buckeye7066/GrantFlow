@@ -1290,7 +1290,7 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
 
   await upsert.run(id, sectionKey, JSON.stringify(data), updated_by ?? null)
 
-  // Keep profile_emails in sync with the profile's own email (basic_information.email).
+  // Keep profile_emails in sync with the profile's own email (basic_information.email) and contacts.
   // Product requirement: the email on the profile implies access for that user.
   //
   // Safety:
@@ -1298,12 +1298,14 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
   // - For admins, always link (admin actions are trusted and audited elsewhere).
   try {
     if (sectionKey === 'basic_information') {
+      const isAdmin = req.ctx?.isAdmin === true
+      const user = req.user ?? {}
+      const primary = normalizeEmail(user?.primary_email)
+      const secondary = normalizeEmail(user?.email)
+      
+      // Sync the main email field
       const email = normalizeEmail(data?.email)
       if (email && isValidEmail(email)) {
-        const user = req.user ?? {}
-        const isAdmin = req.ctx?.isAdmin === true
-        const primary = normalizeEmail(user?.primary_email)
-        const secondary = normalizeEmail(user?.email)
         const canAutoLink = isAdmin || email === primary || email === secondary
 
         if (canAutoLink) {
@@ -1311,6 +1313,21 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
             profileId: String(id),
             emails: [email],
             addedBy: req.ctx?.userId ?? req.ctx?.email ?? 'system-profile-email-sync',
+          })
+        }
+      }
+      
+      // Sync contacts emails (admin-only for security)
+      if (isAdmin && Array.isArray(data?.contacts)) {
+        const contactEmails = data.contacts
+          .map(contact => normalizeEmail(contact?.email))
+          .filter(email => email && isValidEmail(email))
+        
+        if (contactEmails.length > 0) {
+          await addProfileEmails(req.db, {
+            profileId: String(id),
+            emails: contactEmails,
+            addedBy: req.ctx?.userId ?? req.ctx?.email ?? 'system-contacts-sync',
           })
         }
       }
