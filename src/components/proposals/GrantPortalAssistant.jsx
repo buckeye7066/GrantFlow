@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { apiFetch } from '@/api/apiClient';
+import { formatAddress } from '@/utils';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -129,7 +130,7 @@ INSTRUCTIONS:
     { label: 'EIN', value: organization.ein },
     { label: 'UEI', value: organization.uei },
     { label: 'SAM Registered', value: organization.sam_registered ? 'Yes' : 'No' },
-    { label: 'Address', value: `${organization.address || ''} ${organization.city || ''}, ${organization.state || ''} ${organization.zip || ''}`.trim() },
+    { label: 'Address', value: `${formatAddress(organization.address)} ${organization.city || ''}, ${organization.state || ''} ${organization.zip || ''}`.trim() },
     { label: 'Website', value: organization.website },
     { label: 'Emails', value: organization.email },
     { label: 'Phone Numbers', value: organization.phone },

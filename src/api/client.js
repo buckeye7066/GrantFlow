@@ -627,7 +627,7 @@ class APIClient {
             const expiryRaw = window.localStorage.getItem('grantflow:access-expiry')
             const expiryMs = expiryRaw ? Number(expiryRaw) : NaN
             const leewayMs = 60 * 1000
-            if (refreshToken && Number.isFinite(expiryMs) && expiryMs <= Date.now() + leewayMs) {
+            if (refreshToken && (!Number.isFinite(expiryMs) || expiryMs <= Date.now() + leewayMs)) {
               await this.fetch('/api/auth/refresh', {
                 method: 'POST',
                 body: JSON.stringify({ refreshToken }),
