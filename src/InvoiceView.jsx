@@ -3,7 +3,7 @@ import React, { useRef, useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { createPageUrl } from "@/utils";
+import { createPageUrl, formatAddress } from "@/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -213,7 +213,9 @@ export default function InvoiceView() {
               <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">Bill To:</h3>
               <div className="text-slate-900">
                 <p className="text-xl font-bold mb-1">{organization?.name}</p>
-                {organization?.address && <p>{organization.address}</p>}
+                {organization?.address && (
+                  <p>{formatAddress(organization.address)}</p>
+                )}
                 {organization?.city && organization?.state && organization?.zip && (
                   <p>{organization.city}, {organization.state} {organization.zip}</p>
                 )}

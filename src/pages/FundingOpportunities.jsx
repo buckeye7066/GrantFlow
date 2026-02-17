@@ -42,6 +42,7 @@ import { createGrant } from "@/api/grants"
 import { createDocument } from "@/api/documents"
 import { apiFetch } from "@/api/client"
 import { cn } from "@/lib/utils"
+import { formatAddress } from "@/utils"
 import { env } from "@/config/env.js"
 
 const NOT_AVAILABLE = 'N/A'
@@ -822,7 +823,9 @@ function OpportunityDetail({
                     ) : null}
                   </div>
                   {contactInfo?.address ? (
-                    <p className="text-xs text-slate-600 whitespace-pre-line">{contactInfo.address}</p>
+                    <p className="text-xs text-slate-600 whitespace-pre-line">
+                      {formatAddress(contactInfo.address)}
+                    </p>
                   ) : null}
                 </div>
               )}
