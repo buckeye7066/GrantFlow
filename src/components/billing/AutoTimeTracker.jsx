@@ -60,6 +60,13 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
     });
   }, []);
 
+  // Auto-start timer for non-admin users
+  useEffect(() => {
+    if (currentUser && !currentUser.is_admin && !isTracking) {
+      handleStart();
+    }
+  }, [currentUser]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Get billing settings
   const [settings, setSettings] = useState(null);
   useEffect(() => {

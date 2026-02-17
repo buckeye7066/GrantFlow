@@ -8,7 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useQuery } from "@tanstack/react-query"
 import { apiFetch } from "@/api/client"
 import { Link } from "react-router-dom"
-import { createPageUrl } from "@/utils"
+import { createPageUrl, formatAddress } from "@/utils"
 
 export default function Funder() {
   const [searchQuery, setSearchQuery] = useState("")
@@ -233,7 +233,9 @@ export default function Funder() {
                         {funder.address && (
                           <div className="flex items-center gap-2 text-sm col-span-2">
                             <MapPin className="w-4 h-4 text-slate-400" />
-                            <span className="text-slate-600">{funder.address}</span>
+                            <span className="text-slate-600">
+                              {formatAddress(funder.address)}
+                            </span>
                           </div>
                         )}
                       </div>

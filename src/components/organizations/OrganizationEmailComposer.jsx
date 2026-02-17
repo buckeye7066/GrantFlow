@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
+import { formatAddress } from '@/utils';
 import {
   Dialog,
   DialogContent,
@@ -76,7 +77,7 @@ ${organization.applicant_type ? `Type: ${organization.applicant_type.replace(/_/
 ${organization.ein ? `EIN: ${organization.ein}` : ''}
 ${organization.uei ? `UEI: ${organization.uei}` : ''}
 ${organization.address || organization.city || organization.state ? `
-Address: ${organization.address || ''}
+Address: ${formatAddress(organization.address)}
 ${organization.city ? organization.city + ', ' : ''}${organization.state || ''} ${organization.zip || ''}` : ''}
 ${contactMethods.filter(c => c.type === 'email').length > 0 ? `Email: ${contactMethods.filter(c => c.type === 'email').map(c => c.value).join(', ')}` : ''}
 ${contactMethods.filter(c => c.type === 'phone').length > 0 ? `Phone: ${contactMethods.filter(c => c.type === 'phone').map(c => c.value).join(', ')}` : ''}

@@ -2,6 +2,7 @@
 import React, { useMemo, useState } from 'react';
 import { base44 } from '@/api/base44Client';
 import { createLogger } from '@/utils/logger';
+import { formatAddress } from '@/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -271,7 +272,9 @@ Focus areas should be:
               <div className="flex-1">
                 <div className="text-sm font-medium text-slate-700 mb-1">Address</div>
                 <div className="text-slate-600">
-                  {organization.address && <div>{organization.address}</div>}
+                  {organization.address && (
+                    <div>{formatAddress(organization.address)}</div>
+                  )}
                   {(organization.city || organization.state || organization.zip) && (
                     <div>
                       {organization.city}{organization.city && organization.state && ', '}{organization.state} {organization.zip}
