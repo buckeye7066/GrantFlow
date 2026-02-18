@@ -268,6 +268,42 @@ test('auth/access/check: hasPassword=false when user has no password_hash', asyn
   }
 })
 
+test('auth/access/check: users.primary_email grants access when profile_sections has no email', async () => {
+  const srv = startServer()
+  const { port } = await srv.ready
+
+  try {
+    const Database = (await import('better-sqlite3')).default
+    const db = new Database(srv.dbPath)
+    const userId = '00000000-0000-0000-0000-00000000usr'
+    const profileId = '00000000-0000-0000-0000-00000000pf2'
+    const email = 'user-primary-only@example.com'
+
+    db.exec(`
+      INSERT INTO users (id, display_name, primary_email, is_admin)
+      VALUES ('${userId}', 'Primary Email User', '${email}', 0);
+
+      INSERT INTO profiles (id, user_id, display_name)
+      VALUES ('${profileId}', '${userId}', 'Test Profile');
+
+      INSERT INTO profile_sections (id, profile_id, section_key, data)
+      VALUES ('00000000-0000-0000-0000-00000000s2', '${profileId}', 'basic_information', '{"phone":"555-1234"}');
+    `)
+    db.close()
+
+    const result = await fetchJson(`http://127.0.0.1:${port}/api/auth/access/check`, {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    })
+
+    assert.equal(result.status, 200)
+    assert.equal(result.json.allowed, true)
+    assert.equal(result.json.reason, 'profile_match')
+  } finally {
+    await srv.stop()
+  }
+})
+
 test('auth/access/check: validates email format', async () => {
   const srv = startServer()
   const { port } = await srv.ready

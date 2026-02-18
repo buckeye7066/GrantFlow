@@ -540,7 +540,8 @@ function buildUserPayload(userRow, profiles, activeProfileId) {
 }
 
 /**
- * Find a profile by email address from profile_sections basic_information.
+ * Find a profile by email address.
+ * Checks (in order): users.primary_email, profile_emails, profile_sections.basic_information.
  * Works with both Postgres and SQLite.
  * @param {Object} db - Database instance
  * @param {string} normalizedEmail - Normalized email address (lowercase)
@@ -549,6 +550,40 @@ function buildUserPayload(userRow, profiles, activeProfileId) {
 async function findProfileRowForEmail(db, normalizedEmail) {
   if (!normalizedEmail) return null
 
+  // 1) users.primary_email: returning users who have an account
+  try {
+    const userRow = await db
+      .prepare('SELECT id FROM users WHERE LOWER(TRIM(primary_email)) = ? LIMIT 1')
+      .get(normalizedEmail)
+    if (userRow?.id) {
+      const profileRow = await db
+        .prepare('SELECT id, user_id FROM profiles WHERE user_id = ? LIMIT 1')
+        .get(userRow.id)
+      if (profileRow?.id) return profileRow
+    }
+  } catch {
+    // ignore
+  }
+
+  // 2) profile_emails: explicit access mapping (board members, alternates, etc.)
+  try {
+    await ensureProfileEmailSchema(db)
+    const peRow = await db
+      .prepare(
+        `SELECT profile_id FROM profile_emails WHERE LOWER(TRIM(email)) = ? LIMIT 1`
+      )
+      .get(normalizedEmail)
+    if (peRow?.profile_id) {
+      const profileRow = await db
+        .prepare('SELECT id, user_id FROM profiles WHERE id = ? LIMIT 1')
+        .get(peRow.profile_id)
+      if (profileRow?.id) return profileRow
+    }
+  } catch {
+    // ignore
+  }
+
+  // 3) profile_sections.basic_information.data.email
   // Postgres: JSON ->> extraction is safe and fast.
   if (db?.dialect === 'postgres') {
     try {
