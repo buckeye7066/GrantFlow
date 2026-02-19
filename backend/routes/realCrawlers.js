@@ -7,7 +7,7 @@
 import express from 'express'
 import { ensureAuth } from '../middleware/auth.js'
 import { getProfileWithLocation } from '../services/crawlers/crawlerHelpers.js'
-import { calculateMatchScore } from '../servicehs/matchingEngine.js'
+import { calculateMatchScore } from '../services/matchingEngine.js'
 import { bulkUpsertFundingOpportunities } from '../services/opportunityInserter.js'
 import { normalizeDateToIso } from '../services/dateNormalization.js'
 import { crawlLocalFunding } from '../services/crawlers/localFundingCrawler.js'
