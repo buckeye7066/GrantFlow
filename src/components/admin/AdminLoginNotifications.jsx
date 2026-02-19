@@ -170,7 +170,7 @@ export default function AdminLoginNotifications() {
                       <td className="p-2">
                         <div className="font-medium text-slate-900">{e.identifier || 'Unknown'}</div>
                         {e.profile_id ? (
-                          <div className="text-xs text-slate-500">profile: {String(e.profile_id).slice(0, 8)}…</div>
+                          <div className="text-xs text-slate-500">profile: {String(e.profile_id)}</div>
                         ) : null}
                       </td>
                       <td className="p-2">
@@ -223,7 +223,7 @@ export default function AdminLoginNotifications() {
                       <td className="p-2">
                         <div className="font-medium text-slate-900">{v.user_email || v.user_name || 'Unknown'}</div>
                         {v.profile_id ? (
-                          <div className="text-xs text-slate-500">profile: {String(v.profile_id).slice(0, 8)}…</div>
+                          <div className="text-xs text-slate-500">profile: {String(v.profile_id)}</div>
                         ) : null}
                       </td>
                       <td className="p-2">
