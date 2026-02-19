@@ -482,7 +482,7 @@ function MemberBillingCard({ profileId, billing, isLoading, onRefresh }) {
         <CardTitle className="flex items-center gap-2 text-lg font-semibold">
           Billing details
           <Badge variant="outline" className="text-xs text-slate-500 border-slate-200">
-            Profile ID {profileId ? `${profileId.slice(0, 8)}…` : "unknown"}
+            Profile ID {profileId ?? "unknown"}
           </Badge>
         </CardTitle>
         <CardDescription>
