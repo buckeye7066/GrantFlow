@@ -34,8 +34,8 @@ const CRAWLER_TYPES = [
 ]
 
 const LOAN_TYPES = new Set(['loan', 'loan_program', 'microloan'])
-const LIVE_CRAWL_TIMEOUT_MS = Number.parseInt(process.env.LIVE_CRAWL_TIMEOUT_MS ?? '20000', 10) || 20000
-const MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK = Number.parseInt(process.env.MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK ?? '8', 10) || 8
+const LIVE_CRAWL_TIMEOUT_MS = Number.parseInt(process.env.LIVE_CRAWL_TIMEOUT_MS ?? '12000', 10) || 12000
+const MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK = Number.parseInt(process.env.MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK ?? '3', 10) || 3
 const LIVE_CRAWL_PERSIST_OPPS = String(process.env.LIVE_CRAWL_PERSIST_OPPS ?? 'true').toLowerCase() !== 'false'
 
 // Reversible safety toggles: default to SOFT matching (prefer penalties over exclusions).
@@ -72,15 +72,15 @@ function buildSearchTokens(profileContext) {
     for (const phrase of signals.phrases) {
       const normalized = normalizeString(String(phrase))
       if (normalized.length >= 4) tokens.add(normalized)
-      if (tokens.size >= 24) break
+      if (tokens.size >= 10) break
     }
   }
 
-  if (tokens.size < 24 && signals?.keywordSet && typeof signals.keywordSet[Symbol.iterator] === 'function') {
+  if (tokens.size < 10 && signals?.keywordSet && typeof signals.keywordSet[Symbol.iterator] === 'function') {
     for (const kw of signals.keywordSet) {
       const normalized = normalizeString(String(kw))
       if (normalized.length >= 4) tokens.add(normalized)
-      if (tokens.size >= 24) break
+      if (tokens.size >= 10) break
     }
   }
 
@@ -106,7 +106,7 @@ function buildSearchTokens(profileContext) {
     if (normalized.length >= 4) tokens.add(normalized)
   })
 
-  return Array.from(tokens).slice(0, 24)
+  return Array.from(tokens).slice(0, 10)
 }
 
 function isOpportunityCurrent(row) {
