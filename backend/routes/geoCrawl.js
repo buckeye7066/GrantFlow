@@ -51,8 +51,8 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
             : incoming.max_zips ?? incoming.maxZips ?? incoming.zip_limit ?? incoming.zipLimit ?? undefined,
         // Feature toggles (crawler reads these)
         discover_local_resources: incoming.discover_local_resources ?? incoming.discoverLocalResources ?? true,
-        // Geo crawl default: deterministic + scalable (skip per-ZIP web scraping unless explicitly enabled)
-        offline_only: incoming.offline_only ?? incoming.offlineOnly ?? true,
+        // Default offline_only=false so each ZIP gets Grants.gov + Overpass (no cap on max sources per zip; min 3).
+        offline_only: incoming.offline_only ?? incoming.offlineOnly ?? false,
       }
       delete parameters.zips
 
