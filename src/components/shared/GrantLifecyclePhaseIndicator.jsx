@@ -1,6 +1,6 @@
 import React from "react";
 import { Link, useLocation } from "react-router-dom";
-import { LIFECYCLE_PHASES } from "@/config/navigation";
+import { LIFECYCLE_PHASES } from "@/nav/navConfig";
 import { cn } from "@/lib/utils";
 
 /**
