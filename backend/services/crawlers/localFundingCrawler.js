@@ -361,6 +361,7 @@ export async function crawlLocalFunding(profile, options = {}) {
 function buildDirectoryResources({ profile, anchors, profileState, profileCity, targetZip, sources }) {
   const out = []
 
+  const signals = profile?.signals
   // Detect business-oriented profiles to suppress irrelevant assistance resources
   const profileText = [
     ...Array.from(signals?.interests || []),
@@ -368,7 +369,6 @@ function buildDirectoryResources({ profile, anchors, profileState, profileCity, 
     ...(signals?.applicantTypes ? Array.from(signals.applicantTypes) : []),
   ].join(' ').toLowerCase();
   const isBusinessProfile = /food\s*truck|small\s*business|startup|entrepreneur|business\s*funding|mobile\s*food|food\s*vendor|catering\s*business/.test(profileText);
-  const signals = profile?.signals
   const keywords = Array.from(signals?.keywordSet ?? []).slice(0, 12)
   const anchorList = Array.isArray(anchors) && anchors.length > 0 ? anchors : []
   const fallbackCity = profileCity || null
