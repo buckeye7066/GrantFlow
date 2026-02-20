@@ -9,11 +9,18 @@ import { Separator } from '@/components/ui/separator'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Loader2, RotateCcw, Save, CheckCircle2 } from 'lucide-react'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { useAuthStore } from '@/stores/authStore'
+import { env } from '@/config/env'
+import { isAnyaCopilotEnabled, setAnyaCopilotEnabled } from '@/config/anyaCopilotFlags'
 
 export default function Settings() {
   const { preferences, isLoading, error, fetchPreferences, updatePreference, updatePreferences, resetPreferences } = useSettingsStore()
+  const user = useAuthStore((state) => state.user)
+  const isAdmin = Boolean(user?.is_admin)
   const [saveStatus, setSaveStatus] = useState(null)
   const [hasChanges, setHasChanges] = useState(false)
+  const showCopilotToggle = env.isDev || isAdmin
+  const [copilotEnabled, setCopilotEnabled] = useState(() => isAnyaCopilotEnabled())
 
   useEffect(() => {
     fetchPreferences()
@@ -78,12 +85,13 @@ export default function Settings() {
       )}
 
       <Tabs defaultValue="layout" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-5 lg:w-auto">
+        <TabsList className={`grid w-full ${showCopilotToggle ? 'grid-cols-6' : 'grid-cols-5'} lg:w-auto`}>
           <TabsTrigger value="layout">Layout</TabsTrigger>
           <TabsTrigger value="theme">Theme</TabsTrigger>
           <TabsTrigger value="display">Display</TabsTrigger>
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="accessibility">Accessibility</TabsTrigger>
+          {showCopilotToggle ? <TabsTrigger value="features">Features</TabsTrigger> : null}
         </TabsList>
 
         {/* Layout Tab */}
@@ -461,6 +469,37 @@ export default function Settings() {
             </CardContent>
           </Card>
         </TabsContent>
+
+        {showCopilotToggle ? (
+          <TabsContent value="features" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Feature flags</CardTitle>
+                <CardDescription>
+                  Enable experimental or dev-only features. Anya Copilot is off by default in production.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>Anya Copilot UX</Label>
+                    <p className="text-sm text-slate-500">
+                      Next steps panel, &quot;Use current screen&quot; context, and context-aware suggestions in Anya. Dev: stored in localStorage. Production: set VITE_ANYA_COPILOT_ENABLED=true at build.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={copilotEnabled}
+                    onCheckedChange={(checked) => {
+                      setAnyaCopilotEnabled(checked)
+                      setCopilotEnabled(checked)
+                      window.location.reload()
+                    }}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        ) : null}
       </Tabs>
     </div>
   )
