@@ -1,51 +1,44 @@
 /**
  * Runtime feature flags for Anya copilot UX.
- * - ANYA_COPILOT_ENABLED: default OFF in production; can be overridden in dev via localStorage.
- * - ANYA_SCREENSHOT_ENABLED: default OFF everywhere (env only).
+ * Resolved from env defaults + persisted preferences (custom_preferences.feature_flags).
+ * Prefer useFeatureFlags() in components so UI reacts to pref changes; these getters read from store when hydrated.
  */
-import { env } from './env'
-
-const STORAGE_KEY_COPILOT = 'grantflow:anya_copilot_enabled'
+import { getFeatureFlagsFromPreferences } from '@/lib/featureFlags'
+import { useSettingsStore } from '@/stores/settingsStore'
 
 /**
  * Returns true if Anya copilot UX (context, next steps, use current screen) should be shown.
- * In production: only if VITE_ANYA_COPILOT_ENABLED=true at build time.
- * In dev: also true if localStorage key grantflow:anya_copilot_enabled === 'true'.
+ * Reads from persisted preferences when store is hydrated; otherwise falls back to env.
  */
 export function isAnyaCopilotEnabled() {
-  if (env.anyaCopilotEnabled) return true
-  if (env.isDev && typeof window !== 'undefined') {
-    try {
-      return window.localStorage.getItem(STORAGE_KEY_COPILOT) === 'true'
-    } catch {
-      return false
-    }
+  try {
+    const customPrefs = useSettingsStore.getState?.()?.preferences?.custom_preferences
+    const flags = getFeatureFlagsFromPreferences(customPrefs ?? undefined)
+    return flags.anyaCopilotEnabled === true
+  } catch {
+    return false
   }
-  return false
 }
 
 /**
  * Returns true if Anya screenshot capture is allowed (user-triggered only).
- * Default OFF everywhere.
  */
 export function isAnyaScreenshotEnabled() {
-  return env.anyaScreenshotEnabled === true
-}
-
-/**
- * Enable or disable the copilot flag in localStorage (dev only). No-op in production.
- */
-export function setAnyaCopilotEnabled(value) {
-  if (env.isProd) return
   try {
-    if (value) {
-      window.localStorage.setItem(STORAGE_KEY_COPILOT, 'true')
-    } else {
-      window.localStorage.removeItem(STORAGE_KEY_COPILOT)
-    }
+    const customPrefs = useSettingsStore.getState?.()?.preferences?.custom_preferences
+    const flags = getFeatureFlagsFromPreferences(customPrefs ?? undefined)
+    return flags.anyaScreenshotEnabled === true
   } catch {
-    // ignore
+    return false
   }
 }
 
-export { STORAGE_KEY_COPILOT }
+/**
+ * @deprecated Use Settings → Features toggles (persisted via PUT /api/preferences). No-op; kept for compatibility.
+ * @param {boolean} _value - Ignored; toggle via Settings UI instead.
+ */
+export function setAnyaCopilotEnabled(_value) {
+  // Flags are now persisted in backend; toggle via Settings → Features.
+}
+
+export const STORAGE_KEY_COPILOT = 'grantflow:anya_copilot_enabled'

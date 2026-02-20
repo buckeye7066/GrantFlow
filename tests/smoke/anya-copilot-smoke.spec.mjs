@@ -39,14 +39,7 @@ test('Settings route loads', async ({ page }) => {
   expect(res?.ok()).toBeTruthy()
 })
 
-test('with copilot flag in localStorage app still loads (no crash)', async ({ page }) => {
-  await page.addInitScript(() => {
-    try {
-      window.localStorage.setItem('grantflow:anya_copilot_enabled', 'true')
-    } catch {
-      // ignore
-    }
-  })
+test('login page loads with basePath (no crash)', async ({ page }) => {
   await page.goto(`${baseURL}${appBase}/login`, { waitUntil: 'networkidle' })
   const html = await page.content()
   expect(html.toLowerCase()).toContain('id="root"')

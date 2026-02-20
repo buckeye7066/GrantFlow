@@ -11,7 +11,7 @@ import { Loader2, RotateCcw, Save, CheckCircle2 } from 'lucide-react'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useAuthStore } from '@/stores/authStore'
 import { env } from '@/config/env'
-import { isAnyaCopilotEnabled, setAnyaCopilotEnabled } from '@/config/anyaCopilotFlags'
+import { useFeatureFlags } from '@/lib/featureFlags'
 
 export default function Settings() {
   const { preferences, isLoading, error, fetchPreferences, updatePreference, updatePreferences, resetPreferences } = useSettingsStore()
@@ -20,7 +20,14 @@ export default function Settings() {
   const [saveStatus, setSaveStatus] = useState(null)
   const [hasChanges, setHasChanges] = useState(false)
   const showCopilotToggle = env.isDev || isAdmin
-  const [copilotEnabled, setCopilotEnabled] = useState(() => isAnyaCopilotEnabled())
+  const { anyaCopilotEnabled: copilotEnabled, anyaScreenshotEnabled: screenshotEnabled } = useFeatureFlags()
+
+  const setFeatureFlag = (key, value) => {
+    const custom = preferences?.custom_preferences ?? {}
+    const flags = { ...(custom.feature_flags ?? {}), [key]: value }
+    updatePreferences({ custom_preferences: { ...custom, feature_flags: flags } })
+    setHasChanges(true)
+  }
 
   useEffect(() => {
     fetchPreferences()
@@ -476,24 +483,32 @@ export default function Settings() {
               <CardHeader>
                 <CardTitle>Feature flags</CardTitle>
                 <CardDescription>
-                  Enable experimental or dev-only features. Anya Copilot is off by default in production.
+                  Anya copilot and screen capture. Settings persist across refresh and login.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
-                    <Label>Anya Copilot UX</Label>
+                    <Label>Anya Copilot</Label>
                     <p className="text-sm text-slate-500">
-                      Next steps panel, &quot;Use current screen&quot; context, and context-aware suggestions in Anya. Dev: stored in localStorage. Production: set VITE_ANYA_COPILOT_ENABLED=true at build.
+                      Next steps panel, &quot;Use current screen&quot; context, and context-aware suggestions in Anya.
                     </p>
                   </div>
                   <Switch
                     checked={copilotEnabled}
-                    onCheckedChange={(checked) => {
-                      setAnyaCopilotEnabled(checked)
-                      setCopilotEnabled(checked)
-                      window.location.reload()
-                    }}
+                    onCheckedChange={(checked) => setFeatureFlag('anyaCopilotEnabled', checked)}
+                  />
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>Anya Screen Capture</Label>
+                    <p className="text-sm text-slate-500">
+                      Allow &quot;Capture screen&quot; in Anya (user-triggered only).
+                    </p>
+                  </div>
+                  <Switch
+                    checked={screenshotEnabled}
+                    onCheckedChange={(checked) => setFeatureFlag('anyaScreenshotEnabled', checked)}
                   />
                 </div>
               </CardContent>
