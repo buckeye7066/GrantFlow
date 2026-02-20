@@ -667,13 +667,13 @@ class APIClient {
         // non-blocking
       }
       if (typeof window !== 'undefined') {
-        window.location.href = `${APP_BASE.replace(/\/$/, '')}/login`;
+        window.location.href = `${env.appBase.replace(/\/$/, '')}/login`;
       }
     },
     
     redirectToLogin: () => {
       if (typeof window !== 'undefined') {
-        window.location.href = `${APP_BASE.replace(/\/$/, '')}/login`;
+        window.location.href = `${env.appBase.replace(/\/$/, '')}/login`;
       }
     }
   };
