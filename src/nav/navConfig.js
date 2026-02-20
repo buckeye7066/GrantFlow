@@ -128,7 +128,7 @@ export function setNavGroupsOpen(openSet) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify([...openSet]));
-  } catch {}
+  } catch { /* ignore */ }
 }
 
 /** Resolve route path (e.g. "Pipeline") to groupId for breadcrumb / expand-active. */

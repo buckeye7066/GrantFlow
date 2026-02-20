@@ -3,6 +3,7 @@
  * No user private text is captured. Updates are driven by route/auth only (no keystroke);
  * no throttle needed as location and authStore subscriptions do not fire on every key press.
  */
+/* eslint-disable react-refresh/only-export-components -- context + hooks exported from same file */
 import React, { createContext, useContext, useCallback, useMemo, useEffect } from "react";
 import { useLocation } from "react-router-dom";
 import { useAuthStore } from "@/stores/authStore";
