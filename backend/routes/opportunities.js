@@ -400,12 +400,20 @@ router.get('/', async (req, res) => {
 
     if (search) {
       const likeOp = likeOperatorForDb(req.db);
-      // Split multi-word searches into per-token ILIKE conditions.
-      // Each token must match at least one of title/sponsor/description (OR
-      // within a token, AND across tokens). Single-word searches are unchanged.
-      const tokens = search.trim().split(/\s+/).filter(Boolean);
-      for (const token of tokens) {
-        const term = `%${token}%`;
+      // Phrase-aware search: group consecutive tokens into bigrams so that
+      // multi-word concepts (e.g. "food truck") are kept as atomic search
+      // units rather than being split into ambiguous single tokens ("food").
+      // This prevents "food bank" results from polluting "food truck" queries.
+      const rawTokens = search.trim().split(/\s+/).filter(Boolean);
+
+      if (rawTokens.length >= 2) {
+        // Full-phrase condition: match the entire search string as one unit
+        const fullPhrase = `%${search.trim()}%`;
+        baseConditions.push(`(${prefix}title ${likeOp} ? OR ${prefix}sponsor ${likeOp} ? OR ${prefix}description ${likeOp} ? OR ${prefix}keywords ${likeOp} ?)`);
+        baseParams.push(fullPhrase, fullPhrase, fullPhrase, fullPhrase);
+      } else {
+        // Single-word search: unchanged behavior
+        const term = `%${rawTokens[0]}%`;
         baseConditions.push(`(${prefix}title ${likeOp} ? OR ${prefix}sponsor ${likeOp} ? OR ${prefix}description ${likeOp} ?)`);
         baseParams.push(term, term, term);
       }
