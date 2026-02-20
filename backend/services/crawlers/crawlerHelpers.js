@@ -397,6 +397,26 @@ export function calculateMatchScore(opportunity, profile) {
     reasons.push(`Requires matching funds (${opportunity.match_percentage || '?'}%)`)
   }
 
+
+    // ============ CATEGORY MISMATCH PENALTY ============
+      // Penalize opportunities from assistance/charity categories when the profile
+        // is looking for business funding (e.g., food bank results for food truck queries).
+          const businessSignals = ['small_business', 'food truck', 'food_truck', 'startup', 'entrepreneur', 'business funding', 'mobile food', 'food vendor', 'catering']
+            const assistanceCategories = ['food bank', 'food pantry', 'food assistance', 'soup kitchen', 'hunger relief', 'meals on wheels', 'snap benefits']
+              const profileIsBusinessOriented = businessSignals.some(sig =>
+                    (signals?.interests?.has?.(sig)) ||
+                        (signals?.keywordSet?.has?.(sig)) ||
+                            (signals?.applicantTypes?.has?.(sig)) ||
+                                (signals?.occupation?.has?.(sig))
+              )
+                if (profileIsBusinessOriented) {
+                      const isAssistanceOpp = assistanceCategories.some(cat => oppText.includes(cat))
+                          if (isAssistanceOpp) {
+                                  score -= 30
+                                        reasons.push('Assistance/charity mismatch (profile seeks business funding)')
+                          }
+                        }
+                        
   // ============ MULTI-CATEGORY BONUS ============
   const categoryCount = new Set(matchedSignals.map(s => s.split(':')[0])).size
   if (categoryCount >= 5) {
