@@ -35,7 +35,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import AnyaFloatingButton from "@/components/anya/AnyaFloatingButton";
 import { AnyaContextProvider } from "@/contexts/AnyaContext";
-import { isAnyaCopilotEnabled } from "@/config/anyaCopilotFlags";
+import { useFeatureFlags } from "@/lib/featureFlags";
 import ProBonoBanner from "@/components/banners/ProBonoBanner.jsx";
 import AppBreadcrumb from "@/components/shared/AppBreadcrumb";
 import GrantLifecyclePhaseIndicator from "@/components/shared/GrantLifecyclePhaseIndicator";
@@ -183,10 +183,10 @@ export default function Layout({ children, currentPageName }) {
     if (path === '/' || path === '/Dashboard') return
     try {
       window.localStorage.setItem('grantflow:last-visited-page', path)
-    } catch {}
+    } catch (_) { /* ignore */ }
   }, [isAuthenticated, location.pathname, location.search])
 
-  const copilotEnabled = isAnyaCopilotEnabled()
+  const { anyaCopilotEnabled: copilotEnabled } = useFeatureFlags()
   const content = (
     <SidebarProvider>
       <div className="min-h-screen flex w-full bg-gradient-to-br from-background via-background to-muted text-foreground">
