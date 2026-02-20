@@ -1,38 +1,14 @@
-import React from "react";
+import React, { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { createPageUrl } from "@/utils";
 import {
-  LayoutDashboard,
-  Building2,
-  HandCoins,
-  Search,
-  Sparkles,
-  Boxes,
-  Target,
-  Kanban,
-  MessageSquare,
-  Megaphone,
-  CalendarClock,
-  BarChart3,
-  FileText,
-  ShieldCheck,
-  DollarSign,
-  FolderOpen,
-  Calendar,
-  LineChart,
-  Workflow,
-  Layers,
   LogOut,
-  Brain,
-  FileStack,
-  Database,
-  DatabaseZap,
-  Beaker,
   Sun,
   Moon,
-  Settings,
-  Shield,
-} from "lucide-react"
+  ChevronDown,
+  ChevronRight,
+  Sparkles,
+  FileText,
+} from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -47,6 +23,11 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import AutoTimeTracker from "@/components/billing/AutoTimeTracker";
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx";
 import OnboardingFlow from "@/components/onboarding/OnboardingFlow";
@@ -56,161 +37,52 @@ import { useAuthStore } from "@/stores/authStore";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import AnyaFloatingButton from "@/components/anya/AnyaFloatingButton";
 import ProBonoBanner from "@/components/banners/ProBonoBanner.jsx";
+import AppBreadcrumb from "@/components/shared/AppBreadcrumb";
+import GrantLifecyclePhaseIndicator from "@/components/shared/GrantLifecyclePhaseIndicator";
 import { apiFetch } from "@/api/client";
+import { PRIMARY_NAV, MORE_NAV, DEVELOPER_NAV, ADMIN_NAV } from "@/config/navigation";
 
-const navigationItems = [
-  {
-    title: "Dashboard",
-    url: createPageUrl("Dashboard"),
-    icon: LayoutDashboard,
-  },
-  {
-    title: "My Profiles",
-    url: createPageUrl("MyProfiles"),
-    icon: Building2,
-  },
-  {
-    title: "Funder",
-    url: createPageUrl("Funder"),
-    icon: HandCoins,
-  },
-  {
-    title: "Discover Grants",
-    url: createPageUrl("DiscoverGrants"),
-    icon: Search,
-  },
-  {
-    title: "Smart Matcher",
-    url: createPageUrl("SmartMatcher"),
-    icon: Sparkles,
-  },
-  {
-    title: "Item Funding",
-    url: createPageUrl("ItemFunding"),
-    icon: Boxes,
-  },
-  {
-    title: "Profile Matcher",
-    url: createPageUrl("ProfileMatcher"),
-    icon: Target,
-  },
-  {
-    title: "Pipeline",
-    url: createPageUrl("Pipeline"),
-    icon: Kanban,
-  },
-  {
-    title: "Outreach",
-    url: createPageUrl("Outreach"),
-    icon: Megaphone,
-  },
-  {
-    title: "Grant Deadline",
-    url: createPageUrl("GrantDeadline"),
-    icon: CalendarClock,
-  },
-  {
-    title: "Grant Monitoring",
-    url: createPageUrl("GrantMonitoring"),
-    icon: BarChart3,
-  },
-  {
-    title: "Proposals",
-    url: createPageUrl("Proposals"),
-    icon: FileText,
-  },
-  {
-    title: "Stewardship",
-    url: createPageUrl("Stewardship"),
-    icon: ShieldCheck,
-  },
-  {
-    title: "Reports & Analytics",
-    url: createPageUrl("Reports"),
-    icon: BarChart3,
-  },
-  {
-    title: "Advanced Analytics",
-    url: createPageUrl("AdvancedAnalytics"),
-    icon: LineChart,
-  },
-  {
-    title: "Billing & Invoicing",
-    url: createPageUrl("Billing"),
-    icon: DollarSign,
-  },
-  {
-    title: "Budgets",
-    url: createPageUrl("Budgets"),
-    icon: DollarSign,
-  },
-  {
-    title: "Documents",
-    url: createPageUrl("Documents"),
-    icon: FolderOpen,
-  },
-  {
-    title: "Calendar",
-    url: createPageUrl("Calendar"),
-    icon: Calendar,
-  },
-  {
-    title: "Automation",
-    url: createPageUrl("Automation"),
-    icon: Workflow,
-  },
-  {
-    title: "Funding Opportunities",
-    url: createPageUrl("FundingOpportunities"),
-    icon: Layers,
-  },
-  {
-    title: "Data Sources",
-    url: createPageUrl("DataSources"),
-    icon: Database,
-  },
-  {
-    title: "Source Directory",
-    url: createPageUrl("SourceDirectory"),
-    icon: DatabaseZap,
-  },
-  {
-    title: "Printable Application",
-    url: createPageUrl("PrintableApplication"),
-    icon: FileText,
-  },
-  {
-    title: "AI Grant Scorer",
-    url: createPageUrl("AIGrantScorer"),
-    icon: Brain,
-  },
-  {
-    title: "NOFO Parser",
-    url: createPageUrl("NOFOParser"),
-    icon: FileStack,
-  },
-  {
-    title: "Settings",
-    url: createPageUrl("Settings"),
-    icon: Settings,
-  },
-]
-
-const developerItems = [
-  {
-    title: "Diagnostics",
-    url: createPageUrl("Diagnostics"),
-    icon: Beaker,
-  },
-];
-
-const adminItems = [
-  {
-    title: "Admin Panel",
-    url: createPageUrl("Admin"),
-    icon: Shield,
-  },
-];
+function NavCollapsible({ label, items, location }) {
+  const [open, setOpen] = useState(false);
+  const isActive = items.some((item) => location.pathname === item.url);
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <CollapsibleTrigger asChild>
+        <SidebarMenuButton
+          className={`w-full justify-between rounded-lg mb-1 ${
+            isActive ? "bg-sidebar-accent" : "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+          }`}
+        >
+          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+            {label}
+          </span>
+          {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+        </SidebarMenuButton>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <SidebarMenu className="mt-1">
+          {items.map((item) => (
+            <SidebarMenuItem key={item.title}>
+              <SidebarMenuButton
+                asChild
+                className={`transition-all duration-200 rounded-lg mb-1 ${
+                  location.pathname === item.url
+                    ? "bg-primary text-primary-foreground shadow-sm"
+                    : "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                }`}
+              >
+                <Link to={item.url} className="flex items-center gap-3 px-3 py-2.5">
+                  <item.icon className="w-4 h-4" />
+                  <span className="font-medium">{item.title}</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ))}
+        </SidebarMenu>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
 
 export default function Layout({ children, currentPageName }) {
   const location = useLocation();
@@ -301,18 +173,18 @@ export default function Layout({ children, currentPageName }) {
           <SidebarContent className="p-3">
             <SidebarGroup>
               <SidebarGroupLabel className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-3 py-2">
-                Navigation
+                Main
               </SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu>
-                  {navigationItems.map((item) => (
+                  {PRIMARY_NAV.map((item) => (
                     <SidebarMenuItem key={item.title}>
-                      <SidebarMenuButton 
-                        asChild 
+                      <SidebarMenuButton
+                        asChild
                         className={`transition-all duration-200 rounded-lg mb-1 ${
                           location.pathname === item.url
-                            ? 'bg-primary text-primary-foreground shadow-sm'
-                            : 'hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+                            ? "bg-primary text-primary-foreground shadow-sm"
+                            : "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                         }`}
                       >
                         <Link to={item.url} className="flex items-center gap-3 px-3 py-2.5">
@@ -326,19 +198,26 @@ export default function Layout({ children, currentPageName }) {
               </SidebarGroupContent>
             </SidebarGroup>
             <SidebarGroup className="mt-4">
+              <NavCollapsible
+                label="More"
+                items={MORE_NAV}
+                location={location}
+              />
+            </SidebarGroup>
+            <SidebarGroup className="mt-4">
               <SidebarGroupLabel className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-3 py-2">
                 Developer
               </SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu>
-                  {developerItems.map((item) => (
+                  {DEVELOPER_NAV.map((item) => (
                     <SidebarMenuItem key={item.title}>
-                      <SidebarMenuButton 
-                        asChild 
+                      <SidebarMenuButton
+                        asChild
                         className={`transition-all duration-200 rounded-lg mb-1 ${
                           location.pathname === item.url
-                            ? 'bg-primary text-primary-foreground shadow-sm'
-                            : 'hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+                            ? "bg-primary text-primary-foreground shadow-sm"
+                            : "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                         }`}
                       >
                         <Link to={item.url} className="flex items-center gap-3 px-3 py-2.5">
@@ -358,14 +237,14 @@ export default function Layout({ children, currentPageName }) {
                 </SidebarGroupLabel>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    {adminItems.map((item) => (
+                    {ADMIN_NAV.map((item) => (
                       <SidebarMenuItem key={item.title}>
-                        <SidebarMenuButton 
-                          asChild 
+                        <SidebarMenuButton
+                          asChild
                           className={`transition-all duration-200 rounded-lg mb-1 ${
                             location.pathname === item.url
-                              ? 'bg-amber-600 text-white shadow-sm'
-                              : 'hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+                              ? "bg-amber-600 text-white shadow-sm"
+                              : "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                           }`}
                         >
                           <Link to={item.url} className="flex items-center gap-3 px-3 py-2.5">
@@ -436,14 +315,15 @@ export default function Layout({ children, currentPageName }) {
         </Sidebar>
 
         <main className="flex-1 flex flex-col overflow-hidden">
-          <header className="bg-background/80 backdrop-blur border-b border-border px-4 md:px-6 py-3 flex items-center justify-between sticky top-0 z-20">
-            <div className="flex items-center gap-3 md:gap-4">
-              <SidebarTrigger className="hover:bg-muted p-2 rounded-lg transition-colors duration-200 md:hidden" />
-              <div>
-                <h1 className="text-lg md:text-xl font-semibold text-foreground leading-tight">GrantFlow</h1>
-                <p className="text-xs text-muted-foreground">AI-assisted grant management workspace</p>
+          <header className="bg-background/80 backdrop-blur border-b border-border px-4 md:px-6 py-3 flex flex-col gap-2 sticky top-0 z-20">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3 md:gap-4">
+                <SidebarTrigger className="hover:bg-muted p-2 rounded-lg transition-colors duration-200 md:hidden" />
+                <div>
+                  <h1 className="text-lg md:text-xl font-semibold text-foreground leading-tight">GrantFlow</h1>
+                  <p className="text-xs text-muted-foreground">AI-assisted grant management workspace</p>
+                </div>
               </div>
-            </div>
           <div className="flex items-center gap-2 md:gap-3">
             <Button
               variant="outline"
@@ -472,6 +352,11 @@ export default function Layout({ children, currentPageName }) {
                   {displayEmail ? <p className="text-xs text-muted-foreground">{displayEmail}</p> : null}
                 </div>
               </Button>
+            </div>
+            </div>
+            <div className="flex flex-col gap-1.5 min-w-0">
+              <AppBreadcrumb />
+              <GrantLifecyclePhaseIndicator />
             </div>
           </header>
 
