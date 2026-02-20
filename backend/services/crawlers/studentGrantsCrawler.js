@@ -14,7 +14,6 @@
  *
  * CRITICAL: Uses 100% of profile data via signals for search queries and scoring.
  */
-import * as cheerio from 'cheerio'
 import { buildSearchKeywords, calculateMatchScore, filterByDeadline } from './crawlerHelpers.js'
 import { getWithRetry } from './httpClient.js'
 
