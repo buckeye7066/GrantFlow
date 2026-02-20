@@ -1,438 +1,599 @@
 /**
  * Government Funding Crawler
- * Searches NIH, FEMA, Medicare, Medicaid, Federal, State, and Local government sources
- * Excludes loans and matching funds
- * 
+ * Profile-Driven Discovery: Exhaustively uses ALL profile signals to construct
+ * the maximum number of targeted search queries against Grants.gov and other
+ * government funding APIs.
+ *
+ * DESIGN PRINCIPLE: If someone depends on these funds for survival, we cannot
+ * afford to miss a single relevant opportunity. Every signal category in the
+ * profile generates its own search strategy. We cast a wide net with targeted
+ * queries and let the scoring engine determine final relevance.
+ *
+ * STRATEGY: Instead of cherry-picking a few signals, we:
+ * 1. Generate a strategy for EVERY non-empty signal category
+ * 2. Generate cross-signal combination strategies (e.g., veteran + disability)
+ * 3. Generate phrase-based strategies from the profile's own words
+ * 4. Run ALL strategies in parallel against Grants.gov
+ * 5. De-duplicate across strategies
+ * 6. Score with full profile context - NO artificial bonuses
+ *
  * CRITICAL: Uses 100% of profile data via signals for search queries and scoring.
  */
-
-import axios from 'axios'
 import * as cheerio from 'cheerio'
 import { buildSearchKeywords, calculateMatchScore, filterByDeadline } from './crawlerHelpers.js'
 import { getWithRetry, postWithRetry } from './httpClient.js'
 
-const GRANTSGOV_FETCH_URL = 'https://api.grants.gov/v1/api/fetchOpportunity'
-const grantsGovDetailsCache = new Map()
+const GRANTS_GOV_API = 'https://api.grants.gov/v1/api/search2'
+const GRANTS_GOV_DETAIL = 'https://www.grants.gov/search-results-detail/'
 
-async function fetchGrantsGovSynopsis(opportunityId) {
-  const id = String(opportunityId || '').trim()
-  if (!id) return null
-  if (grantsGovDetailsCache.has(id)) return grantsGovDetailsCache.get(id)
-  try {
-    const resp = await postWithRetry(
-      GRANTSGOV_FETCH_URL,
-      { opportunityId: Number(id) },
-      { headers: { 'Content-Type': 'application/json' } },
-      { timeoutMs: 15000, retries: 2 },
-    )
-    const synopsis = resp?.data?.data?.synopsis ?? null
-    const synopsisDescRaw = synopsis?.synopsisDesc ?? null
-    const synopsisText = synopsisDescRaw
-      ? cheerio.load(String(synopsisDescRaw)).text().trim()
-      : null
-    const payload = {
-      synopsisText,
-      responseDate: synopsis?.responseDateStr ?? synopsis?.responseDate ?? null,
-      agencyName: synopsis?.agencyName ?? null,
-      awardCeiling: synopsis?.awardCeiling ?? null,
-      awardFloor: synopsis?.awardFloor ?? null,
-      applicantEligibilityDesc: synopsis?.applicantEligibilityDesc ?? null,
-    }
-    grantsGovDetailsCache.set(id, payload)
-    return payload
-  } catch {
-    grantsGovDetailsCache.set(id, null)
-    return null
-  }
+const NIH_RSS_URL = 'https://grants.nih.gov/grants/guide/newsfeed/fundingopps.xml'
+
+// State grant portals (expandable)
+const STATE_PORTALS = {
+        OH: { name: 'Ohio Grants', searchUrl: 'https://grants.ohio.gov/Public/Search.aspx' },
+        TN: { name: 'Tennessee Grants', searchUrl: 'https://www.tn.gov/finance/grants.html' },
+        CO: { name: 'Colorado Grants', searchUrl: 'https://www.colorado.gov/grants' },
+        TX: { name: 'Texas Grants', searchUrl: 'https://www.texasagriculture.gov/Grants-Services' },
+        CA: { name: 'California Grants', searchUrl: 'https://www.grants.ca.gov/' },
+        NY: { name: 'New York Grants', searchUrl: 'https://grantsmanagement.ny.gov/' },
+        FL: { name: 'Florida Grants', searchUrl: 'https://www.myflorida.com/apps/vbs/vbs_www.main_menu' },
+        PA: { name: 'Pennsylvania Grants', searchUrl: 'https://www.esa.dced.state.pa.us/Login.aspx' },
+        IL: { name: 'Illinois Grants', searchUrl: 'https://www2.illinois.gov/sites/GATA/Grants' },
+        MI: { name: 'Michigan Grants', searchUrl: 'https://www.michigan.gov/leo/bureaus-agencies/ogl' },
 }
 
-// Real government funding APIs and sources
-const GOVERNMENT_SOURCES = {
-  federal: [
-    {
-      name: 'Grants.gov',
-      // Grants.gov public Search API (no key required)
-      // https://api.grants.gov/v1/api/search2
-      apiUrl: 'https://api.grants.gov/v1/api/search2',
-      type: 'api'
-    },
-    {
-      name: 'NIH Grants',
-      // NIH Guide RSS feed for Funding Opportunity Announcements
-      // https://grants.nih.gov/grants/guide/newsfeed/fundingopps.xml
-      baseUrl: 'https://grants.nih.gov/grants/guide/newsfeed/fundingopps.xml',
-      type: 'rss'
-    },
-    {
-      name: 'FEMA Grants',
-      baseUrl: 'https://www.fema.gov/grants',
-      type: 'scrape'
-    },
-    {
-      name: 'SAMHSA Grants',
-      baseUrl: 'https://www.samhsa.gov/grants',
-      type: 'scrape'
-    }
-  ],
-  medicare_medicaid: [
-    {
-      name: 'CMS Innovation Center',
-      baseUrl: 'https://innovation.cms.gov/innovation-models',
-      type: 'scrape'
-    },
-    {
-      name: 'Medicaid.gov',
-      baseUrl: 'https://www.medicaid.gov/medicaid/grants',
-      type: 'scrape'
-    }
-  ],
-  state: {
-    'OH': {
-      name: 'Ohio Grants',
-      baseUrl: 'https://grants.ohio.gov',
-      searchUrl: 'https://grants.ohio.gov/Public/Search.aspx'
-    },
-    'TN': {
-      name: 'Tennessee Grants',
-      baseUrl: 'https://www.tn.gov/finance/grants.html',
-      searchUrl: 'https://www.tn.gov/finance/grants.html'
-    },
-    'CO': {
-      name: 'Colorado Grants',
-      baseUrl: 'https://www.colorado.gov/grants',
-      searchUrl: 'https://www.colorado.gov/grants'
-    },
-    // Add more states as needed
+/**
+       * Build EXHAUSTIVE search strategies from ALL profile signals.
+       * Every non-empty signal category gets at least one strategy.
+       * Cross-signal combinations catch opportunities that span categories.
+       * Phrases from the profile's own words catch specific programs.
+       */
+function buildExhaustiveStrategies(profile) {
+        const signals = profile?.signals
+        if (!signals) return [{ label: 'fallback', query: 'grant assistance program' }]
+
+  const strategies = []
+
+          const toArray = (set) => set && typeof set[Symbol.iterator] === 'function' ? Array.from(set) : []
+                  const clean = (s) => String(s || '').replace(/_/g, ' ').trim()
+
+  const applicantTypes = toArray(signals.applicantTypes).map(clean).filter(Boolean)
+        const interests = toArray(signals.interests).map(clean).filter(Boolean)
+        const demographics = toArray(signals.demographics).map(clean).filter(Boolean)
+        const health = toArray(signals.health).map(clean).filter(Boolean)
+        const assistance = toArray(signals.assistance).map(clean).filter(Boolean)
+        const family = toArray(signals.family).map(clean).filter(Boolean)
+        const military = toArray(signals.military).map(clean).filter(Boolean)
+        const occupation = toArray(signals.occupation).map(clean).filter(Boolean)
+        const phrases = toArray(signals.phrases).filter(p => p.length >= 8 && p.length <= 60)
+
+  // === CATEGORY-SPECIFIC STRATEGIES (one per non-empty category) ===
+
+  // Applicant type strategies (e.g., "nonprofit community health grant")
+  if (applicantTypes.length > 0) {
+            for (const appType of applicantTypes.slice(0, 3)) {
+                        const topInterest = interests[0] || ''
+                        const q = `${appType} ${topInterest} grant`.trim()
+                        strategies.push({ label: `applicant:${appType}`, query: q.slice(0, 80) })
+            }
   }
+
+  // Interest/focus area strategies (e.g., "education youth development funding")
+  if (interests.length > 0) {
+            // Each interest gets its own query for maximum coverage
+          for (const interest of interests.slice(0, 5)) {
+                      strategies.push({ label: `interest:${interest}`, query: `${interest} grant funding`.slice(0, 80) })
+          }
+            // Combined top interests
+          if (interests.length >= 2) {
+                      const combined = interests.slice(0, 3).join(' ')
+                      strategies.push({ label: 'interests-combined', query: `${combined} program`.slice(0, 80) })
+          }
+  }
+
+  // Demographic strategies (e.g., "african american women grant", "first generation")
+  if (demographics.length > 0) {
+            for (const demo of demographics.slice(0, 4)) {
+                        strategies.push({ label: `demo:${demo}`, query: `${demo} grant assistance`.slice(0, 80) })
+            }
+  }
+
+  // Health/disability strategies - CRITICAL for survival funding
+  if (health.length > 0) {
+            for (const condition of health.slice(0, 5)) {
+                        strategies.push({ label: `health:${condition}`, query: `${condition} assistance grant program`.slice(0, 80) })
+            }
+            // Combined health + assistance
+          if (assistance.length > 0) {
+                      const q = `${health[0]} ${assistance[0]} support program`
+                      strategies.push({ label: 'health+assist', query: q.slice(0, 80) })
+          }
+  }
+
+  // Assistance program strategies (e.g., "medicaid low income housing assistance")
+  if (assistance.length > 0) {
+            for (const assist of assistance.slice(0, 4)) {
+                        strategies.push({ label: `assist:${assist}`, query: `${assist} benefits program grant`.slice(0, 80) })
+            }
+  }
+
+  // Family situation strategies (e.g., "single parent childcare grant")
+  if (family.length > 0) {
+            for (const fam of family.slice(0, 3)) {
+                        strategies.push({ label: `family:${fam}`, query: `${fam} family assistance grant`.slice(0, 80) })
+            }
+  }
+
+  // Military/veteran strategies - CRITICAL for veteran benefits
+  if (military.length > 0) {
+            for (const mil of military.slice(0, 3)) {
+                        strategies.push({ label: `military:${mil}`, query: `${mil} grant benefits program`.slice(0, 80) })
+            }
+            // Cross: veteran + health
+          if (health.length > 0) {
+                      const q = `${military[0]} ${health[0]} assistance`
+                      strategies.push({ label: 'military+health', query: q.slice(0, 80) })
+          }
+            // Cross: veteran + family
+          if (family.length > 0) {
+                      const q = `${military[0]} ${family[0]} support`
+                      strategies.push({ label: 'military+family', query: q.slice(0, 80) })
+          }
+  }
+
+  // Occupation strategies (e.g., "healthcare worker grant", "teacher funding")
+  if (occupation.length > 0) {
+            for (const occ of occupation.slice(0, 3)) {
+                        strategies.push({ label: `occupation:${occ}`, query: `${occ} workforce grant program`.slice(0, 80) })
+            }
+  }
+
+  // === CROSS-SIGNAL COMBINATION STRATEGIES ===
+
+  // Demographics + health (e.g., "african american cancer support")
+  if (demographics.length > 0 && health.length > 0) {
+            const q = `${demographics[0]} ${health[0]} support grant`
+            strategies.push({ label: 'demo+health', query: q.slice(0, 80) })
+  }
+
+  // Demographics + family (e.g., "hispanic single parent assistance")
+  if (demographics.length > 0 && family.length > 0) {
+            const q = `${demographics[0]} ${family[0]} assistance`
+            strategies.push({ label: 'demo+family', query: q.slice(0, 80) })
+  }
+
+  // Applicant type + health (e.g., "nonprofit disability services grant")
+  if (applicantTypes.length > 0 && health.length > 0) {
+            const q = `${applicantTypes[0]} ${health[0]} services grant`
+            strategies.push({ label: 'type+health', query: q.slice(0, 80) })
+  }
+
+  // Assistance + family (e.g., "low income single parent housing")
+  if (assistance.length > 0 && family.length > 0) {
+            const q = `${assistance[0]} ${family[0]} program`
+            strategies.push({ label: 'assist+family', query: q.slice(0, 80) })
+  }
+
+  // === PHRASE STRATEGIES (user's own words) ===
+  for (const phrase of phrases.slice(0, 5)) {
+            strategies.push({ label: `phrase:${phrase.slice(0, 20)}`, query: phrase })
+  }
+
+  // === LOCATION-AWARE STRATEGIES ===
+  const state = signals.location?.state
+        const city = signals.location?.city
+        if (state) {
+                  // State + top interest
+          if (interests.length > 0) {
+                      strategies.push({ label: `state+interest`, query: `${state} ${interests[0]} grant program`.slice(0, 80) })
+          }
+                  // State + health
+          if (health.length > 0) {
+                      strategies.push({ label: `state+health`, query: `${state} ${health[0]} assistance`.slice(0, 80) })
+          }
+                  // State + demographics
+          if (demographics.length > 0) {
+                      strategies.push({ label: `state+demo`, query: `${state} ${demographics[0]} grant`.slice(0, 80) })
+          }
+        }
+
+  // === FALLBACK ===
+  if (strategies.length === 0) {
+            const allKeywords = buildSearchKeywords(profile, 10)
+            strategies.push({ label: 'broad-keywords', query: allKeywords.join(' ').slice(0, 80) })
+  }
+
+  // De-duplicate by query text (case-insensitive)
+  const seen = new Set()
+        const unique = strategies.filter(s => {
+                  const key = s.query.toLowerCase().trim()
+                  if (seen.has(key)) return false
+                  seen.add(key)
+                  return true
+        })
+
+  // Cap at 12 strategies to stay within timeout budget (12 parallel API calls, 8s each, ~12s total with concurrency)
+  return unique.slice(0, 12)
 }
 
 export async function crawlGovernmentFunding(profile, options = {}) {
-  const results = []
-  const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 50
-  
-  // CRITICAL: Use signals for all profile data
+        const results = []
+                const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 50
+
   const signals = profile?.signals
-  if (!signals) {
-    console.error('[GovernmentCrawler] No signals in profile - cannot search with 100% precision')
-    return results
-  }
+        if (!signals) {
+                  console.error('[GovernmentCrawler] No signals in profile - cannot search')
+                  return results
+        }
 
   const profileState = signals.location?.state || profile.state || null
-  
-  // Build search keywords from ALL profile signals
-  const searchKeywords = buildSearchKeywords(profile, 25)
-  
-  console.log(`[GovernmentCrawler] Starting search with ${searchKeywords.length} keywords from profile signals`)
-  console.log(`[GovernmentCrawler] Profile state: ${profileState}`)
-  console.log(`[GovernmentCrawler] Keywords: ${searchKeywords.slice(0, 10).join(', ')}...`)
-  console.log(`[GovernmentCrawler] Demographics: ${Array.from(signals.demographics || []).join(', ')}`)
-  console.log(`[GovernmentCrawler] Military: ${Array.from(signals.military || []).join(', ')}`)
-  console.log(`[GovernmentCrawler] Health: ${Array.from(signals.health || []).join(', ')}`)
-  console.log(`[GovernmentCrawler] Assistance: ${Array.from(signals.assistance || []).join(', ')}`)
-  
-  // Search Federal sources
-  for (const source of GOVERNMENT_SOURCES.federal) {
-    try {
-      const opportunities = await searchFederalSource(source, profile, searchKeywords)
-      
-      // Filter out expired deadlines
-      const activeOpps = filterByDeadline(opportunities)
-      
-      for (const opp of activeOpps) {
-        // Skip loans and matching funds
-        if (isLoanOrMatchingFund(opp)) continue
-        
-        // Use comprehensive scoring with 100% of profile signals
-        const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profile)
+        const strategies = buildExhaustiveStrategies(profile)
+        const searchKeywords = buildSearchKeywords(profile, 25)
 
-        // Query relevance bonus:
-        // When an opportunity is returned from a targeted query built from profile signals,
-        // it is already "pre-filtered" for relevance even if the text-based scorer is conservative.
-        let adjustedScore = matchScore
-        if (source?.name === 'Grants.gov' && searchKeywords.length > 0) {
-          const bonus = 35
-          adjustedScore = Math.min(100, matchScore + bonus)
-          reasons.push('Query relevance bonus (Grants.gov search)')
-        }
+  console.log(`[GovernmentCrawler] Exhaustive discovery with ${strategies.length} strategies`)
+        console.log(`[GovernmentCrawler] Strategies: ${strategies.map(s => s.label).join(', ')}`)
+        console.log(`[GovernmentCrawler] Profile state: ${profileState}`)
 
-        if (adjustedScore >= minMatchScore) {
-          results.push({
-            ...opp,
-            match_score: adjustedScore,
-            match_reasons: reasons,
-            matched_signals: matchedSignals,
-            crawler_type: 'government_funding',
-            funding_level: 'federal',
-            source: source.name
-          })
-        }
-      }
-    } catch (error) {
-      console.error(`[GovernmentCrawler] Error searching ${source.name}:`, error.message)
-    }
+  // De-dupe tracker across all sources
+  const seenTitles = new Set()
+
+  // === GRANTS.GOV: Run ALL strategies in parallel ===
+  try {
+            const grantsGovResults = await searchGrantsGovExhaustive(strategies)
+
+          const activeOpps = filterByDeadline(grantsGovResults)
+            for (const opp of activeOpps) {
+                        if (isLoanOrMatchingFund(opp)) continue
+
+              const titleKey = (opp.title || '').toLowerCase().trim()
+                        if (titleKey && seenTitles.has(titleKey)) continue
+                        if (titleKey) seenTitles.add(titleKey)
+
+              const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profile)
+
+              if (matchScore >= minMatchScore) {
+                            results.push({
+                                            ...opp,
+                                            match_score: matchScore,
+                                            match_reasons: reasons,
+                                            matched_signals: matchedSignals,
+                                            crawler_type: 'government_funding',
+                                            funding_level: 'federal',
+                                            source: 'Grants.gov',
+                            })
+              }
+            }
+  } catch (error) {
+            console.error(`[GovernmentCrawler] Grants.gov error:`, error.message)
   }
-  
-  // Search Medicare/Medicaid sources (only if profile has healthcare-related signals)
-  const hasHealthcareSignals = signals.health?.size > 0 || 
-    signals.assistance?.has('medicaid') || 
-    signals.assistance?.has('medicare') ||
-    signals.occupation?.has('healthcare_worker')
-  
+
+  // === NIH RSS ===
+  try {
+            const nihResults = await searchNIHRSS(searchKeywords)
+            const activeOpps = filterByDeadline(nihResults)
+            for (const opp of activeOpps) {
+                        if (isLoanOrMatchingFund(opp)) continue
+
+              const titleKey = (opp.title || '').toLowerCase().trim()
+                        if (titleKey && seenTitles.has(titleKey)) continue
+                        if (titleKey) seenTitles.add(titleKey)
+
+              const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profile)
+
+              if (matchScore >= minMatchScore) {
+                            results.push({
+                                            ...opp,
+                                            match_score: matchScore,
+                                            match_reasons: reasons,
+                                            matched_signals: matchedSignals,
+                                            crawler_type: 'government_funding',
+                                            funding_level: 'federal',
+                                            source: 'NIH Grants',
+                            })
+              }
+            }
+  } catch (error) {
+            console.error(`[GovernmentCrawler] NIH RSS error:`, error.message)
+  }
+
+  // === HEALTHCARE-SPECIFIC (only if profile has healthcare signals) ===
+  const hasHealthcareSignals = signals.health?.size > 0 ||
+            signals.assistance?.has('medicaid') ||
+            signals.assistance?.has('medicare') ||
+            signals.occupation?.has('healthcare_worker')
+
   if (hasHealthcareSignals) {
-    for (const source of GOVERNMENT_SOURCES.medicare_medicaid) {
-      try {
-        const opportunities = await searchCMSSource(source, profile, searchKeywords)
-        const activeOpps = filterByDeadline(opportunities)
-        
-        for (const opp of activeOpps) {
-          if (isLoanOrMatchingFund(opp)) continue
-          
-          const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profile)
-          
-          if (matchScore >= minMatchScore) {
-            results.push({
-              ...opp,
-              match_score: matchScore,
-              match_reasons: reasons,
-              matched_signals: matchedSignals,
-              crawler_type: 'government_funding',
-              funding_level: 'federal_healthcare',
-              source: source.name
-            })
-          }
+            try {
+                        const cmsResults = await searchCMSSources(profile, searchKeywords)
+                        for (const opp of cmsResults) {
+                                      const titleKey = (opp.title || '').toLowerCase().trim()
+                                      if (titleKey && seenTitles.has(titleKey)) continue
+                                      if (titleKey) seenTitles.add(titleKey)
+
+                          const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profile)
+                                      if (matchScore >= minMatchScore) {
+                                                      results.push({
+                                                                        ...opp,
+                                                                        match_score: matchScore,
+                                                                        match_reasons: reasons,
+                                                                        matched_signals: matchedSignals,
+                                                                        crawler_type: 'government_funding',
+                                                                        funding_level: 'federal_healthcare',
+                                                                        source: 'CMS',
+                                                      })
+                                      }
+                        }
+            } catch (error) {
+                        console.error(`[GovernmentCrawler] CMS error:`, error.message)
+            }
+  }
+
+  // === STATE PORTAL (if state is known and has a portal) ===
+  const statePortal = STATE_PORTALS[profileState]
+        if (statePortal) {
+                  try {
+                              const stateResults = await searchStatePortal(statePortal, profileState, searchKeywords)
+                              for (const opp of stateResults) {
+                                            const titleKey = (opp.title || '').toLowerCase().trim()
+                                            if (titleKey && seenTitles.has(titleKey)) continue
+                                            if (titleKey) seenTitles.add(titleKey)
+
+                                const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profile)
+                                            if (matchScore >= minMatchScore) {
+                                                            results.push({
+                                                                              ...opp,
+                                                                              match_score: matchScore,
+                                                                              match_reasons: reasons,
+                                                                              matched_signals: matchedSignals,
+                                                                              crawler_type: 'government_funding',
+                                                                              funding_level: 'state',
+                                                                              state: profileState,
+                                                                              source: statePortal.name,
+                                                            })
+                                            }
+                              }
+                  } catch (error) {
+                              console.error(`[GovernmentCrawler] State portal error:`, error.message)
+                  }
         }
-      } catch (error) {
-        console.error(`[GovernmentCrawler] Error searching ${source.name}:`, error.message)
-      }
-    }
-  }
-  
-  // Search State sources
-  const stateSource = GOVERNMENT_SOURCES.state[profileState]
-  if (stateSource) {
-    try {
-      const opportunities = await searchStateSource(stateSource, profile, profileState, searchKeywords)
-      const activeOpps = filterByDeadline(opportunities)
-      
-      for (const opp of activeOpps) {
-        if (isLoanOrMatchingFund(opp)) continue
-        
-        const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profile)
-        
-        if (matchScore >= minMatchScore) {
-          results.push({
-            ...opp,
-            match_score: matchScore,
-            match_reasons: reasons,
-            matched_signals: matchedSignals,
-            crawler_type: 'government_funding',
-            funding_level: 'state',
-            state: profileState,
-            source: stateSource.name
-          })
+
+  // Sort by match score
+  results.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+
+  console.log(`[GovernmentCrawler] Exhaustive discovery found ${results.length} matching opportunities (min_score=${minMatchScore})`)
+        return results
+}
+
+/**
+ * Run ALL strategies against Grants.gov in parallel.
+ * Each strategy gets its own API call with focused keywords.
+ */
+async function searchGrantsGovExhaustive(strategies) {
+        const allOpportunities = []
+                const seenIds = new Set()
+
+  const queryPromises = strategies.map(async (strategy) => {
+            try {
+                        console.log(`[GovernmentCrawler] Grants.gov "${strategy.label}": "${strategy.query}"`)
+
+              const searchParams = {
+                            keyword: strategy.query,
+                            oppStatuses: 'posted',
+                            sortBy: 'openDate|desc',
+                            rows: 15,
+                            startRecordNum: 0,
+              }
+
+              const response = await postWithRetry(
+                            GRANTS_GOV_API,
+                            searchParams,
+                    { headers: { 'Content-Type': 'application/json' } },
+                    { timeoutMs: 8000, retries: 1 },
+                          )
+
+              let parsed = response?.data
+                        if (typeof parsed === 'string') {
+                                      try { parsed = JSON.parse(parsed) } catch { return [] }
+                        }
+
+              const hits = parsed?.data?.oppHits ?? parsed?.oppHits ?? []
+                          const rows = Array.isArray(hits) ? hits : []
+                                      const results = []
+
+                                                  for (const hit of rows) {
+                                                                const title = hit?.title ?? hit?.oppTitle ?? null
+                                                                if (!title) continue
+
+                          const id = hit?.id ?? hit?.oppId ?? null
+                                                                const idKey = String(id ?? title)
+                                                                if (seenIds.has(idKey)) continue
+                                                                seenIds.add(idKey)
+
+                          const number = hit?.number ?? hit?.oppNum ?? hit?.oppNumber ?? null
+                                                                const agencyName = hit?.agencyName ?? hit?.agency ?? hit?.agencyCode ?? null
+                                                                const closeDate = hit?.closeDate ?? hit?.close_date ?? null
+                                                                const openDate = hit?.openDate ?? hit?.open_date ?? null
+                                                                const description = hit?.synopsis ?? hit?.description ?? null
+
+                          const url = id != null
+                                                                  ? `${GRANTS_GOV_DETAIL}${id}`
+                                          : number
+                                                                    ? `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(number))}`
+                                            : 'https://www.grants.gov/search-grants'
+
+                          results.push({
+                                          title,
+                                          sponsor: agencyName,
+                                          description,
+                                          url,
+                                          opportunity_number: number,
+                                          amount_min: 0,
+                                          amount_max: 0,
+                                          amount_description: null,
+                                          deadline: closeDate,
+                                          open_date: openDate,
+                                          deadline_type: closeDate ? 'fixed' : 'rolling',
+                                          eligibility: '',
+                                          is_national: true,
+                                          source_id: id,
+                                          _discovery_strategy: strategy.label,
+                          })
+                                                  }
+
+              console.log(`[GovernmentCrawler] Strategy "${strategy.label}" returned ${results.length} results`)
+                        return results
+            } catch (error) {
+                        console.error(`[GovernmentCrawler] Strategy "${strategy.label}" failed:`, error.message)
+                        return []
+            }
+  })
+
+  const settled = await Promise.allSettled(queryPromises)
+        for (const result of settled) {
+                  if (result.status === 'fulfilled' && Array.isArray(result.value)) {
+                              allOpportunities.push(...result.value)
+                  }
         }
-      }
-    } catch (error) {
-      console.error(`[GovernmentCrawler] Error searching state source:`, error.message)
-    }
-  }
-  
-  console.log(`[GovernmentCrawler] Found ${results.length} government opportunities with ${minMatchScore}%+ match`)
-  return results
+
+  console.log(`[GovernmentCrawler] Combined ${allOpportunities.length} unique results from ${strategies.length} strategies`)
+        return allOpportunities
 }
 
-async function searchFederalSource(source, profile, searchKeywords) {
-  const opportunities = []
-  
-  if (source.type === 'api' && source.name === 'Grants.gov') {
-    // Use Grants.gov API with keywords from ALL profile signals
-    // Endpoint expects POST JSON body; response shape includes data.oppHits.
-    const searchParams = {
-      keyword: searchKeywords.slice(0, 15).join(' '),
-      oppStatuses: 'posted',
-      sortBy: 'openDate|desc',
-      rows: 50,
-      startRecordNum: 0,
-    }
-    
-    try {
-      const response = await postWithRetry(
-        source.apiUrl,
-        searchParams,
-        { headers: { 'Content-Type': 'application/json' } },
-        { timeoutMs: 15000, retries: 2 },
-      )
-      
-      const hits = response?.data?.data?.oppHits ?? response?.data?.oppHits ?? []
-      const rows = Array.isArray(hits) ? hits : []
-      // Fetch detailed synopsis for a small subset to improve scoring (title-only scoring is too weak).
-      const idsForDetails = rows
-        .map((hit) => hit?.id ?? hit?.oppId ?? null)
-        .filter((v) => v != null)
-        .slice(0, 12)
-      const detailsMap = new Map()
-      for (const oppId of idsForDetails) {
-        const details = await fetchGrantsGovSynopsis(oppId)
-        if (details) detailsMap.set(String(oppId), details)
-      }
+/**
+ * Search NIH RSS feed with keyword filtering
+ */
+async function searchNIHRSS(searchKeywords) {
+        const opportunities = []
+                try {
+                          const response = await getWithRetry(
+                                      NIH_RSS_URL,
+                                { headers: { Accept: 'application/rss+xml, application/xml, text/xml, */*' } },
+                                { timeoutMs: 10000, retries: 1 },
+                                    )
 
-      for (const hit of rows) {
-        const title = hit?.title ?? hit?.oppTitle ?? null
-        if (!title) continue
-        const id = hit?.id ?? hit?.oppId ?? null
-        const number = hit?.number ?? hit?.oppNum ?? hit?.oppNumber ?? null
-        const agencyName = hit?.agencyName ?? hit?.agencyName ?? hit?.agency ?? hit?.agencyCode ?? null
-        const closeDate = hit?.closeDate ?? hit?.close_date ?? null
-        const openDate = hit?.openDate ?? hit?.open_date ?? null
-        const url =
-          id != null
-            ? `https://www.grants.gov/search-results-detail/${id}`
-            : number
-              ? `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(number))}`
-              : 'https://www.grants.gov/search-grants'
+          const $ = cheerio.load(response.data, { xmlMode: true })
+                          $('item').slice(0, 50).each((_i, elem) => {
+                                      const title = $(elem).find('title').text().trim()
+                                      const link = $(elem).find('link').text().trim()
+                                      const description = $(elem).find('description').text().trim()
+                                      const pubDate = $(elem).find('pubDate').text().trim()
 
-        const details = id != null ? detailsMap.get(String(id)) : null
+                                                            if (!title) return
 
-        opportunities.push({
-          title,
-          sponsor: details?.agencyName ?? agencyName,
-          description: details?.synopsisText ?? null,
-          url,
-          opportunity_number: number,
-          amount_min: details?.awardFloor ?? 0,
-          amount_max: details?.awardCeiling ?? 0,
-          deadline: details?.responseDate ?? closeDate,
-          open_date: openDate,
-          deadline_type: (details?.responseDate ?? closeDate) ? 'fixed' : 'rolling',
-          eligibility: details?.applicantEligibilityDesc ?? '',
-          is_national: true,
-          source_id: id,
-        })
-      }
-    } catch (error) {
-      console.error('[GovernmentCrawler] Grants.gov API error:', error.message)
-    }
-  } else if (source.type === 'rss' && source.name === 'NIH Grants') {
-    try {
-      const response = await getWithRetry(
-        source.baseUrl,
-        { headers: { Accept: 'application/rss+xml, application/xml, text/xml, */*' } },
-        { timeoutMs: 15000, retries: 2 },
-      )
-      const $ = cheerio.load(response.data, { xmlMode: true })
+                                                            const haystack = `${title} ${description}`.toLowerCase()
+                                      const anyMatch = searchKeywords.some((kw) => {
+                                                    const needle = String(kw || '').toLowerCase().trim()
+                                                    return needle && needle.length >= 4 && haystack.includes(needle)
+                                      })
 
-      $('item')
-        .slice(0, 75)
-        .each((_i, elem) => {
-          const title = $(elem).find('title').text().trim()
-          const link = $(elem).find('link').text().trim()
-          const description = $(elem).find('description').text().trim()
-          const pubDate = $(elem).find('pubDate').text().trim()
-          if (!title) return
+                                                            if (!anyMatch) return
 
-          // Basic relevance filter: only keep items that match at least one of our signal-derived keywords.
-          const haystack = `${title} ${description}`.toLowerCase()
-          const anyMatch = searchKeywords.some((kw) => {
-            const needle = String(kw || '').toLowerCase().trim()
-            return needle && needle.length >= 4 && haystack.includes(needle)
+                                                            opportunities.push({
+                                                                          title,
+                                                                          sponsor: 'National Institutes of Health',
+                                                                          description,
+                                                                          url: link || NIH_RSS_URL,
+                                                                          deadline: null,
+                                                                          deadline_type: 'rolling',
+                                                                          eligibility: '',
+                                                                          is_national: true,
+                                                                          published_at: pubDate || null,
+                                                                          keywords: ['nih', 'federal', 'research'],
+                                                            })
+                          })
+                } catch (error) {
+                          console.error(`[GovernmentCrawler] NIH RSS error:`, error.message)
+                }
+        return opportunities
+}
+
+/**
+ * Search CMS/Medicare/Medicaid sources
+ */
+async function searchCMSSources(profile, searchKeywords) {
+        const opportunities = []
+                const cmsUrls = [
+                          'https://innovation.cms.gov/innovation-models',
+                          'https://www.medicaid.gov/medicaid/grants',
+                        ]
+
+  for (const url of cmsUrls) {
+            try {
+                        const response = await getWithRetry(url, {}, { timeoutMs: 10000, retries: 1 })
+                        const $ = cheerio.load(response.data)
+
+              $('.innovation-model, .grant-opportunity, .views-row').each((i, elem) => {
+                            const $elem = $(elem)
+                            const title = $elem.find('.model-name, .opportunity-title, h3, h4').first().text().trim()
+                            if (!title) return
+
+                                                                                  opportunities.push({
+                                                                                                  title,
+                                                                                                  sponsor: 'Centers for Medicare & Medicaid Services',
+                                                                                                  description: $elem.find('.model-description, .opportunity-description, p').first().text().trim(),
+                                                                                                  url: url + ($elem.find('a').attr('href') || ''),
+                                                                                                  program_type: 'medicare_medicaid',
+                                                                                                  eligibility: $elem.find('.eligibility').text().trim(),
+                                                                                                  is_national: true,
+                                                                                                  keywords: ['healthcare', 'medicaid', 'medicare', 'cms'],
+                                                                                  })
+              })
+            } catch (error) {
+                        console.error(`[GovernmentCrawler] CMS crawl error for ${url}:`, error.message)
+            }
+  }
+        return opportunities
+}
+
+/**
+ * Search state grant portal
+ */
+async function searchStatePortal(portal, state, searchKeywords) {
+        const opportunities = []
+                try {
+                          const response = await getWithRetry(portal.searchUrl, {}, { timeoutMs: 10000, retries: 1 })
+                          const $ = cheerio.load(response.data)
+
+          // Generic scraping selectors that work across multiple state sites
+          $('tr, .grant-row, .opportunity-row, .list-item').each((i, elem) => {
+                      const $elem = $(elem)
+                      const title = $elem.find('a, .grant-title, .title').first().text().trim()
+                      if (!title || title.length < 10) return
+
+                                                                       const href = $elem.find('a').first().attr('href') || ''
+                      const fullUrl = href.startsWith('http') ? href : (portal.searchUrl.replace(/\/[^/]*$/, '/') + href)
+
+                                                                       opportunities.push({
+                                                                                     title,
+                                                                                     sponsor: $elem.find('.agency-name, .agency, .sponsor').first().text().trim() || `State of ${state}`,
+                                                                                     description: $elem.find('.grant-summary, .description, .summary').first().text().trim(),
+                                                                                     url: fullUrl,
+                                                                                     amount_min: parseAmount($elem.find('.min-award, .amount-min').text()),
+                                                                                     amount_max: parseAmount($elem.find('.max-award, .amount-max').text()),
+                                                                                     deadline: $elem.find('.deadline, .close-date').first().text().trim(),
+                                                                                     eligibility: $elem.find('.eligible-applicants, .eligibility').first().text().trim(),
+                                                                                     state: state,
+                                                                                     is_national: false,
+                                                                       })
           })
-          if (!anyMatch) return
-
-          opportunities.push({
-            title,
-            sponsor: 'National Institutes of Health',
-            description,
-            url: link || source.baseUrl,
-            deadline: null,
-            deadline_type: 'rolling',
-            eligibility: '',
-            is_national: true,
-            published_at: pubDate || null,
-            keywords: ['nih', 'federal', 'research'],
-          })
-        })
-    } catch (error) {
-      console.error(`[GovernmentCrawler] NIH RSS error:`, error.message)
-    }
-  }
-  
-  return opportunities
-}
-
-async function searchCMSSource(source, profile, searchKeywords) {
-  const opportunities = []
-  
-  // Medicare/Medicaid specific crawling
-  try {
-    const response = await getWithRetry(source.baseUrl, {}, { timeoutMs: 10000, retries: 2 })
-    const $ = cheerio.load(response.data)
-    
-    $('.innovation-model, .grant-opportunity').each((i, elem) => {
-      const $elem = $(elem)
-      opportunities.push({
-        title: $elem.find('.model-name, .opportunity-title').text().trim(),
-        sponsor: 'Centers for Medicare & Medicaid Services',
-        description: $elem.find('.model-description, .opportunity-description').text().trim(),
-        url: source.baseUrl + $elem.find('a').attr('href'),
-        program_type: 'medicare_medicaid',
-        eligibility: $elem.find('.eligibility').text().trim(),
-        is_national: true,
-        keywords: ['healthcare', 'medicaid', 'medicare', 'cms'],
-      })
-    })
-  } catch (error) {
-    console.error(`[GovernmentCrawler] CMS crawl error:`, error.message)
-  }
-  
-  return opportunities
-}
-
-async function searchStateSource(source, profile, state, searchKeywords) {
-  const opportunities = []
-  
-  try {
-    const response = await getWithRetry(source.searchUrl || source.baseUrl, {}, { timeoutMs: 10000, retries: 2 })
-    const $ = cheerio.load(response.data)
-    
-    // Ohio specific parsing
-    if (state === 'OH') {
-      $('.grant-row').each((i, elem) => {
-        const $elem = $(elem)
-        opportunities.push({
-          title: $elem.find('.grant-title').text().trim(),
-          sponsor: $elem.find('.agency-name').text().trim() || 'State of Ohio',
-          description: $elem.find('.grant-summary').text().trim(),
-          url: source.baseUrl + $elem.find('a').attr('href'),
-          amount_min: parseAmount($elem.find('.min-award').text()),
-          amount_max: parseAmount($elem.find('.max-award').text()),
-          deadline: $elem.find('.deadline').text().trim(),
-          eligibility: $elem.find('.eligible-applicants').text().trim(),
-          state: state,
-        })
-      })
-    }
-    // Add more state-specific parsing as needed
-  } catch (error) {
-    console.error(`[GovernmentCrawler] State crawl error:`, error.message)
-  }
-  
-  return opportunities
+                } catch (error) {
+                          console.error(`[GovernmentCrawler] State portal error for ${state}:`, error.message)
+                }
+        return opportunities
 }
 
 function isLoanOrMatchingFund(opportunity) {
-  const loanKeywords = ['loan', 'repay', 'interest rate', 'apr', 'credit', 'borrower']
-  const matchingKeywords = ['matching funds', 'match required', 'cost share', 'in-kind match']
-  
-  const text = `${opportunity.title} ${opportunity.description} ${opportunity.eligibility}`.toLowerCase()
-  
-  return loanKeywords.some(keyword => text.includes(keyword)) ||
-         matchingKeywords.some(keyword => text.includes(keyword))
+        const loanKeywords = ['loan', 'repay', 'interest rate', 'apr', 'credit', 'borrower']
+        const matchingKeywords = ['matching funds', 'match required', 'cost share', 'in-kind match']
+        const text = `${opportunity.title} ${opportunity.description} ${opportunity.eligibility}`.toLowerCase()
+        return loanKeywords.some(keyword => text.includes(keyword)) ||
+                  matchingKeywords.some(keyword => text.includes(keyword))
 }
 
 function parseAmount(amountStr) {
-  if (!amountStr) return 0
-  const cleaned = amountStr.replace(/[^0-9]/g, '')
-  return parseInt(cleaned) || 0
+        if (!amountStr) return 0
+        const cleaned = amountStr.replace(/[^0-9]/g, '')
+        return parseInt(cleaned) || 0
 }
 
 export default { crawlGovernmentFunding }

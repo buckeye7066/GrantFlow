@@ -57,15 +57,15 @@ const Diagnostics = () => {
             setTimeout(() => reject(new Error('Timeout: Function took longer than 30 seconds to respond.')), 30000)
         );
 
-        const response = await Promise.race([
+        // Client returns parsed JSON body: { success, analysis } (no .data wrapper)
+        const body = await Promise.race([
             base44.functions.invoke('analyzeGrant', payload),
             timeoutPromise
         ]);
 
         const ms = Date.now() - t0;
         
-        // FIX: Check for success instead of jobId
-        if (response.data?.success) {
+        if (body?.success) {
           testResult = {
             title: grant.title,
             status: 'ok',
@@ -77,7 +77,7 @@ const Diagnostics = () => {
           testResult = {
             title: grant.title,
             status: 'fail',
-            message: `Failed - ${response.data?.message || response.data?.error || 'Unknown analysis error'}`,
+            message: `Failed - ${body?.message || body?.error || 'Unknown analysis error'}`,
           };
           setSummary(prev => ({ ...prev, fail: prev.fail + 1 }));
         }
@@ -128,7 +128,7 @@ const Diagnostics = () => {
       
       setParseResult({
         status: 'success',
-        data: response.data
+        data: response
       });
       
     } catch (error) {

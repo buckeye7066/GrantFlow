@@ -1,5 +1,8 @@
 import axios from 'axios'
 
+// Axios uses HTTP_PROXY, HTTPS_PROXY, NO_PROXY from the environment. If crawlers fail with
+// ENOTFOUND/ETIMEDOUT, check that proxy settings do not block outbound requests.
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -33,8 +36,8 @@ function isRetryableAxiosError(error) {
 
 export async function requestWithRetry(config, options = {}) {
   const {
-    retries = 2,
-    timeoutMs = 15000,
+        retries = 1,
+        timeoutMs = 10000,
     baseDelayMs = 600,
     maxDelayMs = 6000,
     userAgent = 'GrantFlow Crawler/1.0 (+contact: support@grantflow.app)',

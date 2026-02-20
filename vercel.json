@@ -75,6 +75,10 @@
       "destination": "/favicon.ico"
     },
     {
+      "source": "/grantflow/docs/:path*",
+      "destination": "/docs/:path*"
+    },
+    {
       "source": "/grantflow",
       "destination": "/index.html"
     },

@@ -7,7 +7,7 @@
     "node": ">=20 <23"
   },
   "overrides": {
-    "fast-xml-parser": "5.3.4"
+    "fast-xml-parser": "5.3.6"
   },
   "scripts": {
     "dev": "vite",
@@ -18,7 +18,7 @@
     "quality:report": "node scripts/code-quality-gate.mjs --report",
     "lint": "eslint --max-warnings 0 \"src/**/*.{js,jsx}\" \"backend/**/*.js\"",
     "typecheck": "tsc -p tsconfig.node.json --noEmit",
-    "unit": "node scripts/run-unit-tests.mjs && vitest run",
+    "unit": "node scripts/run-unit-tests.mjs && npm exec -- vitest run",
     "smoke": "node ./node_modules/playwright/cli.js test -c tests/smoke/playwright.config.mjs",
     "smoke:install": "node ./node_modules/playwright/cli.js install chromium",
     "e2e": "node ./node_modules/playwright/cli.js test -c tests/e2e/playwright.config.mjs",

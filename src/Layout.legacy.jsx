@@ -1,4 +1,7 @@
-
+/**
+ * DEPRECATED: Canonical layout is src/pages/Layout.jsx (used by src/pages/index.jsx).
+ * This file is kept for reference only. Do not import.
+ */
 import React from "react";
 import { Link, useLocation } from "react-router-dom";
 import { createPageUrl } from "@/utils";

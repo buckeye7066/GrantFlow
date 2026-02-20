@@ -967,7 +967,7 @@ async function processZip(zip, db, config) {
       }
     }
     
-    // Check if we met minimum sources requirement
+    // Enforce minimum only; there is no cap on max sources per zip (all eligible are saved).
     const min = Number(config?.min_sources_per_zip ?? DEFAULT_CONFIG.min_sources_per_zip)
     if (eligibleFound < min) {
       console.log(`  Warning: Only found ${eligibleFound} eligible sources (minimum: ${min})`)

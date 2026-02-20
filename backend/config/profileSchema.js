@@ -470,3 +470,21 @@ export function getDefaultSectionData(sectionKey) {
   return defaults
 }
 
+/**
+ * Map flat field names (as sent by OrganizationProfileDetails / Profile.update) to section key + storage key.
+ * Used by PUT /api/profiles/:id to persist application form fields into profile_sections so saves work and completeness updates.
+ */
+export function getFlatFieldToSectionMap() {
+  const map = new Map()
+  for (const sectionKey of Object.keys(PROFILE_SCHEMA)) {
+    const schema = PROFILE_SCHEMA[sectionKey]
+    const fields = schema?.fields ?? {}
+    for (const fieldName of Object.keys(fields)) {
+      if (!map.has(fieldName)) map.set(fieldName, { sectionKey, storageKey: fieldName })
+    }
+  }
+  // UI uses current_college; schema uses current_institution in education.
+  if (!map.has('current_college')) map.set('current_college', { sectionKey: 'education', storageKey: 'current_institution' })
+  return map
+}
+

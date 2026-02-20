@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { base44 } from "@/api/base44Client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useNavigate, useLocation, Link } from "react-router-dom";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Filter, Loader2, RefreshCcw, Trash2 } from "lucide-react";
-import { getCrawlerJob } from "@/api/crawlers";
+import { getCrawlerJob, createCrawlerJob } from "@/api/crawlers";
 import KanbanBoard from "@/components/pipeline/KanbanBoard";
 import AdvancedFilters from "@/components/pipeline/AdvancedFilters";
 import {
@@ -22,6 +22,7 @@ import {
 import { useToast } from "@/components/ui/use-toast";
 import { useFilteredGrants } from "@/components/hooks/useFilteredGrants";
 import { isGrantExpired } from "@/components/shared/grantUtils";
+import { createPageUrl } from "@/utils";
 import { countBy } from "lodash";
 import { listProfiles } from "@/api/profiles";
 import { apiFetch } from "@/api/apiClient";
@@ -131,6 +132,7 @@ export default function Pipeline() {
 
     queryClient.invalidateQueries({ queryKey: ["grants"] });
     queryClient.invalidateQueries({ queryKey: ["grants-pipeline"] });
+    queryClient.invalidateQueries({ queryKey: ["grants", "pipeline"] });
     setProcessAllJobId(null);
     setIsProcessAllPending(false);
 
@@ -317,25 +319,23 @@ export default function Pipeline() {
         ...(forProfile ? { profile_id: forProfile } : {}),
         parameters: {
           process_all: true,
-          ...(forProfile ? { limit: 2000 } : { limit: 500 }),
+          // All profiles: process up to 2000 grants so "864 of 864" is fully covered
+          ...(forProfile ? { limit: 2000 } : { limit: 2000 }),
         },
       }
 
-      const job = await apiFetch('/api/crawlers/jobs', {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      })
-      const jobId = job?.id
+      const job = await createCrawlerJob(payload)
+      const jobId = job?.id ?? job?.jobId
 
       if (jobId) {
         setProcessAllJobId(jobId)
       } else {
-        setIsProcessAllPending(false)
         toast({
           title: 'Pipeline automation started',
           description: 'Job queued. Progress cannot be tracked.',
         })
       }
+      setIsProcessAllPending(false)
     } catch (error) {
       setIsProcessAllPending(false)
       toast({
@@ -516,34 +516,40 @@ export default function Pipeline() {
           {filteredGrants.length === 0 ? (
             <div className="text-center py-20">
               <h3 className="text-xl font-semibold text-slate-900 mb-2">
-                No Grants Match Your Filters
+                {hasActiveFilters ? "No Grants Match Your Filters" : "No Applications Yet"}
               </h3>
               <p className="text-slate-600 mb-4">
                 {hasActiveFilters
                   ? "Try adjusting your search criteria or filters to see more results."
-                  : "You don't have any grants yet. Start by discovering opportunities!"}
+                  : "Find grants that match your organization, then add them here to track and submit."}
               </p>
-              {hasActiveFilters && (
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setFilters({
-                      search: '',
-                      minAmount: '',
-                      maxAmount: '',
-                      funderTypes: [],
-                      applicationMethods: [],
-                      opportunityTypes: [],
-                      tags: [],
-                      hideExpired: false,
-                      showOnlyExpired: false,
-                    });
-                    setSelectedProfileId("all");
-                  }}
-                >
-                  Clear All Filters
-                </Button>
-              )}
+              <div className="flex flex-wrap items-center justify-center gap-3">
+                {hasActiveFilters ? (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setFilters({
+                        search: '',
+                        minAmount: '',
+                        maxAmount: '',
+                        funderTypes: [],
+                        applicationMethods: [],
+                        opportunityTypes: [],
+                        tags: [],
+                        hideExpired: false,
+                        showOnlyExpired: false,
+                      });
+                      setSelectedProfileId("all");
+                    }}
+                  >
+                    Clear All Filters
+                  </Button>
+                ) : (
+                  <Button asChild variant="default" className="gap-2">
+                    <Link to={createPageUrl("DiscoverGrants")}>Find Grants</Link>
+                  </Button>
+                )}
+              </div>
             </div>
           ) : (
             <KanbanBoard 

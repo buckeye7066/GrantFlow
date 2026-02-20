@@ -16,8 +16,9 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Info, Sparkles, Loader2 } from "lucide-react"
+import { Info, Sparkles, Loader2, Plus, Trash2 } from "lucide-react"
 import { Switch } from "@/components/ui/switch"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import ProfileFieldWithAI from "@/components/profiles/ProfileFieldWithAI"
 
@@ -121,6 +122,12 @@ const basicInfoSchema = z.object({
   gender: z.string().optional().or(z.literal("")),
   nationality: z.string().optional().or(z.literal("")),
   notes: z.string().optional().or(z.literal("")),
+  contacts: z.array(z.object({
+    name: z.string().min(1, "Contact name is required"),
+    email: z.string().email("Enter a valid email address"),
+    role: z.enum(["admin", "full_access", "read_only"]).default("full_access"),
+    addedDate: z.string().optional(),
+  })).optional().default([]),
 })
 
 const organizationDetailsSchema = z.object({
@@ -592,6 +599,7 @@ export const SECTION_CONFIG = {
       gender: "",
       nationality: "",
       notes: "",
+      contacts: [],
     },
     fields: [
       { name: "full_name", label: "Full name / organization name", component: Input },
@@ -607,6 +615,7 @@ export const SECTION_CONFIG = {
       { name: "gender", label: "Gender", component: Input },
       { name: "nationality", label: "Nationality", component: Input },
       { name: "notes", label: "Notes", component: Textarea, props: { rows: 3 } },
+      { name: "contacts", label: "Profile Contacts", type: "contacts" },
     ],
   },
   organization_details: {
@@ -1370,6 +1379,119 @@ export default function ProfileSectionEditor({
                           />
                         )}
                       />
+                    </div>
+                  )
+                }
+
+                // Handle contacts field with custom UI
+                if (field.type === 'contacts') {
+                  return (
+                    <div key={field.name}>
+                      <Label>{field.label}</Label>
+                      <Controller
+                        control={form.control}
+                        name={field.name}
+                        render={({ field: controllerField }) => {
+                          const contacts = Array.isArray(controllerField.value) ? controllerField.value : []
+                          
+                          const addContact = () => {
+                            const newContact = {
+                              name: "",
+                              email: "",
+                              role: "full_access",
+                              addedDate: new Date().toISOString(),
+                            }
+                            controllerField.onChange([...contacts, newContact])
+                          }
+                          
+                          const removeContact = (index) => {
+                            const updated = contacts.filter((_, i) => i !== index)
+                            controllerField.onChange(updated)
+                          }
+                          
+                          const updateContact = (index, updates) => {
+                            const updated = contacts.map((contact, i) => 
+                              i === index ? { ...contact, ...updates } : contact
+                            )
+                            controllerField.onChange(updated)
+                          }
+                          
+                          return (
+                            <div className="space-y-3 mt-2">
+                              {contacts.map((contact, index) => (
+                                <div key={index} className="p-4 border border-slate-200 rounded-lg space-y-3">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-sm font-medium text-slate-700">Contact {index + 1}</span>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => removeContact(index)}
+                                      disabled={isSaving || aiStatus === 'loading'}
+                                    >
+                                      <Trash2 className="w-4 h-4 text-red-600" />
+                                    </Button>
+                                  </div>
+                                  <div className="grid grid-cols-1 gap-3">
+                                    <div>
+                                      <Label htmlFor={`contact-name-${index}`} className="text-xs">Name</Label>
+                                      <Input
+                                        id={`contact-name-${index}`}
+                                        value={contact.name || ""}
+                                        onChange={(e) => updateContact(index, { name: e.target.value })}
+                                        placeholder="Contact name"
+                                        disabled={isSaving || aiStatus === 'loading'}
+                                      />
+                                    </div>
+                                    <div>
+                                      <Label htmlFor={`contact-email-${index}`} className="text-xs">Email</Label>
+                                      <Input
+                                        id={`contact-email-${index}`}
+                                        type="email"
+                                        value={contact.email || ""}
+                                        onChange={(e) => updateContact(index, { email: e.target.value })}
+                                        placeholder="email@example.com"
+                                        disabled={isSaving || aiStatus === 'loading'}
+                                      />
+                                    </div>
+                                    <div>
+                                      <Label htmlFor={`contact-role-${index}`} className="text-xs">Access Role</Label>
+                                      <Select
+                                        value={contact.role || "full_access"}
+                                        onValueChange={(value) => updateContact(index, { role: value })}
+                                        disabled={isSaving || aiStatus === 'loading'}
+                                      >
+                                        <SelectTrigger id={`contact-role-${index}`}>
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          <SelectItem value="admin">Admin</SelectItem>
+                                          <SelectItem value="full_access">Full Access</SelectItem>
+                                          <SelectItem value="read_only">Read Only</SelectItem>
+                                        </SelectContent>
+                                      </Select>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={addContact}
+                                disabled={isSaving || aiStatus === 'loading'}
+                                className="w-full"
+                              >
+                                <Plus className="w-4 h-4 mr-2" />
+                                Add Contact
+                              </Button>
+                            </div>
+                          )
+                        }}
+                      />
+                      {form.formState.errors?.[field.name] && (
+                        <p className="text-xs text-red-600 mt-1">{form.formState.errors[field.name]?.message}</p>
+                      )}
                     </div>
                   )
                 }

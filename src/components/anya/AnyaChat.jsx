@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import { v4 as uuid } from "uuid"
-import { Loader2, Search, Send, Sparkles, Plus, Shield, Database, Activity, Code, Wrench } from "lucide-react"
+import { Loader2, Search, Send, Sparkles, Plus, Shield, Database, Activity, Code, Wrench, ChevronDown, ChevronRight, Compass, FolderOpen, Kanban, User, Monitor } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -21,6 +22,9 @@ import {
   createAnyaTask,
   updateAnyaTask,
 } from "@/lib/anyaClient"
+import { useAnyaContext, serializeAnyaContext } from "@/contexts/AnyaContext"
+import { createPageUrl } from "@/utils"
+import { useFeatureFlags } from "@/lib/featureFlags"
 import {
   Dialog,
   DialogContent,
@@ -95,6 +99,7 @@ export default function AnyaChat({ profileId }) {
   const [isLoadingTasks, setIsLoadingTasks] = useState(false)
   const [isSavingTask, setIsSavingTask] = useState(false)
   const [taskForm, setTaskForm] = useState({ title: "", dueDate: "" })
+  const [isTasksExpanded, setIsTasksExpanded] = useState(false)
   const [updatingTaskId, setUpdatingTaskId] = useState(null)
   const [isAdminToolsOpen, setIsAdminToolsOpen] = useState(false)
   const [adminToolForm, setAdminToolForm] = useState({})
@@ -278,6 +283,68 @@ export default function AnyaChat({ profileId }) {
     }
   }, [isAdmin])
 
+  const { anyaCopilotEnabled: copilotEnabled, anyaScreenshotEnabled: screenshotEnabled } = useFeatureFlags()
+  const anyaContext = useAnyaContext()
+  const navigate = useNavigate()
+  const onboardingActions = useMemo(() => [
+    { type: "navigate", label: "Create or select a profile", payload: { path: createPageUrl("MyProfiles") } },
+    { type: "navigate", label: "Run Discover Grants", payload: { path: createPageUrl("DiscoverGrants") } },
+    { type: "navigate", label: "Add a grant to Pipeline", payload: { path: createPageUrl("Pipeline") } },
+  ], [])
+  const nextStepActions = useMemo(() => {
+    if (!copilotEnabled) return []
+    const fromAdapter = anyaContext?.adapter?.suggestedActions
+    if (fromAdapter && fromAdapter.length > 0) return fromAdapter.slice(0, 5)
+    return onboardingActions
+  }, [copilotEnabled, anyaContext?.adapter?.suggestedActions, onboardingActions])
+  const runNextStepAction = useCallback(async (action) => {
+    if (!action?.type) return
+    try {
+      if (action.type === "navigate" && action.payload?.path) {
+        navigate(action.payload.path)
+        toast({ title: "Opened", description: action.label })
+        return
+      }
+      if (action.type === "invokeTool" && action.payload?.toolName && sessionId) {
+        const params = { ...(action.payload.parameters || {}), profile_id: effectiveProfileId }
+        await invokeAnyaTool(action.payload.toolName, params, { sessionId })
+        toast({ title: "Done", description: action.label })
+        await refreshMessages(sessionId)
+        return
+      }
+      if (action.type === "openModal" && action.payload) {
+        toast({ title: "Action", description: action.label })
+        return
+      }
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Action failed",
+        description: err instanceof Error ? err.message : "Please try again.",
+      })
+    }
+  }, [navigate, sessionId, effectiveProfileId, refreshMessages])
+  const [isSendingContext, setIsSendingContext] = useState(false)
+  const handleUseCurrentScreen = useCallback(async () => {
+    if (!sessionId) return
+    setIsSendingContext(true)
+    try {
+      const ctx = serializeAnyaContext(anyaContext)
+      const text = "Here's my current screen context: " + JSON.stringify(ctx)
+      await postAnyaMessage(sessionId, text)
+      toast({ title: "Context sent", description: "Anya can use this to tailor answers." })
+      await refreshMessages(sessionId)
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Failed to send context",
+        description: err instanceof Error ? err.message : "Please try again.",
+      })
+    } finally {
+      setIsSendingContext(false)
+    }
+  }, [sessionId, anyaContext, refreshMessages])
+
   if (isUnavailable) {
     return (
       <div className="rounded-xl border border-slate-200 bg-white/80 p-4 text-sm text-slate-600 shadow-sm">
@@ -318,8 +385,15 @@ export default function AnyaChat({ profileId }) {
       setMessages((prev) => [...prev, optimisticMessage])
       setInput("")
 
-      await postAnyaMessage(sessionId, trimmed)
-      await refreshMessages(sessionId)
+      const response = await postAnyaMessage(sessionId, trimmed)
+      if (Array.isArray(response?.messages) && response.messages.length > 0) {
+        setMessages((prev) => {
+          const withoutOptimistic = prev.filter((m) => m.id !== optimisticId)
+          return [...withoutOptimistic, ...response.messages]
+        })
+      } else {
+        await refreshMessages(sessionId)
+      }
       log.debug('messages refreshed')
     } catch (error) {
       console.error("[AnyaChat] send failed:", error)
@@ -480,7 +554,7 @@ export default function AnyaChat({ profileId }) {
 
   return (
     <div className="flex h-full flex-col rounded-xl border border-slate-200 bg-white/80 shadow-sm">
-      <div className="border-b border-slate-200 px-4 py-3">
+      <div className="border-b border-slate-200 px-4 py-3 max-h-[40%] overflow-y-auto shrink-0">
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -505,6 +579,55 @@ export default function AnyaChat({ profileId }) {
                 within this profile.
               </p>
             </div>
+            {copilotEnabled ? (
+              <>
+                <div className="space-y-2">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">Next steps</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {nextStepActions.map((action, idx) => (
+                      <Button
+                        key={idx}
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5 text-xs h-8"
+                        onClick={() => runNextStepAction(action)}
+                      >
+                        {action.label?.includes("Pipeline") || action.label?.includes("pipeline") ? (
+                          <Kanban className="h-3.5 w-3.5 shrink-0" />
+                        ) : action.label?.includes("Discover") || action.label?.includes("discover") ? (
+                          <Compass className="h-3.5 w-3.5 shrink-0" />
+                        ) : action.label?.includes("Document") || action.label?.includes("document") ? (
+                          <FolderOpen className="h-3.5 w-3.5 shrink-0" />
+                        ) : action.label?.includes("profile") ? (
+                          <User className="h-3.5 w-3.5 shrink-0" />
+                        ) : (
+                          <Sparkles className="h-3.5 w-3.5 shrink-0" />
+                        )}
+                        <span className="truncate max-w-[140px]">{action.label}</span>
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1.5 text-xs text-slate-600"
+                    onClick={handleUseCurrentScreen}
+                    disabled={!sessionId || isSendingContext}
+                    title="Send current page context to Anya"
+                  >
+                    {isSendingContext ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Monitor className="h-3.5 w-3.5" />
+                    )}
+                    Use current screen
+                  </Button>
+                </div>
+              </>
+            ) : null}
             {(hasQuickActions || hasAdminTools || isLoadingTools) ? (
               <div className="flex items-center gap-2 flex-wrap">
                 {hasGrantTool ? (
@@ -561,19 +684,32 @@ export default function AnyaChat({ profileId }) {
           {sessionId ? (
             <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50/70 p-3">
               <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                    Session tasks
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    Capture action items so nothing falls through.
-                  </p>
-                </div>
+                <button
+                  type="button"
+                  className="flex items-center gap-2 text-left"
+                  onClick={() => setIsTasksExpanded((prev) => !prev)}
+                >
+                  {isTasksExpanded ? (
+                    <ChevronDown className="h-3 w-3 text-slate-500 shrink-0" />
+                  ) : (
+                    <ChevronRight className="h-3 w-3 text-slate-500 shrink-0" />
+                  )}
+                  <div>
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                      Session tasks
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      {isTasksExpanded ? "Capture action items so nothing falls through." : "Click to expand"}
+                    </p>
+                  </div>
+                </button>
                 <Badge variant={openTaskCount > 0 ? "secondary" : "outline"} className="text-[10px]">
                   {openTaskCount} open
                 </Badge>
               </div>
-              <div className="mt-3 space-y-2">
+              {isTasksExpanded && (
+                <>
+                  <div className="mt-3 space-y-2">
                 {isLoadingTasks ? (
                   <div className="flex items-center gap-2 text-xs text-slate-500">
                     <Loader2 className="h-3 w-3 animate-spin text-blue-600" />
@@ -632,8 +768,8 @@ export default function AnyaChat({ profileId }) {
                     No tasks yet. Log a follow-up below to keep momentum.
                   </p>
                 )}
-              </div>
-              <form onSubmit={handleTaskSubmit} className="mt-3 space-y-3">
+                  </div>
+                  <form onSubmit={handleTaskSubmit} className="mt-3 space-y-3">
                 <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_150px]">
                   <div className="space-y-1">
                     <Label htmlFor="anya-task-title" className="text-[11px] text-slate-500">
@@ -675,12 +811,14 @@ export default function AnyaChat({ profileId }) {
                   </Button>
                 </div>
               </form>
+                </>
+              )}
             </div>
           ) : null}
         </div>
       </div>
 
-      <ScrollArea className="flex-1 px-4 py-4">
+      <ScrollArea className="flex-1 min-h-[200px] px-4 py-4">
         {!isLoading && !hasMessages ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-slate-500">
             <p>Anya is ready. Start by asking about a grant or automation job.</p>

@@ -7,7 +7,7 @@ import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import rateLimit from 'express-rate-limit'
 import { buildProfileSectionPrompt, supportedSectionKeys } from '../prompts/profileSections.js'
-import { PROFILE_SCHEMA, getDefaultSectionData } from '../config/profileSchema.js'
+import { PROFILE_SCHEMA, getDefaultSectionData, getFlatFieldToSectionMap } from '../config/profileSchema.js'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
 import { ensureBillingAccount, mapAccountRow } from '../services/billingAccounts.js'
 import { extractCompletionText } from '../utils/openai.js'
@@ -793,9 +793,12 @@ return res.status(500).json({ error: 'Failed to load profile sections', details:
   })
 })
 
+const TOP_LEVEL_PROFILE_KEYS = new Set(['display_name', 'primary_type', 'organization_id', 'status', 'tags'])
+
 router.put('/:id', async (req, res) => {
   const { id } = req.params
-  const { display_name, primary_type, organization_id, status, tags } = req.body ?? {}
+  const body = req.body ?? {}
+  const { display_name, primary_type, organization_id, status, tags } = body
   const isAdmin = req.ctx?.isAdmin === true
   const authUserId = req.ctx?.userId ?? null
   const authProfileId = req.ctx?.activeProfileId ? String(req.ctx.activeProfileId) : null
@@ -851,12 +854,43 @@ router.put('/:id', async (req, res) => {
     values.push(JSON.stringify(tags ?? []))
   }
 
-  if (updates.length === 0) {
-    return res.json(mapProfile(existing))
+  if (updates.length > 0) {
+    const stmt = req.db.prepare(`UPDATE profiles SET ${updates.join(', ')} WHERE id = ?`)
+    await stmt.run(...values, id)
   }
 
-  const stmt = req.db.prepare(`UPDATE profiles SET ${updates.join(', ')} WHERE id = ?`)
-  await stmt.run(...values, id)
+  // Persist flat application fields into profile_sections so application settings save and completeness updates.
+  const flatFieldMap = getFlatFieldToSectionMap()
+  const sectionUpdatesByKey = new Map()
+  for (const [key, value] of Object.entries(body)) {
+    if (TOP_LEVEL_PROFILE_KEYS.has(key)) continue
+    const mapping = flatFieldMap.get(key)
+    if (!mapping) continue
+    const { sectionKey, storageKey } = mapping
+    if (!sectionUpdatesByKey.has(sectionKey)) sectionUpdatesByKey.set(sectionKey, {})
+    sectionUpdatesByKey.get(sectionKey)[storageKey] = value
+  }
+
+  if (sectionUpdatesByKey.size > 0) {
+    const selectSection = req.db.prepare(
+      'SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = ?'
+    )
+    const upsertSection = req.db.prepare(
+      `INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(profile_id, section_key) DO UPDATE SET
+         data = excluded.data,
+         updated_by = excluded.updated_by,
+         updated_at = CURRENT_TIMESTAMP`
+    )
+    const updatedBy = req.ctx?.userId ?? req.ctx?.email ?? 'profile-put'
+    for (const [sectionKey, patch] of sectionUpdatesByKey) {
+      const row = selectSection.get(id, sectionKey)
+      const existingData = row?.data ? safeParseJSON(row.data, {}) : {}
+      const merged = { ...existingData, ...patch }
+      upsertSection.run(id, sectionKey, JSON.stringify(merged), updatedBy)
+    }
+  }
 
   const updated = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   res.json(mapProfile(updated))
@@ -1290,7 +1324,7 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
 
   await upsert.run(id, sectionKey, JSON.stringify(data), updated_by ?? null)
 
-  // Keep profile_emails in sync with the profile's own email (basic_information.email).
+  // Keep profile_emails in sync with the profile's own email (basic_information.email) and contacts.
   // Product requirement: the email on the profile implies access for that user.
   //
   // Safety:
@@ -1298,12 +1332,14 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
   // - For admins, always link (admin actions are trusted and audited elsewhere).
   try {
     if (sectionKey === 'basic_information') {
+      const isAdmin = req.ctx?.isAdmin === true
+      const user = req.user ?? {}
+      const primary = normalizeEmail(user?.primary_email)
+      const secondary = normalizeEmail(user?.email)
+      
+      // Sync the main email field
       const email = normalizeEmail(data?.email)
       if (email && isValidEmail(email)) {
-        const user = req.user ?? {}
-        const isAdmin = req.ctx?.isAdmin === true
-        const primary = normalizeEmail(user?.primary_email)
-        const secondary = normalizeEmail(user?.email)
         const canAutoLink = isAdmin || email === primary || email === secondary
 
         if (canAutoLink) {
@@ -1311,6 +1347,21 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
             profileId: String(id),
             emails: [email],
             addedBy: req.ctx?.userId ?? req.ctx?.email ?? 'system-profile-email-sync',
+          })
+        }
+      }
+      
+      // Sync contacts emails (admin-only for security)
+      if (isAdmin && Array.isArray(data?.contacts)) {
+        const contactEmails = data.contacts
+          .map(contact => normalizeEmail(contact?.email))
+          .filter(email => email && isValidEmail(email))
+        
+        if (contactEmails.length > 0) {
+          await addProfileEmails(req.db, {
+            profileId: String(id),
+            emails: contactEmails,
+            addedBy: req.ctx?.userId ?? req.ctx?.email ?? 'system-contacts-sync',
           })
         }
       }

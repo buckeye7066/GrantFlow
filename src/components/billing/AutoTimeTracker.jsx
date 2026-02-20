@@ -65,7 +65,7 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
     if (currentUser && !currentUser.is_admin && !isTracking) {
       handleStart();
     }
-  }, [currentUser]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentUser]);
 
   // Get billing settings
   const [settings, setSettings] = useState(null);

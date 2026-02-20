@@ -91,8 +91,9 @@ router.get('/', async (req, res) => {
       .get(userId)
     
     if (!preferences) {
-      // Create default preferences for user
+      // Create default preferences for user (rollout: Anya copilot ON, screenshot OFF)
       const id = `pref-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+      const defaultCustom = { feature_flags: { anyaCopilotEnabled: true, anyaScreenshotEnabled: false } }
       const insertSql =
         dialect === 'postgres'
           ? `
@@ -103,13 +104,25 @@ router.get('/', async (req, res) => {
               INSERT INTO user_preferences (id, user_id, custom_preferences)
               VALUES (?, ?, ?)
             `
-      await req.db.prepare(insertSql).run(id, userId, JSON.stringify({}))
-      
+      await req.db.prepare(insertSql).run(id, userId, JSON.stringify(defaultCustom))
       preferences = await req.db
         .prepare('SELECT * FROM user_preferences WHERE id = ?')
         .get(id)
+    } else {
+      let custom = preferences.custom_preferences
+      if (typeof custom === 'string') {
+        try { custom = JSON.parse(custom) } catch { custom = {} }
+      }
+      if (!custom || typeof custom.feature_flags !== 'object') {
+        const updatedCustom = { ...(custom || {}), feature_flags: { anyaCopilotEnabled: true, anyaScreenshotEnabled: false } }
+        const updateSql = dialect === 'postgres'
+          ? 'UPDATE user_preferences SET custom_preferences = ?::jsonb, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?'
+          : 'UPDATE user_preferences SET custom_preferences = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?'
+        await req.db.prepare(updateSql).run(JSON.stringify(updatedCustom), userId)
+        preferences = await req.db.prepare('SELECT * FROM user_preferences WHERE user_id = ?').get(userId)
+      }
     }
-    
+
     res.json(mapPreferencesRow(preferences))
   } catch (error) {
     console.error('[preferences] Error fetching preferences:', error)

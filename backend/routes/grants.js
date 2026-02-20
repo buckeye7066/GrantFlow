@@ -21,7 +21,8 @@ const router = express.Router();
 // Whitelist of allowed columns for UPDATE operations
 const ALLOWED_GRANT_COLUMNS = new Set([
   'organization_id', 'funding_opportunity_id', 'title', 'funder', 'deadline',
-  'status', 'priority', 'amount_requested', 'amount_awarded', 'application_url',
+  'status', 'priority', 'amount_requested', 'amount_awarded', 'amount_min', 'amount_max',
+  'application_url',
   'match_score', 'match_reasons', 'notes', 'requirements', 'eligibility',
   'application_steps', 'contact_name', 'contact_email', 'contact_phone',
 
@@ -97,6 +98,8 @@ async function ensureGrantAiColumns(db) {
       { name: 'ai_summary', pg: 'TEXT', sqlite: 'TEXT' },
       { name: 'ai_error', pg: 'TEXT', sqlite: 'TEXT' },
       { name: 'ai_updated_at', pg: 'TIMESTAMPTZ', sqlite: 'DATETIME' },
+      { name: 'amount_min', pg: 'DOUBLE PRECISION', sqlite: 'REAL' },
+      { name: 'amount_max', pg: 'DOUBLE PRECISION', sqlite: 'REAL' },
     ]
 
     // Ensure profile_id exists too (many code paths expect it).
@@ -560,7 +563,8 @@ router.get('/automation/summary', async (req, res) => {
             e.applied_status AS automation_status,
             e.handoff_required,
             e.handoff_reason,
-            e.ai_summary
+            e.ai_summary,
+            e.recommended_actions
           FROM grants g
           LEFT JOIN latest l ON l.grant_id = g.id
           LEFT JOIN grant_pipeline_events e
@@ -585,6 +589,7 @@ router.get('/automation/summary', async (req, res) => {
               handoff_required: Boolean(row.handoff_required),
               handoff_reason: row.handoff_reason,
               summary: row.ai_summary,
+              recommended_actions: safeParseJSON(row.recommended_actions, []),
             }
           : null,
       })),
