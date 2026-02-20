@@ -34,6 +34,7 @@ import PipelineStatusCard from "@/components/dashboard/PipelineStatusCard"
 import PersonalizationPanel from "@/components/dashboard/PersonalizationPanel"
 import ReminderCenterCard from "@/components/dashboard/ReminderCenterCard"
 import PipelineActionsCard from "@/components/dashboard/PipelineActionsCard"
+import ResumeWhereYouLeftOff from "@/components/dashboard/ResumeWhereYouLeftOff"
 import AnyaChat from "@/components/anya/AnyaChat"
 import OnboardingVideo from "@/components/onboarding/OnboardingVideo"
 import { cn } from "@/lib/utils"
@@ -408,23 +409,19 @@ export default function Dashboard() {
                     Leverage AI nudges and smart filters to keep every opportunity on track.
                   </p>
                   <div className="flex flex-wrap gap-3">
-                    <Button asChild className="gap-2 shadow-md shadow-blue-200/40">
+                    <Button asChild className="gap-2 shadow-md shadow-blue-200/40" size="lg">
                       <Link to={createPageUrl("DiscoverGrants")}>
                         <Plus className="h-4 w-4" />
-                        Discover Grants
+                        Find Grants
                       </Link>
                     </Button>
-                    <Button variant="outline" className="gap-2" asChild>
+                    <Button variant="ghost" size="sm" className="gap-2" asChild>
                       <Link to={createPageUrl("Automation")}>
                         <Sparkles className="h-4 w-4" />
-                        View Automations
+                        Automations
                       </Link>
                     </Button>
-                    <Button 
-                      variant="ghost" 
-                      className="gap-2" 
-                      onClick={() => logout()}
-                    >
+                    <Button variant="ghost" size="sm" className="gap-2" onClick={() => logout()}>
                       <LogOut className="h-4 w-4" />
                       Logout
                     </Button>
@@ -442,6 +439,11 @@ export default function Dashboard() {
           </div>
 
           <div className="space-y-6">
+            <ResumeWhereYouLeftOff
+              urgentDeadlines={urgentDeadlines}
+              activeGrants={activeGrants}
+              hasGrants={relevantGrants?.length > 0}
+            />
             <PersonalizationPanel />
             {activeProfileId && !globalThis?.__GF_SMOKE__ ? <AnyaChat profileId={activeProfileId} /> : null}
           </div>
