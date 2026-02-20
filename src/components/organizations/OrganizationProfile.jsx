@@ -135,6 +135,28 @@ export default function OrganizationProfile({
     }
   }, [grants, orgData?.name]);
 
+
+    // Flatten sections data into orgData so child components can read flat fields
+      const flatOrgData = React.useMemo(() => {
+            if (!orgData) return null;
+                if (!Array.isArray(orgData.sections) || orgData.sections.length === 0) return orgData;
+                    const flat = { ...orgData };
+                        orgData.sections.forEach(section => {
+                                if (section && section.data && typeof section.data === 'object') {
+                                          Object.entries(section.data).forEach(([key, value]) => {
+                                                      // Only set if not already present at top level (top-level wins)
+                                                                if (flat[key] === undefined || flat[key] === null) {
+                                                                              flat[key] = value;
+                                                                }
+                                                              });
+                                                            }
+                                                          });
+                                                              // Also ensure keywords comes from tags if not set
+                                                                  if (!flat.keywords && Array.isArray(flat.tags)) {
+                                                                          flat.keywords = flat.tags;
+                                                                  }
+                                                                      return flat;
+                                                                }, [orgData]);
   const emails = contactMethods.filter(c => c.type === 'email');
   const phones = contactMethods.filter(c => c.type === 'phone');
 
@@ -531,7 +553,7 @@ Return a single JSON object with the key "logo_url" containing the absolute, dir
             </TabsList>
             <TabsContent value="details" className="mt-4 print:mt-0">
               <OrganizationProfileDetails
-                organization={orgData}
+                            organization={flatOrgData}
                 contactMethods={contactMethods}
                 onUpdate={handleUpdate}
                 isUpdating={updateOrgMutation.isPending}
@@ -786,7 +808,7 @@ Return a single JSON object with the key "logo_url" containing the absolute, dir
         <OrganizationEmailComposer
           open={isEmailComposerOpen}
           onClose={() => setIsEmailComposerOpen(false)}
-          organization={orgData}
+                      organization={flatOrgData}
           emails={emails}
         />
       )}

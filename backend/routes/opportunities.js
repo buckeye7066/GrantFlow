@@ -345,8 +345,13 @@ router.get('/', async (req, res) => {
       compliance,
     } = req.query;
 
-    // Allow fetching all opportunities - no arbitrary cap
-    const parsedLimit = Number.parseInt(limit, 10) || 10000;
+    // Hard cap on limit to prevent accidental DoS; override via MAX_LIMIT env var.
+    const MAX_LIMIT = Math.max(1, Number.parseInt(process.env.MAX_LIMIT || '200', 10) || 200);
+    const DEFAULT_LIMIT = 50;
+    const rawLimit = Number.parseInt(limit, 10);
+    const parsedLimit = Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(rawLimit, MAX_LIMIT)
+      : DEFAULT_LIMIT;
     const parsedOffset = Math.max(Number.parseInt(offset, 10) || 0, 0);
 
     const dialect = req.db?.dialect;
@@ -399,10 +404,24 @@ router.get('/', async (req, res) => {
     }
 
     if (search) {
-      const searchTerm = `%${search}%`;
       const likeOp = likeOperatorForDb(req.db);
-      baseConditions.push(`(${prefix}title ${likeOp} ? OR ${prefix}sponsor ${likeOp} ? OR ${prefix}description ${likeOp} ?)`);
-      baseParams.push(searchTerm, searchTerm, searchTerm);
+      // Phrase-aware search: group consecutive tokens into bigrams so that
+      // multi-word concepts (e.g. "food truck") are kept as atomic search
+      // units rather than being split into ambiguous single tokens ("food").
+      // This prevents "food bank" results from polluting "food truck" queries.
+      const rawTokens = search.trim().split(/\s+/).filter(Boolean);
+
+      if (rawTokens.length >= 2) {
+        // Full-phrase condition: match the entire search string as one unit
+        const fullPhrase = `%${search.trim()}%`;
+        baseConditions.push(`(${prefix}title ${likeOp} ? OR ${prefix}sponsor ${likeOp} ? OR ${prefix}description ${likeOp} ? OR ${prefix}keywords ${likeOp} ?)`);
+        baseParams.push(fullPhrase, fullPhrase, fullPhrase, fullPhrase);
+      } else {
+        // Single-word search: unchanged behavior
+        const term = `%${rawTokens[0]}%`;
+        baseConditions.push(`(${prefix}title ${likeOp} ? OR ${prefix}sponsor ${likeOp} ? OR ${prefix}description ${likeOp} ?)`);
+        baseParams.push(term, term, term);
+      }
     }
 
     const normalizedState = state ? String(state).toUpperCase() : null;
@@ -730,6 +749,44 @@ router.get('/', async (req, res) => {
 
     const filteredTotal = Number(result.total ?? withoutExpired.length) - removedExpired;
 
+    // Search fallback: if primary search returned 0 and search has >=2 tokens,
+    // retry with per-token AND matching as a less-restrictive fallback.
+    if (search && withoutExpired.length === 0 && filteredTotal <= 0) {
+      const fallbackTokens = search.trim().split(/\s+/).filter(Boolean);
+      if (fallbackTokens.length >= 2) {
+        console.info('[opportunities] primary search returned 0, trying token-AND fallback', { search });
+        const likeOp = likeOperatorForDb(req.db);
+        const fbConds = [`${prefix}is_active = ?`];
+        const fbParams = [sqlBool(true)];
+        if (dialect === 'postgres') {
+          fbConds.push(`(${prefix}type = 'DIRECTORY' OR LOWER(COALESCE(${prefix}record_origin, '')) LIKE '%directory%' OR ${prefix}deadline_type IN ('rolling','ongoing') OR ${prefix}deadline IS NULL OR ${prefix}deadline >= CURRENT_DATE)`);
+        } else {
+          fbConds.push(`(${prefix}type = 'DIRECTORY' OR LOWER(COALESCE(${prefix}record_origin, '')) LIKE '%directory%' OR ${prefix}deadline_type IN ('rolling','ongoing') OR ${prefix}deadline IS NULL OR DATE(${prefix}deadline) >= DATE('now'))`);
+        }
+        for (const token of fallbackTokens) {
+          const term = `%${token}%`;
+          fbConds.push(`(${prefix}title ${likeOp} ? OR ${prefix}sponsor ${likeOp} ? OR ${prefix}description ${likeOp} ? OR ${prefix}keywords ${likeOp} ?)`);
+          fbParams.push(term, term, term, term);
+        }
+        fbParams.__dialect = dialect;
+        applyComplianceFilters(requestedCompliance, fbConds, fbParams, { prefix });
+        if (normalizedState) { fbConds.push(`(${prefix}state = ? OR ${prefix}is_national = ?)`); fbParams.push(normalizedState, sqlBool(true)); }
+        if (source) { fbConds.push(`${prefix}source = ?`); fbParams.push(source); }
+        const fbWhere = `WHERE ${fbConds.join(' AND ')}`;
+        try {
+          const fbResult = await listAndCount({ fromClause: effectiveFromClause, whereClauseSql: fbWhere, queryParams: fbParams, baseConditionsSql: fbConds, baseParamsSql: fbParams, useGeoIndex: effectiveUseGeoIndex });
+          const fbDec = fbResult.rows.map(decorateOpportunity);
+          const fbSeen = new Set();
+          const fbOut = [];
+          for (const row of fbDec) { const key = dedupeKeyFromRow(row) || (row?.id ? `id:${row.id}` : null); if (key && fbSeen.has(key)) continue; if (key) fbSeen.add(key); fbOut.push(row); }
+          const fbFinal = fbOut.filter((r) => !isExpiredOpportunity(r, { now }));
+          if (fbFinal.length > 0) {
+            return res.json({ data: fbFinal, total: Math.max(0, Number(fbResult.total ?? fbFinal.length)), total_found: Math.max(0, Number(fbResult.total ?? fbFinal.length)), included: fbFinal.length, limit: parsedLimit, offset: parsedOffset, compliance_requested: normalizedCompliance, compliance_effective: normalizedCompliance, fallback_applied: true, fallback_reason: 'phrase_search_returned_0_retried_with_token_and', removed_expired: 0 });
+          }
+        } catch (fbErr) { console.warn('[opportunities] search fallback failed:', fbErr?.message || String(fbErr)); }
+      }
+    }
+
     // Guardrail: if the user requested grant-only compliance but this filter eliminates everything,
     // fall back to returning review-required opportunities instead of an empty result set.
     if (normalizedCompliance === 'grant_only' && filteredTotal === 0) {
@@ -837,8 +894,132 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Get ingestion status
+router.get('/meta/ingestion', async (req, res) => {
+  try {
+    const { getIngestionStatus } = await import('../services/sources/ingestionService.js');
+    const status = getIngestionStatus(req.db);
+    res.json(status);
+  } catch (error) {
+    console.error('Error getting ingestion status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get distinct sources for filtering
+router.get('/meta/sources', async (req, res) => {
+  try {
+    const conditions = ['source IS NOT NULL', 'is_active = ?'];
+    const params = [];
+    params.push(true);
+    params.__dialect = req.db?.dialect;
+    applyComplianceFilters(req.query.compliance, conditions, params);
+    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const sources = await req.db.prepare(`
+      SELECT source, COUNT(*) as count 
+      FROM funding_opportunities 
+      ${whereClause}
+      GROUP BY source 
+      ORDER BY count DESC
+    `).all(...params);
+
+    res.json(sources);
+  } catch (error) {
+    console.error('Error getting sources:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get distinct states for filtering
+router.get('/meta/states', async (req, res) => {
+  try {
+    const conditions = ['state IS NOT NULL', 'is_active = ?'];
+    const params = [];
+    params.push(true);
+    params.__dialect = req.db?.dialect;
+    applyComplianceFilters(req.query.compliance, conditions, params);
+    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const states = await req.db.prepare(`
+      SELECT state, COUNT(*) as count 
+      FROM funding_opportunities 
+      ${whereClause}
+      GROUP BY state 
+      ORDER BY state ASC
+    `).all(...params);
+
+    res.json(states);
+  } catch (error) {
+    console.error('Error getting states:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Export opportunities as CSV (admin-only, streaming)
+router.get('/meta/export', async (req, res) => {
+  try {
+    const user = requireAuthenticatedUser(req, res);
+    if (!user) return;
+    if (!isAdminUser(user)) {
+      return res.status(403).json({ error: 'Admin privileges required' });
+    }
+    const { search, state, source, compliance, deadline_after: deadlineAfter, deadline_before: deadlineBefore, is_national: isNational } = req.query;
+    const MAX_EXPORT_ROWS = Math.max(1, Number.parseInt(process.env.MAX_EXPORT_ROWS || '10000', 10) || 10000);
+    const dialect = req.db?.dialect;
+    const likeOp = likeOperatorForDb(req.db);
+    const sqlBool = (value) => (dialect === 'sqlite' ? (value ? 1 : 0) : Boolean(value));
+    const conditions = [`is_active = ?`];
+    const params = [sqlBool(true)];
+    if (search) {
+      const rawTokens = search.trim().split(/\s+/).filter(Boolean);
+      if (rawTokens.length >= 2) {
+        const fullPhrase = `%${search.trim()}%`;
+        conditions.push(`(title ${likeOp} ? OR sponsor ${likeOp} ? OR description ${likeOp} ? OR keywords ${likeOp} ?)`);
+        params.push(fullPhrase, fullPhrase, fullPhrase, fullPhrase);
+      } else if (rawTokens.length === 1) {
+        const term = `%${rawTokens[0]}%`;
+        conditions.push(`(title ${likeOp} ? OR sponsor ${likeOp} ? OR description ${likeOp} ?)`);
+        params.push(term, term, term);
+      }
+    }
+    if (state) { conditions.push(`(state = ? OR is_national = ?)`); params.push(String(state).toUpperCase(), sqlBool(true)); }
+    if (source) { conditions.push(`source = ?`); params.push(source); }
+    if (isNational === 'true') { conditions.push(`is_national = ?`); params.push(sqlBool(true)); }
+    if (deadlineAfter) { conditions.push(`(deadline_type = 'rolling' OR (deadline IS NOT NULL AND deadline >= ?))`); params.push(deadlineAfter); }
+    if (deadlineBefore) { conditions.push(`(deadline IS NOT NULL AND deadline <= ?)`); params.push(deadlineBefore); }
+    params.__dialect = dialect;
+    applyComplianceFilters(compliance, conditions, params);
+    const whereClause = `WHERE ${conditions.join(' AND ')}`;
+    const BATCH_SIZE = 500;
+    const csvFields = ['id','title','sponsor','source','source_id','description','amount_min','amount_max','deadline','deadline_type','application_url','source_url','is_national','state','categories','keywords','opportunity_type','is_active','requires_match','match_percentage','created_at','updated_at'];
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="opportunities-export.csv"');
+    res.write('\uFEFF' + csvFields.join(',') + '\n');
+    let exported = 0;
+    let offset = 0;
+    while (exported < MAX_EXPORT_ROWS) {
+      const batchLimit = Math.min(BATCH_SIZE, MAX_EXPORT_ROWS - exported);
+      const rows = await req.db.prepare(`SELECT * FROM funding_opportunities ${whereClause} ORDER BY created_at DESC LIMIT ? OFFSET ?`).all(...params, batchLimit, offset);
+      if (!rows || rows.length === 0) break;
+      for (const row of rows) {
+        const line = csvFields.map((field) => { let val = row[field]; if (val === null || val === undefined) return ''; val = String(val).replace(/"/g, '""'); if (val.includes(',') || val.includes('"') || val.includes('\n')) return `"${val}"`; return val; }).join(',');
+        res.write(line + '\n');
+        exported++;
+      }
+      offset += rows.length;
+      if (rows.length < batchLimit) break;
+    }
+    res.end();
+    console.info('[opportunities/export] exported', { exported, state: state || null, source: source || null });
+  } catch (error) {
+    console.error('Error exporting opportunities:', error);
+    if (!res.headersSent) { res.status(500).json({ error: error.message }); } else { res.end(); }
+  }
+});
+
 // Get single opportunity
-router.get('/:id', async (req, res) => {
+router.get('/:id([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})', async (req, res) => {
   try {
     const opp = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(req.params.id);
 
@@ -992,7 +1173,7 @@ router.post('/bulk', async (req, res) => {
 });
 
 // Update opportunity
-router.put('/:id', async (req, res) => {
+router.put('/:id([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})', async (req, res) => {
   try {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return
@@ -1033,7 +1214,7 @@ router.put('/:id', async (req, res) => {
 });
 
 // Delete opportunity (soft delete)
-router.delete('/:id', async (req, res) => {
+router.delete('/:id([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})', async (req, res) => {
   try {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return
@@ -1045,68 +1226,6 @@ router.delete('/:id', async (req, res) => {
     res.json({ success: true, message: 'Opportunity deactivated' });
   } catch (error) {
     console.error('Error deleting opportunity:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get ingestion status
-router.get('/meta/ingestion', async (req, res) => {
-  try {
-    const { getIngestionStatus } = await import('../services/sources/ingestionService.js');
-    const status = getIngestionStatus(req.db);
-    res.json(status);
-  } catch (error) {
-    console.error('Error getting ingestion status:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get distinct sources for filtering
-router.get('/meta/sources', async (req, res) => {
-  try {
-    const conditions = ['source IS NOT NULL', 'is_active = ?'];
-    const params = [];
-    params.push(true);
-    params.__dialect = req.db?.dialect;
-    applyComplianceFilters(req.query.compliance, conditions, params);
-    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-
-    const sources = await req.db.prepare(`
-      SELECT source, COUNT(*) as count 
-      FROM funding_opportunities 
-      ${whereClause}
-      GROUP BY source 
-      ORDER BY count DESC
-    `).all(...params);
-
-    res.json(sources);
-  } catch (error) {
-    console.error('Error getting sources:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get distinct states for filtering
-router.get('/meta/states', async (req, res) => {
-  try {
-    const conditions = ['state IS NOT NULL', 'is_active = ?'];
-    const params = [];
-    params.push(true);
-    params.__dialect = req.db?.dialect;
-    applyComplianceFilters(req.query.compliance, conditions, params);
-    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-
-    const states = await req.db.prepare(`
-      SELECT state, COUNT(*) as count 
-      FROM funding_opportunities 
-      ${whereClause}
-      GROUP BY state 
-      ORDER BY state ASC
-    `).all(...params);
-
-    res.json(states);
-  } catch (error) {
-    console.error('Error getting states:', error);
     res.status(500).json({ error: error.message });
   }
 });

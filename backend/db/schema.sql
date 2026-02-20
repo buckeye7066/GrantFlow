@@ -296,11 +296,16 @@ CREATE TABLE IF NOT EXISTS grants (
   
   amount_requested REAL,
   amount_awarded REAL,
+  amount_min REAL,
+  amount_max REAL,
   
   status TEXT DEFAULT 'discovered' CHECK(status IN (
-    'discovered', 'interested', 'drafting', 'app_prep', 'revision', 
-    'submitted', 'under_review', 'awarded', 'rejected', 'closed', 'archived'
-  )),
+        'discovery', 'discovered', 'interested', 'auto_applied',
+        'drafting', 'application_prep', 'revision', 'portal',
+        'submitted', 'pending_review', 'follow_up', 'awarded',
+        'report', 'declined_no_review', 'declined', 'closed',
+        'app_prep', 'under_review', 'rejected', 'archived'
+      )),
   
   deadline DATE,
   submitted_date DATE,

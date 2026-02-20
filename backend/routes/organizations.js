@@ -289,6 +289,89 @@ router.get('/', ensureAuth, async (req, res) => {
   }
 });
 
+/**
+ * Merge profile_sections into organization for assistants (GrantPortalAssistant, AIApplicationAssistant).
+ * Profile sections hold the narrative/comprehensive data that the raw organizations table may not have.
+ */
+async function mergeProfileSectionsIntoOrg(db, orgId, base) {
+  const profileRow = await db
+    .prepare(
+      `SELECT id FROM profiles WHERE organization_id = ? ORDER BY created_at ASC LIMIT 1`
+    )
+    .get(orgId)
+  if (!profileRow?.id) return base
+
+  const sectionRows = await db
+    .prepare(
+      `SELECT section_key, data FROM profile_sections WHERE profile_id = ?`
+    )
+    .all(profileRow.id)
+
+  const sections = {}
+  for (const row of sectionRows || []) {
+    sections[row.section_key] = safeParseJSON(row.data, {})
+  }
+
+  const basic = sections.basic_information ?? {}
+  const orgDetails = sections.organization_details ?? {}
+  const comprehensive = sections.comprehensive_application ?? {}
+
+  const mergeValue = (a, b) => (b != null && b !== '' && (Array.isArray(b) ? b.length > 0 : true) ? b : a)
+
+  return {
+    ...base,
+    // basic_information
+    email: mergeValue(base.email, normalizeEmailField(basic.email ?? comprehensive.email)),
+    phone: mergeValue(base.phone, normalizePhoneField(basic.phone ?? comprehensive.phone)),
+    address: mergeValue(base.address, basic.address ?? comprehensive.address),
+    city: mergeValue(base.city, basic.city ?? orgDetails.city ?? comprehensive.city),
+    state: mergeValue(base.state, basic.state ?? orgDetails.state ?? comprehensive.state),
+    zip: mergeValue(base.zip, basic.zip ?? comprehensive.zip ?? comprehensive.postal_code),
+    // organization_details
+    ein: mergeValue(base.ein, orgDetails.ein ?? comprehensive.organization_ein),
+    uei: mergeValue(base.uei, orgDetails.uei ?? comprehensive.organization_uei),
+    mission: mergeValue(base.mission, orgDetails.mission ?? comprehensive.mission),
+    annual_budget: base.annual_budget ?? orgDetails.annual_budget ?? comprehensive.annual_budget,
+    staff_count: base.staff_count ?? orgDetails.staff_count ?? comprehensive.staff_count,
+    // comprehensive_application narratives (the main data assistants need)
+    primary_goal: comprehensive.primary_goal ?? base.primary_goal ?? '',
+    target_population: comprehensive.target_population ?? base.target_population ?? '',
+    geographic_focus: comprehensive.geographic_focus ?? base.geographic_focus ?? '',
+    funding_amount_needed: comprehensive.funding_amount_needed ?? base.funding_amount_needed ?? '',
+    timeline: comprehensive.timeline ?? base.timeline ?? '',
+    past_experience: comprehensive.past_experience ?? base.past_experience ?? '',
+    unique_qualities: comprehensive.unique_qualities ?? base.unique_qualities ?? '',
+    collaboration_partners: comprehensive.collaboration_partners ?? base.collaboration_partners ?? '',
+    sustainability_plan: comprehensive.sustainability_plan ?? base.sustainability_plan ?? '',
+    barriers_faced: comprehensive.barriers_faced ?? base.barriers_faced ?? '',
+    // student fields
+    gpa: comprehensive.gpa ?? base.gpa ?? null,
+    act_score: comprehensive.act_score ?? base.act_score ?? null,
+    sat_score: comprehensive.sat_score ?? base.sat_score ?? null,
+    student_grade_level: Array.isArray(comprehensive.student_grade_levels)
+      ? comprehensive.student_grade_levels.join(', ')
+      : (comprehensive.student_grade_level ?? base.student_grade_level ?? ''),
+    intended_major: comprehensive.intended_major ?? base.intended_major ?? '',
+    extracurricular_activities: Array.isArray(comprehensive.extracurricular_activities)
+      ? comprehensive.extracurricular_activities
+      : (base.extracurricular_activities ?? []),
+    achievements: Array.isArray(comprehensive.achievements)
+      ? comprehensive.achievements
+      : (base.achievements ?? []),
+    community_service_hours:
+      comprehensive.community_service_hours ?? base.community_service_hours ?? null,
+    // keywords/focus_areas from comprehensive if org has empty
+    keywords:
+      Array.isArray(comprehensive.keywords) && comprehensive.keywords.length > 0
+        ? comprehensive.keywords
+        : base.keywords,
+    focus_areas:
+      Array.isArray(comprehensive.focus_areas) && comprehensive.focus_areas.length > 0
+        ? comprehensive.focus_areas
+        : base.focus_areas,
+  }
+}
+
 // Get single organization
 router.get('/:id', ensureAuth, async (req, res) => {
   try {
@@ -311,8 +394,12 @@ router.get('/:id', ensureAuth, async (req, res) => {
       federal_registrations: safeParseJSON(org.federal_registrations, []),
       financial_challenges: safeParseJSON(org.financial_challenges, [])
     };
+
+    // Merge profile_sections so assistants (GrantPortalAssistant, AIApplicationAssistant)
+    // receive full narrative data (primary_goal, mission, etc.) instead of empty sections.
+    const merged = await mergeProfileSectionsIntoOrg(req.db, req.params.id, parsed);
     
-    res.json(parsed);
+    res.json(merged);
   } catch (error) {
     console.error('Error getting organization:', error);
     res.status(500).json(formatError(error));

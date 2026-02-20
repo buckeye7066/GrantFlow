@@ -188,10 +188,11 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
       const overpassRadiusKm = Number(params.overpass_radius_km ?? 12)
       const overpassMaxResults = Number(params.overpass_max_results ?? 60)
 
-      const offlineOnly = params.offline_only ?? params.offlineOnly ?? true
-      // Performance default:
-      // - When offline_only=true, we are not hitting upstream APIs and should not sleep per ZIP.
-      // - When offline_only=false, we apply a small default delay unless overridden.
+      // Default offline_only=false so geo crawl hits Grants.gov + Overpass and returns more than
+      // the 6 directory-only sources per zip. Min is 3 per zip; there is no max cap.
+      const offlineOnly = params.offline_only ?? params.offlineOnly ?? false
+      // When offline_only=true, we skip upstream APIs and do not sleep per ZIP.
+      // When offline_only=false, we apply a small default delay unless overridden.
       const rateLimitMs = Number(
         params.rate_limit_ms ??
           (offlineOnly ? 0 : 250),

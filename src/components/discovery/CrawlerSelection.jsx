@@ -9,7 +9,7 @@ import {
   Users, Loader2, CheckCircle, Info, AlertTriangle
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
-import { apiFetch } from '@/api/client';
+import { runRealCrawler } from '@/api/crawlers';
 import { createLogger } from '@/utils/logger'
 
 const CRAWLER_CONFIGS = [
@@ -233,13 +233,23 @@ export default function CrawlerSelection({
       return;
     }
 
+    const effectiveProfileId = (typeof profileId === 'string' ? profileId.trim() : null) || null
+    if (!effectiveProfileId) {
+      toast({
+        variant: 'destructive',
+        title: 'Select a profile',
+        description: 'Select a profile to run crawlers. Crawlers use your profile signals to find matching opportunities.',
+      })
+      return
+    }
+
     setIsRunning(true);
     setProgress({});
     setResults({});
     setErrors({});
 
     const crawlersToRun = Array.from(selectedCrawlers);
-    log.debug('running crawlers', { count: crawlersToRun.length, profileId })
+    log.debug('running crawlers', { count: crawlersToRun.length, profileId: effectiveProfileId })
 
     // Initialize progress
     crawlersToRun.forEach(id => {
@@ -249,17 +259,12 @@ export default function CrawlerSelection({
     // Run crawlers in parallel
     const crawlerPromises = crawlersToRun.map(async (crawlerId) => {
       try {
-        // Call the crawler API with authenticated request
-        const data = await apiFetch('/api/real-crawlers/run', {
-          method: 'POST',
-          body: JSON.stringify({
-            crawler_type: crawlerId,
-            profile_id: profileId,
-            profile_data: profileData,
-            // Item-specific crawlers are only runnable from the Item Funding page.
-            item_request: null,
-            min_match_score: minMatchScore
-          })
+        const data = await runRealCrawler({
+          profileId: effectiveProfileId,
+          crawlerType: crawlerId,
+          profileData,
+          minMatchScore,
+          itemRequest: null,
         });
 
         // Treat backend-reported failure as an error (even though HTTP is 200)
@@ -277,18 +282,20 @@ export default function CrawlerSelection({
       } catch (error) {
         console.error(`[CrawlerSelection] Error running ${crawlerId}:`, error);
         setProgress(prev => ({ ...prev, [crawlerId]: 'error' }));
-        
-        // Extract meaningful error message
+
         let errorMessage = error.message || 'Unknown error';
-        
-        // Try to get more specific error from the response
-        if (error.response && typeof error.response === 'object') {
-          errorMessage = error.response.error || error.response.message || errorMessage;
+        if (error.details && typeof error.details === 'object') {
+          errorMessage = error.details.message || error.details.error || errorMessage;
+        } else if (error.response && typeof error.response === 'object') {
+          errorMessage = error.response.message || error.response.error || errorMessage;
         }
-        
-        // Store the error message for display
+        // Surface profile_id requirement message in a user-friendly way
+        if (/profile_id|profile.*required|select.*profile/i.test(errorMessage)) {
+          errorMessage = 'Select a profile to run crawlers. Crawlers require profile context to match opportunities.';
+        }
+
         setErrors(prev => ({ ...prev, [crawlerId]: errorMessage }));
-        
+
         return { crawlerId, success: false, error: errorMessage };
       }
     });
@@ -338,6 +345,7 @@ export default function CrawlerSelection({
 
   const allSelected = selectedCrawlers.size === CRAWLER_CONFIGS.length;
   const someSelected = selectedCrawlers.size > 0;
+  const hasValidProfile = Boolean((typeof profileId === 'string' ? profileId.trim() : null) || null);
   const anyDbFallback = Object.values(results || {}).some((r) => r && r.used_db_fallback);
   const missingZipLikely = Object.values(results || {}).some((r) => r?.debug && r.debug.has_zip === false);
   const lowKeywordsLikely = Object.values(results || {}).some((r) => r?.debug && (r.debug.keyword_count ?? 0) < 5);
@@ -397,7 +405,7 @@ export default function CrawlerSelection({
               </div>
 
               <div className="flex justify-end">
-                <Button onClick={handleRunCrawlers} disabled={!someSelected || isRunning} size="lg" className="min-w-[200px]">
+                <Button onClick={handleRunCrawlers} disabled={!someSelected || !hasValidProfile || isRunning} size="lg" className="min-w-[200px]">
                   {isRunning ? (
                     <>
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -518,7 +526,7 @@ export default function CrawlerSelection({
           <div className="flex justify-end pt-4 border-t">
             <Button
               onClick={handleRunCrawlers}
-              disabled={!someSelected || isRunning}
+              disabled={!someSelected || !hasValidProfile || isRunning}
               size="lg"
               className="min-w-[200px]"
             >

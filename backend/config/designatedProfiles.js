@@ -431,6 +431,17 @@ export const DESIGNATED_PROFILES = [
         website: 'https://www.focusforwardministries.com',
         address: '796 Mount Vernon Drive Northwest\nCleveland, TN 37311',
         notes: 'Profile imported from Focus Forward Ministries Profile.pdf (Base44 export).',
+        contacts: [
+          { name: "Suzane Burns", email: "Sburns1109@yahoo.com", role: "full_access", addedDate: "2026-02-16T00:00:00.000Z" },
+          { name: "Virginia Howard", email: "vhoward1949@gmail.com", role: "full_access", addedDate: "2026-02-16T00:00:00.000Z" },
+          { name: "John Gann", email: "4johngann@gmail.com", role: "full_access", addedDate: "2026-02-16T00:00:00.000Z" },
+          { name: "Laurie Pavlou", email: "LAPAVLOU@gmail.com", role: "full_access", addedDate: "2026-02-16T00:00:00.000Z" },
+          { name: "Norman Wojcik", email: "normjudywojcik@att.net", role: "full_access", addedDate: "2026-02-16T00:00:00.000Z" },
+          { name: "Phillip Maddux", email: "volsdrummer@gmail.com", role: "full_access", addedDate: "2026-02-16T00:00:00.000Z" },
+          { name: "Vernon Van Deventer", email: "vjvandev@charter.net", role: "full_access", addedDate: "2026-02-16T00:00:00.000Z" },
+          { name: "Nance Glover", email: "naglover2@gmail.com", role: "full_access", addedDate: "2026-02-16T00:00:00.000Z" },
+          { name: "John White", email: "dr.johnwhite@axiombiolabs.org", role: "admin", addedDate: "2026-02-16T00:00:00.000Z" },
+        ],
       },
       organization_details: {
         organization_type: 'Faith-based nonprofit ministry',

@@ -326,6 +326,48 @@ export default function ProfileDetail() {
     requestAvatarAIMutation.mutate()
   }, [requestAvatarAIMutation])
 
+
+  // IMPORTANT: All hooks must be called before any conditional returns (React rules of hooks).
+  const [activeTab, setActiveTab] = React.useState("profile")
+  const hasSyncedTargetColleges = useRef(false)
+  const lastSyncedProfileId = useRef(null)
+
+  // One-time sync: target_colleges -> university_applications (avoids duplicates, no infinite loop)
+  useEffect(() => {
+    if (!profileId || !profile) return
+    const pt = String(profile.primary_type || "").toLowerCase()
+    const bi = profile.sections?.find((s) => s.section_key === "basic_information")?.data ?? {}
+    const ptl = String(bi?.profile_type || "").toLowerCase()
+    const isStudent = ["high_school_student", "college_student", "graduate_student"].includes(pt) || ptl.includes("student")
+    if (!isStudent) return
+    const usd = profile.sections?.find((s) => s.section_key === "university_applications")?.data ?? {}
+    const uniApps = Array.isArray(usd?.applications) ? usd.applications : []
+    if (lastSyncedProfileId.current !== profileId) {
+      hasSyncedTargetColleges.current = false
+      lastSyncedProfileId.current = profileId
+    }
+    if (hasSyncedTargetColleges.current) return
+    hasSyncedTargetColleges.current = true
+    const educationData = profile.sections?.find((s) => s.section_key === "education")?.data ?? {}
+    const { applications, addedCount } = syncTargetCollegesToApplications(educationData, uniApps)
+    if (addedCount === 0) return
+    upsertSectionMutation
+      .mutateAsync({
+        sectionKey: "university_applications",
+        values: { applications },
+      })
+      .catch((err) => {
+        hasSyncedTargetColleges.current = false
+        const msg = err instanceof Error ? err.message : "Sync failed"
+        console.error("[ProfileDetail] target_colleges sync save failed:", msg)
+        toast({
+          variant: "destructive",
+          title: "Target colleges sync failed",
+          description: msg,
+        })
+      })
+  }, [profileId, profile, upsertSectionMutation, toast])
+
   if (!profileId) {
     return (
       <div className="p-6 md:p-8">
@@ -410,8 +452,6 @@ export default function ProfileDetail() {
     profileTypeLabel.includes("medical") ||
     hasHealthSignals
 
-  const [activeTab, setActiveTab] = React.useState("profile")
-
   const studentState =
     basicInfo?.address?.state ??
     basicInfo?.state ??
@@ -430,50 +470,6 @@ export default function ProfileDetail() {
     ? universitySectionData.applications
     : []
 
-  // One-time sync: target_colleges -> university_applications (avoids duplicates, no infinite loop)
-  const hasSyncedTargetColleges = useRef(false)
-  const lastSyncedProfileId = useRef(null)
-  useEffect(() => {
-    if (!profileId || !profile) return
-    if (!isStudentProfile) return
-    if (lastSyncedProfileId.current !== profileId) {
-      hasSyncedTargetColleges.current = false
-      lastSyncedProfileId.current = profileId
-    }
-    if (hasSyncedTargetColleges.current) return
-
-    hasSyncedTargetColleges.current = true
-    const educationData =
-      profile.sections?.find((s) => s.section_key === "education")?.data ?? {}
-    const { applications, addedCount } = syncTargetCollegesToApplications(
-      educationData,
-      universityApplications,
-    )
-    if (addedCount === 0) return
-
-    upsertSectionMutation
-      .mutateAsync({
-        sectionKey: "university_applications",
-        values: { applications },
-      })
-      .catch((err) => {
-        hasSyncedTargetColleges.current = false
-        const msg = err instanceof Error ? err.message : "Sync failed"
-        console.error("[ProfileDetail] target_colleges sync save failed:", msg)
-        toast({
-          variant: "destructive",
-          title: "Target colleges sync failed",
-          description: msg,
-        })
-      })
-  }, [
-    profileId,
-    profile,
-    isStudentProfile,
-    universityApplications,
-    upsertSectionMutation,
-    toast,
-  ])
 
   const handleSaveUniversityApplications = async (nextApplications) => {
     try {

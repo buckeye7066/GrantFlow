@@ -5,13 +5,10 @@ import { toast as showToast } from '@/components/ui/use-toast'
 // API Client - Replaces Base44 SDK
 // This file provides the same interface as base44Client but uses your own backend
 
-// Use relative URLs in production (proxied by Vercel) to avoid CORS issues
-// In dev mode, use VITE_API_URL or default to localhost
-// NOTE: Vite dev server proxies `/api` to the backend (see `vite.config.ts`),
-// so the safest default in dev is also relative URLs (empty string). If you need
-// to hit a remote backend directly, set `VITE_API_URL`.
-const API_URL = env.isDev ? env.apiUrl : '' // Empty string = relative URLs, proxied by Vercel
-const APP_BASE = env.appBase || '/grantflow'
+// Use relative URLs in production (proxied by Vercel) to avoid CORS issues.
+// When the app is served under a base path (e.g. /grantflow), API requests must
+// use that prefix so rewrites like /grantflow/api/:path* reach the backend.
+const API_URL = env.apiUrl || (env.appBase && env.appBase !== '/' ? env.appBase : '')
 
 // Frontend startup sanity (non-fatal): warn on env drift / misconfiguration.
 if (import.meta.env.DEV) {
@@ -314,9 +311,9 @@ class APIClient {
 
     headers['X-Request-Id'] = headers['X-Request-Id'] || requestId;
 
-    // Add timeout to prevent hanging requests
+    // Add timeout to prevent hanging requests (60s for heavy list endpoints)
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
 
     try {
       const requestInit = {
@@ -670,13 +667,13 @@ class APIClient {
         // non-blocking
       }
       if (typeof window !== 'undefined') {
-        window.location.href = `${APP_BASE.replace(/\/$/, '')}/login`;
+        window.location.href = `${env.appBase.replace(/\/$/, '')}/login`;
       }
     },
     
     redirectToLogin: () => {
       if (typeof window !== 'undefined') {
-        window.location.href = `${APP_BASE.replace(/\/$/, '')}/login`;
+        window.location.href = `${env.appBase.replace(/\/$/, '')}/login`;
       }
     }
   };

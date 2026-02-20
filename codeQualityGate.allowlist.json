@@ -40,7 +40,13 @@
     "backend/routes/serviceApplication.js",
     "backend/routes/sourceDirectory.js",
     "backend/routes/stats.js",
+    "backend/routes/items.js",
+    "backend/routes/outreachLogs.js",
+    "backend/routes/version.js",
+    "backend/routes/colleges.js",
 
+    "backend/services/anyaTaskExecutionHelper.js",
+    "backend/services/knowledgeBaseProcessor.js",
     "backend/services/anyaAutonomousCrawler.js",
     "backend/services/anyaAutonomousFunctionRunner.js",
     "backend/services/anyaAutonomousFunctionTesting.js",

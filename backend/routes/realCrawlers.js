@@ -34,16 +34,16 @@ const CRAWLER_TYPES = [
 ]
 
 const LOAN_TYPES = new Set(['loan', 'loan_program', 'microloan'])
-const LIVE_CRAWL_TIMEOUT_MS = Number.parseInt(process.env.LIVE_CRAWL_TIMEOUT_MS ?? '20000', 10) || 20000
-const MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK = Number.parseInt(process.env.MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK ?? '8', 10) || 8
+const LIVE_CRAWL_TIMEOUT_MS = Number.parseInt(process.env.LIVE_CRAWL_TIMEOUT_MS ?? '12000', 10) || 12000
+const MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK = Number.parseInt(process.env.MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK ?? '3', 10) || 3
 const LIVE_CRAWL_PERSIST_OPPS = String(process.env.LIVE_CRAWL_PERSIST_OPPS ?? 'true').toLowerCase() !== 'false'
 
 // Reversible safety toggles: default to SOFT matching (prefer penalties over exclusions).
 const HARD_FILTER_REQUIRES_MATCH = String(process.env.HARD_FILTER_REQUIRES_MATCH ?? '').toLowerCase() === 'true'
 const HARD_FILTER_MATCH_PERCENTAGE = String(process.env.HARD_FILTER_MATCH_PERCENTAGE ?? '').toLowerCase() === 'true'
-// Token narrowing is a performance optimization but can incorrectly eliminate valid opportunities
-// (e.g., rows with sparse descriptions/keywords). Default OFF to avoid hard exclusions.
-const ENABLE_TOKEN_NARROWING = String(process.env.ENABLE_TOKEN_NARROWING ?? '').toLowerCase() === 'true'
+// Token narrowing uses profile-derived keywords to pre-filter DB candidates (OR-based, soft match).
+// Default ON so crawlers use profile information for relevance. Set env ENABLE_TOKEN_NARROWING=false to disable.
+const ENABLE_TOKEN_NARROWING = String(process.env.ENABLE_TOKEN_NARROWING ?? 'true').toLowerCase() === 'true'
 // Reversible: allow temporarily disabling ECF eligibility gating if needed.
 const DISABLE_ECF_UNLOCK_GATING = String(process.env.DISABLE_ECF_UNLOCK_GATING ?? '').toLowerCase() === 'true'
 
@@ -72,17 +72,29 @@ function buildSearchTokens(profileContext) {
     for (const phrase of signals.phrases) {
       const normalized = normalizeString(String(phrase))
       if (normalized.length >= 4) tokens.add(normalized)
-      if (tokens.size >= 12) break
+      if (tokens.size >= 10) break
     }
   }
 
-  if (tokens.size < 12 && signals?.keywordSet && typeof signals.keywordSet[Symbol.iterator] === 'function') {
+  if (tokens.size < 10 && signals?.keywordSet && typeof signals.keywordSet[Symbol.iterator] === 'function') {
     for (const kw of signals.keywordSet) {
       const normalized = normalizeString(String(kw))
       if (normalized.length >= 4) tokens.add(normalized)
-      if (tokens.size >= 12) break
+      if (tokens.size >= 10) break
     }
   }
+
+      // Add demographic, interest, health, assistance, and applicant-type signals as tokens.
+          // These are the strongest profile-specific signals for matching.
+              const signalSets = [signals?.interests, signals?.demographics, signals?.health, signals?.assistance, signals?.applicantTypes, signals?.family, signals?.occupation, signals?.military]
+                  for (const signalSet of signalSets) {
+                        if (signalSet && typeof signalSet[Symbol.iterator] === 'function') {
+                                for (const val of signalSet) {
+                                          const normalized = normalizeString(String(val).replace(/_/g, ' '))
+                                                    if (normalized.length >= 4) tokens.add(normalized)
+                                                            }
+                                                                  }
+                                                                      }
 
   // Fallback to tags/focus areas if signals missing.
   const profile = profileContext?.profile
@@ -94,7 +106,7 @@ function buildSearchTokens(profileContext) {
     if (normalized.length >= 4) tokens.add(normalized)
   })
 
-  return Array.from(tokens).slice(0, 12)
+  return Array.from(tokens).slice(0, 10)
 }
 
 function isOpportunityCurrent(row) {
@@ -312,7 +324,7 @@ async function runLiveCrawler({ crawlerType, profile, itemRequest, minMatchScore
   } catch (error) {
     const errorMsg = error?.message || String(error)
     const errorCode = error?.code
-    
+
     // Provide more specific error messages
     let friendlyError = errorMsg
     if (errorCode === 'TIMEOUT') {
@@ -322,8 +334,11 @@ async function runLiveCrawler({ crawlerType, profile, itemRequest, minMatchScore
     } else if (errorMsg.includes('API key') || errorMsg.includes('SAM_GOV_API_KEY')) {
       friendlyError = `API configuration missing for ${crawlerType} crawler`
     }
-    
+
     console.error(`[RealCrawlers] ${crawlerType} live crawler error:`, errorMsg)
+    if (error?.stack) {
+      console.error(`[RealCrawlers] ${crawlerType} stack trace:\n`, error.stack)
+    }
     
     return {
       ok: false,

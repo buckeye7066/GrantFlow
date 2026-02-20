@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet"
-import { Loader2, Sparkles, RefreshCw, AlertTriangle, CheckCircle2, Clock, History } from "lucide-react"
+import { Loader2, Sparkles, RefreshCw, AlertTriangle, CheckCircle2, Clock, History, ListChecks, ChevronDown, ChevronRight } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { getAutomationSummary, runPipelineAutomation } from "@/api/grants"
 import GrantAutomationTimeline from "@/components/pipeline/GrantAutomationTimeline"
@@ -43,6 +43,7 @@ export default function PipelineAutomationPanel({
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const [selectedGrant, setSelectedGrant] = React.useState(null)
+  const [expandedGrants, setExpandedGrants] = React.useState(new Set())
 
   const {
     data: summary = [],
@@ -110,6 +111,15 @@ export default function PipelineAutomationPanel({
       })
     },
   })
+
+  const toggleExpanded = React.useCallback((grantId) => {
+    setExpandedGrants((prev) => {
+      const next = new Set(prev)
+      if (next.has(grantId)) next.delete(grantId)
+      else next.add(grantId)
+      return next
+    })
+  }, [])
 
   if (!organizationId) {
     return null
@@ -229,6 +239,55 @@ export default function PipelineAutomationPanel({
                           </span>
                         </>
                       ) : null}
+
+                      {/* Step-by-step application instructions */}
+                      {automation?.handoff_required && automation?.recommended_actions ? (() => {
+                        const data = automation.recommended_actions
+                        const actions = Array.isArray(data) ? data : (Array.isArray(data?.actions) ? data.actions : [])
+                        const appSteps = typeof data?.application_steps === 'string' ? data.application_steps : null
+                        const isExpanded = expandedGrants.has(entry.id)
+
+                        if (!actions.length && !appSteps) return null
+
+                        return (
+                          <div className="mt-2 space-y-2">
+                            <button
+                              type="button"
+                              className="flex items-center gap-1.5 text-[11px] font-semibold text-blue-700 uppercase tracking-wide hover:text-blue-900 transition"
+                              onClick={() => toggleExpanded(entry.id)}
+                            >
+                              {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                              <ListChecks className="w-3 h-3" />
+                              How to complete this application
+                            </button>
+                            {isExpanded && (
+                              <div className="rounded-md border border-blue-200 bg-blue-50/50 p-3 space-y-3">
+                                {appSteps ? (
+                                  <div className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">{appSteps}</div>
+                                ) : null}
+                                {actions.length > 0 ? (
+                                  <div className="space-y-1.5">
+                                    {!appSteps && <div className="text-[11px] font-semibold text-slate-600">Next steps:</div>}
+                                    {actions.map((action, idx) => (
+                                      <div key={idx} className="flex items-start gap-2 text-xs text-slate-700">
+                                        <span className="shrink-0 flex items-center justify-center w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold">
+                                          {action.step || idx + 1}
+                                        </span>
+                                        <div className="flex-1">
+                                          <span>{action.description}</span>
+                                          {action.owner && action.owner !== 'ai' ? (
+                                            <Badge variant="outline" className="ml-2 text-[9px] uppercase">{action.owner}</Badge>
+                                          ) : null}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : null}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })() : null}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">

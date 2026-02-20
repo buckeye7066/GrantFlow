@@ -157,18 +157,27 @@ export async function crawlLocalFunding(profile, options = {}) {
   const radiusMiles = typeof options.radius_miles === 'number' ? Math.max(1, Math.min(100, options.radius_miles)) : DEFAULT_SEARCH_RADIUS_MILES
   const includeDirectoryResources =
     String(options.include_directory_resources ?? 'true').toLowerCase() !== 'false'
-  
-  // CRITICAL: Use signals for all profile data
-  const signals = profile?.signals
-  if (!signals) {
-    console.error('[LocalFundingCrawler] No signals in profile - cannot search with 100% precision')
+
+  // Validate profile and signals
+  if (!profile || typeof profile !== 'object') {
+    console.error('[LocalFundingCrawler] Invalid profile: profile must be a non-null object')
     return results
   }
-
-  // Get ZIP from signals (extracted from all profile sections)
-  const targetZip = normalizeZip(signals.location?.zip || profile.zip_code || profile.zip || profile.postal_code)
+  const signals = profile?.signals
+  if (!signals) {
+    console.error('[LocalFundingCrawler] No profile.signals - profile must have signals (run profile enrichment or ensure profile_sections are loaded)')
+    return results
+  }
+  const targetZipRaw = normalizeZip(signals.location?.zip || profile.zip_code || profile.zip || profile.postal_code)
   const profileState = signals.location?.state || profile.state
   const profileCity = signals.location?.city || profile.city
+  if (!targetZipRaw && !profileState) {
+    console.warn('[LocalFundingCrawler] No ZIP or state in profile - returning directory resources only. Add location (ZIP or state) for better local matches.')
+  } else if (targetZipRaw && !/^\d{5}$/.test(targetZipRaw)) {
+    console.warn('[LocalFundingCrawler] Invalid ZIP format (expected 5 digits):', targetZipRaw)
+  }
+
+  const targetZip = targetZipRaw
   
   // Build search keywords from ALL profile signals
   const searchKeywords = buildSearchKeywords(profile, 25)
@@ -215,7 +224,11 @@ export async function crawlLocalFunding(profile, options = {}) {
         kind: zip === targetZip ? 'profile' : 'school',
       })
     } catch (error) {
-      console.error(`[LocalFundingCrawler] Unexpected error resolving ZIP ${zip}:`, error)
+      const errMsg = error instanceof Error ? error.message : String(error)
+      console.error(`[LocalFundingCrawler] Unexpected error resolving ZIP ${zip}:`, errMsg)
+      if (error instanceof Error && error.stack) {
+        console.error(`[LocalFundingCrawler] ZIP resolution stack:\n`, error.stack)
+      }
     }
   }
 
@@ -333,7 +346,10 @@ export async function crawlLocalFunding(profile, options = {}) {
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error)
-      console.error(`[LocalFundingCrawler] Error searching ${source.name}:`, errorMsg)
+      console.error(`[LocalFundingCrawler] Error searching ${source.name} (${source.baseUrl}):`, errorMsg)
+      if (error instanceof Error && error.stack) {
+        console.error(`[LocalFundingCrawler] Source ${source.name} stack:\n`, error.stack)
+      }
       // Continue with other sources - don't let one source failure break entire crawl
     }
   }
@@ -344,7 +360,15 @@ export async function crawlLocalFunding(profile, options = {}) {
 
 function buildDirectoryResources({ profile, anchors, profileState, profileCity, targetZip, sources }) {
   const out = []
+
   const signals = profile?.signals
+  // Detect business-oriented profiles to suppress irrelevant assistance resources
+  const profileText = [
+    ...Array.from(signals?.interests || []),
+    ...Array.from(signals?.keywordSet || []),
+    ...(signals?.applicantTypes ? Array.from(signals.applicantTypes) : []),
+  ].join(' ').toLowerCase();
+  const isBusinessProfile = /food\s*truck|small\s*business|startup|entrepreneur|business\s*funding|mobile\s*food|food\s*vendor|catering\s*business/.test(profileText);
   const keywords = Array.from(signals?.keywordSet ?? []).slice(0, 12)
   const anchorList = Array.isArray(anchors) && anchors.length > 0 ? anchors : []
   const fallbackCity = profileCity || null
@@ -399,6 +423,7 @@ function buildDirectoryResources({ profile, anchors, profileState, profileCity, 
           })
           break
         case 'food_bank':
+          if (isBusinessProfile) break; // Skip food bank for business profiles
           out.push({
             title: city && state ? `Food Bank resources near ${city}, ${state}` : `Food Bank Locator (${anchorLabel})`,
             sponsor: 'Feeding America',
