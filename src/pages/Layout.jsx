@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   LogOut,
@@ -13,8 +13,6 @@ import {
   Sidebar,
   SidebarContent,
   SidebarGroup,
-  SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -40,46 +38,57 @@ import ProBonoBanner from "@/components/banners/ProBonoBanner.jsx";
 import AppBreadcrumb from "@/components/shared/AppBreadcrumb";
 import GrantLifecyclePhaseIndicator from "@/components/shared/GrantLifecyclePhaseIndicator";
 import { apiFetch } from "@/api/client";
-import { PRIMARY_NAV, MORE_NAV, DEVELOPER_NAV, ADMIN_NAV } from "@/config/navigation";
+import { createPageUrl } from "@/utils";
+import { NAV_GROUPS, getGroupIdForRoute } from "@/nav/navConfig";
+import { useNavGroupsOpen, getShowAdvancedTools, setShowAdvancedTools } from "@/nav/useNavGroupsOpen";
 
-function NavCollapsible({ label, items, location }) {
-  const [open, setOpen] = useState(false);
-  const isActive = items.some((item) => location.pathname === item.url);
+function NavGroupCollapsible({ group, location, isOpen, onToggle, user }) {
+  const isActive = group.items.some((item) => location.pathname === item.url);
+  const visibleItems = group.items.filter((item) => {
+    if (item.isAdminOnly && !user?.is_admin) return false;
+    return true;
+  });
+  if (visibleItems.length === 0) return null;
+  const GroupIcon = group.icon;
+
   return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger asChild>
-        <SidebarMenuButton
-          className={`w-full justify-between rounded-lg mb-1 ${
-            isActive ? "bg-sidebar-accent" : "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-          }`}
-        >
-          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-            {label}
-          </span>
-          {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-        </SidebarMenuButton>
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <SidebarMenu className="mt-1">
-          {items.map((item) => (
-            <SidebarMenuItem key={item.title}>
-              <SidebarMenuButton
-                asChild
-                className={`transition-all duration-200 rounded-lg mb-1 ${
-                  location.pathname === item.url
-                    ? "bg-primary text-primary-foreground shadow-sm"
-                    : "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-                }`}
-              >
-                <Link to={item.url} className="flex items-center gap-3 px-3 py-2.5">
-                  <item.icon className="w-4 h-4" />
-                  <span className="font-medium">{item.title}</span>
-                </Link>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          ))}
-        </SidebarMenu>
-      </CollapsibleContent>
+    <Collapsible open={isOpen} onOpenChange={() => onToggle(group.groupId)}>
+      <SidebarGroup>
+        <CollapsibleTrigger asChild>
+          <SidebarMenuButton
+            className={`w-full justify-between rounded-lg mb-1 ${
+              isActive ? "bg-sidebar-accent" : "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+            }`}
+          >
+            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+              {GroupIcon && <GroupIcon className="w-3.5 h-3.5" />}
+              {group.label}
+            </span>
+            {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+          </SidebarMenuButton>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <SidebarMenu className="mt-1">
+            {visibleItems.map((item) => (
+              <SidebarMenuItem key={item.routeName}>
+                <SidebarMenuButton
+                  asChild
+                  className={`transition-all duration-200 rounded-lg mb-1 ${
+                    location.pathname === item.url
+                      ? "bg-primary text-primary-foreground shadow-sm"
+                      : "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                  } ${item.isAdvanced ? "pl-6 text-xs" : ""}`}
+                >
+                  <Link to={item.url} className="flex items-center gap-3 px-3 py-2.5">
+                    <item.icon className="w-4 h-4 shrink-0" />
+                    <span className="font-medium">{item.title}</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+        </CollapsibleContent>
+      </SidebarGroup>
     </Collapsible>
   );
 }
@@ -87,6 +96,8 @@ function NavCollapsible({ label, items, location }) {
 export default function Layout({ children, currentPageName }) {
   const location = useLocation();
   const navigate = useNavigate();
+  const [navGroupsOpen, toggleNavGroup] = useNavGroupsOpen();
+  const [showAdvancedTools, setShowAdvancedToolsState] = useState(getShowAdvancedTools);
   const { state: dashboardPrefs, dispatch: preferencesDispatch } = useDashboardPreferences();
   const { user, profiles, activeProfileId, setActiveProfileId, logout, triggerOnboardingVideo } = useAuthStore((state) => ({
     user: state.user,
@@ -97,6 +108,14 @@ export default function Layout({ children, currentPageName }) {
     triggerOnboardingVideo: state.triggerOnboardingVideo,
   }));
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const isAdmin = Boolean(user?.is_admin);
+  const showAdminGroup = isAdmin || showAdvancedTools;
+
+  const handleAdvancedToolsToggle = useCallback(() => {
+    const next = !getShowAdvancedTools();
+    setShowAdvancedTools(next);
+    setShowAdvancedToolsState(next);
+  }, []);
 
   const toggleDarkMode = React.useCallback(() => {
     preferencesDispatch({
@@ -154,6 +173,17 @@ export default function Layout({ children, currentPageName }) {
     }).catch(() => {})
   }, [isAuthenticated, location.pathname, location.search])
 
+  // Persist last visited page for Dashboard "Continue" card.
+  React.useEffect(() => {
+    if (!isAuthenticated) return
+    const path = location.pathname + (location.search || '')
+    if (path.startsWith('/login') || path.startsWith('/set-password') || path.startsWith('/auth')) return
+    if (path === '/' || path === '/Dashboard') return
+    try {
+      window.localStorage.setItem('grantflow:last-visited-page', path)
+    } catch {}
+  }, [isAuthenticated, location.pathname, location.search])
+
   return (
     <SidebarProvider>
       <div className="min-h-screen flex w-full bg-gradient-to-br from-background via-background to-muted text-foreground">
@@ -171,93 +201,25 @@ export default function Layout({ children, currentPageName }) {
           </SidebarHeader>
           
           <SidebarContent className="p-3">
-            <SidebarGroup>
-              <SidebarGroupLabel className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-3 py-2">
-                Main
-              </SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  {PRIMARY_NAV.map((item) => (
-                    <SidebarMenuItem key={item.title}>
-                      <SidebarMenuButton
-                        asChild
-                        className={`transition-all duration-200 rounded-lg mb-1 ${
-                          location.pathname === item.url
-                            ? "bg-primary text-primary-foreground shadow-sm"
-                            : "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-                        }`}
-                      >
-                        <Link to={item.url} className="flex items-center gap-3 px-3 py-2.5">
-                          <item.icon className="w-4 h-4" />
-                          <span className="font-medium">{item.title}</span>
-                        </Link>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  ))}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-            <SidebarGroup className="mt-4">
-              <NavCollapsible
-                label="More"
-                items={MORE_NAV}
+            {NAV_GROUPS.filter((g) => g.groupId !== "admin" || showAdminGroup).map((group) => (
+              <NavGroupCollapsible
+                key={group.groupId}
+                group={group}
                 location={location}
+                isOpen={navGroupsOpen.has(group.groupId)}
+                onToggle={toggleNavGroup}
+                user={user}
               />
-            </SidebarGroup>
-            <SidebarGroup className="mt-4">
-              <SidebarGroupLabel className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-3 py-2">
-                Developer
-              </SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  {DEVELOPER_NAV.map((item) => (
-                    <SidebarMenuItem key={item.title}>
-                      <SidebarMenuButton
-                        asChild
-                        className={`transition-all duration-200 rounded-lg mb-1 ${
-                          location.pathname === item.url
-                            ? "bg-primary text-primary-foreground shadow-sm"
-                            : "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-                        }`}
-                      >
-                        <Link to={item.url} className="flex items-center gap-3 px-3 py-2.5">
-                          <item.icon className="w-4 h-4" />
-                          <span className="font-medium">{item.title}</span>
-                        </Link>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  ))}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-            {user?.is_admin && (
-              <SidebarGroup className="mt-4">
-                <SidebarGroupLabel className="text-xs font-semibold text-amber-700 dark:text-amber-300 uppercase tracking-wider px-3 py-2">
-                  Admin
-                </SidebarGroupLabel>
-                <SidebarGroupContent>
-                  <SidebarMenu>
-                    {ADMIN_NAV.map((item) => (
-                      <SidebarMenuItem key={item.title}>
-                        <SidebarMenuButton
-                          asChild
-                          className={`transition-all duration-200 rounded-lg mb-1 ${
-                            location.pathname === item.url
-                              ? "bg-amber-600 text-white shadow-sm"
-                              : "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-                          }`}
-                        >
-                          <Link to={item.url} className="flex items-center gap-3 px-3 py-2.5">
-                            <item.icon className="w-4 h-4" />
-                            <span className="font-medium">{item.title}</span>
-                          </Link>
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    ))}
-                  </SidebarMenu>
-                </SidebarGroupContent>
-              </SidebarGroup>
-            )}
+            ))}
+            <div className="pt-2 mt-2 border-t border-sidebar-border">
+              <button
+                type="button"
+                onClick={handleAdvancedToolsToggle}
+                className="text-[11px] text-muted-foreground hover:text-sidebar-foreground px-3 py-1.5"
+              >
+                {showAdvancedTools ? "Hide advanced tools" : "Show advanced tools"}
+              </button>
+            </div>
           </SidebarContent>
 
           <SidebarFooter className="border-t border-sidebar-border p-4 space-y-4">

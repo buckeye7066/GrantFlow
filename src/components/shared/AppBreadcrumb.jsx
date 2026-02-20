@@ -8,11 +8,12 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
-import { getBreadcrumbFromPath } from "@/config/navigation";
+import { getBreadcrumbSegments } from "@/nav/navConfig";
 
 export default function AppBreadcrumb() {
   const location = useLocation();
-  const segments = getBreadcrumbFromPath(location.pathname, location.search?.replace(/^\?/, "") || "");
+  const search = location.search?.replace(/^\?/, "") || "";
+  const segments = getBreadcrumbSegments(location.pathname, search);
 
   if (segments.length === 0) return null;
 
@@ -20,10 +21,10 @@ export default function AppBreadcrumb() {
     <Breadcrumb className="hidden sm:block">
       <BreadcrumbList>
         {segments.map((seg, i) => (
-          <React.Fragment key={seg.path}>
+          <React.Fragment key={seg.path + seg.label + i}>
             {i > 0 && <BreadcrumbSeparator />}
             <BreadcrumbItem>
-              {i === segments.length - 1 ? (
+              {seg.isCurrent || i === segments.length - 1 ? (
                 <BreadcrumbPage>{seg.label}</BreadcrumbPage>
               ) : (
                 <BreadcrumbLink asChild>
