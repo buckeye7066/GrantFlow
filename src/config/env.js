@@ -19,6 +19,8 @@ const EnvSchema = z.object({
 
   // Feature flags (frontend-gated UI only; backend remains authoritative)
   VITE_SHOULDERS_VNEXT: z.string().optional(),
+  VITE_ANYA_COPILOT_ENABLED: z.string().optional(),
+  VITE_ANYA_SCREENSHOT_ENABLED: z.string().optional(),
 })
 
 export const env = (() => {
@@ -31,6 +33,8 @@ export const env = (() => {
     VITE_CANONICAL_HOST: import.meta.env.VITE_CANONICAL_HOST,
     VITE_CANONICAL_HOST_STRICT: import.meta.env.VITE_CANONICAL_HOST_STRICT,
     VITE_SHOULDERS_VNEXT: import.meta.env.VITE_SHOULDERS_VNEXT,
+    VITE_ANYA_COPILOT_ENABLED: import.meta.env.VITE_ANYA_COPILOT_ENABLED,
+    VITE_ANYA_SCREENSHOT_ENABLED: import.meta.env.VITE_ANYA_SCREENSHOT_ENABLED,
   }
 
   const parsed = EnvSchema.safeParse(raw)
@@ -48,6 +52,10 @@ export const env = (() => {
   const shouldersVnext =
     String(raw.VITE_SHOULDERS_VNEXT || '').trim().toLowerCase() === 'true'
 
+  // Anya copilot: default OFF in production; ON only if explicitly set or (dev + localStorage override).
+  const anyaCopilotEnv = String(raw.VITE_ANYA_COPILOT_ENABLED || '').trim().toLowerCase() === 'true'
+  const anyaScreenshotEnv = String(raw.VITE_ANYA_SCREENSHOT_ENABLED || '').trim().toLowerCase() === 'true'
+
   return {
     isDev: !!raw.DEV,
     isProd: !!raw.PROD,
@@ -56,5 +64,9 @@ export const env = (() => {
     canonicalHost,
     canonicalStrict,
     shouldersVnext,
+    /** Anya copilot UX (context, next steps). Default OFF in production. */
+    anyaCopilotEnabled: anyaCopilotEnv,
+    /** Anya screenshot capture. Default OFF everywhere. */
+    anyaScreenshotEnabled: anyaScreenshotEnv,
   }
 })()
