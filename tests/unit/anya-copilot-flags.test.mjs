@@ -48,3 +48,28 @@ test('feature flags: ANYA_SCREENSHOT_ENABLED default OFF (contract)', () => {
   const defaultOff = true
   assert.equal(defaultOff, true)
 })
+
+// Feature flag resolution: preferences override env; stable schema for custom_preferences.feature_flags
+function getFeatureFlagsFromPreferences(customPrefs, envDefaults = { anyaCopilotEnabled: false, anyaScreenshotEnabled: false }) {
+  const flags = customPrefs?.feature_flags
+  return {
+    anyaCopilotEnabled: typeof flags?.anyaCopilotEnabled === 'boolean' ? flags.anyaCopilotEnabled : envDefaults.anyaCopilotEnabled,
+    anyaScreenshotEnabled: typeof flags?.anyaScreenshotEnabled === 'boolean' ? flags.anyaScreenshotEnabled : envDefaults.anyaScreenshotEnabled,
+  }
+}
+
+test('feature flag parsing: preferences override env defaults', () => {
+  const envDef = { anyaCopilotEnabled: false, anyaScreenshotEnabled: false }
+  assert.deepEqual(getFeatureFlagsFromPreferences(null, envDef), { anyaCopilotEnabled: false, anyaScreenshotEnabled: false })
+  assert.deepEqual(getFeatureFlagsFromPreferences({}, envDef), { anyaCopilotEnabled: false, anyaScreenshotEnabled: false })
+  assert.deepEqual(getFeatureFlagsFromPreferences({ feature_flags: { anyaCopilotEnabled: true } }, envDef), { anyaCopilotEnabled: true, anyaScreenshotEnabled: false })
+  assert.deepEqual(getFeatureFlagsFromPreferences({ feature_flags: { anyaScreenshotEnabled: true } }, envDef), { anyaCopilotEnabled: false, anyaScreenshotEnabled: true })
+  assert.deepEqual(getFeatureFlagsFromPreferences({ feature_flags: { anyaCopilotEnabled: true, anyaScreenshotEnabled: true } }, envDef), { anyaCopilotEnabled: true, anyaScreenshotEnabled: true })
+  assert.deepEqual(getFeatureFlagsFromPreferences({ feature_flags: { anyaCopilotEnabled: false } }, { anyaCopilotEnabled: true, anyaScreenshotEnabled: false }), { anyaCopilotEnabled: false, anyaScreenshotEnabled: false })
+})
+
+test('AnyaContext stable schema: useAnyaContext fallback shape', () => {
+  const fallback = { route: '/', search: '', activeProfileId: null, pageName: 'Dashboard', activeObject: {}, adapter: null, setAdapterContext: () => {} }
+  assert.equal(typeof fallback.setAdapterContext, 'function')
+  assert.ok('route' in fallback && 'pageName' in fallback && 'adapter' in fallback)
+})

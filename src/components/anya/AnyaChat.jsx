@@ -24,7 +24,7 @@ import {
 } from "@/lib/anyaClient"
 import { useAnyaContext, serializeAnyaContext } from "@/contexts/AnyaContext"
 import { createPageUrl } from "@/utils"
-import { isAnyaCopilotEnabled, isAnyaScreenshotEnabled } from "@/config/anyaCopilotFlags"
+import { useFeatureFlags } from "@/lib/featureFlags"
 import {
   Dialog,
   DialogContent,
@@ -283,7 +283,7 @@ export default function AnyaChat({ profileId }) {
     }
   }, [isAdmin])
 
-  const copilotEnabled = isAnyaCopilotEnabled()
+  const { anyaCopilotEnabled: copilotEnabled, anyaScreenshotEnabled: screenshotEnabled } = useFeatureFlags()
   const anyaContext = useAnyaContext()
   const navigate = useNavigate()
   const onboardingActions = useMemo(() => [
