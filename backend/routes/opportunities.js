@@ -399,10 +399,16 @@ router.get('/', async (req, res) => {
     }
 
     if (search) {
-      const searchTerm = `%${search}%`;
       const likeOp = likeOperatorForDb(req.db);
-      baseConditions.push(`(${prefix}title ${likeOp} ? OR ${prefix}sponsor ${likeOp} ? OR ${prefix}description ${likeOp} ?)`);
-      baseParams.push(searchTerm, searchTerm, searchTerm);
+      // Split multi-word searches into per-token ILIKE conditions.
+      // Each token must match at least one of title/sponsor/description (OR
+      // within a token, AND across tokens). Single-word searches are unchanged.
+      const tokens = search.trim().split(/\s+/).filter(Boolean);
+      for (const token of tokens) {
+        const term = `%${token}%`;
+        baseConditions.push(`(${prefix}title ${likeOp} ? OR ${prefix}sponsor ${likeOp} ? OR ${prefix}description ${likeOp} ?)`);
+        baseParams.push(term, term, term);
+      }
     }
 
     const normalizedState = state ? String(state).toUpperCase() : null;
