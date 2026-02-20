@@ -35,9 +35,34 @@ import PersonalizationPanel from "@/components/dashboard/PersonalizationPanel"
 import ReminderCenterCard from "@/components/dashboard/ReminderCenterCard"
 import PipelineActionsCard from "@/components/dashboard/PipelineActionsCard"
 import ResumeWhereYouLeftOff from "@/components/dashboard/ResumeWhereYouLeftOff"
+import ContinueCard from "@/components/dashboard/ContinueCard"
+import StartHereCard from "@/components/dashboard/StartHereCard"
 import AnyaChat from "@/components/anya/AnyaChat"
 import OnboardingVideo from "@/components/onboarding/OnboardingVideo"
 import { cn } from "@/lib/utils"
+
+/** Resolves last-visited page from localStorage (client-only) and picks Continue vs Start here vs Resume. */
+function DashboardContinueOrStart({ profilesLength, urgentDeadlines, activeGrants, hasGrants }) {
+  const [lastVisitedPath, setLastVisitedPath] = useState(null);
+  useEffect(() => {
+    try {
+      setLastVisitedPath(window.localStorage.getItem("grantflow:last-visited-page"));
+    } catch {
+      setLastVisitedPath(null);
+    }
+  }, []);
+  const hasLastPage =
+    lastVisitedPath && lastVisitedPath !== "/" && lastVisitedPath !== "/Dashboard";
+  if (hasLastPage) return <ContinueCard lastVisitedPath={lastVisitedPath} />;
+  if (profilesLength === 0) return <StartHereCard />;
+  return (
+    <ResumeWhereYouLeftOff
+      urgentDeadlines={urgentDeadlines}
+      activeGrants={activeGrants}
+      hasGrants={hasGrants}
+    />
+  );
+}
 
 // LJWMonogram component - defined outside Dashboard to maintain stable reference
 function LJWMonogram({ className = "" }) {
@@ -439,7 +464,8 @@ export default function Dashboard() {
           </div>
 
           <div className="space-y-6">
-            <ResumeWhereYouLeftOff
+            <DashboardContinueOrStart
+              profilesLength={profiles.length}
               urgentDeadlines={urgentDeadlines}
               activeGrants={activeGrants}
               hasGrants={relevantGrants?.length > 0}
