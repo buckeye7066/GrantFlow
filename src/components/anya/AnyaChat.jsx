@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import { v4 as uuid } from "uuid"
-import { Loader2, Search, Send, Sparkles, Plus, Shield, Database, Activity, Code, Wrench, ChevronDown, ChevronRight } from "lucide-react"
+import { Loader2, Search, Send, Sparkles, Plus, Shield, Database, Activity, Code, Wrench, ChevronDown, ChevronRight, Compass, FolderOpen, Kanban, User, Monitor } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -21,6 +22,9 @@ import {
   createAnyaTask,
   updateAnyaTask,
 } from "@/lib/anyaClient"
+import { useAnyaContext, serializeAnyaContext } from "@/contexts/AnyaContext"
+import { createPageUrl } from "@/utils"
+import { isAnyaCopilotEnabled, isAnyaScreenshotEnabled } from "@/config/anyaCopilotFlags"
 import {
   Dialog,
   DialogContent,
@@ -279,6 +283,68 @@ export default function AnyaChat({ profileId }) {
     }
   }, [isAdmin])
 
+  const copilotEnabled = isAnyaCopilotEnabled()
+  const anyaContext = useAnyaContext()
+  const navigate = useNavigate()
+  const onboardingActions = useMemo(() => [
+    { type: "navigate", label: "Create or select a profile", payload: { path: createPageUrl("MyProfiles") } },
+    { type: "navigate", label: "Run Discover Grants", payload: { path: createPageUrl("DiscoverGrants") } },
+    { type: "navigate", label: "Add a grant to Pipeline", payload: { path: createPageUrl("Pipeline") } },
+  ], [])
+  const nextStepActions = useMemo(() => {
+    if (!copilotEnabled) return []
+    const fromAdapter = anyaContext?.adapter?.suggestedActions
+    if (fromAdapter && fromAdapter.length > 0) return fromAdapter.slice(0, 5)
+    return onboardingActions
+  }, [copilotEnabled, anyaContext?.adapter?.suggestedActions, onboardingActions])
+  const runNextStepAction = useCallback(async (action) => {
+    if (!action?.type) return
+    try {
+      if (action.type === "navigate" && action.payload?.path) {
+        navigate(action.payload.path)
+        toast({ title: "Opened", description: action.label })
+        return
+      }
+      if (action.type === "invokeTool" && action.payload?.toolName && sessionId) {
+        const params = { ...(action.payload.parameters || {}), profile_id: effectiveProfileId }
+        await invokeAnyaTool(action.payload.toolName, params, { sessionId })
+        toast({ title: "Done", description: action.label })
+        await refreshMessages(sessionId)
+        return
+      }
+      if (action.type === "openModal" && action.payload) {
+        toast({ title: "Action", description: action.label })
+        return
+      }
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Action failed",
+        description: err instanceof Error ? err.message : "Please try again.",
+      })
+    }
+  }, [navigate, sessionId, effectiveProfileId, refreshMessages])
+  const [isSendingContext, setIsSendingContext] = useState(false)
+  const handleUseCurrentScreen = useCallback(async () => {
+    if (!sessionId) return
+    setIsSendingContext(true)
+    try {
+      const ctx = serializeAnyaContext(anyaContext)
+      const text = "Here's my current screen context: " + JSON.stringify(ctx)
+      await postAnyaMessage(sessionId, text)
+      toast({ title: "Context sent", description: "Anya can use this to tailor answers." })
+      await refreshMessages(sessionId)
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Failed to send context",
+        description: err instanceof Error ? err.message : "Please try again.",
+      })
+    } finally {
+      setIsSendingContext(false)
+    }
+  }, [sessionId, anyaContext, refreshMessages])
+
   if (isUnavailable) {
     return (
       <div className="rounded-xl border border-slate-200 bg-white/80 p-4 text-sm text-slate-600 shadow-sm">
@@ -513,6 +579,55 @@ export default function AnyaChat({ profileId }) {
                 within this profile.
               </p>
             </div>
+            {copilotEnabled ? (
+              <>
+                <div className="space-y-2">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">Next steps</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {nextStepActions.map((action, idx) => (
+                      <Button
+                        key={idx}
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5 text-xs h-8"
+                        onClick={() => runNextStepAction(action)}
+                      >
+                        {action.label?.includes("Pipeline") || action.label?.includes("pipeline") ? (
+                          <Kanban className="h-3.5 w-3.5 shrink-0" />
+                        ) : action.label?.includes("Discover") || action.label?.includes("discover") ? (
+                          <Compass className="h-3.5 w-3.5 shrink-0" />
+                        ) : action.label?.includes("Document") || action.label?.includes("document") ? (
+                          <FolderOpen className="h-3.5 w-3.5 shrink-0" />
+                        ) : action.label?.includes("profile") ? (
+                          <User className="h-3.5 w-3.5 shrink-0" />
+                        ) : (
+                          <Sparkles className="h-3.5 w-3.5 shrink-0" />
+                        )}
+                        <span className="truncate max-w-[140px]">{action.label}</span>
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1.5 text-xs text-slate-600"
+                    onClick={handleUseCurrentScreen}
+                    disabled={!sessionId || isSendingContext}
+                    title="Send current page context to Anya"
+                  >
+                    {isSendingContext ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Monitor className="h-3.5 w-3.5" />
+                    )}
+                    Use current screen
+                  </Button>
+                </div>
+              </>
+            ) : null}
             {(hasQuickActions || hasAdminTools || isLoadingTools) ? (
               <div className="flex items-center gap-2 flex-wrap">
                 {hasGrantTool ? (
