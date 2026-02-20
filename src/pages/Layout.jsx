@@ -34,6 +34,8 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuthStore } from "@/stores/authStore";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import AnyaFloatingButton from "@/components/anya/AnyaFloatingButton";
+import { AnyaContextProvider } from "@/contexts/AnyaContext";
+import { isAnyaCopilotEnabled } from "@/config/anyaCopilotFlags";
 import ProBonoBanner from "@/components/banners/ProBonoBanner.jsx";
 import AppBreadcrumb from "@/components/shared/AppBreadcrumb";
 import GrantLifecyclePhaseIndicator from "@/components/shared/GrantLifecyclePhaseIndicator";
@@ -184,7 +186,8 @@ export default function Layout({ children, currentPageName }) {
     } catch {}
   }, [isAuthenticated, location.pathname, location.search])
 
-  return (
+  const copilotEnabled = isAnyaCopilotEnabled()
+  const content = (
     <SidebarProvider>
       <div className="min-h-screen flex w-full bg-gradient-to-br from-background via-background to-muted text-foreground">
         <Sidebar className="border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
@@ -338,5 +341,6 @@ export default function Layout({ children, currentPageName }) {
         <AnyaFloatingButton profileId={activeProfileId} />
       </div>
     </SidebarProvider>
-  );
+  )
+  return copilotEnabled ? <AnyaContextProvider>{content}</AnyaContextProvider> : content
 }
