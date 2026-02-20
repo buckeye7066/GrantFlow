@@ -324,7 +324,7 @@ async function runLiveCrawler({ crawlerType, profile, itemRequest, minMatchScore
   } catch (error) {
     const errorMsg = error?.message || String(error)
     const errorCode = error?.code
-    
+
     // Provide more specific error messages
     let friendlyError = errorMsg
     if (errorCode === 'TIMEOUT') {
@@ -334,8 +334,11 @@ async function runLiveCrawler({ crawlerType, profile, itemRequest, minMatchScore
     } else if (errorMsg.includes('API key') || errorMsg.includes('SAM_GOV_API_KEY')) {
       friendlyError = `API configuration missing for ${crawlerType} crawler`
     }
-    
+
     console.error(`[RealCrawlers] ${crawlerType} live crawler error:`, errorMsg)
+    if (error?.stack) {
+      console.error(`[RealCrawlers] ${crawlerType} stack trace:\n`, error.stack)
+    }
     
     return {
       ok: false,

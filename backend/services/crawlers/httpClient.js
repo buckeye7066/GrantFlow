@@ -1,5 +1,8 @@
 import axios from 'axios'
 
+// Axios uses HTTP_PROXY, HTTPS_PROXY, NO_PROXY from the environment. If crawlers fail with
+// ENOTFOUND/ETIMEDOUT, check that proxy settings do not block outbound requests.
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
