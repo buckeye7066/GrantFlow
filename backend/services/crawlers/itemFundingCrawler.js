@@ -220,6 +220,58 @@ const KNOWN_ITEM_SOURCES = {
               keywords: ['food', 'snap', 'wic', 'school meals', 'usda'],
       },
         ],
+    food_truck: [
+      {
+        name: 'SBA Small Business Grants & Loans',
+        url: 'https://www.sba.gov/funding-programs',
+        description: 'SBA funding programs for starting or expanding a small business, including food trucks and mobile food vendors.',
+        keywords: ['food truck', 'small business', 'sba', 'startup', 'mobile food'],
+      },
+      {
+        name: 'SCORE Mentoring for Small Business',
+        url: 'https://www.score.org/',
+        description: 'Free mentoring and resources for small business owners including food truck operators.',
+        keywords: ['food truck', 'small business', 'mentoring', 'startup'],
+      },
+      {
+        name: 'Grants.gov Business Opportunities',
+        url: 'https://www.grants.gov/search-grants?fundingCategories=BC',
+        description: 'Federal grant opportunities for Business and Commerce, including food service and mobile vendor programs.',
+        keywords: ['food truck', 'small business', 'grant', 'federal', 'commerce'],
+      },
+      {
+        name: 'FedEx Small Business Grant Contest',
+        url: 'https://www.fedex.com/en-us/small-business/grant-contest.html',
+        description: 'Annual grant contest for small businesses. Food trucks and mobile food businesses are eligible.',
+        keywords: ['food truck', 'small business', 'grant', 'contest'],
+      },
+    ],
+  small_business: [
+      {
+        name: 'SBA Funding Programs',
+        url: 'https://www.sba.gov/funding-programs',
+        description: 'U.S. Small Business Administration funding programs including grants, loans, and investment capital.',
+        keywords: ['small business', 'sba', 'startup', 'entrepreneur', 'funding'],
+      },
+      {
+        name: 'Grants.gov Business & Commerce',
+        url: 'https://www.grants.gov/search-grants?fundingCategories=BC',
+        description: 'Federal grants for business and commerce development.',
+        keywords: ['small business', 'grant', 'federal', 'commerce'],
+      },
+      {
+        name: 'SCORE Free Business Mentoring',
+        url: 'https://www.score.org/',
+        description: 'Free mentoring, workshops, and resources for small business owners and entrepreneurs.',
+        keywords: ['small business', 'mentoring', 'entrepreneur', 'startup'],
+      },
+      {
+        name: 'Minority Business Development Agency',
+        url: 'https://www.mbda.gov/',
+        description: 'Resources and support for minority-owned businesses including grants, contracts, and capital.',
+        keywords: ['small business', 'minority', 'grant', 'minority-owned'],
+      },
+    ],
     clothing: [
       {
               name: 'Dress for Success',
@@ -258,7 +310,9 @@ function parseItemRequest(request) {
                   furniture: ['furniture', 'desk', 'chair', 'table', 'cabinet', 'bed', 'mattress', 'couch'],
                   medical_equipment: ['medical equipment', 'hospital bed', 'oxygen', 'nebulizer', 'stethoscope', 'wheelchair', 'walker', 'crutch'],
                   adaptive_equipment: ['adaptive', 'assistive', 'wheelchair ramp', 'stairlift', 'hearing aid', 'braille'],
-                  food: ['food', 'groceries', 'meals', 'pantry', 'nutrition'],
+                  food_truck: ['food truck', 'food cart', 'mobile food', 'food vendor', 'catering business', 'food trailer'],
+    small_business: ['small business', 'startup', 'entrepreneur', 'business funding', 'business grant', 'sba'],
+    food: ['food', 'groceries', 'meals', 'pantry', 'nutrition'],
                   clothing: ['clothing', 'clothes', 'uniform', 'suit', 'professional attire', 'work clothes'],
             }
 
