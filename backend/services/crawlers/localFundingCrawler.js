@@ -344,6 +344,14 @@ export async function crawlLocalFunding(profile, options = {}) {
 
 function buildDirectoryResources({ profile, anchors, profileState, profileCity, targetZip, sources }) {
   const out = []
+
+  // Detect business-oriented profiles to suppress irrelevant assistance resources
+  const profileText = [
+    ...Array.from(signals?.interests || []),
+    ...Array.from(signals?.keywordSet || []),
+    ...(signals?.applicantTypes ? Array.from(signals.applicantTypes) : []),
+  ].join(' ').toLowerCase();
+  const isBusinessProfile = /food\s*truck|small\s*business|startup|entrepreneur|business\s*funding|mobile\s*food|food\s*vendor|catering\s*business/.test(profileText);
   const signals = profile?.signals
   const keywords = Array.from(signals?.keywordSet ?? []).slice(0, 12)
   const anchorList = Array.isArray(anchors) && anchors.length > 0 ? anchors : []
@@ -399,6 +407,7 @@ function buildDirectoryResources({ profile, anchors, profileState, profileCity, 
           })
           break
         case 'food_bank':
+          if (isBusinessProfile) break; // Skip food bank for business profiles
           out.push({
             title: city && state ? `Food Bank resources near ${city}, ${state}` : `Food Bank Locator (${anchorLabel})`,
             sponsor: 'Feeding America',
