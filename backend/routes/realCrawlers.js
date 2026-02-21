@@ -454,12 +454,8 @@ function buildCandidateOpportunityQuery({ crawlerType, profileContext, tokens, i
       : "(deadline_type IN ('rolling','ongoing') OR deadline IS NULL OR deadline >= date('now'))",
   )
 
-  // Geography: state + national.
-  const state = profileContext?.signals?.location?.state ?? profileContext?.profile?.state ?? null
-  if (state && typeof state === 'string' && state.trim().length === 2) {
-    conditions.push(isPostgres ? '(state = ? OR is_national = TRUE OR state IS NULL)' : '(state = ? OR is_national = 1 OR state IS NULL)')
-    params.push(state.trim().toUpperCase())
-  }
+  // Geography: expand outward. Do NOT hard-filter by state—let scoring surface best fits.
+  // Profile state is used by matchingEngine for ranking; mismatches reduce score, not exclude.
 
   // Crawler-type hints (lightweight pre-filter).
   if (crawlerType === 'student_grants') {

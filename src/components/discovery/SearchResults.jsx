@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import GrantCard from '../pipeline/GrantCard';
 import { Button } from '@/components/ui/button';
-import { Loader2, Plus, Check, CheckSquare, Square } from 'lucide-react';
+import { Loader2, Plus, Check, CheckSquare, Square, Search } from 'lucide-react';
 import { useToast } from "@/components/ui/use-toast";
 import { Progress } from "@/components/ui/progress";
 import { Checkbox } from '@/components/ui/checkbox';
@@ -187,7 +187,18 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
   };
 
   if (!results || results.length === 0) {
-    return null;
+    return (
+      <div className="rounded-xl border bg-white p-12 text-center space-y-4">
+        <Search className="w-14 h-14 mx-auto text-slate-300" />
+        <h3 className="text-xl font-semibold text-slate-900">No opportunities matched this time</h3>
+        <p className="text-slate-600 max-w-md mx-auto">
+          Try lowering the minimum match score, add more details to your profile (ZIP code, state, keywords), or run different funding sources.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          The more complete your profile, the better we can find grants that fit you.
+        </p>
+      </div>
+    );
   }
 
   const allSelected = selectedOpportunities.size === results.length && results.length > 0;
