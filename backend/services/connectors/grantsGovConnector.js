@@ -94,7 +94,7 @@ export async function searchOpportunities(params = {}) {
       console.warn('[grants.gov] search2 returned 0 results; full response:', JSON.stringify(data, null, 2))
     }
 
-    return hits.map((hit) => {
+    const mapped = hits.map((hit) => {
       const number = hit?.number ?? hit?.oppNum ?? hit?.oppNumber ?? null
       const id = hit?.id ?? hit?.oppId ?? null
       const title = hit?.title ?? hit?.oppTitle ?? ''
@@ -104,6 +104,8 @@ export async function searchOpportunities(params = {}) {
       const closeDate = hit?.closeDate ?? null
       const oppStatus = hit?.oppStatus ?? null
       const alnlist = hit?.alnlist ?? null
+      const fundingInstrument = hit?.fundingInstrumentType ?? hit?.fundingInstrument ?? ''
+      const costSharing = hit?.costSharingOrMatchingRequirement ?? hit?.costSharing ?? ''
 
       const url =
         id != null
@@ -120,6 +122,10 @@ export async function searchOpportunities(params = {}) {
 
       const statusLower = oppStatus ? String(oppStatus).toLowerCase() : ''
       const isActive = statusLower.includes('posted') || statusLower.includes('forecast')
+
+      const instCode = String(fundingInstrument).toUpperCase()
+      const is_loan = /^L$|^PC$|^LOAN$/.test(instCode) || instCode.includes('LOAN')
+      const requires_match = /^yes$|^true$|^1$/.test(String(costSharing).toLowerCase().trim())
 
       return {
         title: title || '',
@@ -142,8 +148,12 @@ export async function searchOpportunities(params = {}) {
         last_verified_at: new Date().toISOString(),
         is_active: isActive,
         last_crawled: new Date().toISOString(),
+        is_loan,
+        requires_match,
       }
     });
+
+    return mapped.filter((o) => !o.is_loan && !o.requires_match);
   } catch (error) {
     console.error('[Grants.gov] Search failed:', error.message);
     throw error;
