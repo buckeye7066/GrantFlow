@@ -167,14 +167,35 @@ export async function crawlLocalFunding(profile, options = {}) {
   if (!signals) {
     console.error('[LocalFundingCrawler] No profile.signals - profile must have signals (run profile enrichment or ensure profile_sections are loaded)')
     return results
-  }
-  const targetZipRaw = normalizeZip(signals.location?.zip || profile.zip_code || profile.zip || profile.postal_code)
-  const profileState = signals.location?.state || profile.state
-  const profileCity = signals.location?.city || profile.city
-  if (!targetZipRaw && !profileState) {
-    console.warn('[LocalFundingCrawler] No ZIP or state in profile - returning directory resources only. Add location (ZIP or state) for better local matches.')
-  } else if (targetZipRaw && !/^\d{5}$/.test(targetZipRaw)) {
-    console.warn('[LocalFundingCrawler] Invalid ZIP format (expected 5 digits):', targetZipRaw)
+  const signals = profile?.signals
+      // FIX: Extract location directly from profile sections as fallback
+      // when signals.location is missing or incomplete
+      const sections = profile?.sections ?? {}
+      const basicInfo = sections?.basic_information ?? {}
+      const locationFocus = sections?.location_focus ?? {}
+
+      if (!signals) {
+            console.warn('[LocalFundingCrawler] No profile.signals - extracting location from sections as fallback')
+            // Don't return empty - try to use section data directly
+      }
+
+      // Build location with multi-level fallback: signals > sections > profile top-level
+      const sectionZip = basicInfo?.zip_code || basicInfo?.postal_code || basicInfo?.zip
+      const sectionState = basicInfo?.state || locationFocus?.state || locationFocus?.primary_state
+      const sectionCity = basicInfo?.city || locationFocus?.city
+
+      const targetZipRaw = normalizeZip(
+            signals?.location?.zip || sectionZip || profile.zip_code || profile.zip || profile.postal_code
+          )
+      const profileState = signals?.location?.state || sectionState || profile.state
+      const profileCity = signals?.location?.city || sectionCity || profile.city
+
+      // Debug: log resolved location so we can trace mismatches
+      console.log(`[LocalFundingCrawler] Location resolution:`,
+                      `signals.location=${JSON.stringify(signals?.location)},`,
+                      `section.state=${sectionState}, section.city=${sectionCity}, section.zip=${sectionZip},`,
+                      `resolved: city=${profileCity}, state=${profileState}, zip=${targetZipRaw}`
+                    )
   }
 
   const targetZip = targetZipRaw
@@ -544,7 +565,7 @@ function isLoanOrMatchingFund(opportunity) {
          matchingKeywords.some(keyword => text.includes(keyword))
 }
 
-async function getZipCoordinates(zip) {
+h(zip) {
   // Validate ZIP code format
   if (!zip || typeof zip !== 'string' && typeof zip !== 'number') {
     console.warn('[LocalFundingCrawler] Invalid ZIP code format:', zip)
@@ -556,7 +577,7 @@ async function getZipCoordinates(zip) {
     console.warn('[LocalFundingCrawler] ZIP code must be 5 digits:', zipStr)
     return null
   }
-
+h
   try {
     // Prefer local dataset to avoid network flakiness and "skipped" ZIP handling.
     const local = zipcodes.lookup(zipStr)
