@@ -78,8 +78,14 @@ export async function searchAssistanceListings(params = {}) {
     const data = await rateLimitedFetch(url, apiKey);
     
     const listings = data.assistanceListings || [];
+    const loanOrMatchRe = /\bloan\b|\bmicroloan\b|\bfinancing\b|\bmatching\b|\bcost share\b|\bmatch required\b|\b1:1\b|\bdollar for dollar\b/i;
     
-    return listings.map(listing => ({
+    return listings
+      .filter((listing) => {
+        const text = `${listing.programTitle || ''} ${listing.programObjectives || ''} ${listing.applicantEligibility || ''}`;
+        return !loanOrMatchRe.test(text);
+      })
+      .map(listing => ({
       title: listing.programTitle || '',
       sponsor: listing.federalAgency || '',
       source: 'sam.gov',
@@ -101,6 +107,8 @@ export async function searchAssistanceListings(params = {}) {
       last_verified_at: new Date().toISOString(),
       is_active: true,
       last_crawled: new Date().toISOString(),
+      is_loan: false,
+      requires_match: false,
       // Program details
       cfda_number: listing.programNumber,
       authorization: listing.authorization || null

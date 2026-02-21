@@ -752,11 +752,28 @@ export async function crawlRealOpportunities(db, state = null, options = {}) {
     }
   }
   
-  // Save to database
+  // Loan/matching detection - skip before upsert (consistent with crawlerHelpers)
+  function isLoanOrMatchingFund(opp) {
+    const title = String(opp?.title || '').toLowerCase();
+    const desc = String(opp?.description || '').toLowerCase();
+    const text = `${title} ${desc}`;
+    if (opp?.requires_match === true) return true;
+    if (/\bloan\b|\bmicroloan\b|\bfinancing\b|\bapr\b/.test(text)) return true;
+    if (/\bmatching\b|\bcost share\b|\bmatch required\b|\b1:1\b|\bdollar for dollar\b/.test(text)) return true;
+    if (opp?.is_loan === true) return true;
+    return false;
+  }
+
+  const toUpsert = allOpportunities.filter((opp) => !isLoanOrMatchingFund(opp));
+  const skipped = allOpportunities.length - toUpsert.length;
+  if (skipped > 0) {
+    console.log(`[RealCrawler] Skipped ${skipped} loan/matching opportunities`);
+  }
+
   let inserted = 0;
   let updated = 0;
-  
-  for (const opp of allOpportunities) {
+
+  for (const opp of toUpsert) {
     try {
       // Check if exists by source_id
       const existing = db.prepare(
@@ -770,13 +787,14 @@ export async function crawlRealOpportunities(db, state = null, options = {}) {
             title = ?, sponsor = ?, description = ?, amount_min = ?, amount_max = ?,
             deadline = ?, deadline_type = ?, application_url = ?, source_url = ?,
             is_national = ?, state = ?, categories = ?, keywords = ?,
-            eligibility_bullets = ?, updated_at = CURRENT_TIMESTAMP
+            eligibility_bullets = ?, requires_match = ?, is_loan = ?, updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
         `).run(
           opp.title, opp.sponsor, opp.description, opp.amount_min, opp.amount_max,
           opp.deadline, opp.deadline_type, opp.application_url, opp.source_url,
           opp.is_national ? 1 : 0, opp.state, JSON.stringify(opp.categories || []),
           JSON.stringify(opp.keywords || []), JSON.stringify(opp.eligibility_bullets || []),
+          opp.requires_match ? 1 : 0, opp.is_loan ? 1 : 0,
           existing.id
         );
         updated++;
@@ -787,9 +805,9 @@ export async function crawlRealOpportunities(db, state = null, options = {}) {
             id, title, sponsor, source, source_id, source_url, description,
             amount_min, amount_max, deadline, deadline_type, application_url,
             is_national, state, categories, keywords, eligibility_bullets,
-            opportunity_type, requires_501c3, requires_match, is_active,
+            opportunity_type, requires_501c3, requires_match, is_loan, is_active,
             created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         `).run(
           // Never use dataset IDs as the DB primary key (can collide across sources/runs).
           randomUUID(), opp.title, opp.sponsor, opp.source, opp.source_id, opp.source_url,
@@ -797,7 +815,7 @@ export async function crawlRealOpportunities(db, state = null, options = {}) {
           opp.application_url, opp.is_national ? 1 : 0, opp.state,
           JSON.stringify(opp.categories || []), JSON.stringify(opp.keywords || []),
           JSON.stringify(opp.eligibility_bullets || []), opp.opportunity_type || 'grant',
-          opp.requires_501c3 ? 1 : 0, opp.requires_match ? 1 : 0
+          opp.requires_501c3 ? 1 : 0, opp.requires_match ? 1 : 0, opp.is_loan ? 1 : 0
         );
         inserted++;
       }
@@ -807,12 +825,13 @@ export async function crawlRealOpportunities(db, state = null, options = {}) {
     }
   }
   
-  console.log(`[RealCrawler] Complete: ${inserted} inserted, ${updated} updated, ${errors.length} errors`);
-  
+  console.log(`[RealCrawler] Complete: ${inserted} inserted, ${updated} updated, ${skipped} skipped (loan/matching), ${errors.length} errors`);
+
   return {
     total: allOpportunities.length,
     inserted,
     updated,
+    skipped,
     errors: errors.length > 0 ? errors : undefined,
     state: state || 'nationwide'
   };
