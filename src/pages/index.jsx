@@ -85,6 +85,7 @@ import Services from "./Services";
 import Settings from "./Settings";
 
 import Admin from "./Admin";
+import Incognito from "./Incognito";
 
 import Login from "./Login";
 import AuthCallback from "./AuthCallback";
@@ -337,6 +338,7 @@ function LayoutRoutes() {
                 <Route path="/Stewardship" element={withBoundary(<Stewardship />, "Stewardship")} />
 
                 <Route path="/Settings" element={withBoundary(<Settings />, "Settings")} />
+                <Route path="/Incognito" element={withBoundary(<Incognito />, "Incognito")} />
 
                 <Route path="/Diagnostics" element={withBoundary(<Diagnostics />, "Diagnostics")} />
 

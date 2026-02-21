@@ -313,6 +313,118 @@ export async function checkSchedule(db) {
 }
 
 /**
+ * In-memory state for admin-triggered background code crawl & repair.
+ * Single-instance only; not shared across processes.
+ */
+const backgroundCodeCrawlState = {
+  running: false,
+  startedAt: null,
+  completedAt: null,
+  lastResult: null,
+  lastError: null,
+}
+
+/**
+ * Run only code crawl + function tests + test repair (no crawlers/item discovery).
+ * Does not require ANYA_AUTONOMOUS_ENABLED; used for admin-triggered background run.
+ */
+export async function runCodeCrawlAndRepairOnly(context) {
+  const report = {
+    trigger: 'background',
+    started_at: new Date().toISOString(),
+    operations: {},
+    errors: [],
+  }
+
+  await logOperation('background_code_repair_start', 'started', { trigger: 'background' }, context)
+
+  try {
+    if (AUTONOMOUS_CONFIG.operations.codeCrawl) {
+      try {
+        const result = await runAutonomousCodeCrawl(AUTONOMOUS_CONFIG.params.codeCrawl, context)
+        report.operations.codeCrawl = { status: 'completed', files_scanned: result.files_scanned, files_modified: result.files_modified, issues_fixed: result.issues_fixed }
+      } catch (error) {
+        report.errors.push({ phase: 'codeCrawl', error: error.message })
+        report.operations.codeCrawl = { status: 'failed', error: error.message }
+      }
+    }
+
+    if (AUTONOMOUS_CONFIG.operations.functionTests) {
+      try {
+        const result = await runAutonomousFunctionTests(AUTONOMOUS_CONFIG.params.functionTests, context)
+        report.operations.functionTests = { status: 'completed', total_tests: result.total_tests, tests_passed: result.tests_passed, tests_failed: result.tests_failed }
+        if (result.failed_tests && result.failed_tests.length > 0) {
+          try {
+            const repairResult = await repairFailingTests(result.failed_tests, context.db)
+            report.operations.testRepair = { status: 'completed', repaired: repairResult.repaired.length, unable_to_repair: repairResult.unable_to_repair.length }
+            if (repairResult.repaired.length > 0) {
+              const retestResult = await runAutonomousFunctionTests(AUTONOMOUS_CONFIG.params.functionTests, context)
+              report.operations.functionTestsAfterRepair = { tests_passed: retestResult.tests_passed, tests_failed: retestResult.tests_failed }
+            }
+          } catch (repairError) {
+            report.operations.testRepair = { status: 'failed', error: repairError.message }
+          }
+        }
+      } catch (error) {
+        report.errors.push({ phase: 'functionTests', error: error.message })
+        report.operations.functionTests = { status: 'failed', error: error.message }
+      }
+    }
+
+    report.completed_at = new Date().toISOString()
+    report.status = report.errors.length > 0 ? 'completed_with_errors' : 'success'
+    await logOperation('background_code_repair_complete', report.status, report, context)
+    return report
+  } catch (error) {
+    report.status = 'failed'
+    report.error = error.message
+    await logOperation('background_code_repair_error', 'failed', { error: error.message }, context)
+    throw error
+  }
+}
+
+/**
+ * Start code crawl and repair in the background. Returns immediately.
+ * Safe to call from HTTP handler; state is updated when the run completes.
+ */
+export function startBackgroundCodeCrawlAndRepair(context) {
+  if (backgroundCodeCrawlState.running) {
+    return { queued: false, message: 'A background code crawl & repair is already running.' }
+  }
+  backgroundCodeCrawlState.running = true
+  backgroundCodeCrawlState.startedAt = new Date().toISOString()
+  backgroundCodeCrawlState.lastResult = null
+  backgroundCodeCrawlState.lastError = null
+
+  runCodeCrawlAndRepairOnly(context)
+    .then((result) => {
+      backgroundCodeCrawlState.running = false
+      backgroundCodeCrawlState.completedAt = new Date().toISOString()
+      backgroundCodeCrawlState.lastResult = result
+    })
+    .catch((err) => {
+      backgroundCodeCrawlState.running = false
+      backgroundCodeCrawlState.completedAt = new Date().toISOString()
+      backgroundCodeCrawlState.lastError = err?.message || String(err)
+    })
+
+  return { queued: true, message: 'Code crawl and repair started in the background.' }
+}
+
+/**
+ * Get current background code crawl & repair state (for status API).
+ */
+export function getBackgroundCodeCrawlState() {
+  return {
+    running: backgroundCodeCrawlState.running,
+    startedAt: backgroundCodeCrawlState.startedAt,
+    completedAt: backgroundCodeCrawlState.completedAt,
+    lastResult: backgroundCodeCrawlState.lastResult,
+    lastError: backgroundCodeCrawlState.lastError,
+  }
+}
+
+/**
  * Get current configuration
  */
 export function getAutonomousConfig() {

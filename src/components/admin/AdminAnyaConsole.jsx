@@ -84,6 +84,25 @@ export default function AdminAnyaConsole() {
               {busy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <PlayCircle className="w-4 h-4 mr-2" />}
               Code ops
             </Button>
+            <Button
+              variant="secondary"
+              onClick={async () => {
+                setBusy(true)
+                try {
+                  const res = await post("/api/anya/autonomous/code/background", {})
+                  toast({ title: res.queued ? "Started in background" : "Status", description: res.message })
+                  await refresh()
+                } catch (err) {
+                  toast({ title: "Background start failed", description: err.message, variant: "destructive" })
+                } finally {
+                  setBusy(false)
+                }
+              }}
+              disabled={busy || (status?.background_code_crawl_repair?.running)}
+            >
+              {(status?.background_code_crawl_repair?.running) ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <PlayCircle className="w-4 h-4 mr-2" />}
+              Code crawl & repair (background)
+            </Button>
             <Button onClick={() => run("Run autonomous crawlers", "/api/anya/autonomous/crawlers")} disabled={busy}>
               {busy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <PlayCircle className="w-4 h-4 mr-2" />}
               Crawlers
@@ -101,6 +120,21 @@ export default function AdminAnyaConsole() {
               Refresh
             </Button>
           </div>
+
+          {status?.background_code_crawl_repair ? (
+            <div className="rounded-md border border-slate-200 bg-slate-50 dark:bg-slate-900/50 dark:border-slate-700 p-3 text-sm">
+              <span className="font-medium">Background code crawl & repair: </span>
+              {status.background_code_crawl_repair.running ? (
+                <span className="text-amber-600 dark:text-amber-400">Running… started {status.background_code_crawl_repair.startedAt ? new Date(status.background_code_crawl_repair.startedAt).toLocaleTimeString() : ''}</span>
+              ) : status.background_code_crawl_repair.lastError ? (
+                <span className="text-red-600 dark:text-red-400">Last run failed: {status.background_code_crawl_repair.lastError}</span>
+              ) : status.background_code_crawl_repair.completedAt ? (
+                <span className="text-slate-600 dark:text-slate-400">Idle. Last completed {new Date(status.background_code_crawl_repair.completedAt).toLocaleString()}{status.background_code_crawl_repair.lastResult?.status ? ` (${status.background_code_crawl_repair.lastResult.status})` : ''}</span>
+              ) : (
+                <span className="text-slate-500">Not run yet. Click &quot;Code crawl & repair (background)&quot; to start.</span>
+              )}
+            </div>
+          ) : null}
 
           {status ? (
             <pre className="text-xs bg-slate-950 text-slate-50 rounded-md p-3 overflow-auto max-h-96">

@@ -781,6 +781,7 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
       source = null,
       skip_parsing: rawSkipParsing,
       enable_ai: rawEnableAi,
+      add_to_opportunities: rawAddToOpportunities,
     } = req.body ?? {};
 
     let file = req.file;
@@ -996,12 +997,18 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
       }
     }
 
+    const addToOpportunities = rawAddToOpportunities === true || rawAddToOpportunities === 'true';
+
     // Queue background ingestion:
     // - always extracts text (PDF/DOCX/TXT)
     // - OCR fallback for scanned PDFs + images
     // - AI parsing runs only if enable_ai is true (tier-gated)
-    // - Also queues for HTML-imported docs when parsing is enabled (cheerio text already extracted)
-    if ((!extractedText && file?.path) || (extractedTextFromHtml && !skipParsing && profileId)) {
+    // - Also queues for HTML-imported docs when parsing is enabled or when add_to_opportunities (global Discover)
+    const shouldQueue =
+      (!extractedText && file?.path) ||
+      (extractedTextFromHtml && !skipParsing && profileId) ||
+      (extractedTextFromHtml && addToOpportunities && profileId);
+    if (shouldQueue) {
       if (!skipParsing && profileId) {
         if (!(await requireTierCapability(req, res, profileId, TIER_CAPABILITIES.DOCUMENT_AI))) return
       }
@@ -1022,6 +1029,7 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
             source,
             handwriting: req.body?.handwriting === 'true' || req.body?.handwriting === true,
             enable_ai: !skipParsing,
+            add_to_opportunities: addToOpportunities,
           }),
           requestedBy,
         );

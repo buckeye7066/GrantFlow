@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { FolderOpen, Loader2, Sparkles, UploadCloud, UserCircle2 } from "lucide-react";
+import { FolderOpen, Link2, Loader2, Sparkles, UploadCloud, UserCircle2 } from "lucide-react";
 import DocumentItem from "../components/documents/DocumentItem";
 import {
   AlertDialog,
@@ -38,6 +38,9 @@ export default function Documents() {
   const [uploadFile, setUploadFile] = useState(null);
   const [uploadError, setUploadError] = useState(null);
   const [handwritingOcr, setHandwritingOcr] = useState(true);
+  const [urlToImport, setUrlToImport] = useState("");
+  const [urlImportError, setUrlImportError] = useState(null);
+  const [addToOpportunities, setAddToOpportunities] = useState(true);
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const fileInputRef = useRef(null);
@@ -92,6 +95,52 @@ export default function Documents() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['documents', selectedProfileId] });
       setDeletingDoc(null);
+    },
+  });
+
+  const urlImportMutation = useMutation({
+    mutationFn: async ({ url, profileId }) => {
+      const trimmed = String(url || "").trim();
+      if (!trimmed) throw new Error("Enter a URL");
+      const fileUrl = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+      let name = "URL import";
+      try {
+        const parsed = new URL(fileUrl);
+        const base = parsed.pathname.split("/").filter(Boolean).pop();
+        name = base ? decodeURIComponent(base) : `URL import (${parsed.hostname})`;
+      } catch {
+        // keep default name
+      }
+      return ingestDocument({
+        profile_id: profileId,
+        file_url: fileUrl,
+        name,
+        type: canDocumentAI ? "source_material" : "profile_file",
+        skip_parsing: canDocumentAI ? false : true,
+        enable_ai: canDocumentAI ? true : false,
+        source: "url_import",
+        add_to_opportunities: addToOpportunities,
+      });
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["documents", variables.profileId] });
+      setUrlToImport("");
+      setUrlImportError(null);
+      toast({
+        title: "URL imported",
+        description: addToOpportunities
+          ? "We'll parse the page and add any grant info to Discover for the whole app."
+          : "We'll download and parse the content for this profile.",
+      });
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : "URL import failed";
+      setUrlImportError(message);
+      toast({
+        variant: "destructive",
+        title: "URL import failed",
+        description: message,
+      });
     },
   });
 
@@ -589,6 +638,65 @@ const latestDuration = describeDuration(latestEnrichmentJob)
             {uploadError ? (
               <p className="mt-2 text-xs text-red-600">{uploadError}</p>
             ) : null}
+
+            <div className="mt-6 pt-6 border-t border-slate-200">
+              <h3 className="text-sm font-semibold text-slate-900 mb-1">Import from URL</h3>
+              <p className="text-sm text-slate-600 mb-3">
+                Paste a link from your daily grant digest or any grant listing page. We’ll fetch the page, parse it, and optionally add grant info to Discover so it appears app-wide.
+              </p>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end flex-wrap">
+                <div className="flex-1 min-w-[200px]">
+                  <input
+                    type="url"
+                    placeholder="https://..."
+                    value={urlToImport}
+                    onChange={(e) => {
+                      setUrlToImport(e.target.value);
+                      setUrlImportError(null);
+                    }}
+                    disabled={!selectedProfileId || urlImportMutation.isPending}
+                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm placeholder:text-slate-400"
+                  />
+                  {urlImportError ? (
+                    <p className="mt-1 text-xs text-red-600">{urlImportError}</p>
+                  ) : null}
+                </div>
+                <div className="flex items-center gap-4">
+                  <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={addToOpportunities}
+                      onChange={(e) => setAddToOpportunities(e.target.checked)}
+                      disabled={!selectedProfileId || urlImportMutation.isPending}
+                    />
+                    Add grant info to Discover (global)
+                  </label>
+                  <Button
+                    onClick={() => {
+                      if (!selectedProfileId) {
+                        toast({
+                          variant: "destructive",
+                          title: "Select a profile",
+                          description: "Choose a profile before importing from URL.",
+                        });
+                        return;
+                      }
+                      urlImportMutation.mutate({ url: urlToImport, profileId: selectedProfileId });
+                    }}
+                    disabled={!urlToImport.trim() || !selectedProfileId || urlImportMutation.isPending}
+                    variant="outline"
+                    className="gap-2"
+                  >
+                    {urlImportMutation.isPending ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Link2 className="w-4 h-4" />
+                    )}
+                    Import URL
+                  </Button>
+                </div>
+              </div>
+            </div>
           </div>
             {isLoadingDocuments ? (
               <div className="flex justify-center items-center py-16">

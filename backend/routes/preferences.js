@@ -93,7 +93,11 @@ router.get('/', async (req, res) => {
     if (!preferences) {
       // Create default preferences for user (rollout: Anya copilot ON, screenshot OFF)
       const id = `pref-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-      const defaultCustom = { feature_flags: { anyaCopilotEnabled: true, anyaScreenshotEnabled: false } }
+      // Initialize custom preferences with feature flags and incognito toggle
+      const defaultCustom = {
+        feature_flags: { anyaCopilotEnabled: true, anyaScreenshotEnabled: false },
+        incognitoEnabled: false,
+      }
       const insertSql =
         dialect === 'postgres'
           ? `
@@ -114,12 +118,31 @@ router.get('/', async (req, res) => {
         try { custom = JSON.parse(custom) } catch { custom = {} }
       }
       if (!custom || typeof custom.feature_flags !== 'object') {
-        const updatedCustom = { ...(custom || {}), feature_flags: { anyaCopilotEnabled: true, anyaScreenshotEnabled: false } }
-        const updateSql = dialect === 'postgres'
-          ? 'UPDATE user_preferences SET custom_preferences = ?::jsonb, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?'
-          : 'UPDATE user_preferences SET custom_preferences = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?'
+        // Ensure feature flags and incognitoEnabled exist in custom preferences
+        const updatedCustom = {
+          ...(custom || {}),
+          feature_flags: { anyaCopilotEnabled: true, anyaScreenshotEnabled: false },
+          incognitoEnabled: false,
+        }
+        const updateSql =
+          dialect === 'postgres'
+            ? 'UPDATE user_preferences SET custom_preferences = ?::jsonb, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?'
+            : 'UPDATE user_preferences SET custom_preferences = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?'
         await req.db.prepare(updateSql).run(JSON.stringify(updatedCustom), userId)
-        preferences = await req.db.prepare('SELECT * FROM user_preferences WHERE user_id = ?').get(userId)
+        preferences = await req.db
+          .prepare('SELECT * FROM user_preferences WHERE user_id = ?')
+          .get(userId)
+      } else if (custom.incognitoEnabled === undefined) {
+        // If custom preferences exist but incognitoEnabled is missing, set it to false
+        const updatedCustom = { ...custom, incognitoEnabled: false }
+        const updateSql =
+          dialect === 'postgres'
+            ? 'UPDATE user_preferences SET custom_preferences = ?::jsonb, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?'
+            : 'UPDATE user_preferences SET custom_preferences = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?'
+        await req.db.prepare(updateSql).run(JSON.stringify(updatedCustom), userId)
+        preferences = await req.db
+          .prepare('SELECT * FROM user_preferences WHERE user_id = ?')
+          .get(userId)
       }
     }
 
