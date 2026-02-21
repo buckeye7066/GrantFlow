@@ -6,7 +6,8 @@ import { getProfile, listProfiles } from '@/api/profiles';
 import { apiFetch } from '@/api/client';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Loader2, Search, User } from 'lucide-react';
+import { Loader2, Search, User, Lightbulb, ArrowRight, CheckCircle2 } from 'lucide-react';
+import HelpTip from '@/components/help/HelpTip';
 import SearchResults from '@/components/discovery/SearchResults';
 import CrawlerSelection from '@/components/discovery/CrawlerSelection';
 import { Badge } from '@/components/ui/badge';
@@ -35,6 +36,11 @@ export default function DiscoverGrants() {
   const [searchParams] = useSearchParams()
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const [searchResults, setSearchResults] = useState([]);
+  const [dismissedSuggestions, setDismissedSuggestions] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('grantflow:dismissed-suggestions') || '[]');
+    } catch { return []; }
+  });
   
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -75,6 +81,26 @@ export default function DiscoverGrants() {
       setSelectedProfileId(urlProfileId)
     }
   }, [searchParams, profiles, selectedProfileId])
+
+  // Persist last selected profile for session continuity
+  useEffect(() => {
+    if (selectedProfileId) {
+      try { localStorage.setItem('grantflow:discover-last-profile', selectedProfileId); } catch {}
+    }
+  }, [selectedProfileId]);
+
+  // Restore last selected profile on mount
+  useEffect(() => {
+    if (!selectedProfileId && profiles.length > 0) {
+      try {
+        const lastProfile = localStorage.getItem('grantflow:discover-last-profile');
+        if (lastProfile && profiles.some(p => p.id === lastProfile)) {
+          setSelectedProfileId(lastProfile);
+        }
+      } catch {}
+    }
+  }, [profiles]);
+
 
   const { data: profileDetail } = useQuery({
     queryKey: ['discover-profile', effectiveProfileId ?? selectedProfileId],
@@ -310,6 +336,42 @@ export default function DiscoverGrants() {
     }
   };
 
+  // --- Next Steps / Suggestions Logic ---
+  const suggestions = React.useMemo(() => {
+    const items = [];
+    if (!selectedProfile) {
+      items.push({ id: 'select-profile', icon: User, text: 'Select a profile to get started', detail: 'Choose a profile from the dropdown above so we can match funding opportunities to your needs.' });
+      return items;
+    }
+    const sections = profileDetail?.sections || {};
+    const sectionKeys = Object.keys(sections);
+    if (sectionKeys.length < 3) {
+      items.push({ id: 'complete-profile', icon: User, text: 'Complete your profile for better matches', detail: 'Adding more details (location, interests, goals) helps us find more relevant funding.' });
+    }
+    if (!sections.basic_information?.state && !sections.basic_information?.zip_code) {
+      items.push({ id: 'add-location', icon: Lightbulb, text: 'Add your location (state/ZIP) to your profile', detail: 'Location data is critical for finding local funding and community resources near you.' });
+    }
+    if (searchResults.length === 0) {
+      items.push({ id: 'run-crawlers', icon: Search, text: 'Run a search to discover funding opportunities', detail: 'Select one or more funding sources below and click Search to find grants that match your profile.' });
+    }
+    if (searchResults.length > 0) {
+      const highMatches = searchResults.filter(r => (r.match_score || r.match || 0) >= 80);
+      if (highMatches.length > 0) {
+        items.push({ id: 'review-top', icon: CheckCircle2, text: 'Review your top ' + highMatches.length + ' high-match opportunities', detail: 'These opportunities scored 80%+ match with your profile. Consider adding them to your pipeline.' });
+      }
+      items.push({ id: 'add-pipeline', icon: ArrowRight, text: 'Add promising grants to your pipeline', detail: 'Use the checkboxes to select opportunities, then click Add to Pipeline to track and manage them.' });
+    }
+    return items.filter(s => !dismissedSuggestions.includes(s.id));
+  }, [selectedProfile, profileDetail, searchResults, dismissedSuggestions]);
+
+  const dismissSuggestion = (id) => {
+    setDismissedSuggestions(prev => {
+      const next = [...prev, id];
+      try { localStorage.setItem('grantflow:dismissed-suggestions', JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+
   return (
     <div className="p-6 md:p-8">
       <div className="max-w-7xl mx-auto">
@@ -317,11 +379,48 @@ export default function DiscoverGrants() {
           <h1 className="text-3xl font-bold text-foreground flex items-center gap-2">
             <Search className="w-8 h-8 text-primary" />
             Discover Funding Opportunities
+            <HelpTip text="Search across multiple funding databases to find grants, scholarships, and assistance programs that match your profile. Results are scored based on how well they fit your location, demographics, and needs." />
           </h1>
           <p className="text-muted-foreground mt-2">
             Find scholarships, grants, benefits, and assistance programs that match your profile
           </p>
         </header>
+
+        {/* Next Steps / Suggestions Panel */}
+        {suggestions.length > 0 && (
+          <Card className="mb-8 border-amber-200 bg-amber-50/50">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-lg">
+                <Lightbulb className="w-5 h-5 text-amber-600" />
+                Suggested Next Steps
+                <HelpTip text="These suggestions are personalized based on your profile and activity. Dismiss any you have already completed." />
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <div className="space-y-3">
+                {suggestions.map((s) => {
+                  const Icon = s.icon;
+                  return (
+                    <div key={s.id} className="flex items-start gap-3 p-3 bg-white rounded-lg border border-amber-100 group">
+                      <Icon className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-foreground">{s.text}</p>
+                        <p className="text-sm text-muted-foreground mt-0.5">{s.detail}</p>
+                      </div>
+                      <button
+                        onClick={() => dismissSuggestion(s.id)}
+                        className="text-xs text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mt-1"
+                        title="Dismiss this suggestion"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         <Card className="shadow-lg mb-8">
           <CardHeader className="border-b border-border">
