@@ -35,6 +35,7 @@ import grantMonitoringRouter from './routes/grantMonitoring.js';
 import billingRouter from './routes/billing.js';
 import authRouter from './routes/auth.js';
 import preferencesRouter from './routes/preferences.js';
+import incognitoRouter from './routes/incognito.js';
 import adminRouter from './routes/admin.js';
 import createGeoCrawlRouter from './routes/geoCrawl.js'
 import discoveryRouter from './routes/discovery.js';
@@ -1545,6 +1546,8 @@ app.use('/api/grant-monitoring', grantMonitoringRouter);
 app.use('/api/crawlers', crawlersRouter);
 app.use('/api/real-crawlers', realCrawlersRouter);
 app.use('/api/preferences', preferencesRouter);
+// Incognito module endpoints (gated by user custom preferences)
+app.use('/api/incognito', incognitoRouter);
 app.use('/api/version', versionRouter);
 // Base44 function-style endpoints (used by NOFO Parser + Diagnostics)
 app.use('/api', nofoRouter);

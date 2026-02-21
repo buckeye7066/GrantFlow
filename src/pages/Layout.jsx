@@ -43,11 +43,16 @@ import { apiFetch } from "@/api/client";
 import { createPageUrl } from "@/utils";
 import { NAV_GROUPS, getGroupIdForRoute } from "@/nav/navConfig";
 import { useNavGroupsOpen, getShowAdvancedTools, setShowAdvancedTools } from "@/nav/useNavGroupsOpen";
+import { useSettingsStore } from '@/stores/settingsStore';
 
 function NavGroupCollapsible({ group, location, isOpen, onToggle, user }) {
+  // Access user preferences to support feature toggles
+  const preferences = useSettingsStore((state) => state.preferences);
   const isActive = group.items.some((item) => location.pathname === item.url);
   const visibleItems = group.items.filter((item) => {
     if (item.isAdminOnly && !user?.is_admin) return false;
+    // Hide items that require Incognito when the flag is disabled
+    if (item.requiresIncognitoEnabled && !preferences?.custom_preferences?.incognitoEnabled) return false;
     return true;
   });
   if (visibleItems.length === 0) return null;

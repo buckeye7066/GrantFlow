@@ -48,8 +48,8 @@ function MessageBubble({ message }) {
           : "border-slate-200 bg-white text-slate-700",
       )}
     >
-      <div className="flex items-center justify-between gap-2 text-xs text-slate-500 pb-1">
-        <Badge variant={isAssistant ? "secondary" : "outline"} className="text-[10px] uppercase tracking-wide">
+      <div className="flex items-center justify-between gap-2 text-xs text-slate-600 pb-1">
+        <Badge variant={isAssistant ? "secondary" : "outline"} className="text-[11px] uppercase tracking-wide">
           {isAssistant ? "Anya" : "You"}
         </Badge>
         <span>
@@ -60,12 +60,12 @@ function MessageBubble({ message }) {
       </div>
       <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
       {message.tool_name ? (
-        <div className="mt-2 space-y-2 text-[11px] text-slate-500">
+        <div className="mt-2 space-y-2 text-xs text-slate-600">
           <div>
-            Tool: <span className="font-mono text-[11px] text-slate-600">{message.tool_name}</span>
+            Tool: <span className="font-mono text-xs text-slate-700">{message.tool_name}</span>
           </div>
           {message.tool_payload ? (
-            <div className="max-h-48 overflow-y-auto rounded-md border border-slate-200 bg-white/80 p-2 text-xs text-slate-700">
+            <div className="max-h-48 overflow-y-auto rounded-md border border-slate-200 bg-white/80 p-2 text-xs text-slate-800">
               <pre className="whitespace-pre-wrap">
                 {JSON.stringify(message.tool_payload, null, 2)}
               </pre>
@@ -103,6 +103,7 @@ export default function AnyaChat({ profileId }) {
   const [updatingTaskId, setUpdatingTaskId] = useState(null)
   const [isAdminToolsOpen, setIsAdminToolsOpen] = useState(false)
   const [adminToolForm, setAdminToolForm] = useState({})
+  const [invokingAdminTool, setInvokingAdminTool] = useState(null)
 
   const hasMessages = messages.length > 0
   const hasTasks = tasks.length > 0
@@ -116,19 +117,56 @@ export default function AnyaChat({ profileId }) {
   )
   const hasQuickActions = hasCodeSearchTool || hasGrantTool
   
-  // Group admin tools by category
   const adminTools = useMemo(() => {
     if (!isAdmin) return {}
-    
+
     const adminToolsList = tools.filter((tool) => tool.requiresAdmin)
+    const categorized = new Set()
+
     const grouped = {
-      code: adminToolsList.filter((t) => t.name.startsWith("admin.code.")),
-      crawler: adminToolsList.filter((t) => t.name.startsWith("admin.crawler.")),
-      functions: adminToolsList.filter((t) => t.name.startsWith("admin.functions.")),
-      database: adminToolsList.filter((t) => t.name.startsWith("admin.db.")),
-      health: adminToolsList.filter((t) => t.name.startsWith("admin.health.")),
+      diagnostics: adminToolsList.filter((t) => {
+        const match = t.name === "admin.diagnostics" || t.name.startsWith("admin.system.")
+        if (match) categorized.add(t.name)
+        return match
+      }),
+      health: adminToolsList.filter((t) => {
+        const match = t.name.startsWith("admin.health.")
+        if (match) categorized.add(t.name)
+        return match
+      }),
+      crawler: adminToolsList.filter((t) => {
+        const match = t.name.startsWith("admin.crawler.")
+        if (match) categorized.add(t.name)
+        return match
+      }),
+      autonomous: adminToolsList.filter((t) => {
+        const match = t.name.startsWith("admin.anya.") || t.name.startsWith("admin.items.")
+        if (match) categorized.add(t.name)
+        return match
+      }),
+      code: adminToolsList.filter((t) => {
+        const match = t.name.startsWith("admin.code.")
+        if (match) categorized.add(t.name)
+        return match
+      }),
+      functions: adminToolsList.filter((t) => {
+        const match = t.name.startsWith("admin.functions.")
+        if (match) categorized.add(t.name)
+        return match
+      }),
+      database: adminToolsList.filter((t) => {
+        const match = t.name.startsWith("admin.db.")
+        if (match) categorized.add(t.name)
+        return match
+      }),
+      brain: adminToolsList.filter((t) => {
+        const match = t.name.startsWith("admin.brain.")
+        if (match) categorized.add(t.name)
+        return match
+      }),
+      other: adminToolsList.filter((t) => !categorized.has(t.name)),
     }
-    
+
     return grouped
   }, [tools, isAdmin])
   
@@ -347,14 +385,14 @@ export default function AnyaChat({ profileId }) {
 
   if (isUnavailable) {
     return (
-      <div className="rounded-xl border border-slate-200 bg-white/80 p-4 text-sm text-slate-600 shadow-sm">
+      <div className="rounded-xl border border-slate-200 bg-white/80 p-4 text-sm text-slate-700 shadow-sm">
         <div className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-full overflow-hidden bg-gradient-to-br from-purple-600 to-blue-600">
             <img src="/images/anya-avatar.svg" alt="Anya" className="h-full w-full object-cover" />
           </div>
           <div className="font-semibold text-slate-800">Anya is temporarily unavailable</div>
         </div>
-        <div className="mt-2 text-xs text-slate-500">
+        <div className="mt-2 text-xs text-slate-600">
           The core app is still working; we’re restoring Anya’s services in the background. Refresh in a minute.
         </div>
       </div>
@@ -546,6 +584,28 @@ export default function AnyaChat({ profileId }) {
     }
   }
 
+  const handleRunAdminTool = async (tool) => {
+    if (!sessionId || !tool?.name) return
+    setInvokingAdminTool(tool.name)
+    try {
+      await invokeAnyaTool(tool.name, { profile_id: effectiveProfileId }, { sessionId })
+      toast({
+        title: `${tool.name} completed`,
+        description: "Results have been posted to the chat thread.",
+      })
+      await refreshMessages(sessionId)
+    } catch (error) {
+      console.error(`[AnyaChat] admin tool ${tool.name} failed`, error)
+      toast({
+        variant: "destructive",
+        title: `${tool.name} failed`,
+        description: error instanceof Error ? error.message : "Please try again shortly.",
+      })
+    } finally {
+      setInvokingAdminTool(null)
+    }
+  }
+
   const isCodeSearchDisabled =
     !hasCodeSearchTool || !sessionId || isLoading || isInvokingTool || isLoadingTools
   const isGrantInsightsDisabled =
@@ -568,13 +628,13 @@ export default function AnyaChat({ profileId }) {
                 </div>
                 <h2 className="text-sm font-semibold text-slate-800">Anya, your GrantFlow copilot</h2>
                 {isAdmin && (
-                  <Badge variant="default" className="gap-1 text-[10px] bg-purple-600">
+                  <Badge variant="default" className="gap-1 text-[11px] bg-purple-600">
                     <Shield className="h-3 w-3" />
                     ADMIN
                   </Badge>
                 )}
               </div>
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-slate-600">
                 Ask about grant matches, automation jobs, or request code assistance. All actions stay
                 within this profile.
               </p>
@@ -677,7 +737,7 @@ export default function AnyaChat({ profileId }) {
             ) : null}
           </div>
           {!hasQuickActions && !isLoadingTools ? (
-            <p className="text-[11px] text-slate-400">
+            <p className="text-xs text-slate-600">
               Tool registry still loading. Quick actions will appear here shortly.
             </p>
           ) : null}
@@ -698,12 +758,12 @@ export default function AnyaChat({ profileId }) {
                     <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
                       Session tasks
                     </h3>
-                    <p className="text-xs text-slate-500">
+                    <p className="text-xs text-slate-600">
                       {isTasksExpanded ? "Capture action items so nothing falls through." : "Click to expand"}
                     </p>
                   </div>
                 </button>
-                <Badge variant={openTaskCount > 0 ? "secondary" : "outline"} className="text-[10px]">
+                <Badge variant={openTaskCount > 0 ? "secondary" : "outline"} className="text-[11px]">
                   {openTaskCount} open
                 </Badge>
               </div>
@@ -711,7 +771,7 @@ export default function AnyaChat({ profileId }) {
                 <>
                   <div className="mt-3 space-y-2">
                 {isLoadingTasks ? (
-                  <div className="flex items-center gap-2 text-xs text-slate-500">
+                  <div className="flex items-center gap-2 text-xs text-slate-600">
                     <Loader2 className="h-3 w-3 animate-spin text-blue-600" />
                     Fetching tasks…
                   </div>
@@ -751,10 +811,10 @@ export default function AnyaChat({ profileId }) {
                           >
                             {task.title}
                           </span>
-                          <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
                             {dueLabel ? <span>{dueLabel}</span> : null}
                             {task.priority && task.priority !== "normal" ? (
-                              <span className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 font-medium uppercase tracking-wide text-[10px] text-slate-600">
+                              <span className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 font-medium uppercase tracking-wide text-[11px] text-slate-600">
                                 {task.priority}
                               </span>
                             ) : null}
@@ -764,7 +824,7 @@ export default function AnyaChat({ profileId }) {
                     )
                   })
                 ) : (
-                  <p className="text-xs text-slate-500">
+                  <p className="text-xs text-slate-600">
                     No tasks yet. Log a follow-up below to keep momentum.
                   </p>
                 )}
@@ -772,7 +832,7 @@ export default function AnyaChat({ profileId }) {
                   <form onSubmit={handleTaskSubmit} className="mt-3 space-y-3">
                 <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_150px]">
                   <div className="space-y-1">
-                    <Label htmlFor="anya-task-title" className="text-[11px] text-slate-500">
+                    <Label htmlFor="anya-task-title" className="text-xs text-slate-600">
                       Task title
                     </Label>
                     <Input
@@ -786,7 +846,7 @@ export default function AnyaChat({ profileId }) {
                     />
                   </div>
                   <div className="space-y-1">
-                    <Label htmlFor="anya-task-due" className="text-[11px] text-slate-500">
+                    <Label htmlFor="anya-task-due" className="text-xs text-slate-600">
                       Due date (optional)
                     </Label>
                     <Input
@@ -829,7 +889,7 @@ export default function AnyaChat({ profileId }) {
               <MessageBubble key={message.id} message={message} />
             ))}
             {isSending ? (
-              <div className="flex items-center gap-2 text-xs text-slate-500">
+              <div className="flex items-center gap-2 text-xs text-slate-600">
                 <Loader2 className="h-3 w-3 animate-spin text-blue-600" />
                 Working…
               </div>
@@ -860,7 +920,7 @@ export default function AnyaChat({ profileId }) {
           disabled={isDisabled}
         />
         <div className="mt-3 flex items-center justify-between">
-          <span className="text-[11px] text-slate-400">
+          <span className="text-xs text-slate-600">
             Anya keeps all actions scoped to this profile.
           </span>
           <Button
@@ -916,7 +976,7 @@ export default function AnyaChat({ profileId }) {
                 }
                 placeholder="backend/routes"
               />
-              <p className="text-[11px] text-slate-400">
+              <p className="text-xs text-slate-600">
                 Path should be relative to the repository root and within backend/, src/, or scripts/.
               </p>
             </div>
@@ -955,62 +1015,38 @@ export default function AnyaChat({ profileId }) {
               Advanced diagnostic and management tools for administrators. Use with caution.
             </DialogDescription>
           </DialogHeader>
-          
+
           <div className="space-y-6">
-            {adminTools.code && adminTools.code.length > 0 && (
+            {adminTools.diagnostics && adminTools.diagnostics.length > 0 && (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <Code className="h-4 w-4 text-slate-600" />
-                  <h3 className="font-semibold text-sm">Code Analysis</h3>
+                  <Activity className="h-4 w-4 text-purple-700" />
+                  <h3 className="font-semibold text-sm text-slate-900">System Diagnostics</h3>
                 </div>
                 <div className="grid gap-2">
-                  {adminTools.code.map((tool) => (
+                  {adminTools.diagnostics.map((tool) => (
                     <div
                       key={tool.name}
-                      className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                      className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
                     >
-                      <div className="font-mono text-xs text-purple-600">{tool.name}</div>
-                      <div className="text-xs text-slate-600 mt-1">{tool.description}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {adminTools.crawler && adminTools.crawler.length > 0 && (
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <Activity className="h-4 w-4 text-slate-600" />
-                  <h3 className="font-semibold text-sm">Crawler Management</h3>
-                </div>
-                <div className="grid gap-2">
-                  {adminTools.crawler.map((tool) => (
-                    <div
-                      key={tool.name}
-                      className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
-                    >
-                      <div className="font-mono text-xs text-purple-600">{tool.name}</div>
-                      <div className="text-xs text-slate-600 mt-1">{tool.description}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {adminTools.database && adminTools.database.length > 0 && (
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <Database className="h-4 w-4 text-slate-600" />
-                  <h3 className="font-semibold text-sm">Database & Diagnostics</h3>
-                </div>
-                <div className="grid gap-2">
-                  {adminTools.database.map((tool) => (
-                    <div
-                      key={tool.name}
-                      className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
-                    >
-                      <div className="font-mono text-xs text-purple-600">{tool.name}</div>
-                      <div className="text-xs text-slate-600 mt-1">{tool.description}</div>
+                      <div className="flex-1 min-w-0 mr-3">
+                        <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
+                        <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="shrink-0 gap-1.5 border-purple-300 text-purple-700 hover:bg-purple-50"
+                        disabled={!sessionId || invokingAdminTool === tool.name}
+                        onClick={() => handleRunAdminTool(tool)}
+                      >
+                        {invokingAdminTool === tool.name ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Activity className="h-3.5 w-3.5" />
+                        )}
+                        Run
+                      </Button>
                     </div>
                   ))}
                 </div>
@@ -1020,17 +1056,177 @@ export default function AnyaChat({ profileId }) {
             {adminTools.health && adminTools.health.length > 0 && (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <Activity className="h-4 w-4 text-slate-600" />
-                  <h3 className="font-semibold text-sm">Health & Monitoring</h3>
+                  <Activity className="h-4 w-4 text-slate-700" />
+                  <h3 className="font-semibold text-sm text-slate-900">Health & Monitoring</h3>
                 </div>
                 <div className="grid gap-2">
                   {adminTools.health.map((tool) => (
                     <div
                       key={tool.name}
-                      className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                      className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
                     >
-                      <div className="font-mono text-xs text-purple-600">{tool.name}</div>
-                      <div className="text-xs text-slate-600 mt-1">{tool.description}</div>
+                      <div className="flex-1 min-w-0 mr-3">
+                        <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
+                        <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="shrink-0 gap-1.5"
+                        disabled={!sessionId || invokingAdminTool === tool.name}
+                        onClick={() => handleRunAdminTool(tool)}
+                      >
+                        {invokingAdminTool === tool.name ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Wrench className="h-3.5 w-3.5" />
+                        )}
+                        Run
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {adminTools.crawler && adminTools.crawler.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Activity className="h-4 w-4 text-slate-700" />
+                  <h3 className="font-semibold text-sm text-slate-900">Crawler Management</h3>
+                </div>
+                <div className="grid gap-2">
+                  {adminTools.crawler.map((tool) => (
+                    <div
+                      key={tool.name}
+                      className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                    >
+                      <div className="flex-1 min-w-0 mr-3">
+                        <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
+                        <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="shrink-0 gap-1.5"
+                        disabled={!sessionId || invokingAdminTool === tool.name}
+                        onClick={() => handleRunAdminTool(tool)}
+                      >
+                        {invokingAdminTool === tool.name ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Wrench className="h-3.5 w-3.5" />
+                        )}
+                        Run
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {adminTools.autonomous && adminTools.autonomous.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-slate-700" />
+                  <h3 className="font-semibold text-sm text-slate-900">Autonomous Operations</h3>
+                </div>
+                <div className="grid gap-2">
+                  {adminTools.autonomous.map((tool) => (
+                    <div
+                      key={tool.name}
+                      className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                    >
+                      <div className="flex-1 min-w-0 mr-3">
+                        <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
+                        <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="shrink-0 gap-1.5"
+                        disabled={!sessionId || invokingAdminTool === tool.name}
+                        onClick={() => handleRunAdminTool(tool)}
+                      >
+                        {invokingAdminTool === tool.name ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Wrench className="h-3.5 w-3.5" />
+                        )}
+                        Run
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {adminTools.code && adminTools.code.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Code className="h-4 w-4 text-slate-700" />
+                  <h3 className="font-semibold text-sm text-slate-900">Code Analysis</h3>
+                </div>
+                <div className="grid gap-2">
+                  {adminTools.code.map((tool) => (
+                    <div
+                      key={tool.name}
+                      className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                    >
+                      <div className="flex-1 min-w-0 mr-3">
+                        <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
+                        <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="shrink-0 gap-1.5"
+                        disabled={!sessionId || invokingAdminTool === tool.name}
+                        onClick={() => handleRunAdminTool(tool)}
+                      >
+                        {invokingAdminTool === tool.name ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Wrench className="h-3.5 w-3.5" />
+                        )}
+                        Run
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {adminTools.database && adminTools.database.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Database className="h-4 w-4 text-slate-700" />
+                  <h3 className="font-semibold text-sm text-slate-900">Database & Queries</h3>
+                </div>
+                <div className="grid gap-2">
+                  {adminTools.database.map((tool) => (
+                    <div
+                      key={tool.name}
+                      className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                    >
+                      <div className="flex-1 min-w-0 mr-3">
+                        <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
+                        <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="shrink-0 gap-1.5"
+                        disabled={!sessionId || invokingAdminTool === tool.name}
+                        onClick={() => handleRunAdminTool(tool)}
+                      >
+                        {invokingAdminTool === tool.name ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Wrench className="h-3.5 w-3.5" />
+                        )}
+                        Run
+                      </Button>
                     </div>
                   ))}
                 </div>
@@ -1040,17 +1236,105 @@ export default function AnyaChat({ profileId }) {
             {adminTools.functions && adminTools.functions.length > 0 && (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <Wrench className="h-4 w-4 text-slate-600" />
-                  <h3 className="font-semibold text-sm">Function Testing</h3>
+                  <Wrench className="h-4 w-4 text-slate-700" />
+                  <h3 className="font-semibold text-sm text-slate-900">Function Testing</h3>
                 </div>
                 <div className="grid gap-2">
                   {adminTools.functions.map((tool) => (
                     <div
                       key={tool.name}
-                      className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                      className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
                     >
-                      <div className="font-mono text-xs text-purple-600">{tool.name}</div>
-                      <div className="text-xs text-slate-600 mt-1">{tool.description}</div>
+                      <div className="flex-1 min-w-0 mr-3">
+                        <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
+                        <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="shrink-0 gap-1.5"
+                        disabled={!sessionId || invokingAdminTool === tool.name}
+                        onClick={() => handleRunAdminTool(tool)}
+                      >
+                        {invokingAdminTool === tool.name ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Wrench className="h-3.5 w-3.5" />
+                        )}
+                        Run
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {adminTools.brain && adminTools.brain.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-slate-700" />
+                  <h3 className="font-semibold text-sm text-slate-900">Brain Management</h3>
+                </div>
+                <div className="grid gap-2">
+                  {adminTools.brain.map((tool) => (
+                    <div
+                      key={tool.name}
+                      className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                    >
+                      <div className="flex-1 min-w-0 mr-3">
+                        <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
+                        <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="shrink-0 gap-1.5"
+                        disabled={!sessionId || invokingAdminTool === tool.name}
+                        onClick={() => handleRunAdminTool(tool)}
+                      >
+                        {invokingAdminTool === tool.name ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Wrench className="h-3.5 w-3.5" />
+                        )}
+                        Run
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {adminTools.other && adminTools.other.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Wrench className="h-4 w-4 text-slate-700" />
+                  <h3 className="font-semibold text-sm text-slate-900">Other Tools</h3>
+                </div>
+                <div className="grid gap-2">
+                  {adminTools.other.map((tool) => (
+                    <div
+                      key={tool.name}
+                      className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                    >
+                      <div className="flex-1 min-w-0 mr-3">
+                        <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
+                        <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="shrink-0 gap-1.5"
+                        disabled={!sessionId || invokingAdminTool === tool.name}
+                        onClick={() => handleRunAdminTool(tool)}
+                      >
+                        {invokingAdminTool === tool.name ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Wrench className="h-3.5 w-3.5" />
+                        )}
+                        Run
+                      </Button>
                     </div>
                   ))}
                 </div>
@@ -1059,8 +1343,8 @@ export default function AnyaChat({ profileId }) {
           </div>
 
           <DialogFooter>
-            <p className="text-xs text-slate-500 text-left flex-1">
-              Ask Anya to use any of these tools by referencing their name in your message.
+            <p className="text-xs text-slate-600 text-left flex-1">
+              You can also ask Anya to use any tool by referencing its name in your message.
             </p>
             <Button variant="outline" onClick={() => setIsAdminToolsOpen(false)}>
               Close

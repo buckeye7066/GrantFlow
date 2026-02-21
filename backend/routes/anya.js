@@ -443,6 +443,21 @@ router.post('/autonomous/code', adminAuth, async (req, res) => {
   }
 })
 
+router.post('/autonomous/code/background', adminAuth, async (req, res) => {
+  try {
+    const { startBackgroundCodeCrawlAndRepair } = await import('../services/anyaAutonomousScheduler.js')
+    const context = { db: req.db, user: req.ctx?.user ?? req.user }
+    const result = startBackgroundCodeCrawlAndRepair(context)
+    if (result.queued) {
+      res.status(202).json(result)
+    } else {
+      res.status(200).json(result)
+    }
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
 router.post('/autonomous/crawlers', adminAuth, async (req, res) => {
   try {
     const result = await invokeTool(req.db, req.ctx, 'admin.anya.runCrawlers', req.body, {})

@@ -21,11 +21,19 @@ export default function Settings() {
   const [hasChanges, setHasChanges] = useState(false)
   const showCopilotToggle = env.isDev || isAdmin
   const { anyaCopilotEnabled: copilotEnabled, anyaScreenshotEnabled: screenshotEnabled } = useFeatureFlags()
+  // Incognito toggle from custom preferences
+  const incognitoEnabled = preferences?.custom_preferences?.incognitoEnabled ?? false
 
   const setFeatureFlag = (key, value) => {
     const custom = preferences?.custom_preferences ?? {}
     const flags = { ...(custom.feature_flags ?? {}), [key]: value }
     updatePreferences({ custom_preferences: { ...custom, feature_flags: flags } })
+    setHasChanges(true)
+  }
+
+  const handleIncognitoChange = async (checked) => {
+    const custom = preferences?.custom_preferences ?? {}
+    updatePreferences({ custom_preferences: { ...custom, incognitoEnabled: checked } })
     setHasChanges(true)
   }
 
@@ -92,13 +100,16 @@ export default function Settings() {
       )}
 
       <Tabs defaultValue="layout" className="space-y-6">
-        <TabsList className={`grid w-full ${showCopilotToggle ? 'grid-cols-6' : 'grid-cols-5'} lg:w-auto`}>
+        {/* Adjust number of columns to account for privacy tab */}
+        <TabsList className={`grid w-full ${showCopilotToggle ? 'grid-cols-7' : 'grid-cols-6'} lg:w-auto`}>
           <TabsTrigger value="layout">Layout</TabsTrigger>
           <TabsTrigger value="theme">Theme</TabsTrigger>
           <TabsTrigger value="display">Display</TabsTrigger>
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="accessibility">Accessibility</TabsTrigger>
+          {/* Show features tab only for dev/admin */}
           {showCopilotToggle ? <TabsTrigger value="features">Features</TabsTrigger> : null}
+          <TabsTrigger value="privacy">Privacy</TabsTrigger>
         </TabsList>
 
         {/* Layout Tab */}
@@ -515,6 +526,32 @@ export default function Settings() {
             </Card>
           </TabsContent>
         ) : null}
+
+        {/* Privacy Tab */}
+        <TabsContent value="privacy" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Privacy</CardTitle>
+              <CardDescription>
+                Control optional modules related to privacy and data broker removal.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>Enable Incognito (Privacy / Data Broker Removal)</Label>
+                  <p className="text-sm text-slate-500">
+                    Adds the Incognito module to navigation and enables its API.
+                  </p>
+                </div>
+                <Switch
+                  checked={incognitoEnabled}
+                  onCheckedChange={(checked) => handleIncognitoChange(checked)}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
       </Tabs>
     </div>
   )

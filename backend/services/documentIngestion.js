@@ -3,6 +3,7 @@ import { summarizeOpenAIError } from '../utils/openaiClient.js'
 import { invokeJsonWithFallback } from '../utils/aiProviders.js'
 import { buildFallbackDocumentSummary, applyFallbackUniversityUpdates } from './documentFallbackParser.js'
 import { classifyUniversityApplicationForDocument, loadUniversityApplicationsForProfile } from './universityDocumentClassifier.js'
+import { extractAndUpsertOpportunitiesFromText } from './extractOpportunitiesFromDocumentText.js'
 import { countWords, detectFileType, extractTextWithFallback, normalizeText, scoreExtraction, sha256File } from './documentIngestion/index.js'
 import {
   ensureDocumentExtract,
@@ -333,6 +334,7 @@ export async function processDocumentIngestionJob({
   const documentId = params.document_id
   const handwriting = params.handwriting === true
   const enableAi = normalizeEnableAi(params.enable_ai)
+  const addToOpportunities = params.add_to_opportunities === true
 
   if (!documentId) {
     throw new Error('document_ingest job missing document_id parameter')
@@ -514,6 +516,23 @@ export async function processDocumentIngestionJob({
     }
 
     document.extracted_text = canonicalText
+
+    if (addToOpportunities && canonicalText) {
+      try {
+        const oppResult = await extractAndUpsertOpportunitiesFromText(db, canonicalText)
+        updates.push({
+          type: 'opportunities',
+          inserted: oppResult.inserted,
+          skipped: oppResult.skipped,
+          errors: oppResult.errors?.length ? oppResult.errors : undefined,
+        })
+      } catch (oppErr) {
+        updates.push({
+          type: 'opportunities',
+          error: oppErr instanceof Error ? oppErr.message : String(oppErr),
+        })
+      }
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     await markDocumentExtractFailed(db, documentId, { warnings: [message] })
@@ -555,6 +574,7 @@ export async function processDocumentIngestionJob({
   try {
     // Extraction-only mode (do not run AI parsing).
     if (!enableAi) {
+      const oppUpdate = updates.find((u) => u.type === 'opportunities')
       return {
         inserted: 0,
         sections_updated: [],
@@ -566,6 +586,7 @@ export async function processDocumentIngestionJob({
           profile_id: profile?.id ?? null,
           extraction_status: extractRecord?.status ?? null,
           confidence: extractConfidence,
+          opportunities_added: oppUpdate?.inserted ?? 0,
         },
       }
     }
@@ -872,6 +893,7 @@ export async function processDocumentIngestionJob({
               .join(' • ')
           : 'No new structured data extracted from this document.'
 
+    const oppUpdate = updates.find((u) => u.type === 'opportunities')
     const resultMeta = {
       document_id: documentId,
       profile_id: profile?.id ?? null,
@@ -881,6 +903,7 @@ export async function processDocumentIngestionJob({
       used_fallback: usedFallback,
       openai_unavailable: Boolean(openaiUnavailableMessage),
       openai_error: openAIWarning || openaiUnavailableMessage || null,
+      opportunities_added: oppUpdate?.inserted ?? 0,
     }
 
     const processingError = (openAIWarning || openaiUnavailableMessage)

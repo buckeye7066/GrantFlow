@@ -46,6 +46,7 @@ import {
   testButtonFunctionality,
   getAutonomousFunctionTestsStatus,
 } from './anyaAutonomousFunctionTesting.js'
+import { getBackgroundCodeCrawlState } from './anyaAutonomousScheduler.js'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 
 const tools = new Map()
@@ -1839,6 +1840,8 @@ registerTool({
     if (operationType === 'functions' || operationType === 'all') {
       status.function_tests = await getAutonomousFunctionTestsStatus(context?.db ?? null)
     }
+    
+    status.background_code_crawl_repair = getBackgroundCodeCrawlState()
     
     return status
   },

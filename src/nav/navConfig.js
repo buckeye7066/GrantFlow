@@ -104,6 +104,8 @@ export const NAV_GROUPS = [
       { title: "Budgets", routeName: "Budgets", url: createPageUrl("Budgets"), icon: DollarSign },
       { title: "Diagnostics", routeName: "Diagnostics", url: createPageUrl("Diagnostics"), icon: Beaker },
       { title: "Admin Panel", routeName: "Admin", url: createPageUrl("Admin"), icon: Shield, isAdminOnly: true },
+      // Incognito extension (privacy/broker removal) - requires incognitoEnabled flag
+      { title: "Incognito", routeName: "Incognito", url: createPageUrl("Incognito"), icon: ShieldCheck, requiresIncognitoEnabled: true },
     ],
   },
 ];
@@ -180,6 +182,7 @@ export const ROUTE_LABELS = {
   Settings: "Settings",
   Diagnostics: "Diagnostics",
   Admin: "Admin",
+  Incognito: "Incognito",
 };
 
 /** Grant lifecycle for header phase indicator. */

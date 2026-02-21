@@ -1,0 +1,36 @@
+import express from 'express'
+import ensureUserPreferencesTable from '../utils/ensureUserPreferencesTable.js'
+
+const router = express.Router()
+
+// Simple health endpoint to verify Incognito module is enabled for the user.
+router.get('/health', async (req, res) => {
+  const userId = req.ctx?.userId ?? null
+  if (!userId) {
+    return res.status(401).json({ error: 'Authentication required' })
+  }
+  try {
+    await ensureUserPreferencesTable(req.db)
+    const row = await req.db
+      .prepare('SELECT custom_preferences FROM user_preferences WHERE user_id = ?')
+      .get(userId)
+    let custom = row?.custom_preferences
+    if (typeof custom === 'string') {
+      try {
+        custom = JSON.parse(custom)
+      } catch {
+        custom = {}
+      }
+    }
+    const enabled = Boolean(custom?.incognitoEnabled)
+    if (!enabled) {
+      return res.status(403).json({ error: 'Incognito module is disabled' })
+    }
+    return res.json({ status: 'ok' })
+  } catch (error) {
+    console.error('[incognito] Error checking health:', error)
+    return res.status(500).json({ error: 'Failed to check Incognito status' })
+  }
+})
+
+export default router
