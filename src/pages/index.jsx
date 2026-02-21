@@ -84,6 +84,8 @@ import Services from "./Services";
 
 import Settings from "./Settings";
 
+import Help from "./Help";
+
 import Admin from "./Admin";
 import Incognito from "./Incognito";
 
@@ -212,6 +214,8 @@ const PAGES = {
     
     Settings: Settings,
     
+    Help: Help,
+    
     Admin: Admin,
     
 }
@@ -338,6 +342,8 @@ function LayoutRoutes() {
                 <Route path="/Stewardship" element={withBoundary(<Stewardship />, "Stewardship")} />
 
                 <Route path="/Settings" element={withBoundary(<Settings />, "Settings")} />
+
+                <Route path="/Help" element={withBoundary(<Help />, "Help")} />
                 <Route path="/Incognito" element={withBoundary(<Incognito />, "Incognito")} />
 
                 <Route path="/Diagnostics" element={withBoundary(<Diagnostics />, "Diagnostics")} />

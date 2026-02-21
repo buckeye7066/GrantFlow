@@ -5,6 +5,7 @@
 import { createPageUrl } from "@/utils";
 import {
   LayoutDashboard,
+  LifeBuoy,
   Building2,
   Search,
   Kanban,
@@ -42,6 +43,14 @@ export const NAV_GROUPS = [
     items: [
       { title: "Dashboard", routeName: "Dashboard", url: createPageUrl("Dashboard"), icon: LayoutDashboard },
       { title: "Calendar", routeName: "Calendar", url: createPageUrl("Calendar"), icon: Calendar },
+    ],
+  },
+  {
+    groupId: "help",
+    label: "Help",
+    icon: LifeBuoy,
+    items: [
+      { title: "Help Center", routeName: "Help", url: createPageUrl("Help"), icon: LifeBuoy },
     ],
   },
   {
@@ -183,6 +192,7 @@ export const ROUTE_LABELS = {
   Diagnostics: "Diagnostics",
   Admin: "Admin",
   Incognito: "Incognito",
+  Help: "Help Center",
 };
 
 /** Grant lifecycle for header phase indicator. */
