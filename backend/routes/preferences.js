@@ -184,13 +184,30 @@ router.put('/', async (req, res) => {
     const updates = []
     const values = []
     const allowedFields = Object.keys(DEFAULT_PREFERENCES)
+
+    // Merge custom_preferences with existing instead of replacing (preserves lastVisitedPath, incognitoEnabled, etc.)
+    if (req.body.custom_preferences !== undefined) {
+      const existingRow = await req.db.prepare('SELECT custom_preferences FROM user_preferences WHERE user_id = ?').get(userId)
+      let existingCustom = {}
+      if (existingRow?.custom_preferences) {
+        try {
+          existingCustom = typeof existingRow.custom_preferences === 'string'
+            ? JSON.parse(existingRow.custom_preferences)
+            : existingRow.custom_preferences
+        } catch {
+          existingCustom = {}
+        }
+      }
+      const incoming = typeof req.body.custom_preferences === 'object' ? req.body.custom_preferences : {}
+      const merged = { ...existingCustom, ...incoming }
+      updates.push(dialect === 'postgres' ? 'custom_preferences = ?::jsonb' : 'custom_preferences = ?')
+      values.push(JSON.stringify(merged))
+    }
     
     Object.entries(req.body).forEach(([key, value]) => {
+      if (key === 'custom_preferences') return // already handled above
       if (allowedFields.includes(key) && value !== undefined) {
-        if (key === 'custom_preferences') {
-          updates.push(dialect === 'postgres' ? 'custom_preferences = ?::jsonb' : 'custom_preferences = ?')
-          values.push(JSON.stringify(value))
-        } else if (typeof value === 'boolean') {
+        if (typeof value === 'boolean') {
           updates.push(`${key} = ?`)
           values.push(Boolean(value))
         } else {

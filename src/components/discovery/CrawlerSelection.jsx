@@ -8,6 +8,7 @@ import {
   HeartPulse,
   Users, Loader2, CheckCircle, Info, AlertTriangle, ChevronDown
 } from 'lucide-react';
+import HelpTip from '@/components/help/HelpTip';
 import { useToast } from '@/components/ui/use-toast';
 import { runRealCrawler } from '@/api/crawlers';
 import { createLogger } from '@/utils/logger'
@@ -294,6 +295,9 @@ export default function CrawlerSelection({
         if (/profile_id|profile.*required|select.*profile/i.test(errorMessage)) {
           errorMessage = 'Select a profile to run crawlers. Crawlers require profile context to match opportunities.';
         }
+        if (error?.response?.error === 'PROFILE_CONTEXT_INCOMPLETE') {
+          errorMessage = error?.response?.message || errorMessage;
+        }
 
         setErrors(prev => ({ ...prev, [crawlerId]: errorMessage }));
 
@@ -401,6 +405,7 @@ export default function CrawlerSelection({
                 <div className="flex items-start justify-between">
                   <div>
                     Some searches used your curated database (real opportunities we've already found) because the live search returned nothing or your profile is missing key details.
+                    <HelpTip text="Live search found no results, or your profile needs more details (ZIP, keywords). We used our curated database instead so you still see relevant opportunities." />
                     <span className="text-xs opacity-60 ml-1">
                       {showFallbackDetails ? '(click to hide)' : '(click for details)'}
                     </span>
@@ -507,7 +512,10 @@ export default function CrawlerSelection({
           <div className="p-4 bg-muted/20 rounded-lg border border-border">
             <div className="flex items-center justify-between">
               <div>
-                <div className="font-medium text-foreground">Minimum match score</div>
+                <div className="font-medium text-foreground inline-flex items-center gap-1">
+                  Minimum match score
+                  <HelpTip text="How closely a grant must fit your profile to appear. Lower = more results; higher = only the best fits." />
+                </div>
                 <div className="text-xs text-muted-foreground">
                   Lower this to see more results; raise it to keep only the strongest matches.
                 </div>
@@ -565,7 +573,10 @@ export default function CrawlerSelection({
                     <div className="flex-1 space-y-2">
                       <div className="flex items-center gap-2">
                         <Icon className={`w-5 h-5 ${crawler.color}`} />
-                        <h3 className="font-semibold">{crawler.name}</h3>
+                        <h3 className="font-semibold inline-flex items-center gap-1">
+                          {crawler.name}
+                          <HelpTip text={crawler.details} />
+                        </h3>
                         {status === 'running' && (
                           <Loader2 className="w-4 h-4 animate-spin text-primary" />
                         )}

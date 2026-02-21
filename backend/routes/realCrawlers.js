@@ -627,6 +627,24 @@ router.post('/run', ensureAuth, async (req, res) => {
       null
 
     const profileContextIncomplete = sectionCount === 0 || coveragePct < 1
+
+    if (profileContextIncomplete) {
+      return res.status(200).json({
+        success: false,
+        error: 'PROFILE_CONTEXT_INCOMPLETE',
+        message:
+          'Your profile is missing saved sections. Please open your profile and click Save before running crawlers. Add at least ZIP/State and a few tags for best results.',
+        crawler_type,
+        opportunities: [],
+        debug: {
+          section_count: sectionCount,
+          coverage_pct: coveragePct,
+          has_zip: Boolean(zip),
+          has_state: Boolean(state),
+          keyword_count: keywordCount,
+        },
+      })
+    }
     
     console.log(`[RealCrawlers] Running ${crawler_type} for profile ${profile_id || 'custom'}`)
 

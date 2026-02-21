@@ -44,6 +44,7 @@ import { createPageUrl } from "@/utils";
 import { NAV_GROUPS, getGroupIdForRoute } from "@/nav/navConfig";
 import { useNavGroupsOpen, getShowAdvancedTools, setShowAdvancedTools } from "@/nav/useNavGroupsOpen";
 import { useSettingsStore } from '@/stores/settingsStore';
+import { setLastVisitedPath } from '@/lib/lastVisitedPreferences';
 
 function NavGroupCollapsible({ group, location, isOpen, onToggle, user }) {
   // Access user preferences to support feature toggles
@@ -180,7 +181,8 @@ export default function Layout({ children, currentPageName }) {
     }).catch(() => {})
   }, [isAuthenticated, location.pathname, location.search])
 
-  // Persist last visited page for Dashboard "Continue" card.
+  // Persist last visited page for Dashboard "Continue" card (preferences = source of truth, localStorage = fallback).
+  const lastVisitedRef = React.useRef({ path: null, at: 0 })
   React.useEffect(() => {
     if (!isAuthenticated) return
     const path = location.pathname + (location.search || '')
@@ -189,6 +191,12 @@ export default function Layout({ children, currentPageName }) {
     try {
       window.localStorage.setItem('grantflow:last-visited-page', path)
     } catch (_) { /* ignore */ }
+    const now = Date.now()
+    const { path: lastPath, at } = lastVisitedRef.current
+    if (path !== lastPath || now - at >= 5000) {
+      lastVisitedRef.current = { path, at: now }
+      setLastVisitedPath(path).catch(() => {})
+    }
   }, [isAuthenticated, location.pathname, location.search])
 
   const { anyaCopilotEnabled: copilotEnabled } = useFeatureFlags()
