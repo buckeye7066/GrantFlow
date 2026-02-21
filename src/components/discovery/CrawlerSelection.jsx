@@ -266,7 +266,16 @@ export default function CrawlerSelection({
           crawlerType: crawlerId,
           profileData,
           minMatchScore,
-          itemRequest: null,
+          itemRequest: profileData ? {
+              location: {
+                state: profileData?.signals?.location?.state || profileData?.state || null,
+                city: profileData?.signals?.location?.city || profileData?.city || null,
+                zip: profileData?.signals?.location?.zip || profileData?.zip_code || null,
+              },
+              interests: profileData?.signals?.interests ? Array.from(profileData.signals.interests).slice(0, 10) : (profileData?.tags || []).slice(0, 10),
+              demographics: profileData?.signals?.demographics ? Array.from(profileData.signals.demographics).slice(0, 10) : [],
+              career_goals: profileData?.sections?.career_goals?.primary_goal || profileData?.career_goal || null,
+            } : null,
         });
 
         // Treat backend-reported failure as an error (even though HTTP is 200)
