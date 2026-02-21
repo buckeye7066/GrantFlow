@@ -6,7 +6,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { 
   MapPin, Building2, GraduationCap, Heart, 
   HeartPulse,
-  Users, Loader2, CheckCircle, Info, AlertTriangle
+  Users, Loader2, CheckCircle, Info, AlertTriangle, ChevronDown
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { runRealCrawler } from '@/api/crawlers';
@@ -74,6 +74,7 @@ export default function CrawlerSelection({
   const [progress, setProgress] = useState({});
   const [results, setResults] = useState({});
   const [errors, setErrors] = useState({});
+  const [showFallbackDetails, setShowFallbackDetails] = useState(false);
   const [minMatchScore, setMinMatchScore] = useState(50); // Lowered to 50 to show more results; crawlers now use 100% of profile signals for scoring
   const { toast } = useToast();
   const log = React.useMemo(() => createLogger('CrawlerSelection'), [])
@@ -166,7 +167,7 @@ export default function CrawlerSelection({
     let reason = null
     if (!allowed) {
       if (!profileId) reason = 'Select a profile to unlock this crawler.'
-      else if (!confident) reason = 'Loading profile eligibility…'
+      else if (!confident) reason = 'Loading profile eligibilityâ¦'
       else if (!isTn) reason = 'ECF CHOICES is Tennessee-only; profile must be TN (or mention TN).'
       else reason = 'Requires ECF CHOICES participant or caregiver/provider profile.'
     }
@@ -197,7 +198,7 @@ export default function CrawlerSelection({
     if (crawlerId === 'ecf_benefits' && !ecfUnlock.allowed) {
       toast({
         variant: ecfUnlock.confident ? 'destructive' : 'default',
-        title: ecfUnlock.confident ? 'ECF crawler locked' : 'Checking ECF eligibility…',
+        title: ecfUnlock.confident ? 'ECF crawler locked' : 'Checking ECF eligibilityâ¦',
         description:
           ecfUnlock.reason ||
           'This crawler is only available for ECF CHOICES participants or their caretakers/providers.',
@@ -350,6 +351,32 @@ export default function CrawlerSelection({
   const missingZipLikely = Object.values(results || {}).some((r) => r?.debug && r.debug.has_zip === false);
   const lowKeywordsLikely = Object.values(results || {}).some((r) => r?.debug && (r.debug.keyword_count ?? 0) < 5);
 
+  // Compute missing signal details for the clickable fallback banner
+  const missingSignals = useMemo(() => {
+    const signals = [];
+    const debugEntries = Object.values(results || {}).map(r => r?.debug).filter(Boolean);
+    if (!debugEntries.length) return signals;
+    const d = debugEntries[0];
+    if (d.has_zip === false) signals.push({ label: 'ZIP Code', desc: 'Required for local/geographic matching' });
+    if (d.has_state === false) signals.push({ label: 'State', desc: 'Used for state-level program filtering' });
+    if ((d.keyword_count ?? 0) < 5) signals.push({ label: 'Keywords / Tags', desc: 'Fewer than 5 keywords limits match quality' });
+    if (d.section_count < 5) signals.push({ label: 'Profile Sections', desc: 'Fewer than 5 sections reduces context' });
+    if (d.profile_context_incomplete) signals.push({ label: 'Profile Context', desc: 'Profile context is incomplete' });
+    return signals;
+  }, [results]);
+
+  const fallbackCrawlerNames = useMemo(() =>
+    Object.entries(results || {})
+      .filter(([, v]) => v?.used_db_fallback)
+      .map(([k]) => k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())),
+    [results]
+  );
+
+  const profileStats = useMemo(() => {
+    const d = Object.values(results || {})[0]?.debug;
+    return d ? { keywords: d.keyword_count ?? 0, sections: d.section_count ?? 0, coverage: d.coverage_pct ?? 0 } : null;
+  }, [results]);
+
   return (
     <div className="space-y-6">
       <Card>
@@ -364,22 +391,78 @@ export default function CrawlerSelection({
         </CardHeader>
         <CardContent className="space-y-4">
           {anyDbFallback && (
-            <Alert variant="warning">
+            <Alert
+              variant="warning"
+              className="cursor-pointer transition-all hover:shadow-sm"
+              onClick={() => setShowFallbackDetails(prev => !prev)}
+            >
               <AlertTriangle className="w-4 h-4" />
               <AlertDescription>
-                Some crawlers returned <strong>DB fallback</strong> results (real opportunities from your local curated database)
-                because the live crawl returned nothing or your profile is missing key signals.
-                {missingZipLikely && (
-                  <>
-                    <br />
-                    <span className="text-sm">Tip: add a ZIP/state to get true local matches.</span>
-                  </>
-                )}
-                {lowKeywordsLikely && (
-                  <>
-                    <br />
-                    <span className="text-sm">Tip: add a few tags/keywords to improve match quality.</span>
-                  </>
+                <div className="flex items-start justify-between">
+                  <div>
+                    Some crawlers returned <strong>DB fallback</strong> results (real opportunities
+                    from your local curated database) because the live crawl returned nothing or
+                    your profile is missing key signals.
+                    <span className="text-xs opacity-60 ml-1">
+                      {showFallbackDetails ? '(click to hide)' : '(click for details)'}
+                    </span>
+                    {missingZipLikely && !showFallbackDetails && (
+                      <>
+                        <br />
+                        <span className="text-sm">Tip: add a ZIP/state to get true local matches.</span>
+                      </>
+                    )}
+                    {lowKeywordsLikely && !showFallbackDetails && (
+                      <>
+                        <br />
+                        <span className="text-sm">Tip: add a few tags/keywords to improve match quality.</span>
+                      </>
+                    )}
+                  </div>
+                  <ChevronDown className={`w-4 h-4 shrink-0 ml-2 transition-transform ${showFallbackDetails ? 'rotate-180' : ''}`} />
+                </div>
+
+                {showFallbackDetails && (
+                  <div className="border-t border-yellow-500/30 pt-3 mt-2 space-y-3">
+                    <p className="font-semibold text-sm text-yellow-800">Missing Key Signals in Profile</p>
+
+                    {missingSignals.length === 0 ? (
+                      <div className="p-2 bg-green-50 border border-green-200 rounded-md text-sm">
+                        All key signals are present. Crawlers fell back because live crawl returned no results.
+                      </div>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {missingSignals.map(s => (
+                          <div key={s.label} className="p-2 bg-red-50 border border-red-200 rounded-md text-sm">
+                            <span className="font-semibold text-red-900">{s.label}</span>
+                            <span className="text-gray-500"> — {s.desc}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {fallbackCrawlerNames.length > 0 && (
+                      <div>
+                        <p className="font-semibold text-xs text-yellow-800 mb-1.5">
+                          Crawlers using DB fallback ({fallbackCrawlerNames.length}):
+                        </p>
+                        <div className="flex flex-wrap gap-1">
+                          {fallbackCrawlerNames.map(name => (
+                            <span key={name} className="px-2 py-0.5 bg-yellow-100 border border-yellow-300 rounded-full text-xs text-yellow-800">
+                              {name}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {profileStats && (
+                      <div className="p-2 bg-gray-50 rounded-md text-xs text-gray-500">
+                        <span className="font-medium">Profile Stats:</span>{' '}
+                        Keywords: {profileStats.keywords} · Sections: {profileStats.sections} · Coverage: {profileStats.coverage}%
+                      </div>
+                    )}
+                  </div>
                 )}
               </AlertDescription>
             </Alert>
