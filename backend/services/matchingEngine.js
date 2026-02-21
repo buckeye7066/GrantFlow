@@ -220,9 +220,19 @@ function eligibilityMatchesApplicantType(opportunity, profile) {
 }
 
 /**
- * Calculate keyword overlap score (0-25 points)
+ * Calculate keyword overlap score (-10 to 25 points)
+ * Scoring tiers:
+ * - Intent phrase match = 5 pts
+ * - Multi-word phrase = 3 pts
+ * - Exact keyword = 1.5 pts
+ * - Single-word text match = 0.25 pts
+ * - Intent mismatch penalty = -10 pts
  */
 function calculateKeywordOverlap(profile, opportunity) {
+  const intentPhraseSet =
+    profile?.intentPhrases && typeof profile.intentPhrases[Symbol.iterator] === 'function'
+      ? Array.from(profile.intentPhrases)
+      : []
   const keywordSet =
     profile?.keywordSet && typeof profile.keywordSet[Symbol.iterator] === 'function'
       ? Array.from(profile.keywordSet)
@@ -259,9 +269,18 @@ function calculateKeywordOverlap(profile, opportunity) {
   const profileKeywords = safeParseArrayField(profile.keywords, []);
   const focusAreas = safeParseArrayField(profile.focus_areas, []);
   const programAreas = safeParseArrayField(profile.program_areas, []);
-  
-  const allProfileKeywords = [
-    ...keywordSet,
+
+  const AMBIGUOUS_SINGLE_WORDS = new Set([
+    'food', 'health', 'care', 'home', 'house', 'school', 'community',
+    'family', 'child', 'children', 'work', 'service', 'support', 'program',
+    'help', 'assist', 'need', 'general', 'special', 'local', 'national',
+    'plan', 'fund', 'grant', 'money', 'bank', 'credit', 'loan',
+    'start', 'open', 'build', 'make', 'create', 'medical', 'business',
+    'assistance', 'resource', 'free', 'apply', 'person', 'people',
+  ]);
+
+  const allTerms = [
+    ...intentPhraseSet,
     ...phraseSet,
     ...interestSet,
     ...demographicSet,
@@ -269,39 +288,74 @@ function calculateKeywordOverlap(profile, opportunity) {
     ...assistanceSet,
     ...genderSet,
     ...applicantTypes,
+    ...keywordSet,
     ...profileKeywords,
     ...focusAreas,
     ...programAreas,
   ]
     .map(k => String(k).toLowerCase().trim())
     .filter(k => k.length > 0);
-  
-  if (allProfileKeywords.length === 0) return 0;
-  
+
+  if (allTerms.length === 0) return 0;
+
   const oppKeywords = safeParseArrayField(opportunity.keywords, []);
   const oppCategories = safeParseArrayField(opportunity.categories, []);
   const oppText = `${opportunity.title || ''} ${opportunity.description || ''}`.toLowerCase();
-  
+
+  const intentPhraseStrings = new Set(intentPhraseSet.map((p) => String(p).toLowerCase()).filter((p) => p.length >= 4));
+  const phraseSetStrings = new Set(
+    [...phraseSet, ...interestSet]
+      .map((p) => String(p).toLowerCase().trim())
+      .filter((p) => p.length >= 6 && p.includes(' '))
+  );
+
   let matches = 0;
-  // Cap the number of profile keywords considered to keep scoring bounded but still comprehensive.
-  allProfileKeywords.slice(0, 250).forEach(keyword => {
-    // Exact keyword match
-    if (oppKeywords.some(ok => String(ok).toLowerCase().includes(keyword))) {
-      matches += 2;
-      return;
+  const matchedIntentPhrases = new Set();
+
+  // Tier 1: Score intent phrases first
+  for (const phrase of intentPhraseSet) {
+    const phraseLower = String(phrase).toLowerCase();
+    if (phraseLower.length < 4) continue;
+    if (oppText.includes(phraseLower) || oppKeywords.some((ok) => String(ok).toLowerCase().includes(phraseLower))) {
+      matches += 5;
+      matchedIntentPhrases.add(phraseLower);
     }
-    // Category match
-    if (oppCategories.some(oc => String(oc).toLowerCase().includes(keyword))) {
-      matches += 2;
-      return;
+  }
+  if (intentPhraseStrings.size > 0 && matchedIntentPhrases.size === 0) {
+    matches -= 10;
+  }
+
+  // Tier 2: Score other multi-word phrases
+  for (const phrase of [...phraseSet, ...interestSet]) {
+    const phraseLower = String(phrase).toLowerCase().trim();
+    if (phraseLower.length < 6 || !phraseLower.includes(' ')) continue;
+    if (intentPhraseStrings.has(phraseLower)) continue;
+    if (oppText.includes(phraseLower)) {
+      matches += 3;
     }
-    // Text match (weaker signal)
-    if (oppText.includes(keyword)) {
-      matches += 0.5;
+  }
+
+  // Tier 3: Score single keywords
+  const allPhraseStrings = [...intentPhraseStrings, ...phraseSetStrings];
+  for (const keyword of allTerms) {
+    const kw = keyword.toLowerCase();
+    if (AMBIGUOUS_SINGLE_WORDS.has(kw)) continue;
+    if (kw.includes(' ')) continue; // already handled in Tier 2
+    if (allPhraseStrings.some((p) => p.includes(kw))) continue;
+    if (oppKeywords.some((ok) => String(ok).toLowerCase().includes(kw))) {
+      matches += 1.5;
+      continue;
     }
-  });
-  
-  return Math.min(25, Math.floor(matches));
+    if (oppCategories.some((oc) => String(oc).toLowerCase().includes(kw))) {
+      matches += 1.5;
+      continue;
+    }
+    if (oppText.includes(kw)) {
+      matches += 0.25;
+    }
+  }
+
+  return Math.max(-10, Math.min(25, Math.floor(matches)));
 }
 
 /**

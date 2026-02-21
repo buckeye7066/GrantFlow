@@ -495,6 +495,7 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
 
   const keywordSet = new Set()
   const phraseSet = new Set()
+  const intentPhraseSet = new Set()
   const demographicSet = new Set()
   const genderSet = new Set()
   const assistanceSet = new Set()
@@ -588,6 +589,21 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   // Freeform keyword arrays from the comprehensive application form.
   registerKeywords(Array.isArray(comprehensive?.keywords) ? comprehensive.keywords : [])
   registerKeywords(Array.isArray(comprehensive?.focus_areas) ? comprehensive.focus_areas : [])
+
+  // Intent phrases: multi-word goal/objective phrases (e.g. "food truck business") — highest priority for matching
+  const goalLikeFields = [
+    comprehensive?.primary_goal,
+    comprehensive?.mission,
+    profile?.primary_goal,
+  ]
+  goalLikeFields.forEach((val) => {
+    if (!val || typeof val !== 'string') return
+    val
+      .split(/[,;]+/)
+      .map((s) => normalizeString(s))
+      .filter((s) => s.length >= 6 && s.includes(' '))
+      .forEach((s) => intentPhraseSet.add(s))
+  })
 
   // If the comprehensive application includes narrative fields, treat them as signal text.
   collectNarrativeKeywords(
@@ -1188,6 +1204,7 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     keywords: Array.from(keywordSet),
     keywordSet,
     phrases: phraseSet,
+    intentPhrases: intentPhraseSet,
     demographics: demographicSet,
     genders: genderSet,
     assistance: assistanceSet,
