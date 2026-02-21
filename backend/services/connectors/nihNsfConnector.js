@@ -113,7 +113,9 @@ export async function searchNIHOpportunities(params = {}) {
       is_active: true,
       last_crawled: new Date().toISOString(),
       amount_min: 100000,
-      amount_max: 500000 // Typical R01 range
+      amount_max: 500000, // Typical R01 range
+      is_loan: false,
+      requires_match: false
     });
   });
   
@@ -161,7 +163,9 @@ export async function searchNSFOpportunities(params = {}) {
       is_active: true,
       last_crawled: new Date().toISOString(),
       amount_min: 400000,
-      amount_max: 500000
+      amount_max: 500000,
+      is_loan: false,
+      requires_match: false
     }
   ];
   

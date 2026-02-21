@@ -138,7 +138,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
     }
 
     const minScore = Number.parseInt(req.query.min_score ?? '60', 10)
-    const limit = Math.min(Math.max(Number.parseInt(req.query.limit ?? '200', 10) || 200, 1), 2000)
+    const limit = Math.min(Math.max(Number.parseInt(req.query.limit ?? '1000', 10) || 1000, 1), 5000)
     const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : ''
 
     const profileContext = await loadProfileContext(req.db, profileId)
@@ -147,6 +147,19 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
     const conditions = ['is_active = ?']
     const params = []
     params.push(true)
+
+    // Unconditional exclusion of loans and matching-required funds.
+    const isPostgres = req.db?.dialect === 'postgres'
+    conditions.push(
+      isPostgres
+        ? '(requires_match IS NULL OR requires_match = FALSE)'
+        : '(requires_match = 0 OR requires_match IS NULL)',
+    )
+    conditions.push(
+      isPostgres
+        ? '(is_loan IS NULL OR is_loan = FALSE)'
+        : '(is_loan = 0 OR is_loan IS NULL)',
+    )
 
     // Only return real opportunities by default.
     // (We keep NULL as "unknown" origin, but explicitly exclude synthetic placeholders.)
@@ -172,9 +185,12 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
 
-    // Candidate set: prioritize upcoming deadlines first, then recently updated.
+    // Candidate set: national first, then rolling/no-deadline, then upcoming fixed deadlines.
     const deadlineNullSort =
       req.db?.dialect === 'postgres' ? 'deadline IS NULL' : "deadline IS NULL OR deadline = ''"
+    const isNationalSort = req.db?.dialect === 'postgres'
+      ? "(is_national = TRUE OR state = 'nationwide')"
+      : "(is_national = 1 OR state = 'nationwide')"
 
     const candidates = await req.db
       .prepare(
@@ -183,7 +199,8 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
           FROM funding_opportunities
           ${where}
           ORDER BY
-            CASE WHEN ${deadlineNullSort} THEN 1 ELSE 0 END,
+            CASE WHEN ${isNationalSort} THEN 0 ELSE 1 END,
+            CASE WHEN ${deadlineNullSort} THEN 0 ELSE 1 END,
             deadline ASC,
             updated_at DESC
           LIMIT ?
@@ -206,37 +223,12 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
 
     scored.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
 
-    // Robustness guardrail:
-    // If strict min_score filtering results in 0 (common when ingestion/mapping lags),
-    // fall back to returning the best-scoring opportunities so the UI never shows "0"
-    // for profiles with plenty of signal data.
-    let returnedOpps = scored
-    let fallbackApplied = false
-
-    if (returnedOpps.length === 0 && candidates.length > 0 && Number.isFinite(minScore) && minScore > 0) {
-      const rescored = candidates
-        .map((opp) => {
-          const computed = calculateMatchScore(profileContext, opp)
-          return {
-            ...opp,
-            match_score: computed.score,
-            match_reasons: computed.reasons,
-            url: opp.application_url ?? opp.source_url ?? null,
-          }
-        })
-        .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
-
-      returnedOpps = rescored.slice(0, Math.min(limit, 200))
-      fallbackApplied = returnedOpps.length > 0
-    }
-
     res.json({
       profile_id: profileId,
       min_score: Number.isFinite(minScore) ? minScore : null,
       total_scored: candidates.length,
-      returned: returnedOpps.length,
-      fallback_applied: fallbackApplied || undefined,
-      opportunities: returnedOpps,
+      returned: scored.length,
+      opportunities: scored,
     })
   } catch (error) {
     console.error('Error matching profile to opportunities:', error)

@@ -484,17 +484,17 @@ router.post('/comprehensiveMatch', async (req, res) => {
     
     const isPostgres = req.db?.dialect === 'postgres'
 
-  // IMPORTANT:
-  // Matching funds are not an exclusive eligibility gate — they should reduce score, not eliminate results.
-  // Reversible safety toggle exists for admins who want the old behavior.
-  const hardFilterRequiresMatch = String(process.env.HARD_FILTER_REQUIRES_MATCH ?? '').toLowerCase() === 'true'
-  if (hardFilterRequiresMatch) {
-    conditions.push(
-      isPostgres
-        ? '(requires_match IS NULL OR requires_match = FALSE)'
-        : '(requires_match = 0 OR requires_match IS NULL)',
-    );
-  }
+  // Unconditional exclusion of loans and matching-required funds in every query path.
+  conditions.push(
+    isPostgres
+      ? '(requires_match IS NULL OR requires_match = FALSE)'
+      : '(requires_match = 0 OR requires_match IS NULL)',
+  );
+  conditions.push(
+    isPostgres
+      ? '(is_loan IS NULL OR is_loan = FALSE)'
+      : '(is_loan = 0 OR is_loan IS NULL)',
+  );
     
     // State filtering
     if (profileStates.length > 0) {
@@ -613,6 +613,19 @@ router.post('/searchOpportunities', async (req, res) => {
     
     const conditions = [];
     const params = [];
+    const isPostgres = req.db?.dialect === 'postgres';
+
+    // Unconditional exclusion of loans and matching-required funds
+    conditions.push(
+      isPostgres
+        ? '(requires_match IS NULL OR requires_match = FALSE)'
+        : '(requires_match = 0 OR requires_match IS NULL)',
+    );
+    conditions.push(
+      isPostgres
+        ? '(is_loan IS NULL OR is_loan = FALSE)'
+        : '(is_loan = 0 OR is_loan IS NULL)',
+    );
     
     // Profile-based filtering
     if (profile_id) {
