@@ -12,6 +12,7 @@ import { MoreVertical, Star, Edit, Trash2, Calendar, DollarSign, Building2, Targ
 import { format, isPast } from 'date-fns';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
+import HelpTip from '@/components/help/HelpTip';
 
 // Helper to get a valid grant detail URL
 function getGrantDetailUrl(grant, isDiscoveryResult = false) {
@@ -99,18 +100,22 @@ export default function GrantCard({ grant, organization, organizationName, onSta
           {grant.starred && <Star className="w-4 h-4 text-yellow-400 fill-yellow-400" />}
           {isExpired && <Badge variant="destructive" className="text-xs">EXPIRED</Badge>}
           {hasSummary && showSummary && (
-            <Badge variant="outline" className="text-xs bg-purple-50 text-purple-700 border-purple-200">
-              <Sparkles className="w-3 h-3 mr-1" />
-              AI Summary
-            </Badge>
+            <HelpTip text="AI Summary: This opportunity has been analyzed by our AI to provide a quick description of the funding program.">
+                <Badge variant="outline" className="text-xs bg-purple-50 text-purple-700 border-purple-200 cursor-help">
+                  <Sparkles className="w-3 h-3 mr-1" />
+                  AI Summary
+                </Badge>
+              </HelpTip>
           )}
           {/* Match Score Badge - PROMINENT */}
           {hasMatchScore && (
-            <Badge className={`text-xs font-bold ${matchColor.bg} ${matchColor.text}`}>
-              <Target className="w-3 h-3 mr-1" />
-              {Math.round(matchScore)}% Match
-            </Badge>
-          )}
+              <HelpTip text={`Match Score: ${Math.round(matchScore)}%. This shows how well this opportunity fits your profile based on location, demographics, interests, and eligibility criteria. 80%+ = Excellent, 65%+ = Good, 50%+ = Fair.`}>
+                <Badge className={`text-xs font-bold ${matchColor.bg} ${matchColor.text} cursor-help`}>
+                  <Target className="w-3 h-3 mr-1" />
+                  {Math.round(matchScore)}% Match
+                </Badge>
+              </HelpTip>
+            )}}
         </div>
         {(onStarToggle || onDelete) && (
           <DropdownMenu open={showMenu} onOpenChange={setShowMenu}>
@@ -206,9 +211,11 @@ export default function GrantCard({ grant, organization, organizationName, onSta
           {grant.tags && grant.tags.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {grant.tags.slice(0, 2).map(tag => (
-                <Badge key={tag} variant="secondary" className="text-xs px-1.5 py-0">
-                  {tag}
-                </Badge>
+                <HelpTip text={`Tag: ${tag}. Tags indicate the funding category or focus area of this opportunity.`}>
+                    <Badge key={tag} variant="secondary" className="text-xs px-1.5 py-0 cursor-help">
+                      {tag}
+                    </Badge>
+                  </HelpTip>
               ))}
               {grant.tags.length > 2 && (
                 <Badge variant="secondary" className="text-xs px-1.5 py-0">
@@ -222,9 +229,11 @@ export default function GrantCard({ grant, organization, organizationName, onSta
           {grant.categories && grant.categories.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {grant.categories.slice(0, 2).map(cat => (
-                <Badge key={cat} variant="outline" className="text-xs px-1.5 py-0 bg-blue-50 text-blue-700 border-blue-200">
-                  {cat}
-                </Badge>
+                <HelpTip text={`Category: ${cat}. This funding opportunity falls under this program category.`}>
+                    <Badge key={cat} variant="outline" className="text-xs px-1.5 py-0 bg-blue-50 text-blue-700 border-blue-200 cursor-help">
+                      {cat}
+                    </Badge>
+                  </HelpTip>
               ))}
               {grant.categories.length > 2 && (
                 <Badge variant="outline" className="text-xs px-1.5 py-0">
@@ -243,9 +252,11 @@ export default function GrantCard({ grant, organization, organizationName, onSta
             )}
 
             {grant.rolling && (
-              <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-200">
-                Rolling Deadline
-              </Badge>
+              <HelpTip text="Rolling Deadline: This opportunity accepts applications on an ongoing basis with no fixed closing date.">
+                    <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-200 cursor-help">
+                      Rolling Deadline
+                    </Badge>
+                  </HelpTip>
             )}
 
             {(grant.amount_max || grant.typical_award || grant.awardMax) && (
