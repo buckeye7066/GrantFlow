@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { useNavigate, useSearchParams } from "react-router-dom"
+import { Link, useNavigate, useSearchParams } from "react-router-dom"
 import {
   AlertTriangle,
   Building,
@@ -42,7 +42,7 @@ import { createGrant } from "@/api/grants"
 import { createDocument } from "@/api/documents"
 import { apiFetch } from "@/api/client"
 import { cn } from "@/lib/utils"
-import { formatAddress } from "@/utils"
+import { formatAddress, createPageUrl } from "@/utils"
 import { env } from "@/config/env.js"
 
 const NOT_AVAILABLE = 'N/A'
@@ -1420,7 +1420,7 @@ export default function FundingOpportunities() {
           <div className="space-y-2">
             <div className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700 uppercase tracking-wide">
               <Layers className="w-3 h-3" />
-              Opportunity Observatory
+              Funding Catalog
             </div>
             <h1 className="text-3xl md:text-4xl font-bold text-slate-900">Funding Opportunities</h1>
             <p className="text-sm md:text-base text-slate-600 max-w-3xl">
@@ -1754,16 +1754,20 @@ export default function FundingOpportunities() {
             <p className="text-sm text-slate-600 max-w-md mx-auto">
               {opportunitiesResponse?.data?.length === 0 && opportunitiesResponse?.total === 0 ? (
                 <>
-                  No funding opportunities have been ingested yet. To populate with real data from live sources, run:
-                  <code className="block mt-2 p-2 bg-slate-100 rounded text-left">npm run ingest</code>
-                  Or use the Admin panel to trigger ingestion via API.
+                  No funding opportunities have been loaded yet. Try Discover Grants to search for funding that matches your profile.
                 </>
               ) : (
                 <>
-                  Adjust your filters or ensure the ingestion has completed. Once ingestion runs, opportunities from Grants.gov and USASpending.gov will appear here.
+                  Adjust your filters or try Discover Grants to search for more opportunities.
                 </>
               )}
             </p>
+            <Link to={createPageUrl("DiscoverGrants")}>
+              <Button size="lg" className="mt-4">
+                <Target className="w-4 h-4 mr-2" />
+                Find grants in Discover Grants
+              </Button>
+            </Link>
           </CardContent>
         </Card>
       )}

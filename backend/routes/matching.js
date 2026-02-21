@@ -142,7 +142,6 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
     const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : ''
 
     const profileContext = await loadProfileContext(req.db, profileId)
-    const profileState = profileContext?.signals?.location?.state ?? null
 
     const conditions = ['is_active = ?']
     const params = []
@@ -169,13 +168,9 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
     // Keep results current: no expired deadlines unless rolling/ongoing/NULL.
     conditions.push(`(deadline_type IN ('rolling','ongoing') OR deadline IS NULL OR deadline >= ${req.db?.dialect === 'postgres' ? 'CURRENT_DATE' : "date('now')"})`)
 
-    // Default geography behavior: state + national + NULL state.
-    if (profileState && typeof profileState === 'string' && profileState.length === 2) {
-      // NOTE: many legacy rows use `state='nationwide'` for national programs, even when is_national isn't set.
-      conditions.push("(state = ? OR is_national = ? OR state IS NULL OR state = 'nationwide')")
-      params.push(profileState)
-      params.push(true)
-    }
+    // Geography: expand outward. Do NOT hard-filter by state—let scoring surface best fits.
+    // Profile state is used by calculateMatchScore for ranking; mismatches reduce score, not exclude.
+    // (Previously excluded out-of-state opportunities entirely, blocking many relevant national/regional programs.)
 
     if (q) {
       conditions.push('(LOWER(title) LIKE ? OR LOWER(description) LIKE ? OR LOWER(keywords) LIKE ? OR LOWER(categories) LIKE ?)')

@@ -10,8 +10,8 @@ import { ListOrdered, Building2, Search, Kanban } from "lucide-react";
  */
 export default function StartHereCard() {
   const steps = [
-    { label: "Create or select your organization", to: createPageUrl("Organizations"), icon: Building2 },
-    { label: "Discover grants that match you", to: createPageUrl("DiscoverGrants"), icon: Search },
+    { label: "Add your organization", to: createPageUrl("Organizations"), icon: Building2 },
+    { label: "Find grants that match you", to: createPageUrl("DiscoverGrants"), icon: Search },
     { label: "Add to pipeline and track applications", to: createPageUrl("Pipeline"), icon: Kanban },
   ];
 
@@ -25,7 +25,7 @@ export default function StartHereCard() {
       </CardHeader>
       <CardContent className="pt-0">
         <p className="text-sm text-muted-foreground mb-3">
-          Get started in three steps: set up your organization, find grants, then track your applications.
+          New to GrantFlow? Follow these three steps: add your organization, search for grants that match you, then track your applications.
         </p>
         <ol className="space-y-2">
           {steps.map((step, i) => (

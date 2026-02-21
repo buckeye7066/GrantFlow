@@ -312,8 +312,8 @@ export default function CrawlerSelection({
 
     log.debug('crawler results', { opportunities: successfulResults.length, minMatchScore })
 
-    // Add to pipeline if callback provided
-    if (onCrawlComplete && successfulResults.length > 0) {
+    // Notify parent (even when empty, so DiscoverGrants can show zero-results state)
+    if (onCrawlComplete) {
       await onCrawlComplete(successfulResults);
     }
 
@@ -338,7 +338,7 @@ export default function CrawlerSelection({
     }
 
     toast({
-      title: 'Crawler run complete',
+      title: 'Search complete',
       description: toastDescription,
       variant: errorCount > 0 ? 'destructive' : 'default'
     });
@@ -383,10 +383,10 @@ export default function CrawlerSelection({
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Info className="w-5 h-5" />
-            Select Funding Crawlers
+            Find Funding
           </CardTitle>
           <CardDescription>
-            Choose which specialized crawlers to run for finding funding opportunities
+            Choose which funding sources to search. We match results to your profile so you see the most relevant grants first.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -400,9 +400,7 @@ export default function CrawlerSelection({
               <AlertDescription>
                 <div className="flex items-start justify-between">
                   <div>
-                    Some crawlers returned <strong>DB fallback</strong> results (real opportunities
-                    from your local curated database) because the live crawl returned nothing or
-                    your profile is missing key signals.
+                    Some searches used your curated database (real opportunities we've already found) because the live search returned nothing or your profile is missing key details.
                     <span className="text-xs opacity-60 ml-1">
                       {showFallbackDetails ? '(click to hide)' : '(click for details)'}
                     </span>
@@ -428,7 +426,7 @@ export default function CrawlerSelection({
 
                     {missingSignals.length === 0 ? (
                       <div className="p-2 bg-green-50 border border-green-200 rounded-md text-sm">
-                        All key signals are present. Crawlers fell back because live crawl returned no results.
+                        All key signals are present. Live search returned no results, so we used your curated database.
                       </div>
                     ) : (
                       <div className="space-y-1.5">
@@ -444,7 +442,7 @@ export default function CrawlerSelection({
                     {fallbackCrawlerNames.length > 0 && (
                       <div>
                         <p className="font-semibold text-xs text-yellow-800 mb-1.5">
-                          Crawlers using DB fallback ({fallbackCrawlerNames.length}):
+                          Searches using curated database ({fallbackCrawlerNames.length}):
                         </p>
                         <div className="flex flex-wrap gap-1">
                           {fallbackCrawlerNames.map(name => (
@@ -478,11 +476,11 @@ export default function CrawlerSelection({
                   onCheckedChange={handleSelectAll}
                 />
                 <label htmlFor="select-all-crawlers" className="font-medium cursor-pointer">
-                  {allSelected ? 'Deselect All' : 'Select All Crawlers'}
+                  {allSelected ? 'Deselect All' : 'Select All'}
                 </label>
                 {someSelected ? (
                   <span className="text-sm text-muted-foreground">
-                    {selectedCrawlers.size} crawler{selectedCrawlers.size !== 1 ? 's' : ''} selected
+                    {selectedCrawlers.size} source{selectedCrawlers.size !== 1 ? 's' : ''} selected
                   </span>
                 ) : null}
               </div>
@@ -492,11 +490,11 @@ export default function CrawlerSelection({
                   {isRunning ? (
                     <>
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Running Crawlers...
+                      Searching...
                     </>
                   ) : (
                     <>
-                      Run Selected Crawlers
+                      Search for Funding
                       {someSelected && ` (${selectedCrawlers.size})`}
                     </>
                   )}
@@ -588,8 +586,15 @@ export default function CrawlerSelection({
                       ) : null}
                       
                       {result && (
-                        <div className="mt-2 text-xs text-green-700 dark:text-green-300 font-medium">
-                          Included {result.count || 0} of {result.total_found ?? (result.count || 0)} found
+                        <div className="mt-2 space-y-1">
+                          <div className="text-xs text-green-700 dark:text-green-300 font-medium">
+                            Included {result.count || 0} of {result.total_found ?? (result.count || 0)} found
+                          </div>
+                          {(result.count || 0) === 0 && (result.total_found ?? 0) > 0 && (
+                            <div className="text-xs text-amber-700 dark:text-amber-200">
+                              None met the match threshold. Try lowering the minimum score above, or add more profile details (ZIP, state, keywords) for better matches.
+                            </div>
+                          )}
                         </div>
                       )}
                       
@@ -616,11 +621,11 @@ export default function CrawlerSelection({
               {isRunning ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Running Crawlers...
+                  Searching...
                 </>
               ) : (
                 <>
-                  Run Selected Crawlers
+                  Search for Funding
                   {someSelected && ` (${selectedCrawlers.size})`}
                 </>
               )}
@@ -630,7 +635,7 @@ export default function CrawlerSelection({
           {/* Results Summary */}
           {Object.keys(results).length > 0 && (
             <div className="mt-6 p-4 bg-green-50 border border-green-200 rounded-lg">
-              <h4 className="font-semibold text-green-900 mb-2">Crawler Results</h4>
+              <h4 className="font-semibold text-green-900 mb-2">Search Results</h4>
               <div className="space-y-1">
                 {Object.entries(results).map(([crawlerId, result]) => {
                   const crawler = CRAWLER_CONFIGS.find(c => c.id === crawlerId);

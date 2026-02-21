@@ -138,7 +138,7 @@ export default function DiscoverGrants() {
     queryClient.invalidateQueries({ queryKey: ['grants'] })
 
     toast({
-      title: 'Crawler complete',
+      title: 'Search complete',
       description: `Found ${opportunities.length} opportunities. Pipeline update: ${addedCount} added, ${alreadyCount} already in pipeline, ${failedCount} failed (from ${attempted} eligible).`,
     })
     
@@ -330,7 +330,7 @@ export default function DiscoverGrants() {
               Select Profile to Search
             </CardTitle>
             <CardDescription>
-              Choose a profile to run real web crawlers and find matching opportunities
+              Choose a profile so we can search for grants that match you
             </CardDescription>
           </CardHeader>
           <CardContent className="p-6">
