@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { createPageUrl } from "@/utils"
 import { useAuthStore } from "@/stores/authStore"
+import { getLastVisitedPath } from "@/lib/lastVisitedPreferences"
 
 import StatCard from "@/components/dashboard/StatCard"
 import UrgentDeadlinesCard from "@/components/dashboard/UrgentDeadlinesCard"
@@ -41,15 +42,25 @@ import AnyaChat from "@/components/anya/AnyaChat"
 import OnboardingVideo from "@/components/onboarding/OnboardingVideo"
 import { cn } from "@/lib/utils"
 
-/** Resolves last-visited page from localStorage (client-only) and picks Continue vs Start here vs Resume. */
+/** Resolves last-visited page from preferences (source of truth) or localStorage (fallback). */
 function DashboardContinueOrStart({ profilesLength, urgentDeadlines, activeGrants, hasGrants }) {
   const [lastVisitedPath, setLastVisitedPath] = useState(null);
   useEffect(() => {
-    try {
-      setLastVisitedPath(window.localStorage.getItem("grantflow:last-visited-page"));
-    } catch {
-      setLastVisitedPath(null);
-    }
+    let cancelled = false;
+    (async () => {
+      const fromServer = await getLastVisitedPath();
+      if (cancelled) return;
+      if (fromServer) {
+        setLastVisitedPath(fromServer);
+        return;
+      }
+      try {
+        setLastVisitedPath(window.localStorage.getItem("grantflow:last-visited-page"));
+      } catch {
+        setLastVisitedPath(null);
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
   const hasLastPage =
     lastVisitedPath && lastVisitedPath !== "/" && lastVisitedPath !== "/Dashboard";
