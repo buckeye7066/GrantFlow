@@ -62,6 +62,15 @@ export async function getProfileWithLocation(db, profileId) {
   }
 }
 
+const AMBIGUOUS_SINGLE_WORDS = new Set([
+  'food', 'health', 'care', 'home', 'house', 'school', 'community',
+  'family', 'child', 'children', 'work', 'service', 'support', 'program',
+  'help', 'assist', 'need', 'general', 'special', 'local', 'national',
+  'plan', 'fund', 'grant', 'money', 'bank', 'credit', 'loan',
+  'start', 'open', 'build', 'make', 'create', 'medical', 'business',
+  'assistance', 'resource', 'free', 'apply', 'person', 'people',
+])
+
 /**
  * Build search keywords from ALL profile signals.
  * Returns an array of the most relevant keywords for API searches.
@@ -83,20 +92,27 @@ export function buildSearchKeywords(profile, maxKeywords = 25) {
     return true
   }
 
-  // Add from all signal sets (highest priority first)
-  if (signals.interests?.size) {
-    for (const interest of signals.interests) keywords.add(interest)
+  // Priority 1: Intent phrases
+  if (signals.intentPhrases?.size) {
+    for (const phrase of signals.intentPhrases) {
+      if (looksUseful(phrase)) keywords.add(phrase)
+    }
   }
+
+  // Priority 2: Multi-word phrases from signals.phrases
+  if (signals.phrases?.size) {
+    const multiWordPhrases = Array.from(signals.phrases)
+      .filter((p) => looksUseful(p) && String(p).includes(' '))
+      .slice(0, 15)
+    for (const p of multiWordPhrases) keywords.add(p)
+  }
+
+  // Priority 3: Applicant types
   if (signals.applicantTypes?.size) {
     for (const type of signals.applicantTypes) keywords.add(type)
   }
-  // Add core keyword set (broad coverage)
-  if (signals.keywordSet?.size) {
-    for (const kw of signals.keywordSet) {
-      if (looksUseful(kw)) keywords.add(kw)
-      if (keywords.size >= maxKeywords * 4) break
-    }
-  }
+
+  // Priority 4: Signal sets
   if (signals.demographics?.size) {
     for (const demo of signals.demographics) keywords.add(demo.replace(/_/g, ' '))
   }
@@ -115,16 +131,29 @@ export function buildSearchKeywords(profile, maxKeywords = 25) {
   if (signals.occupation?.size) {
     for (const occ of signals.occupation) keywords.add(occ.replace(/_/g, ' '))
   }
-  // Add top phrases (more specific than single keywords)
-  if (signals.phrases?.size) {
-    const phrases = Array.from(signals.phrases).slice(0, 15)
-    phrases.forEach(p => keywords.add(p))
+
+  // Priority 5: Interests (filter out AMBIGUOUS_SINGLE_WORDS)
+  if (signals.interests?.size) {
+    for (const interest of signals.interests) {
+      const norm = String(interest).toLowerCase()
+      if (AMBIGUOUS_SINGLE_WORDS.has(norm)) continue
+      if (looksUseful(interest)) keywords.add(interest)
+    }
   }
-  // Last-resort: include passthrough “all data” tokens (PII-scrubbed in signals builder).
-  if (signals.allData?.size && keywords.size < maxKeywords * 2) {
-    for (const token of signals.allData) {
-      if (looksUseful(token)) keywords.add(token)
-      if (keywords.size >= maxKeywords * 4) break
+
+  // Priority 6: Single keywords from keywordSet (filtered, cap 6)
+  const phraseStrings = Array.from(keywords).map((k) => String(k).toLowerCase())
+  let singleKeywordCount = 0
+  if (signals.keywordSet?.size) {
+    for (const kw of signals.keywordSet) {
+      if (singleKeywordCount >= 6) break
+      const norm = String(kw).toLowerCase().trim()
+      if (!looksUseful(kw)) continue
+      if (norm.includes(' ')) continue
+      if (AMBIGUOUS_SINGLE_WORDS.has(norm)) continue
+      if (phraseStrings.some((p) => p.includes(norm))) continue
+      keywords.add(kw)
+      singleKeywordCount++
     }
   }
 
@@ -311,7 +340,7 @@ export function calculateMatchScore(opportunity, profile) {
   }
 
   // ============ GLOBAL KEYWORD MATCH (0-10 pts) ============
-  // Use the full keyword set (includes “all data” passthrough tokens) for broad matching.
+
   if (signals?.keywordSet?.size) {
     let kwMatches = 0
     // Cap evaluation for performance/noise.

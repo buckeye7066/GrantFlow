@@ -63,50 +63,106 @@ function safeParseJSON(value, fallback) {
   }
 }
 
+const AMBIGUOUS_SINGLE_WORDS = new Set([
+  'food', 'health', 'care', 'home', 'house', 'school', 'community',
+  'family', 'child', 'children', 'work', 'service', 'support', 'program',
+  'help', 'assist', 'need', 'general', 'special', 'local', 'national',
+  'plan', 'fund', 'grant', 'money', 'bank', 'credit', 'loan',
+  'start', 'open', 'build', 'make', 'create', 'medical', 'business',
+  'assistance', 'resource', 'free', 'apply', 'person', 'people',
+])
+
 function buildSearchTokens(profileContext) {
   const signals = profileContext?.signals
-  const tokens = new Set()
+  const profile = profileContext?.profile
+  const phraseTokens = new Set()
+  const singleTokens = new Set()
 
-  // Prefer richer signals when present.
+  // Priority 1: intent phrases (multi-word, high priority)
+  if (signals?.intentPhrases && typeof signals.intentPhrases[Symbol.iterator] === 'function') {
+    for (const phrase of signals.intentPhrases) {
+      const normalized = normalizeString(String(phrase))
+      if (normalized.length >= 6 && normalized.includes(' ')) phraseTokens.add(normalized)
+    }
+  }
+
+  // Priority 2: phrases (multi-word, deduplicated)
   if (signals?.phrases && typeof signals.phrases[Symbol.iterator] === 'function') {
     for (const phrase of signals.phrases) {
       const normalized = normalizeString(String(phrase))
-      if (normalized.length >= 4) tokens.add(normalized)
-      if (tokens.size >= 10) break
+      if (normalized.length >= 6 && normalized.includes(' ') && !phraseTokens.has(normalized)) {
+        phraseTokens.add(normalized)
+      }
     }
   }
 
-  if (tokens.size < 10 && signals?.keywordSet && typeof signals.keywordSet[Symbol.iterator] === 'function') {
+  // Priority 3: applicant types (phrase if multi-word, single if not)
+  if (signals?.applicantTypes && typeof signals.applicantTypes[Symbol.iterator] === 'function') {
+    for (const val of signals.applicantTypes) {
+      const normalized = normalizeString(String(val).replace(/_/g, ' '))
+      if (normalized.length < 4) continue
+      if (normalized.includes(' ')) phraseTokens.add(normalized)
+      else singleTokens.add(normalized)
+    }
+  }
+
+  // Priority 4: signal sets (interests, demographics, health, assistance, occupation, military)
+  const signalSets = [
+    signals?.interests,
+    signals?.demographics,
+    signals?.health,
+    signals?.assistance,
+    signals?.occupation,
+    signals?.military,
+  ]
+  for (const signalSet of signalSets) {
+    if (signalSet && typeof signalSet[Symbol.iterator] === 'function') {
+      for (const val of signalSet) {
+        const normalized = normalizeString(String(val).replace(/_/g, ' '))
+        if (normalized.length >= 4) {
+          if (normalized.includes(' ')) phraseTokens.add(normalized)
+          else singleTokens.add(normalized)
+        }
+      }
+    }
+  }
+
+  // Priority 5: keyword set (single tokens only)
+  if (signals?.keywordSet && typeof signals.keywordSet[Symbol.iterator] === 'function') {
     for (const kw of signals.keywordSet) {
       const normalized = normalizeString(String(kw))
-      if (normalized.length >= 4) tokens.add(normalized)
-      if (tokens.size >= 10) break
+      if (normalized.length >= 4 && !normalized.includes(' ')) singleTokens.add(normalized)
     }
   }
 
-      // Add demographic, interest, health, assistance, and applicant-type signals as tokens.
-          // These are the strongest profile-specific signals for matching.
-              const signalSets = [signals?.interests, signals?.demographics, signals?.health, signals?.assistance, signals?.applicantTypes, signals?.family, signals?.occupation, signals?.military]
-                  for (const signalSet of signalSets) {
-                        if (signalSet && typeof signalSet[Symbol.iterator] === 'function') {
-                                for (const val of signalSet) {
-                                          const normalized = normalizeString(String(val).replace(/_/g, ' '))
-                                                    if (normalized.length >= 4) tokens.add(normalized)
-                                                            }
-                                                                  }
-                                                                      }
+  // Priority 6: profile tags
+  if (Array.isArray(profile?.tags)) {
+    for (const value of profile.tags) {
+      const normalized = normalizeString(String(value))
+      if (normalized.length >= 4) {
+        if (normalized.includes(' ')) phraseTokens.add(normalized)
+        else singleTokens.add(normalized)
+      }
+    }
+  }
 
-  // Fallback to tags/focus areas if signals missing.
-  const profile = profileContext?.profile
-  const fallback = []
-  if (Array.isArray(profile?.tags)) fallback.push(...profile.tags)
-  if (Array.isArray(profile?.interests)) fallback.push(...profile.interests)
-  fallback.forEach((value) => {
-    const normalized = normalizeString(String(value))
-    if (normalized.length >= 4) tokens.add(normalized)
-  })
+  // Assemble: phrase tokens first (up to 14 total), then single tokens (max 4)
+  const finalTokens = new Set()
+  for (const p of phraseTokens) {
+    if (finalTokens.size >= 14) break
+    finalTokens.add(p)
+  }
+  const phraseTokenArray = Array.from(phraseTokens)
+  let singleCount = 0
+  for (const s of singleTokens) {
+    if (finalTokens.size >= 14 || singleCount >= 4) break
+    if (AMBIGUOUS_SINGLE_WORDS.has(s)) continue
+    if (phraseTokenArray.some((p) => p.includes(s))) continue
+    finalTokens.add(s)
+    singleCount++
+  }
 
-  return Array.from(tokens).slice(0, 10)
+  return Array.from(finalTokens).slice(0, 14)
 }
 
 function isOpportunityCurrent(row) {
