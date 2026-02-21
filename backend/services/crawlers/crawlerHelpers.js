@@ -44,6 +44,19 @@ export async function getProfileWithLocation(db, profileId) {
     zip_code: extractZipFromContext({ profile: context.profile, sections: context.sections }),
   }
 
+  // CRITICAL FIX: Ensure signals.location is always populated with derived location data.
+  // The buildProfileSignals function may leave signals.location with null values if sections
+  // are structured differently. This guarantees crawlers get the correct location from sections.
+  if (context.signals) {
+    if (!context.signals.location) {
+      context.signals.location = {};
+    }
+    // Patch signals.location with derivedLocation values (section-based) as fallback
+    context.signals.location.state = context.signals.location.state || derivedLocation.state || organization?.state || null;
+    context.signals.location.city = context.signals.location.city || derivedLocation.city || organization?.city || null;
+    context.signals.location.zip = context.signals.location.zip || derivedLocation.zip_code || organization?.zip || null;
+    console.log('[crawlerHelpers] Location resolved:', JSON.stringify(context.signals.location));
+  }
   // Log profile signals summary for debugging
   console.log(`[crawlerHelpers] Profile ${profileId} signals: ${summarizeProfileSignals(context.signals)}`)
   console.log(`[crawlerHelpers] Keywords: ${context.signals.keywordSet?.size || 0}, Demographics: ${context.signals.demographics?.size || 0}, Military: ${context.signals.military?.size || 0}, Health: ${context.signals.health?.size || 0}, Assistance: ${context.signals.assistance?.size || 0}`)
