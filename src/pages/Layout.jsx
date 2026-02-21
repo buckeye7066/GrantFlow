@@ -302,7 +302,7 @@ export default function Layout({ children, currentPageName }) {
               onClick={triggerOnboardingVideo}
             >
               <Sparkles className="w-3.5 h-3.5 mr-2" />
-              Tutorial
+              User Manual
             </Button>
             <Button
               variant="outline"

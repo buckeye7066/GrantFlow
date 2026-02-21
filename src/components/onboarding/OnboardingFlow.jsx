@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
-import OnboardingVideo from './OnboardingVideo'
+import OnboardingManual from './OnboardingManual'
 import ProfileCreationWizard from './ProfileCreationWizard'
 
 export default function OnboardingFlow() {
@@ -104,7 +104,7 @@ export default function OnboardingFlow() {
 
   return (
     <>
-      <OnboardingVideo
+      <OnboardingManual
         open={showVideo}
         onComplete={handleVideoComplete}
         onSkip={handleVideoSkip}
