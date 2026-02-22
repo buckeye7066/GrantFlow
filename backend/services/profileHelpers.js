@@ -1041,6 +1041,15 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     registerKeyword('501c3')
     registerKeyword('nonprofit')
   }
+  if (Boolean(organizationDetails.is_501c3)) {
+    registerKeyword('501c3')
+    registerKeyword('501(c)(3)')
+    registerKeyword('nonprofit')
+  }
+  if (Boolean(organizationDetails.sam_registered)) {
+    registerKeyword('sam.gov')
+    registerKeyword('sam registered')
+  }
   if (organizationDetails.founding_year) {
     const age = nowYear - parseNumber(organizationDetails.founding_year)
     if (age !== null && age <= 3) {
@@ -1064,6 +1073,25 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   }
   if (organizationDetails.programs_offered && Array.isArray(organizationDetails.programs_offered)) {
     organizationDetails.programs_offered.forEach(prog => registerKeyword(prog))
+  }
+
+  // ============ NONPROFIT COMPLIANCE ============
+  // Critical eligibility signals for federal grants (501c3, SAM.gov, fiscal sponsor).
+  const nonprofitCompliance = sections?.nonprofit_compliance ?? {}
+  if (Boolean(nonprofitCompliance.is_501c3)) {
+    registerKeyword('501c3')
+    registerKeyword('501(c)(3)')
+    registerKeyword('nonprofit')
+  }
+  if (Boolean(nonprofitCompliance.sam_registered)) {
+    registerKeyword('sam.gov')
+    registerKeyword('sam registered')
+  }
+  if (Boolean(nonprofitCompliance.fiscal_sponsor)) {
+    registerKeyword('fiscal sponsor')
+    if (nonprofitCompliance.fiscal_sponsor_name) {
+      registerKeyword(nonprofitCompliance.fiscal_sponsor_name)
+    }
   }
 
   // ============ NARRATIVE ============
@@ -1184,7 +1212,8 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   const expectedSections = [
     'basic_information', 'demographics', 'family_life', 'financial_information',
     'government_assistance', 'health_medical', 'location_focus', 'military_service',
-    'narrative', 'occupation', 'organization_details', 'university_applications', 'education'
+    'narrative', 'occupation', 'organization_details', 'nonprofit_compliance',
+    'university_applications', 'education'
   ]
   const presentSections = sectionKeys.filter(k => expectedSections.includes(k))
   
