@@ -565,7 +565,7 @@ function isLoanOrMatchingFund(opportunity) {
          matchingKeywords.some(keyword => text.includes(keyword))
 }
 
-h(zip) {
+async function getZipCoordinates(zip) {
   // Validate ZIP code format
   if (!zip || typeof zip !== 'string' && typeof zip !== 'number') {
     console.warn('[LocalFundingCrawler] Invalid ZIP code format:', zip)
@@ -577,7 +577,7 @@ h(zip) {
     console.warn('[LocalFundingCrawler] ZIP code must be 5 digits:', zipStr)
     return null
   }
-h
+
   try {
     // Prefer local dataset to avoid network flakiness and "skipped" ZIP handling.
     const local = zipcodes.lookup(zipStr)
