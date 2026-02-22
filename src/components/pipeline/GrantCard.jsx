@@ -109,13 +109,13 @@ export default function GrantCard({ grant, organization, organizationName, onSta
           )}
           {/* Match Score Badge - PROMINENT */}
           {hasMatchScore && (
-              <HelpTip text={`Match Score: ${Math.round(matchScore)}%. This shows how well this opportunity fits your profile based on location, demographics, interests, and eligibility criteria. 80%+ = Excellent, 65%+ = Good, 50%+ = Fair.`}>
-                <Badge className={`text-xs font-bold ${matchColor.bg} ${matchColor.text} cursor-help`}>
+              <HelpTip text={"Match Score: " + Math.round(matchScore) + "%. This shows how well this opportunity fits your profile based on location, demographics, interests, and eligibility criteria. 80%+ = Excellent, 65%+ = Good, 50%+ = Fair."}>
+                <Badge className={"text-xs font-bold " + matchColor.bg + " " + matchColor.text + " cursor-help"}>
                   <Target className="w-3 h-3 mr-1" />
                   {Math.round(matchScore)}% Match
                 </Badge>
               </HelpTip>
-            )}}
+            )}
         </div>
         {(onStarToggle || onDelete) && (
           <DropdownMenu open={showMenu} onOpenChange={setShowMenu}>
@@ -211,7 +211,7 @@ export default function GrantCard({ grant, organization, organizationName, onSta
           {grant.tags && grant.tags.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {grant.tags.slice(0, 2).map(tag => (
-                <HelpTip text={`Tag: ${tag}. Tags indicate the funding category or focus area of this opportunity.`}>
+                <HelpTip text={"Tag: " + tag + ". Tags indicate the funding category or focus area of this opportunity."}>
                     <Badge key={tag} variant="secondary" className="text-xs px-1.5 py-0 cursor-help">
                       {tag}
                     </Badge>
@@ -229,7 +229,7 @@ export default function GrantCard({ grant, organization, organizationName, onSta
           {grant.categories && grant.categories.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {grant.categories.slice(0, 2).map(cat => (
-                <HelpTip text={`Category: ${cat}. This funding opportunity falls under this program category.`}>
+                <HelpTip text={"Category: " + cat + ". This funding opportunity falls under this program category."}>
                     <Badge key={cat} variant="outline" className="text-xs px-1.5 py-0 bg-blue-50 text-blue-700 border-blue-200 cursor-help">
                       {cat}
                     </Badge>
