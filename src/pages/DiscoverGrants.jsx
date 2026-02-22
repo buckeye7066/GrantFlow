@@ -1,10 +1,11 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { base44 } from '@/api/base44Client';
 import { getProfile, listProfiles } from '@/api/profiles';
 import { apiFetch } from '@/api/client';
 import { runRealCrawler } from '@/api/crawlers';
+import { createPageUrl } from '@/utils';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
@@ -35,10 +36,14 @@ function resolveSelectedProfileId(selectedProfileId, searchParams, profiles) {
 
 export default function DiscoverGrants() {
   const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [minMatchScore, setMinMatchScore] = useState(50);
   const [isSearching, setIsSearching] = useState(false);
+  const profileSelectorRef = React.useRef(null)
+  const searchActionsRef = React.useRef(null)
+  const resultsRef = React.useRef(null)
   const [dismissedSuggestions, setDismissedSuggestions] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('grantflow:dismissed-suggestions') || '[]');
@@ -431,6 +436,78 @@ export default function DiscoverGrants() {
     });
   };
 
+  const scrollToRef = (ref) => {
+    if (!ref?.current) return false;
+    ref.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return true;
+  };
+
+  const suggestionActionLabel = (suggestionId) => {
+    switch (suggestionId) {
+      case 'select-profile':
+        return profiles.length === 0 ? 'Create a profile' : 'Select profile';
+      case 'complete-profile':
+      case 'add-location':
+        return 'Open profile';
+      case 'run-crawlers':
+        return isSearching ? 'Search in progress' : 'Run search now';
+      case 'review-top':
+      case 'add-pipeline':
+        return 'View search results';
+      default:
+        return 'Open next step';
+    }
+  };
+
+  const handleSuggestionAction = async (suggestionId) => {
+    const activeProfileId = effectiveProfileId || selectedProfileId || null
+    log.debug('suggested next step clicked', {
+      suggestionId,
+      activeProfileId,
+      searchResultCount: searchResults.length,
+    })
+
+    switch (suggestionId) {
+      case 'select-profile': {
+        if (profiles.length === 0) {
+          navigate(createPageUrl('MyProfiles'));
+          return;
+        }
+        scrollToRef(profileSelectorRef);
+        return;
+      }
+      case 'complete-profile':
+      case 'add-location': {
+        if (selectedProfile?.id) {
+          navigate(createPageUrl('ProfileDetail', { id: selectedProfile.id }));
+          return;
+        }
+        if (profiles.length === 0) {
+          navigate(createPageUrl('MyProfiles'));
+          return;
+        }
+        scrollToRef(profileSelectorRef);
+        return;
+      }
+      case 'run-crawlers': {
+        if (isSearching) return;
+        scrollToRef(searchActionsRef);
+        await handleFindFunding();
+        return;
+      }
+      case 'review-top':
+      case 'add-pipeline': {
+        const movedToResults = scrollToRef(resultsRef);
+        if (!movedToResults) {
+          navigate(createPageUrl('Pipeline', activeProfileId ? { profile_id: activeProfileId } : undefined));
+        }
+        return;
+      }
+      default:
+        return;
+    }
+  };
+
   return (
     <div className="p-6 md:p-8">
       <div className="max-w-7xl mx-auto">
@@ -461,13 +538,27 @@ export default function DiscoverGrants() {
                   const Icon = s.icon;
                   return (
                     <div key={s.id} className="flex items-start gap-3 p-3 bg-white rounded-lg border border-amber-100 group">
-                      <Icon className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-foreground">{s.text}</p>
-                        <p className="text-sm text-muted-foreground mt-0.5">{s.detail}</p>
-                      </div>
                       <button
-                        onClick={() => dismissSuggestion(s.id)}
+                        type="button"
+                        onClick={() => void handleSuggestionAction(s.id)}
+                        className="flex flex-1 min-w-0 items-start gap-3 text-left rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                      >
+                        <Icon className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-foreground">{s.text}</p>
+                          <p className="text-sm text-muted-foreground mt-0.5">{s.detail}</p>
+                          <p className="text-xs text-primary font-medium mt-2 inline-flex items-center gap-1">
+                            {suggestionActionLabel(s.id)}
+                            <ArrowRight className="w-3.5 h-3.5" />
+                          </p>
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          dismissSuggestion(s.id);
+                        }}
                         className="text-xs text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mt-1"
                         title="Dismiss this suggestion"
                       >
@@ -493,7 +584,7 @@ export default function DiscoverGrants() {
           </CardHeader>
           <CardContent className="p-6">
             {/* Profile Selector */}
-            <div className="mb-6">
+            <div className="mb-6" ref={profileSelectorRef}>
               <Label className="text-base font-semibold mb-3 block">Select Profile</Label>
               <Select value={selectedProfileId} onValueChange={setSelectedProfileId}>
                 <SelectTrigger className="h-12">
@@ -576,7 +667,7 @@ export default function DiscoverGrants() {
             )}
 
             {/* Find Funding — single comprehensive search */}
-            <div className="space-y-6">
+            <div className="space-y-6" ref={searchActionsRef}>
               <div>
                 <h3 className="text-lg font-semibold text-foreground">Find Funding Opportunities</h3>
                 <p className="text-sm text-muted-foreground mt-1">
@@ -628,12 +719,14 @@ export default function DiscoverGrants() {
 
         {/* Results Display */}
         {searchResults.length > 0 && (
-        <SearchResults
-          results={searchResults}
-          profileId={effectiveProfileId ?? selectedProfileId}
-            onAddToPipeline={handleAddToPipeline}
-            organizationName={selectedProfile?.display_name}
-          />
+          <div ref={resultsRef}>
+            <SearchResults
+              results={searchResults}
+              profileId={effectiveProfileId ?? selectedProfileId}
+              onAddToPipeline={handleAddToPipeline}
+              organizationName={selectedProfile?.display_name}
+            />
+          </div>
         )}
       </div>
     </div>
