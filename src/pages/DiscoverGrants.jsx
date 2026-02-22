@@ -85,7 +85,7 @@ export default function DiscoverGrants() {
   // Persist last selected profile for session continuity
   useEffect(() => {
     if (selectedProfileId) {
-      try { localStorage.setItem('grantflow:discover-last-profile', selectedProfileId); } catch {}
+      try { localStorage.setItem('grantflow:discover-last-profile', selectedProfileId); } catch { /* ignore storage errors */ }
     }
   }, [selectedProfileId]);
 
@@ -97,7 +97,7 @@ export default function DiscoverGrants() {
         if (lastProfile && profiles.some(p => p.id === lastProfile)) {
           setSelectedProfileId(lastProfile);
         }
-      } catch {}
+      } catch { /* ignore storage errors */ }
     }
   }, [profiles]);
 
@@ -367,7 +367,7 @@ export default function DiscoverGrants() {
   const dismissSuggestion = (id) => {
     setDismissedSuggestions(prev => {
       const next = [...prev, id];
-      try { localStorage.setItem('grantflow:dismissed-suggestions', JSON.stringify(next)); } catch {}
+      try { localStorage.setItem('grantflow:dismissed-suggestions', JSON.stringify(next)); } catch { /* ignore storage errors */ }
       return next;
     });
   };
