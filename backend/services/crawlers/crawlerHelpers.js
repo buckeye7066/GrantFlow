@@ -173,6 +173,29 @@ export function buildSearchKeywords(profile, maxKeywords = 25) {
   return Array.from(keywords).slice(0, maxKeywords)
 }
 
+const STATE_MAPPING = {
+  alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA',
+  colorado: 'CO', connecticut: 'CT', delaware: 'DE', florida: 'FL', georgia: 'GA',
+  hawaii: 'HI', idaho: 'ID', illinois: 'IL', indiana: 'IN', iowa: 'IA', kansas: 'KS',
+  kentucky: 'KY', louisiana: 'LA', maine: 'ME', maryland: 'MD', massachusetts: 'MA',
+  michigan: 'MI', minnesota: 'MN', mississippi: 'MS', missouri: 'MO', montana: 'MT',
+  nebraska: 'NE', nevada: 'NV', 'new hampshire': 'NH', 'new jersey': 'NJ',
+  'new mexico': 'NM', 'new york': 'NY', 'north carolina': 'NC',
+  'north dakota': 'ND', ohio: 'OH', oklahoma: 'OK', oregon: 'OR', pennsylvania: 'PA',
+  'rhode island': 'RI', 'south carolina': 'SC', 'south dakota': 'SD',
+  tennessee: 'TN', texas: 'TX', utah: 'UT', vermont: 'VT', virginia: 'VA',
+  washington: 'WA', 'west virginia': 'WV', wisconsin: 'WI', wyoming: 'WY',
+  'district of columbia': 'DC',
+}
+
+function normalizeState(value) {
+  if (!value) return ''
+  const s = String(value).toLowerCase().trim()
+  if (STATE_MAPPING[s]) return STATE_MAPPING[s].toUpperCase()
+  const sanitized = s.replace(/[^a-z]/g, '')
+  return sanitized.length === 2 ? sanitized.toUpperCase() : sanitized.toUpperCase()
+}
+
 /**
  * Comprehensive match scoring using 100% of profile signals.
  * This function MUST be used by all crawlers for scoring opportunities.
@@ -186,6 +209,9 @@ export function calculateMatchScore(opportunity, profile) {
   const reasons = []
   const matchedSignals = []
   let score = 0
+
+  const normalizedOppState = normalizeState(opportunity.state || '')
+  const normalizedProfileState = normalizeState(signals?.location?.state || profile.state || '')
 
   // Build searchable text from opportunity
   const oppText = [
@@ -206,17 +232,18 @@ export function calculateMatchScore(opportunity, profile) {
 
   // ============ GEOGRAPHIC MATCH (0-20 pts) ============
   const profileState = signals?.location?.state || profile.state
-  if (opportunity.is_national) {
+  const isNationwide = String(opportunity.state || '').toLowerCase().trim() === 'nationwide'
+  if (opportunity.is_national || isNationwide) {
     score += 15
     reasons.push('National eligibility')
-  } else if (opportunity.state && profileState) {
-    if (opportunity.state.toUpperCase() === profileState.toUpperCase()) {
+  } else if (normalizedOppState && normalizedProfileState) {
+    if (normalizedOppState === normalizedProfileState) {
       score += 20
       reasons.push(`State match: ${profileState}`)
       matchedSignals.push(`location:${profileState}`)
     } else {
-      // State mismatch - significant penalty
-      score -= 15
+      // State mismatch - significant penalty (e.g. TN vs CA)
+      score -= 20
       reasons.push(`State mismatch: opp=${opportunity.state}, profile=${profileState}`)
     }
   }

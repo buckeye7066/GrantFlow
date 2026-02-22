@@ -63,12 +63,38 @@ function loadRealOpportunities() {
   return allOpps
 }
 
+const STATE_MAPPING = {
+  alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA',
+  colorado: 'CO', connecticut: 'CT', delaware: 'DE', florida: 'FL', georgia: 'GA',
+  hawaii: 'HI', idaho: 'ID', illinois: 'IL', indiana: 'IN', iowa: 'IA', kansas: 'KS',
+  kentucky: 'KY', louisiana: 'LA', maine: 'ME', maryland: 'MD', massachusetts: 'MA',
+  michigan: 'MI', minnesota: 'MN', mississippi: 'MS', missouri: 'MO', montana: 'MT',
+  nebraska: 'NE', nevada: 'NV', 'new hampshire': 'NH', 'new jersey': 'NJ',
+  'new mexico': 'NM', 'new york': 'NY', 'north carolina': 'NC',
+  'north dakota': 'ND', ohio: 'OH', oklahoma: 'OK', oregon: 'OR', pennsylvania: 'PA',
+  'rhode island': 'RI', 'south carolina': 'SC', 'south dakota': 'SD',
+  tennessee: 'TN', texas: 'TX', utah: 'UT', vermont: 'VT', virginia: 'VA',
+  washington: 'WA', 'west virginia': 'WV', wisconsin: 'WI', wyoming: 'WY',
+  'district of columbia': 'DC',
+}
+
+function normalizeState(state) {
+  if (!state) return ''
+  const s = String(state).toLowerCase().trim()
+  if (STATE_MAPPING[s]) return STATE_MAPPING[s].toUpperCase()
+  const sanitized = s.replace(/[^a-z]/g, '')
+  return sanitized.length === 2 ? sanitized.toUpperCase() : sanitized.toUpperCase()
+}
+
 /**
  * Calculate match score between opportunity and profile signals
  */
 function calculateOpportunityMatch(opp, signals, profileState) {
-  let score = 40 // Base score
+  let score = 0
   const matchReasons = []
+  
+  const normalizedOppState = normalizeState(opp.state || '')
+  const normalizedProfileState = normalizeState(profileState || '')
   
   const oppKeywords = new Set([
     ...(opp.keywords || []).map(k => k.toLowerCase()),
@@ -77,13 +103,14 @@ function calculateOpportunityMatch(opp, signals, profileState) {
   
   const oppText = `${opp.title} ${opp.description}`.toLowerCase()
   
-  // State match (15 points)
-  if (opp.state === 'nationwide' || opp.state === profileState) {
+  // State match (15 points) — uses normalized values for TN/Tennessee, CA/California etc.
+  const isNationwide = String(opp.state || '').toLowerCase().trim() === 'nationwide'
+  if (isNationwide || (normalizedOppState && normalizedProfileState && normalizedOppState === normalizedProfileState)) {
     score += 15
-    if (opp.state === profileState) {
+    if (!isNationwide && normalizedOppState === normalizedProfileState) {
       matchReasons.push(`Location: ${profileState}`)
     }
-  } else if (opp.state && opp.state !== profileState) {
+  } else if (normalizedOppState && normalizedProfileState) {
     // Wrong state - significantly reduce score
     score -= 20
   }
@@ -300,14 +327,14 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
       }
     }
 
-    matchThreshold = params.match_threshold || 70
+    matchThreshold = params.match_threshold || 80
     maxResults = params.max_results || 50
     saveToDatabase = params.save_to_database !== false
   } else {
     // Called directly with (db, profileContext, options)
     db = contextOrDb
     profileContext = profileContextArg
-    matchThreshold = options.matchThreshold || 70
+    matchThreshold = options.matchThreshold || 80
     maxResults = options.maxResults || 50
     saveToDatabase = options.saveToDatabase !== false
   }
@@ -394,7 +421,7 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
   const targetMin = Math.min(10, maxResults)
   const requestedThreshold = Number(matchThreshold) || 0
   const thresholdCandidates = Array.from(
-    new Set([requestedThreshold, 70, 60, 50, 40, 30, 0].filter((v) => Number.isFinite(v))),
+    new Set([requestedThreshold, 80, 70, 60, 50, 0].filter((v) => Number.isFinite(v))),
   ).sort((a, b) => b - a)
 
   let thresholdUsed = requestedThreshold

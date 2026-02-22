@@ -178,7 +178,7 @@ export async function processComprehensiveCrawlerJob({ db, job, dataDir, profile
   console.log('[comprehensiveCrawler] Starting with real opportunities...')
   
   const parameters = job.parameters ?? {}
-  const matchThreshold = parameters.match_threshold || 70
+  const matchThreshold = parameters.match_threshold || 80
   const maxResults = parameters.max_results || 50
   
   // Build profile signals

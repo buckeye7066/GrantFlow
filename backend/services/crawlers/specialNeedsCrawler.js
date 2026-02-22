@@ -462,7 +462,7 @@ function identifySpecialNeedsFromSignals(profile) {
 
 export async function crawlSpecialNeeds(profile, options = {}) {
     const results = []
-        const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 50
+        const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 60
 
   const signals = profile?.signals
     if (!signals) {
