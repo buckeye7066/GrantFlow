@@ -138,6 +138,7 @@ This document inventories the current GrantFlow system **as implemented** (not a
 - `comprehensiveCrawler.js`: “nationwide crawl” placeholder currently generating template opportunities by ZIP; writes into `funding_opportunities`
 - `itemCrawler.js`: item funding matching against static JSON catalogue; profile-driven scoring
 - `opportunityInserter.js`: inserts into `funding_opportunities` with dedupe on `(source, source_id)`
+- **Crawler → catalog flow**: Geo Crawl, Nationwide Crawl, and live crawler runs persist to `funding_opportunities`; Funding Opportunities page and Discover Grants read from APIs that query this table.
 - `profileHelpers.js`: loads profile context and builds profile signals (keywords, demographics, assistance, location, academics)
 - `profileEnrichment.js`: AI-based profile section enrichment job (OpenAI)
 - `documentIngestion.js`: AI extraction from document text into profile sections (OpenAI)

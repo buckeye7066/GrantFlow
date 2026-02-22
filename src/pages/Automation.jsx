@@ -1486,7 +1486,13 @@ export default function Automation() {
   const [jobTypeFilter, setJobTypeFilter] = useState("all")
   const [jobStatusFilter, setJobStatusFilter] = useState("all")
   const [profileFilter, setProfileFilter] = useState(isAdmin ? "all" : activeProfileId ?? "all")
-  const [selectedProfile, setSelectedProfile] = useState(activeProfileId ?? "none")
+  const [selectedProfile, setSelectedProfile] = useState(() => {
+    try {
+      const stored = localStorage.getItem('grantflow:automation-selected-profile')
+      if (stored && stored !== 'none') return stored
+    } catch { /* ignore */ }
+    return activeProfileId ?? "none"
+  })
   const [selectedJob, setSelectedJob] = useState(null)
   const [itemQuery, setItemQuery] = useState("15 passenger van")
   const [selectedSections, setSelectedSections] = useState(["basic_information"])
@@ -1512,6 +1518,28 @@ export default function Automation() {
         : profiles[0].id
 
     if (preferred) {
+      setSelectedProfile(preferred)
+    }
+  }, [isAdmin, profilesQuery.data, selectedProfile, activeProfileId])
+
+  // Persist "Run automations as profile" selection across sessions.
+  useEffect(() => {
+    if (!selectedProfile) return
+    try {
+      localStorage.setItem('grantflow:automation-selected-profile', selectedProfile)
+    } catch { /* ignore */ }
+  }, [selectedProfile])
+
+  // If stored profile no longer exists (e.g., deleted), reset to a valid one.
+  useEffect(() => {
+    if (!isAdmin || !selectedProfile || selectedProfile === 'none') return
+    const profiles = Array.isArray(profilesQuery.data) ? profilesQuery.data : []
+    if (profiles.length === 0) return
+    const exists = profiles.some((p) => p.id === selectedProfile)
+    if (!exists) {
+      const preferred = activeProfileId && profiles.some((p) => p.id === activeProfileId)
+        ? activeProfileId
+        : profiles[0].id
       setSelectedProfile(preferred)
     }
   }, [isAdmin, profilesQuery.data, selectedProfile, activeProfileId])
