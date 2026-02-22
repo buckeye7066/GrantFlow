@@ -16,7 +16,7 @@ export async function processHealthResourcesCrawlerJob({ db, job, profileContext
     signals: signals ?? profile.signals ?? null,
   }
 
-  const minMatchScore = typeof job?.parameters?.min_match_score === 'number' ? job.parameters.min_match_score : 50
+  const minMatchScore = typeof job?.parameters?.min_match_score === 'number' ? job.parameters.min_match_score : 60
   const includeTrials =
     job?.parameters?.include_trials === true ||
     String(job?.parameters?.include_trials ?? '').toLowerCase() === 'true'

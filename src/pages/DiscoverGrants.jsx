@@ -37,7 +37,7 @@ export default function DiscoverGrants() {
   const [searchParams] = useSearchParams()
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const [searchResults, setSearchResults] = useState([]);
-  const [minMatchScore, setMinMatchScore] = useState(50);
+  const [minMatchScore, setMinMatchScore] = useState(60);
   const [isSearching, setIsSearching] = useState(false);
   const [dismissedSuggestions, setDismissedSuggestions] = useState(() => {
     try {

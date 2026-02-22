@@ -67,7 +67,7 @@ function buildClinicalTrialsLinks({ conditionNames, state }) {
 
 export async function crawlHealthResources(profile, options = {}) {
   const results = []
-  const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 50
+  const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 60
 
   // CRITICAL: Use signals for all profile data.
   const signals = profile?.signals
@@ -400,7 +400,7 @@ export async function crawlHealthResources(profile, options = {}) {
     })
     .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
 
-  const thresholdCandidates = Array.from(new Set([minMatchScore, 70, 60, 50, 40, 30, 0]))
+  const thresholdCandidates = Array.from(new Set([minMatchScore, 80, 70, 60, 50, 0]))
     .filter((v) => Number.isFinite(v))
     .sort((a, b) => b - a)
 
