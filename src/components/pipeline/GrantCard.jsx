@@ -211,8 +211,8 @@ export default function GrantCard({ grant, organization, organizationName, onSta
           {grant.tags && grant.tags.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {grant.tags.slice(0, 2).map(tag => (
-                <HelpTip text={"Tag: " + tag + ". Tags indicate the funding category or focus area of this opportunity."}>
-                    <Badge key={tag} variant="secondary" className="text-xs px-1.5 py-0 cursor-help">
+                <HelpTip key={tag} text={"Tag: " + tag + ". Tags indicate the funding category or focus area of this opportunity."}>
+                    <Badge variant="secondary" className="text-xs px-1.5 py-0 cursor-help">
                       {tag}
                     </Badge>
                   </HelpTip>
@@ -229,8 +229,8 @@ export default function GrantCard({ grant, organization, organizationName, onSta
           {grant.categories && grant.categories.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {grant.categories.slice(0, 2).map(cat => (
-                <HelpTip text={"Category: " + cat + ". This funding opportunity falls under this program category."}>
-                    <Badge key={cat} variant="outline" className="text-xs px-1.5 py-0 bg-blue-50 text-blue-700 border-blue-200 cursor-help">
+                <HelpTip key={cat} text={"Category: " + cat + ". This funding opportunity falls under this program category."}>
+                    <Badge variant="outline" className="text-xs px-1.5 py-0 bg-blue-50 text-blue-700 border-blue-200 cursor-help">
                       {cat}
                     </Badge>
                   </HelpTip>
