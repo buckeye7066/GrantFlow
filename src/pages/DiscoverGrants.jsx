@@ -4,12 +4,13 @@ import { useSearchParams } from 'react-router-dom';
 import { base44 } from '@/api/base44Client';
 import { getProfile, listProfiles } from '@/api/profiles';
 import { apiFetch } from '@/api/client';
+import { runRealCrawler } from '@/api/crawlers';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Button } from '@/components/ui/button';
 import { Loader2, Search, User, Lightbulb, ArrowRight, CheckCircle2 } from 'lucide-react';
 import HelpTip from '@/components/help/HelpTip';
 import SearchResults from '@/components/discovery/SearchResults';
-import CrawlerSelection from '@/components/discovery/CrawlerSelection';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/components/ui/use-toast';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -36,6 +37,8 @@ export default function DiscoverGrants() {
   const [searchParams] = useSearchParams()
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const [searchResults, setSearchResults] = useState([]);
+  const [minMatchScore, setMinMatchScore] = useState(50);
+  const [isSearching, setIsSearching] = useState(false);
   const [dismissedSuggestions, setDismissedSuggestions] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('grantflow:dismissed-suggestions') || '[]');
@@ -134,6 +137,62 @@ export default function DiscoverGrants() {
     (profileForSearch?.medicaid_enrolled || selectedOrg?.medicaid_enrolled) &&
     (profileForSearch?.medicaid_waiver_program === 'ecf_choices' ||
       selectedOrg?.medicaid_waiver_program === 'ecf_choices');
+
+  const handleFindFunding = async () => {
+    const profileIdToUse = effectiveProfileId ?? selectedProfileId
+    const pid = (typeof profileIdToUse === 'string' ? profileIdToUse.trim() : null) || null
+    if (!pid) {
+      toast({
+        variant: 'destructive',
+        title: 'Select a profile',
+        description: 'Select a profile to search. We use your profile to match funding opportunities.',
+      })
+      return
+    }
+    setIsSearching(true)
+    const itemRequest = profileForSearch ? {
+      location: {
+        state: profileForSearch?.signals?.location?.state || profileForSearch?.state || null,
+        city: profileForSearch?.signals?.location?.city || profileForSearch?.city || null,
+        zip: profileForSearch?.signals?.location?.zip || profileForSearch?.zip_code || null,
+      },
+      interests: profileForSearch?.signals?.interests ? Array.from(profileForSearch.signals.interests).slice(0, 10) : (profileForSearch?.tags || []).slice(0, 10),
+      demographics: profileForSearch?.signals?.demographics ? Array.from(profileForSearch.signals.demographics).slice(0, 10) : [],
+      career_goals: profileForSearch?.sections?.career_goals?.primary_goal || profileForSearch?.career_goal || null,
+    } : null
+    try {
+      const data = await runRealCrawler({
+        profileId: pid,
+        crawlerType: 'comprehensive',
+        profileData: profileForSearch,
+        minMatchScore,
+        itemRequest,
+      })
+      if (data && data.success === false) {
+        const message = data.message || data.error || 'Search failed'
+        toast({
+          variant: 'destructive',
+          title: 'Search failed',
+          description: message,
+        })
+        return
+      }
+      const opportunities = data?.opportunities ?? []
+      await handleCrawlerResults(opportunities)
+    } catch (error) {
+      console.error('[DiscoverGrants] Search error:', error)
+      const errorMessage = error?.message || error?.response?.message || error?.response?.error || 'Search failed. Please try again.'
+      toast({
+        variant: 'destructive',
+        title: 'Search failed',
+        description: /profile_id|profile.*required|select.*profile/i.test(errorMessage)
+          ? 'Select a profile to run the search. We need your profile to match opportunities.'
+          : errorMessage,
+      })
+    } finally {
+      setIsSearching(false)
+    }
+  }
 
   const handleCrawlerResults = async (opportunities) => {
     log.debug('processing crawler results', { count: opportunities.length })
@@ -352,7 +411,7 @@ export default function DiscoverGrants() {
       items.push({ id: 'add-location', icon: Lightbulb, text: 'Add your location (state/ZIP) to your profile', detail: 'Location data is critical for finding local funding and community resources near you.' });
     }
     if (searchResults.length === 0) {
-      items.push({ id: 'run-crawlers', icon: Search, text: 'Run a search to discover funding opportunities', detail: 'Select one or more funding sources below and click Search to find grants that match your profile.' });
+      items.push({ id: 'run-crawlers', icon: Search, text: 'Run a search to discover funding opportunities', detail: 'Click "Find Funding Opportunities" to search all sources matched to your profile.' });
     }
     if (searchResults.length > 0) {
       const highMatches = searchResults.filter(r => (r.match_score || r.match || 0) >= 80);
@@ -516,12 +575,54 @@ export default function DiscoverGrants() {
               </Alert>
             )}
 
-            {/* Crawler Selection */}
-            <CrawlerSelection
-              profileId={effectiveProfileId ?? selectedProfileId}
-              profileData={profileForSearch}
-              onCrawlComplete={handleCrawlerResults}
-            />
+            {/* Find Funding — single comprehensive search */}
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-lg font-semibold text-foreground">Find Funding Opportunities</h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  We'll search all available funding sources — grants, scholarships, benefits, and local programs — matched to your profile.
+                </p>
+              </div>
+              <div className="p-4 bg-muted/20 rounded-lg border border-border">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-medium text-foreground inline-flex items-center gap-1">
+                      Minimum match score
+                      <HelpTip text="How closely a grant must fit your profile to appear. Lower = more results; higher = only the best fits." />
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Lower this to see more results; raise it to keep only the strongest matches.
+                    </div>
+                  </div>
+                  <div className="text-sm font-semibold text-foreground">{minMatchScore}%</div>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={minMatchScore}
+                  onChange={(e) => setMinMatchScore(Number(e.target.value))}
+                  disabled={isSearching}
+                  className="mt-3 w-full"
+                />
+              </div>
+              <Button
+                onClick={handleFindFunding}
+                disabled={!selectedProfile || isSearching}
+                size="lg"
+                className="min-w-[240px]"
+              >
+                {isSearching ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Searching...
+                  </>
+                ) : (
+                  'Find Funding Opportunities'
+                )}
+              </Button>
+            </div>
           </CardContent>
         </Card>
 

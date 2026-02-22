@@ -22,15 +22,25 @@ import { ensureProfileAccess } from '../utils/accessControl.js'
 
 const router = express.Router()
 
-// Crawler types
+// Crawler types (comprehensive = single pass over all funding sources)
 const CRAWLER_TYPES = [
+  'comprehensive',
   'local_funding',
-  'government_funding', 
+  'government_funding',
   'student_grants',
   'health_resources',
   'ecf_benefits',
   'item_matching',
   'special_needs'
+]
+
+const COMPREHENSIVE_CRAWLER_IDS = [
+  'local_funding',
+  'government_funding',
+  'student_grants',
+  'health_resources',
+  'ecf_benefits',
+  'special_needs',
 ]
 
 const LOAN_TYPES = new Set(['loan', 'loan_program', 'microloan'])
@@ -293,40 +303,70 @@ async function runLiveCrawler({ crawlerType, profile, itemRequest, minMatchScore
 
   try {
     let rawResults = []
-    switch (crawlerType) {
-      case 'local_funding':
-        rawResults = await withTimeout(crawlLocalFunding(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'local_funding')
-        break
-      case 'government_funding':
-        rawResults = await withTimeout(crawlGovernmentFunding(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'government_funding')
-        break
-      case 'student_grants':
-        rawResults = await withTimeout(crawlStudentGrants(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'student_grants')
-        break
-      case 'health_resources':
-        rawResults = await withTimeout(crawlHealthResources(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'health_resources')
-        break
-      case 'special_needs':
-        rawResults = await withTimeout(crawlSpecialNeeds(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'special_needs')
-        break
-      case 'item_matching':
-        rawResults = await withTimeout(
-          crawlItemFunding(profile, { item_request: itemRequest }),
-          LIVE_CRAWL_TIMEOUT_MS,
-          'item_matching',
+    if (crawlerType === 'comprehensive') {
+      const results = await Promise.all(
+        COMPREHENSIVE_CRAWLER_IDS.map((id) =>
+          (async () => {
+            try {
+              switch (id) {
+                case 'local_funding':
+                  return await withTimeout(crawlLocalFunding(profile, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                case 'government_funding':
+                  return await withTimeout(crawlGovernmentFunding(profile, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                case 'student_grants':
+                  return await withTimeout(crawlStudentGrants(profile, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                case 'health_resources':
+                  return await withTimeout(crawlHealthResources(profile, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                case 'special_needs':
+                  return await withTimeout(crawlSpecialNeeds(profile, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                case 'ecf_benefits':
+                  return await withTimeout(crawlECFBenefits(profile, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                default:
+                  return []
+              }
+            } catch (err) {
+              console.warn(`[RealCrawlers] comprehensive: ${id} failed:`, err?.message || err)
+              return []
+            }
+          })()
         )
-        break
-      case 'ecf_benefits':
-        // NOTE: crawler currently yields mostly link-style benefit records.
-        rawResults = await withTimeout(crawlECFBenefits(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'ecf_benefits')
-        break
-      default:
-        return {
-          ok: false,
-          duration_ms: Date.now() - startedAt,
-          error: `No live crawler implementation for ${crawlerType}`,
-          opportunities: [],
-        }
+      )
+      rawResults = results.flat()
+    } else {
+      switch (crawlerType) {
+        case 'local_funding':
+          rawResults = await withTimeout(crawlLocalFunding(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'local_funding')
+          break
+        case 'government_funding':
+          rawResults = await withTimeout(crawlGovernmentFunding(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'government_funding')
+          break
+        case 'student_grants':
+          rawResults = await withTimeout(crawlStudentGrants(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'student_grants')
+          break
+        case 'health_resources':
+          rawResults = await withTimeout(crawlHealthResources(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'health_resources')
+          break
+        case 'special_needs':
+          rawResults = await withTimeout(crawlSpecialNeeds(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'special_needs')
+          break
+        case 'item_matching':
+          rawResults = await withTimeout(
+            crawlItemFunding(profile, { item_request: itemRequest }),
+            LIVE_CRAWL_TIMEOUT_MS,
+            'item_matching',
+          )
+          break
+        case 'ecf_benefits':
+          rawResults = await withTimeout(crawlECFBenefits(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'ecf_benefits')
+          break
+        default:
+          return {
+            ok: false,
+            duration_ms: Date.now() - startedAt,
+            error: `No live crawler implementation for ${crawlerType}`,
+            opportunities: [],
+          }
+      }
     }
 
     const normalized = (Array.isArray(rawResults) ? rawResults : [])
