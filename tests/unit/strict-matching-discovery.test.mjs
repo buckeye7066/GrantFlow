@@ -217,10 +217,10 @@ test('itemCrawler (D): no fallback threshold; matched=0 and fallback_applied=fal
 // E) Production seeding guard: scripts exit nonzero when NODE_ENV=production
 // ---------------------------------------------------------------------------
 
-function runScriptInProduction(scriptPath) {
+function runScriptWith(scriptPath, extraEnv = {}) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [scriptPath], {
-      env: { ...process.env, NODE_ENV: 'production' },
+      env: { ...process.env, ...extraEnv },
       stdio: 'pipe',
     })
     let stderr = ''
@@ -232,7 +232,7 @@ function runScriptInProduction(scriptPath) {
 
 test('seeding guard (E): backend/scripts/seed-profile-grants.mjs exits nonzero in production', async () => {
   const scriptPath = path.resolve('backend/scripts/seed-profile-grants.mjs')
-  const { code, stderr } = await runScriptInProduction(scriptPath)
+  const { code, stderr } = await runScriptWith(scriptPath, { NODE_ENV: 'production' })
   assert.ok(code !== 0, `Expected nonzero exit code in production, got code=${code}`)
   assert.ok(
     stderr.includes('[seed-profile-grants]') && stderr.includes('production'),
@@ -242,11 +242,67 @@ test('seeding guard (E): backend/scripts/seed-profile-grants.mjs exits nonzero i
 
 test('seeding guard (E): scripts/seed-profile-grants.mjs exits nonzero in production', async () => {
   const scriptPath = path.resolve('scripts/seed-profile-grants.mjs')
-  const { code, stderr } = await runScriptInProduction(scriptPath)
+  const { code, stderr } = await runScriptWith(scriptPath, { NODE_ENV: 'production' })
   assert.ok(code !== 0, `Expected nonzero exit code in production, got code=${code}`)
   assert.ok(
     stderr.includes('[seed-profile-grants]') && stderr.includes('production'),
     `Expected production-guard message in stderr, got: ${stderr}`,
   )
 })
+
+test('seeding guard (E): backend/scripts/seed-profile-grants.mjs exits nonzero when DISABLE_SEEDING=true', async () => {
+  const scriptPath = path.resolve('backend/scripts/seed-profile-grants.mjs')
+  const { code, stderr } = await runScriptWith(scriptPath, { NODE_ENV: 'development', DISABLE_SEEDING: 'true' })
+  assert.ok(code !== 0, `Expected nonzero exit code when DISABLE_SEEDING=true, got code=${code}`)
+  assert.ok(
+    stderr.includes('[seed-profile-grants]'),
+    `Expected guard message in stderr, got: ${stderr}`,
+  )
+})
+
+test('seeding guard (E): scripts/seed-profile-grants.mjs exits nonzero when DISABLE_SEEDING=true', async () => {
+  const scriptPath = path.resolve('scripts/seed-profile-grants.mjs')
+  const { code, stderr } = await runScriptWith(scriptPath, { NODE_ENV: 'development', DISABLE_SEEDING: 'true' })
+  assert.ok(code !== 0, `Expected nonzero exit code when DISABLE_SEEDING=true, got code=${code}`)
+  assert.ok(
+    stderr.includes('[seed-profile-grants]'),
+    `Expected guard message in stderr, got: ${stderr}`,
+  )
+})
+
+// ---------------------------------------------------------------------------
+// F) seedOnStartup.js: blocks when NODE_ENV=production or DISABLE_SEEDING=true
+// ---------------------------------------------------------------------------
+
+test('seedOnStartup (F): seedFundingOpportunities returns 0 without inserting in production', async () => {
+  const { seedFundingOpportunities } = await import('../../backend/utils/seedOnStartup.js')
+  const origEnv = process.env.NODE_ENV
+  process.env.NODE_ENV = 'production'
+  try {
+    const db = createDb()
+    const result = seedFundingOpportunities(db)
+    assert.equal(result, 0, 'Expected 0 (blocked) in production')
+    const count = db.prepare('SELECT COUNT(*) as c FROM funding_opportunities').get().c
+    assert.equal(Number(count), 0, 'No rows should have been inserted in production')
+  } finally {
+    process.env.NODE_ENV = origEnv
+  }
+})
+
+test('seedOnStartup (F): seedFundingOpportunities returns 0 when DISABLE_SEEDING=true', async () => {
+  const { seedFundingOpportunities } = await import('../../backend/utils/seedOnStartup.js')
+  const origDisable = process.env.DISABLE_SEEDING
+  const origEnv = process.env.NODE_ENV
+  process.env.DISABLE_SEEDING = 'true'
+  process.env.NODE_ENV = 'development'
+  try {
+    const db = createDb()
+    const result = seedFundingOpportunities(db)
+    assert.equal(result, 0, 'Expected 0 (blocked) when DISABLE_SEEDING=true')
+  } finally {
+    process.env.DISABLE_SEEDING = origDisable
+    process.env.NODE_ENV = origEnv
+  }
+})
+
 
