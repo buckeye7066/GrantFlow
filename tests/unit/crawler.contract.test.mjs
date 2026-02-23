@@ -106,3 +106,43 @@ test('crawler opportunity contract helpers: must-not detection and keyword merge
     ['grant', 'startup'],
   )
 })
+
+test('crawler opportunity contract: defaults opportunity_type by crawler type when missing', () => {
+  const government = enforceCrawlerOpportunityContract(
+    {
+      title: 'Federal Opportunity',
+      url: 'https://www.grants.gov/search-grants',
+    },
+    { crawlerType: 'government_funding' },
+  )
+  assert.equal(government?.opportunity_type, 'grant')
+
+  const student = enforceCrawlerOpportunityContract(
+    {
+      title: 'Student Aid Opportunity',
+      url: 'https://studentaid.gov',
+    },
+    { crawlerType: 'student_grants' },
+  )
+  assert.equal(student?.opportunity_type, 'scholarship')
+
+  const local = enforceCrawlerOpportunityContract(
+    {
+      title: 'Community Program',
+      url: 'https://www.unitedway.org/find-your-united-way',
+    },
+    { crawlerType: 'local_funding' },
+  )
+  assert.equal(local?.opportunity_type, 'program')
+  assert.equal(local?.record_origin, 'directory_resource')
+
+  const comprehensiveWithSource = enforceCrawlerOpportunityContract(
+    {
+      title: 'Comprehensive Government Source',
+      source: 'government_funding',
+      url: 'https://www.usda.gov/topics/food-and-nutrition',
+    },
+    { crawlerType: 'comprehensive' },
+  )
+  assert.equal(comprehensiveWithSource?.opportunity_type, 'grant')
+})

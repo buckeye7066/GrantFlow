@@ -22,6 +22,7 @@ test('query planner: food truck startup intent excludes food-bank terms', () => 
       primary_need_category: 'business_startup',
       keywords: ['food truck', 'mobile food business', 'startup grant'],
       negative_keywords: [],
+      confidence: 0.92,
     },
   }
 
@@ -56,6 +57,7 @@ test('query planner: food security intent excludes restaurant startup noise', ()
       primary_need_category: 'food_security',
       keywords: ['food pantry', 'nutrition support'],
       negative_keywords: [],
+      confidence: 0.87,
     },
   }
 
@@ -90,6 +92,7 @@ test('query planner: ECF benefits include TN analog terms and sponsors', () => {
       primary_need_category: 'disability_support',
       keywords: ['ecf choices', 'community first'],
       negative_keywords: [],
+      confidence: 0.9,
     },
   }
 
@@ -124,6 +127,7 @@ test('query planner: nurse licensure intent adds workforce training concepts', (
       primary_need_category: 'education',
       keywords: ['nurse licensure', 'nclex prep', 'nursing scholarship'],
       negative_keywords: [],
+      confidence: 0.84,
     },
   }
 
@@ -136,4 +140,38 @@ test('query planner: nurse licensure intent adds workforce training concepts', (
   assert.ok(plan.shouldTerms.includes('nurse licensure training grant'))
   assert.ok(plan.shouldTerms.includes('nclex prep assistance'))
   assert.ok(plan.requiredConcepts.includes('workforce training'))
+})
+
+test('query planner: low-confidence intent keeps mustNot terms disabled', () => {
+  const facets = {
+    profile: {
+      primary_profile_type: 'small_business',
+      applicant_types: ['small_business'],
+    },
+    geo: {
+      state: 'TN',
+      zip: '37209',
+    },
+    occupation: {
+      small_business_owner: true,
+    },
+    assistance: {},
+    intent: {
+      primary_need_category: 'business_startup',
+      keywords: ['food truck', 'startup'],
+      negative_keywords: ['food bank'],
+      confidence: 0.4,
+    },
+  }
+
+  const plan = planCrawlerQueries({
+    crawlerType: 'local_funding',
+    facets,
+    location: facets.geo,
+  })
+
+  assert.ok(plan.mustTerms.includes('food truck grant'))
+  assert.ok(plan.shouldTerms.includes('small business startup'))
+  assert.equal(plan.mustNotTerms.includes('food bank'), false)
+  assert.equal(plan.mustNotTerms.includes('food pantry'), false)
 })

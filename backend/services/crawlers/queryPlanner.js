@@ -1,4 +1,5 @@
 import { buildIntentTokens } from '../profile/profileTaxonomy.js'
+const INTENT_MUST_NOT_CONFIDENCE_THRESHOLD = 0.7
 
 const AUTHORITY_ALLOWLIST_BASE = [
   'grants.gov',
@@ -82,6 +83,14 @@ function normalizeString(value) {
   return value.trim().toLowerCase()
 }
 
+function normalizeConfidence(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return 0
+  if (number <= 0) return 0
+  if (number >= 1) return 1
+  return number
+}
+
 function uniqueStrings(values = []) {
   const out = []
   const seen = new Set()
@@ -155,7 +164,7 @@ function applicantTerms(facets = {}) {
   return uniqueStrings(terms)
 }
 
-function intentDisambiguation({ facets, mustTerms, shouldTerms, mustNotTerms, requiredConcepts }) {
+function intentDisambiguation({ facets, mustTerms, shouldTerms, mustNotTerms, requiredConcepts, allowAggressiveMustNot }) {
   const intentKeywords = Array.isArray(facets?.intent?.keywords) ? facets.intent.keywords : []
   const intentCategory = normalizeString(facets?.intent?.primary_need_category || '')
   const occupation = facets?.occupation ?? {}
@@ -169,9 +178,11 @@ function intentDisambiguation({ facets, mustTerms, shouldTerms, mustNotTerms, re
     mustTerms.push('food truck grant')
     shouldTerms.push('mobile food business')
     shouldTerms.push('small business startup')
-    mustNotTerms.push('food bank')
-    mustNotTerms.push('food pantry')
-    mustNotTerms.push('hunger relief')
+    if (allowAggressiveMustNot) {
+      mustNotTerms.push('food bank')
+      mustNotTerms.push('food pantry')
+      mustNotTerms.push('hunger relief')
+    }
     requiredConcepts.push('business funding')
   }
 
@@ -180,7 +191,7 @@ function intentDisambiguation({ facets, mustTerms, shouldTerms, mustNotTerms, re
     shouldTerms.push('strike hardship fund')
     shouldTerms.push('union emergency assistance')
     shouldTerms.push('labor relief grant')
-    mustNotTerms.push('stock option strike price')
+    if (allowAggressiveMustNot) mustNotTerms.push('stock option strike price')
     requiredConcepts.push('worker emergency assistance')
   }
 
@@ -192,7 +203,7 @@ function intentDisambiguation({ facets, mustTerms, shouldTerms, mustNotTerms, re
     shouldTerms.push('teacher classroom grant')
     shouldTerms.push('school supplies stipend')
     shouldTerms.push('educator mini grant')
-    mustNotTerms.push('teacher certification loan')
+    if (allowAggressiveMustNot) mustNotTerms.push('teacher certification loan')
     requiredConcepts.push('classroom supplies')
   }
 
@@ -221,6 +232,8 @@ function intentDisambiguation({ facets, mustTerms, shouldTerms, mustNotTerms, re
 
 export function planCrawlerQueries({ crawlerType, facets = {}, location = null }) {
   const normalizedCrawlerType = normalizeString(crawlerType || 'comprehensive') || 'comprehensive'
+  const intentConfidence = normalizeConfidence(facets?.intent?.confidence)
+  const allowAggressiveMustNot = intentConfidence >= INTENT_MUST_NOT_CONFIDENCE_THRESHOLD
   const effectiveLocation = location || facets?.geo || {}
   const intentTokens = buildIntentTokens({ facets })
 
@@ -275,7 +288,14 @@ export function planCrawlerQueries({ crawlerType, facets = {}, location = null }
     dedupeKeys.push('benefit_categories')
   }
 
-  intentDisambiguation({ facets, mustTerms, shouldTerms, mustNotTerms, requiredConcepts })
+  intentDisambiguation({
+    facets,
+    mustTerms,
+    shouldTerms,
+    mustNotTerms,
+    requiredConcepts,
+    allowAggressiveMustNot,
+  })
 
   // Geographic expansion hint: city -> county -> state -> national.
   if (effectiveLocation?.city) requiredConcepts.push('city_or_county_match')
