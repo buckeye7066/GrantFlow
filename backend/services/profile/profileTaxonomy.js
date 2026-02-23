@@ -604,7 +604,7 @@ function deriveIntent({ facets }) {
     education:
       (hasProfileApplicantType('student') ? 1 : 0) +
       (hasGpaValue ? 1 : 0) +
-      (Boolean(getDeep(facets, 'education.intended_major')) ? 1 : 0) +
+      (getDeep(facets, 'education.intended_major') ? 1 : 0) +
       (studentTokenHits > 0 ? 1 : 0),
     disability_support: (hasDisabilitySignals ? 1 : 0) + (disabilityTokenHits > 0 ? 1 : 0),
     healthcare_support: (hasHealthSignals ? 1 : 0) + (healthTokenHits > 0 ? 1 : 0),
