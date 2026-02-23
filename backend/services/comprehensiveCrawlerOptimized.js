@@ -327,7 +327,7 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
       }
     }
 
-    matchThreshold = params.match_threshold || 80
+    matchThreshold = params.match_threshold || 65
     maxResults = params.max_results || 50
     saveToDatabase = params.save_to_database !== false
   } else {
