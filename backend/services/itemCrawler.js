@@ -262,6 +262,7 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
     result_meta: {
       total_scored: scoredOpps.length,
       match_threshold: requestedThreshold,
+      match_threshold_fallback_applied: false,
     },
     opportunityLogs: topOpps.map(o => ({
       title: o.title,
