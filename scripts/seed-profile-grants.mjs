@@ -6,6 +6,12 @@
  * Only uses verified real funding opportunities - no fakes.
  */
 
+// Safety guard: refuse to run in production to prevent seeding data into real user environments.
+if (process.env.NODE_ENV === 'production') {
+  console.error('[seed-profile-grants] Seeding disabled in production.')
+  process.exit(1)
+}
+
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
