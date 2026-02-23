@@ -19,6 +19,8 @@ import { crawlItemFunding } from '../services/crawlers/itemFundingCrawler.js'
 import { crawlECFBenefits, evaluateEcfUnlockEligibility } from '../services/crawlers/ecfBenefitsCrawler.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
+import { buildProfileFacets, requireFacets, buildIntentTokens } from '../services/profile/profileTaxonomy.js'
+import { planCrawlerQueries } from '../services/crawlers/queryPlanner.js'
 
 const router = express.Router()
 
@@ -62,6 +64,55 @@ function normalizeString(value) {
   return value.trim().toLowerCase()
 }
 
+function isValidHttpUrl(value) {
+  if (typeof value !== 'string' || value.trim().length === 0) return false
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+function bumpRejectionCount(rejections, key) {
+  if (!rejections || !key) return
+  const k = String(key)
+  rejections[k] = (rejections[k] ?? 0) + 1
+}
+
+function summarizeUsedFacets(facets) {
+  if (!facets || typeof facets !== 'object') return {}
+  return {
+    profile: {
+      primary_profile_type: facets?.profile?.primary_profile_type ?? null,
+      applicant_types_count: Array.isArray(facets?.profile?.applicant_types)
+        ? facets.profile.applicant_types.length
+        : 0,
+    },
+    geo: {
+      state: facets?.geo?.state ?? null,
+      zip: facets?.geo?.zip ?? null,
+      city: facets?.geo?.city ?? null,
+      county: facets?.geo?.county ?? null,
+    },
+    intent: {
+      primary_need_category: facets?.intent?.primary_need_category ?? null,
+      keywords_count: Array.isArray(facets?.intent?.keywords) ? facets.intent.keywords.length : 0,
+      negative_keywords_count: Array.isArray(facets?.intent?.negative_keywords)
+        ? facets.intent.negative_keywords.length
+        : 0,
+    },
+  }
+}
+
+function buildAdminDebugMeta({ profileContext, queryPlan, validationRejectionCounts = {} }) {
+  return {
+    used_facets: summarizeUsedFacets(profileContext?.facets),
+    query_plan: queryPlan ?? profileContext?.queryPlan ?? null,
+    validation_rejection_counts: validationRejectionCounts,
+  }
+}
+
 function safeParseJSON(value, fallback) {
   if (value === null || value === undefined) return fallback
   if (Array.isArray(value)) return value
@@ -83,6 +134,31 @@ const AMBIGUOUS_SINGLE_WORDS = new Set([
 ])
 
 function buildSearchTokens(profileContext) {
+  const facets = profileContext?.facets
+  const queryPlan = profileContext?.queryPlan
+
+  // Taxonomy-first token generation so fallback DB search uses canonical facets.
+  if (facets && typeof facets === 'object') {
+    const intentTokens = buildIntentTokens({ facets })
+    const fromIntent = [
+      ...(Array.isArray(intentTokens.mustTerms) ? intentTokens.mustTerms : []),
+      ...(Array.isArray(intentTokens.shouldTerms) ? intentTokens.shouldTerms : []),
+    ]
+    const fromPlan = [
+      ...(Array.isArray(queryPlan?.mustTerms) ? queryPlan.mustTerms : []),
+      ...(Array.isArray(queryPlan?.shouldTerms) ? queryPlan.shouldTerms : []),
+    ]
+
+    const facetTokens = new Set()
+    for (const token of [...fromIntent, ...fromPlan]) {
+      const normalized = normalizeString(token)
+      if (normalized.length >= 4) facetTokens.add(normalized)
+    }
+    if (facetTokens.size > 0) {
+      return Array.from(facetTokens).slice(0, 14)
+    }
+  }
+
   const signals = profileContext?.signals
   const profile = profileContext?.profile
   const phraseTokens = new Set()
@@ -193,33 +269,65 @@ function isOpportunityCurrent(row) {
   return parsed >= new Date(now.getFullYear(), now.getMonth(), now.getDate())
 }
 
-function normalizeLiveOpportunity(raw, { crawlerType }) {
-  if (!raw || typeof raw !== 'object') return null
+function normalizeLiveOpportunity(raw, { crawlerType, rejectionCounts = null }) {
+  if (!raw || typeof raw !== 'object') {
+    bumpRejectionCount(rejectionCounts, 'invalid_object')
+    return null
+  }
 
   const title = raw.title ?? raw.name ?? null
   const sponsor = raw.sponsor ?? raw.funder ?? raw.source ?? null
-  const url = raw.url ?? raw.application_url ?? raw.source_url ?? null
+  const rawUrl = raw.url ?? raw.application_url ?? raw.source_url ?? null
 
-  if (!title || typeof title !== 'string') return null
+  if (!title || typeof title !== 'string') {
+    bumpRejectionCount(rejectionCounts, 'missing_title')
+    return null
+  }
+
+  if (!rawUrl || !isValidHttpUrl(rawUrl)) {
+    bumpRejectionCount(rejectionCounts, !rawUrl ? 'missing_url' : 'invalid_url')
+    return null
+  }
 
   const opportunityType = normalizeString(raw.opportunity_type || raw.type || raw.grant_type || 'grant') || 'grant'
-  if (LOAN_TYPES.has(opportunityType)) return null
+  if (LOAN_TYPES.has(opportunityType)) {
+    bumpRejectionCount(rejectionCounts, 'loan_type_excluded')
+    return null
+  }
 
   const existingScore = typeof raw.match_score === 'number' ? raw.match_score : null
   const existingReasons = Array.isArray(raw.match_reasons) ? raw.match_reasons : []
   const recordOriginRaw = normalizeString(raw.record_origin || '')
-  const isDirectoryStyle = opportunityType === 'program' || recordOriginRaw.includes('directory') || Boolean(raw.is_directory_resource)
+  const isDirectoryStyle =
+    opportunityType === 'program' || recordOriginRaw.includes('directory') || Boolean(raw.is_directory_resource)
   const normalizedDeadline = normalizeDateToIso(raw.deadline ?? null)
+
+  const eligibilityBullets = Array.isArray(raw.eligibility_bullets)
+    ? raw.eligibility_bullets
+    : typeof raw.eligibility === 'string' && raw.eligibility.trim().length > 0
+    ? [raw.eligibility.trim()]
+    : []
+
+  const description =
+    typeof raw.description === 'string' && raw.description.trim().length > 0
+      ? raw.description
+      : typeof raw.summary === 'string' && raw.summary.trim().length > 0
+      ? raw.summary
+      : null
+
+  const matchReasons = mergeReasons(existingReasons, [
+    facetsReasonFromRaw(raw),
+  ]).filter(Boolean)
 
   return {
     id: raw.id ?? null,
     title,
     sponsor,
-    description: raw.description ?? null,
+    description,
     source: raw.source ?? crawlerType,
-    source_url: raw.source_url ?? url,
-    application_url: raw.application_url ?? url,
-    url,
+    source_url: raw.source_url ?? rawUrl,
+    application_url: raw.application_url ?? rawUrl,
+    url: rawUrl,
     amount_min: raw.amount_min ?? null,
     amount_max: raw.amount_max ?? null,
     amount_description: raw.amount_description ?? null,
@@ -230,15 +338,22 @@ function normalizeLiveOpportunity(raw, { crawlerType }) {
     state: raw.state ?? null,
     categories: Array.isArray(raw.categories) ? raw.categories : [],
     keywords: Array.isArray(raw.keywords) ? raw.keywords : [],
-    eligibility_bullets: Array.isArray(raw.eligibility_bullets) ? raw.eligibility_bullets : [],
+    eligibility_bullets: eligibilityBullets,
     opportunity_type: opportunityType,
     // Preserve crawler-provided origin when present; directory-style resources must not be treated as volatile live crawls.
     record_origin: recordOriginRaw || (isDirectoryStyle ? 'directory_resource' : 'live_crawl'),
     crawler_type: crawlerType,
     ...(existingScore !== null ? { match_score: existingScore } : {}),
-    ...(existingReasons.length ? { match_reasons: existingReasons } : {}),
+    ...(matchReasons.length ? { match_reasons: matchReasons } : {}),
     ...(isDirectoryStyle ? { is_directory_resource: true } : {}),
   }
+}
+
+function facetsReasonFromRaw(raw) {
+  const reasons = Array.isArray(raw?.match_reasons) ? raw.match_reasons : []
+  if (reasons.length > 0) return ''
+  if (raw?.match_reason && typeof raw.match_reason === 'string') return raw.match_reason
+  return ''
 }
 
 function mergeReasons(a, b) {
@@ -287,9 +402,30 @@ async function withTimeout(promise, ms, label) {
   }
 }
 
-async function runLiveCrawler({ crawlerType, profile, itemRequest, minMatchScore }) {
+function buildFacetReasons(facets) {
+  const reasons = []
+  const primaryType = facets?.profile?.primary_profile_type
+  const state = facets?.geo?.state
+  const need = facets?.intent?.primary_need_category
+  if (primaryType) reasons.push(`Profile type: ${String(primaryType).replace(/_/g, ' ')}`)
+  if (state) reasons.push(`State context: ${String(state).toUpperCase()}`)
+  if (need && String(need) !== 'unknown') reasons.push(`Intent category: ${String(need).replace(/_/g, ' ')}`)
+  return reasons
+}
+
+async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMatchScore }) {
   const startedAt = Date.now()
-  const options = { min_match_score: minMatchScore }
+  const effectiveContext =
+    profileContext && typeof profileContext === 'object' && profileContext.profile
+      ? profileContext
+      : {
+          profile: profileContext ?? {},
+          sections: profileContext?.sections ?? {},
+          signals: profileContext?.signals ?? null,
+          facets: profileContext?.facets ?? {},
+          trace: profileContext?.trace ?? {},
+        }
+  const profile = effectiveContext.profile
 
   // Validate profile before attempting to crawl
   if (!profile || typeof profile !== 'object') {
@@ -301,6 +437,15 @@ async function runLiveCrawler({ crawlerType, profile, itemRequest, minMatchScore
     }
   }
 
+  const queryPlan = planCrawlerQueries({
+    crawlerType,
+    facets: effectiveContext?.facets ?? {},
+    location: effectiveContext?.facets?.geo ?? effectiveContext?.signals?.location ?? {},
+  })
+  const options = { min_match_score: minMatchScore, query_plan: queryPlan }
+  const rejectionCounts = {}
+  const facetReasons = buildFacetReasons(effectiveContext?.facets ?? {})
+
   try {
     let rawResults = []
     if (crawlerType === 'comprehensive') {
@@ -310,17 +455,17 @@ async function runLiveCrawler({ crawlerType, profile, itemRequest, minMatchScore
             try {
               switch (id) {
                 case 'local_funding':
-                  return await withTimeout(crawlLocalFunding(profile, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                  return await withTimeout(crawlLocalFunding(effectiveContext, options), LIVE_CRAWL_TIMEOUT_MS, id)
                 case 'government_funding':
-                  return await withTimeout(crawlGovernmentFunding(profile, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                  return await withTimeout(crawlGovernmentFunding(effectiveContext, options), LIVE_CRAWL_TIMEOUT_MS, id)
                 case 'student_grants':
-                  return await withTimeout(crawlStudentGrants(profile, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                  return await withTimeout(crawlStudentGrants(effectiveContext, options), LIVE_CRAWL_TIMEOUT_MS, id)
                 case 'health_resources':
-                  return await withTimeout(crawlHealthResources(profile, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                  return await withTimeout(crawlHealthResources(effectiveContext, options), LIVE_CRAWL_TIMEOUT_MS, id)
                 case 'special_needs':
-                  return await withTimeout(crawlSpecialNeeds(profile, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                  return await withTimeout(crawlSpecialNeeds(effectiveContext, options), LIVE_CRAWL_TIMEOUT_MS, id)
                 case 'ecf_benefits':
-                  return await withTimeout(crawlECFBenefits(profile, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                  return await withTimeout(crawlECFBenefits(effectiveContext, options), LIVE_CRAWL_TIMEOUT_MS, id)
                 default:
                   return []
               }
@@ -328,36 +473,60 @@ async function runLiveCrawler({ crawlerType, profile, itemRequest, minMatchScore
               console.warn(`[RealCrawlers] comprehensive: ${id} failed:`, err?.message || err)
               return []
             }
-          })()
-        )
+          })(),
+        ),
       )
       rawResults = results.flat()
     } else {
       switch (crawlerType) {
         case 'local_funding':
-          rawResults = await withTimeout(crawlLocalFunding(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'local_funding')
+          rawResults = await withTimeout(
+            crawlLocalFunding(effectiveContext, options),
+            LIVE_CRAWL_TIMEOUT_MS,
+            'local_funding',
+          )
           break
         case 'government_funding':
-          rawResults = await withTimeout(crawlGovernmentFunding(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'government_funding')
+          rawResults = await withTimeout(
+            crawlGovernmentFunding(effectiveContext, options),
+            LIVE_CRAWL_TIMEOUT_MS,
+            'government_funding',
+          )
           break
         case 'student_grants':
-          rawResults = await withTimeout(crawlStudentGrants(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'student_grants')
+          rawResults = await withTimeout(
+            crawlStudentGrants(effectiveContext, options),
+            LIVE_CRAWL_TIMEOUT_MS,
+            'student_grants',
+          )
           break
         case 'health_resources':
-          rawResults = await withTimeout(crawlHealthResources(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'health_resources')
+          rawResults = await withTimeout(
+            crawlHealthResources(effectiveContext, options),
+            LIVE_CRAWL_TIMEOUT_MS,
+            'health_resources',
+          )
           break
         case 'special_needs':
-          rawResults = await withTimeout(crawlSpecialNeeds(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'special_needs')
+          rawResults = await withTimeout(
+            crawlSpecialNeeds(effectiveContext, options),
+            LIVE_CRAWL_TIMEOUT_MS,
+            'special_needs',
+          )
           break
         case 'item_matching':
           rawResults = await withTimeout(
-            crawlItemFunding(profile, { item_request: itemRequest }),
+            crawlItemFunding(effectiveContext, { ...options, item_request: itemRequest }),
             LIVE_CRAWL_TIMEOUT_MS,
             'item_matching',
           )
           break
         case 'ecf_benefits':
-          rawResults = await withTimeout(crawlECFBenefits(profile, options), LIVE_CRAWL_TIMEOUT_MS, 'ecf_benefits')
+          rawResults = await withTimeout(
+            crawlECFBenefits(effectiveContext, options),
+            LIVE_CRAWL_TIMEOUT_MS,
+            'ecf_benefits',
+          )
           break
         default:
           return {
@@ -370,14 +539,25 @@ async function runLiveCrawler({ crawlerType, profile, itemRequest, minMatchScore
     }
 
     const normalized = (Array.isArray(rawResults) ? rawResults : [])
-      .map((row) => normalizeLiveOpportunity(row, { crawlerType }))
+      .map((row) => normalizeLiveOpportunity(row, { crawlerType, rejectionCounts }))
       .filter(Boolean)
+      .filter((row) => {
+        const text =
+          `${row?.title || ''} ${row?.description || ''} ${(row?.keywords || []).join(' ')} ${(row?.categories || []).join(' ')}`.toLowerCase()
+        const blocked = Array.isArray(queryPlan?.mustNotTerms)
+          ? queryPlan.mustNotTerms.some((term) => normalizeString(term) && text.includes(normalizeString(term)))
+          : false
+        if (blocked) bumpRejectionCount(rejectionCounts, 'query_plan_must_not')
+        return !blocked
+      })
 
-    // Score with the FULL profile context (signals + sections) so we use all datapoints consistently.
-    const profileContextForScoring =
-      profile && typeof profile === 'object' && profile.sections
-        ? { profile, sections: profile.sections ?? {}, signals: profile.signals ?? null }
-        : profile
+    // Score with the FULL profile context (signals + sections + facets) so we use all datapoints consistently.
+    const profileContextForScoring = {
+      profile,
+      sections: effectiveContext.sections ?? profile.sections ?? {},
+      signals: effectiveContext.signals ?? profile.signals ?? null,
+      facets: effectiveContext.facets ?? {},
+    }
 
     const current = normalized.filter(isOpportunityCurrent)
 
@@ -388,14 +568,15 @@ async function runLiveCrawler({ crawlerType, profile, itemRequest, minMatchScore
       const existingScore = typeof row.match_score === 'number' ? row.match_score : null
       const isDirectory = isDirectoryResource(row)
 
-      const mergedScore =
-        existingScore === null ? computedScore : Math.max(existingScore, computedScore)
-      const mergedReasons = mergeReasons(row.match_reasons, computedReasons)
+      const mergedScore = existingScore === null ? computedScore : Math.max(existingScore, computedScore)
+      const mergedReasons = mergeReasons(row.match_reasons, mergeReasons(computedReasons, facetReasons))
 
       // Guarantee directory resources survive the user's min threshold (they're entry points, not competitive matches).
       const finalScore = isDirectory ? Math.max(Math.min(Number(minMatchScore), 55), mergedScore) : mergedScore
       const finalReasons = isDirectory
-        ? mergeReasons(mergedReasons, [`Directory resource (always included at ${Number(minMatchScore)}%+ threshold)`])
+        ? mergeReasons(mergedReasons, [
+            `Directory resource (always included at ${Number(minMatchScore)}%+ threshold)`,
+          ])
         : mergedReasons
 
       return { ...row, match_score: finalScore, match_reasons: finalReasons }
@@ -416,6 +597,8 @@ async function runLiveCrawler({ crawlerType, profile, itemRequest, minMatchScore
       filtered_count: included.length,
       opportunities: included,
       error: null,
+      query_plan: queryPlan,
+      validation_rejection_counts: rejectionCounts,
     }
   } catch (error) {
     const errorMsg = error?.message || String(error)
@@ -435,12 +618,14 @@ async function runLiveCrawler({ crawlerType, profile, itemRequest, minMatchScore
     if (error?.stack) {
       console.error(`[RealCrawlers] ${crawlerType} stack trace:\n`, error.stack)
     }
-    
+
     return {
       ok: false,
       duration_ms: Date.now() - startedAt,
       error: friendlyError,
       opportunities: [],
+      query_plan: queryPlan,
+      validation_rejection_counts: rejectionCounts,
     }
   }
 }
@@ -533,6 +718,26 @@ function buildCandidateOpportunityQuery({ crawlerType, profileContext, tokens, i
     })
   }
 
+  // Intent-driven explicit exclusions (must-not terms).
+  // Used only for clear disambiguation (for example: food truck business vs food bank assistance).
+  const mustNotTerms = Array.isArray(profileContext?.queryPlan?.mustNotTerms)
+    ? profileContext.queryPlan.mustNotTerms
+    : []
+  if (mustNotTerms.length > 0) {
+    const mustNotClauses = mustNotTerms
+      .slice(0, 12)
+      .map(
+        () =>
+          '(LOWER(title) NOT LIKE ? AND LOWER(description) NOT LIKE ? AND LOWER(keywords) NOT LIKE ? AND LOWER(categories) NOT LIKE ?)',
+      )
+      .join(' AND ')
+    conditions.push(`(${mustNotClauses})`)
+    mustNotTerms.slice(0, 12).forEach((term) => {
+      const pattern = `%${normalizeString(term)}%`
+      params.push(pattern, pattern, pattern, pattern)
+    })
+  }
+
   // Item-specific narrowing if provided.
   if (crawlerType === 'item_matching' && itemRequest && typeof itemRequest === 'string') {
     const itemTokens = itemRequest
@@ -583,6 +788,7 @@ router.post('/run', ensureAuth, async (req, res) => {
     item_request,
     min_match_score = 60, // Aligned with crawler defaults; use 100% of profile signals
   } = req.body
+  const adminDebugRequested = String(req.query?.admin ?? req.body?.admin ?? '').toLowerCase() === 'true'
   
   if (!crawler_type || !CRAWLER_TYPES.includes(crawler_type)) {
     return res.status(400).json({ 
@@ -643,45 +849,67 @@ router.post('/run', ensureAuth, async (req, res) => {
       console.warn('[RealCrawlers] Profile missing signals and sections - results may be limited')
     }
 
-    const profileContext =
+    let profileContext =
       profile && profile.sections && profile.signals
         ? { profile, sections: profile.sections, signals: profile.signals }
         : { profile, sections: profile?.sections ?? {}, signals: profile?.signals ?? null }
 
-    const coveragePct = profileContext?.signals?.coverage?.pct ?? 0
+    profileContext = buildProfileFacets(profileContext)
+    try {
+      profileContext = requireFacets(profileContext, { strict: true })
+    } catch (taxonomyError) {
+      const statusCode = Number(taxonomyError?.status || 400)
+      return res.status(statusCode).json({
+        success: false,
+        error: taxonomyError?.code || 'PROFILE_CONTEXT_INCOMPLETE',
+        message:
+          taxonomyError?.message ||
+          'Required profile facets are missing. Update your profile and try again.',
+        crawler_type,
+        opportunities: [],
+        details: taxonomyError?.details ?? null,
+      })
+    }
+
+    const coveragePct =
+      profileContext?.coverage?.field_map_coverage?.signal_coverage_pct ??
+      profileContext?.coverage?.field_map_coverage?.pct ??
+      profileContext?.signals?.coverage?.pct ??
+      0
     const sectionCount = profileContext?.sections ? Object.keys(profileContext.sections).length : 0
     const keywordCount =
       typeof profileContext?.signals?.keywordSet?.size === 'number'
         ? profileContext.signals.keywordSet.size
         : Array.isArray(profileContext?.signals?.keywords)
         ? profileContext.signals.keywords.length
+        : Array.isArray(profileContext?.facets?.intent?.keywords)
+        ? profileContext.facets.intent.keywords.length
         : 0
-    const zip =
-      profileContext?.signals?.location?.zip ??
-      profile?.zip_code ??
-      profile?.postal_code ??
-      null
-    const state =
-      profileContext?.signals?.location?.state ??
-      profile?.state ??
-      null
+    const zip = profileContext?.facets?.geo?.zip ?? profileContext?.signals?.location?.zip ?? profile?.zip_code ?? null
+    const state = profileContext?.facets?.geo?.state ?? profileContext?.signals?.location?.state ?? profile?.state ?? null
 
-    const profileContextIncomplete = sectionCount === 0 || coveragePct < 1
+    const canonicalSectionsPresent = Number(
+      profileContext?.coverage?.field_map_coverage?.canonical_sections_present ?? 0,
+    )
+    const profileContextIncomplete =
+      sectionCount === 0 || (canonicalSectionsPresent === 0 && Number(coveragePct) < 1)
 
     if (profileContextIncomplete) {
-      return res.status(200).json({
+      return res.status(400).json({
         success: false,
         error: 'PROFILE_CONTEXT_INCOMPLETE',
         message:
-          'Your profile is missing saved sections. Please open your profile and click Save before running crawlers. Add at least ZIP/State and a few tags for best results.',
+          'Your profile is missing required canonical sections/facets. Save profile sections (including ZIP/state and profile type) and retry.',
         crawler_type,
         opportunities: [],
         debug: {
           section_count: sectionCount,
           coverage_pct: coveragePct,
+          canonical_sections_present: canonicalSectionsPresent,
           has_zip: Boolean(zip),
           has_state: Boolean(state),
           keyword_count: keywordCount,
+          required_missing: profileContext?.coverage?.required_missing ?? [],
         },
       })
     }
@@ -716,6 +944,13 @@ router.post('/run', ensureAuth, async (req, res) => {
       }
     }
     
+    const routeQueryPlan = planCrawlerQueries({
+      crawlerType: crawler_type,
+      facets: profileContext?.facets ?? {},
+      location: profileContext?.facets?.geo ?? profileContext?.signals?.location ?? {},
+    })
+    profileContext.queryPlan = routeQueryPlan
+
     // 1) Try live crawler first (real web sources), then fall back to DB matching.
     const startTime = Date.now()
     const debug = {
@@ -723,17 +958,19 @@ router.post('/run', ensureAuth, async (req, res) => {
       used_db_fallback: false,
       live: null,
       db: null,
+      query_plan: routeQueryPlan,
       has_zip: Boolean(zip),
       has_state: Boolean(state),
       keyword_count: keywordCount,
       coverage_pct: coveragePct,
       section_count: sectionCount,
       profile_context_incomplete: profileContextIncomplete,
+      required_missing: profileContext?.coverage?.required_missing ?? [],
     }
 
     const live = await runLiveCrawler({
       crawlerType: crawler_type,
-      profile,
+      profileContext,
       itemRequest: item_request,
       minMatchScore: Number(min_match_score),
     })
@@ -749,7 +986,7 @@ router.post('/run', ensureAuth, async (req, res) => {
               ...o,
               // Keep these as global opportunities (not tied to a single profile).
               profile_id: null,
-              record_origin: 'live_crawl',
+              record_origin: o.record_origin ?? 'live_crawl',
               source: crawler_type,
               source_id: o.source_id ?? o.id ?? o.url ?? o.application_url ?? o.source_url ?? null,
               source_url: o.source_url ?? o.url ?? o.application_url ?? null,
@@ -768,12 +1005,21 @@ router.post('/run', ensureAuth, async (req, res) => {
         duration_ms: live.duration_ms,
         returned: live.opportunities.length,
         total_found: live.total_found ?? live.opportunities.length,
+        query_plan: live.query_plan ?? routeQueryPlan,
+        validation_rejection_counts: live.validation_rejection_counts ?? {},
       }
 
       // If live results are solid, skip fallback; otherwise optionally augment with DB.
       const shouldSkipFallback = live.opportunities.length >= MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK
       if (shouldSkipFallback) {
         const duration = Date.now() - startTime
+        const debugMeta = adminDebugRequested
+          ? buildAdminDebugMeta({
+              profileContext,
+              queryPlan: routeQueryPlan,
+              validationRejectionCounts: live.validation_rejection_counts ?? {},
+            })
+          : undefined
         return res.json({
           success: true,
           crawler_type,
@@ -786,11 +1032,19 @@ router.post('/run', ensureAuth, async (req, res) => {
           used_live: true,
           used_db_fallback: false,
           debug,
+          ...(debugMeta ? { debug_meta: debugMeta } : {}),
         })
       }
     } else {
       debug.used_live = false
-      debug.live = { ok: Boolean(live.ok), duration_ms: live.duration_ms, returned: 0, error: live.error || null }
+      debug.live = {
+        ok: Boolean(live.ok),
+        duration_ms: live.duration_ms,
+        returned: 0,
+        error: live.error || null,
+        query_plan: live.query_plan ?? routeQueryPlan,
+        validation_rejection_counts: live.validation_rejection_counts ?? {},
+      }
     }
 
     // 2) DB matching fallback (fast, stable, always uses full profile data).
@@ -956,6 +1210,13 @@ router.post('/run', ensureAuth, async (req, res) => {
     console.log(
       `[RealCrawlers] ${crawler_type} evaluated ${totalFound} candidates; returning ${merged.length} (min_score=${min_match_score}) in ${duration}ms`,
     )
+    const debugMeta = adminDebugRequested
+      ? buildAdminDebugMeta({
+          profileContext,
+          queryPlan: routeQueryPlan,
+          validationRejectionCounts: live?.validation_rejection_counts ?? {},
+        })
+      : undefined
     
     res.json({
       success: true,
@@ -969,6 +1230,7 @@ router.post('/run', ensureAuth, async (req, res) => {
       used_live: Boolean(debug.used_live),
       used_db_fallback: Boolean(debug.used_db_fallback),
       debug,
+      ...(debugMeta ? { debug_meta: debugMeta } : {}),
     })
     
   } catch (error) {
@@ -1046,18 +1308,19 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
   let totalFound = 0
   let totalInserted = 0
 
-  const profileContextBase =
+  let profileContextBase =
     profile && profile.sections && profile.signals
       ? { profile, sections: profile.sections, signals: profile.signals }
       : { profile, sections: profile?.sections ?? {}, signals: profile?.signals ?? null }
 
-  const coveragePct = profileContextBase?.signals?.coverage?.pct ?? 0
-  if (!profileContextBase?.sections || Object.keys(profileContextBase.sections).length === 0 || coveragePct < 1) {
-    return res.status(400).json({
-      error: 'Profile context incomplete',
-      message:
-        'Refusing to run: crawlers require 100% profile coverage (all sections loaded and included in signals). Please complete/save the profile sections and retry.',
-      coverage: profileContextBase?.signals?.coverage ?? null,
+  profileContextBase = buildProfileFacets(profileContextBase)
+  try {
+    profileContextBase = requireFacets(profileContextBase, { strict: true })
+  } catch (taxonomyError) {
+    return res.status(Number(taxonomyError?.status || 400)).json({
+      error: taxonomyError?.code || 'PROFILE_CONTEXT_INCOMPLETE',
+      message: taxonomyError?.message || 'Missing required profile facets',
+      details: taxonomyError?.details ?? null,
     })
   }
   
@@ -1072,7 +1335,14 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
     }
     
     try {
-      const profileContext = profileContextBase
+      const profileContext = {
+        ...profileContextBase,
+        queryPlan: planCrawlerQueries({
+          crawlerType,
+          facets: profileContextBase?.facets ?? {},
+          location: profileContextBase?.facets?.geo ?? profileContextBase?.signals?.location ?? {},
+        }),
+      }
       const startAt = Date.now()
 
       if (crawlerType === 'ecf_benefits' && !DISABLE_ECF_UNLOCK_GATING) {
@@ -1095,7 +1365,7 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
       try {
         live = await runLiveCrawler({
           crawlerType,
-          profile,
+          profileContext,
           itemRequest: req.body?.item_request ?? null,
           minMatchScore: Number(min_match_score),
         })

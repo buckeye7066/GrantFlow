@@ -11,6 +11,12 @@
  */
 
 import { calculateMatchScore } from './crawlerHelpers.js'
+import { planCrawlerQueries } from './queryPlanner.js'
+import {
+  resolveCrawlerContext,
+  mergePlanKeywords,
+  enforceCrawlerOpportunityContract,
+} from './crawlerOpportunityContract.js'
 
 function normalizeString(value) {
   return String(value ?? '').trim()
@@ -66,11 +72,23 @@ function buildClinicalTrialsLinks({ conditionNames, state }) {
 }
 
 export async function crawlHealthResources(profile, options = {}) {
+  const { profile: resolvedProfile, signals, facets, queryPlan: queryPlanFromContext } = resolveCrawlerContext(
+    profile,
+    options,
+  )
+  profile = resolvedProfile
+  const queryPlan =
+    queryPlanFromContext ??
+    planCrawlerQueries({
+      crawlerType: 'health_resources',
+      facets,
+      location: facets?.geo ?? signals?.location ?? {},
+    })
+  const plannerKeywords = mergePlanKeywords([], queryPlan).slice(0, 12)
   const results = []
   const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 60
 
   // CRITICAL: Use signals for all profile data.
-  const signals = profile?.signals
   if (!signals) {
     console.error('[HealthResourcesCrawler] No signals in profile - cannot search with 100% precision')
     return results
@@ -358,7 +376,7 @@ export async function crawlHealthResources(profile, options = {}) {
         url: link.url,
         categories: ['clinical_trials', 'health_resources'],
         // Use only resource-specific keywords for fair scoring.
-        keywords: Array.from(new Set([...(link.keywords ?? [])])),
+        keywords: Array.from(new Set([...(link.keywords ?? []), ...plannerKeywords])),
         type: 'DIRECTORY',
         opportunity_type: 'directory',
         is_national: true,
@@ -382,9 +400,11 @@ export async function crawlHealthResources(profile, options = {}) {
   // Score + select deterministically, with a non-zero floor for directory-style resources.
   const scored = baseResources
     .map((opp) => {
+      const keywords = Array.from(new Set([...(opp.keywords ?? []), ...plannerKeywords]))
       const { score, reasons } = calculateMatchScore(opp, profile)
       return {
         ...opp,
+        keywords,
         match_score: score,
         match_reasons: reasons,
         crawler_type: 'health_resources',
@@ -432,6 +452,16 @@ export async function crawlHealthResources(profile, options = {}) {
   }
 
   // Cap output to keep UI readable; still deterministic.
-  return selected.slice(0, 20)
+  return selected
+    .slice(0, 20)
+    .map((row) =>
+      enforceCrawlerOpportunityContract(row, {
+        crawlerType: 'health_resources',
+        facets,
+        queryPlan,
+        sourceFallback: row?.source ?? row?.sponsor ?? 'Health resources',
+      }),
+    )
+    .filter(Boolean)
 }
 
