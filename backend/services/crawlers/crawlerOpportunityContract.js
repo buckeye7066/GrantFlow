@@ -53,6 +53,33 @@ function inferEligibilityBullets(raw) {
   return []
 }
 
+function inferOpportunityType({ rawOpportunity, crawlerType, sourceFallback }) {
+  const explicitType = normalizeLower(rawOpportunity?.opportunity_type || rawOpportunity?.type || '')
+  if (explicitType) return explicitType
+
+  const normalizedCrawlerType = normalizeLower(crawlerType || '')
+  if (normalizedCrawlerType === 'government_funding') return 'grant'
+  if (normalizedCrawlerType === 'student_grants') return 'scholarship'
+  if (['local_funding', 'health_resources', 'special_needs', 'ecf_benefits', 'item_matching'].includes(normalizedCrawlerType)) {
+    return 'program'
+  }
+  if (normalizedCrawlerType === 'comprehensive') {
+    const sourceHint = normalizeLower(rawOpportunity?.source || sourceFallback || '')
+    if (
+      sourceHint.includes('government') ||
+      sourceHint.includes('grants.gov') ||
+      sourceHint.includes('federal') ||
+      sourceHint.includes('state')
+    ) {
+      return 'grant'
+    }
+    if (sourceHint.includes('student') || sourceHint.includes('scholar')) return 'scholarship'
+    return 'program'
+  }
+
+  return 'program'
+}
+
 export function resolveCrawlerContext(profileOrContext, options = {}) {
   const context =
     profileOrContext &&
@@ -143,6 +170,7 @@ export function enforceCrawlerOpportunityContract(
     ...(Array.isArray(rawOpportunity.match_reasons) ? rawOpportunity.match_reasons : []),
     ...facetReasons,
   ])
+  const opportunityType = inferOpportunityType({ rawOpportunity, crawlerType, sourceFallback })
 
   const normalized = {
     ...rawOpportunity,
@@ -156,11 +184,11 @@ export function enforceCrawlerOpportunityContract(
     categories,
     keywords,
     eligibility_bullets: eligibilityBullets,
-    opportunity_type: rawOpportunity.opportunity_type ?? rawOpportunity.type ?? 'program',
+    opportunity_type: opportunityType,
     record_origin:
       rawOpportunity.record_origin ??
       recordOrigin ??
-      (String(rawOpportunity.opportunity_type || '').toLowerCase() === 'program' ? 'directory_resource' : 'live_crawl'),
+      (opportunityType === 'program' ? 'directory_resource' : 'live_crawl'),
     crawler_type: crawlerType,
     match_reasons: matchReasons,
   }

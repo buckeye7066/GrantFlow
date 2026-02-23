@@ -40,6 +40,8 @@ test('profile taxonomy: required facets and coverage are populated from canonica
   assert.equal(profileContext.facets.geo.zip, '37209')
   assert.ok(profileContext.facets.intent.primary_need_category)
   assert.notEqual(profileContext.facets.intent.primary_need_category, 'unknown')
+  assert.equal(typeof profileContext.facets.intent.confidence, 'number')
+  assert.ok(profileContext.facets.intent.confidence >= 0 && profileContext.facets.intent.confidence <= 1)
   assert.deepEqual(profileContext.coverage.required_missing, [])
   assert.ok((profileContext.coverage?.field_map_coverage?.signal_coverage_pct ?? 0) >= 1)
 
@@ -68,7 +70,7 @@ test('profile taxonomy: requireFacets returns structured missing facet errors', 
       assert.ok(Array.isArray(error?.details?.required_missing))
       assert.ok(error.details.required_missing.includes('profile.primary_profile_type'))
       assert.ok(error.details.required_missing.includes('geo.state_or_zip'))
-      assert.ok(error.details.required_missing.length >= 2)
+      assert.ok(error.details.required_missing.includes('intent.primary_need_category'))
       return true
     },
   )

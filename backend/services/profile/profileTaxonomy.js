@@ -71,6 +71,7 @@ const REQUIRED_FACETS = [
   'geo.state_or_zip',
   'intent.primary_need_category',
 ]
+const INTENT_MUST_NOT_CONFIDENCE_THRESHOLD = 0.7
 
 /*
  * Section inventory (Phase 0 mapping from current seed/write paths)
@@ -148,6 +149,14 @@ function normalizeNumber(value) {
   if (value === null || value === undefined || value === '') return null
   const number = Number(value)
   return Number.isFinite(number) ? number : null
+}
+
+function normalizeConfidence(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return 0
+  if (number <= 0) return 0
+  if (number >= 1) return 1
+  return number
 }
 
 function uniqueStrings(values = []) {
@@ -497,6 +506,11 @@ function addIntentKeywords(seed = [], additions = []) {
 
 function deriveIntent({ facets }) {
   const profileType = normalizeLower(getDeep(facets, 'profile.primary_profile_type'))
+  const profileApplicantTypes = Array.isArray(getDeep(facets, 'profile.applicant_types'))
+    ? getDeep(facets, 'profile.applicant_types').map((value) => normalizeLower(value))
+    : []
+  const gpaValue = getDeep(facets, 'education.gpa')
+  const hasGpaValue = gpaValue !== null && gpaValue !== undefined
   const occupation = getDeep(facets, 'occupation') || {}
   const assistance = getDeep(facets, 'assistance') || {}
   const health = getDeep(facets, 'health') || {}
@@ -511,6 +525,28 @@ function deriveIntent({ facets }) {
     getDeep(facets, 'organization.organization_type'),
   ]
   const textTokens = tokenizeText(narrativeValues)
+  const tokenSet = new Set(textTokens)
+  const tokenHits = (needles = []) =>
+    needles.reduce((count, needle) => (tokenSet.has(needle) ? count + 1 : count), 0)
+  const hasProfileApplicantType = (needle) =>
+    profileType.includes(needle) || profileApplicantTypes.some((entry) => entry.includes(needle))
+
+  const businessTokenHits = tokenHits([
+    'business',
+    'startup',
+    'entrepreneur',
+    'food truck',
+    'mobile food',
+    'vendor',
+    'cooperative',
+  ])
+  const studentTokenHits = tokenHits(['student', 'college', 'scholarship', 'tuition', 'education'])
+  const disabilityTokenHits = tokenHits(['disability', 'accessible', 'assistive', 'special needs', 'autism'])
+  const healthTokenHits = tokenHits(['health', 'medical', 'treatment', 'copay', 'patient', 'care'])
+  const housingTokenHits = tokenHits(['housing', 'eviction', 'rent', 'shelter', 'section8', 'section 8'])
+  const veteranTokenHits = tokenHits(['veteran', 'military', 'service member', 'va'])
+  const foodTokenHits = tokenHits(['food', 'food bank', 'food pantry', 'nutrition'])
+  const transportTokenHits = tokenHits(['transportation', 'van', 'vehicle', 'bus'])
 
   const hasBusinessSignals =
     occupation.small_business_owner === true ||
@@ -520,8 +556,8 @@ function deriveIntent({ facets }) {
       ),
     )
   const hasStudentSignals =
-    profileType.includes('student') ||
-    getDeep(facets, 'education.gpa') !== null ||
+    hasProfileApplicantType('student') ||
+    hasGpaValue ||
     Boolean(getDeep(facets, 'education.intended_major'))
   const hasHousingSignals =
     family.homeless === true ||
@@ -555,6 +591,40 @@ function deriveIntent({ facets }) {
   else if (hasFoodSignals) category = 'food_security'
   else if (hasTransportSignals) category = 'transportation_access'
   else if (!profileType && textTokens.length === 0) category = 'unknown'
+
+  const evidenceByCategory = {
+    business_startup:
+      (occupation.small_business_owner === true ? 1 : 0) +
+      (hasProfileApplicantType('business') ? 1 : 0) +
+      (businessTokenHits > 0 ? 1 : 0) +
+      (businessTokenHits > 2 ? 1 : 0),
+    education:
+      (hasProfileApplicantType('student') ? 1 : 0) +
+      (hasGpaValue ? 1 : 0) +
+      (Boolean(getDeep(facets, 'education.intended_major')) ? 1 : 0) +
+      (studentTokenHits > 0 ? 1 : 0),
+    disability_support: (hasDisabilitySignals ? 1 : 0) + (disabilityTokenHits > 0 ? 1 : 0),
+    healthcare_support: (hasHealthSignals ? 1 : 0) + (healthTokenHits > 0 ? 1 : 0),
+    housing_stability: (hasHousingSignals ? 1 : 0) + (housingTokenHits > 0 ? 1 : 0),
+    veteran_support: (hasVeteranSignals ? 1 : 0) + (veteranTokenHits > 0 ? 1 : 0),
+    food_security: (hasFoodSignals ? 1 : 0) + (foodTokenHits > 0 ? 1 : 0),
+    transportation_access: (hasTransportSignals ? 1 : 0) + (transportTokenHits > 0 ? 1 : 0),
+    general_assistance: textTokens.length > 0 ? 1 : 0,
+  }
+  const selectedEvidence = evidenceByCategory[category] ?? 0
+  const competingStrongCategories = Object.entries(evidenceByCategory).filter(
+    ([entryCategory, entryEvidence]) => entryCategory !== category && entryEvidence >= 2,
+  ).length
+
+  let confidence = 0
+  if (category !== 'unknown') {
+    confidence = 0.42 + selectedEvidence * 0.16
+    if (textTokens.length >= 3) confidence += 0.06
+    if (textTokens.length === 0) confidence -= 0.08
+    if (category === 'general_assistance') confidence -= 0.08
+    confidence -= competingStrongCategories * 0.1
+  }
+  const boundedConfidence = Math.round(normalizeConfidence(confidence) * 100) / 100
 
   let keywords = uniqueStrings(textTokens)
   let negativeKeywords = []
@@ -592,6 +662,11 @@ function deriveIntent({ facets }) {
     primary_need_category: category,
     keywords: keywords.slice(0, 32),
     negative_keywords: negativeKeywords.slice(0, 20),
+    confidence: boundedConfidence,
+    evidence: {
+      selected_evidence: selectedEvidence,
+      competing_strong_categories: competingStrongCategories,
+    },
   }
 }
 
@@ -710,6 +785,7 @@ function buildBaseFacetShape() {
       primary_need_category: 'unknown',
       keywords: [],
       negative_keywords: [],
+      confidence: 0,
     },
     pii: {
       has_ssn: false,
@@ -809,6 +885,12 @@ export function buildProfileFacets(profileContext = {}) {
   setDeep(facets, 'intent.primary_need_category', intent.primary_need_category)
   setDeep(facets, 'intent.keywords', intent.keywords)
   setDeep(facets, 'intent.negative_keywords', intent.negative_keywords)
+  setDeep(facets, 'intent.confidence', intent.confidence)
+  trace.intent = {
+    primary_need_category: intent.primary_need_category,
+    confidence: intent.confidence,
+    evidence: intent.evidence,
+  }
 
   applyPiiRules({ facets, sectionsByKey, trace })
 
@@ -877,6 +959,8 @@ export function requireFacets(profileContext, opts = {}) {
 
 export function buildIntentTokens({ facets } = {}) {
   const category = normalizeLower(facets?.intent?.primary_need_category || '')
+  const confidence = normalizeConfidence(facets?.intent?.confidence)
+  const allowAggressiveMustNot = confidence >= INTENT_MUST_NOT_CONFIDENCE_THRESHOLD
   const baseKeywords = Array.isArray(facets?.intent?.keywords) ? facets.intent.keywords : []
   const negativeKeywords = Array.isArray(facets?.intent?.negative_keywords)
     ? facets.intent.negative_keywords
@@ -884,7 +968,7 @@ export function buildIntentTokens({ facets } = {}) {
 
   const mustTerms = []
   const shouldTerms = []
-  const mustNotTerms = [...negativeKeywords]
+  const mustNotTerms = allowAggressiveMustNot ? [...negativeKeywords] : []
 
   for (const keyword of baseKeywords) {
     const normalized = normalizeLower(keyword)
@@ -907,10 +991,10 @@ export function buildIntentTokens({ facets } = {}) {
     shouldTerms.push(...categoryExpansions[category])
   }
 
-  if (category === 'business_startup' && mustNotTerms.length === 0) {
+  if (allowAggressiveMustNot && category === 'business_startup' && mustNotTerms.length === 0) {
     mustNotTerms.push('food bank', 'food pantry', 'hunger relief')
   }
-  if (category === 'food_security' && mustNotTerms.length === 0) {
+  if (allowAggressiveMustNot && category === 'food_security' && mustNotTerms.length === 0) {
     mustNotTerms.push('food truck startup', 'restaurant franchise')
   }
 
