@@ -4,7 +4,7 @@
  * Production version - uses only real data sources
  */
 
-import express from 'express'
+import express from 'express'h
 import { ensureAuth } from '../middleware/auth.js'
 import { getProfileWithLocation } from '../services/crawlers/crawlerHelpers.js'
 import { calculateMatchScore } from '../services/matchingEngine.js'
@@ -393,7 +393,7 @@ async function runLiveCrawler({ crawlerType, profile, itemRequest, minMatchScore
       const mergedReasons = mergeReasons(row.match_reasons, computedReasons)
 
       // Guarantee directory resources survive the user's min threshold (they're entry points, not competitive matches).
-      const finalScore = isDirectory ? Math.max(Number(minMatchScore), mergedScore) : mergedScore
+      const finalScore = isDirectory ? Math.max(Math.min(Number(minMatchScore), 55), mergedScore) : mergedScore
       const finalReasons = isDirectory
         ? mergeReasons(mergedReasons, [`Directory resource (always included at ${Number(minMatchScore)}%+ threshold)`])
         : mergedReasons
@@ -851,7 +851,7 @@ router.post('/run', ensureAuth, async (req, res) => {
     const scored = currentCandidates.map((row) => {
       const { score, reasons } = calculateMatchScore(profileContext, row)
       const isDirectory = isDirectoryResource(row)
-      const finalScore = isDirectory ? Math.max(Number(min_match_score), score) : score
+      const finalScore = isDirectory ? Math.max(Math.min(Number(min_match_score), 55), score) : score
       const finalReasons = isDirectory
         ? mergeReasons(reasons, [
             `Directory resource (always included at ${Number(min_match_score)}%+ threshold)`,
@@ -1135,7 +1135,7 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
         .map((row) => {
           const { score, reasons } = calculateMatchScore(profileContext, row)
           const isDirectory = isDirectoryResource(row)
-          const finalScore = isDirectory ? Math.max(Number(min_match_score), score) : score
+          const finalScore = isDirectory ? Math.max(Math.min(Number(min_match_score), 55), score) : score
           const finalReasons = isDirectory
             ? mergeReasons(reasons, [
                 `Directory resource (always included at ${Number(min_match_score)}%+ threshold)`,
