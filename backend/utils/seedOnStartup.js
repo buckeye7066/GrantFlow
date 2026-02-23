@@ -12,6 +12,17 @@ import crypto from 'crypto';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+/**
+ * Returns true if this process should NOT run any seeding.
+ * Blocked when NODE_ENV=production OR DISABLE_SEEDING=true.
+ */
+function isSeedingBlocked() {
+  const nodeEnv = String(process.env.NODE_ENV || '').trim().toLowerCase()
+  if (nodeEnv === 'production') return true
+  const disableSeeding = String(process.env.DISABLE_SEEDING || '').trim().toLowerCase()
+  return disableSeeding === 'true' || disableSeeding === '1'
+}
+
 function loadJSON(path) {
   try {
     return JSON.parse(readFileSync(path, 'utf8'));
@@ -28,6 +39,10 @@ function ensureArray(value) {
 }
 
 export function seedFundingOpportunities(db) {
+  if (isSeedingBlocked()) {
+    console.info('[seedOnStartup] seedFundingOpportunities: blocked (production or DISABLE_SEEDING)')
+    return 0
+  }
   console.log('[seedOnStartup] Seeding funding opportunities...');
   
   const REAL_OPPS_PATH = join(__dirname, '../data/crawlers/real_funding_opportunities.json');
@@ -106,6 +121,10 @@ export function seedFundingOpportunities(db) {
 }
 
 export function seedProfileGrants(db) {
+  if (isSeedingBlocked()) {
+    console.info('[seedOnStartup] seedProfileGrants: blocked (production or DISABLE_SEEDING)')
+    return 0
+  }
   console.log('[seedOnStartup] Seeding profile grants...');
   
   // Get all profiles
@@ -283,6 +302,10 @@ export function seedProfileGrants(db) {
 }
 
 export function seedOnStartup(db) {
+  if (isSeedingBlocked()) {
+    console.info('[seedOnStartup] seedOnStartup: blocked (production or DISABLE_SEEDING)')
+    return
+  }
   console.log('[seedOnStartup] Starting database seeding...');
   
   // Check if we need to seed

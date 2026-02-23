@@ -3301,6 +3301,11 @@ router.post('/seed-baseline-profiles', async (req, res) => {
 
 // POST /api/admin/seed-profile-grants - Seed grants for profiles
 router.post('/seed-profile-grants', async (req, res) => {
+  // Safety guard: refuse to seed in production to prevent fake/random scores from affecting users.
+  const nodeEnv = String(process.env.NODE_ENV || '').trim().toLowerCase()
+  if (nodeEnv === 'production') {
+    return res.status(403).json({ success: false, error: 'Seeding is disabled in production.' })
+  }
   try {
     const { excludeProfiles = [] } = req.body || {};
     const profiles = await req.db.prepare('SELECT * FROM profiles WHERE status = ?').all('active');

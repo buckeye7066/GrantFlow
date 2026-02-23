@@ -190,12 +190,12 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
     return (
       <div className="rounded-xl border bg-white p-12 text-center space-y-4">
         <Search className="w-14 h-14 mx-auto text-slate-300" />
-        <h3 className="text-xl font-semibold text-slate-900">No opportunities matched this time</h3>
+        <h3 className="text-xl font-semibold text-slate-900">No opportunities matched your profile</h3>
         <p className="text-slate-600 max-w-md mx-auto">
-          Try lowering the minimum match score, add more details to your profile (ZIP code, state, keywords), or run different funding sources.
+          No funding sources closely matched your profile criteria at this time. This means results would not be relevant enough to show.
         </p>
         <p className="text-sm text-muted-foreground">
-          The more complete your profile, the better we can find grants that fit you.
+          To improve results: add your location (state or ZIP code), profile type, and specific needs to your profile. The more complete your profile, the better we can find grants that truly fit you.
         </p>
       </div>
     );
