@@ -69,8 +69,8 @@ export async function upsertFundingOpportunity(db, opportunity) {
   const applicationUrl = normalizeUrl(opportunity.application_url)
   const evidenceUrl = normalizeUrl(opportunity.evidence_url ?? sourceUrl ?? applicationUrl)
 
-  // Live-crawled opportunities must have at least one concrete URL for traceability.
-  if (recordOrigin === 'live_crawl' && !sourceUrl && !applicationUrl && !evidenceUrl) {
+  // All opportunities must have at least one concrete URL for traceability and user access.
+  if (!sourceUrl && !applicationUrl && !evidenceUrl) {
     return {
       id: null,
       inserted: false,

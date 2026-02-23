@@ -53,7 +53,12 @@ export function calculateMatchScore(profile, opportunity) {
   let geoTier = null // zip|city|county|state|national|unknown
   let geoPoints = 0
 
-  if (profileZip && oppZip && String(profileZip).trim() === String(oppZip).trim()) {
+  // Check unknown profile location first — no location data means we cannot verify
+  // geographic eligibility for any opportunity, including national ones.
+  if (!profileZip && !profileCounty && !profileCity && !profileState) {
+    geoTier = 'unknown'
+    geoPoints = -5
+  } else if (profileZip && oppZip && String(profileZip).trim() === String(oppZip).trim()) {
     geoTier = 'zip'
     geoPoints = 25
   } else if (profileCounty && oppCounty && normalizeCounty(oppCounty) === normalizeCounty(profileCounty)) {
@@ -74,9 +79,6 @@ export function calculateMatchScore(profile, opportunity) {
   } else if (oppIsNational) {
     geoTier = 'national'
     geoPoints = 8
-  } else if (!profileZip && !profileCounty && !profileCity && !profileState) {
-    geoTier = 'unknown'
-    geoPoints = 0
   } else if (profileState && oppState && normalizeState(oppState) !== normalizeState(profileState)) {
     // State mismatch (e.g. TN vs CA) — stronger penalty
     geoTier = 'mismatch'
@@ -93,7 +95,7 @@ export function calculateMatchScore(profile, opportunity) {
   else if (geoTier === 'city') reasons.push('Geography: City match (text)')
   else if (geoTier === 'state') reasons.push('Geography: State match')
   else if (geoTier === 'national') reasons.push('National eligibility')
-  else if (geoTier === 'unknown') reasons.push('Location unknown (neutral)')
+  else if (geoTier === 'unknown') reasons.push('Location unknown — cannot verify geographic eligibility')
   else if (geoTier === 'mismatch') reasons.push('Geography mismatch (soft penalty)')
   
   // Applicant type match (25 pts)

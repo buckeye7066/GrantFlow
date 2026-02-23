@@ -201,30 +201,15 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
     })
   }
   
-  // Sort and limit
+  // Sort and filter by requested threshold only — no fallback relaxation
   scoredOpps.sort((a, b) => b.match_score - a.match_score)
-  const targetMin = Math.min(6, maxResults)
   const requestedThreshold = Number(matchThreshold) || 0
-  const thresholdCandidates = Array.from(
-    new Set([requestedThreshold, 70, 60, 50, 40, 30, 0].filter((v) => Number.isFinite(v))),
-  ).sort((a, b) => b - a)
-
-  let thresholdUsed = requestedThreshold
-  let filteredOpps = scoredOpps.filter((opp) => (opp.match_score ?? 0) >= thresholdUsed)
-  for (const threshold of thresholdCandidates) {
-    const subset = scoredOpps.filter((opp) => (opp.match_score ?? 0) >= threshold)
-    if (subset.length >= targetMin || (threshold === 0 && subset.length > 0)) {
-      thresholdUsed = threshold
-      filteredOpps = subset
-      break
-    }
-  }
+  const filteredOpps = scoredOpps.filter((opp) => (opp.match_score ?? 0) >= requestedThreshold)
 
   const topOpps = filteredOpps.slice(0, maxResults)
-  const thresholdFallbackApplied = thresholdUsed !== requestedThreshold
   
   console.log(
-    `[itemCrawler] Found ${topOpps.length} matching item funding sources (requested: ${requestedThreshold}%, used: ${thresholdUsed}%)`,
+    `[itemCrawler] Found ${topOpps.length} matching item funding sources (threshold: ${requestedThreshold}%)`,
   )
   
   // Insert into database
@@ -276,9 +261,7 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
     matched: topOpps.length,
     result_meta: {
       total_scored: scoredOpps.length,
-      match_threshold_requested: requestedThreshold,
-      match_threshold_used: thresholdUsed,
-      match_threshold_fallback_applied: thresholdFallbackApplied,
+      match_threshold: requestedThreshold,
     },
     opportunityLogs: topOpps.map(o => ({
       title: o.title,

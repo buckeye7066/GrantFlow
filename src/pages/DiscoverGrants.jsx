@@ -9,7 +9,7 @@ import { createPageUrl } from '@/utils';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { Loader2, Search, User, Lightbulb, ArrowRight, CheckCircle2 } from 'lucide-react';
+import { Loader2, Search, User, Lightbulb, ArrowRight, CheckCircle2, AlertTriangle } from 'lucide-react';
 import HelpTip from '@/components/help/HelpTip';
 import SearchResults from '@/components/discovery/SearchResults';
 import { Badge } from '@/components/ui/badge';
@@ -142,6 +142,31 @@ export default function DiscoverGrants() {
     (profileForSearch?.medicaid_enrolled || selectedOrg?.medicaid_enrolled) &&
     (profileForSearch?.medicaid_waiver_program === 'ecf_choices' ||
       selectedOrg?.medicaid_waiver_program === 'ecf_choices');
+
+  // Detect required profile attributes that are missing and would reduce match quality.
+  const profileMissingFields = useMemo(() => {
+    if (!selectedProfile) return []
+    const sections = profileDetail?.sections || {}
+    const missing = []
+    const hasState =
+      sections.basic_information?.state ||
+      sections.location_focus?.state ||
+      profileForSearch?.state ||
+      selectedOrg?.state
+    const hasZip =
+      sections.basic_information?.zip_code ||
+      sections.location_focus?.zip_code ||
+      profileForSearch?.zip_code ||
+      profileForSearch?.postal_code
+    if (!hasState && !hasZip) {
+      missing.push('location (state or ZIP code)')
+    }
+    const hasType = selectedProfile.primary_type || profileForSearch?.primary_type
+    if (!hasType) {
+      missing.push('profile type')
+    }
+    return missing
+  }, [selectedProfile, profileDetail, profileForSearch, selectedOrg])
 
   const handleFindFunding = async () => {
     const profileIdToUse = effectiveProfileId ?? selectedProfileId
@@ -662,6 +687,23 @@ export default function DiscoverGrants() {
                       🏥 ECF CHOICES Participant
                     </span>
                   )}
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {/* Profile completeness warning */}
+            {selectedProfile && profileMissingFields.length > 0 && (
+              <Alert className="bg-amber-50 border-amber-300 mb-6">
+                <AlertTriangle className="h-4 w-4 text-amber-600" />
+                <AlertDescription className="text-amber-800">
+                  <strong>Profile incomplete:</strong> Missing {profileMissingFields.join(' and ')}. Without this information, match scores will be lower and results may be less relevant.{' '}
+                  <button
+                    type="button"
+                    className="underline font-medium"
+                    onClick={() => navigate(createPageUrl('ProfileDetail', { id: selectedProfile.id }))}
+                  >
+                    Complete your profile
+                  </button>
                 </AlertDescription>
               </Alert>
             )}
