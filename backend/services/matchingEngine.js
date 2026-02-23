@@ -7,7 +7,7 @@
 import { safeParseArrayField } from './profileHelpers.js'
 import { buildProfileSignals } from './profileHelpers.js'
 
-/**
+/**h
  * Calculate deterministic match score between profile and opportunity
  * @param {Object} profile - User/organization profile
  * @param {Object} opportunity - Funding opportunity
@@ -73,7 +73,7 @@ export function calculateMatchScore(profile, opportunity) {
     geoPoints = 18
   } else if (oppIsNational) {
     geoTier = 'national'
-    geoPoints = 12
+    geoPoints = 8
   } else if (!profileZip && !profileCounty && !profileCity && !profileState) {
     geoTier = 'unknown'
     geoPoints = 0
@@ -378,7 +378,7 @@ function calculateKeywordOverlap(profile, opportunity) {
       continue;
     }
     if (oppText.includes(kw)) {
-      matches += 0.25;
+      matches += 0.1;
     }
   }
 
