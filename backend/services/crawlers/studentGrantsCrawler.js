@@ -16,6 +16,12 @@
  */
 import { buildSearchKeywords, calculateMatchScore, filterByDeadline } from './crawlerHelpers.js'
 import { getWithRetry } from './httpClient.js'
+import { planCrawlerQueries } from './queryPlanner.js'
+import {
+  resolveCrawlerContext,
+  mergePlanKeywords,
+  enforceCrawlerOpportunityContract,
+} from './crawlerOpportunityContract.js'
 
 /**
    * Real federal student aid programs. These are always available and always real.
@@ -257,11 +263,31 @@ const SIGNAL_SPECIFIC_SCHOLARSHIPS = {
         ],
 }
 
-export async function crawlStudentGrants(profile, options = {}) {
+function finalizeStudentResults(rows, { facets, queryPlan }) {
+  return rows
+    .map((row) =>
+      enforceCrawlerOpportunityContract(row, {
+        crawlerType: 'student_grants',
+        facets,
+        queryPlan,
+        sourceFallback: row?.source ?? row?.sponsor ?? 'Student grants',
+      }),
+    )
+    .filter(Boolean)
+}
+
+export async function crawlStudentGrants(profileInput, options = {}) {
+    const { profile, signals, facets, queryPlan: queryPlanFromContext } = resolveCrawlerContext(profileInput, options)
+    const queryPlan =
+          queryPlanFromContext ??
+          planCrawlerQueries({
+                    crawlerType: 'student_grants',
+                    facets,
+                    location: facets?.geo ?? signals?.location ?? {},
+          })
     const results = []
         const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 60
 
-  const signals = profile?.signals
     if (!signals) {
           console.error('[StudentGrantsCrawler] No signals in profile - cannot search')
           return results
@@ -273,7 +299,7 @@ export async function crawlStudentGrants(profile, options = {}) {
         return results
   }
 
-  const searchKeywords = buildSearchKeywords(profile, 25)
+  const searchKeywords = mergePlanKeywords(buildSearchKeywords(profile, 25), queryPlan).slice(0, 35)
 
   console.log(`[StudentGrantsCrawler] Student profile detected`)
     console.log(`[StudentGrantsCrawler] Academics: GPA=${signals.academics?.gpa}, SAT=${signals.academics?.sat}, ACT=${signals.academics?.act}`)
@@ -474,7 +500,7 @@ export async function crawlStudentGrants(profile, options = {}) {
   results.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
 
   console.log(`[StudentGrantsCrawler] Found ${results.length} student opportunities with ${minMatchScore}%+ match`)
-    return results
+    return finalizeStudentResults(results, { facets, queryPlan })
 }
 
 function isStudentProfile(profile) {

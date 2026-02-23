@@ -10,6 +10,12 @@ import * as cheerio from 'cheerio'
 import zipcodes from 'zipcodes'
 import { buildSearchKeywords, calculateMatchScore, filterByDeadline } from './crawlerHelpers.js'
 import { getWithRetry } from './httpClient.js'
+import { planCrawlerQueries } from './queryPlanner.js'
+import {
+  resolveCrawlerContext,
+  mergePlanKeywords,
+  enforceCrawlerOpportunityContract,
+} from './crawlerOpportunityContract.js'
 
 // Calculate distance between two coordinates (in miles)
 const calculateDistance = (lat1, lng1, lat2, lng2) => {
@@ -151,7 +157,28 @@ const LOCAL_FUNDING_SOURCES = [
   },
 ]
 
-export async function crawlLocalFunding(profile, options = {}) {
+function finalizeLocalResults(rows, { facets, queryPlan }) {
+  return rows
+    .map((row) =>
+      enforceCrawlerOpportunityContract(row, {
+        crawlerType: 'local_funding',
+        facets,
+        queryPlan,
+        sourceFallback: row?.source ?? 'Local Funding',
+      }),
+    )
+    .filter(Boolean)
+}
+
+export async function crawlLocalFunding(profileInput, options = {}) {
+  const { profile, signals, facets, queryPlan: queryPlanFromContext } = resolveCrawlerContext(profileInput, options)
+  const queryPlan =
+    queryPlanFromContext ??
+    planCrawlerQueries({
+      crawlerType: 'local_funding',
+      facets,
+      location: facets?.geo ?? signals?.location ?? {},
+    })
   const results = []
   const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 60
   const radiusMiles = typeof options.radius_miles === 'number' ? Math.max(1, Math.min(100, options.radius_miles)) : DEFAULT_SEARCH_RADIUS_MILES
@@ -163,7 +190,6 @@ export async function crawlLocalFunding(profile, options = {}) {
     console.error('[LocalFundingCrawler] Invalid profile: profile must be a non-null object')
     return results
   }
-  const signals = profile?.signals
   if (!signals) {
     console.error('[LocalFundingCrawler] No profile.signals - profile must have signals (run profile enrichment or ensure profile_sections are loaded)')
     return results
@@ -193,7 +219,7 @@ export async function crawlLocalFunding(profile, options = {}) {
   const targetZip = targetZipRaw
   
   // Build search keywords from ALL profile signals
-  const searchKeywords = buildSearchKeywords(profile, 25)
+  const searchKeywords = mergePlanKeywords(buildSearchKeywords(profile, 25), queryPlan).slice(0, 35)
   const schoolZips = extractInterestedSchoolZips(profile)
 
   // Anchor ZIPs: profile ZIP + up to 3 interested-school ZIPs (student profiles).
@@ -255,6 +281,7 @@ export async function crawlLocalFunding(profile, options = {}) {
       profileCity,
       targetZip,
       sources: LOCAL_FUNDING_SOURCES,
+      facets,
     })
     for (const opp of directoryOpps) {
       // Directory resources are intentionally "always relevant" once shown:
@@ -276,7 +303,7 @@ export async function crawlLocalFunding(profile, options = {}) {
   // If there is no ZIP or we couldn't resolve any coordinates, don't attempt geo-radius crawling.
   if (!targetZip || anchors.length === 0) {
     console.log(`[LocalFundingCrawler] Found ${results.length} local opportunities with ${minMatchScore}%+ match`)
-    return results
+    return finalizeLocalResults(results, { facets, queryPlan })
   }
 
   // Search each source
@@ -368,10 +395,10 @@ export async function crawlLocalFunding(profile, options = {}) {
   }
 
   console.log(`[LocalFundingCrawler] Found ${results.length} local opportunities with ${minMatchScore}%+ match`)
-  return results
+  return finalizeLocalResults(results, { facets, queryPlan })
 }
 
-function buildDirectoryResources({ profile, anchors, profileState, profileCity, targetZip, sources }) {
+function buildDirectoryResources({ profile, anchors, profileState, profileCity, targetZip, sources, facets = {} }) {
   const out = []
 
   const signals = profile?.signals
@@ -381,7 +408,11 @@ function buildDirectoryResources({ profile, anchors, profileState, profileCity, 
     ...Array.from(signals?.keywordSet || []),
     ...(signals?.applicantTypes ? Array.from(signals.applicantTypes) : []),
   ].join(' ').toLowerCase();
-  const isBusinessProfile = /food\s*truck|small\s*business|startup|entrepreneur|business\s*funding|mobile\s*food|food\s*vendor|catering\s*business/.test(profileText);
+  const isBusinessProfile =
+    String(facets?.intent?.primary_need_category || '') === 'business_startup' ||
+    /food\s*truck|small\s*business|startup|entrepreneur|business\s*funding|mobile\s*food|food\s*vendor|catering\s*business/.test(
+      profileText,
+    )
   const keywords = Array.from(signals?.keywordSet ?? []).slice(0, 12)
   const anchorList = Array.isArray(anchors) && anchors.length > 0 ? anchors : []
   const fallbackCity = profileCity || null
