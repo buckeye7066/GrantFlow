@@ -1,9 +1,10 @@
 import Database from 'better-sqlite3';
 import crypto from 'crypto';
 
-// Safety guard: refuse to run in production to prevent fake/random scores from affecting users.
+// Safety guard: refuse to run in production or when seeding is explicitly disabled.
 const nodeEnv = String(process.env.NODE_ENV || '').trim().toLowerCase()
-if (nodeEnv === 'production') {
+const disableSeeding = String(process.env.DISABLE_SEEDING || '').trim().toLowerCase()
+if (nodeEnv === 'production' || disableSeeding === 'true' || disableSeeding === '1') {
   console.error('[seed-profile-grants] Refusing to run in production environment. This script generates random match scores and must not be used in production.')
   process.exit(1)
 }

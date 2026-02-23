@@ -6,8 +6,10 @@
  * Only uses verified real funding opportunities - no fakes.
  */
 
-// Safety guard: refuse to run in production to prevent seeding data into real user environments.
-if (process.env.NODE_ENV === 'production') {
+// Safety guard: refuse to run in production or when seeding is explicitly disabled.
+const _nodeEnv = String(process.env.NODE_ENV || '').trim().toLowerCase()
+const _disableSeeding = String(process.env.DISABLE_SEEDING || '').trim().toLowerCase()
+if (_nodeEnv === 'production' || _disableSeeding === 'true' || _disableSeeding === '1') {
   console.error('[seed-profile-grants] Seeding disabled in production.')
   process.exit(1)
 }
