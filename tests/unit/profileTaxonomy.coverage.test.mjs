@@ -1,8 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { createRequire } from 'node:module'
 
-import schema from '../../backend/services/profile/applicationSchema.json' with { type: 'json' }
 import { buildProfileFacets, requireFacets, SECTION_MAPPERS } from '../../backend/services/profile/profileTaxonomy.js'
+
+const require = createRequire(import.meta.url)
+const schema = require('../../backend/services/profile/applicationSchema.json')
 
 test('profile taxonomy: canonical section keys all have mappers', () => {
   const canonicalKeys = Array.isArray(schema?.canonical_section_keys) ? schema.canonical_section_keys : []

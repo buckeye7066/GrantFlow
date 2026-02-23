@@ -1,6 +1,9 @@
-import schema from './applicationSchema.json' with { type: 'json' }
+import { createRequire } from 'node:module'
 import zipcodes from 'zipcodes'
 import { resolveCountyForZip } from '../geo/zipCountyResolver.js'
+
+const require = createRequire(import.meta.url)
+const schema = require('./applicationSchema.json')
 
 const CANONICAL_SECTION_KEYS = Array.isArray(schema?.canonical_section_keys)
   ? schema.canonical_section_keys
