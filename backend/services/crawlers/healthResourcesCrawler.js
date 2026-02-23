@@ -10,7 +10,7 @@
  * - Informational resources only. No diagnosis/treatment recommendations.
  */
 
-import { buildSearchKeywords, calculateMatchScore } from './crawlerHelpers.js'
+import { calculateMatchScore } from './crawlerHelpers.js'
 
 function normalizeString(value) {
   return String(value ?? '').trim()
@@ -86,12 +86,8 @@ export async function crawlHealthResources(profile, options = {}) {
     options.include_trials === true ||
     Boolean(health?.consent_for_studies)
 
-  // Build search keywords from ALL profile signals (deterministic).
-  const searchKeywords = buildSearchKeywords(profile, 25)
   const conditionBlob = conditionNames.join(' ').toLowerCase()
 
-  const hasCancer = conditionBlob.includes('cancer') || conditionBlob.includes('oncology') || conditionBlob.includes('tumor')
-  const hasKidney = conditionBlob.includes('kidney') || conditionBlob.includes('dialysis') || conditionBlob.includes('renal')
   const hasHiv = conditionBlob.includes('hiv') || conditionBlob.includes('aids')
   const hasTbi = conditionBlob.includes('tbi') || conditionBlob.includes('brain injury')
   const hasEpilepsy = conditionBlob.includes('epilepsy') || conditionBlob.includes('seizure')
@@ -107,7 +103,7 @@ export async function crawlHealthResources(profile, options = {}) {
         'Informational overview of non-emergency medical transportation benefits and how states administer NEMT.',
       url: 'https://www.medicaid.gov/medicaid/benefits/non-emergency-medical-transportation/index.html',
       categories: ['transportation_services', 'health_resources'],
-      keywords: ['transportation', 'appointments', 'medicaid', ...searchKeywords],
+      keywords: ['transportation', 'appointments', 'medicaid'],
       type: 'DIRECTORY',
       opportunity_type: 'benefit',
       is_national: true,
@@ -120,7 +116,7 @@ export async function crawlHealthResources(profile, options = {}) {
         'Directory-style resource for medical transportation assistance and related support programs (informational listings).',
       url: 'https://www.needymeds.org/free_non_profit_clinics.taf?_function=transportation',
       categories: ['transportation_services', 'health_resources'],
-      keywords: ['transportation', 'medical transportation', 'rides', ...searchKeywords],
+      keywords: ['transportation', 'medical transportation', 'rides'],
       type: 'DIRECTORY',
       opportunity_type: 'benefit',
       is_national: true,
@@ -132,7 +128,7 @@ export async function crawlHealthResources(profile, options = {}) {
       description: 'Local assistance directory. Search for transportation, caregiving support, and related services.',
       url: 'https://www.211.org/',
       categories: ['transportation_services', 'health_resources'],
-      keywords: ['211', 'transportation', 'caregiver', ...searchKeywords],
+      keywords: ['211', 'transportation', 'caregiver'],
       type: 'DIRECTORY',
       opportunity_type: 'directory',
       is_national: true,
@@ -147,7 +143,7 @@ export async function crawlHealthResources(profile, options = {}) {
         'Directory of patient assistance programs and discount resources (informational; eligibility varies).',
       url: 'https://www.needymeds.org/',
       categories: ['medical_financial_aid', 'health_resources'],
-      keywords: ['patient assistance', 'copay', 'prescription assistance', ...searchKeywords],
+      keywords: ['patient assistance', 'copay', 'prescription assistance'],
       type: 'DIRECTORY',
       opportunity_type: 'benefit',
       is_national: true,
@@ -160,7 +156,7 @@ export async function crawlHealthResources(profile, options = {}) {
         'Case management and patient support navigation resources (informational).',
       url: 'https://www.patientadvocate.org/',
       categories: ['medical_financial_aid', 'health_resources'],
-      keywords: ['case management', 'patient advocate', 'financial assistance', ...searchKeywords],
+      keywords: ['case management', 'patient advocate', 'financial assistance'],
       type: 'DIRECTORY',
       opportunity_type: 'benefit',
       is_national: true,
@@ -173,7 +169,7 @@ export async function crawlHealthResources(profile, options = {}) {
         'Copay and premium assistance programs for eligible patients (informational).',
       url: 'https://www.healthwellfoundation.org/',
       categories: ['medical_financial_aid', 'health_resources'],
-      keywords: ['copay assistance', 'premium assistance', ...searchKeywords],
+      keywords: ['copay assistance', 'premium assistance'],
       type: 'DIRECTORY',
       opportunity_type: 'benefit',
       is_national: true,
@@ -186,7 +182,7 @@ export async function crawlHealthResources(profile, options = {}) {
         'Copay assistance programs for eligible patients (informational).',
       url: 'https://www.panfoundation.org/',
       categories: ['medical_financial_aid', 'health_resources'],
-      keywords: ['copay assistance', 'patient assistance', ...searchKeywords],
+      keywords: ['copay assistance', 'patient assistance'],
       type: 'DIRECTORY',
       opportunity_type: 'benefit',
       is_national: true,
@@ -200,7 +196,7 @@ export async function crawlHealthResources(profile, options = {}) {
       description: 'Reliable patient education topics and resources (informational).',
       url: 'https://medlineplus.gov/',
       categories: ['patient_education', 'health_resources'],
-      keywords: ['patient education', 'NIH', 'health information', ...searchKeywords],
+      keywords: ['patient education', 'NIH', 'health information'],
       type: 'DIRECTORY',
       opportunity_type: 'directory',
       is_national: true,
@@ -212,7 +208,7 @@ export async function crawlHealthResources(profile, options = {}) {
       description: 'Public health education resources (informational).',
       url: 'https://www.cdc.gov/',
       categories: ['patient_education', 'health_resources'],
-      keywords: ['CDC', 'health education', ...searchKeywords],
+      keywords: ['CDC', 'health education'],
       type: 'DIRECTORY',
       opportunity_type: 'directory',
       is_national: true,
@@ -226,7 +222,7 @@ export async function crawlHealthResources(profile, options = {}) {
       description: 'State contact directory for Medicaid programs.',
       url: 'https://www.medicaid.gov/about-us/contact-us/contact-state-page.html',
       categories: ['transportation_services', 'medical_financial_aid', 'health_resources'],
-      keywords: ['medicaid', 'state contacts', state || 'state', ...searchKeywords],
+      keywords: ['medicaid', 'state contacts', state || 'state'],
       type: 'DIRECTORY',
       opportunity_type: 'directory',
       is_national: true,
@@ -243,7 +239,7 @@ export async function crawlHealthResources(profile, options = {}) {
         description: 'Transportation assistance program information (availability varies).',
         url: 'https://www.cancer.org/support-programs-and-services/road-to-recovery.html',
         categories: ['transportation_services', 'health_resources'],
-        keywords: ['cancer', 'rides', 'transportation', ...searchKeywords],
+        keywords: ['cancer', 'rides', 'transportation'],
         type: 'DIRECTORY',
         opportunity_type: 'benefit',
         is_national: true,
@@ -255,7 +251,7 @@ export async function crawlHealthResources(profile, options = {}) {
         description: 'Cancer education and guidance resources (informational).',
         url: 'https://www.cancer.gov/',
         categories: ['patient_education', 'health_resources'],
-        keywords: ['cancer', 'oncology', ...searchKeywords],
+        keywords: ['cancer', 'oncology'],
         type: 'DIRECTORY',
         opportunity_type: 'directory',
         is_national: true,
@@ -270,7 +266,7 @@ export async function crawlHealthResources(profile, options = {}) {
       description: 'Education and financial support resources for kidney disease (informational).',
       url: 'https://www.kidneyfund.org/',
       categories: ['medical_financial_aid', 'patient_education', 'health_resources'],
-      keywords: ['kidney', 'dialysis', 'financial help', ...searchKeywords],
+      keywords: ['kidney', 'dialysis', 'financial help'],
       type: 'DIRECTORY',
       opportunity_type: 'benefit',
       is_national: true,
@@ -284,7 +280,7 @@ export async function crawlHealthResources(profile, options = {}) {
       description: 'Resources and support navigation related to HIV (informational).',
       url: 'https://aidsunited.org/',
       categories: ['medical_financial_aid', 'patient_education', 'health_resources'],
-      keywords: ['hiv', 'aids', ...searchKeywords],
+      keywords: ['hiv', 'aids'],
       type: 'DIRECTORY',
       opportunity_type: 'directory',
       is_national: true,
@@ -298,7 +294,7 @@ export async function crawlHealthResources(profile, options = {}) {
       description: 'Education and support resources for epilepsy (informational).',
       url: 'https://www.epilepsy.com/',
       categories: ['patient_education', 'health_resources'],
-      keywords: ['epilepsy', 'seizures', ...searchKeywords],
+      keywords: ['epilepsy', 'seizures'],
       type: 'DIRECTORY',
       opportunity_type: 'directory',
       is_national: true,
@@ -312,7 +308,7 @@ export async function crawlHealthResources(profile, options = {}) {
       description: 'Education and resources about traumatic brain injury (informational).',
       url: 'https://www.cdc.gov/traumaticbraininjury/index.html',
       categories: ['patient_education', 'health_resources'],
-      keywords: ['tbi', 'brain injury', ...searchKeywords],
+      keywords: ['tbi', 'brain injury'],
       type: 'DIRECTORY',
       opportunity_type: 'directory',
       is_national: true,
@@ -327,7 +323,7 @@ export async function crawlHealthResources(profile, options = {}) {
         description: 'Resources and education for autism (informational).',
         url: 'https://autismsociety.org/',
         categories: ['patient_education', 'health_resources'],
-        keywords: ['autism', 'neurodivergent', ...searchKeywords],
+        keywords: ['autism', 'neurodivergent'],
         type: 'DIRECTORY',
         opportunity_type: 'directory',
         is_national: true,
@@ -339,7 +335,7 @@ export async function crawlHealthResources(profile, options = {}) {
         description: 'Self-advocacy and informational resources (informational).',
         url: 'https://autisticadvocacy.org/',
         categories: ['patient_education', 'health_resources'],
-        keywords: ['autism', 'self advocacy', ...searchKeywords],
+        keywords: ['autism', 'self advocacy'],
         type: 'DIRECTORY',
         opportunity_type: 'directory',
         is_national: true,
@@ -359,8 +355,8 @@ export async function crawlHealthResources(profile, options = {}) {
           'Research study/trial listing search (informational). Eligibility is determined by each study team.',
         url: link.url,
         categories: ['clinical_trials', 'health_resources'],
-        // Include broad profile-derived keywords so these can score/rank for opted-in users.
-        keywords: Array.from(new Set([...(link.keywords ?? []), ...searchKeywords])),
+        // Use only resource-specific keywords for fair scoring.
+        keywords: Array.from(new Set([...(link.keywords ?? [])])),
         type: 'DIRECTORY',
         opportunity_type: 'directory',
         is_national: true,
@@ -373,7 +369,7 @@ export async function crawlHealthResources(profile, options = {}) {
       description: 'Volunteer registry connecting people with research studies (informational).',
       url: 'https://www.researchmatch.org/',
       categories: ['clinical_trials', 'health_resources'],
-      keywords: ['research studies', 'participants', ...searchKeywords],
+      keywords: ['research studies', 'participants'],
       type: 'DIRECTORY',
       opportunity_type: 'directory',
       is_national: true,
