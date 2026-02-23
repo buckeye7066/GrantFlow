@@ -1,4 +1,4 @@
-import schema from './applicationSchema.json' assert { type: 'json' }
+import schema from './applicationSchema.json' with { type: 'json' }
 import zipcodes from 'zipcodes'
 import { resolveCountyForZip } from '../geo/zipCountyResolver.js'
 

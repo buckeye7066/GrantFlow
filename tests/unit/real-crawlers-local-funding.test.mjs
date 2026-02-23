@@ -73,7 +73,7 @@ async function fetchJson(url, init) {
   return { status: res.status, json }
 }
 
-test('real crawler: local_funding does not hard-fail when profile sections are missing', async () => {
+test('real crawler: local_funding returns 400 when canonical section context is missing', async () => {
   const srv = startServer()
   const { port } = await srv.ready
 
@@ -130,11 +130,11 @@ test('real crawler: local_funding does not hard-fail when profile sections are m
       }),
     })
 
-    // The key invariant: it should not 400 on "Profile context incomplete".
-    assert.equal(run.status, 200)
+    assert.equal(run.status, 400)
     assert.equal(run.json?.success, false)
-    assert.ok(run.json?.debug)
     assert.equal(run.json?.error, 'PROFILE_CONTEXT_INCOMPLETE')
+    const requiredMissing = run.json?.details?.required_missing ?? run.json?.debug?.required_missing ?? []
+    assert.ok(Array.isArray(requiredMissing))
   } finally {
     await srv.stop()
   }
@@ -166,6 +166,21 @@ test('real crawler: DB fallback never returns 0 included when opportunities exis
 
       INSERT INTO profiles (id, user_id, organization_id, display_name, primary_type, status, tags)
       VALUES ('${profileId}', '${userId}', '${orgId}', 'Crawler Profile 2', 'individual_need', 'active', '[]');
+
+      INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+      VALUES (
+        '${profileId}',
+        'basic_information',
+        '{"full_name":"Crawler Profile 2","profile_category":"individual_need","city":"Nashville","state":"TN","zip":"37209"}',
+        'test'
+      );
+      INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+      VALUES (
+        '${profileId}',
+        'narrative',
+        '{"primary_goal":"Need local food and utility assistance","target_population":"household in need","geographic_focus":"Nashville"}',
+        'test'
+      );
 
       INSERT INTO funding_opportunities (
         id,
@@ -290,16 +305,25 @@ test('real crawler: DB fallback never returns 0 included when opportunities exis
     })
 
     assert.equal(run.status, 200)
-    assert.equal(run.json?.success, false)
-    assert.equal(run.json?.error, 'PROFILE_CONTEXT_INCOMPLETE')
-// Profile has no sections so PROFILE_CONTEXT_INCOMPLETE is returned.
-        // Directory resource survival is tested implicitly by the profileContextIncomplete guard.
-
-    // Traceability: if we needed fallback to avoid "0 included of X found", it must be explicit in debug.
-    assert.ok(run.json?.debug)
-    // With the TDZ fix, the live crawler may now succeed (directory resources don't need HTTP),
-        // so used_db_fallback may be false. The key invariant is that results are returned either way.
-        assert.equal(typeof run.json.debug.section_count, 'number')
+    assert.equal(run.json?.success, true)
+    assert.ok(Array.isArray(run.json?.opportunities))
+    assert.ok((run.json?.total_found ?? 0) > 0)
+    assert.ok((run.json?.count ?? 0) > 0)
+    assert.equal(run.json.count, run.json.filtered_count)
+    assert.ok(
+      run.json.opportunities.every((opp) => typeof opp.match_score === 'number' && opp.match_score >= 0),
+      'all returned opportunities should have numeric match_score',
+    )
+    assert.ok(
+      run.json.opportunities.some(
+        (opp) =>
+          opp.is_directory_resource === true ||
+          String(opp.opportunity_type || '').toLowerCase() === 'program' ||
+          String(opp.record_origin || '').toLowerCase().includes('directory') ||
+          String(opp.record_origin || '').toLowerCase().includes('curated'),
+      ),
+      'expected at least one directory-style opportunity to survive filtering',
+    )
   } finally {
     await srv.stop()
   }
