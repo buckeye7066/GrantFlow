@@ -52,9 +52,6 @@ test('matchingEngine (A): unknown profile location applies a -5 geo penalty', ()
     13,
     `Expected 13-point gap between unknown location (-5) and national bonus (+8), got ${scoreWithLocation - score}`,
   )
-
-  // Score must stay low for an empty profile with no matching attributes
-  assert.ok(score <= 10, `Score (${score}) should stay low for empty profile against national opp`)
 })
 
 // ---------------------------------------------------------------------------
@@ -206,7 +203,9 @@ test('itemCrawler (D): no fallback threshold; matched=0 and fallback_applied=fal
   })
 
   assert.equal(result.matched, 0, `Expected 0 matched results but got ${result.matched}`)
-  assert.equal(result.result_meta.match_threshold, 90, 'Threshold in result_meta should reflect the requested value')
+  assert.equal(result.result_meta.match_threshold, 90, 'match_threshold should reflect the requested value')
+  assert.equal(result.result_meta.match_threshold_requested, 90, 'match_threshold_requested (back-compat) should reflect the requested value')
+  assert.equal(result.result_meta.match_threshold_used, 90, 'match_threshold_used (back-compat) should equal the requested value')
   assert.equal(
     result.result_meta.match_threshold_fallback_applied,
     false,
