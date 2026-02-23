@@ -1041,12 +1041,12 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     registerKeyword('501c3')
     registerKeyword('nonprofit')
   }
-  if (Boolean(organizationDetails.is_501c3)) {
+  if (organizationDetails.is_501c3) {
     registerKeyword('501c3')
     registerKeyword('501(c)(3)')
     registerKeyword('nonprofit')
   }
-  if (Boolean(organizationDetails.sam_registered)) {
+  if (organizationDetails.sam_registered) {
     registerKeyword('sam.gov')
     registerKeyword('sam registered')
   }
@@ -1078,16 +1078,16 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   // ============ NONPROFIT COMPLIANCE ============
   // Critical eligibility signals for federal grants (501c3, SAM.gov, fiscal sponsor).
   const nonprofitCompliance = sections?.nonprofit_compliance ?? {}
-  if (Boolean(nonprofitCompliance.is_501c3)) {
+  if (nonprofitCompliance.is_501c3) {
     registerKeyword('501c3')
     registerKeyword('501(c)(3)')
     registerKeyword('nonprofit')
   }
-  if (Boolean(nonprofitCompliance.sam_registered)) {
+  if (nonprofitCompliance.sam_registered) {
     registerKeyword('sam.gov')
     registerKeyword('sam registered')
   }
-  if (Boolean(nonprofitCompliance.fiscal_sponsor)) {
+  if (nonprofitCompliance.fiscal_sponsor) {
     registerKeyword('fiscal sponsor')
     if (nonprofitCompliance.fiscal_sponsor_name) {
       registerKeyword(nonprofitCompliance.fiscal_sponsor_name)
