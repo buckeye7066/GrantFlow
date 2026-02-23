@@ -156,17 +156,20 @@ export default function GrantCard({ grant, organization, organizationName, onSta
           
           <p className="text-xs text-slate-600 truncate">{grant.funder || grant.sponsor}</p>
           
-          {/* Match Reasons (if available) */}
-          {showSummary && grant.matchReasons && grant.matchReasons.length > 0 && (
+          {/* Match Reasons (if available) - support both match_reasons (API) and matchReasons (legacy) */}
+          {showSummary && (() => {
+            const reasons = Array.isArray(grant.match_reasons) ? grant.match_reasons : (Array.isArray(grant.matchReasons) ? grant.matchReasons : []);
+            return reasons.length > 0 ? (
             <div className="bg-emerald-50 border border-emerald-200 rounded-md p-2 space-y-1">
               <p className="text-xs font-semibold text-emerald-900">Why this matches:</p>
-              {grant.matchReasons.slice(0, 3).map((reason, idx) => (
+              {reasons.slice(0, 5).map((reason, idx) => (
                 <p key={idx} className="text-xs text-emerald-700 leading-tight">
-                  {reason}
+                  {typeof reason === 'string' ? reason : String(reason)}
                 </p>
               ))}
             </div>
-          )}
+            ) : null;
+          })()}
 
           {/* Warnings (if any) */}
           {showSummary && grant.matchWarnings && grant.matchWarnings.length > 0 && (

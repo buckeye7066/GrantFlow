@@ -496,6 +496,16 @@ export function calculateMatchScore(opportunity, profile) {
     reasons.push(`Good multi-category match (${categoryCount} categories)`)
   }
 
+  // ============ STRONG EVIDENCE BONUS (helps relevant directory resources reach 70%+) ============
+  // When multiple signals align (keywords, interests, categories, location), add modest boost.
+  const hasSubstantiveMatch = reasons.some(r =>
+    /keyword|interest|category|location|phrase|geographic/i.test(String(r))
+  )
+  if (matchedSignals.length >= 3 && hasSubstantiveMatch && score < 75) {
+    score += 8
+    reasons.push('Multiple profile signals align with this opportunity')
+  }
+
   // Clamp score
   const finalScore = Math.max(0, Math.min(100, score))
 

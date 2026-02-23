@@ -307,7 +307,7 @@ export default function DiscoverGrants() {
           profile_id: profileIdForAdd,
           organization_id: orgId || null,
           match_score: opportunity.match || opportunity.match_score,
-          match_reasons: opportunity.matchReasons || opportunity.matched_fields || [],
+          match_reasons: opportunity.match_reasons || opportunity.matchReasons || opportunity.matched_fields || [],
           // Include full opportunity data for synthetic opportunities
           opportunity_data: {
             title: opportunity.title,
