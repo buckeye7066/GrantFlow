@@ -4,7 +4,7 @@
  * Production version - uses only real data sources
  */
 
-import express from 'express'h
+import express from 'express'
 import { ensureAuth } from '../middleware/auth.js'
 import { getProfileWithLocation } from '../services/crawlers/crawlerHelpers.js'
 import { calculateMatchScore } from '../services/matchingEngine.js'
