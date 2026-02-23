@@ -1,6 +1,13 @@
 import Database from 'better-sqlite3';
 import crypto from 'crypto';
 
+// Safety guard: refuse to run in production to prevent fake/random scores from affecting users.
+const nodeEnv = String(process.env.NODE_ENV || '').trim().toLowerCase()
+if (nodeEnv === 'production') {
+  console.error('[seed-profile-grants] Refusing to run in production environment. This script generates random match scores and must not be used in production.')
+  process.exit(1)
+}
+
 const db = new Database('./data/grantflow.db');
 
 console.log('=== SEEDING GRANTS FOR PROFILES ===\n');
