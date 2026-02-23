@@ -103,7 +103,7 @@ export async function crawlHealthResources(profile, options = {}) {
       sponsor: 'Medicaid.gov',
       description:
         'Informational overview of non-emergency medical transportation benefits and how states administer NEMT.',
-      url: 'https://www.medicaid.gov/medicaid/benefits/non-emergency-medical-transportation/index.html',
+      url: 'https://www.medicaid.gov/medicaid/benefits/assurance-of-transportation',
       categories: ['transportation_services', 'health_resources'],
       keywords: ['transportation', 'appointments', 'medicaid'],
       type: 'DIRECTORY',
@@ -222,7 +222,7 @@ export async function crawlHealthResources(profile, options = {}) {
       title: 'Medicaid: Contact your state',
       sponsor: 'Medicaid.gov',
       description: 'State contact directory for Medicaid programs.',
-      url: 'https://www.medicaid.gov/about-us/contact-us/contact-state-page.html',
+      url: 'https://www.medicaid.gov/about-us/contact-us',
       categories: ['transportation_services', 'medical_financial_aid', 'health_resources'],
       keywords: ['medicaid', 'state contacts', state || 'state'],
       type: 'DIRECTORY',
