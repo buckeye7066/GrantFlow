@@ -91,6 +91,8 @@ export async function crawlHealthResources(profile, options = {}) {
   const hasHiv = conditionBlob.includes('hiv') || conditionBlob.includes('aids')
   const hasTbi = conditionBlob.includes('tbi') || conditionBlob.includes('brain injury')
   const hasEpilepsy = conditionBlob.includes('epilepsy') || conditionBlob.includes('seizure')
+    const hasCancer = conditionBlob.includes('cancer') || conditionBlob.includes('oncology') || conditionBlob.includes('tumor')
+    const hasKidney = conditionBlob.includes('kidney') || conditionBlob.includes('dialysis') || conditionBlob.includes('renal')
   const hasNeurodivergent = conditionBlob.includes('autism') || conditionBlob.includes('adhd') || conditionBlob.includes('neurodiv')
 
   // Reputable, durable link-only resources (no mock amounts).
