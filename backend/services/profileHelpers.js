@@ -1,6 +1,70 @@
 import zipcodes from 'zipcodes'
 import { resolveCountyForZip } from './geo/zipCountyResolver.js'
 
+const STATE_NAME_TO_ABBREV = {
+  alabama: 'AL',
+  alaska: 'AK',
+  arizona: 'AZ',
+  arkansas: 'AR',
+  california: 'CA',
+  colorado: 'CO',
+  connecticut: 'CT',
+  delaware: 'DE',
+  florida: 'FL',
+  georgia: 'GA',
+  hawaii: 'HI',
+  idaho: 'ID',
+  illinois: 'IL',
+  indiana: 'IN',
+  iowa: 'IA',
+  kansas: 'KS',
+  kentucky: 'KY',
+  louisiana: 'LA',
+  maine: 'ME',
+  maryland: 'MD',
+  massachusetts: 'MA',
+  michigan: 'MI',
+  minnesota: 'MN',
+  mississippi: 'MS',
+  missouri: 'MO',
+  montana: 'MT',
+  nebraska: 'NE',
+  nevada: 'NV',
+  'new hampshire': 'NH',
+  'new jersey': 'NJ',
+  'new mexico': 'NM',
+  'new york': 'NY',
+  'north carolina': 'NC',
+  'north dakota': 'ND',
+  ohio: 'OH',
+  oklahoma: 'OK',
+  oregon: 'OR',
+  pennsylvania: 'PA',
+  'rhode island': 'RI',
+  'south carolina': 'SC',
+  'south dakota': 'SD',
+  tennessee: 'TN',
+  texas: 'TX',
+  utah: 'UT',
+  vermont: 'VT',
+  virginia: 'VA',
+  washington: 'WA',
+  'west virginia': 'WV',
+  wisconsin: 'WI',
+  wyoming: 'WY',
+  'district of columbia': 'DC',
+}
+
+function normalizeStateValue(value) {
+  if (typeof value !== 'string') return null
+  const raw = value.trim()
+  if (!raw) return null
+  const upper = raw.toUpperCase().replace(/[^A-Z]/g, '')
+  if (upper.length === 2) return upper
+  const byName = STATE_NAME_TO_ABBREV[raw.toLowerCase()]
+  return byName ?? null
+}
+
 function safeParseJSON(value, fallback) {
   if (!value) return fallback
   try {
@@ -257,14 +321,20 @@ export function extractZipFromContext({ profile, sections, jobParameters = {} })
     sections?.location_focus?.zip,
     sections?.organization_details?.zip,
     sections?.organization_details?.hq_zip,
+    profile?.zip_code,
+    profile?.zip,
     profile?.postal_code,
   ]
 
-  const zip = candidates.find(
-    (value) => typeof value === 'string' && /^\d{5}$/.test(value.trim()),
-  )
+  const zip = candidates
+    .map((value) => {
+      if (typeof value !== 'string') return null
+      const match = value.trim().match(/^(\d{5})/)
+      return match ? match[1] : null
+    })
+    .find(Boolean)
 
-  return zip?.trim() ?? null
+  return zip ?? null
 }
 
 export function extractStateFromContext({ profile, sections, jobParameters = {} }) {
@@ -280,13 +350,7 @@ export function extractStateFromContext({ profile, sections, jobParameters = {} 
     profile?.state,
   ]
 
-  const state = candidates
-    .map((value) =>
-      typeof value === 'string' && value.trim().length === 2
-        ? value.trim().toUpperCase()
-        : null,
-    )
-    .find(Boolean)
+  const state = candidates.map(normalizeStateValue).find(Boolean)
 
   return state ?? null
 }
@@ -403,8 +467,11 @@ function extractCityFromSections({ sections, jobParameters = {}, profile }) {
     jobParameters.city,
     sections?.basic_information?.city,
     sections?.basic_information?.address_city,
+    sections?.location_focus?.city,
     sections?.location_focus?.primary_city,
     sections?.location_focus?.service_city,
+    sections?.comprehensive_application?.city,
+    sections?.organization_details?.city,
     profile?.city,
   ]
   const city = candidates.find((value) => typeof value === 'string' && value.trim().length > 0)
