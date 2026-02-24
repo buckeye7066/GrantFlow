@@ -13,6 +13,7 @@ import { createOpenAIClient } from '../utils/openaiClient.js'
 import { extractCompletionText } from '../utils/openai.js'
 import { safeParseJSON } from '../utils/safeJson.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
+import { extractStateFromContext, loadProfileContext } from '../services/profileHelpers.js'
 
 const router = express.Router()
 
@@ -201,8 +202,36 @@ router.post('/crawlBenefitsGov', async (req, res) => {
 
   const payload = req.body ?? {}
   const organizationId = payload.organization_id ?? payload.organizationId ?? null
-  const { state } = await loadOrganizationLocation(req.db, organizationId)
-  const resolvedState = state ? String(state).toUpperCase() : null
+  const profileId = payload.profile_id ?? payload.profileId ?? null
+  const { state: orgState } = await loadOrganizationLocation(req.db, organizationId)
+
+  // Resolve state from multiple sources: org table, profile sections, profile row
+  let resolvedState = orgState ? String(orgState).toUpperCase() : null
+
+  if ((!resolvedState || !/^[A-Z]{2}$/.test(resolvedState)) && (profileId || organizationId)) {
+    try {
+      // Find profile linked to this org (or use profileId directly)
+      let pid = profileId
+      if (!pid && organizationId) {
+        const profileRow = await req.db
+          .prepare('SELECT id FROM profiles WHERE organization_id = ? LIMIT 1')
+          .get(String(organizationId))
+        pid = profileRow?.id ?? null
+      }
+      if (pid) {
+        const ctx = await loadProfileContext(req.db, pid)
+        const sectionState = extractStateFromContext({
+          profile: ctx?.profile ?? {},
+          sections: ctx?.sections ?? {},
+        })
+        if (sectionState && /^[A-Z]{2}$/.test(sectionState)) {
+          resolvedState = sectionState
+        }
+      }
+    } catch (err) {
+      console.warn('[crawlBenefitsGov] Profile section state lookup failed:', err?.message)
+    }
+  }
 
   const logId = createLogId()
   const startedAt = Date.now()
