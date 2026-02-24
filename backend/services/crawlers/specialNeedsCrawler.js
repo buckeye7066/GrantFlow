@@ -13,6 +13,12 @@
 import * as cheerio from 'cheerio'
 import { buildSearchKeywords, calculateMatchScore, filterByDeadline } from './crawlerHelpers.js'
 import { getWithRetry } from './httpClient.js'
+import { planCrawlerQueries } from './queryPlanner.js'
+import {
+  resolveCrawlerContext,
+  mergePlanKeywords,
+  enforceCrawlerOpportunityContract,
+} from './crawlerOpportunityContract.js'
 
 /**
    * Real, verified special needs funding sources organized by category.
@@ -460,11 +466,32 @@ function identifySpecialNeedsFromSignals(profile) {
   return Array.from(needs)
 }
 
-export async function crawlSpecialNeeds(profile, options = {}) {
+function finalizeSpecialNeedsResults(rows, { facets, queryPlan }) {
+  return rows
+    .map((row) =>
+      enforceCrawlerOpportunityContract(row, {
+        crawlerType: 'special_needs',
+        facets,
+        queryPlan,
+        sourceFallback: row?.source ?? row?.sponsor ?? 'Special needs',
+      }),
+    )
+    .filter(Boolean)
+}
+
+export async function crawlSpecialNeeds(profileInput, options = {}) {
+    const { profile, signals, facets, queryPlan: queryPlanFromContext } = resolveCrawlerContext(profileInput, options)
+    const queryPlan =
+        queryPlanFromContext ??
+        planCrawlerQueries({
+              crawlerType: 'special_needs',
+              facets,
+              location: facets?.geo ?? signals?.location ?? {},
+        })
+  const plannerKeywords = mergePlanKeywords([], queryPlan).slice(0, 10)
     const results = []
         const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 60
 
-  const signals = profile?.signals
     if (!signals) {
           console.error('[SpecialNeedsCrawler] No signals in profile - cannot search')
           return results
@@ -511,7 +538,7 @@ export async function crawlSpecialNeeds(profile, options = {}) {
                     eligibility: `See ${source.name} website for full eligibility criteria`,
                     is_national: true,
                     categories: [needCategory, 'special_needs'],
-                    keywords: [...(source.keywords || []), needCategory.replace(/_/g, ' ')],
+                    keywords: [...(source.keywords || []), needCategory.replace(/_/g, ' '), ...plannerKeywords],
                     opportunity_type: 'program',
                     need_category: needCategory,
           }
@@ -539,7 +566,7 @@ export async function crawlSpecialNeeds(profile, options = {}) {
   results.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
 
   console.log(`[SpecialNeedsCrawler] Found ${results.length} special needs opportunities with ${minMatchScore}%+ match`)
-    return results
+    return finalizeSpecialNeedsResults(results, { facets, queryPlan })
 }
 
 function isLoan(opportunity) {

@@ -22,6 +22,12 @@
 import * as cheerio from 'cheerio'
 import { buildSearchKeywords, calculateMatchScore } from './crawlerHelpers.js'
 import { getWithRetry } from './httpClient.js'
+import { planCrawlerQueries } from './queryPlanner.js'
+import {
+  resolveCrawlerContext,
+  mergePlanKeywords,
+  enforceCrawlerOpportunityContract,
+} from './crawlerOpportunityContract.js'
 
 /**
    * Known organizations that provide specific item categories.
@@ -474,7 +480,28 @@ async function searchWebForItem(itemRequest, profile) {
   return results
 }
 
-export async function crawlItemFunding(profile, options = {}) {
+function finalizeItemResults(rows, { facets, queryPlan }) {
+  return rows
+    .map((row) =>
+      enforceCrawlerOpportunityContract(row, {
+        crawlerType: 'item_matching',
+        facets,
+        queryPlan,
+        sourceFallback: row?.source ?? row?.sponsor ?? 'Item funding',
+      }),
+    )
+    .filter(Boolean)
+}
+
+export async function crawlItemFunding(profileInput, options = {}) {
+    const { profile, signals, facets, queryPlan: queryPlanFromContext } = resolveCrawlerContext(profileInput, options)
+    const queryPlan =
+        queryPlanFromContext ??
+        planCrawlerQueries({
+              crawlerType: 'item_matching',
+              facets,
+              location: facets?.geo ?? signals?.location ?? {},
+        })
     const results = []
         const itemRequest = options.item_request
 
@@ -483,8 +510,7 @@ export async function crawlItemFunding(profile, options = {}) {
         return results
   }
 
-  const signals = profile?.signals
-    const searchKeywords = signals ? buildSearchKeywords(profile, 10) : []
+    const searchKeywords = signals ? mergePlanKeywords(buildSearchKeywords(profile, 10), queryPlan).slice(0, 20) : []
         const parsed = parseItemRequest(itemRequest)
 
   console.log(`[ItemFundingCrawler] Searching for: "${itemRequest}"`)
@@ -624,7 +650,7 @@ export async function crawlItemFunding(profile, options = {}) {
   const capped = results.slice(0, 30)
 
   console.log(`[ItemFundingCrawler] Found ${capped.length} real sources for "${itemRequest}"`)
-    return capped
+    return finalizeItemResults(capped, { facets, queryPlan })
 }
 
 function extractDomain(url) {
