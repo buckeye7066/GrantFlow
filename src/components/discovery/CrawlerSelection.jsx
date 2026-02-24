@@ -3,6 +3,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { useNavigate } from 'react-router-dom';
 import { 
   MapPin, Building2, GraduationCap, Heart, 
   HeartPulse,
@@ -12,6 +13,8 @@ import HelpTip from '@/components/help/HelpTip';
 import { useToast } from '@/components/ui/use-toast';
 import { runRealCrawler } from '@/api/crawlers';
 import { createLogger } from '@/utils/logger'
+import { createPageUrl } from '@/utils'
+import { getProfileContextIncompleteHint } from '@/components/discovery/profileContextIncompleteUi'
 
 const CRAWLER_CONFIGS = [
   {
@@ -70,11 +73,13 @@ export default function CrawlerSelection({
   onCrawlComplete,
   itemRequest = null 
 }) {
+  const navigate = useNavigate()
   const [selectedCrawlers, setSelectedCrawlers] = useState(new Set());
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState({});
   const [results, setResults] = useState({});
   const [errors, setErrors] = useState({});
+  const [profileFixHints, setProfileFixHints] = useState({});
   const [showFallbackDetails, setShowFallbackDetails] = useState(false);
   const [minMatchScore, setMinMatchScore] = useState(50); // Lowered to 50 to show more results; crawlers now use 100% of profile signals for scoring
   const { toast } = useToast();
@@ -249,6 +254,7 @@ export default function CrawlerSelection({
     setProgress({});
     setResults({});
     setErrors({});
+    setProfileFixHints({});
 
     const crawlersToRun = Array.from(selectedCrawlers);
     log.debug('running crawlers', { count: crawlersToRun.length, profileId: effectiveProfileId })
@@ -288,6 +294,12 @@ export default function CrawlerSelection({
         
         setProgress(prev => ({ ...prev, [crawlerId]: 'completed' }));
         setResults(prev => ({ ...prev, [crawlerId]: data }));
+        setProfileFixHints((prev) => {
+          if (!prev[crawlerId]) return prev
+          const next = { ...prev }
+          delete next[crawlerId]
+          return next
+        })
         
         return { crawlerId, success: true, data };
       } catch (error) {
@@ -304,8 +316,17 @@ export default function CrawlerSelection({
         if (/profile_id|profile.*required|select.*profile/i.test(errorMessage)) {
           errorMessage = 'Select a profile to run crawlers. Crawlers require profile context to match opportunities.';
         }
-        if (error?.response?.error === 'PROFILE_CONTEXT_INCOMPLETE') {
-          errorMessage = error?.response?.message || errorMessage;
+        const profileIncompleteHint = getProfileContextIncompleteHint(error)
+        if (profileIncompleteHint) {
+          errorMessage = profileIncompleteHint.headline
+          setProfileFixHints((prev) => ({ ...prev, [crawlerId]: profileIncompleteHint }))
+        } else {
+          setProfileFixHints((prev) => {
+            if (!prev[crawlerId]) return prev
+            const next = { ...prev }
+            delete next[crawlerId]
+            return next
+          })
         }
 
         setErrors(prev => ({ ...prev, [crawlerId]: errorMessage }));
@@ -551,6 +572,7 @@ export default function CrawlerSelection({
               const status = progress[crawler.id];
               const result = results[crawler.id];
               const error = errors[crawler.id];
+              const profileFixHint = profileFixHints[crawler.id] || null;
               const isLocked = crawler.id === 'ecf_benefits' && !ecfUnlock.allowed
 
               return (
@@ -621,6 +643,32 @@ export default function CrawlerSelection({
                       {error && (
                         <div className="mt-2 p-2 bg-red-500/10 border border-red-500/30 rounded text-xs text-red-800 dark:text-red-200">
                           <strong>Error:</strong> {error}
+                        </div>
+                      )}
+
+                      {profileFixHint && (
+                        <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-900 dark:bg-blue-500/10 dark:border-blue-500/30 dark:text-blue-100">
+                          <p className="font-semibold">{profileFixHint.headline}</p>
+                          <ul className="list-disc ml-4 mt-1 space-y-0.5">
+                            {profileFixHint.checklist.map((item) => (
+                              <li key={`${crawler.id}-fix-${item}`}>{item}</li>
+                            ))}
+                          </ul>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="mt-2 h-7 px-2 text-xs"
+                            disabled={!profileId}
+                            onClick={(event) => {
+                              event.preventDefault()
+                              event.stopPropagation()
+                              if (!profileId) return
+                              navigate(createPageUrl('ProfileDetail', { id: profileId }))
+                            }}
+                          >
+                            Go to Profile -&gt; Save
+                          </Button>
                         </div>
                       )}
                     </div>

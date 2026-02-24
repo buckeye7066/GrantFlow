@@ -24,6 +24,25 @@ const dataDir = process.env.CRAWLER_DATA_DIR
   ? resolve(String(process.env.CRAWLER_DATA_DIR))
   : join(__dirname, '..', 'data', 'crawlers')
 
+/**
+ * Maximum wall-clock time a single crawler handler may run before being aborted.
+ * Default 30 minutes; override via CRAWLER_JOB_TIMEOUT_MS.
+ * This prevents jobs from hanging silently and blocking the per-profile lock forever.
+ */
+const JOB_TIMEOUT_MS = parseInt(process.env.CRAWLER_JOB_TIMEOUT_MS || String(30 * 60 * 1000), 10)
+
+function withTimeout(promise, ms, label) {
+  let timeoutId
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      const err = new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)
+      err.code = 'JOB_TIMEOUT'
+      reject(err)
+    }, ms)
+  })
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId))
+}
+
 const HANDLERS = {
   avatar_lookup: processAvatarLookupJob,
   local: processLocalCrawlerJob,
@@ -361,7 +380,11 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         getOpenAI,
       }
 
-      result = await handler(context)
+      result = await withTimeout(
+        handler(context),
+        JOB_TIMEOUT_MS,
+        `Job ${jobId} (${job.type})`,
+      )
 
       if (job.type === 'avatar_lookup' && result?.avatarUrl && profileContext?.profile) {
         const previous = await db

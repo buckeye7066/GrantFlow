@@ -18,6 +18,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Label } from '@/components/ui/label';
 import { useAuthStore } from '@/stores/authStore';
 import { createLogger } from '@/utils/logger'
+import { getProfileContextIncompleteHint } from '@/components/discovery/profileContextIncompleteUi'
 
 
 
@@ -53,6 +54,7 @@ export default function DiscoverGrants() {
   const [searchResults, setSearchResults] = useState([]);
   const [minMatchScore, setMinMatchScore] = useState(60);
   const [isSearching, setIsSearching] = useState(false);
+  const [profileCompletionHint, setProfileCompletionHint] = useState(null)
   const profileSelectorRef = React.useRef(null)
   const searchActionsRef = React.useRef(null)
   const resultsRef = React.useRef(null)
@@ -189,6 +191,7 @@ export default function DiscoverGrants() {
     const profileIdToUse = effectiveProfileId ?? selectedProfileId
     const pid = (typeof profileIdToUse === 'string' ? profileIdToUse.trim() : null) || null
     if (!pid) {
+      setProfileCompletionHint(null)
       toast({
         variant: 'destructive',
         title: 'Select a profile',
@@ -197,6 +200,7 @@ export default function DiscoverGrants() {
       return
     }
     setIsSearching(true)
+    setProfileCompletionHint(null)
     const itemRequest = profileForSearch ? {
       location: {
         state: profileForSearch?.signals?.location?.state || profileForSearch?.state || null,
@@ -216,6 +220,15 @@ export default function DiscoverGrants() {
         itemRequest,
       })
       if (data && data.success === false) {
+        const profileHint = getProfileContextIncompleteHint(data)
+        if (profileHint) {
+          setProfileCompletionHint(profileHint)
+          toast({
+            title: 'Profile needs a quick update',
+            description: profileHint.headline,
+          })
+          return
+        }
         const message = data.message || data.error || 'Search failed'
         toast({
           variant: 'destructive',
@@ -225,9 +238,19 @@ export default function DiscoverGrants() {
         return
       }
       const opportunities = data?.opportunities ?? []
+      setProfileCompletionHint(null)
       await handleCrawlerResults(opportunities)
     } catch (error) {
       console.error('[DiscoverGrants] Search error:', error)
+      const profileHint = getProfileContextIncompleteHint(error)
+      if (profileHint) {
+        setProfileCompletionHint(profileHint)
+        toast({
+          title: 'Profile needs a quick update',
+          description: profileHint.headline,
+        })
+        return
+      }
       const errorMessage = error?.message || error?.response?.message || error?.response?.error || 'Search failed. Please try again.'
       toast({
         variant: 'destructive',
@@ -722,6 +745,36 @@ export default function DiscoverGrants() {
                   >
                     Complete your profile
                   </button>
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {profileCompletionHint && (
+              <Alert className="bg-blue-50 border-blue-300 mb-6">
+                <AlertTriangle className="h-4 w-4 text-blue-700" />
+                <AlertDescription className="text-blue-900">
+                  <strong>{profileCompletionHint.headline}</strong>
+                  <ul className="list-disc ml-5 mt-2 space-y-1">
+                    {profileCompletionHint.checklist.map((item) => (
+                      <li key={`profile-completion-${item}`}>{item}</li>
+                    ))}
+                  </ul>
+                  <div className="mt-3">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        if (selectedProfile?.id) {
+                          navigate(createPageUrl('ProfileDetail', { id: selectedProfile.id }))
+                          return
+                        }
+                        navigate(createPageUrl('MyProfiles'))
+                      }}
+                    >
+                      Go to Profile -&gt; Save
+                    </Button>
+                  </div>
                 </AlertDescription>
               </Alert>
             )}

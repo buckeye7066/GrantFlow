@@ -646,9 +646,17 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   }
 
   if (profile?.display_name) {
-    // Extract keywords from display name (e.g., "Axiom Community Health Cooperative" -> community, health)
-    const nameWords = profile.display_name.split(/\s+/).filter(w => w.length > 3)
-    nameWords.forEach(word => registerKeyword(word))
+    // Extract keywords from display name ONLY for organizations/businesses
+    // (e.g., "Axiom Community Health Cooperative" -> community, health).
+    // For individuals/families, the display_name is a person's name and must NOT
+    // be used as a keyword — it causes false geographic matches
+    // (e.g., "William" matching "Williamson, NY" or "Fitzwilliam, NH").
+    const orgTypes = new Set(['organization', 'nonprofit', 'small_business', 'government', 'tribe', 'church'])
+    const profileType = normalizeString(profile.primary_type || profile.applicant_type || '')
+    if (orgTypes.has(profileType)) {
+      const nameWords = profile.display_name.split(/\s+/).filter(w => w.length > 3)
+      nameWords.forEach(word => registerKeyword(word))
+    }
   }
 
   // ============ BASIC INFORMATION ============
@@ -1095,14 +1103,42 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     }
   }
 
-  // ============ NARRATIVE ============
+  // ============ NARRATIVE (Story & Goals) ============
+  // Narrative fields carry the strongest intent signal — promote multi-word phrases
+  // to intentPhraseSet (5 pts each in matchingEngine) and also register as keywords.
+  // MAX_INTENT_PHRASE_LENGTH: discard very long phrases that are prose, not searchable terms.
+  // MAX_NARRATIVE_PHRASES_PER_FIELD: cap phrases per field to avoid noisy over-matching.
+  const MAX_INTENT_PHRASE_LENGTH = 80
+  const MAX_NARRATIVE_PHRASES_PER_FIELD = 5
   const narrative = sections?.narrative ?? {}
   collectNarrativeKeywords(narrative, registerKeyword)
   if (narrative.mission) {
     collectNarrativeKeywords({ mission: narrative.mission }, registerKeyword)
   }
-  if (narrative.target_population) registerKeyword(narrative.target_population)
-  if (narrative.primary_goal) registerKeyword(narrative.primary_goal)
+  if (narrative.target_population) {
+    registerKeyword(narrative.target_population)
+    // Add as intent phrase (high-priority signal)
+    const tp = String(narrative.target_population).trim().toLowerCase()
+    if (tp.length >= 4) intentPhraseSet.add(tp)
+  }
+  if (narrative.primary_goal) {
+    registerKeyword(narrative.primary_goal)
+    // Add goal phrases as intent phrases (high-priority signal)
+    String(narrative.primary_goal)
+      .split(/[,;]+/)
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s.length >= 4 && s.includes(' '))
+      .forEach((s) => intentPhraseSet.add(s))
+  }
+  if (narrative.mission) {
+    // Mission statement: extract multi-word phrases as intent phrases
+    String(narrative.mission)
+      .split(/[,;.]+/)
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s.length >= 6 && s.includes(' ') && s.length <= MAX_INTENT_PHRASE_LENGTH)
+      .slice(0, MAX_NARRATIVE_PHRASES_PER_FIELD)
+      .forEach((s) => intentPhraseSet.add(s))
+  }
   if (narrative.funding_amount_needed) {
     // Extract dollar amount
     const amountMatch = String(narrative.funding_amount_needed).match(/\$?([\d,]+)/g)
@@ -1117,6 +1153,45 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   }
   if (narrative.use_of_funds) {
     collectNarrativeKeywords({ use_of_funds: narrative.use_of_funds }, registerKeyword)
+    // Promote use_of_funds phrases to intent phrases
+    String(narrative.use_of_funds)
+      .split(/[,;]+/)
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s.length >= 6 && s.includes(' '))
+      .slice(0, MAX_NARRATIVE_PHRASES_PER_FIELD)
+      .forEach((s) => intentPhraseSet.add(s))
+  }
+
+  // ============ PROGRAMS & SERVICES ============
+  // Programs & Services is the second-highest priority section for matching intent.
+  // Focus areas and keywords are promoted to intentPhraseSet for 5-pt scoring.
+  const programsServices = sections?.programs_services ?? {}
+  const psFocusAreas = Array.isArray(programsServices.focus_areas) ? programsServices.focus_areas : []
+  const psInterests = Array.isArray(programsServices.interests) ? programsServices.interests : []
+  const psKeywords = Array.isArray(programsServices.keywords) ? programsServices.keywords : []
+  psFocusAreas.forEach((area) => {
+    if (!area || typeof area !== 'string') return
+    const normalized = area.trim().toLowerCase()
+    registerKeyword(area)
+    interestSet.add(normalized)
+    // Multi-word focus areas → intent phrases (high scoring tier)
+    if (normalized.length >= 4) intentPhraseSet.add(normalized)
+  })
+  psInterests.forEach((interest) => {
+    if (!interest || typeof interest !== 'string') return
+    const normalized = interest.trim().toLowerCase()
+    registerKeyword(interest)
+    interestSet.add(normalized)
+    if (normalized.length >= 4 && normalized.includes(' ')) intentPhraseSet.add(normalized)
+  })
+  psKeywords.forEach((kw) => {
+    if (!kw || typeof kw !== 'string') return
+    registerKeyword(kw)
+    const normalized = kw.trim().toLowerCase()
+    if (normalized.length >= 4) intentPhraseSet.add(normalized)
+  })
+  if (programsServices.notes) {
+    collectNarrativeKeywords({ notes: programsServices.notes }, registerKeyword)
   }
 
   // ============ UNIVERSITY APPLICATIONS ============
@@ -1214,7 +1289,7 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     'basic_information', 'demographics', 'family_life', 'financial_information',
     'government_assistance', 'health_medical', 'location_focus', 'military_service',
     'narrative', 'occupation', 'organization_details', 'nonprofit_compliance',
-    'university_applications', 'education'
+    'university_applications', 'education', 'programs_services',
   ]
   const presentSections = sectionKeys.filter(k => expectedSections.includes(k))
   

@@ -6,6 +6,8 @@
 
 import axios from 'axios'
 import * as cheerio from 'cheerio'
+import { planCrawlerQueries } from './queryPlanner.js'
+import { resolveCrawlerContext, enforceCrawlerOpportunityContract } from './crawlerOpportunityContract.js'
 
 const ECF_SOURCES = {
   individual: [
@@ -39,7 +41,28 @@ const ECF_SOURCES = {
   ]
 }
 
-export async function crawlECFBenefits(profile, options = {}) {
+function finalizeEcfResults(rows, { facets, queryPlan }) {
+  return rows
+    .map((row) =>
+      enforceCrawlerOpportunityContract(row, {
+        crawlerType: 'ecf_benefits',
+        facets,
+        queryPlan,
+        sourceFallback: row?.source ?? row?.sponsor ?? 'ECF benefits',
+      }),
+    )
+    .filter(Boolean)
+}
+
+export async function crawlECFBenefits(profileInput, options = {}) {
+  const { profile, signals, facets, queryPlan: queryPlanFromContext } = resolveCrawlerContext(profileInput, options)
+  const queryPlan =
+    queryPlanFromContext ??
+    planCrawlerQueries({
+      crawlerType: 'ecf_benefits',
+      facets,
+      location: facets?.geo ?? signals?.location ?? {},
+    })
   const results = []
   
   const { eligibleIndividual, eligibleSupport, supportType } = evaluateEcfUnlockEligibility(profile)
@@ -111,7 +134,7 @@ export async function crawlECFBenefits(profile, options = {}) {
   }
   
   console.log(`[ECFBenefitsCrawler] Found ${results.length} ECF benefits with 80%+ match`)
-  return results
+  return finalizeEcfResults(results, { facets, queryPlan })
 }
 
 function hasKeyword(signals, value) {
