@@ -667,22 +667,12 @@ router.post('/run', ensureAuth, async (req, res) => {
       null
 
     const profileContextIncomplete = sectionCount === 0 || coveragePct < 1
-
     if (profileContextIncomplete) {
-      return res.status(200).json({
-        success: false,
-        error: 'PROFILE_CONTEXT_INCOMPLETE',
-        message:
-          'Your profile is missing saved sections. Please open your profile and click Save before running crawlers. Add at least ZIP/State and a few tags for best results.',
-        crawler_type,
-        opportunities: [],
-        debug: {
-          section_count: sectionCount,
-          coverage_pct: coveragePct,
-          has_zip: Boolean(zip),
-          has_state: Boolean(state),
-          keyword_count: keywordCount,
-        },
+      console.warn('[RealCrawlers] Profile has sparse context - running anyway for directory + DB fallback', {
+        section_count: sectionCount,
+        coverage_pct: coveragePct,
+        has_zip: Boolean(zip),
+        has_state: Boolean(state),
       })
     }
     
@@ -798,7 +788,7 @@ router.post('/run', ensureAuth, async (req, res) => {
     
     try {
       const tokens = buildSearchTokens(profileContext)
-      const { sql, params } = buildCandidateOpportunityQuery({
+      let { sql, params } = buildCandidateOpportunityQuery({
         crawlerType: crawler_type,
         profileContext,
         tokens,
@@ -806,6 +796,19 @@ router.post('/run', ensureAuth, async (req, res) => {
         dialect: db?.dialect,
       })
       candidates = (await db.prepare(sql).all(...params)).map(formatDbOpportunity).filter(Boolean)
+
+      // Relax: if token narrowing yielded 0, retry without tokens so directory-style and broad matches survive.
+      if (candidates.length === 0 && ENABLE_TOKEN_NARROWING && tokens.length > 0) {
+        console.log('[RealCrawlers] Token narrowing returned 0; retrying DB fallback without token filter')
+        const broad = buildCandidateOpportunityQuery({
+          crawlerType: crawler_type,
+          profileContext,
+          tokens: [],
+          itemRequest: item_request,
+          dialect: db?.dialect,
+        })
+        candidates = (await db.prepare(broad.sql).all(...broad.params)).map(formatDbOpportunity).filter(Boolean)
+      }
     } catch (crawlerError) {
       console.error(`[RealCrawlers] Crawler ${crawler_type} failed:`, crawlerError)
       

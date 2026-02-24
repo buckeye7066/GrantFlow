@@ -2,6 +2,16 @@
 
 This ledger records defects encountered while implementing the crawler, and how they were fixed.
 
+## 2026-02-23 — cof.org foundation-locator invalid TLS / timeout
+
+- **Symptom**: Local crawling returned 0 results; `foundation-locator` URL had invalid TLS cert or timed out.
+- **Root cause**: `https://www.cof.org/foundation-locator` (lat/lng params) was unreliable.
+- **Fix**:
+  - Switched to `https://www.cof.org/community-foundation-locator` (works, state dropdown).
+  - nationalZipCrawler: use community-foundation-locator with optional `?state=XX`.
+  - localFundingCrawler: added Community Foundation Locator as directory resource (no fetch, link only).
+- **Evidence**: `community-foundation-locator` fetches successfully; directory-style links avoid TLS at crawl time.
+
 ## 2026-01-10 — Cheerio ESM default import crash
 
 - **Symptom**: `SyntaxError: The requested module 'cheerio' does not provide an export named 'default'`

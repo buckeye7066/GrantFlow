@@ -234,28 +234,15 @@ This document describes all real data sources used by the GrantFlow crawler syst
 
 ## Foundation and Nonprofit Sources
 
-### 1. Council on Foundations - Foundation Locator
+### 1. Council on Foundations - Community Foundation Locator
 
-**Endpoint:** `https://www.cof.org/foundation-locator`
+**Endpoint:** `https://www.cof.org/community-foundation-locator`
 
-**Access Method:** API / Web scraping (requires proper access)
-
-**Rate Limits:**
-- Check with CoF for API access
-- Web scraping: 1 request per 5 seconds
-
-**Data Fields:**
-- Foundation name
-- Location (lat/lng)
-- Grant range (min/max)
-- Focus areas
-- Eligibility
+**Access Method:** Directory link (no scraping). Users search by state; no API/fetch required.
 
 **Provenance Fields:**
-- `source`: "cof.org"
-- `source_url`: Direct foundation profile URL
-
-**Note:** May require membership or API key for full access.
+- `source`: "cof_foundation_locator"
+- `source_url`: Community foundation locator URL (optionally with ?state=XX)
 
 ---
 

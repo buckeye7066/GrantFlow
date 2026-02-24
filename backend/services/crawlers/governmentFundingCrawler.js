@@ -220,15 +220,19 @@ export async function crawlGovernmentFunding(profile, options = {}) {
         const results = []
                 const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 60
 
-  const signals = profile?.signals
-        if (!signals) {
-                  console.error('[GovernmentCrawler] No signals in profile - cannot search')
-                  return results
-        }
-
+  // Null/missing signals must not disqualify; use minimal fallback
+  const signals = profile?.signals ?? {
+    location: { state: profile?.state || null },
+    keywordSet: new Set(),
+    demographics: new Set(),
+    health: new Set(),
+    assistance: new Set(),
+    occupation: new Set(),
+  }
+  const profileForCrawler = profile.signals ? profile : { ...profile, signals }
   const profileState = signals.location?.state || profile.state || null
-        const strategies = buildExhaustiveStrategies(profile)
-        const searchKeywords = buildSearchKeywords(profile, 25)
+        const strategies = buildExhaustiveStrategies(profileForCrawler)
+        const searchKeywords = buildSearchKeywords(profileForCrawler, 25)
 
   console.log(`[GovernmentCrawler] Exhaustive discovery with ${strategies.length} strategies`)
         console.log(`[GovernmentCrawler] Strategies: ${strategies.map(s => s.label).join(', ')}`)
@@ -249,7 +253,7 @@ export async function crawlGovernmentFunding(profile, options = {}) {
                         if (titleKey && seenTitles.has(titleKey)) continue
                         if (titleKey) seenTitles.add(titleKey)
 
-              const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profile)
+              const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profileForCrawler)
 
               if (matchScore >= minMatchScore) {
                             results.push({
@@ -278,7 +282,7 @@ export async function crawlGovernmentFunding(profile, options = {}) {
                         if (titleKey && seenTitles.has(titleKey)) continue
                         if (titleKey) seenTitles.add(titleKey)
 
-              const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profile)
+              const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profileForCrawler)
 
               if (matchScore >= minMatchScore) {
                             results.push({
@@ -310,7 +314,7 @@ export async function crawlGovernmentFunding(profile, options = {}) {
                                       if (titleKey && seenTitles.has(titleKey)) continue
                                       if (titleKey) seenTitles.add(titleKey)
 
-                          const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profile)
+                          const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profileForCrawler)
                                       if (matchScore >= minMatchScore) {
                                                       results.push({
                                                                         ...opp,
@@ -338,7 +342,7 @@ export async function crawlGovernmentFunding(profile, options = {}) {
                                             if (titleKey && seenTitles.has(titleKey)) continue
                                             if (titleKey) seenTitles.add(titleKey)
 
-                                const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profile)
+                                const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profileForCrawler)
                                             if (matchScore >= minMatchScore) {
                                                             results.push({
                                                                               ...opp,

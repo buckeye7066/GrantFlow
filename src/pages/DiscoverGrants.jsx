@@ -34,6 +34,18 @@ function resolveSelectedProfileId(selectedProfileId, searchParams, profiles) {
   return valid ? fromUrl : null
 }
 
+/** Profile API returns sections as [{ section_key, data }, ...]. Normalize to { section_key: data } for reads. */
+function sectionsMap(profileDetail) {
+  const raw = profileDetail?.sections
+  if (!raw) return {}
+  if (Array.isArray(raw)) {
+    return Object.fromEntries(
+      (raw).map((s) => [s?.section_key, s?.data]).filter(([k]) => Boolean(k))
+    )
+  }
+  return typeof raw === 'object' && raw !== null ? raw : {}
+}
+
 export default function DiscoverGrants() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
@@ -146,17 +158,22 @@ export default function DiscoverGrants() {
   // Detect required profile attributes that are missing and would reduce match quality.
   const profileMissingFields = useMemo(() => {
     if (!selectedProfile) return []
-    const sections = profileDetail?.sections || {}
+    const sections = sectionsMap(profileDetail)
+    const basic = sections.basic_information || {}
+    const locationFocus = sections.location_focus || {}
     const missing = []
     const hasState =
-      sections.basic_information?.state ||
-      sections.location_focus?.state ||
+      basic.state ||
+      locationFocus.state ||
       profileForSearch?.state ||
       selectedOrg?.state
     const hasZip =
-      sections.basic_information?.zip_code ||
-      sections.location_focus?.zip_code ||
+      basic.zip ||
+      basic.zip_code ||
+      locationFocus.zip ||
+      locationFocus.zip_code ||
       profileForSearch?.zip_code ||
+      profileForSearch?.zip ||
       profileForSearch?.postal_code
     if (!hasState && !hasZip) {
       missing.push('location (state or ZIP code)')
@@ -432,12 +449,13 @@ export default function DiscoverGrants() {
       items.push({ id: 'select-profile', icon: User, text: 'Select a profile to get started', detail: 'Choose a profile from the dropdown above so we can match funding opportunities to your needs.' });
       return items;
     }
-    const sections = profileDetail?.sections || {};
+    const sections = sectionsMap(profileDetail);
     const sectionKeys = Object.keys(sections);
     if (sectionKeys.length < 3) {
       items.push({ id: 'complete-profile', icon: User, text: 'Complete your profile for better matches', detail: 'Adding more details (location, interests, goals) helps us find more relevant funding.' });
     }
-    if (!sections.basic_information?.state && !sections.basic_information?.zip_code) {
+    const basic = sections.basic_information || {};
+    if (!basic.state && !basic.zip && !basic.zip_code) {
       items.push({ id: 'add-location', icon: Lightbulb, text: 'Add your location (state/ZIP) to your profile', detail: 'Location data is critical for finding local funding and community resources near you.' });
     }
     if (searchResults.length === 0) {
