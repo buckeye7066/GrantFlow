@@ -206,16 +206,23 @@ export async function crawlLocalFunding(profileInput, options = {}) {
     demographics: new Set(),
   }
 
-  // Build location with multi-level fallback: signals > sections > profile top-level
+  // Build location with multi-level fallback. Profile top-level (from DB) is authoritative when present.
   const sectionZip = basicInfo?.zip_code || basicInfo?.postal_code || basicInfo?.zip
   const sectionState = basicInfo?.state || locationFocus?.state || locationFocus?.primary_state
   const sectionCity = basicInfo?.city || locationFocus?.city
-
   const targetZipRaw = normalizeZip(
-    signals?.location?.zip || sectionZip || profile.zip_code || profile.zip || profile.postal_code
+    profile.zip_code || profile.zip || profile.postal_code || signals?.location?.zip || sectionZip
   )
-  const profileState = signals?.location?.state || sectionState || profile.state
-  const profileCity = signals?.location?.city || sectionCity || profile.city
+  const profileState =
+    (profile.state && String(profile.state).trim()) ||
+    signals?.location?.state ||
+    sectionState ||
+    null
+  const profileCity =
+    (profile.city && String(profile.city).trim()) ||
+    signals?.location?.city ||
+    sectionCity ||
+    null
 
   if (!targetZipRaw && !profileState) {
     console.warn('[LocalFundingCrawler] No ZIP or state in profile - returning directory resources only. Add location (ZIP or state) for better local matches.')
