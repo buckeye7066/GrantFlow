@@ -23,9 +23,11 @@ export function calculateMatchScore(profile, opportunity) {
   const effectiveSignals =
     profileContext?.signals ??
     (profileContext?.sections ? buildProfileSignals({ profile: effectiveProfile, sections: profileContext.sections }) : null)
+  const effectiveFacets = profileContext?.facets ?? null
 
   const reasons = [];
   let score = 0;
+  const oppText = `${opportunity?.title || ''} ${opportunity?.description || ''} ${opportunity?.sponsor || ''}`.toLowerCase()
   
   // Geographic match (expand outward: ZIP → county → state → national)
   // IMPORTANT: location mismatches reduce score; they must NOT exclude results.
@@ -126,6 +128,15 @@ export function calculateMatchScore(profile, opportunity) {
   if (categoryScore > 0) {
     reasons.push(`Category match (${categoryScore} pts)`);
   }
+
+  // Facet alignment (intent + profile attributes) with explicit reasons.
+  const facetAdjustments = calculateFacetAdjustments({
+    facets: effectiveFacets,
+    opportunity,
+    oppText,
+  })
+  score += facetAdjustments.points
+  reasons.push(...facetAdjustments.reasons)
   
   // Amount eligibility (10 pts)
   if (amountInRange(effectiveProfile?.funding_amount_needed, opportunity)) {
@@ -158,6 +169,17 @@ export function calculateMatchScore(profile, opportunity) {
   if (opportunity.requires_match) {
     score -= 10;
     reasons.push(`Requires matching funds (${opportunity.match_percentage || '?'}%)`);
+  }
+
+  // Preserve anti-loan/credit-repair filtering as score penalties (never hard exclusion here).
+  const opportunityType = String(opportunity?.opportunity_type || opportunity?.type || '').toLowerCase()
+  if (['loan', 'loan_program', 'microloan'].includes(opportunityType) || /\bloan\b/.test(oppText)) {
+    score -= 30
+    reasons.push('Loan program penalty (grants prioritized)')
+  }
+  if (/\bcredit repair\b|\bcredit counseling\b|\bdebt consolidation\b/.test(oppText)) {
+    score -= 25
+    reasons.push('Credit repair/counseling penalty')
   }
   
   return { 
@@ -203,6 +225,200 @@ function normalizeState(value) {
 function applicantTypeSetHas(applicantTypesSet, values = []) {
   if (!applicantTypesSet || applicantTypesSet.size === 0) return false
   return values.some((v) => applicantTypesSet.has(String(v).toLowerCase()))
+}
+
+function ensureArray(value) {
+  if (Array.isArray(value)) return value
+  if (value === null || value === undefined) return []
+  return [value]
+}
+
+function tokenizeFacetTerms(values = []) {
+  const AMBIGUOUS_SINGLE_WORDS = new Set([
+    'food', 'health', 'care', 'home', 'house', 'school', 'community',
+    'family', 'child', 'children', 'work', 'service', 'support', 'program',
+    'help', 'assist', 'need', 'general', 'special', 'local', 'national',
+    'plan', 'fund', 'grant', 'money', 'bank', 'credit', 'loan',
+    'start', 'open', 'build', 'make', 'create', 'medical', 'business',
+    'assistance', 'resource', 'free', 'apply', 'person', 'people',
+  ])
+  return ensureArray(values)
+    .map((v) => normalizeString(String(v || '')))
+    .filter((v) => {
+      if (!v) return false
+      if (v.includes(' ')) return v.length >= 6
+      if (v.length < 4) return false
+      if (AMBIGUOUS_SINGLE_WORDS.has(v)) return false
+      return true
+    })
+}
+
+function textIncludesToken(text, token) {
+  const needle = normalizeString(token)
+  if (!needle) return false
+  if (needle.includes(' ')) return text.includes(needle)
+  return new RegExp(`\\b${needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text)
+}
+
+function countTokenMatches(text, tokens = []) {
+  let count = 0
+  for (const token of tokens) {
+    if (textIncludesToken(text, token)) count++
+  }
+  return count
+}
+
+function humanizeEnum(value) {
+  const normalized = normalizeString(value)
+  if (!normalized) return 'unknown'
+  return normalized.replace(/_/g, ' ')
+}
+
+function calculateFacetAdjustments({ facets, opportunity, oppText }) {
+  if (!facets || typeof facets !== 'object' || !opportunity || typeof opportunity !== 'object') {
+    return { points: 0, reasons: [] }
+  }
+
+  const reasons = []
+  let points = 0
+  const oppCorpus = normalizeString(
+    `${oppText || ''} ${(safeParseArrayField(opportunity?.keywords, []) || []).join(' ')} ${
+      (safeParseArrayField(opportunity?.categories, []) || []).join(' ')
+    } ${(safeParseArrayField(opportunity?.eligibility_bullets, []) || []).join(' ')}`,
+  )
+
+  const intentCategory = normalizeString(facets?.intent?.primary_need_category || '')
+  const intentKeywords = tokenizeFacetTerms(facets?.intent?.keywords || [])
+  const intentNegativeKeywords = tokenizeFacetTerms(facets?.intent?.negative_keywords || [])
+  const applicantTypes = ensureArray(facets?.profile?.applicant_types).map((v) => normalizeString(v)).filter(Boolean)
+  const primaryType = normalizeString(facets?.profile?.primary_profile_type || '')
+
+  const categoryTokens = {
+    business_startup: ['small business', 'startup', 'entrepreneur', 'sba', 'microenterprise', 'food truck'],
+    education: ['student', 'scholarship', 'tuition', 'classroom', 'college', 'school', 'nclex', 'licensure'],
+    disability_support: ['disability', 'special needs', 'assistive', 'accessible', 'autism', 'blind', 'deaf'],
+    healthcare_support: ['healthcare', 'medical', 'patient', 'hospital', 'treatment', 'copay', 'rx'],
+    housing_stability: ['housing', 'rent', 'eviction', 'shelter', 'utility', 'homeless'],
+    veteran_support: ['veteran', 'military', 'va ', 'service member'],
+    food_security: ['food assistance', 'nutrition', 'food bank', 'food pantry', 'meal'],
+    transportation_access: ['transportation', 'vehicle', 'transit', 'bus pass', 'mobility'],
+    general_assistance: ['grant', 'assistance', 'support'],
+  }
+  const allCategoryKeys = Object.keys(categoryTokens)
+
+  if (intentCategory && intentCategory !== 'unknown') {
+    const tokens = categoryTokens[intentCategory] || []
+    const sameCategoryHits = countTokenMatches(oppCorpus, tokens)
+    if (sameCategoryHits > 0) {
+      const boost = Math.min(9, 3 + sameCategoryHits)
+      points += boost
+      reasons.push(`Facet intent alignment: ${humanizeEnum(intentCategory)} (+${boost})`)
+    } else {
+      // Soft mismatch penalty only when another category has strong evidence.
+      let strongestAlt = null
+      let strongestAltHits = 0
+      for (const key of allCategoryKeys) {
+        if (key === intentCategory) continue
+        const hits = countTokenMatches(oppCorpus, categoryTokens[key] || [])
+        if (hits > strongestAltHits) {
+          strongestAlt = key
+          strongestAltHits = hits
+        }
+      }
+      if (strongestAlt && strongestAltHits >= 2) {
+        points -= 4
+        reasons.push(
+          `Facet intent mismatch (soft): profile=${humanizeEnum(intentCategory)}, opportunity≈${humanizeEnum(
+            strongestAlt,
+          )} (-4)`,
+        )
+      }
+    }
+  }
+
+  if (intentKeywords.length > 0) {
+    const matches = intentKeywords.filter((kw) => textIncludesToken(oppCorpus, kw))
+    if (matches.length > 0) {
+      const boost = Math.min(12, matches.length * 2)
+      points += boost
+      reasons.push(`Facet keyword overlap (${matches.length}) (+${boost})`)
+    } else if (intentKeywords.length >= 2) {
+      points -= 3
+      reasons.push('Facet keyword overlap missing (soft penalty -3)')
+    }
+  }
+
+  if (intentNegativeKeywords.length > 0) {
+    const blockedHits = intentNegativeKeywords.filter((kw) => textIncludesToken(oppCorpus, kw))
+    if (blockedHits.length > 0) {
+      const penalty = Math.min(18, blockedHits.length * 6)
+      points -= penalty
+      reasons.push(`Facet negative keyword conflict (${blockedHits.length}) (-${penalty})`)
+    }
+  }
+
+  const hasStudentSignals =
+    primaryType.includes('student') ||
+    applicantTypes.some((t) => t.includes('student')) ||
+    facets?.education?.gpa !== null && facets?.education?.gpa !== undefined
+  if (hasStudentSignals && countTokenMatches(oppCorpus, ['student', 'scholarship', 'tuition', 'college']) > 0) {
+    points += 5
+    reasons.push('Facet profile alignment: student (+5)')
+  } else if (hasStudentSignals && /not for students|non[-\s]?student/i.test(oppCorpus)) {
+    points -= 5
+    reasons.push('Facet profile mismatch (student exclusion signal) (-5)')
+  }
+
+  const hasBusinessSignals =
+    primaryType.includes('business') ||
+    applicantTypes.some((t) => t.includes('business')) ||
+    facets?.occupation?.small_business_owner === true
+  if (hasBusinessSignals && countTokenMatches(oppCorpus, ['small business', 'startup', 'entrepreneur', 'sba']) > 0) {
+    points += 5
+    reasons.push('Facet profile alignment: small business (+5)')
+  }
+
+  const hasVeteranSignals = facets?.military?.veteran === true || facets?.military?.disabled_veteran === true
+  if (hasVeteranSignals && countTokenMatches(oppCorpus, ['veteran', 'military', 'va ']) > 0) {
+    points += 5
+    reasons.push('Facet profile alignment: veteran (+5)')
+  }
+
+  const hasDisabilitySignals =
+    (Array.isArray(facets?.health?.disability_types) && facets.health.disability_types.length > 0) ||
+    facets?.health?.visual_impairment === true ||
+    facets?.health?.hearing_impairment === true
+  if (hasDisabilitySignals && countTokenMatches(oppCorpus, ['disability', 'special needs', 'accessible', 'assistive']) > 0) {
+    points += 5
+    reasons.push('Facet profile alignment: disability support (+5)')
+  }
+
+  const hasLowIncomeSignals =
+    facets?.financial?.low_income === true ||
+    facets?.assistance?.snap_recipient === true ||
+    facets?.assistance?.tanf_recipient === true ||
+    facets?.assistance?.section8_housing === true
+  if (hasLowIncomeSignals && countTokenMatches(oppCorpus, ['low income', 'hardship', 'household', 'public assistance']) > 0) {
+    points += 4
+    reasons.push('Facet profile alignment: low-income assistance (+4)')
+  }
+
+  // Keep facet adjustments bounded so facets re-rank, not dominate.
+  const bounded = Math.max(-35, Math.min(35, points))
+  if (bounded !== points) {
+    reasons.push(`Facet adjustment capped (${points} -> ${bounded})`)
+  }
+
+  if (String(process.env.MATCHING_ENGINE_FACET_DEBUG || '').toLowerCase() === 'true') {
+    console.log('[matchingEngine] facet adjustments', {
+      title: opportunity?.title ?? null,
+      points: bounded,
+      reasons,
+      intent_category: intentCategory || null,
+    })
+  }
+
+  return { points: bounded, reasons }
 }
 
 /**

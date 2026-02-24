@@ -1,0 +1,858 @@
+{
+  "schema_version": "2026-02-23.1",
+  "canonical_section_keys": [
+    "basic_information",
+    "organization_details",
+    "financial_information",
+    "government_assistance",
+    "health_medical",
+    "demographics",
+    "family_life",
+    "military_service",
+    "occupation",
+    "location_focus",
+    "narrative",
+    "university_applications",
+    "education",
+    "nonprofit_compliance",
+    "small_business_details",
+    "medical_insurance",
+    "medical_history",
+    "employment",
+    "housing",
+    "family",
+    "programs_services"
+  ],
+  "fallback_section_keys": [
+    "comprehensive_application"
+  ],
+  "required_for_crawling": [
+    {
+      "facet": "profile.primary_profile_type",
+      "description": "Required to avoid cross-type junk opportunities."
+    },
+    {
+      "facet": "geo.state_or_zip",
+      "description": "Required for local/state matching expansion."
+    },
+    {
+      "facet": "intent.primary_need_category",
+      "description": "Required for intent disambiguation and must-not terms."
+    }
+  ],
+  "pii_rules": {
+    "ssn": {
+      "store_raw": false,
+      "store_boolean_field": "pii.has_ssn",
+      "store_masked_last4_field": "pii.ssn_last4_masked",
+      "mask_style": "last4_only",
+      "input_candidates": [
+        "comprehensive_application.ssn",
+        "comprehensive_application.social_security_number",
+        "basic_information.ssn"
+      ]
+    },
+    "medicaid_id": {
+      "store_raw": false,
+      "store_boolean_field": "pii.has_medicaid_id",
+      "store_masked_last4_field": "pii.medicaid_id_last4_masked",
+      "mask_style": "last4_only",
+      "input_candidates": [
+        "government_assistance.tenncare_id",
+        "comprehensive_application.tenncare_id",
+        "government_assistance.medicaid_id"
+      ]
+    }
+  },
+  "fields": [
+    {
+      "id": "profile.primary_profile_type",
+      "type": "enum",
+      "relevance": true,
+      "query_use": "required",
+      "facet_path": "profile.primary_profile_type",
+      "source_section_key": "basic_information",
+      "source_path": "profile_category",
+      "fallback_source_path": [
+        "comprehensive_application.applicant_type",
+        "organization_details.organization_type"
+      ]
+    },
+    {
+      "id": "profile.applicant_types",
+      "type": "string_array",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "profile.applicant_types",
+      "source_section_key": "organization_details",
+      "source_path": "organization_type",
+      "fallback_source_path": [
+        "comprehensive_application.applicant_type",
+        "occupation.small_business_owner",
+        "occupation.nonprofit_employee"
+      ]
+    },
+    {
+      "id": "geo.state",
+      "type": "state_code",
+      "relevance": true,
+      "query_use": "required_or",
+      "facet_path": "geo.state",
+      "source_section_key": "basic_information",
+      "source_path": "state",
+      "fallback_source_path": [
+        "location_focus.state",
+        "organization_details.state",
+        "comprehensive_application.state"
+      ]
+    },
+    {
+      "id": "geo.zip",
+      "type": "zip5",
+      "relevance": true,
+      "query_use": "required_or",
+      "facet_path": "geo.zip",
+      "source_section_key": "basic_information",
+      "source_path": "zip",
+      "fallback_source_path": [
+        "basic_information.postal_code",
+        "location_focus.zip",
+        "organization_details.zip",
+        "comprehensive_application.zip"
+      ]
+    },
+    {
+      "id": "geo.city",
+      "type": "string",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "geo.city",
+      "source_section_key": "basic_information",
+      "source_path": "city",
+      "fallback_source_path": [
+        "location_focus.primary_city",
+        "location_focus.city",
+        "comprehensive_application.city"
+      ]
+    },
+    {
+      "id": "geo.county_hint",
+      "type": "string",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "geo.county_hint",
+      "source_section_key": "location_focus",
+      "source_path": "geographic_focus",
+      "fallback_source_path": [
+        "location_focus.notes"
+      ]
+    },
+    {
+      "id": "organization.organization_type",
+      "type": "string",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "organization.organization_type",
+      "source_section_key": "organization_details",
+      "source_path": "organization_type",
+      "fallback_source_path": [
+        "comprehensive_application.applicant_type"
+      ]
+    },
+    {
+      "id": "organization.nonprofit_ready",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "organization.nonprofit_ready",
+      "source_section_key": "nonprofit_compliance",
+      "source_path": "is_501c3",
+      "fallback_source_path": [
+        "organization_details.ein",
+        "comprehensive_application.business_501c3_certified"
+      ]
+    },
+    {
+      "id": "financial.household_income",
+      "type": "number",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "financial.household_income",
+      "source_section_key": "financial_information",
+      "source_path": "household_income",
+      "fallback_source_path": [
+        "comprehensive_application.household_income"
+      ]
+    },
+    {
+      "id": "financial.household_size",
+      "type": "number",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "financial.household_size",
+      "source_section_key": "financial_information",
+      "source_path": "household_size",
+      "fallback_source_path": [
+        "comprehensive_application.household_size"
+      ]
+    },
+    {
+      "id": "financial.need_level",
+      "type": "enum",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "financial.need_level",
+      "source_section_key": "financial_information",
+      "source_path": "financial_need_level",
+      "fallback_source_path": [
+        "comprehensive_application.financial_need_level"
+      ]
+    },
+    {
+      "id": "financial.low_income",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "financial.low_income",
+      "source_section_key": "financial_information",
+      "source_path": "low_income",
+      "fallback_source_path": [
+        "comprehensive_application.low_income"
+      ]
+    },
+    {
+      "id": "assistance.medicaid_enrolled",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "assistance.medicaid_enrolled",
+      "source_section_key": "government_assistance",
+      "source_path": "medicaid_enrolled",
+      "fallback_source_path": [
+        "comprehensive_application.medicaid_enrolled"
+      ]
+    },
+    {
+      "id": "assistance.medicaid_waiver_program",
+      "type": "string",
+      "relevance": true,
+      "query_use": "disambiguation",
+      "facet_path": "assistance.medicaid_waiver_program",
+      "source_section_key": "government_assistance",
+      "source_path": "medicaid_waiver_program",
+      "fallback_source_path": [
+        "comprehensive_application.medicaid_waiver_program"
+      ]
+    },
+    {
+      "id": "assistance.ecf_choices_role",
+      "type": "enum",
+      "relevance": true,
+      "query_use": "disambiguation",
+      "facet_path": "assistance.ecf_choices_role",
+      "source_section_key": "government_assistance",
+      "source_path": "ecf_choices_role",
+      "fallback_source_path": [
+        "comprehensive_application.ecf_choices_role"
+      ]
+    },
+    {
+      "id": "assistance.medicare_recipient",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "assistance.medicare_recipient",
+      "source_section_key": "government_assistance",
+      "source_path": "medicare_recipient",
+      "fallback_source_path": [
+        "comprehensive_application.medicare_recipient"
+      ]
+    },
+    {
+      "id": "assistance.ssi_recipient",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "assistance.ssi_recipient",
+      "source_section_key": "government_assistance",
+      "source_path": "ssi_recipient",
+      "fallback_source_path": [
+        "comprehensive_application.ssi_recipient"
+      ]
+    },
+    {
+      "id": "assistance.ssdi_recipient",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "assistance.ssdi_recipient",
+      "source_section_key": "government_assistance",
+      "source_path": "ssdi_recipient",
+      "fallback_source_path": [
+        "comprehensive_application.ssdi_recipient"
+      ]
+    },
+    {
+      "id": "assistance.snap_recipient",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "assistance.snap_recipient",
+      "source_section_key": "government_assistance",
+      "source_path": "snap_recipient",
+      "fallback_source_path": [
+        "comprehensive_application.snap_recipient"
+      ]
+    },
+    {
+      "id": "assistance.tanf_recipient",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "assistance.tanf_recipient",
+      "source_section_key": "government_assistance",
+      "source_path": "tanf_recipient",
+      "fallback_source_path": [
+        "comprehensive_application.tanf_recipient"
+      ]
+    },
+    {
+      "id": "assistance.section8_housing",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "assistance.section8_housing",
+      "source_section_key": "government_assistance",
+      "source_path": "section8_housing",
+      "fallback_source_path": [
+        "comprehensive_application.section8_housing"
+      ]
+    },
+    {
+      "id": "assistance.other_programs",
+      "type": "string",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "assistance.other_programs",
+      "source_section_key": "government_assistance",
+      "source_path": "other_programs",
+      "fallback_source_path": [
+        "comprehensive_application.other_programs"
+      ]
+    },
+    {
+      "id": "demographics.african_american",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "demographics.african_american",
+      "source_section_key": "demographics",
+      "source_path": "african_american",
+      "fallback_source_path": [
+        "comprehensive_application.african_american"
+      ]
+    },
+    {
+      "id": "demographics.hispanic_latino",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "demographics.hispanic_latino",
+      "source_section_key": "demographics",
+      "source_path": "hispanic_latino",
+      "fallback_source_path": [
+        "comprehensive_application.hispanic_latino"
+      ]
+    },
+    {
+      "id": "demographics.asian_american",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "demographics.asian_american",
+      "source_section_key": "demographics",
+      "source_path": "asian_american",
+      "fallback_source_path": [
+        "comprehensive_application.asian_american"
+      ]
+    },
+    {
+      "id": "demographics.native_american",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "demographics.native_american",
+      "source_section_key": "demographics",
+      "source_path": "native_american",
+      "fallback_source_path": [
+        "comprehensive_application.native_american"
+      ]
+    },
+    {
+      "id": "demographics.lgbtq",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "demographics.lgbtq",
+      "source_section_key": "demographics",
+      "source_path": "lgbtq",
+      "fallback_source_path": [
+        "comprehensive_application.lgbtq"
+      ]
+    },
+    {
+      "id": "demographics.immigrant_status",
+      "type": "enum",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "demographics.immigrant_status",
+      "source_section_key": "demographics",
+      "source_path": "immigrant_status",
+      "fallback_source_path": [
+        "comprehensive_application.immigration_status"
+      ]
+    },
+    {
+      "id": "health.conditions",
+      "type": "string_array",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "health.conditions",
+      "source_section_key": "health_medical",
+      "source_path": "conditions",
+      "fallback_source_path": [
+        "comprehensive_application.chronic_illness_type",
+        "comprehensive_application.cancer_type"
+      ]
+    },
+    {
+      "id": "health.disability_types",
+      "type": "string_array",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "health.disability_types",
+      "source_section_key": "health_medical",
+      "source_path": "disability_type",
+      "fallback_source_path": [
+        "comprehensive_application.disability_type"
+      ]
+    },
+    {
+      "id": "health.support_needs_level",
+      "type": "enum",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "health.support_needs_level",
+      "source_section_key": "health_medical",
+      "source_path": "support_needs_level",
+      "fallback_source_path": [
+        "comprehensive_application.support_needs_level"
+      ]
+    },
+    {
+      "id": "health.mental_health_condition",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "health.mental_health_condition",
+      "source_section_key": "health_medical",
+      "source_path": "mental_health_condition",
+      "fallback_source_path": [
+        "comprehensive_application.mental_health_condition"
+      ]
+    },
+    {
+      "id": "health.chronic_illness",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "health.chronic_illness",
+      "source_section_key": "health_medical",
+      "source_path": "chronic_illness",
+      "fallback_source_path": [
+        "comprehensive_application.chronic_illness"
+      ]
+    },
+    {
+      "id": "health.substance_recovery",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "health.substance_recovery",
+      "source_section_key": "health_medical",
+      "source_path": "substance_recovery",
+      "fallback_source_path": [
+        "comprehensive_application.substance_recovery"
+      ]
+    },
+    {
+      "id": "health.neurodivergent",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "health.neurodivergent",
+      "source_section_key": "health_medical",
+      "source_path": "neurodivergent",
+      "fallback_source_path": [
+        "comprehensive_application.neurodivergent"
+      ]
+    },
+    {
+      "id": "health.visual_impairment",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "health.visual_impairment",
+      "source_section_key": "health_medical",
+      "source_path": "visual_impairment",
+      "fallback_source_path": [
+        "comprehensive_application.visual_impairment"
+      ]
+    },
+    {
+      "id": "health.hearing_impairment",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "health.hearing_impairment",
+      "source_section_key": "health_medical",
+      "source_path": "hearing_impairment",
+      "fallback_source_path": [
+        "comprehensive_application.hearing_impairment"
+      ]
+    },
+    {
+      "id": "family.single_parent",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "family.single_parent",
+      "source_section_key": "family_life",
+      "source_path": "single_parent",
+      "fallback_source_path": [
+        "comprehensive_application.single_parent"
+      ]
+    },
+    {
+      "id": "family.homeless",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "family.homeless",
+      "source_section_key": "family_life",
+      "source_path": "homeless",
+      "fallback_source_path": [
+        "comprehensive_application.homeless"
+      ]
+    },
+    {
+      "id": "family.caregiver",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "family.caregiver",
+      "source_section_key": "family_life",
+      "source_path": "caregiver",
+      "fallback_source_path": [
+        "comprehensive_application.caregiver"
+      ]
+    },
+    {
+      "id": "family.foster_youth",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "family.foster_youth",
+      "source_section_key": "family_life",
+      "source_path": "foster_youth",
+      "fallback_source_path": [
+        "comprehensive_application.foster_youth"
+      ]
+    },
+    {
+      "id": "family.formerly_incarcerated",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "family.formerly_incarcerated",
+      "source_section_key": "family_life",
+      "source_path": "formerly_incarcerated",
+      "fallback_source_path": [
+        "comprehensive_application.formerly_incarcerated"
+      ]
+    },
+    {
+      "id": "family.domestic_violence_survivor",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "family.domestic_violence_survivor",
+      "source_section_key": "family_life",
+      "source_path": "domestic_violence_survivor",
+      "fallback_source_path": [
+        "comprehensive_application.domestic_violence_survivor"
+      ]
+    },
+    {
+      "id": "military.veteran",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "military.veteran",
+      "source_section_key": "military_service",
+      "source_path": "veteran",
+      "fallback_source_path": [
+        "comprehensive_application.veteran"
+      ]
+    },
+    {
+      "id": "military.disabled_veteran",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "military.disabled_veteran",
+      "source_section_key": "military_service",
+      "source_path": "disabled_veteran",
+      "fallback_source_path": [
+        "comprehensive_application.disabled_veteran"
+      ]
+    },
+    {
+      "id": "military.military_spouse",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "military.military_spouse",
+      "source_section_key": "military_service",
+      "source_path": "military_spouse",
+      "fallback_source_path": [
+        "comprehensive_application.military_spouse"
+      ]
+    },
+    {
+      "id": "occupation.healthcare_worker",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "occupation.healthcare_worker",
+      "source_section_key": "occupation",
+      "source_path": "healthcare_worker",
+      "fallback_source_path": [
+        "comprehensive_application.healthcare_worker"
+      ]
+    },
+    {
+      "id": "occupation.educator",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "occupation.educator",
+      "source_section_key": "occupation",
+      "source_path": "educator",
+      "fallback_source_path": [
+        "comprehensive_application.educator"
+      ]
+    },
+    {
+      "id": "occupation.small_business_owner",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "occupation.small_business_owner",
+      "source_section_key": "occupation",
+      "source_path": "small_business_owner",
+      "fallback_source_path": [
+        "comprehensive_application.small_business_owner"
+      ]
+    },
+    {
+      "id": "occupation.nonprofit_employee",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "occupation.nonprofit_employee",
+      "source_section_key": "occupation",
+      "source_path": "nonprofit_employee",
+      "fallback_source_path": [
+        "comprehensive_application.nonprofit_employee"
+      ]
+    },
+    {
+      "id": "education.gpa",
+      "type": "number",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "education.gpa",
+      "source_section_key": "education",
+      "source_path": "gpa",
+      "fallback_source_path": [
+        "university_applications.applications[].avg_gpa",
+        "comprehensive_application.gpa"
+      ]
+    },
+    {
+      "id": "education.intended_major",
+      "type": "string",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "education.intended_major",
+      "source_section_key": "education",
+      "source_path": "intended_major",
+      "fallback_source_path": [
+        "university_applications.applications[].interests[]",
+        "comprehensive_application.intended_major"
+      ]
+    },
+    {
+      "id": "narrative.primary_goal",
+      "type": "string",
+      "relevance": true,
+      "query_use": "disambiguation",
+      "facet_path": "narrative.primary_goal",
+      "source_section_key": "narrative",
+      "source_path": "primary_goal",
+      "fallback_source_path": [
+        "comprehensive_application.primary_goal"
+      ]
+    },
+    {
+      "id": "narrative.target_population",
+      "type": "string",
+      "relevance": true,
+      "query_use": "disambiguation",
+      "facet_path": "narrative.target_population",
+      "source_section_key": "narrative",
+      "source_path": "target_population",
+      "fallback_source_path": [
+        "comprehensive_application.target_population"
+      ]
+    },
+    {
+      "id": "narrative.geographic_focus",
+      "type": "string",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "narrative.geographic_focus",
+      "source_section_key": "location_focus",
+      "source_path": "geographic_focus",
+      "fallback_source_path": [
+        "narrative.geographic_focus",
+        "comprehensive_application.geographic_focus"
+      ]
+    },
+    {
+      "id": "narrative.keywords",
+      "type": "string_array",
+      "relevance": true,
+      "query_use": "boost",
+      "facet_path": "narrative.keywords",
+      "source_section_key": "programs_services",
+      "source_path": "keywords",
+      "fallback_source_path": [
+        "comprehensive_application.keywords",
+        "comprehensive_application.focus_areas"
+      ]
+    },
+    {
+      "id": "intent.primary_need_category",
+      "type": "enum",
+      "relevance": true,
+      "query_use": "required",
+      "facet_path": "intent.primary_need_category",
+      "source_section_key": "narrative",
+      "source_path": [
+        "primary_goal",
+        "target_population"
+      ],
+      "fallback_source_path": [
+        "programs_services.focus_areas",
+        "occupation.healthcare_worker",
+        "occupation.small_business_owner",
+        "government_assistance.medicaid_waiver_program",
+        "comprehensive_application.primary_goal",
+        "comprehensive_application.keywords"
+      ]
+    },
+    {
+      "id": "intent.keywords",
+      "type": "string_array",
+      "relevance": true,
+      "query_use": "required",
+      "facet_path": "intent.keywords",
+      "source_section_key": "narrative",
+      "source_path": [
+        "primary_goal",
+        "target_population",
+        "mission"
+      ],
+      "fallback_source_path": [
+        "programs_services.keywords",
+        "programs_services.interests",
+        "comprehensive_application.keywords",
+        "comprehensive_application.focus_areas"
+      ]
+    },
+    {
+      "id": "intent.negative_keywords",
+      "type": "string_array",
+      "relevance": true,
+      "query_use": "required",
+      "facet_path": "intent.negative_keywords",
+      "source_section_key": "narrative",
+      "source_path": [
+        "primary_goal",
+        "mission"
+      ],
+      "fallback_source_path": [
+        "occupation.small_business_owner",
+        "occupation.educator",
+        "occupation.healthcare_worker"
+      ]
+    },
+    {
+      "id": "pii.has_ssn",
+      "type": "boolean",
+      "relevance": false,
+      "query_use": "pii_only",
+      "facet_path": "pii.has_ssn"
+    },
+    {
+      "id": "pii.ssn_last4_masked",
+      "type": "string",
+      "relevance": false,
+      "query_use": "pii_only",
+      "facet_path": "pii.ssn_last4_masked"
+    },
+    {
+      "id": "pii.has_medicaid_id",
+      "type": "boolean",
+      "relevance": true,
+      "query_use": "pii_only",
+      "facet_path": "pii.has_medicaid_id",
+      "source_section_key": "government_assistance",
+      "source_path": "tenncare_id",
+      "fallback_source_path": [
+        "comprehensive_application.tenncare_id"
+      ]
+    },
+    {
+      "id": "pii.medicaid_id_last4_masked",
+      "type": "string",
+      "relevance": true,
+      "query_use": "pii_only",
+      "facet_path": "pii.medicaid_id_last4_masked",
+      "source_section_key": "government_assistance",
+      "source_path": "tenncare_id",
+      "fallback_source_path": [
+        "comprehensive_application.tenncare_id"
+      ]
+    },
+    {
+      "id": "legal.exact_exclusion_code",
+      "type": "string",
+      "relevance": false,
+      "query_use": "none",
+      "facet_path": "legal.exact_exclusion_code"
+    }
+  ]
+}
