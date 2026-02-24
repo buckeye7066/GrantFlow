@@ -645,9 +645,17 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   }
 
   if (profile?.display_name) {
-    // Extract keywords from display name (e.g., "Axiom Community Health Cooperative" -> community, health)
-    const nameWords = profile.display_name.split(/\s+/).filter(w => w.length > 3)
-    nameWords.forEach(word => registerKeyword(word))
+    // Extract keywords from display name ONLY for organizations/businesses
+    // (e.g., "Axiom Community Health Cooperative" -> community, health).
+    // For individuals/families, the display_name is a person's name and must NOT
+    // be used as a keyword — it causes false geographic matches
+    // (e.g., "William" matching "Williamson, NY" or "Fitzwilliam, NH").
+    const orgTypes = new Set(['organization', 'nonprofit', 'small_business', 'government', 'tribe', 'church'])
+    const profileType = normalizeString(profile.primary_type || profile.applicant_type || '')
+    if (orgTypes.has(profileType)) {
+      const nameWords = profile.display_name.split(/\s+/).filter(w => w.length > 3)
+      nameWords.forEach(word => registerKeyword(word))
+    }
   }
 
   // ============ BASIC INFORMATION ============
