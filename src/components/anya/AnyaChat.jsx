@@ -916,7 +916,7 @@ export default function AnyaChat({ profileId }) {
           }}
           placeholder="Ask Anya for help…"
           rows={3}
-          className="resize-none text-sm"
+          className="resize-none text-sm bg-white border-slate-200 text-slate-900 placeholder:text-slate-500 focus-visible:ring-slate-400"
           disabled={isDisabled}
         />
         <div className="mt-3 flex items-center justify-between">
