@@ -39,6 +39,16 @@ const listProfilesLimiter = rateLimit({
   message: 'Too many profile list requests, please try again later.',
 })
 
+// Profile creation touches several tables and schedules background jobs.
+// Apply moderate rate limiting to prevent bulk-creation abuse.
+const createProfileLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  limit: 30, // reasonable for normal usage; admins can create multiple profiles
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: 'Too many profile create requests, please try again later.',
+})
+
 function isAuthenticatedFromCtx(ctx) {
   return Boolean(ctx && (ctx.userId || ctx.activeProfileId || ctx.email))
 }
@@ -644,7 +654,7 @@ router.delete('/:id/emails/:emailId', async (req, res) => {
   }
 })
 
-router.post('/', async (req, res) => {
+router.post('/', createProfileLimiter, async (req, res) => {
   const isAdmin = req.ctx?.isAdmin === true
   const userId = req.ctx?.userId ?? null
   const { display_name, primary_type, organization_id, user_id, created_by, status = 'active', tags = [] } = req.body ?? {}
@@ -724,6 +734,42 @@ router.post('/', async (req, res) => {
 
   await linkProfileToAdmin(req.db, profileId)
   const refreshed = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(profileId)
+
+  // Schedule initial crawl jobs for the new profile (best-effort, non-blocking).
+  // Idempotency keys prevent duplicate jobs on quick double-submits.
+  try {
+    const { createCrawlerJob } = await import('../services/crawlerJobCreation.js')
+    // Local crawl: discover funding near the profile's location
+    await createCrawlerJob(req.db, {
+      type: 'local',
+      profileId,
+      parameters: { triggered_by: 'profile_create' },
+      requestedBy: req.ctx?.userId ?? 'system',
+    })
+    // National crawl: broad eligibility check
+    await createCrawlerJob(req.db, {
+      type: 'national',
+      profileId,
+      parameters: { triggered_by: 'profile_create' },
+      requestedBy: req.ctx?.userId ?? 'system',
+    })
+    // Dispatch the local job immediately (fire-and-forget)
+    const { dispatchCrawlerJob } = await import('../services/crawlerDispatcher.js')
+    const localJob = await req.db
+      .prepare(
+        `SELECT id FROM crawler_jobs WHERE profile_id = ? AND type = 'local' AND status = 'queued' ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(profileId)
+    if (localJob?.id) {
+      dispatchCrawlerJob({ db: req.db, jobId: localJob.id, uploadDir: getUploadsDir(req), getOpenAI }).catch((err) => {
+        console.warn('[profiles] Failed to dispatch initial local crawl:', err?.message || String(err))
+      })
+    }
+  } catch (scheduleError) {
+    // Never fail profile creation because of a scheduling error.
+    console.warn('[profiles] Failed to schedule initial crawl for new profile:', scheduleError?.message || String(scheduleError))
+  }
+
   res.status(201).json(mapProfile(refreshed))
 })
 
@@ -794,6 +840,23 @@ return res.status(500).json({ error: 'Failed to load profile sections', details:
 })
 
 const TOP_LEVEL_PROFILE_KEYS = new Set(['display_name', 'primary_type', 'organization_id', 'status', 'tags'])
+
+// GET /api/profiles/:id/readiness — profile completeness gate
+// Returns whether the profile has enough data for meaningful matching.
+router.get('/:id/readiness', async (req, res) => {
+  const { id } = req.params
+  try {
+    const { checkProfileReadiness } = await import('../services/profileReadinessService.js')
+    const result = await checkProfileReadiness(req.db, id)
+    return res.status(200).json({
+      profile_id: id,
+      ...result,
+      timestamp: new Date().toISOString(),
+    })
+  } catch (error) {
+    return res.status(500).json({ error: error?.message || String(error) })
+  }
+})
 
 router.put('/:id', async (req, res) => {
   const { id } = req.params

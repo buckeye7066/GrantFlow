@@ -22,6 +22,12 @@
 import * as cheerio from 'cheerio'
 import { buildSearchKeywords, calculateMatchScore, filterByDeadline } from './crawlerHelpers.js'
 import { getWithRetry, postWithRetry } from './httpClient.js'
+import { planCrawlerQueries } from './queryPlanner.js'
+import {
+  resolveCrawlerContext,
+  mergePlanKeywords,
+  enforceCrawlerOpportunityContract,
+} from './crawlerOpportunityContract.js'
 
 const GRANTS_GOV_API = 'https://api.grants.gov/v1/api/search2'
 const GRANTS_GOV_DETAIL = 'https://www.grants.gov/search-results-detail/'
@@ -216,7 +222,28 @@ function buildExhaustiveStrategies(profile) {
   return unique.slice(0, 12)
 }
 
-export async function crawlGovernmentFunding(profile, options = {}) {
+function finalizeGovernmentResults(rows, { facets, queryPlan }) {
+  return rows
+    .map((row) =>
+      enforceCrawlerOpportunityContract(row, {
+        crawlerType: 'government_funding',
+        facets,
+        queryPlan,
+        sourceFallback: row?.source ?? 'Government funding',
+      }),
+    )
+    .filter(Boolean)
+}
+
+export async function crawlGovernmentFunding(profileInput, options = {}) {
+        const { profile, signals, facets, queryPlan: queryPlanFromContext } = resolveCrawlerContext(profileInput, options)
+        const queryPlan =
+                  queryPlanFromContext ??
+                  planCrawlerQueries({
+                            crawlerType: 'government_funding',
+                            facets,
+                            location: facets?.geo ?? signals?.location ?? {},
+                  })
         const results = []
                 const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 60
 
@@ -232,7 +259,7 @@ export async function crawlGovernmentFunding(profile, options = {}) {
   const profileForCrawler = profile.signals ? profile : { ...profile, signals }
   const profileState = signals.location?.state || profile.state || null
         const strategies = buildExhaustiveStrategies(profileForCrawler)
-        const searchKeywords = buildSearchKeywords(profileForCrawler, 25)
+        const searchKeywords = mergePlanKeywords(buildSearchKeywords(profileForCrawler, 25), queryPlan).slice(0, 35)
 
   console.log(`[GovernmentCrawler] Exhaustive discovery with ${strategies.length} strategies`)
         console.log(`[GovernmentCrawler] Strategies: ${strategies.map(s => s.label).join(', ')}`)
@@ -365,7 +392,7 @@ export async function crawlGovernmentFunding(profile, options = {}) {
   results.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
 
   console.log(`[GovernmentCrawler] Exhaustive discovery found ${results.length} matching opportunities (min_score=${minMatchScore})`)
-        return results
+        return finalizeGovernmentResults(results, { facets, queryPlan })
 }
 
 /**
