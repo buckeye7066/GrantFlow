@@ -381,29 +381,22 @@ async function runLiveCrawler({ crawlerType, profile, itemRequest, minMatchScore
 
     const current = normalized.filter(isOpportunityCurrent)
 
-    // Preserve crawler-provided match_score when present (directory-style resources often pre-score themselves),
-    // and only add our computed score on top.
+    // Score all opportunities uniformly using the profile context.
+    // Directory resources are no longer given preferential treatment — they must
+    // earn their relevance through the same matching criteria as every other result.
     const rescored = current.map((row) => {
       const { score: computedScore, reasons: computedReasons } = calculateMatchScore(profileContextForScoring, row)
       const existingScore = typeof row.match_score === 'number' ? row.match_score : null
-      const isDirectory = isDirectoryResource(row)
 
       const mergedScore =
         existingScore === null ? computedScore : Math.max(existingScore, computedScore)
       const mergedReasons = mergeReasons(row.match_reasons, computedReasons)
 
-      // Guarantee directory resources survive the user's min threshold (they're entry points, not competitive matches).
-      const finalScore = isDirectory ? Math.max(Math.min(Number(minMatchScore), 55), mergedScore) : mergedScore
-      const finalReasons = isDirectory
-        ? mergeReasons(mergedReasons, [`Directory resource (always included at ${Number(minMatchScore)}%+ threshold)`])
-        : mergedReasons
-
-      return { ...row, match_score: finalScore, match_reasons: finalReasons }
+      return { ...row, match_score: mergedScore, match_reasons: mergedReasons }
     })
 
     const included = rescored
       .filter((row) => {
-        if (isDirectoryResource(row)) return true
         return typeof row.match_score === 'number' && row.match_score >= Number(minMatchScore)
       })
       .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
@@ -845,23 +838,14 @@ router.post('/run', ensureAuth, async (req, res) => {
     const expiredExcluded = Math.max(0, candidates.length - currentCandidates.length)
 
     // Score all candidates using the deterministic engine (uses full sections/signals).
-    // CRITICAL INVARIANT:
-    // - Directory-style resources must survive filtering (they are entry points, not competitive matches).
-    // - When total_found > 0, do not return included === 0 unless this is a fatal error.
+    // All opportunities scored uniformly — directory resources earn relevance through matching.
     const scored = currentCandidates.map((row) => {
       const { score, reasons } = calculateMatchScore(profileContext, row)
-      const isDirectory = isDirectoryResource(row)
-      const finalScore = isDirectory ? Math.max(Math.min(Number(min_match_score), 55), score) : score
-      const finalReasons = isDirectory
-        ? mergeReasons(reasons, [
-            `Directory resource (always included at ${Number(min_match_score)}%+ threshold)`,
-          ])
-        : reasons
 
       return {
         ...row,
-        match_score: finalScore,
-        match_reasons: finalReasons,
+        match_score: score,
+        match_reasons: reasons,
         // Normalize sponsor/title for UI
         sponsor: row.sponsor ?? row.funder ?? null,
       }
@@ -872,7 +856,6 @@ router.post('/run', ensureAuth, async (req, res) => {
     // Filter by minimum match score (default lowered; UI can adjust).
     let filteredOpportunities = scored
       .filter((opp) => {
-        if (isDirectoryResource(opp)) return true
         return typeof opp.match_score === 'number' && opp.match_score >= Number(min_match_score)
       })
       .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
@@ -930,7 +913,7 @@ router.post('/run', ensureAuth, async (req, res) => {
     // This preserves the response shape while preventing "total_found > 0, included === 0".
     if (initiallyIncludedCount === 0 && totalFound > 0) {
       filteredOpportunities = scored
-        .filter((o) => typeof o?.match_score === 'number' || isDirectoryResource(o))
+        .filter((o) => typeof o?.match_score === 'number')
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
         .slice(0, 50)
       debug.db.returned = filteredOpportunities.length
@@ -1134,24 +1117,15 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
         .filter((row) => isOpportunityCurrent(row))
         .map((row) => {
           const { score, reasons } = calculateMatchScore(profileContext, row)
-          const isDirectory = isDirectoryResource(row)
-          const finalScore = isDirectory ? Math.max(Math.min(Number(min_match_score), 55), score) : score
-          const finalReasons = isDirectory
-            ? mergeReasons(reasons, [
-                `Directory resource (always included at ${Number(min_match_score)}%+ threshold)`,
-              ])
-            : reasons
-          return { ...row, match_score: finalScore, match_reasons: finalReasons }
+          return { ...row, match_score: score, match_reasons: reasons }
         })
 
       const totalFoundForCrawler = scored.length
 
-      // Filtering with guardrails:
-      // - Directory resources always survive.
-      // - "0 included" is a failure state when total_found > 0; fall back to best-scoring items.
+      // Filter by minimum match score.
+      // If 0 included but we had results, fall back to best-scoring items.
       let filtered = scored
         .filter((opp) => {
-          if (isDirectoryResource(opp)) return true
           return typeof opp.match_score === 'number' && opp.match_score >= Number(min_match_score)
         })
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
@@ -1159,7 +1133,7 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
 
       if (filtered.length === 0 && totalFoundForCrawler > 0) {
         filtered = scored
-          .filter((o) => typeof o?.match_score === 'number' || isDirectoryResource(o))
+          .filter((o) => typeof o?.match_score === 'number')
           .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
           .slice(0, 50)
       }
