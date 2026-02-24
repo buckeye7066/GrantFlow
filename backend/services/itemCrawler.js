@@ -152,10 +152,16 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
     return [pattern, pattern, pattern]
   })
   
-  const dbOpps = db.prepare(`
+  const isPostgres = db?.dialect === 'postgres'
+  const activePredicate = isPostgres ? 'is_active = TRUE' : 'is_active = 1'
+  const noMatchPredicate = isPostgres
+    ? '(requires_match IS NULL OR requires_match = FALSE)'
+    : '(requires_match = 0 OR requires_match IS NULL)'
+
+  const dbOpps = await db.prepare(`
     SELECT * FROM funding_opportunities 
-    WHERE is_active = 1 
-    AND (requires_match = 0 OR requires_match IS NULL)
+    WHERE ${activePredicate}
+    AND ${noMatchPredicate}
     AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
     AND (${keywordConditions})
     LIMIT 50
