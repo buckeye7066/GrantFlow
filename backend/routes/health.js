@@ -2,6 +2,7 @@ import express from 'express'
 import fs from 'fs'
 import { getSafeHealthSummary } from '../services/diagnosticsService.js'
 import { ensureUploadsDirWritable, isLikelyPersistentPath } from '../utils/uploadsDir.js'
+import { getDataReadiness, getSystemAlerts } from '../services/dataReadinessService.js'
 
 const router = express.Router()
 
@@ -236,6 +237,43 @@ router.get('/readyz', async (req, res) => {
     dialect: dbCheck.dialect ?? null,
     timestamp: new Date().toISOString(),
   })
+})
+
+// Data readiness: is the funding_opportunities catalog populated and fresh?
+router.get('/api/health/data-readiness', async (req, res) => {
+  try {
+    const readiness = await getDataReadiness(req.db)
+    const statusCode = readiness.status === 'ready' ? 200 : 503
+    return res.status(statusCode).json({
+      ...readiness,
+      timestamp: new Date().toISOString(),
+    })
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      status: 'error',
+      error: error?.message || String(error),
+      timestamp: new Date().toISOString(),
+    })
+  }
+})
+
+// Alerts: surface operational issues (stuck jobs, empty catalog, crawler errors, etc.)
+router.get('/api/health/alerts', async (req, res) => {
+  try {
+    const { alerts, healthy } = await getSystemAlerts(req.db)
+    return res.status(healthy ? 200 : 503).json({
+      ok: healthy,
+      alerts,
+      timestamp: new Date().toISOString(),
+    })
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      alerts: [{ code: 'internal_error', severity: 'critical', message: error?.message || String(error) }],
+      timestamp: new Date().toISOString(),
+    })
+  }
 })
 
 export default router
