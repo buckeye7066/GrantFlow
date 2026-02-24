@@ -24,6 +24,29 @@ import { planCrawlerQueries } from '../services/crawlers/queryPlanner.js'
 
 const router = express.Router()
 
+const STATE_NAME_TO_ABBREV_CRAWLERS = {
+  alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA',
+  colorado: 'CO', connecticut: 'CT', delaware: 'DE', florida: 'FL', georgia: 'GA',
+  hawaii: 'HI', idaho: 'ID', illinois: 'IL', indiana: 'IN', iowa: 'IA',
+  kansas: 'KS', kentucky: 'KY', louisiana: 'LA', maine: 'ME', maryland: 'MD',
+  massachusetts: 'MA', michigan: 'MI', minnesota: 'MN', mississippi: 'MS', missouri: 'MO',
+  montana: 'MT', nebraska: 'NE', nevada: 'NV', 'new hampshire': 'NH', 'new jersey': 'NJ',
+  'new mexico': 'NM', 'new york': 'NY', 'north carolina': 'NC', 'north dakota': 'ND',
+  ohio: 'OH', oklahoma: 'OK', oregon: 'OR', pennsylvania: 'PA', 'rhode island': 'RI',
+  'south carolina': 'SC', 'south dakota': 'SD', tennessee: 'TN', texas: 'TX', utah: 'UT',
+  vermont: 'VT', virginia: 'VA', washington: 'WA', 'west virginia': 'WV',
+  wisconsin: 'WI', wyoming: 'WY', 'district of columbia': 'DC',
+}
+
+function normalizeStateForCrawler(value) {
+  if (typeof value !== 'string') return null
+  const raw = value.trim()
+  if (!raw) return null
+  const upper = raw.toUpperCase().replace(/[^A-Z]/g, '')
+  if (upper.length === 2) return upper
+  return STATE_NAME_TO_ABBREV_CRAWLERS[raw.toLowerCase()] ?? null
+}
+
 // Crawler types (comprehensive = single pass over all funding sources)
 const CRAWLER_TYPES = [
   'comprehensive',
@@ -881,13 +904,13 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     // CRITICAL: Use DB-backed profile location as single source of truth for crawlers.
     // Ensures WV profile never gets DC (or other) geography from facets/signals that failed to populate.
-    const profileState = (profile?.state && String(profile.state).trim()) || null
+    const profileState = normalizeStateForCrawler(profile?.state) || null
     const profileZip = (profile?.zip_code && String(profile.zip_code).trim()) || (profile?.postal_code && String(profile.postal_code).trim()) || null
     const profileCity = (profile?.city && String(profile.city).trim()) || null
     if (profileState || profileZip || profileCity) {
       if (!profileContext.facets) profileContext.facets = {}
       if (!profileContext.facets.geo) profileContext.facets.geo = {}
-      if (!profileContext.facets.geo.state && profileState) profileContext.facets.geo.state = profileState.length === 2 ? profileState.toUpperCase() : profileState
+      if (!profileContext.facets.geo.state && profileState) profileContext.facets.geo.state = profileState
       if (!profileContext.facets.geo.zip && profileZip) profileContext.facets.geo.zip = /^\d{5}/.test(profileZip) ? profileZip.replace(/\D/g, '').slice(0, 5) : profileZip
       if (!profileContext.facets.geo.city && profileCity) profileContext.facets.geo.city = profileCity
       if (profileContext.signals && profileContext.signals.location) {
