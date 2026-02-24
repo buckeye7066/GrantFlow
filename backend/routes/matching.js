@@ -3,6 +3,8 @@ import { formatError } from '../middleware/errorHandler.js'
 import { calculateMatchScore } from '../services/matchingEngine.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
+import { getDataReadiness } from '../services/dataReadinessService.js'
+import { checkProfileReadiness } from '../services/profileReadinessService.js'
 
 const router = express.Router()
 
@@ -135,6 +137,41 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
     const profileRow = await req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
     if (!profileRow) {
       return res.status(404).json({ error: 'Profile not found' })
+    }
+
+    // ── Profile readiness gate ────────────────────────────────────────────────
+    // Skip only if caller explicitly passes ?skip_readiness_check=1 (for admin/debug use).
+    if (req.query.skip_readiness_check !== '1') {
+      const readiness = await checkProfileReadiness(req.db, profileId)
+      if (!readiness.ready) {
+        return res.status(422).json({
+          error: 'profile_not_ready',
+          message: readiness.guidance || 'Profile requires additional information before matching.',
+          missing: readiness.missing,
+          score: readiness.score,
+          guidance: readiness.guidance,
+        })
+      }
+    }
+
+    // ── Data readiness gate ───────────────────────────────────────────────────
+    // Skip only if caller explicitly passes ?skip_readiness_check=1.
+    if (req.query.skip_readiness_check !== '1') {
+      const dataReady = await getDataReadiness(req.db)
+      if (dataReady.status === 'not_run') {
+        return res.status(503).json({
+          error: 'catalog_not_ready',
+          message: 'The funding opportunity catalog has not been populated yet. Please run crawls first.',
+          data_readiness: dataReady,
+        })
+      }
+      if (dataReady.status === 'running') {
+        return res.status(503).json({
+          error: 'catalog_loading',
+          message: 'Crawls are in progress. Please try again shortly.',
+          data_readiness: dataReady,
+        })
+      }
     }
 
     const minScore = Number.parseInt(req.query.min_score ?? '60', 10)
