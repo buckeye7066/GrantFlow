@@ -12,6 +12,7 @@ import { processItemGiftCrawlerJob } from './itemGiftCrawler.js'
 import { processDocumentIngestionJob } from './documentIngestion.js'
 import { processPipelineAutomationJob } from './pipelineAutomation.js'
 import { buildProfileContext } from './profileHelpers.js'
+import { prepareContextForSnapshot, restoreContextFromSnapshot } from './snapshotSerialization.js'
 import { processProfileEnrichmentJob } from './profileEnrichment.js'
 import { processNationalJob } from './nationalJobRouter.js'
 import { logFailedJob, determineSeverity } from './deadLetterQueue.js'
@@ -91,7 +92,8 @@ async function ensureJobSnapshot(db, job) {
   // Deterministic reference: use the job's persisted created_at when available.
   const asOf = normalizeIso(job.created_at) || null
   const context = await buildProfileContext(db, job.profile_id, { asOf })
-  const snapshotJson = stableStringify(context)
+  const serializable = prepareContextForSnapshot(context)
+  const snapshotJson = stableStringify(serializable)
   const snapshotHash = crypto.createHash('sha256').update(snapshotJson).digest('hex')
 
   // Concurrency safety: only write snapshot if still NULL.
@@ -310,7 +312,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       if (job.profile_id) {
         const { snapshotJson, repaired } = await ensureJobSnapshot(db, job)
         if (snapshotJson) {
-          profileContext = parseJSON(snapshotJson)
+          profileContext = restoreContextFromSnapshot(parseJSON(snapshotJson))
           if (repaired) {
             console.info('[crawlerDispatcher] Repaired missing job snapshot (persisted)', jobId)
           } else {
@@ -319,7 +321,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         }
       } else if (job.profile_context_snapshot) {
         // Non-profile jobs may still carry a snapshot; use it when present.
-        profileContext = parseJSON(job.profile_context_snapshot)
+        profileContext = restoreContextFromSnapshot(parseJSON(job.profile_context_snapshot))
         console.log('[crawlerDispatcher] Using stored profile snapshot for job', jobId)
       }
     } catch (error) {

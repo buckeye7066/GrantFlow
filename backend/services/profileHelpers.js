@@ -247,6 +247,7 @@ export function extractZipFromContext({ profile, sections, jobParameters = {} })
     jobParameters.zip,
     jobParameters.primary_zip,
     sections?.basic_information?.zip,
+    sections?.basic_information?.zip_code,
     sections?.basic_information?.postal_code,
     sections?.basic_information?.address_zip,
     sections?.comprehensive_application?.zip,

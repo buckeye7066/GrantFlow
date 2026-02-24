@@ -261,11 +261,13 @@ export async function crawlStudentGrants(profile, options = {}) {
     const results = []
         const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 60
 
-  const signals = profile?.signals
-    if (!signals) {
-          console.error('[StudentGrantsCrawler] No signals in profile - cannot search')
-          return results
-    }
+  // Null/missing signals must not disqualify; use minimal fallback
+  const signals = profile?.signals ?? {
+    keywordSet: new Set(),
+    demographics: new Set(),
+    applicantTypes: new Set(),
+  }
+  const profileForCrawler = profile.signals ? profile : { ...profile, signals }
 
   // Check if this is a student profile
   if (!isStudentProfile(profile)) {
@@ -273,7 +275,7 @@ export async function crawlStudentGrants(profile, options = {}) {
         return results
   }
 
-  const searchKeywords = buildSearchKeywords(profile, 25)
+  const searchKeywords = buildSearchKeywords(profileForCrawler, 25)
 
   console.log(`[StudentGrantsCrawler] Student profile detected`)
     console.log(`[StudentGrantsCrawler] Academics: GPA=${signals.academics?.gpa}, SAT=${signals.academics?.sat}, ACT=${signals.academics?.act}`)
@@ -311,7 +313,7 @@ export async function crawlStudentGrants(profile, options = {}) {
       if (seenUrls.has(aid.url)) continue
         seenUrls.add(aid.url)
 
-      const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(aid, profile)
+      const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(aid, profileForCrawler)
 
       // Federal aid bonus - these are real, substantial programs
       const adjustedScore = Math.min(100, matchScore + 10)
@@ -370,7 +372,7 @@ export async function crawlStudentGrants(profile, options = {}) {
                     opportunity_type: 'scholarship',
           }
 
-          const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profile)
+          const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profileForCrawler)
 
           // Signal-specific bonus: we know this matches the student's profile
           const adjustedScore = Math.min(100, matchScore + 15)
@@ -411,7 +413,7 @@ export async function crawlStudentGrants(profile, options = {}) {
               opportunity_type: 'directory',
       }
 
-      const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profile)
+      const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profileForCrawler)
 
       results.push({
               ...opp,
@@ -453,7 +455,7 @@ export async function crawlStudentGrants(profile, options = {}) {
               opportunity_type: 'program',
       }
 
-      const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profile)
+      const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profileForCrawler)
 
       // School-specific bonus
       const adjustedScore = Math.min(100, matchScore + 10)

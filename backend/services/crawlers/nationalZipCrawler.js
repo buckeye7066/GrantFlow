@@ -703,7 +703,11 @@ async function searchFoundationLocator(zip, coords) {
   
   try {
     // Legitimate directory links (no scraping required).
-    const cofUrl = `https://www.cof.org/foundation-locator?lat=${coords.lat}&lng=${coords.lng}&radius=25`
+    // NOTE: foundation-locator (lat/lng) had invalid TLS; community-foundation-locator works.
+    const cofBase = 'https://www.cof.org/community-foundation-locator'
+    const cofUrl = coords?.state
+      ? `${cofBase}?state=${encodeURIComponent(coords.state)}`
+      : cofBase
     const candidUrl = 'https://candid.org/find-us'
 
     opportunities.push(

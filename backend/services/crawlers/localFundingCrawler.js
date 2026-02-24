@@ -117,13 +117,14 @@ function minDistanceToAnchors({ anchors, latitude, longitude }) {
 
 // Real (and reliable) local resource URLs.
 //
-// IMPORTANT:
-// - The previous "Community Foundation Locator" source at cof.org is currently serving an invalid TLS cert
-//   for www.cof.org (observed in multiple environments), which caused local crawling to return 0 results.
-// - We intentionally avoid insecure TLS bypasses (rejectUnauthorized=false) in production code.
-// - Instead, we provide durable directory-style local resources that can always be returned when a profile
-//   has location signals (ZIP/state), and we keep the door open for richer sources later.
+// NOTE: Use community-foundation-locator (not foundation-locator); the latter had invalid TLS.
+// Directory-style links only—no scraping—so TLS on user click is acceptable.
 const LOCAL_FUNDING_SOURCES = [
+  {
+    name: 'Community Foundation Locator',
+    baseUrl: 'https://www.cof.org/community-foundation-locator',
+    type: 'community_foundation',
+  },
   {
     name: 'United Way Locator',
     baseUrl: 'https://www.unitedway.org/find-your-united-way',
@@ -158,21 +159,27 @@ export async function crawlLocalFunding(profile, options = {}) {
   const includeDirectoryResources =
     String(options.include_directory_resources ?? 'true').toLowerCase() !== 'false'
 
-  // Validate profile and signals
+  // Validate profile
   if (!profile || typeof profile !== 'object') {
     console.error('[LocalFundingCrawler] Invalid profile: profile must be a non-null object')
     return results
   }
-  const signals = profile?.signals
-  if (!signals) {
-    console.error('[LocalFundingCrawler] No profile.signals - profile must have signals (run profile enrichment or ensure profile_sections are loaded)')
-    return results
-  }
-
-  // Build location with multi-level fallback: signals > sections > profile top-level
+  // Build minimal signals from profile when missing (null/undefined must not disqualify)
   const sections = profile?.sections ?? {}
   const basicInfo = sections?.basic_information ?? {}
   const locationFocus = sections?.location_focus ?? {}
+  const signals = profile?.signals ?? {
+    location: {
+      zip: basicInfo?.zip_code || basicInfo?.postal_code || profile?.zip_code || profile?.zip || profile?.postal_code || null,
+      state: basicInfo?.state || locationFocus?.state || profile?.state || null,
+      city: basicInfo?.city || locationFocus?.city || profile?.city || null,
+    },
+    keywordSet: new Set(),
+    interests: new Set(),
+    demographics: new Set(),
+  }
+
+  // Build location with multi-level fallback: signals > sections > profile top-level
   const sectionZip = basicInfo?.zip_code || basicInfo?.postal_code || basicInfo?.zip
   const sectionState = basicInfo?.state || locationFocus?.state || locationFocus?.primary_state
   const sectionCity = basicInfo?.city || locationFocus?.city
@@ -191,9 +198,12 @@ export async function crawlLocalFunding(profile, options = {}) {
   console.log('[LocalFundingCrawler] Location resolution:', `city=${profileCity}, state=${profileState}, zip=${targetZipRaw}`)
 
   const targetZip = targetZipRaw
-  
+
+  // Ensure profile has signals for buildSearchKeywords (uses fallback when missing)
+  const profileForKeywords = profile.signals ? profile : { ...profile, signals }
+
   // Build search keywords from ALL profile signals
-  const searchKeywords = buildSearchKeywords(profile, 25)
+  const searchKeywords = buildSearchKeywords(profileForKeywords, 25)
   const schoolZips = extractInterestedSchoolZips(profile)
 
   // Anchor ZIPs: profile ZIP + up to 3 interested-school ZIPs (student profiles).
@@ -473,6 +483,32 @@ function buildDirectoryResources({ profile, anchors, profileState, profileCity, 
             state,
             categories: ['utilities', 'housing', 'local', 'community'],
             keywords: ['community action', 'utilities assistance', 'rent assistance', ...keywords],
+            local_anchor_zip: anchor?.zip ?? null,
+            local_anchor_kind: anchor?.kind ?? null,
+          })
+          break
+        case 'community_foundation':
+          out.push({
+            title:
+              city && state
+                ? `Community Foundation Locator near ${city}, ${state}`
+                : `Community Foundation Locator (${anchorLabel})`,
+            sponsor: 'Council on Foundations',
+            description:
+              'Find community foundations in your area. Search by state or use the map to locate accredited foundations.',
+            url: state
+              ? `${source.baseUrl}?state=${encodeURIComponent(state)}`
+              : source.baseUrl,
+            application_url: state
+              ? `${source.baseUrl}?state=${encodeURIComponent(state)}`
+              : source.baseUrl,
+            source_url: source.baseUrl,
+            opportunity_type: 'program',
+            deadline_type: 'rolling',
+            is_national: false,
+            state,
+            categories: ['foundation', 'philanthropy', 'local', 'community'],
+            keywords: ['community foundation', 'philanthropy', 'foundation locator', ...keywords],
             local_anchor_zip: anchor?.zip ?? null,
             local_anchor_kind: anchor?.kind ?? null,
           })

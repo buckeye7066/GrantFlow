@@ -69,12 +69,14 @@ export async function crawlHealthResources(profile, options = {}) {
   const results = []
   const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 60
 
-  // CRITICAL: Use signals for all profile data.
-  const signals = profile?.signals
-  if (!signals) {
-    console.error('[HealthResourcesCrawler] No signals in profile - cannot search with 100% precision')
-    return results
+  // Null/missing signals must not disqualify; use minimal fallback
+  const signals = profile?.signals ?? {
+    location: { state: profile?.state || null },
+    keywordSet: new Set(),
+    health: new Set(),
+    demographics: new Set(),
   }
+  const profileForCrawler = profile.signals ? profile : { ...profile, signals }
 
   const state = signals.location?.state || profile.state || null
   const sections = profile?.sections || signals.rawSections || {}
@@ -382,7 +384,7 @@ export async function crawlHealthResources(profile, options = {}) {
   // Score + select deterministically, with a non-zero floor for directory-style resources.
   const scored = baseResources
     .map((opp) => {
-      const { score, reasons } = calculateMatchScore(opp, profile)
+      const { score, reasons } = calculateMatchScore(opp, profileForCrawler)
       return {
         ...opp,
         match_score: score,
