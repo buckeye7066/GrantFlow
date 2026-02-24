@@ -31,6 +31,29 @@ const calculateDistance = (lat1, lng1, lat2, lng2) => {
 
 const DEFAULT_SEARCH_RADIUS_MILES = 50
 
+const STATE_NAME_TO_ABBREV_LOCAL = {
+  alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA',
+  colorado: 'CO', connecticut: 'CT', delaware: 'DE', florida: 'FL', georgia: 'GA',
+  hawaii: 'HI', idaho: 'ID', illinois: 'IL', indiana: 'IN', iowa: 'IA',
+  kansas: 'KS', kentucky: 'KY', louisiana: 'LA', maine: 'ME', maryland: 'MD',
+  massachusetts: 'MA', michigan: 'MI', minnesota: 'MN', mississippi: 'MS', missouri: 'MO',
+  montana: 'MT', nebraska: 'NE', nevada: 'NV', 'new hampshire': 'NH', 'new jersey': 'NJ',
+  'new mexico': 'NM', 'new york': 'NY', 'north carolina': 'NC', 'north dakota': 'ND',
+  ohio: 'OH', oklahoma: 'OK', oregon: 'OR', pennsylvania: 'PA', 'rhode island': 'RI',
+  'south carolina': 'SC', 'south dakota': 'SD', tennessee: 'TN', texas: 'TX', utah: 'UT',
+  vermont: 'VT', virginia: 'VA', washington: 'WA', 'west virginia': 'WV',
+  wisconsin: 'WI', wyoming: 'WY', 'district of columbia': 'DC',
+}
+
+function normalizeStateAbbrev(value) {
+  if (typeof value !== 'string') return null
+  const raw = value.trim()
+  if (!raw) return null
+  const upper = raw.toUpperCase().replace(/[^A-Z]/g, '')
+  if (upper.length === 2) return upper
+  return STATE_NAME_TO_ABBREV_LOCAL[raw.toLowerCase()] ?? null
+}
+
 function normalizeZip(value) {
   if (value === null || value === undefined) return null
   const s = String(value).trim()
@@ -195,10 +218,10 @@ export async function crawlLocalFunding(profileInput, options = {}) {
   const sections = profile?.sections ?? {}
   const basicInfo = sections?.basic_information ?? {}
   const locationFocus = sections?.location_focus ?? {}
-  const signals = profile?.signals ?? {
+  const effectiveSignals = profile?.signals ?? {
     location: {
       zip: basicInfo?.zip_code || basicInfo?.postal_code || profile?.zip_code || profile?.zip || profile?.postal_code || null,
-      state: basicInfo?.state || locationFocus?.state || profile?.state || null,
+      state: normalizeStateAbbrev(basicInfo?.state || locationFocus?.state || profile?.state) || null,
       city: basicInfo?.city || locationFocus?.city || profile?.city || null,
     },
     keywordSet: new Set(),
@@ -208,19 +231,19 @@ export async function crawlLocalFunding(profileInput, options = {}) {
 
   // Build location with multi-level fallback. Profile top-level (from DB) is authoritative when present.
   const sectionZip = basicInfo?.zip_code || basicInfo?.postal_code || basicInfo?.zip
-  const sectionState = basicInfo?.state || locationFocus?.state || locationFocus?.primary_state
+  const sectionState = normalizeStateAbbrev(basicInfo?.state || locationFocus?.state || locationFocus?.primary_state)
   const sectionCity = basicInfo?.city || locationFocus?.city
   const targetZipRaw = normalizeZip(
-    profile.zip_code || profile.zip || profile.postal_code || signals?.location?.zip || sectionZip
+    profile.zip_code || profile.zip || profile.postal_code || effectiveSignals?.location?.zip || sectionZip
   )
   const profileState =
-    (profile.state && String(profile.state).trim()) ||
-    signals?.location?.state ||
+    normalizeStateAbbrev(profile.state) ||
+    effectiveSignals?.location?.state ||
     sectionState ||
     null
   const profileCity =
     (profile.city && String(profile.city).trim()) ||
-    signals?.location?.city ||
+    effectiveSignals?.location?.city ||
     sectionCity ||
     null
 
@@ -234,7 +257,7 @@ export async function crawlLocalFunding(profileInput, options = {}) {
   const targetZip = targetZipRaw
 
   // Ensure profile has signals for buildSearchKeywords (uses fallback when missing)
-  const profileForKeywords = profile.signals ? profile : { ...profile, signals }
+  const profileForKeywords = profile.signals ? profile : { ...profile, signals: effectiveSignals }
 
   // Build search keywords from ALL profile signals
   const searchKeywords = mergePlanKeywords(buildSearchKeywords(profileForKeywords, 25), queryPlan).slice(0, 35)
@@ -256,8 +279,8 @@ export async function crawlLocalFunding(profileInput, options = {}) {
   }
   console.log(`[LocalFundingCrawler] Using ${searchKeywords.length} keywords from profile signals`)
   console.log(`[LocalFundingCrawler] Keywords: ${searchKeywords.slice(0, 10).join(', ')}...`)
-  console.log(`[LocalFundingCrawler] Interests: ${Array.from(signals.interests || []).slice(0, 5).join(', ')}`)
-  console.log(`[LocalFundingCrawler] Demographics: ${Array.from(signals.demographics || []).join(', ')}`)
+  console.log(`[LocalFundingCrawler] Interests: ${Array.from(effectiveSignals.interests || []).slice(0, 5).join(', ')}`)
+  console.log(`[LocalFundingCrawler] Demographics: ${Array.from(effectiveSignals.demographics || []).join(', ')}`)
   if (schoolZips.length > 0) {
     console.log(
       `[LocalFundingCrawler] Student school ZIP anchors (interested schools): ${schoolZips.slice(0, 8).join(', ')}${
