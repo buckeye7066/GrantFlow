@@ -672,6 +672,23 @@ function buildCandidateOpportunityQuery({ crawlerType, profileContext, tokens, i
 
   // Geography: expand outward. Do NOT hard-filter by state—let scoring surface best fits.
   // Profile state is used by matchingEngine for ranking; mismatches reduce score, not exclude.
+  // Exception: local_funding must scope to profile state so a WV profile does not get DC-only opportunities.
+  const profileStateForGeo =
+    profileContext?.facets?.geo?.state ??
+    profileContext?.signals?.location?.state ??
+    profileContext?.profile?.state
+  const normalizedProfileState =
+    profileStateForGeo && String(profileStateForGeo).trim().length === 2
+      ? String(profileStateForGeo).trim().toUpperCase()
+      : null
+  if ((crawlerType === 'local_funding' || crawlerType === 'comprehensive') && normalizedProfileState) {
+    conditions.push(
+      isPostgres
+        ? `(state IS NULL OR TRIM(UPPER(state)) = ? OR is_national = TRUE OR LOWER(COALESCE(is_national::text, '')) = 'true')`
+        : "(state IS NULL OR TRIM(UPPER(state)) = ? OR is_national = 1 OR LOWER(COALESCE(is_national, '')) = 'true')",
+    )
+    params.push(normalizedProfileState)
+  }
 
   // Crawler-type hints (lightweight pre-filter).
   if (crawlerType === 'student_grants') {
@@ -860,6 +877,25 @@ router.post('/run', ensureAuth, async (req, res) => {
         opportunities: [],
         details: taxonomyError?.details ?? null,
       })
+    }
+
+    // CRITICAL: Use DB-backed profile location as single source of truth for crawlers.
+    // Ensures WV profile never gets DC (or other) geography from facets/signals that failed to populate.
+    const profileState = (profile?.state && String(profile.state).trim()) || null
+    const profileZip = (profile?.zip_code && String(profile.zip_code).trim()) || (profile?.postal_code && String(profile.postal_code).trim()) || null
+    const profileCity = (profile?.city && String(profile.city).trim()) || null
+    if (profileState || profileZip || profileCity) {
+      if (!profileContext.facets) profileContext.facets = {}
+      if (!profileContext.facets.geo) profileContext.facets.geo = {}
+      if (!profileContext.facets.geo.state && profileState) profileContext.facets.geo.state = profileState.length === 2 ? profileState.toUpperCase() : profileState
+      if (!profileContext.facets.geo.zip && profileZip) profileContext.facets.geo.zip = /^\d{5}/.test(profileZip) ? profileZip.replace(/\D/g, '').slice(0, 5) : profileZip
+      if (!profileContext.facets.geo.city && profileCity) profileContext.facets.geo.city = profileCity
+      if (profileContext.signals && profileContext.signals.location) {
+        if (!profileContext.signals.location.state && profileState) profileContext.signals.location.state = profileContext.facets.geo.state
+        if (!profileContext.signals.location.zip && profileZip) profileContext.signals.location.zip = profileContext.facets.geo.zip
+        if (!profileContext.signals.location.city && profileCity) profileContext.signals.location.city = profileCity
+      }
+      console.log('[RealCrawlers] Profile location (authoritative):', { state: profileContext.facets.geo.state, zip: profileContext.facets.geo.zip, city: profileContext.facets.geo.city })
     }
 
     const coveragePct =
