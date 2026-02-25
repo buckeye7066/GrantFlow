@@ -515,7 +515,10 @@ router.post('/comprehensiveMatch', async (req, res) => {
       }
     }
     
-    // Build the query
+    // Build the query: pull state + national + NULL state for relatable funding (no RANDOM).
+    // Goal: real funding sources for profile needs — candidates are geographically relevant, then scored by profile signals.
+    const candidateLimit = 3000;
+    const statePlaceholders = profileStates.length > 0 ? profileStates.map(() => '?').join(',') : null;
     let query =
       req.db?.dialect === 'postgres'
         ? 'SELECT * FROM funding_opportunities WHERE is_active = TRUE'
@@ -523,9 +526,21 @@ router.post('/comprehensiveMatch', async (req, res) => {
     if (conditions.length > 0) {
       query += ' AND ' + conditions.join(' AND ');
     }
-    query += ' ORDER BY RANDOM() LIMIT 100';
-    
-    const opportunities = await req.db.prepare(query).all(...params);
+    // Prefer state-specific, then national/rolling, then by deadline (deterministic, repeatable).
+    const deadlineNullSort =
+      req.db?.dialect === 'postgres' ? 'deadline IS NULL' : "deadline IS NULL OR deadline = ''";
+    const isNationalSort = req.db?.dialect === 'postgres'
+      ? "(is_national = TRUE OR state = 'nationwide')"
+      : "(is_national = 1 OR state = 'nationwide')";
+    const stateOrderClause = statePlaceholders
+      ? `CASE WHEN state IN (${statePlaceholders}) THEN 0 ELSE 1 END, `
+      : '';
+    query += ` ORDER BY ${stateOrderClause}CASE WHEN ${isNationalSort} THEN 0 ELSE 1 END, CASE WHEN ${deadlineNullSort} THEN 0 ELSE 1 END, deadline ASC, updated_at DESC LIMIT ${candidateLimit}`;
+
+    const opportunities = await req.db.prepare(query).all(
+      ...params,
+      ...(profileStates.length > 0 ? profileStates : []),
+    );
     
     console.log(`[comprehensiveMatch] Query found ${opportunities.length} opportunities`);
     console.log(`[comprehensiveMatch] Profile signals:`, JSON.stringify({

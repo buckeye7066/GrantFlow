@@ -1,7 +1,12 @@
 /**
  * Deterministic Match Scoring Engine
- * Replaces all Math.random() scoring with explainable, reproducible algorithm
- * Same input always produces same output for auditability
+ *
+ * Goal: Surface real, relatable funding sources for the profile's needs.
+ * - Score reflects fit: opportunity eligibility/title/description must align with profile
+ *   (applicant type, keywords, geography, category, amount). Higher score = more relatable.
+ * - Penalties (geography mismatch, intent phrase miss) are soft so semantically related
+ *   opportunities (e.g. "small business" grant for a food-truck profile) are not discarded.
+ * - No randomness; same profile + opportunity always yields same score (auditability).
  */
 
 import { safeParseArrayField } from './profileHelpers.js'
@@ -86,9 +91,9 @@ export function calculateMatchScore(profile, opportunity) {
     geoTier = 'mismatch'
     geoPoints = -20
   } else {
-    // Known profile location but no match signal on the opportunity.
+    // Known profile location but no match signal on the opportunity. Soft penalty only.
     geoTier = 'mismatch'
-    geoPoints = -5
+    geoPoints = -2
   }
 
   score += geoPoints
@@ -439,7 +444,7 @@ function eligibilityMatchesApplicantType(opportunity, profile) {
     'family': ['family', 'household', 'parent', 'families'],
     'organization': ['organization', 'org', 'agency', 'entity'],
     'nonprofit': ['nonprofit', 'non-profit', '501(c)(3)', 'charity', 'charitable'],
-    'small_business': ['small business', 'business', 'enterprise', 'company', 'smb'],
+    'small_business': ['small business', 'business', 'enterprise', 'company', 'smb', 'microenterprise', 'startup', 'entrepreneur', 'usda', 'sba', 'rural development', 'community development'],
     'student': ['student', 'scholar', 'undergraduate', 'graduate', 'college'],
     'college_student': ['college student', 'undergraduate', 'university student'],
     'high_school_student': ['high school', 'secondary student', 'k-12'],
@@ -566,8 +571,10 @@ function calculateKeywordOverlap(profile, opportunity) {
       matchedIntentPhrases.add(phraseLower);
     }
   }
+  // Soft penalty only: missing intent phrase reduces score but must not zero out.
+  // Profile may say "food truck business" while opportunity says "small business" or "microenterprise" — still a match.
   if (intentPhraseStrings.size > 0 && matchedIntentPhrases.size === 0) {
-    matches -= 10;
+    matches -= 2;
   }
 
   // Tier 2: Score other multi-word phrases
