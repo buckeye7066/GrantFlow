@@ -10,7 +10,8 @@
  * - Informational resources only. No diagnosis/treatment recommendations.
  */
 
-import { calculateMatchScore } from './crawlerHelpers.js'
+import { calculateMatchScore, buildSearchKeywords } from './crawlerHelpers.js'
+import { getWithRetry, postWithRetry } from './httpClient.js'
 import { planCrawlerQueries } from './queryPlanner.js'
 import {
   resolveCrawlerContext,
@@ -69,6 +70,90 @@ function buildClinicalTrialsLinks({ conditionNames, state }) {
       keywords: ['clinical trials', 'research studies', 'participants', name],
     }
   })
+}
+
+
+/**
+ * Fetch live health-related grant opportunities from Grants.gov API.
+ * Queries health, social-services, income-security and recovery categories.
+ */
+async function fetchLiveHealthOpportunities({ state, keywords = [], signals = {} }) {
+  const results = []
+  const healthCategories = ['HL', 'ISS', 'DPR'] // Health, Income Security, Drug/Prescription
+  const baseKeyword = keywords.slice(0, 3).join(' ') || 'health assistance'
+
+  for (const category of healthCategories) {
+    try {
+      const payload = {
+        rows: 10,
+        oppStatuses: 'posted|forecasted',
+        keyword: baseKeyword,
+        startRecordNum: 0,
+        fundingCategories: category,
+      }
+      const response = await postWithRetry(
+        'https://api.grants.gov/v1/api/search2',
+        payload,
+        { headers: { 'Content-Type': 'application/json', Accept: 'application/json' } },
+        { timeoutMs: 10000, retries: 1 },
+      )
+      const hits = response?.data?.oppHits ?? response?.data?.data?.oppHits ?? []
+      for (const opp of Array.isArray(hits) ? hits.slice(0, 8) : []) {
+        if (!opp?.title) continue
+        results.push({
+          title: opp.title,
+          sponsor: opp.agencyName || opp.agency || 'Federal Agency',
+          description: opp.synopsis || 'Federal health assistance opportunity. Visit Grants.gov for eligibility and application details.',
+          url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
+          application_url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
+          source_url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
+          state: state || 'nationwide',
+          is_national: true,
+          opportunity_type: 'grant',
+          deadline_type: opp.closeDate ? 'fixed' : 'rolling',
+          deadline: opp.closeDate || null,
+          categories: ['health', 'federal', category.toLowerCase()],
+          keywords: ['health', 'federal', 'grant', ...keywords.slice(0, 3)],
+          source: 'grants.gov',
+        })
+      }
+    } catch (err) {
+      console.error('[HealthResourcesCrawler] Grants.gov fetch error for category', category, ':', err.message)
+    }
+  }
+
+  // Also query Benefits.gov for health-related programs in the profile's state
+  if (state) {
+    try {
+      const benefitsUrl = `https://www.benefits.gov/api/benefits?state=${encodeURIComponent(state)}&category=health&pageSize=10`
+      const benefitsRes = await getWithRetry(benefitsUrl, {}, { timeoutMs: 8000, retries: 1 })
+      const programs = benefitsRes?.data?.programs ?? benefitsRes?.data ?? []
+      if (Array.isArray(programs)) {
+        for (const prog of programs.slice(0, 8)) {
+          if (!prog?.title && !prog?.name) continue
+          results.push({
+            title: prog.title || prog.name,
+            sponsor: prog.agency || prog.agencyName || 'Benefits.gov',
+            description: prog.summary || prog.description || 'State health assistance program. Visit Benefits.gov for eligibility details.',
+            url: prog.url || `https://www.benefits.gov/benefit/${prog.id || ''}`,
+            application_url: prog.applyUrl || prog.url || 'https://www.benefits.gov',
+            source_url: prog.url || 'https://www.benefits.gov',
+            state,
+            is_national: false,
+            opportunity_type: 'program',
+            deadline_type: 'rolling',
+            categories: ['health', 'state', 'assistance'],
+            keywords: ['health', 'benefits', state, ...keywords.slice(0, 3)],
+            source: 'benefits.gov',
+          })
+        }
+      }
+    } catch (err) {
+      console.error('[HealthResourcesCrawler] Benefits.gov fetch error:', err.message)
+    }
+  }
+
+  return results
 }
 
 export async function crawlHealthResources(profile, options = {}) {
@@ -455,6 +540,22 @@ export async function crawlHealthResources(profile, options = {}) {
   }
 
   // Cap output to keep UI readable; still deterministic.
+  
+  // Fetch live health opportunities from Grants.gov and Benefits.gov
+  try {
+    const profileState = resolvedProfile?.state || signals?.location?.state || null
+    const searchKws = buildSearchKeywords(resolvedProfile, 8)
+    const liveOpps = await fetchLiveHealthOpportunities({ state: profileState, keywords: searchKws, signals })
+    for (const liveOpp of liveOpps) {
+      const { score, reasons } = calculateMatchScore(liveOpp, resolvedProfile)
+      if (score >= minScore) {
+        selected.push(enforceCrawlerOpportunityContract({ ...liveOpp, match_score: score, match_reasons: reasons }, { crawlerType: 'health_resources', facets, queryPlan }))
+      }
+    }
+  } catch (liveErr) {
+    console.error('[HealthResourcesCrawler] Live fetch error:', liveErr.message)
+  }
+
   return selected
     .slice(0, 20)
     .map((row) =>
