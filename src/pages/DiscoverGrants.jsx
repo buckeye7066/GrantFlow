@@ -152,6 +152,39 @@ export default function DiscoverGrants() {
 
   const profileForSearch = profileDetail ?? selectedOrg ?? selectedProfile;
 
+  // Catalog match: real funding opportunities from DB, scored by profile needs (relatable grants, not only directory links)
+  const { data: catalogMatchResponse } = useQuery({
+    queryKey: ['discover-catalog', effectiveProfileId],
+    queryFn: async () => {
+      if (!effectiveProfileId) return { opportunities: [] }
+      return apiFetch(`/api/matching/profile/${effectiveProfileId}/opportunities?min_score=50&limit=200`)
+    },
+    enabled: authReady && Boolean(effectiveProfileId),
+    staleTime: 2 * 60 * 1000,
+  })
+
+  const catalogOpportunities = useMemo(() => {
+    const payload = catalogMatchResponse?.data ?? catalogMatchResponse ?? {}
+    const rows = payload?.opportunities ?? []
+    if (!Array.isArray(rows)) return []
+    return rows.map((opp) => ({
+      id: opp.id,
+      title: opp.title,
+      program_name: opp.title,
+      sponsor: opp.sponsor || opp.funder,
+      url: opp.application_url ?? opp.source_url ?? opp.url,
+      deadline: opp.deadline,
+      deadlineAt: opp.deadline,
+      description: opp.description,
+      descriptionMd: opp.description,
+      match_score: opp.match_score,
+      match: opp.match_score,
+      matched_fields: opp.match_reasons ?? [],
+      matchReasons: opp.match_reasons ?? [],
+      source: opp.source || 'catalog',
+    }))
+  }, [catalogMatchResponse])
+
   const isECFProfile =
     (profileForSearch?.medicaid_enrolled || selectedOrg?.medicaid_enrolled) &&
     (profileForSearch?.medicaid_waiver_program === 'ecf_choices' ||
@@ -830,11 +863,27 @@ export default function DiscoverGrants() {
           </CardContent>
         </Card>
 
-        {/* Results Display */}
-        {searchResults.length > 0 && (
+        {/* Results Display: catalog matches (real grants from DB) + crawler results (directories/live crawl), deduped */}
+        {((catalogOpportunities.length > 0) || searchResults.length > 0) && (
           <div ref={resultsRef}>
             <SearchResults
-              results={searchResults}
+              results={(() => {
+                const seen = new Set()
+                const merged = []
+                for (const opp of catalogOpportunities) {
+                  const key = opp.id ?? `${opp.title}|${opp.sponsor ?? ''}`
+                  if (seen.has(key)) continue
+                  seen.add(key)
+                  merged.push(opp)
+                }
+                for (const opp of searchResults) {
+                  const key = opp.id ?? opp.url ?? `${opp.title}|${opp.sponsor ?? ''}`
+                  if (seen.has(key)) continue
+                  seen.add(key)
+                  merged.push(opp)
+                }
+                return merged.sort((a, b) => (b.match_score ?? b.match ?? 0) - (a.match_score ?? a.match ?? 0))
+              })()}
               profileId={effectiveProfileId ?? selectedProfileId}
               onAddToPipeline={handleAddToPipeline}
               organizationName={selectedProfile?.display_name}

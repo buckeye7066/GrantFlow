@@ -174,8 +174,8 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       }
     }
 
-    const minScore = Number.parseInt(req.query.min_score ?? '60', 10)
-    const limit = Math.min(Math.max(Number.parseInt(req.query.limit ?? '1000', 10) || 1000, 1), 5000)
+    const minScore = Number.parseInt(req.query.min_score ?? '50', 10)
+    const limit = Math.min(Math.max(Number.parseInt(req.query.limit ?? '2000', 10) || 2000, 1), 5000)
     const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : ''
 
     const profileContext = await loadProfileContext(req.db, profileId)
