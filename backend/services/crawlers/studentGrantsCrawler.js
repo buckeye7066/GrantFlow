@@ -263,6 +263,53 @@ const SIGNAL_SPECIFIC_SCHOLARSHIPS = {
         ],
 }
 
+
+/**
+ * Fetch live student grant opportunities from Grants.gov API.
+ * Queries the education category (ED) and matches to profile signals.
+ */
+async function fetchLiveStudentOpportunities({ keywords = [], state = null }) {
+  const results = []
+  const keyword = keywords.slice(0, 3).join(' ') || 'education scholarship grant'
+  try {
+    const payload = {
+      rows: 20,
+      oppStatuses: 'posted|forecasted',
+      keyword,
+      startRecordNum: 0,
+      fundingCategories: 'ED', // Education
+    }
+    const response = await getWithRetry(
+      'https://api.grants.gov/v1/api/search2',
+      { method: 'POST', data: payload, headers: { 'Content-Type': 'application/json', Accept: 'application/json' } },
+      { timeoutMs: 10000, retries: 1 },
+    )
+    const hits = response?.data?.oppHits ?? response?.data?.data?.oppHits ?? []
+    for (const opp of Array.isArray(hits) ? hits.slice(0, 15) : []) {
+      if (!opp?.title) continue
+      results.push({
+        title: opp.title,
+        sponsor: opp.agencyName || opp.agency || 'Federal Agency',
+        description: opp.synopsis || 'Federal education grant opportunity. Visit Grants.gov for eligibility and application details.',
+        url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
+        application_url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
+        source_url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
+        state: state || 'nationwide',
+        is_national: true,
+        opportunity_type: 'grant',
+        deadline_type: opp.closeDate ? 'fixed' : 'rolling',
+        deadline: opp.closeDate || null,
+        categories: ['education', 'federal', 'student'],
+        keywords: ['education', 'federal', 'grant', 'student', ...keywords.slice(0, 3)],
+        source: 'grants.gov',
+      })
+    }
+  } catch (err) {
+    console.error('[StudentGrantsCrawler] Grants.gov fetch error:', err.message)
+  }
+  return results
+}
+
 function finalizeStudentResults(rows, { facets, queryPlan }) {
   return rows
     .map((row) =>
@@ -499,7 +546,24 @@ export async function crawlStudentGrants(profileInput, options = {}) {
         }
   }
 
-  // Sort by match score
+
+  // Fetch live education grants from Grants.gov and merge into results
+  try {
+    const profileState = profile?.state || signals?.location?.state || null
+    const liveOpps = await fetchLiveStudentOpportunities({ keywords: searchKeywords.slice(0, 5), state: profileState })
+    for (const liveOpp of liveOpps) {
+      if (isStudentLoan(liveOpp)) continue
+      const { score, reasons } = calculateMatchScore(liveOpp, profileForCrawler)
+      if (score >= minMatchScore) {
+        results.push({ ...liveOpp, match_score: score, match_reasons: reasons, source: 'grants.gov' })
+      }
+    }
+    console.log(`[StudentGrantsCrawler] Added ${liveOpps.length} live Grants.gov education opportunities`)
+  } catch (liveErr) {
+    console.error('[StudentGrantsCrawler] Live fetch error:', liveErr.message)
+  }
+
+    // Sort by match score
   results.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
 
   console.log(`[StudentGrantsCrawler] Found ${results.length} student opportunities with ${minMatchScore}%+ match`)
