@@ -5,6 +5,7 @@
  */
 
 import axios from 'axios'
+import { getWithRetry, postWithRetry } from './httpClient.js'
 import * as cheerio from 'cheerio'
 import { planCrawlerQueries } from './queryPlanner.js'
 import { resolveCrawlerContext, enforceCrawlerOpportunityContract } from './crawlerOpportunityContract.js'
@@ -134,7 +135,105 @@ export async function crawlECFBenefits(profileInput, options = {}) {
   }
   
   console.log(`[ECFBenefitsCrawler] Found ${results.length} ECF benefits with 80%+ match`)
+  
+  // Fetch live Grants.gov and Benefits.gov ECF/Medicaid opportunities
+  try {
+    const liveKws = profile?.signals?.keywordSet ? Array.from(profile.signals.keywordSet).slice(0, 5) : []
+    const liveOpps = await fetchLiveECFOpportunities({ keywords: liveKws, state: profile?.state || null })
+    for (const liveOpp of liveOpps) {
+      if (isLoan(liveOpp)) continue
+      const matchScore = calculateECFMatchScore(liveOpp, profile)
+      if (matchScore >= 60) {
+        results.push({ ...liveOpp, match_score: matchScore })
+      }
+    }
+    console.log(`[ECFBenefitsCrawler] Added ${liveOpps.length} live Grants.gov/Benefits.gov opportunities`)
+  } catch (liveErr) {
+    console.error('[ECFBenefitsCrawler] Live fetch error:', liveErr.message)
+  }
+
   return finalizeEcfResults(results, { facets, queryPlan })
+}
+
+
+/**
+ * Fetch live Medicaid waiver and ECF-adjacent opportunities from Grants.gov and ACL.gov.
+ */
+async function fetchLiveECFOpportunities({ keywords = [], state = null }) {
+  const results = []
+  const keyword = keywords.slice(0, 3).join(' ') || 'medicaid waiver community based services disability'
+
+  // Query Grants.gov for Medicaid waiver / disability services
+  try {
+    const payload = {
+      rows: 15,
+      oppStatuses: 'posted|forecasted',
+      keyword,
+      startRecordNum: 0,
+      fundingCategories: 'HL', // Health category covers Medicaid/disability
+    }
+    const response = await postWithRetry(
+      'https://api.grants.gov/v1/api/search2',
+      payload,
+      { headers: { 'Content-Type': 'application/json', Accept: 'application/json' } },
+      { timeoutMs: 10000, retries: 1 },
+    )
+    const hits = response?.data?.oppHits ?? response?.data?.data?.oppHits ?? []
+    for (const opp of Array.isArray(hits) ? hits.slice(0, 10) : []) {
+      if (!opp?.title) continue
+      results.push({
+        title: opp.title,
+        sponsor: opp.agencyName || opp.agency || 'Federal Agency',
+        description: opp.synopsis || 'Federal Medicaid/disability opportunity. Visit Grants.gov for eligibility.',
+        url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
+        application_url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
+        source_url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
+        state: state || 'nationwide',
+        is_national: true,
+        opportunity_type: 'grant',
+        deadline_type: opp.closeDate ? 'fixed' : 'rolling',
+        deadline: opp.closeDate || null,
+        categories: ['ecf', 'medicaid', 'disability', 'federal'],
+        keywords: ['medicaid', 'waiver', 'disability', 'community', ...keywords.slice(0, 3)],
+        source: 'grants.gov',
+      })
+    }
+  } catch (err) {
+    console.error('[ECFBenefitsCrawler] Grants.gov fetch error:', err.message)
+  }
+
+  // Query Benefits.gov for disability/Medicaid programs in this state
+  if (state) {
+    try {
+      const url = `https://www.benefits.gov/api/benefits?state=${encodeURIComponent(state)}&category=disability&pageSize=10`
+      const res = await getWithRetry(url, {}, { timeoutMs: 8000, retries: 1 })
+      const programs = res?.data?.programs ?? res?.data ?? []
+      if (Array.isArray(programs)) {
+        for (const prog of programs.slice(0, 8)) {
+          if (!prog?.title && !prog?.name) continue
+          results.push({
+            title: prog.title || prog.name,
+            sponsor: prog.agency || 'Benefits.gov',
+            description: prog.summary || prog.description || 'State Medicaid/disability assistance program.',
+            url: prog.url || 'https://www.benefits.gov',
+            application_url: prog.applyUrl || prog.url || 'https://www.benefits.gov',
+            source_url: prog.url || 'https://www.benefits.gov',
+            state,
+            is_national: false,
+            opportunity_type: 'program',
+            deadline_type: 'rolling',
+            categories: ['ecf', 'medicaid', 'state', 'disability'],
+            keywords: ['medicaid', 'disability', 'waiver', state],
+            source: 'benefits.gov',
+          })
+        }
+      }
+    } catch (err) {
+      console.error('[ECFBenefitsCrawler] Benefits.gov fetch error:', err.message)
+    }
+  }
+
+  return results
 }
 
 function hasKeyword(signals, value) {
