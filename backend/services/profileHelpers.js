@@ -87,11 +87,41 @@ export async function loadProfileContext(db, profileId) {
     city: profile.city || organization?.city || null,
   }
   
-  const signals = buildProfileSignals({ 
+  let signals = buildProfileSignals({ 
     profile: mergedProfile, 
     sections,
     asOf: mergedProfile.updated_at || mergedProfile.created_at || null,
   })
+
+  // Foolproof: guarantee signals are always usable by crawlers/matching (never null or empty when profile exists).
+  if (!signals || typeof signals !== 'object') {
+    signals = buildProfileSignals({ profile: mergedProfile, sections: {}, asOf: null })
+  }
+  if (!signals.location || typeof signals.location !== 'object') {
+    signals.location = {
+      zip: mergedProfile.postal_code || mergedProfile.zip_code || null,
+      state: mergedProfile.state || null,
+      city: mergedProfile.city || null,
+      county: null,
+    }
+  }
+  const hasAnyKeywords = (signals.keywordSet && signals.keywordSet.size > 0) || (Array.isArray(signals.keywords) && signals.keywords.length > 0)
+  if (!hasAnyKeywords && (mergedProfile.primary_type || (Array.isArray(mergedProfile.tags) && mergedProfile.tags.length > 0))) {
+    const pt = String(mergedProfile.primary_type || '').trim().toLowerCase()
+    if (pt) {
+      if (!signals.keywordSet) signals.keywordSet = new Set()
+      signals.keywordSet.add(pt)
+      if (!signals.applicantTypes) signals.applicantTypes = new Set()
+      signals.applicantTypes.add(pt)
+    }
+    if (Array.isArray(mergedProfile.tags) && mergedProfile.tags.length > 0) {
+      if (!signals.keywordSet) signals.keywordSet = new Set()
+      mergedProfile.tags.forEach((t) => t && signals.keywordSet.add(String(t).toLowerCase().trim()))
+    }
+    if (Array.isArray(signals.keywords)) {
+      signals.keywords = Array.from(signals.keywordSet || [])
+    }
+  }
 
   return { 
     profile: mergedProfile, 

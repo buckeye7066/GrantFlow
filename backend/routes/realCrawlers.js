@@ -886,8 +886,9 @@ router.post('/run', ensureAuth, async (req, res) => {
         : { profile, sections: profile?.sections ?? {}, signals: profile?.signals ?? null }
 
     profileContext = buildProfileFacets(profileContext)
+    // Never block crawlers on missing facets — run with best-effort context (strict: false).
     try {
-      profileContext = requireFacets(profileContext, { strict: true })
+      profileContext = requireFacets(profileContext, { strict: false })
     } catch (taxonomyError) {
       const statusCode = Number(taxonomyError?.status || 400)
       return res.status(statusCode).json({
@@ -895,7 +896,7 @@ router.post('/run', ensureAuth, async (req, res) => {
         error: taxonomyError?.code || 'PROFILE_CONTEXT_INCOMPLETE',
         message:
           taxonomyError?.message ||
-          'Required profile facets are missing. Update your profile and try again.',
+          'Profile context could not be built. Update your profile and try again.',
         crawler_type,
         opportunities: [],
         details: taxonomyError?.details ?? null,
@@ -1358,11 +1359,11 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
 
   profileContextBase = buildProfileFacets(profileContextBase)
   try {
-    profileContextBase = requireFacets(profileContextBase, { strict: true })
+    profileContextBase = requireFacets(profileContextBase, { strict: false })
   } catch (taxonomyError) {
     return res.status(Number(taxonomyError?.status || 400)).json({
       error: taxonomyError?.code || 'PROFILE_CONTEXT_INCOMPLETE',
-      message: taxonomyError?.message || 'Missing required profile facets',
+      message: taxonomyError?.message || 'Profile context could not be built',
       details: taxonomyError?.details ?? null,
     })
   }

@@ -595,6 +595,16 @@ function deriveIntent({ facets }) {
   else if (hasTransportSignals) category = 'transportation_access'
   else if (!profileType && textTokens.length === 0) category = 'unknown'
 
+  // Foolproof: when category would be unknown, infer from profile type so crawlers always get usable intent.
+  if (category === 'unknown' && profileType) {
+    if (profileType.includes('business') || profileType.includes('small_business')) category = 'business_startup'
+    else if (profileType.includes('student') || profileType.includes('college') || profileType.includes('school'))
+      category = 'education'
+    else if (profileType.includes('veteran') || profileType.includes('military')) category = 'veteran_support'
+    else if (profileType.includes('nonprofit') || profileType.includes('organization')) category = 'general_assistance'
+    else category = 'general_assistance'
+  }
+
   const evidenceByCategory = {
     business_startup:
       (occupation.small_business_owner === true ? 1 : 0) +
@@ -801,20 +811,22 @@ function buildBaseFacetShape() {
 
 function mergeProfileFallbacks({ normalizedContext, facets }) {
   const profile = normalizedContext.profile ?? {}
+  const org = normalizedContext.organization ?? {}
   if (!getDeep(facets, 'profile.primary_profile_type')) {
-    const fallbackType = normalizeLower(profile.primary_type || profile.applicant_type || '')
+    const fallbackType = normalizeLower(profile.primary_type || profile.applicant_type || org.organization_type || '')
     if (fallbackType) setDeep(facets, 'profile.primary_profile_type', fallbackType)
   }
-  if (!getDeep(facets, 'geo.state') && profile.state) {
-    const state = normalizeState(profile.state)
+  if (!getDeep(facets, 'geo.state')) {
+    const state = normalizeState(profile.state || org.state)
     if (state) setDeep(facets, 'geo.state', state)
   }
-  if (!getDeep(facets, 'geo.zip') && (profile.zip_code || profile.postal_code || profile.zip)) {
-    const zip = normalizeZip(profile.zip_code || profile.postal_code || profile.zip)
+  if (!getDeep(facets, 'geo.zip')) {
+    const zip = normalizeZip(profile.zip_code || profile.postal_code || profile.zip || org.zip || org.postal_code)
     if (zip) setDeep(facets, 'geo.zip', zip)
   }
-  if (!getDeep(facets, 'geo.city') && profile.city) {
-    setDeep(facets, 'geo.city', normalizeString(profile.city))
+  if (!getDeep(facets, 'geo.city')) {
+    const city = normalizeString(profile.city || org.city)
+    if (city) setDeep(facets, 'geo.city', city)
   }
 }
 
@@ -944,7 +956,8 @@ export function requireFacets(profileContext, opts = {}) {
   const requiredMissing = Array.isArray(context?.coverage?.required_missing)
     ? context.coverage.required_missing
     : []
-  if (requiredMissing.length > 0) {
+  // When strict is false (e.g. crawlers), never throw on missing facets — run with best-effort context.
+  if (strict && requiredMissing.length > 0) {
     throw toError({
       code: 'PROFILE_CONTEXT_INCOMPLETE',
       message: `Missing required profile facets: ${requiredMissing.join(', ')}`,
