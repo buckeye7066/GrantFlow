@@ -12,7 +12,7 @@
  */
 import * as cheerio from 'cheerio'
 import { buildSearchKeywords, calculateMatchScore, filterByDeadline } from './crawlerHelpers.js'
-import { getWithRetry } from './httpClient.js'
+import { getWithRetry, postWithRetry } from './httpClient.js'
 import { planCrawlerQueries } from './queryPlanner.js'
 import {
   resolveCrawlerContext,
@@ -562,7 +562,23 @@ export async function crawlSpecialNeeds(profileInput, options = {}) {
               }
   }
 
-  // Sort by match score
+
+  // Fetch live disability/special-needs grants from Grants.gov and Benefits.gov
+  try {
+    const profileState = profile?.state || signals?.location?.state || null
+    const liveOpps = await fetchLiveSpecialNeedsOpportunities({ keywords: searchKeywords.slice(0, 5), state: profileState })
+    for (const liveOpp of liveOpps) {
+      const { score, reasons } = calculateMatchScore(liveOpp, profileForCrawler)
+      if (score >= minMatchScore) {
+        results.push({ ...liveOpp, match_score: score, match_reasons: reasons })
+      }
+    }
+    console.log(`[SpecialNeedsCrawler] Added ${liveOpps.length} live Grants.gov/Benefits.gov opportunities`)
+  } catch (liveErr) {
+    console.error('[SpecialNeedsCrawler] Live fetch error:', liveErr.message)
+  }
+
+    // Sort by match score
   results.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
 
   console.log(`[SpecialNeedsCrawler] Found ${results.length} special needs opportunities with ${minMatchScore}%+ match`)
