@@ -157,7 +157,8 @@ export default function DiscoverGrants() {
     queryKey: ['discover-catalog', effectiveProfileId],
     queryFn: async () => {
       if (!effectiveProfileId) return { opportunities: [] }
-      return apiFetch(`/api/matching/profile/${effectiveProfileId}/opportunities?min_score=50&limit=200`)
+      // Bypass readiness gates so Discover always shows catalog matches when backend has opportunities
+      return apiFetch(`/api/matching/profile/${effectiveProfileId}/opportunities?min_score=50&limit=200&skip_readiness_check=1`)
     },
     enabled: authReady && Boolean(effectiveProfileId),
     staleTime: 2 * 60 * 1000,
