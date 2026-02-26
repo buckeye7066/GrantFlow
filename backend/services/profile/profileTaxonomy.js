@@ -424,6 +424,15 @@ function mapOccupation(section = {}) {
   return mapped
 }
 
+function mapProgramsServices(section = {}) {
+  const mapped = { ...(isPlainObject(section) ? section : {}) }
+  const hasKeywords = Array.isArray(mapped.keywords) && mapped.keywords.length > 0
+  if (!hasKeywords && mapped.focus_areas) {
+    mapped.keywords = Array.isArray(mapped.focus_areas) ? [...mapped.focus_areas] : [mapped.focus_areas]
+  }
+  return mapped
+}
+
 const passthrough = (section = {}) => (isPlainObject(section) ? { ...section } : {})
 
 export const SECTION_MAPPERS = Object.freeze({
@@ -447,7 +456,7 @@ export const SECTION_MAPPERS = Object.freeze({
   employment: passthrough,
   housing: passthrough,
   family: passthrough,
-  programs_services: passthrough,
+  programs_services: mapProgramsServices,
   comprehensive_application: passthrough,
 })
 
