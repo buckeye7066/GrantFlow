@@ -178,13 +178,15 @@ function safeParseJSON(value, fallback) {
 
 const AMBIGUOUS_SINGLE_WORDS = new Set([
   'food', 'care', 'home', 'house', 'school', 'community',
+  
   'child', 'children', 'work', 'service', 'support', 'program',
   'help', 'need', 'general', 'special', 'local', 'national',
   'plan', 'fund', 'grant', 'money', 'bank', 'credit', 'loan',
   'start', 'open', 'build', 'make', 'create',
   'resource', 'free', 'apply', 'person', 'people',
 ]);
-  const facets = profileContext?.facets
+ function buildSearchTokens(profileContext) {
+ const facets = profileContext?.facets
   const queryPlan = profileContext?.queryPlan
 
   // Taxonomy-first token generation so fallback DB search uses canonical facets.
