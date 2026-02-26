@@ -176,16 +176,14 @@ function safeParseJSON(value, fallback) {
   }
 }
 
-AMBIGUOUS_SINGLE_WORDS
+const AMBIGUOUS_SINGLE_WORDS = new Set([
   'food', 'care', 'home', 'house', 'school', 'community',
-'child', 'children', 'work', 'service', 'support', 'program',
+  'child', 'children', 'work', 'service', 'support', 'program',
   'help', 'need', 'general', 'special', 'local', 'national',
   'plan', 'fund', 'grant', 'money', 'bank', 'credit', 'loan',
- 'start', 'open', 'build', 'make', 'create',
-  ''resource', 'free', 'apply', 'person', 'people',
-])
-
-function buildSearchTokens(profileContext) {
+  'start', 'open', 'build', 'make', 'create',
+  'resource', 'free', 'apply', 'person', 'people',
+]);
   const facets = profileContext?.facets
   const queryPlan = profileContext?.queryPlan
 
