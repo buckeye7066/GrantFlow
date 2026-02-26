@@ -746,9 +746,12 @@
       "relevance": true,
       "query_use": "boost",
       "facet_path": "narrative.keywords",
-      "source_section_key": "programs_services",
+      "source_section_key": "narrative",
       "source_path": "keywords",
       "fallback_source_path": [
+        "narrative.focus_areas",
+        "programs_services.keywords",
+        "programs_services.focus_areas",
         "comprehensive_application.keywords",
         "comprehensive_application.focus_areas"
       ]
@@ -765,6 +768,9 @@
         "target_population"
       ],
       "fallback_source_path": [
+        "narrative.keywords",
+        "narrative.focus_areas",
+        "narrative.mission",
         "programs_services.focus_areas",
         "occupation.healthcare_worker",
         "occupation.small_business_owner",
@@ -786,6 +792,8 @@
         "mission"
       ],
       "fallback_source_path": [
+        "narrative.keywords",
+        "narrative.focus_areas",
         "programs_services.keywords",
         "programs_services.interests",
         "comprehensive_application.keywords",
