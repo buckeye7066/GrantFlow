@@ -24,6 +24,35 @@ import { planCrawlerQueries } from '../services/crawlers/queryPlanner.js'
 
 const router = express.Router()
 
+/**
+ * Merge request-provided profile_data into a DB-loaded profile.
+ * Goal: crawlers ALWAYS use the most current profile context (sections + signals + top-level fields)
+ * even if the DB copy is stale or the UI has just enriched/edited the profile.
+ */
+function mergeProfileAndData(profile, profileData) {
+
+
+  if (!profileData) return profile;
+  if (!profile || typeof profile !== 'object') return profileData;
+  const merged = { ...profile };
+
+  // Prefer newest context
+  if (profileData.sections && typeof profileData.sections === 'object') {
+    merged.sections = { ...(profile.sections || {}), ...profileData.sections };
+  }
+  if (profileData.signals && typeof profileData.signals === 'object') {
+    merged.signals = { ...(profile.signals || {}), ...profileData.signals };
+  }
+
+  // Copy simple fields (state/city/zip/etc.) if provided
+  for (const key of Object.keys(profileData)) {
+    if (key === 'sections' || key === 'signals') continue;
+    if (profileData[key] !== undefined) merged[key] = profileData[key];
+  }
+
+  return merged;
+}
+
 const STATE_NAME_TO_ABBREV_CRAWLERS = {
   alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA',
   colorado: 'CO', connecticut: 'CT', delaware: 'DE', florida: 'FL', georgia: 'GA',
@@ -148,12 +177,12 @@ function safeParseJSON(value, fallback) {
 }
 
 const AMBIGUOUS_SINGLE_WORDS = new Set([
-  'food', 'health', 'care', 'home', 'house', 'school', 'community',
-  'family', 'child', 'children', 'work', 'service', 'support', 'program',
+  'food', 'care', 'home', 'house', 'school', 'community',
+'child', 'children', 'work', 'service', 'support', 'program',
   'help', 'assist', 'need', 'general', 'special', 'local', 'national',
   'plan', 'fund', 'grant', 'money', 'bank', 'credit', 'loan',
   'start', 'open', 'build', 'make', 'create', 'medical', 'business',
-  'assistance', 'resource', 'free', 'apply', 'person', 'people',
+  ''resource', 'free', 'apply', 'person', 'people',
 ])
 
 function buildSearchTokens(profileContext) {
@@ -869,7 +898,10 @@ router.post('/run', ensureAuth, async (req, res) => {
       }
     } else {
       profile = profile_data
-    }
+     
+ }
+        profile = mergeProfileAndData(profile, profile_data);
+
 
     if (!profile) {
       return res.status(404).json({
