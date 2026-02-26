@@ -248,7 +248,7 @@ export async function crawlGovernmentFunding(profileInput, options = {}) {
                 const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 60
 
   // Null/missing signals must not disqualify; use minimal fallback
-  const signals = profile?.signals ?? {
+  const effectiveSignals = signals ?? profile?.signals ?? {
     location: { state: profile?.state || null },
     keywordSet: new Set(),
     demographics: new Set(),
@@ -256,8 +256,8 @@ export async function crawlGovernmentFunding(profileInput, options = {}) {
     assistance: new Set(),
     occupation: new Set(),
   }
-  const profileForCrawler = profile.signals ? profile : { ...profile, signals }
-  const profileState = signals.location?.state || profile.state || null
+  const profileForCrawler = profile.signals ? profile : { ...profile, signals: effectiveSignals }
+  const profileState = effectiveSignals.location?.state || profile.state || null
         const strategies = buildExhaustiveStrategies(profileForCrawler)
         const searchKeywords = mergePlanKeywords(buildSearchKeywords(profileForCrawler, 25), queryPlan).slice(0, 35)
 
@@ -328,10 +328,10 @@ export async function crawlGovernmentFunding(profileInput, options = {}) {
   }
 
   // === HEALTHCARE-SPECIFIC (only if profile has healthcare signals) ===
-  const hasHealthcareSignals = signals.health?.size > 0 ||
-            signals.assistance?.has('medicaid') ||
-            signals.assistance?.has('medicare') ||
-            signals.occupation?.has('healthcare_worker')
+  const hasHealthcareSignals = effectiveSignals.health?.size > 0 ||
+            effectiveSignals.assistance?.has('medicaid') ||
+            effectiveSignals.assistance?.has('medicare') ||
+            effectiveSignals.occupation?.has('healthcare_worker')
 
   if (hasHealthcareSignals) {
             try {
