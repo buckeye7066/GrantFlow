@@ -342,12 +342,15 @@ function normalizeLiveOpportunity(raw, { crawlerType, rejectionCounts = null }) 
     facetsReasonFromRaw(raw),
   ]).filter(Boolean)
 
+  // Preserve sub-crawler source when running comprehensive so UI can show "From N sources".
+  const effectiveCrawlerType = raw.crawler_type ?? crawlerType
+
   return {
     id: raw.id ?? null,
     title,
     sponsor,
     description,
-    source: raw.source ?? crawlerType,
+    source: raw.source ?? effectiveCrawlerType,
     source_url: raw.source_url ?? rawUrl,
     application_url: raw.application_url ?? rawUrl,
     url: rawUrl,
@@ -365,7 +368,7 @@ function normalizeLiveOpportunity(raw, { crawlerType, rejectionCounts = null }) 
     opportunity_type: opportunityType,
     // Preserve crawler-provided origin when present; directory-style resources must not be treated as volatile live crawls.
     record_origin: recordOriginRaw || (isDirectoryStyle ? 'directory_resource' : 'live_crawl'),
-    crawler_type: crawlerType,
+    crawler_type: effectiveCrawlerType,
     ...(existingScore !== null ? { match_score: existingScore } : {}),
     ...(matchReasons.length ? { match_reasons: matchReasons } : {}),
     ...(isDirectoryStyle ? { is_directory_resource: true } : {}),

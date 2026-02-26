@@ -174,16 +174,16 @@ export async function crawlHealthResources(profile, options = {}) {
   const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 60
 
   // Null/missing signals must not disqualify; use minimal fallback
-  const signals = profile?.signals ?? {
+  const effectiveSignals = signals ?? profile?.signals ?? {
     location: { state: profile?.state || null },
     keywordSet: new Set(),
     health: new Set(),
     demographics: new Set(),
   }
-  const profileForCrawler = profile.signals ? profile : { ...profile, signals }
+  const profileForCrawler = profile.signals ? profile : { ...profile, signals: effectiveSignals }
 
-  const state = signals.location?.state || profile.state || null
-  const sections = profile?.sections || signals.rawSections || {}
+  const state = effectiveSignals.location?.state || profile.state || null
+  const sections = profile?.sections || effectiveSignals.rawSections || {}
   const health = sections?.health_medical ?? {}
 
   const conditionNames = normalizeConditionNames(health?.conditions)

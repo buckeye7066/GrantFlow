@@ -2,6 +2,7 @@ import express from 'express'
 import { formatError } from '../middleware/errorHandler.js'
 import { calculateMatchScore } from '../services/matchingEngine.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
+import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
 import { getDataReadiness } from '../services/dataReadinessService.js'
 import { checkProfileReadiness } from '../services/profileReadinessService.js'
@@ -41,8 +42,9 @@ router.get('/profile/:profileId/grants', async (req, res) => {
       return res.status(404).json({ error: 'Profile not found' })
     }
 
-    // Load full profile context (sections + signals) so scoring uses the 22-page application data.
-    const profileContext = await loadProfileContext(req.db, profileId)
+    // Load full profile context (sections + signals) and taxonomy facets so scoring matches crawler behavior.
+    const baseContext = await loadProfileContext(req.db, profileId)
+    const profileContext = buildProfileFacets(baseContext)
 
     // Use profile.organization_id to fetch the pipeline grants.
     if (!profileRow.organization_id) {
@@ -178,7 +180,9 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
     const limit = Math.min(Math.max(Number.parseInt(req.query.limit ?? '2000', 10) || 2000, 1), 5000)
     const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : ''
 
-    const profileContext = await loadProfileContext(req.db, profileId)
+    // Load profile context and build taxonomy facets so catalog scoring uses same intent/keywords as crawlers.
+    const baseContext = await loadProfileContext(req.db, profileId)
+    const profileContext = buildProfileFacets(baseContext)
 
     const conditions = ['is_active = ?']
     const params = []

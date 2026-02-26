@@ -336,12 +336,12 @@ export async function crawlStudentGrants(profileInput, options = {}) {
         const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 60
 
   // Null/missing signals must not disqualify; use minimal fallback
-  const signals = profile?.signals ?? {
+  const effectiveSignals = signals ?? profile?.signals ?? {
     keywordSet: new Set(),
     demographics: new Set(),
     applicantTypes: new Set(),
   }
-  const profileForCrawler = profile.signals ? profile : { ...profile, signals }
+  const profileForCrawler = profile.signals ? profile : { ...profile, signals: effectiveSignals }
 
   // Check if this is a student profile
   if (!isStudentProfile(profile)) {
@@ -352,12 +352,12 @@ export async function crawlStudentGrants(profileInput, options = {}) {
   const searchKeywords = mergePlanKeywords(buildSearchKeywords(profileForCrawler, 25), queryPlan).slice(0, 35)
 
   console.log(`[StudentGrantsCrawler] Student profile detected`)
-    console.log(`[StudentGrantsCrawler] Academics: GPA=${signals.academics?.gpa}, SAT=${signals.academics?.sat}, ACT=${signals.academics?.act}`)
-    console.log(`[StudentGrantsCrawler] Interests: ${Array.from(signals.interests || []).slice(0, 5).join(', ')}`)
-    console.log(`[StudentGrantsCrawler] Demographics: ${Array.from(signals.demographics || []).join(', ')}`)
-    console.log(`[StudentGrantsCrawler] Health: ${Array.from(signals.health || []).join(', ')}`)
-    console.log(`[StudentGrantsCrawler] Family: ${Array.from(signals.family || []).join(', ')}`)
-    console.log(`[StudentGrantsCrawler] Military: ${Array.from(signals.military || []).join(', ')}`)
+    console.log(`[StudentGrantsCrawler] Academics: GPA=${effectiveSignals.academics?.gpa}, SAT=${effectiveSignals.academics?.sat}, ACT=${effectiveSignals.academics?.act}`)
+    console.log(`[StudentGrantsCrawler] Interests: ${Array.from(effectiveSignals.interests || []).slice(0, 5).join(', ')}`)
+    console.log(`[StudentGrantsCrawler] Demographics: ${Array.from(effectiveSignals.demographics || []).join(', ')}`)
+    console.log(`[StudentGrantsCrawler] Health: ${Array.from(effectiveSignals.health || []).join(', ')}`)
+    console.log(`[StudentGrantsCrawler] Family: ${Array.from(effectiveSignals.family || []).join(', ')}`)
+    console.log(`[StudentGrantsCrawler] Military: ${Array.from(effectiveSignals.military || []).join(', ')}`)
     console.log(`[StudentGrantsCrawler] Using ${searchKeywords.length} keywords from profile signals`)
 
   const seenUrls = new Set()
@@ -366,15 +366,15 @@ export async function crawlStudentGrants(profileInput, options = {}) {
   for (const aid of FEDERAL_STUDENT_AID) {
         // Check requirements
       if (aid._requires?.financial_need) {
-              const hasNeed = signals.assistance?.has('low_income') ||
-                        signals.financial?.needLevel === 'High' ||
-                        signals.financial?.needLevel === 'Critical' ||
-                        signals.financial?.needLevel === 'Extreme' ||
-                        signals.assistance?.has('high_financial_need')
+              const hasNeed = effectiveSignals.assistance?.has('low_income') ||
+                        effectiveSignals.financial?.needLevel === 'High' ||
+                        effectiveSignals.financial?.needLevel === 'Critical' ||
+                        effectiveSignals.financial?.needLevel === 'Extreme' ||
+                        effectiveSignals.assistance?.has('high_financial_need')
               if (!hasNeed) continue
       }
         if (aid._requires?.military) {
-                if (!signals.military?.size) continue
+                if (!effectiveSignals.military?.size) continue
         }
         if (aid._requires?.interest_match) {
                 const interests = Array.from(signals.interests || []).map(i => i.toLowerCase())
@@ -413,7 +413,7 @@ export async function crawlStudentGrants(profileInput, options = {}) {
   // Map signal values to scholarship categories
   const signalCategoryMap = {
         first_generation: demographicSignals.includes('first_generation'),
-        military: (signals.military?.size || 0) > 0,
+        military: (effectiveSignals.military?.size || 0) > 0,
         disability: healthSignals.some(h => h.includes('disability') || h.includes('wheelchair') || h.includes('impair') || h.includes('blind') || h.includes('deaf')),
         african_american: demographicSignals.includes('african_american'),
         hispanic_latino: demographicSignals.includes('hispanic_latino'),

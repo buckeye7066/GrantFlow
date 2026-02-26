@@ -1,14 +1,33 @@
-
 import React from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import GrantCard from '../pipeline/GrantCard';
 import { Button } from '@/components/ui/button';
-import { Loader2, Plus, Check, CheckSquare, Square, Search } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Loader2, Plus, Check, CheckSquare, Square, Search, Database } from 'lucide-react';
 import { useToast } from "@/components/ui/use-toast";
 import { Progress } from "@/components/ui/progress";
 import { Checkbox } from '@/components/ui/checkbox';
+
+const SOURCE_LABELS = {
+  local_funding: 'Local funding',
+  government_funding: 'Government',
+  student_grants: 'Student grants',
+  health_resources: 'Health resources',
+  special_needs: 'Special needs',
+  ecf_benefits: 'ECF Benefits',
+  item_matching: 'Item funding',
+  comprehensive: 'Search',
+  catalog: 'Catalog',
+  discovery: 'Discovery',
+};
+
+function formatSourceLabel(source) {
+  if (!source || typeof source !== 'string') return 'Funding source';
+  const key = source.toLowerCase().replace(/\s+/g, '_');
+  return SOURCE_LABELS[key] || source.replace(/_/g, ' ');
+}
 
 function getOpportunityKey(opp, idx) {
   const raw =
@@ -203,8 +222,35 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
 
   const allSelected = selectedOpportunities.size === results.length && results.length > 0;
 
+  const uniqueSources = React.useMemo(() => {
+    const set = new Set();
+    results.forEach((opp) => {
+      const s = opp.source || opp.crawler_type || 'catalog';
+      if (s) set.add(s);
+    });
+    return Array.from(set);
+  }, [results]);
+
   return (
     <div data-component="SearchResults" data-results-count={results.length} data-selected-count={selectedOpportunities.size}>
+      {/* Multiple funding sources summary */}
+      {uniqueSources.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          <Database className="w-4 h-4 shrink-0" />
+          <span>
+            From {uniqueSources.length} funding source{uniqueSources.length !== 1 ? 's' : ''}:
+          </span>
+          {uniqueSources.slice(0, 8).map((src) => (
+            <Badge key={src} variant="secondary" className="font-normal">
+              {formatSourceLabel(src)}
+            </Badge>
+          ))}
+          {uniqueSources.length > 8 && (
+            <Badge variant="outline">+{uniqueSources.length - 8} more</Badge>
+          )}
+        </div>
+      )}
+
       {/* Background Processing Indicator */}
       {isProcessing && (
         <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
@@ -267,7 +313,7 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
                 isSelected ? 'ring-2 ring-blue-500 border-blue-500' : ''
               }`}
             >
-              <div className="p-3 border-b bg-slate-50 flex items-center gap-2">
+              <div className="p-3 border-b bg-slate-50 flex items-center gap-2 flex-wrap">
                 <Checkbox
                   checked={isSelected}
                   onCheckedChange={() => handleToggleSelection(oppKey)}
@@ -275,10 +321,15 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
                 />
                 <label 
                   htmlFor={`select-${oppKey}`} 
-                  className="text-sm font-medium cursor-pointer flex-1"
+                  className="text-sm font-medium cursor-pointer flex-1 min-w-0"
                 >
                   Select
                 </label>
+                {(opp.source || opp.crawler_type) && (
+                  <Badge variant="outline" className="text-xs shrink-0">
+                    {formatSourceLabel(opp.source || opp.crawler_type)}
+                  </Badge>
+                )}
               </div>
               <div className="flex-grow">
                  <GrantCard 
