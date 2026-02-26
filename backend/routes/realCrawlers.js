@@ -176,12 +176,12 @@ function safeParseJSON(value, fallback) {
   }
 }
 
-const AMBIGUOUS_SINGLE_WORDS = new Set([
+AMBIGUOUS_SINGLE_WORDS
   'food', 'care', 'home', 'house', 'school', 'community',
 'child', 'children', 'work', 'service', 'support', 'program',
-  'help', 'assist', 'need', 'general', 'special', 'local', 'national',
+  'help', 'need', 'general', 'special', 'local', 'national',
   'plan', 'fund', 'grant', 'money', 'bank', 'credit', 'loan',
-  'start', 'open', 'build', 'make', 'create', 'medical', 'business',
+ 'start', 'open', 'build', 'make', 'create',
   ''resource', 'free', 'apply', 'person', 'people',
 ])
 
