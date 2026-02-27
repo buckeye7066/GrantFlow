@@ -31,18 +31,44 @@ function ensureArray(value) {
   return [value]
 }
 
-function isValidHttpUrl(value) {
+export function isValidHttpUrl(value) {
   if (typeof value !== 'string' || value.trim().length === 0) return false
   try {
     const parsed = new URL(value)
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
-    // Master prompt: no placeholders — reject example.com, example.org, placeholder
+    // Master prompt: no placeholders -- reject example.com, example.org, example.gov, placeholder
     const host = (parsed.hostname || '').toLowerCase()
-    if (host.includes('example.com') || host.includes('example.org') || host.includes('placeholder')) return false
+    if (
+      host.includes('example.com') ||
+      host.includes('example.org') ||
+      host.includes('example.gov') ||
+      host.includes('placeholder')
+    )
+      return false
     return true
   } catch {
     return false
   }
+}
+
+/**
+ * Detect loans, microloans, financing, or matching-fund/cost-share opportunities.
+ * Checks schema fields (`is_loan`, `requires_match`, `opportunity_type`) and keyword patterns.
+ * @param {Object} opportunity
+ * @returns {boolean}
+ */
+export function isLoanOrMatchingFund(opportunity) {
+  if (!opportunity || typeof opportunity !== 'object') return false
+  if (opportunity.is_loan === true) return true
+  if (opportunity.requires_match === true) return true
+  const oppType = String(opportunity.opportunity_type || '').toLowerCase()
+  if (['loan', 'loan_program', 'microloan'].includes(oppType)) return true
+  const text = `${opportunity.title || ''} ${opportunity.description || ''} ${opportunity.eligibility || ''}`.toLowerCase()
+  const loanKeywords = ['\\bloan\\b', '\\bmicroloan\\b', '\\bfinancing\\b', '\\bapr\\b']
+  const matchKeywords = ['matching funds', 'match required', 'cost share', '1:1 match', 'dollar for dollar']
+  if (loanKeywords.some((kw) => new RegExp(kw).test(text))) return true
+  if (matchKeywords.some((kw) => text.includes(kw))) return true
+  return false
 }
 
 function inferEligibilityBullets(raw) {
@@ -150,10 +176,9 @@ export function enforceCrawlerOpportunityContract(
   const url = rawOpportunity.url || rawOpportunity.application_url || rawOpportunity.source_url || null
   if (!isValidHttpUrl(url)) return null
 
-  // Require title; allow fallback from description so real URL sources are not dropped by missing title only.
+  // Title is required: must be present as an explicit `title` or `name` field.
   const rawTitle = normalizeString(rawOpportunity.title || rawOpportunity.name || '')
-  const rawDesc = normalizeString(rawOpportunity.description || rawOpportunity.summary || '')
-  const title = rawTitle || (rawDesc ? rawDesc.slice(0, 80).trim() || 'Funding opportunity' : 'Funding opportunity')
+  const title = rawTitle
   if (!title) return null
 
   const description = normalizeString(rawOpportunity.description || rawOpportunity.summary || title)
@@ -204,6 +229,8 @@ export function enforceCrawlerOpportunityContract(
 }
 
 export default {
+  isValidHttpUrl,
+  isLoanOrMatchingFund,
   resolveCrawlerContext,
   mergePlanKeywords,
   violatesMustNot,
