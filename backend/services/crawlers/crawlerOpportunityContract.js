@@ -35,7 +35,11 @@ function isValidHttpUrl(value) {
   if (typeof value !== 'string' || value.trim().length === 0) return false
   try {
     const parsed = new URL(value)
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
+    // Master prompt: no placeholders — reject example.com, example.org, placeholder
+    const host = (parsed.hostname || '').toLowerCase()
+    if (host.includes('example.com') || host.includes('example.org') || host.includes('placeholder')) return false
+    return true
   } catch {
     return false
   }
@@ -143,11 +147,14 @@ export function enforceCrawlerOpportunityContract(
   if (!isPlainObject(rawOpportunity)) return null
   if (violatesMustNot(rawOpportunity, queryPlan)) return null
 
-  const title = normalizeString(rawOpportunity.title || rawOpportunity.name || '')
-  if (!title) return null
-
   const url = rawOpportunity.url || rawOpportunity.application_url || rawOpportunity.source_url || null
   if (!isValidHttpUrl(url)) return null
+
+  // Require title; allow fallback from description so real URL sources are not dropped by missing title only.
+  const rawTitle = normalizeString(rawOpportunity.title || rawOpportunity.name || '')
+  const rawDesc = normalizeString(rawOpportunity.description || rawOpportunity.summary || '')
+  const title = rawTitle || (rawDesc ? rawDesc.slice(0, 80).trim() || 'Funding opportunity' : 'Funding opportunity')
+  if (!title) return null
 
   const description = normalizeString(rawOpportunity.description || rawOpportunity.summary || title)
   const keywords = uniqueStrings(ensureArray(rawOpportunity.keywords))

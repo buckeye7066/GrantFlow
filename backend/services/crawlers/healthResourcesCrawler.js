@@ -548,7 +548,7 @@ export async function crawlHealthResources(profile, options = {}) {
     const liveOpps = await fetchLiveHealthOpportunities({ state: profileState, keywords: searchKws, signals })
     for (const liveOpp of liveOpps) {
       const { score, reasons } = calculateMatchScore(liveOpp, resolvedProfile)
-      if (score >= minScore) {
+      if (score >= minMatchScore) {
         selected.push(enforceCrawlerOpportunityContract({ ...liveOpp, match_score: score, match_reasons: reasons }, { crawlerType: 'health_resources', facets, queryPlan }))
       }
     }

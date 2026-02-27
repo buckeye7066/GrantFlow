@@ -629,12 +629,23 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
       return { ...row, match_score: mergedScore, match_reasons: mergedReasons }
     })
 
-    const included = rescored
+    let included = rescored
       .filter((row) => {
         return typeof row.match_score === 'number' && row.match_score >= Number(minMatchScore)
       })
       .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
       .slice(0, 50)
+
+    // Guardrail: real URL sources must not all be dropped when min_match_score is strict.
+    // If we have scored results but 0 passed threshold, return top-scoring so profile still gets relevant, URL-verified opps.
+    let fallbackApplied = false
+    if (included.length === 0 && rescored.length > 0) {
+      included = rescored
+        .filter((o) => typeof o?.match_score === 'number')
+        .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+        .slice(0, 50)
+      fallbackApplied = true
+    }
 
     return {
       ok: true,
@@ -645,6 +656,7 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
       error: null,
       query_plan: queryPlan,
       validation_rejection_counts: rejectionCounts,
+      ...(fallbackApplied ? { score_fallback_applied: true } : {}),
     }
   } catch (error) {
     const errorMsg = error?.message || String(error)
@@ -849,8 +861,12 @@ router.post('/run', ensureAuth, async (req, res) => {
     profile_id,
     profile_data,
     item_request,
-    min_match_score = 60, // Aligned with crawler defaults; use 100% of profile signals
+    min_match_score: bodyMinScore,
   } = req.body
+  // Slider is law (master prompt): use Discover Grants slider when provided (0–100); default 50
+  let min_match_score = 50
+  if (typeof bodyMinScore === 'number' && bodyMinScore >= 0 && bodyMinScore <= 100) min_match_score = bodyMinScore
+  else if (typeof bodyMinScore === 'string' && /^\d+$/.test(bodyMinScore)) min_match_score = Math.min(100, Math.max(0, parseInt(bodyMinScore, 10)))
   const adminDebugRequested = String(req.query?.admin ?? req.body?.admin ?? '').toLowerCase() === 'true'
   
   if (!crawler_type || !CRAWLER_TYPES.includes(crawler_type)) {
@@ -1373,15 +1389,15 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
   }
   
   const db = req.db
-  const profile = await getProfileWithLocation(db, profile_id)
-  
+  let profile = await getProfileWithLocation(db, profile_id)
   if (!profile) {
-    return res.status(404).json({ 
+    return res.status(404).json({
       error: 'Profile not found',
-      message: `Profile with ID ${profile_id} does not exist`
+      message: `Profile with ID ${profile_id} does not exist`,
     })
   }
-  
+  profile = mergeProfileAndData(profile, req.body?.profile_data ?? null)
+
   const succeeded = []
   const failed = []
   let totalFound = 0
@@ -1402,7 +1418,24 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
       details: taxonomyError?.details ?? null,
     })
   }
-  
+
+  // Use DB-backed profile location as single source of truth (same as POST /run).
+  const profileState = normalizeStateForCrawler(profile?.state) || null
+  const profileZip = (profile?.zip_code && String(profile.zip_code).trim()) || (profile?.postal_code && String(profile.postal_code).trim()) || null
+  const profileCity = (profile?.city && String(profile.city).trim()) || null
+  if (profileState || profileZip || profileCity) {
+    if (!profileContextBase.facets) profileContextBase.facets = {}
+    if (!profileContextBase.facets.geo) profileContextBase.facets.geo = {}
+    if (!profileContextBase.facets.geo.state && profileState) profileContextBase.facets.geo.state = profileState
+    if (!profileContextBase.facets.geo.zip && profileZip) profileContextBase.facets.geo.zip = /^\d{5}/.test(profileZip) ? profileZip.replace(/\D/g, '').slice(0, 5) : profileZip
+    if (!profileContextBase.facets.geo.city && profileCity) profileContextBase.facets.geo.city = profileCity
+    if (profileContextBase.signals && profileContextBase.signals.location) {
+      if (!profileContextBase.signals.location.state && profileState) profileContextBase.signals.location.state = profileContextBase.facets.geo.state
+      if (!profileContextBase.signals.location.zip && profileZip) profileContextBase.signals.location.zip = profileContextBase.facets.geo.zip
+      if (!profileContextBase.signals.location.city && profileCity) profileContextBase.signals.location.city = profileContextBase.facets.geo.city
+    }
+  }
+
   for (const crawlerType of crawler_types) {
     if (!CRAWLER_TYPES.includes(crawlerType)) {
       failed.push({

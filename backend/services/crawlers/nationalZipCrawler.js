@@ -1063,6 +1063,9 @@ async function completeStateRunRow(db, runRow, { status, processed, sources, fai
 async function saveOpportunity(db, opp) {
   if (!opp?.title) return 0
   if (!opp?.source || !opp?.source_id) return 0
+  // Only persist real, usable resources: require at least one valid URL
+  const hasUrl = normalizeUrl(opp?.url) || normalizeUrl(opp?.source_url) || normalizeUrl(opp?.application_url)
+  if (!hasUrl) return 0
 
   const id = crypto.randomUUID()
   const insertSql =
