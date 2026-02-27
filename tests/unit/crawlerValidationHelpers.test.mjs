@@ -55,7 +55,7 @@ test('isValidHttpUrl: rejects example.gov placeholder', () => {
 })
 
 test('isValidHttpUrl: rejects URL containing placeholder in hostname', () => {
-  assert.equal(isValidHttpUrl('https://placeholder.example/grant'), false)
+  assert.equal(isValidHttpUrl('http://placeholder/grant'), false)
 })
 
 test('isValidHttpUrl: rejects subdomain of example.com', () => {
