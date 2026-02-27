@@ -22,6 +22,7 @@ import {
   mergePlanKeywords,
   enforceCrawlerOpportunityContract,
 } from './crawlerOpportunityContract.js'
+import { enforceOpportunityPolicy } from './opportunityPolicy.js'
 
 /**
    * Real federal student aid programs. These are always available and always real.
@@ -343,6 +344,9 @@ export async function crawlStudentGrants(profileInput, options = {}) {
   }
   const profileForCrawler = profile.signals ? profile : { ...profile, signals: effectiveSignals }
 
+  // Extract FAFSA/need-based signals from profile sections and signals
+  const fafsaSignals = extractFafsaSignals(profile, effectiveSignals)
+
   // Check if this is a student profile
   if (!isStudentProfile(profile)) {
         console.log('[StudentGrantsCrawler] Not a student profile, skipping')
@@ -357,16 +361,19 @@ export async function crawlStudentGrants(profileInput, options = {}) {
     console.log(`[StudentGrantsCrawler] Demographics: ${Array.from(effectiveSignals.demographics || []).join(', ')}`)
     console.log(`[StudentGrantsCrawler] Health: ${Array.from(effectiveSignals.health || []).join(', ')}`)
     console.log(`[StudentGrantsCrawler] Family: ${Array.from(effectiveSignals.family || []).join(', ')}`)
-    console.log(`[StudentGrantsCrawler] Military: ${Array.from(effectiveSignals.military || []).join(', ')}`)
+    console.log(`[StudentGrantsCrawler] FAFSA/need signals: pell_eligible=${fafsaSignals.pellEligible}, high_need=${fafsaSignals.highNeed}, low_income=${fafsaSignals.lowIncome}, dependency=${fafsaSignals.dependencyStatus || 'unknown'}`)
     console.log(`[StudentGrantsCrawler] Using ${searchKeywords.length} keywords from profile signals`)
 
   const seenUrls = new Set()
 
   // === 1. FEDERAL STUDENT AID (always real, always available) ===
   for (const aid of FEDERAL_STUDENT_AID) {
-        // Check requirements
+        // Check requirements — use consolidated FAFSA signals for need detection
       if (aid._requires?.financial_need) {
-              const hasNeed = effectiveSignals.assistance?.has('low_income') ||
+              const hasNeed = fafsaSignals.highNeed ||
+                        fafsaSignals.pellEligible ||
+                        fafsaSignals.lowIncome ||
+                        effectiveSignals.assistance?.has('low_income') ||
                         effectiveSignals.financial?.needLevel === 'High' ||
                         effectiveSignals.financial?.needLevel === 'Critical' ||
                         effectiveSignals.financial?.needLevel === 'Extreme' ||
@@ -377,8 +384,8 @@ export async function crawlStudentGrants(profileInput, options = {}) {
                 if (!effectiveSignals.military?.size) continue
         }
         if (aid._requires?.interest_match) {
-                const interests = Array.from(signals.interests || []).map(i => i.toLowerCase())
-                const keywords = Array.from(signals.keywordSet || []).map(k => k.toLowerCase())
+                const interests = Array.from(effectiveSignals.interests || []).map(i => i.toLowerCase())
+                const keywords = Array.from(effectiveSignals.keywordSet || []).map(k => k.toLowerCase())
                 const all = [...interests, ...keywords]
                 const matches = aid._requires.interest_match.some(req => all.some(i => i.includes(req)))
                 if (!matches) continue
@@ -386,6 +393,9 @@ export async function crawlStudentGrants(profileInput, options = {}) {
 
       if (seenUrls.has(aid.url)) continue
         seenUrls.add(aid.url)
+
+        // Apply policy before scoring
+        if (!enforceOpportunityPolicy(aid).ok) continue
 
       const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(aid, profileForCrawler)
 
@@ -446,6 +456,9 @@ export async function crawlStudentGrants(profileInput, options = {}) {
                     opportunity_type: 'scholarship',
           }
 
+          // Apply policy before scoring
+          if (!enforceOpportunityPolicy(opp).ok) continue
+
           const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profileForCrawler)
 
           // Signal-specific bonus: we know this matches the student's profile
@@ -502,12 +515,21 @@ export async function crawlStudentGrants(profileInput, options = {}) {
   }
 
   // === 4. SCHOOL-SPECIFIC FINANCIAL AID ===
-  const sections = profile?.sections || signals.rawSections || {}
+  // Collect schools from university_applications and education.interested_schools
+  const sections = profile?.sections || effectiveSignals.rawSections || {}
       const universityApps = sections?.university_applications?.applications || []
-          const interestedSchools = universityApps.map(app => app.name).filter(Boolean)
+      const educationInterested = Array.isArray(sections?.education?.interested_schools)
+        ? sections.education.interested_schools
+        : []
+      // Merge school names from both sources
+      const interestedSchools = [
+        ...universityApps.map(app => app.name).filter(Boolean),
+        ...educationInterested.map(s => (typeof s === 'string' ? s : s?.name)).filter(Boolean),
+      ].filter((v, i, arr) => arr.indexOf(v) === i) // dedupe
 
   for (const school of interestedSchools) {
-        const schoolUrl = getSchoolFinAidUrl(school)
+        // Try known lookup first; fall back to deterministic URL pattern generation
+        const schoolUrl = getSchoolFinAidUrl(school) || generateSchoolFinAidUrl(school)
         if (!schoolUrl || seenUrls.has(schoolUrl)) continue
         seenUrls.add(schoolUrl)
 
@@ -529,6 +551,9 @@ export async function crawlStudentGrants(profileInput, options = {}) {
               opportunity_type: 'program',
       }
 
+      // Apply policy before scoring
+      if (!enforceOpportunityPolicy(opp).ok) continue
+
       const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profileForCrawler)
 
       // School-specific bonus
@@ -549,10 +574,11 @@ export async function crawlStudentGrants(profileInput, options = {}) {
 
   // Fetch live education grants from Grants.gov and merge into results
   try {
-    const profileState = profile?.state || signals?.location?.state || null
+    const profileState = profile?.state || effectiveSignals?.location?.state || null
     const liveOpps = await fetchLiveStudentOpportunities({ keywords: searchKeywords.slice(0, 5), state: profileState })
     for (const liveOpp of liveOpps) {
       if (isStudentLoan(liveOpp)) continue
+      if (!enforceOpportunityPolicy(liveOpp).ok) continue
       const { score, reasons } = calculateMatchScore(liveOpp, profileForCrawler)
       if (score >= minMatchScore) {
         results.push({ ...liveOpp, match_score: score, match_reasons: reasons, source: 'grants.gov' })
@@ -618,6 +644,82 @@ function isStudentLoan(opportunity) {
         ]
     const text = `${opportunity.title} ${opportunity.description} ${opportunity.eligibility}`.toLowerCase()
     return loanKeywords.some(keyword => text.includes(keyword))
+}
+
+/**
+ * Extract FAFSA / financial-need indicators from profile sections and signals.
+ * Returns a plain object with boolean/string properties that supplement effectiveSignals.
+ */
+function extractFafsaSignals(profile, signals) {
+  const sections = profile?.sections ?? {}
+  const financial = sections?.financial_information ?? sections?.financial ?? {}
+  const assistance = sections?.assistance ?? {}
+
+  // Pell Grant eligible: explicit field or EFC/SAI of 0 (maximum need)
+  const efcOrSai =
+    typeof financial?.efc === 'number' ? financial.efc
+    : typeof financial?.sai === 'number' ? financial.sai
+    : typeof financial?.expected_family_contribution === 'number' ? financial.expected_family_contribution
+    : null
+  const pellEligible =
+    Boolean(financial?.pell_eligible) ||
+    Boolean(financial?.pell_grant_eligible) ||
+    efcOrSai === 0
+
+  // High financial need: explicit signals or FAFSA-style markers
+  const highNeed =
+    pellEligible ||
+    Boolean(financial?.high_financial_need) ||
+    String(financial?.need_level ?? '').toLowerCase() === 'high' ||
+    String(financial?.need_level ?? '').toLowerCase() === 'critical' ||
+    signals?.assistance?.has?.('high_financial_need') ||
+    signals?.assistance?.has?.('exceptional_need')
+
+  // Low income: explicit marker or income tier
+  const lowIncome =
+    Boolean(financial?.low_income) ||
+    String(financial?.income_tier ?? '').toLowerCase().includes('low') ||
+    signals?.assistance?.has?.('low_income') ||
+    signals?.assistance?.has?.('poverty') ||
+    signals?.demographics?.has?.('low_income')
+
+  // Dependency status: 'dependent' | 'independent' | null
+  const dependencyStatus =
+    String(financial?.dependency_status ?? financial?.fafsa_dependency ?? '').toLowerCase() || null
+
+  // SAI / EFC (Student Aid Index / Expected Family Contribution) — numeric
+  const sai = efcOrSai
+
+  return { pellEligible, highNeed, lowIncome, dependencyStatus, sai }
+}
+
+/**
+ * Generate a best-guess financial aid URL for a school using common domain patterns.
+ * Returns null if the school name cannot be mapped to a likely domain.
+ *
+ * NOTE: This is a heuristic fallback for schools not in getSchoolFinAidUrl(). The
+ * generated domain may be wrong for universities with well-known abbreviations (e.g.,
+ * "Ohio State University" generates "ohiostate.edu" not "osu.edu"). These cases are
+ * handled by the lookup table in getSchoolFinAidUrl() above.
+ */
+function generateSchoolFinAidUrl(schoolName) {
+  if (!schoolName || typeof schoolName !== 'string') return null
+  const lower = schoolName.toLowerCase().trim()
+
+  // Convert "University of XYZ" → "xyz.edu", "XYZ University" → "xyz.edu", etc.
+  const domainGuess = lower
+    .replace(/\bthe\s+/g, '')
+    .replace(/\buniversity\s+of\s+/g, '')
+    .replace(/\s+university$/g, '')
+    .replace(/\s+college$/g, '')
+    .replace(/\s+institute(\s+of\s+technology)?$/g, '')
+    .replace(/[^a-z0-9]+/g, '')
+    .slice(0, 20)
+
+  if (!domainGuess) return null
+
+  // Prefer /financial-aid path as it is the most common pattern.
+  return `https://www.${domainGuess}.edu/financial-aid`
 }
 
 export default { crawlStudentGrants }

@@ -16,6 +16,7 @@ import {
   mergePlanKeywords,
   enforceCrawlerOpportunityContract,
 } from './crawlerOpportunityContract.js'
+import { enforceOpportunityPolicy } from './opportunityPolicy.js'
 
 // Calculate distance between two coordinates (in miles)
 const calculateDistance = (lat1, lng1, lat2, lng2) => {
@@ -367,8 +368,8 @@ export async function crawlLocalFunding(profileInput, options = {}) {
       
       // Score each opportunity using 100% of profile signals
       for (const opp of activeOpps) {
-        // Skip loans and matching funds
-        if (isLoanOrMatchingFund(opp)) continue
+        // Apply unified policy (URL, placeholder, loan, matching-funds) before scoring.
+        if (!enforceOpportunityPolicy(opp).ok) continue
         
         // Calculate minimum distance to any anchor (profile ZIP or interested-school ZIPs).
         let distance = null
