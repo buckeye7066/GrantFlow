@@ -21,7 +21,7 @@ const CRAWLER_CONFIGS = [
     id: 'local_funding',
     name: 'Local Funding',
     icon: MapPin,
-    description: 'Searches for funding opportunities within 50 miles of your location or school ZIP code',
+    description: 'Searches for funding opportunities within 25 miles of your location or school ZIP code',
     details: 'Includes community foundations, United Way, local nonprofits, and regional grant programs. Excludes loans; programs requiring matching funds may be included but will score lower.',
     color: 'text-blue-600'
   },

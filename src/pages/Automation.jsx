@@ -56,7 +56,7 @@ async function startGeoCrawl(payload) {
 }
 
 const JOB_LABELS = {
-  local: "Local 50-mile sweep",
+  local: "Local 25-mile sweep",
   scholarship: "Scholarship intelligence",
   comprehensive: "Comprehensive match",
   item_search: "Item funding search",
@@ -1936,7 +1936,7 @@ export default function Automation() {
         <QuickActionCard
           icon={Rocket}
           title="Launch local sweep"
-          description="Search within 50 miles of the profile’s ZIP for non-repayable opportunities."
+          description="Search within 25 miles of the profile’s ZIP for non-repayable opportunities."
           onClick={() => handleQueueJob("local")}
           disabled={!isAdmin && !activeProfileId}
           loading={createJobMutation.isPending && createJobMutation.variables?.type === "local"}

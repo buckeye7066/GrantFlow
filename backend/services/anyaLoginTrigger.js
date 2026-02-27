@@ -141,7 +141,7 @@ export async function initializeAnyaForAdmin(db, user, profileId = null, { uploa
     // Create crawler jobs
     const jobIds = {
       local: await createCrawlerJob(db, profileId, 'local', {
-        radius_miles: 50,
+        radius_miles: 25,
         max_results: 100,
       }),
       scholarship: await createCrawlerJob(db, profileId, 'scholarship', {
@@ -177,7 +177,7 @@ export async function initializeAnyaForAdmin(db, user, profileId = null, { uploa
     // Add welcome message from Anya
     const welcomeMessage = `Welcome back! I've automatically started the following background tasks for you:
 
-1. **Local Opportunities** - Searching within 50 miles
+1. **Local Opportunities** - Searching within 25 miles
 2. **Scholarship Opportunities** - Finding relevant scholarships
 3. **Comprehensive Match** - Scanning the opportunity catalog for strong nationwide matches
 4. **Profile Enrichment** - Updating profile data

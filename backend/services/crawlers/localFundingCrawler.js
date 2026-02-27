@@ -1,6 +1,6 @@
 /**
  * Local Funding Crawler
- * Searches for funding opportunities within 50 mile radius of profile location
+ * Searches for funding opportunities within 25 mile radius of profile location
  * Excludes loans and matching funds
  * 
  * CRITICAL: Uses 100% of profile data via signals for search queries and scoring.
@@ -29,7 +29,7 @@ const calculateDistance = (lat1, lng1, lat2, lng2) => {
   return R * c
 }
 
-const DEFAULT_SEARCH_RADIUS_MILES = 50
+const DEFAULT_SEARCH_RADIUS_MILES = 25
 
 const STATE_NAME_TO_ABBREV_LOCAL = {
   alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA',

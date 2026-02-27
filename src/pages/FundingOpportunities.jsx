@@ -1130,6 +1130,9 @@ export default function FundingOpportunities() {
       return Number.isFinite(parsed) ? parsed : 0
     }
 
+    const getStateKey = (opportunity) =>
+      (opportunity?.state && String(opportunity.state).trim()) || (opportunity?.is_national ? "National" : null) || ""
+
     opportunities.forEach((opportunity) => {
       const zipKey = getZipKey(opportunity) ?? `zip-${groupOrder.length}`
       if (!groupedByZip.has(zipKey)) {
@@ -1146,6 +1149,16 @@ export default function FundingOpportunities() {
         .slice()
         .sort((a, b) => getTemplateOrder(a) - getTemplateOrder(b))
         .forEach((item) => ordered.push(item))
+    })
+
+    // Group by state → zip: sort so catalog displays state first, then zip within state
+    ordered.sort((a, b) => {
+      const stateA = getStateKey(a)
+      const stateB = getStateKey(b)
+      if (stateA !== stateB) return (stateA || "").localeCompare(stateB || "", undefined, { sensitivity: "base" })
+      const zipA = getZipKey(a) ?? ""
+      const zipB = getZipKey(b) ?? ""
+      return zipA.localeCompare(zipB, undefined, { numeric: true })
     })
 
     return ordered
@@ -1435,7 +1448,7 @@ export default function FundingOpportunities() {
               Crawler coverage highlights
             </p>
             <ul className="list-disc list-inside space-y-1 text-xs">
-              <li>Local crawler: 50-mile radius of profile zip codes (and student campus ZIPs).</li>
+              <li>Local crawler: 25-mile radius of profile zip codes (and student campus ZIPs).</li>
               <li>Scholarship crawler: FAFSA, Common App, and campus portals.</li>
               <li>Comprehensive crawler: 44k+ US ZIP searches, minimum 3 results per ZIP.</li>
               <li>Default view surfaces grant funds only. Adjust the Funding terms filter to review programs with match or repayment requirements.</li>

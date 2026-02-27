@@ -1359,7 +1359,7 @@ registerTool({
       `)
       
       const defaultParams = {
-        local: { radius_miles: 50, max_results: 100 },
+        local: { radius_miles: 25, max_results: 100 },
         scholarship: { max_results: 50 },
         comprehensive: { max_results: 200 },
         profile_enrichment: {},
