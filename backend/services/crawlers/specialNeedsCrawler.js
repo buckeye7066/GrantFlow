@@ -20,6 +20,9 @@ import {
   enforceCrawlerOpportunityContract,
 } from './crawlerOpportunityContract.js'
 
+const GRANTS_GOV_API = 'https://api.grants.gov/v1/api/search2'
+const GRANTS_GOV_DETAIL = 'https://www.grants.gov/search-results-detail/'
+
 /**
    * Real, verified special needs funding sources organized by category.
    * Each entry has a real URL, a real organization name, and an honest description.
@@ -479,6 +482,68 @@ function finalizeSpecialNeedsResults(rows, { facets, queryPlan }) {
     .filter(Boolean)
 }
 
+/** Fetch live special-needs/disability-related opportunities from Grants.gov. */
+async function fetchLiveSpecialNeedsOpportunities({ keywords = [], state = null } = {}) {
+  const query = (keywords.length > 0 ? keywords[0] : 'disability assistance grant').toString().trim() || 'disability assistance grant'
+  try {
+    const response = await postWithRetry(
+      GRANTS_GOV_API,
+      {
+        keyword: query,
+        oppStatuses: 'posted',
+        sortBy: 'openDate|desc',
+        rows: 15,
+        startRecordNum: 0,
+      },
+      { headers: { 'Content-Type': 'application/json' } },
+      { timeoutMs: 8000, retries: 1 },
+    )
+    let parsed = response?.data
+    if (typeof parsed === 'string') {
+      try {
+        parsed = JSON.parse(parsed)
+      } catch {
+        return []
+      }
+    }
+    const hits = parsed?.data?.oppHits ?? parsed?.oppHits ?? []
+    const rows = Array.isArray(hits) ? hits : []
+    const opportunities = []
+    for (const hit of rows) {
+      const title = hit?.title ?? hit?.oppTitle ?? null
+      if (!title) continue
+      const id = hit?.id ?? hit?.oppId ?? null
+      const number = hit?.number ?? hit?.oppNum ?? hit?.oppNumber ?? null
+      const agencyName = hit?.agencyName ?? hit?.agency ?? hit?.agencyCode ?? null
+      const closeDate = hit?.closeDate ?? hit?.close_date ?? null
+      const description = hit?.synopsis ?? hit?.description ?? null
+      const url = id != null
+        ? `${GRANTS_GOV_DETAIL}${id}`
+        : number
+          ? `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(number))}`
+          : 'https://www.grants.gov/search-grants'
+      opportunities.push({
+        title,
+        sponsor: agencyName,
+        description,
+        url,
+        opportunity_number: number,
+        amount_min: 0,
+        amount_max: 0,
+        deadline: closeDate,
+        deadline_type: closeDate ? 'fixed' : 'rolling',
+        eligibility: '',
+        is_national: true,
+        source_id: id,
+      })
+    }
+    return opportunities
+  } catch (err) {
+    console.warn('[SpecialNeedsCrawler] Grants.gov live fetch:', err?.message || err)
+    return []
+  }
+}
+
 export async function crawlSpecialNeeds(profileInput, options = {}) {
     const { profile, signals, facets, queryPlan: queryPlanFromContext } = resolveCrawlerContext(profileInput, options)
     const queryPlan =
@@ -491,6 +556,7 @@ export async function crawlSpecialNeeds(profileInput, options = {}) {
   const plannerKeywords = mergePlanKeywords([], queryPlan).slice(0, 10)
     const results = []
         const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 60
+    const profileForCrawler = profile?.signals ? profile : { ...profile, signals: signals ?? {} }
 
     if (!signals) {
           console.error('[SpecialNeedsCrawler] No signals in profile - cannot search')
@@ -566,7 +632,7 @@ export async function crawlSpecialNeeds(profileInput, options = {}) {
   // Fetch live disability/special-needs grants from Grants.gov and Benefits.gov
   try {
     const profileState = profile?.state || signals?.location?.state || null
-    const liveOpps = await fetchLiveSpecialNeedsOpportunities({ keywords: searchKeywords.slice(0, 5), state: profileState })
+    const liveOpps = await fetchLiveSpecialNeedsOpportunities({ keywords: plannerKeywords.slice(0, 5), state: profileState })
     for (const liveOpp of liveOpps) {
       const { score, reasons } = calculateMatchScore(liveOpp, profileForCrawler)
       if (score >= minMatchScore) {

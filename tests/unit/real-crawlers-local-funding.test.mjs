@@ -73,7 +73,7 @@ async function fetchJson(url, init) {
   return { status: res.status, json }
 }
 
-test('real crawler: local_funding returns 400 when canonical section context is missing', async () => {
+test('real crawler: local_funding runs with minimal profile (sparse context allowed for directory + DB fallback)', async () => {
   const srv = startServer()
   const { port } = await srv.ready
 
@@ -130,11 +130,10 @@ test('real crawler: local_funding returns 400 when canonical section context is 
       }),
     })
 
-    assert.equal(run.status, 400)
-    assert.equal(run.json?.success, false)
-    assert.equal(run.json?.error, 'PROFILE_CONTEXT_INCOMPLETE')
-    const requiredMissing = run.json?.details?.required_missing ?? run.json?.debug?.required_missing ?? []
-    assert.ok(Array.isArray(requiredMissing))
+    // Sparse/minimal profile is allowed: run proceeds for directory + DB fallback (no 400).
+    assert.equal(run.status, 200)
+    assert.ok(Array.isArray(run.json?.opportunities))
+    assert.ok(typeof run.json?.total_found === 'number')
   } finally {
     await srv.stop()
   }

@@ -458,16 +458,19 @@ function buildDirectoryResources({ profile, anchors, profileState, profileCity, 
   const anchorList = Array.isArray(anchors) && anchors.length > 0 ? anchors : []
   const fallbackCity = profileCity || null
   const fallbackState = profileState || null
+  // Always include at least one anchor so directory resources (Benefits.gov, United Way, etc.) are returned
+  // even when profile has no ZIP/state/city (per rule: directory-style resources must survive).
+  const fallbackAnchor = {
+    zip: targetZip ?? null,
+    coords: { city: fallbackCity, state: fallbackState },
+    kind: 'profile',
+  }
   const effectiveAnchors =
     anchorList.length > 0
       ? anchorList
-      : [
-          {
-            zip: targetZip ?? null,
-            coords: { city: fallbackCity, state: fallbackState },
-            kind: 'profile',
-          },
-        ].filter((a) => a.zip || a.coords?.city || a.coords?.state)
+      : fallbackAnchor.zip || fallbackAnchor.coords?.city || fallbackAnchor.coords?.state
+        ? [fallbackAnchor]
+        : [fallbackAnchor] // No location: still emit one anchor so we return national/state-agnostic directory entries
 
   for (const anchor of effectiveAnchors) {
     const city = anchor?.coords?.city || fallbackCity || null

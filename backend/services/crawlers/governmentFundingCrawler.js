@@ -267,6 +267,8 @@ export async function crawlGovernmentFunding(profileInput, options = {}) {
 
   // De-dupe tracker across all sources
   const seenTitles = new Set()
+  // Below-threshold fallback: when no results pass min_score, return top by score (avoid 0 when we have candidates)
+  const belowThreshold = []
 
   // === GRANTS.GOV: Run ALL strategies in parallel ===
   try {
@@ -281,17 +283,19 @@ export async function crawlGovernmentFunding(profileInput, options = {}) {
                         if (titleKey) seenTitles.add(titleKey)
 
               const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profileForCrawler)
-
+              const row = {
+                ...opp,
+                match_score: matchScore,
+                match_reasons: reasons,
+                matched_signals: matchedSignals,
+                crawler_type: 'government_funding',
+                funding_level: 'federal',
+                source: 'Grants.gov',
+              }
               if (matchScore >= minMatchScore) {
-                            results.push({
-                                            ...opp,
-                                            match_score: matchScore,
-                                            match_reasons: reasons,
-                                            matched_signals: matchedSignals,
-                                            crawler_type: 'government_funding',
-                                            funding_level: 'federal',
-                                            source: 'Grants.gov',
-                            })
+                results.push(row)
+              } else {
+                belowThreshold.push(row)
               }
             }
   } catch (error) {
@@ -387,6 +391,14 @@ export async function crawlGovernmentFunding(profileInput, options = {}) {
                               console.error(`[GovernmentCrawler] State portal error:`, error.message)
                   }
         }
+
+  // When no results pass threshold but we have Grants.gov candidates, return top by score (avoid 0)
+  if (results.length === 0 && belowThreshold.length > 0) {
+    belowThreshold.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+    const top = belowThreshold.slice(0, 20)
+    results.push(...top)
+    console.log(`[GovernmentCrawler] Score fallback: ${top.length} opportunities (best score ${top[0]?.match_score ?? 0}, min_score=${minMatchScore})`)
+  }
 
   // Sort by match score
   results.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))

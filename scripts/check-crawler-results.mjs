@@ -61,9 +61,9 @@ const pipelineCount = db.prepare('SELECT COUNT(*) as count FROM grants').get()
 console.log(`\n=== PIPELINE ENTRIES (GRANTS) ===`)
 console.log(`Total grant items: ${pipelineCount.count}`)
 
-// Check grants by organization/profile
+// Check grants by organization/profile (organizations.name, not display_name)
 const grantsByOrg = db.prepare(`
-  SELECT o.display_name, COUNT(g.id) as count
+  SELECT o.name, COUNT(g.id) as count
   FROM organizations o
   LEFT JOIN grants g ON o.id = g.organization_id
   GROUP BY o.id
@@ -74,13 +74,13 @@ const grantsByOrg = db.prepare(`
 if (grantsByOrg.length > 0) {
   console.log('\nOrganizations with grants:')
   grantsByOrg.forEach(org => {
-    console.log(`  - ${org.display_name}: ${org.count} grants`)
+    console.log(`  - ${org.name}: ${org.count} grants`)
   })
 }
 
-// Check recent grants added
+// Check recent grants added (organizations.name)
 const recentGrants = db.prepare(`
-  SELECT g.title, g.status, g.notes, o.display_name
+  SELECT g.title, g.status, g.notes, o.name
   FROM grants g
   JOIN organizations o ON g.organization_id = o.id
   WHERE g.notes LIKE '%Auto-added%'
@@ -92,7 +92,7 @@ if (recentGrants.length > 0) {
   console.log('\nRecent auto-added grants:')
   recentGrants.forEach(g => {
     console.log(`  - ${g.title}`)
-    console.log(`    Org: ${g.display_name}`)
+    console.log(`    Org: ${g.name}`)
     console.log(`    Status: ${g.status}`)
   })
 }

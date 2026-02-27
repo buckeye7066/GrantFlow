@@ -245,7 +245,7 @@ function tokenizeFacetTerms(values = []) {
 'help', 'need', 'general', 'special', 'local', 'national',
 'plan', 'fund', 'grant', 'money', 'bank', 'credit', 'loan',
 'start', 'open', 'build', 'make', 'create',
-'resource', 'free', 'apply', 'person', 'people'eople',
+'resource', 'free', 'apply', 'person', 'people',
   ])
   return ensureArray(values)
     .map((v) => normalizeString(String(v || '')))
@@ -521,12 +521,15 @@ function calculateKeywordOverlap(profile, opportunity) {
   const programAreas = safeParseArrayField(profile.program_areas, []);
 
   const AMBIGUOUS_SINGLE_WORDS = new Set([
- 'food', 'care', 'home', 'house', 'school', 'community',
-'child', 'children', 'work', 'service', 'support', 'program',
-'help', 'need', 'general', 'special', 'local', 'national',
-'plan', 'fund', 'grant', 'money', 'bank', 'credit', 'loan',
-'start', 'open', 'build', 'make', 'create',
-'resource', 'free', 'apply', 'person', 'people'
+    'food', 'care', 'home', 'house', 'school', 'community',
+    'child', 'children', 'work', 'service', 'support', 'program',
+    'help', 'need', 'general', 'special', 'local', 'national',
+    'plan', 'fund', 'grant', 'money', 'bank', 'credit', 'loan',
+    'start', 'open', 'build', 'make', 'create',
+    'resource', 'free', 'apply', 'person', 'people',
+  ]);
+
+  const allTerms = [
     ...phraseSet,
     ...interestSet,
     ...demographicSet,
