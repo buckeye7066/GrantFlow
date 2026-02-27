@@ -39,10 +39,14 @@ export function isValidHttpUrl(value) {
     // Master prompt: no placeholders -- reject example.com, example.org, example.gov, placeholder
     const host = (parsed.hostname || '').toLowerCase()
     if (
-      host.includes('example.com') ||
-      host.includes('example.org') ||
-      host.includes('example.gov') ||
-      host.includes('placeholder')
+      host === 'example.com' ||
+      host.endsWith('.example.com') ||
+      host === 'example.org' ||
+      host.endsWith('.example.org') ||
+      host === 'example.gov' ||
+      host.endsWith('.example.gov') ||
+      host === 'placeholder' ||
+      host.endsWith('.placeholder')
     )
       return false
     return true
