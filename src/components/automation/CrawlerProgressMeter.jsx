@@ -35,7 +35,7 @@ const JOB_TYPE_ICONS = {
 }
 
 const JOB_TYPE_LABELS = {
-  local: "Local 50-mile Sweep",
+  local: "Local 25-mile Sweep",
   scholarship: "Scholarship Intelligence",
   comprehensive: "Nationwide Crawl",
   item_search: "Item Funding Search",

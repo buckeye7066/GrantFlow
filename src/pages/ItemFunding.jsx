@@ -562,7 +562,7 @@ export default function ItemFunding() {
             </p>
             <ul className="list-disc list-inside space-y-1 text-xs">
               <li>Loans, lease-to-own offers, and match-required programs are hidden by default (toggle “Show match/loan results” to review them).</li>
-              <li>Local crawler searches within 50 miles (or the student&apos;s campus ZIP) for locality-specific aid.</li>
+              <li>Local crawler searches within 25 miles (or the student&apos;s campus ZIP) for locality-specific aid.</li>
               <li>Scholarship and Geo Crawl augment the list with verified national gift-based funding.</li>
             </ul>
           </div>

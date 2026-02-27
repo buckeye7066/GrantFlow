@@ -138,13 +138,13 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
 
     const jobs = []
     
-    // 1. Local crawler (profile zip + 50 mile radius)
+    // 1. Local crawler (profile zip + 25 mile radius)
     // Always queue local crawler for personalized geographic opportunities
     jobs.push({
       id: randomUUID(),
       type: 'local',
       profile_id: profileId,
-      parameters: { radius: 50 }
+      parameters: { radius: 25 }
     })
     
     // 2. Scholarship crawler (if student indicators exist)

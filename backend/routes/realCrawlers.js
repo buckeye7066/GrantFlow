@@ -1563,7 +1563,7 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
  */
 function getCrawlerDescription(type) {
   const descriptions = {
-    local_funding: 'Searches for funding opportunities within 50 miles of your location',
+    local_funding: 'Searches for funding opportunities within 25 miles of your location',
     government_funding: 'Finds federal, state, and local government grants and programs',
     student_grants: 'Discovers scholarships, grants, and financial aid for students',
     ecf_benefits: 'Locates ECF CHOICES benefits and disability support services',
