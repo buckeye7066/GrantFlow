@@ -1,5 +1,9 @@
 import crypto from 'crypto'
-import { isValidHttpUrl, isLoanOrMatchingFund } from './crawlers/crawlerOpportunityContract.js'
+import { isValidRealUrl, isLoanLike, isMatchingFunds } from './crawlers/opportunityPolicy.js'
+
+// Backward-compat alias
+const isValidHttpUrl = isValidRealUrl
+const isLoanOrMatchingFund = (opp) => isLoanLike(opp) || isMatchingFunds(opp)
 
 function ensureArray(value) {
   if (!value) return []
