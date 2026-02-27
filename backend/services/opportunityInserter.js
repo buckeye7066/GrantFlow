@@ -1,4 +1,5 @@
 import crypto from 'crypto'
+import { isValidHttpUrl, isLoanOrMatchingFund } from './crawlers/crawlerOpportunityContract.js'
 
 function ensureArray(value) {
   if (!value) return []
@@ -69,13 +70,24 @@ export async function upsertFundingOpportunity(db, opportunity) {
   const applicationUrl = normalizeUrl(opportunity.application_url)
   const evidenceUrl = normalizeUrl(opportunity.evidence_url ?? sourceUrl ?? applicationUrl)
 
-  // All opportunities must have at least one concrete URL for traceability and user access.
-  if (!sourceUrl && !applicationUrl && !evidenceUrl) {
+  // All opportunities must have at least one concrete valid http/https URL (no placeholders).
+  const candidateUrl = sourceUrl ?? applicationUrl ?? evidenceUrl ?? null
+  if (!candidateUrl || !isValidHttpUrl(candidateUrl)) {
     return {
       id: null,
       inserted: false,
       skipped: true,
-      reason: 'missing evidence/source/application URL',
+      reason: !candidateUrl ? 'missing evidence/source/application URL' : 'invalid or placeholder URL',
+    }
+  }
+
+  // Exclude loans, microloans, financing, and matching-fund/cost-share opportunities.
+  if (isLoanOrMatchingFund(opportunity)) {
+    return {
+      id: null,
+      inserted: false,
+      skipped: true,
+      reason: 'excluded: loan or matching-fund opportunity',
     }
   }
 

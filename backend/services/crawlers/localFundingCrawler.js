@@ -205,7 +205,8 @@ export async function crawlLocalFunding(profileInput, options = {}) {
     })
   const results = []
   const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 60
-  const radiusMiles = typeof options.radius_miles === 'number' ? Math.max(1, Math.min(100, options.radius_miles)) : DEFAULT_SEARCH_RADIUS_MILES
+  // Product rule: local crawler radius is always exactly 25 miles — not caller-overridable.
+  const radiusMiles = DEFAULT_SEARCH_RADIUS_MILES
   const includeDirectoryResources =
     String(options.include_directory_resources ?? 'true').toLowerCase() !== 'false'
 

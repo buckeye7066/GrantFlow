@@ -120,7 +120,17 @@ function isValidHttpUrl(value) {
   if (typeof value !== 'string' || value.trim().length === 0) return false
   try {
     const parsed = new URL(value)
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
+    // Reject placeholder/example domains per product rules.
+    const host = (parsed.hostname || '').toLowerCase()
+    if (
+      host.includes('example.com') ||
+      host.includes('example.org') ||
+      host.includes('example.gov') ||
+      host.includes('placeholder')
+    )
+      return false
+    return true
   } catch {
     return false
   }
