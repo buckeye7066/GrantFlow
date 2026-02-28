@@ -222,6 +222,57 @@ function buildExhaustiveStrategies(profile) {
           }
         }
 
+  // === INDIVIDUAL-FOCUSED STRATEGIES ===
+  // Grants.gov mostly funds organizations, but many programs directly serve individuals.
+  // For individual/family profiles, add searches for these programs explicitly.
+  const isIndividualProfile =
+    applicantTypes.some(t => ['individual', 'individual_need', 'family', 'medical_assistance'].includes(t)) ||
+    clean(signals?.profileType || '').includes('individual')
+
+  if (isIndividualProfile) {
+    // Core assistance programs that serve individuals
+    const individualPrograms = [
+      { label: 'ind:health-center', query: 'community health center' },
+      { label: 'ind:mental-health', query: 'mental health services grant' },
+      { label: 'ind:disability', query: 'disability services independent living' },
+      { label: 'ind:housing', query: 'housing assistance homeless prevention' },
+      { label: 'ind:energy', query: 'LIHEAP energy assistance low income' },
+      { label: 'ind:food', query: 'food assistance nutrition program' },
+      { label: 'ind:workforce', query: 'workforce development job training' },
+      { label: 'ind:substance', query: 'substance abuse treatment services' },
+      { label: 'ind:childcare', query: 'child care head start early childhood' },
+    ]
+
+    // State-specific individual programs
+    if (state) {
+      individualPrograms.push(
+        { label: 'ind:state-assist', query: `${state} assistance benefits program` },
+        { label: 'ind:state-health', query: `${state} health services community` },
+        { label: 'ind:state-housing', query: `${state} housing community development` },
+      )
+    }
+
+    // Add Appalachian-specific for WV, KY, TN, VA, NC, GA, AL, MS, OH, PA, MD, SC
+    const appalachianStates = new Set(['WV', 'KY', 'TN', 'VA', 'NC', 'GA', 'AL', 'MS', 'OH', 'PA', 'MD', 'SC'])
+    if (state && appalachianStates.has(state)) {
+      individualPrograms.push(
+        { label: 'ind:appalachian', query: 'Appalachian regional commission community' },
+        { label: 'ind:rural', query: 'rural development community facilities' },
+      )
+    }
+
+    // Cross with health/disability signals
+    if (health.length > 0) {
+      individualPrograms.push(
+        { label: 'ind:health-specific', query: `${health[0]} patient assistance program` },
+      )
+    }
+
+    for (const prog of individualPrograms) {
+      strategies.push(prog)
+    }
+  }
+
   // === FALLBACK ===
   if (strategies.length === 0) {
             const allKeywords = buildSearchKeywords(profile, 10)
@@ -237,8 +288,8 @@ function buildExhaustiveStrategies(profile) {
                   return true
         })
 
-  // Cap at 12 strategies to stay within timeout budget (12 parallel API calls, 8s each, ~12s total with concurrency)
-  return unique.slice(0, 12)
+  // Cap at 20 strategies to stay within timeout budget (batch of 3, ~400ms delay, ~20s total with dual API)
+  return unique.slice(0, 20)
 }
 
 function finalizeGovernmentResults(rows, { facets, queryPlan }) {
@@ -329,10 +380,13 @@ export async function crawlGovernmentFunding(profileInput, options = {}) {
       console.log('[GovernmentCrawler] All strategies returned 0 — running broad state fallback')
       const broadQuery = `${profileState} grant assistance`
       const { opportunities: broadOpps } = await searchGrants(broadQuery, { rows: 25 })
-      for (const opp of broadOpps) {
-        const titleKey = (opp.title || '').toLowerCase().trim()
-        if (!titleKey || seenTitles.has(titleKey)) continue
-        seenTitles.add(titleKey)
+      console.log(`[GovernmentCrawler] Broad fallback returned ${broadOpps?.length ?? 0} raw hits`)
+      for (const opp of broadOpps ?? []) {
+        const title = opp?.title ?? null
+        if (!title) continue
+        const titleKey = title.toLowerCase().trim()
+        if (titleKey && seenTitles.has(titleKey)) continue
+        if (titleKey) seenTitles.add(titleKey)
         const decorated = { ...opp, _discovery_strategy: 'broad_state_fallback' }
         if (!enforceOpportunityPolicy(decorated).ok) continue
         const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(decorated, profileForCrawler)
@@ -346,11 +400,8 @@ export async function crawlGovernmentFunding(profileInput, options = {}) {
           source: 'Grants.gov',
         })
       }
-      if (broadOpps.length > 0) {
-        console.log(`[GovernmentCrawler] Broad fallback returned ${broadOpps.length} opportunities`)
-      }
     } catch (broadErr) {
-      console.error('[GovernmentCrawler] Broad fallback error:', broadErr?.message ?? broadErr)
+      console.error('[GovernmentCrawler] Broad fallback error:', broadErr?.message ?? broadErr, broadErr?.requestUrl || '')
     }
   }
 
@@ -462,14 +513,17 @@ export async function crawlGovernmentFunding(profileInput, options = {}) {
 }
 
 /**
- * Run ALL strategies against Grants.gov via the resilient client (legacy + Simpler API).
+ * Run ALL strategies against Grants.gov in parallel.
+ * Each strategy gets its own API call with focused keywords.
  */
 async function searchGrantsGovExhaustive(strategies) {
+  // Delegate to the dual-API client (legacy + simpler.grants.gov)
   const { opportunities, diagnostics } = await searchGrantsBatch(strategies, {
     batchSize: 3,
     batchDelayMs: 400,
     rowsPerQuery: 25,
   })
+
   console.log(`[GovernmentCrawler] Dual-API batch: ${opportunities.length} unique results from ${strategies.length} strategies`)
   if (diagnostics?.per_strategy) {
     const summary = Object.entries(diagnostics.per_strategy)
@@ -477,6 +531,7 @@ async function searchGrantsGovExhaustive(strategies) {
       .join(', ')
     console.log(`[GovernmentCrawler] Per-strategy: ${summary}`)
   }
+
   return opportunities
 }
 
