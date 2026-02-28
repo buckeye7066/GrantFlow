@@ -16,6 +16,7 @@
  */
 import { buildSearchKeywords, calculateMatchScore, filterByDeadline } from './crawlerHelpers.js'
 import { getWithRetry } from './httpClient.js'
+import { searchGrants } from './grantsGovClient.js'
 import { planCrawlerQueries } from './queryPlanner.js'
 import {
   resolveCrawlerContext,
@@ -266,49 +267,42 @@ const SIGNAL_SPECIFIC_SCHOLARSHIPS = {
 
 
 /**
- * Fetch live student grant opportunities from Grants.gov API.
- * Queries the education category (ED) and matches to profile signals.
+ * Fetch live student grant opportunities from Grants.gov (resilient client).
+ * Queries education-related keywords and maps to crawler opportunity shape.
  */
 async function fetchLiveStudentOpportunities({ keywords = [], state = null }) {
-  const results = []
   const keyword = keywords.slice(0, 3).join(' ') || 'education scholarship grant'
   try {
-    const payload = {
-      rows: 20,
-      oppStatuses: 'posted|forecasted',
-      keyword,
-      startRecordNum: 0,
-      fundingCategories: 'ED', // Education
+    const { ok, opportunities: grantOpps } = await searchGrants(keyword, { rows: 20 })
+    if (!ok) {
+      console.warn('[StudentGrantsCrawler] Grants.gov APIs failed for live fetch')
+      return []
     }
-    const response = await getWithRetry(
-      'https://api.grants.gov/v1/api/search2',
-      { method: 'POST', data: payload, headers: { 'Content-Type': 'application/json', Accept: 'application/json' } },
-      { timeoutMs: 10000, retries: 1 },
-    )
-    const hits = response?.data?.oppHits ?? response?.data?.data?.oppHits ?? []
-    for (const opp of Array.isArray(hits) ? hits.slice(0, 15) : []) {
+    const results = []
+    for (const opp of (grantOpps || []).slice(0, 15)) {
       if (!opp?.title) continue
       results.push({
         title: opp.title,
-        sponsor: opp.agencyName || opp.agency || 'Federal Agency',
-        description: opp.synopsis || 'Federal education grant opportunity. Visit Grants.gov for eligibility and application details.',
-        url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
-        application_url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
-        source_url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
+        sponsor: opp.sponsor || 'Federal Agency',
+        description: opp.description || 'Federal education grant opportunity. Visit Grants.gov for eligibility and application details.',
+        url: opp.url || opp.application_url || 'https://www.grants.gov',
+        application_url: opp.application_url || opp.url || 'https://www.grants.gov',
+        source_url: opp.source_url || opp.url || 'https://www.grants.gov',
         state: state || 'nationwide',
         is_national: true,
         opportunity_type: 'grant',
-        deadline_type: opp.closeDate ? 'fixed' : 'rolling',
-        deadline: opp.closeDate || null,
+        deadline_type: opp.deadline_type || 'rolling',
+        deadline: opp.deadline || null,
         categories: ['education', 'federal', 'student'],
         keywords: ['education', 'federal', 'grant', 'student', ...keywords.slice(0, 3)],
         source: 'grants.gov',
       })
     }
+    return results
   } catch (err) {
     console.error('[StudentGrantsCrawler] Grants.gov fetch error:', err.message)
+    return []
   }
-  return results
 }
 
 function finalizeStudentResults(rows, { facets, queryPlan }) {
@@ -322,7 +316,6 @@ function finalizeStudentResults(rows, { facets, queryPlan }) {
       }),
     )
     .filter(Boolean)
-    .filter((row) => enforceOpportunityPolicy(row).ok)
 }
 
 export async function crawlStudentGrants(profileInput, options = {}) {
@@ -337,17 +330,16 @@ export async function crawlStudentGrants(profileInput, options = {}) {
     const results = []
         const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 60
 
+  // Null/missing signals must not disqualify; use minimal fallback
   const effectiveSignals = signals ?? profile?.signals ?? {
     keywordSet: new Set(),
     demographics: new Set(),
     applicantTypes: new Set(),
   }
   const profileForCrawler = profile.signals ? profile : { ...profile, signals: effectiveSignals }
-  const profileContext = { profile: profileForCrawler, sections: profile?.sections ?? {}, signals: effectiveSignals, facets: facets ?? {} }
+
+  // Extract FAFSA/need-based signals from profile sections and signals
   const fafsaSignals = extractFafsaSignals(profile, effectiveSignals)
-  if (fafsaSignals.highNeed || fafsaSignals.pellEligible) {
-    console.log('[StudentGrantsCrawler] FAFSA context:', { pellEligible: fafsaSignals.pellEligible, highNeed: fafsaSignals.highNeed, dependencyStatus: fafsaSignals.dependencyStatus })
-  }
 
   // Check if this is a student profile
   if (!isStudentProfile(profile)) {
@@ -400,7 +392,7 @@ export async function crawlStudentGrants(profileInput, options = {}) {
         // Apply policy before scoring
         if (!enforceOpportunityPolicy(aid).ok) continue
 
-      const { score: matchScore, reasons } = calculateMatchScore(profileContext, aid)
+      const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(aid, profileForCrawler)
 
       // Federal aid bonus - these are real, substantial programs
       const adjustedScore = Math.min(100, matchScore + 10)
@@ -409,7 +401,7 @@ export async function crawlStudentGrants(profileInput, options = {}) {
                           ...aid,
                           match_score: adjustedScore,
                           match_reasons: [...reasons, 'Federal student aid program'],
-                          matched_signals: [],
+                          matched_signals: matchedSignals,
                           crawler_type: 'student_grants',
                           source: 'Federal Student Aid',
                 })
@@ -418,10 +410,10 @@ export async function crawlStudentGrants(profileInput, options = {}) {
 
   // === 2. SIGNAL-SPECIFIC SCHOLARSHIPS ===
   // For every applicable signal, include matching scholarships
-  const demographicSignals = Array.from(signals.demographics || [])
-    const healthSignals = Array.from(signals.health || [])
-    const familySignals = Array.from(signals.family || [])
-    const genderSignals = Array.from(signals.genders || [])
+  const demographicSignals = Array.from(effectiveSignals.demographics || [])
+    const healthSignals = Array.from(effectiveSignals.health || [])
+    const familySignals = Array.from(effectiveSignals.family || [])
+    const genderSignals = Array.from(effectiveSignals.genders || [])
 
   // Map signal values to scholarship categories
   const signalCategoryMap = {
@@ -462,7 +454,7 @@ export async function crawlStudentGrants(profileInput, options = {}) {
           // Apply policy before scoring
           if (!enforceOpportunityPolicy(opp).ok) continue
 
-          const { score: matchScore, reasons } = calculateMatchScore(profileContext, opp)
+          const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profileForCrawler)
 
           // Signal-specific bonus: we know this matches the student's profile
           const adjustedScore = Math.min(100, matchScore + 15)
@@ -471,7 +463,7 @@ export async function crawlStudentGrants(profileInput, options = {}) {
                                           ...opp,
                                           match_score: adjustedScore,
                                           match_reasons: [...reasons, `Signal-specific scholarship: ${category.replace(/_/g, ' ')}`],
-                                          matched_signals: [],
+                                          matched_signals: matchedSignals,
                                           crawler_type: 'student_grants',
                                           source: scholarship.sponsor,
                               })
@@ -503,13 +495,13 @@ export async function crawlStudentGrants(profileInput, options = {}) {
               opportunity_type: 'directory',
       }
 
-      const { score: matchScore, reasons } = calculateMatchScore(profileContext, opp)
+      const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profileForCrawler)
 
       results.push({
               ...opp,
               match_score: Math.max(minMatchScore, matchScore),
               match_reasons: [...reasons, 'Scholarship search engine'],
-              matched_signals: [],
+              matched_signals: matchedSignals,
               crawler_type: 'student_grants',
               source: source.name,
               is_directory_resource: true,
@@ -557,7 +549,7 @@ export async function crawlStudentGrants(profileInput, options = {}) {
       // Apply policy before scoring
       if (!enforceOpportunityPolicy(opp).ok) continue
 
-      const { score: matchScore, reasons } = calculateMatchScore(profileContext, opp)
+      const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profileForCrawler)
 
       // School-specific bonus
       const adjustedScore = Math.min(100, matchScore + 10)
@@ -566,7 +558,7 @@ export async function crawlStudentGrants(profileInput, options = {}) {
                           ...opp,
                           match_score: adjustedScore,
                           match_reasons: [...reasons, `School-specific: ${school}`],
-                          matched_signals: [],
+                          matched_signals: matchedSignals,
                           crawler_type: 'student_grants',
                           source: `${school} Financial Aid`,
                           school_specific: true,
@@ -575,13 +567,14 @@ export async function crawlStudentGrants(profileInput, options = {}) {
   }
 
 
+  // Fetch live education grants from Grants.gov and merge into results
   try {
     const profileState = profile?.state || effectiveSignals?.location?.state || null
     const liveOpps = await fetchLiveStudentOpportunities({ keywords: searchKeywords.slice(0, 5), state: profileState })
     for (const liveOpp of liveOpps) {
       if (isStudentLoan(liveOpp)) continue
       if (!enforceOpportunityPolicy(liveOpp).ok) continue
-      const { score, reasons } = calculateMatchScore(profileContext, liveOpp)
+      const { score, reasons } = calculateMatchScore(liveOpp, profileForCrawler)
       if (score >= minMatchScore) {
         results.push({ ...liveOpp, match_score: score, match_reasons: reasons, source: 'grants.gov' })
       }
@@ -596,27 +589,6 @@ export async function crawlStudentGrants(profileInput, options = {}) {
 
   console.log(`[StudentGrantsCrawler] Found ${results.length} student opportunities with ${minMatchScore}%+ match`)
     return finalizeStudentResults(results, { facets, queryPlan })
-}
-
-/**
- * Extract FAFSA/financial-aid indicators from profile for federal and state aid inclusion.
- * @returns {{ pellEligible: boolean, highNeed: boolean, dependencyStatus: string|null }}
- */
-function getFafsaSignals(profile, signals) {
-  const sections = profile?.sections ?? {}
-  const fin = sections?.financial_information ?? {}
-  const needLevel = fin.financial_need_level ?? signals?.financial?.needLevel ?? ''
-  const highNeed = ['High', 'Critical', 'Extreme'].includes(String(needLevel))
-  const pellEligible =
-    highNeed ||
-    Boolean(signals?.assistance?.has?.('high_financial_need')) ||
-    Boolean(signals?.assistance?.has?.('low_income')) ||
-    Boolean(fin.pell_eligible) ||
-    String(fin.fafsa_filed ?? '').toLowerCase() === 'yes' ||
-    String(fin.fafsa_filed ?? '').toLowerCase() === 'true'
-  const dependencyStatus =
-    fin.dependency_status ?? fin.fafsa_dependency ?? profile?.dependency_status ?? null
-  return { pellEligible, highNeed, dependencyStatus: dependencyStatus ? String(dependencyStatus) : null }
 }
 
 function isStudentProfile(profile) {

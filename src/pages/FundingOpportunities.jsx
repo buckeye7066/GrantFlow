@@ -10,6 +10,7 @@ import {
   ExternalLink,
   FileText,
   Filter,
+  Globe,
   Layers,
   Loader2,
   MapPin,
@@ -44,6 +45,7 @@ import { apiFetch } from "@/api/client"
 import { cn } from "@/lib/utils"
 import { formatAddress, createPageUrl } from "@/utils"
 import { env } from "@/config/env.js"
+import GeoFundingView from "@/components/funding/GeoFundingView"
 
 const NOT_AVAILABLE = 'N/A'
 
@@ -992,6 +994,7 @@ export default function FundingOpportunities() {
   const [savingOpportunityId, setSavingOpportunityId] = useState(null)
   const [creatingVNextOpportunityId, setCreatingVNextOpportunityId] = useState(null)
   const [currentPage, setCurrentPage] = useState(1)
+  const [viewMode, setViewMode] = useState("list") // "list" | "geo"
   const ITEMS_PER_PAGE = 50
 
   React.useEffect(() => {
@@ -1584,6 +1587,32 @@ export default function FundingOpportunities() {
 
             <div className="flex items-center justify-between gap-3 border-t border-slate-100 pt-4">
               <div className="flex items-center gap-3">
+                <div className="inline-flex items-center rounded-lg border border-slate-200 p-0.5">
+                  <button
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                      viewMode === "list"
+                        ? "bg-slate-900 text-white shadow-sm"
+                        : "text-slate-600 hover:text-slate-900 hover:bg-slate-100",
+                    )}
+                    onClick={() => setViewMode("list")}
+                  >
+                    <Layers className="w-3.5 h-3.5" />
+                    List
+                  </button>
+                  <button
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                      viewMode === "geo"
+                        ? "bg-slate-900 text-white shadow-sm"
+                        : "text-slate-600 hover:text-slate-900 hover:bg-slate-100",
+                    )}
+                    onClick={() => setViewMode("geo")}
+                  >
+                    <Globe className="w-3.5 h-3.5" />
+                    Browse by Zip
+                  </button>
+                </div>
                 <div className="flex items-center gap-2">
                   <Switch
                     id="national-switch"
@@ -1621,6 +1650,12 @@ export default function FundingOpportunities() {
         </Card>
       </header>
 
+      {viewMode === "geo" ? (
+        <GeoFundingView
+          profileId={filters.profileId !== "all" ? filters.profileId : null}
+        />
+      ) : (
+      <>
       {fallbackApplied ? (
         <Alert className="border-amber-200 bg-amber-50/70">
           <AlertTitle className="text-amber-900">No grant-only results for these filters</AlertTitle>
@@ -1783,6 +1818,8 @@ export default function FundingOpportunities() {
             </Link>
           </CardContent>
         </Card>
+      )}
+      </>
       )}
 
       <OpportunityDetail

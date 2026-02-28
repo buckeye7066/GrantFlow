@@ -11,6 +11,7 @@ import zipcodes from 'zipcodes'
 import { buildSearchKeywords, filterByDeadline } from './crawlerHelpers.js'
 import { calculateMatchScore } from '../matchingEngine.js'
 import { getWithRetry } from './httpClient.js'
+import { searchGrants } from './grantsGovClient.js'
 import { planCrawlerQueries } from './queryPlanner.js'
 import {
   resolveCrawlerContext,
@@ -648,65 +649,54 @@ async function searchLocalSource(source, coords, profile, searchKeywords, meta =
   try {
     switch (source.type) {
       case 'benefits_gov': {
-        // Benefits.gov eligibility API - search for programs by state
+        // Search Grants.gov for state assistance/benefits programs (resilient client)
         if (!profileState) break
-        const stateParam = encodeURIComponent(profileState)
-        // Use Benefits.gov program search - filter by state
-        const url = `https://www.benefits.gov/api/benefits?state=${stateParam}&pageSize=20`
-        const response = await getWithRetry(url, {}, { timeoutMs: 8000, retries: 1 })
-        const programs = response?.data?.programs ?? response?.data ?? []
-        if (!Array.isArray(programs)) break
-        for (const prog of programs.slice(0, 15)) {
-          if (!prog?.title && !prog?.name) continue
-          opportunities.push({
-            title: prog.title || prog.name,
-            sponsor: prog.agency || prog.agencyName || 'Benefits.gov',
-            description: prog.summary || prog.description || 'State/local assistance program. Visit Benefits.gov for eligibility details.',
-            url: prog.url || prog.applyUrl || `https://www.benefits.gov/benefit/${prog.id || ''}`,
-            application_url: prog.applyUrl || prog.url || 'https://www.benefits.gov',
-            source_url: prog.url || 'https://www.benefits.gov',
-            state: profileState,
-            opportunity_type: 'program',
-            deadline_type: 'rolling',
-            is_national: false,
-            categories: prog.categories || ['local', 'assistance'],
-            keywords: [profileState, 'benefits', 'assistance', ...(searchKeywords.slice(0, 5))],
-            latitude: coords?.lat ?? null,
-            longitude: coords?.lng ?? null,
-          })
+        try {
+          const { opportunities: grantOpps } = await searchGrants(`${profileState} benefits assistance program`, { rows: 15 })
+          for (const opp of (grantOpps || []).slice(0, 10)) {
+            if (!opp?.title) continue
+            opportunities.push({
+              title: opp.title,
+              sponsor: opp.sponsor || 'Federal/State Agency',
+              description: opp.description,
+              url: opp.url || opp.application_url,
+              application_url: opp.application_url || opp.url,
+              source_url: opp.source_url || opp.url,
+              state: profileState,
+              opportunity_type: 'program',
+              deadline_type: opp.deadline_type || 'rolling',
+              deadline: opp.deadline || null,
+              is_national: false,
+              categories: ['benefits', 'government_assistance', 'local'],
+              keywords: [profileState, 'benefits', 'assistance', ...(searchKeywords.slice(0, 5))],
+              latitude: coords?.lat ?? null,
+              longitude: coords?.lng ?? null,
+            })
+          }
+        } catch (err) {
+          console.warn('[LocalFundingCrawler] benefits_gov grants.gov search failed:', err?.message || err)
         }
         break
       }
 
       case 'community_foundation': {
-        // Query Grants.gov API for community/local grants in this state
+        // Query Grants.gov for community/local grants in this state (resilient client)
         if (!profileState) break
         const stateKeyword = `${profileState} community foundation grant`
-        const payload = {
-          rows: 15,
-          oppStatuses: 'posted|forecasted',
-          keyword: stateKeyword,
-          startRecordNum: 0,
-        }
-        const response = await getWithRetry(
-          'https://api.grants.gov/v1/api/search2',
-          { method: 'POST', data: payload, headers: { 'Content-Type': 'application/json' } },
-          { timeoutMs: 10000, retries: 1 }
-        )
-        const hits = response?.data?.oppHits ?? response?.data?.data?.oppHits ?? []
-        for (const opp of (Array.isArray(hits) ? hits : []).slice(0, 10)) {
+        const { opportunities: grantOpps } = await searchGrants(stateKeyword, { rows: 15 })
+        for (const opp of (grantOpps || []).slice(0, 10)) {
           if (!opp?.title) continue
           opportunities.push({
-            title: opp.title || opp.opportunityTitle,
-            sponsor: opp.agencyName || opp.agency || 'Federal/State Agency',
-            description: opp.synopsis || opp.description || 'Federal grant opportunity. Visit Grants.gov for details.',
-            url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
-            application_url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
-            source_url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
+            title: opp.title,
+            sponsor: opp.sponsor || 'Federal/State Agency',
+            description: opp.description,
+            url: opp.url || opp.application_url,
+            application_url: opp.application_url || opp.url,
+            source_url: opp.source_url || opp.url,
             state: profileState,
             opportunity_type: 'grant',
-            deadline_type: opp.closeDate ? 'fixed' : 'rolling',
-            deadline: opp.closeDate || null,
+            deadline_type: opp.deadline_type || 'rolling',
+            deadline: opp.deadline || null,
             is_national: false,
             categories: ['community', 'foundation', 'local'],
             keywords: [profileState, 'community', 'grant', ...(searchKeywords.slice(0, 4))],
@@ -714,33 +704,30 @@ async function searchLocalSource(source, coords, profile, searchKeywords, meta =
             longitude: coords?.lng ?? null,
           })
         }
+        if ((grantOpps || []).length === 0) {
+          console.warn('[LocalFundingCrawler] community_foundation: grants.gov returned 0 hits')
+        }
         break
       }
 
       case 'community_action': {
-        // Search Grants.gov for CSBG (Community Services Block Grant) and CAP-related funding
+        // Search Grants.gov for CSBG/CAP-related funding (resilient client)
         if (!profileState) break
         const keyword = `${profileState} community services block grant assistance`
-        const payload = { rows: 10, oppStatuses: 'posted|forecasted', keyword, startRecordNum: 0 }
-        const response = await getWithRetry(
-          'https://api.grants.gov/v1/api/search2',
-          { method: 'POST', data: payload, headers: { 'Content-Type': 'application/json' } },
-          { timeoutMs: 10000, retries: 1 }
-        )
-        const hits = response?.data?.oppHits ?? response?.data?.data?.oppHits ?? []
-        for (const opp of (Array.isArray(hits) ? hits : []).slice(0, 8)) {
+        const { opportunities: grantOpps } = await searchGrants(keyword, { rows: 10 })
+        for (const opp of (grantOpps || []).slice(0, 8)) {
           if (!opp?.title) continue
           opportunities.push({
             title: opp.title,
-            sponsor: opp.agencyName || 'HHS / Community Action',
-            description: opp.synopsis || 'Community action grant. Visit Grants.gov for eligibility and application details.',
-            url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
-            application_url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
-            source_url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
+            sponsor: opp.sponsor || 'HHS / Community Action',
+            description: opp.description,
+            url: opp.url || opp.application_url,
+            application_url: opp.application_url || opp.url,
+            source_url: opp.source_url || opp.url,
             state: profileState,
             opportunity_type: 'grant',
-            deadline_type: opp.closeDate ? 'fixed' : 'rolling',
-            deadline: opp.closeDate || null,
+            deadline_type: opp.deadline_type || 'rolling',
+            deadline: opp.deadline || null,
             is_national: false,
             categories: ['community', 'action', 'local', 'assistance'],
             keywords: ['community action', 'CSBG', profileState, ...(searchKeywords.slice(0, 4))],
@@ -748,39 +735,39 @@ async function searchLocalSource(source, coords, profile, searchKeywords, meta =
             longitude: coords?.lng ?? null,
           })
         }
+        if ((grantOpps || []).length === 0) {
+          console.warn('[LocalFundingCrawler] community_action: grants.gov returned 0 hits')
+        }
         break
       }
 
       case 'housing_authority': {
-        // Search Grants.gov for HUD housing programs in this state
+        // Search Grants.gov for HUD housing programs in this state (resilient client)
         if (!profileState) break
         const keyword = `${profileState} HUD housing assistance voucher`
-        const payload = { rows: 10, oppStatuses: 'posted|forecasted', keyword, startRecordNum: 0 }
-        const response = await getWithRetry(
-          'https://api.grants.gov/v1/api/search2',
-          { method: 'POST', data: payload, headers: { 'Content-Type': 'application/json' } },
-          { timeoutMs: 10000, retries: 1 }
-        )
-        const hits = response?.data?.oppHits ?? response?.data?.data?.oppHits ?? []
-        for (const opp of (Array.isArray(hits) ? hits : []).slice(0, 8)) {
+        const { opportunities: grantOpps } = await searchGrants(keyword, { rows: 10 })
+        for (const opp of (grantOpps || []).slice(0, 8)) {
           if (!opp?.title) continue
           opportunities.push({
             title: opp.title,
-            sponsor: opp.agencyName || 'HUD',
-            description: opp.synopsis || 'HUD housing assistance program. Visit Grants.gov for eligibility.',
-            url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
-            application_url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
-            source_url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
+            sponsor: opp.sponsor || 'HUD',
+            description: opp.description,
+            url: opp.url || opp.application_url,
+            application_url: opp.application_url || opp.url,
+            source_url: opp.source_url || opp.url,
             state: profileState,
             opportunity_type: 'program',
-            deadline_type: opp.closeDate ? 'fixed' : 'rolling',
-            deadline: opp.closeDate || null,
+            deadline_type: opp.deadline_type || 'rolling',
+            deadline: opp.deadline || null,
             is_national: false,
             categories: ['housing', 'local', 'HUD'],
             keywords: ['housing', 'HUD', 'voucher', profileState, ...(searchKeywords.slice(0, 3))],
             latitude: coords?.lat ?? null,
             longitude: coords?.lng ?? null,
           })
+        }
+        if ((grantOpps || []).length === 0) {
+          console.warn('[LocalFundingCrawler] housing_authority: grants.gov returned 0 hits')
         }
         break
       }
@@ -796,18 +783,16 @@ async function searchLocalSource(source, coords, profile, searchKeywords, meta =
     console.error(`[LocalFundingCrawler] searchLocalSource error for ${source.type}:`, msg)
   }
 
+  if (opportunities.length === 0 && source.type !== 'united_way' && source.type !== 'food_bank') {
+    console.warn(`[LocalFundingCrawler] Source "${source.type}" returned 0 live results for state=${coords?.state}`)
+  } else if (opportunities.length > 0) {
+    console.log(`[LocalFundingCrawler] Source "${source.type}" returned ${opportunities.length} results`)
+  }
+
   return opportunities
 }
 
-function isLoanOrMatchingFund(opportunity) {
-  const loanKeywords = ['loan', 'repay', 'interest', 'apr', 'credit']
-  const matchingKeywords = ['matching funds', 'match required', '1:1 match', 'dollar for dollar']
-  
-  const text = `${opportunity.title} ${opportunity.description} ${opportunity.eligibility}`.toLowerCase()
-  
-  return loanKeywords.some(keyword => text.includes(keyword)) ||
-         matchingKeywords.some(keyword => text.includes(keyword))
-}
+// Loan/matching-fund detection is handled by enforceOpportunityPolicy().
 
 async function getZipCoordinates(zip) {
   // Validate ZIP code format
