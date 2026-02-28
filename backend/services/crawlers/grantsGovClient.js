@@ -10,7 +10,7 @@
  * directly against the grants.gov endpoints.
  */
 
-import { postWithRetry } from './httpClient.js'
+import { getWithRetry, postWithRetry } from './httpClient.js'
 
 // ── Endpoints ──────────────────────────────────────────────────────────────────
 const LEGACY_API = 'https://api.grants.gov/v1/api/search2'
@@ -21,6 +21,11 @@ const GRANTS_GOV_DETAIL = 'https://www.grants.gov/search-results-detail/'
 const API_TIMEOUT_MS = 20_000
 const API_RETRIES = 2
 const MAX_ROWS_PER_QUERY = 25
+
+// Simpler.Grants.gov requires an API key. If SIMPLER_GRANTS_API_KEY env is set,
+// we'll include it in requests. Otherwise we skip the Simpler API entirely.
+const SIMPLER_API_KEY = process.env.SIMPLER_GRANTS_API_KEY || ''
+const SIMPLER_API_ENABLED = SIMPLER_API_KEY.length > 0
 
 // ── Normaliser (both APIs → common shape) ──────────────────────────────────────
 
@@ -215,11 +220,17 @@ async function querySimplerAPI(keyword, rows = MAX_ROWS_PER_QUERY) {
   }
 
   try {
+    const headers = { 'Content-Type': 'application/json' }
+    if (SIMPLER_API_KEY) {
+      headers['X-Auth'] = SIMPLER_API_KEY
+      headers['Authorization'] = `Bearer ${SIMPLER_API_KEY}`
+    }
+
     const response = await postWithRetry(
       SIMPLER_API,
       body,
-      { headers: { 'Content-Type': 'application/json' } },
-      { timeoutMs: API_TIMEOUT_MS, retries: API_RETRIES },
+      { headers },
+      { timeoutMs: API_TIMEOUT_MS, retries: 0 },
     )
 
     let parsed = response?.data
@@ -279,9 +290,12 @@ export async function searchGrants(keyword, opts = {}) {
   const { rows = MAX_ROWS_PER_QUERY, legacyOnly = false, simplerOnly = false } = opts
   const diagnostics = { legacy: null, simpler: null, merged: 0 }
 
+  // Skip Simpler API entirely if no API key is configured (it returns 401)
+  const skipSimpler = !SIMPLER_API_ENABLED || legacyOnly
+
   const [legacyResult, simplerResult] = await Promise.all([
     simplerOnly ? Promise.resolve({ ok: false, hits: [], error: 'skipped' }) : queryLegacyAPI(keyword, rows),
-    legacyOnly ? Promise.resolve({ ok: false, hits: [], error: 'skipped' }) : querySimplerAPI(keyword, rows),
+    skipSimpler ? Promise.resolve({ ok: false, hits: [], error: 'no_api_key' }) : querySimplerAPI(keyword, rows),
   ])
 
   diagnostics.legacy = {
