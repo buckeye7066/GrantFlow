@@ -206,6 +206,26 @@ export function enforceOpportunityPolicy(opp) {
   return { ok: true, reason: null }
 }
 
+/**
+ * Filter an array of opportunities by policy; optionally merge rejection counts into an external object.
+ * @param {object[]} opportunities
+ * @param {{ rejectionCounts?: Record<string, number> }} [opts]
+ * @returns {{ passed: object[], rejectionCounts: Record<string, number> }}
+ */
+export function filterByPolicy(opportunities, opts = {}) {
+  const outCounts = opts.rejectionCounts ?? {}
+  resetPolicyRejectionCounts()
+  const passed = (Array.isArray(opportunities) ? opportunities : []).filter((opp) => {
+    const p = enforceOpportunityPolicy(opp)
+    return p.ok
+  })
+  const counts = getPolicyRejectionCounts()
+  Object.entries(counts).forEach(([k, v]) => {
+    if (v > 0) outCounts[k] = (outCounts[k] ?? 0) + v
+  })
+  return { passed, rejectionCounts: outCounts }
+}
+
 // ─── Re-exports for backward compatibility ────────────────────────────────────
 
 export { isValidHttpUrl } from './crawlerOpportunityContract.js'

@@ -4,6 +4,8 @@ Use this as a **Cursor rule** or **master prompt** when working on GrantFlow cra
 
 **How to use:** Paste the contents (or the "Short rules summary" in §6) into a Cursor rule (e.g. `.cursor/rules/crawlers.mdc` or project rules), or paste the full doc into the chat when asking Cursor to optimize or fix crawlers. For Vercel/Railway: frontend is on Vercel (API rewrites to Railway); crawler logic runs on the backend — ensure all rules apply to backend crawlers and APIs. It encodes the product goals and constraints so that all crawler-related changes meet or exceed them.
 
+**Unified reference (implementation, tests, env, defects):** [docs/CRAWLERS.md](CRAWLERS.md)
+
 ---
 
 ## 1. Core principles
@@ -11,7 +13,7 @@ Use this as a **Cursor rule** or **master prompt** when working on GrantFlow cra
 - **Real only:** Every funding source returned or stored **must have a valid, clickable URL** (http/https). No placeholders, no example.org, no "TBD" links. Filter or drop any opportunity that lacks a URL before it reaches the UI or DB.
 - **No loans, no matching funds:** Under no circumstances surface or store loans, microloans, financing, or matching-fund/cost-share opportunities as if they were grants. Exclude them in crawlers, APIs, and listing layers (keyword + schema: `opportunity_type`, `is_loan`, `requires_match`).
 - **Profile-driven (except Geo):** All crawlers except the Geo Crawler must use **all available profile data** (sections, signals, facets, location, demographics, academics, assistance, interests, etc.) to find funding that **matches the needs of the profile** and scores at or above the **user-chosen minimum match percentage** (Discover Grants slider: 0–100%, step 5 → `min_match_score`).
-- **Slider is law:** The minimum match score from the Discover Grants slider must be respected. Only return opportunities that meet or exceed that percentage. Directory-style entry points (e.g. Benefits.gov, United Way locator) may be treated as always above threshold so users always see them, but all other results must pass the slider threshold.
+- **Slider is law (with exceptions):** The minimum match score from the Discover Grants slider must be respected for scored crawlers. **ECF and similar state benefit programs do not use the slider:** they are eligibility-based—either the profile qualifies to use that program (e.g. ECF CHOICES participant/caregiver/provider in TN) or they do not. If they qualify, return all non-loan benefits; if not, return none. Directory-style entry points may be treated as always above threshold so users always see them.
 - **Geo Crawler is not profile-based:** The Geo Crawler does not use a profile. It discovers **every real (URL-required) funding source** that has an address or association with a ZIP code, for **every ZIP code nationwide**. Counts per ZIP can be 3 (rural) to very large (e.g. Manhattan). Store results by **state**, sub-categorized by **ZIP**, in the Funding Opportunities tab.
 
 ---
@@ -36,12 +38,16 @@ Use this as a **Cursor rule** or **master prompt** when working on GrantFlow cra
   - **School list:** Applications and interested schools for school-portal URLs and school-specific aid.
 - **Output:** Only real opportunities with URLs; no loans (e.g. exclude Stafford, PLUS, private loans by keyword and type); no placeholders. Match score must meet or exceed the slider.
 
-### 2.3 Government, Health, Special Needs, ECF crawlers
+### 2.3 Government, Health, Special Needs crawlers
 
 - **Profile usage:** Use full profile (location, demographics, health, assistance, family, military, etc.) to build search strategies and score results. No result should be returned below the slider percentage unless it is an explicitly allowed directory entry.
 - **Real + relatable:** Every item must have a URL and must be relatable to the profile (scored). No placeholders; no loans; no matching funds.
 
-### 2.4 Geo Crawler
+### 2.4 ECF and similar state benefit programs
+
+- **Eligibility-based, no slider:** ECF (Tennessee ECF CHOICES) and any similar state-specific benefit programs do **not** use the Discover Grants slider. Either the profile qualifies (e.g. ECF participant, caregiver, or provider in TN) or it does not. If qualified, return all non-loan benefits that pass URL/contract checks; if not qualified, return no results. Do not filter by minimum match score for these crawlers.
+
+### 2.5 Geo Crawler
 
 - **Goal:** Find **every** real (URL-required) funding source that has an address or association **in a given ZIP code**, for **every US ZIP code** (nationwide). Not profile-based.
 - **Storage:** Store in `funding_opportunities`; associate to geography via `funding_opportunity_geo_index` (state, ZIP, county, geo_run_id). Funding Opportunities tab must list geo results **grouped by state**, **sub-categorized by ZIP** (state → ZIP ordering).
@@ -57,7 +63,7 @@ Use this as a **Cursor rule** or **master prompt** when working on GrantFlow cra
 - **Loan / matching exclusion:** In crawlers and in listing APIs, exclude by:
   - **Keywords:** loan, microloan, financing, APR, matching funds, match required, cost share, 1:1 match, dollar-for-dollar, etc.
   - **Schema:** `opportunity_type` in loan types; `is_loan = true`; `requires_match = true` where the product rule is to hide matching-fund-only opportunities.
-- **Slider:** The value from the Discover Grants “Minimum match score” slider is sent as `min_match_score` to `/api/real-crawlers/run`. Every crawler that returns scored results must filter so that returned opportunities have `match_score >= min_match_score`, except for allowed directory entries that are always shown.
+- **Slider:** The value from the Discover Grants “Minimum match score” slider is sent as `min_match_score` to `/api/real-crawlers/run`. Every crawler that returns scored results must filter so that returned opportunities have `match_score >= min_match_score`, except: (1) allowed directory entries that are always shown, and (2) ECF and similar state benefit programs—eligibility-based only; do not apply the slider (profile qualifies or does not).
 - **Profile context:** When running profile-based crawlers, pass the full profile context (from `getProfileWithLocation` / `buildProfileFacets` / `requireFacets`) and use it for keywords, strategies, and scoring. Do not ignore sections or signals that could improve relevance.
 
 ---
@@ -84,7 +90,7 @@ Use this as a **Cursor rule** or **master prompt** when working on GrantFlow cra
 ## 6. Short “rules” summary (for Cursor rules)
 
 - All funding results must have a valid URL; no placeholders, no loans, no matching funds.
-- Profile-based crawlers use full profile data and respect the Discover Grants minimum match score slider.
+- Profile-based crawlers use full profile data and respect the Discover Grants minimum match score slider, except ECF and similar state benefit programs (eligibility-based only, no slider).
 - Local crawler: 25 miles from profile ZIP and from each interested-school ZIP (students).
 - Student crawler: school portals, FAFSA-style need, GPA, test scores, gender, location; endowments/grants/scholarships only.
 - Geo crawler: every ZIP nationwide; real (URL) only; store by state and ZIP; not profile-based.

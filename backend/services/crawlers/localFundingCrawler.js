@@ -8,7 +8,8 @@
 
 import * as cheerio from 'cheerio'
 import zipcodes from 'zipcodes'
-import { buildSearchKeywords, calculateMatchScore, filterByDeadline } from './crawlerHelpers.js'
+import { buildSearchKeywords, filterByDeadline } from './crawlerHelpers.js'
+import { calculateMatchScore } from '../matchingEngine.js'
 import { getWithRetry } from './httpClient.js'
 import { planCrawlerQueries } from './queryPlanner.js'
 import {
@@ -193,6 +194,7 @@ function finalizeLocalResults(rows, { facets, queryPlan }) {
       }),
     )
     .filter(Boolean)
+    .filter((row) => enforceOpportunityPolicy(row).ok)
 }
 
 export async function crawlLocalFunding(profileInput, options = {}) {
@@ -400,25 +402,20 @@ export async function crawlLocalFunding(profileInput, options = {}) {
           }
         }
         
-        // Use comprehensive scoring with 100% of profile signals
-        const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profile)
-        
-        // Add distance bonus (closer = better)
+        const profileContext = { profile, sections: profile?.sections ?? {}, signals: profile?.signals ?? effectiveSignals, facets: facets ?? {} }
+        const { score: matchScore, reasons } = calculateMatchScore(profileContext, opp)
         let adjustedScore = matchScore
         if (distance !== null) {
-          const distanceBonus = Math.max(0, 10 - Math.floor(distance / 5)) // Up to +10 for nearby
+          const distanceBonus = Math.max(0, 10 - Math.floor(distance / 5))
           adjustedScore += distanceBonus
-          if (distanceBonus > 0) {
-            reasons.push(`Proximity bonus: ${Math.round(distance)} miles away`)
-          }
+          if (distanceBonus > 0) reasons.push(`Proximity bonus: ${Math.round(distance)} miles away`)
         }
-        
         if (adjustedScore >= minMatchScore) {
           results.push({
             ...opp,
             match_score: Math.min(100, adjustedScore),
             match_reasons: reasons,
-            matched_signals: matchedSignals,
+            matched_signals: [],
             distance_miles: distance !== null ? Math.round(distance) : null,
             distance_anchor_zip: distanceAnchorZip,
             crawler_type: 'local_funding',

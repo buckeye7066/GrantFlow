@@ -65,87 +65,70 @@ export async function crawlECFBenefits(profileInput, options = {}) {
       location: facets?.geo ?? signals?.location ?? {},
     })
   const results = []
-  
   const { eligibleIndividual, eligibleSupport, supportType } = evaluateEcfUnlockEligibility(profile)
-  
+
   if (!eligibleIndividual && !eligibleSupport) {
     console.log('[ECFBenefitsCrawler] Locked: profile not eligible for ECF CHOICES (participant/caregiver/provider)')
     return results
   }
-  
-  console.log(`[ECFBenefitsCrawler] Starting ECF benefits search`)
+
+  // ECF and similar state benefit programs are eligibility-based: profile either qualifies or does not.
+  // Slider does not apply; if we reach here, include all non-loan benefits that pass the contract.
   console.log(
-    `[ECFBenefitsCrawler] Individual eligible: ${eligibleIndividual}, Support eligible: ${eligibleSupport}${
-      eligibleSupport ? ` (${supportType})` : ''
-    }`,
+    `[ECFBenefitsCrawler] Starting ECF benefits search (eligibility-based; slider not used). Individual: ${eligibleIndividual}, Support: ${eligibleSupport}${eligibleSupport ? ` (${supportType})` : ''}`,
   )
-  
-  // Search individual benefits if eligible
+
   if (eligibleIndividual) {
     for (const source of ECF_SOURCES.individual) {
       try {
         const benefits = await searchIndividualBenefits(source, profile)
-        
         for (const benefit of benefits) {
           if (isLoan(benefit)) continue
-          
           const matchScore = calculateECFMatchScore(benefit, profile, 'individual')
-          
-          if (matchScore >= 80) {
-            results.push({
-              ...benefit,
-              match_score: matchScore,
-              crawler_type: 'ecf_benefits',
-              benefit_type: 'individual',
-              source: source.name
-            })
-          }
+          results.push({
+            ...benefit,
+            match_score: matchScore,
+            crawler_type: 'ecf_benefits',
+            benefit_type: 'individual',
+            source: source.name
+          })
         }
       } catch (error) {
         console.error(`[ECFBenefitsCrawler] Error searching ${source.name}:`, error.message)
       }
     }
   }
-  
-  // Search family/provider support if provider
+
   if (eligibleSupport) {
     for (const source of ECF_SOURCES.family_support) {
       try {
         const benefits = await searchFamilySupportBenefits(source, profile)
-        
         for (const benefit of benefits) {
           if (isLoan(benefit)) continue
-          
           const matchScore = calculateECFMatchScore(benefit, profile, 'provider')
-          
-          if (matchScore >= 80) {
-            results.push({
-              ...benefit,
-              match_score: matchScore,
-              crawler_type: 'ecf_benefits',
-              benefit_type: 'family_support',
-              source: source.name
-            })
-          }
+          results.push({
+            ...benefit,
+            match_score: matchScore,
+            crawler_type: 'ecf_benefits',
+            benefit_type: 'family_support',
+            source: source.name
+          })
         }
       } catch (error) {
         console.error(`[ECFBenefitsCrawler] Error searching ${source.name}:`, error.message)
       }
     }
   }
-  
-  console.log(`[ECFBenefitsCrawler] Found ${results.length} ECF benefits with 80%+ match`)
-  
-  // Fetch live Grants.gov and Benefits.gov ECF/Medicaid opportunities
+
+  console.log(`[ECFBenefitsCrawler] Found ${results.length} ECF benefits (eligibility-based)`)
+
   try {
     const liveKws = profile?.signals?.keywordSet ? Array.from(profile.signals.keywordSet).slice(0, 5) : []
     const liveOpps = await fetchLiveECFOpportunities({ keywords: liveKws, state: profile?.state || null })
     for (const liveOpp of liveOpps) {
       if (isLoan(liveOpp)) continue
       const matchScore = calculateECFMatchScore(liveOpp, profile)
-      if (matchScore >= 60) {
-        results.push({ ...liveOpp, match_score: matchScore })
-      }
+      results.push({ ...liveOpp, match_score: matchScore })
     }
     console.log(`[ECFBenefitsCrawler] Added ${liveOpps.length} live Grants.gov/Benefits.gov opportunities`)
   } catch (liveErr) {
