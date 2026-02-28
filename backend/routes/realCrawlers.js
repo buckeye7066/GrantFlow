@@ -1572,7 +1572,10 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
           const { score, reasons } = calculateMatchScore(profileContext, row)
           return { ...row, match_score: score, match_reasons: reasons }
         })
-      const { passed: scored } = filterByPolicy(scoredRaw, {})
+      const scored = scoredRaw.filter((row) => {
+        const p = enforceOpportunityPolicy(row)
+        return p.ok
+      })
 
       const totalFoundForCrawler = scored.length
 
