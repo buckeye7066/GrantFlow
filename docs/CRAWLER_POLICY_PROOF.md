@@ -1,200 +1,83 @@
-# Crawler Policy Proof
+# Crawler Policy Proof — Non-Negotiable Exclusions & Enforcement
 
-This document describes how the GrantFlow opportunity policy is enforced across every code path,
-what changed to implement it, and how to verify it.
+This document describes how GrantFlow enforces non-negotiable business rules across all real crawlers (everything except GeoCrawler) so that only **real, relatable** funding sources with valid URLs are returned, and loans, matching-funds, and placeholders never appear.
 
----
+## What Changed
 
-## 1. What changed
+1. **Centralised policy** — `backend/services/crawlers/opportunityPolicy.js` is the single source of truth:
+   - `isValidRealUrl(url)` — strict http/https only; rejects example.com, localhost, placeholder domains.
+   - `isPlaceholderOpportunity(opp)` — detects lorem, “coming soon”, stub text, missing/short title.
+   - `isLoanLike(opp)` — `opportunity_type` in [loan, loan_program, microloan] + keyword heuristics (loan, financing, APR, repayment, etc.).
+   - `isMatchingFunds(opp)` — `requires_match === true`, `match_percentage > 0`, and keyword heuristics (matching funds, cost-share, 1:1 match, dollar-for-dollar).
+   - `enforceOpportunityPolicy(opp)` — returns `{ ok, reason }`; bumps rejection counters for debugging.
+   - `filterByPolicy(opportunities, opts)` — filters an array and merges rejection counts into `opts.rejectionCounts`.
 
-### New module — `backend/services/crawlers/opportunityPolicy.js`
+2. **Policy applied in every path**
+   - **Live crawler normalization** — `normalizeLiveOpportunity()` in `realCrawlers.js` calls `enforceOpportunityPolicy(raw)` first; non-compliant rows return `null`.
+   - **After rescoring** — Live path applies `filterByPolicy` after rescoring and again before threshold; DB fallback applies `enforceOpportunityPolicy` in `formatDbOpportunity()` and after scoring.
+   - **DB candidate query** — `buildCandidateOpportunityQuery()` hard-excludes:
+     - `opportunity_type` IN (loan, loan_program, microloan)
+     - `is_loan = TRUE` (when column exists)
+     - `requires_match = TRUE`
+     - `match_percentage > 0`
+     - Dialect-safe for SQLite and Postgres.
+   - **Before persistence** — `bulkUpsertFundingOpportunities()` in `opportunityInserter.js` runs `enforceOpportunityPolicy(opportunity)` on each item; only compliant opportunities are written.
 
-Single source of truth for all compliance checks. All other modules import from here.
+3. **Local crawler**
+   - **25-mile anchors** — Anchor list = profile ZIP + interested-school ZIPs from `extractInterestedSchoolZips()`. Radius is fixed at 25 miles (`DEFAULT_SEARCH_RADIUS_MILES`). When there is no ZIP or no anchors, only policy-compliant directory resources are returned (no radius matching).
+   - Policy is applied to every opportunity before scoring and before adding to results.
 
-| Export | Purpose |
-|---|---|
-| `isValidRealUrl(url)` | Returns `true` iff URL is valid `http/https` and not a placeholder domain |
-| `isLoanLike(opp)` | Returns `true` if opportunity is a loan, microloan, or financing product |
-| `isMatchingFunds(opp)` | Returns `true` if opportunity requires matching funds or cost-share |
-| `isPlaceholderOpportunity(opp)` | Returns `true` if title/description contains stub text |
-| `pickRealUrl(opp)` | Returns first valid real URL from an opp's URL fields, or `null` |
-| `enforceOpportunityPolicy(opp)` | Orchestrator: returns `{ ok: boolean, reason: string\|null }` |
-| `getPolicyRejectionCounts()` | Returns module-level rejection counters (by reason) |
-| `resetPolicyRejectionCounts()` | Resets all counters to zero |
+4. **Student crawler**
+   - **FAFSA** — `extractFafsaSignals(profile, signals)` returns pellEligible, highNeed, lowIncome, dependencyStatus, SAI/EFC. Used to include/weight federal and need-based programs.
+   - **School-specific** — For schools in `university_applications` and `education.interested_schools`, uses `getSchoolFinAidUrl(school)` and `generateSchoolFinAidUrl(school)` (deterministic patterns, no auth). All outputs pass `enforceOpportunityPolicy`.
+   - **calculateMatchScore** — All calls use (profileContext, opportunity) with profile first.
 
-Rejection reasons tracked: `no_real_url`, `placeholder_text`, `loan_like`, `matching_funds`, `invalid_object`.
+5. **Debug**
+   - Rejection reasons are accumulated in `validation_rejection_counts` and `policy_rejections_db` in the run response debug object.
+   - `scripts/check-crawler-results.mjs --response <path-to-json>` prints returned count, policy rejection counts, and top rejection reasons from a saved crawler response.
 
-### Changed — `backend/routes/realCrawlers.js`
+6. **Analysis-driven fixes (CRAWLER_ANALYSIS.md)**
+   - **Cross-crawler dedup** — In comprehensive mode, after `results.flat()`, results are deduplicated by URL/title so the same opportunity is not returned by multiple sub-crawlers.
+   - **Single scoring engine** — The route layer uses only `matchingEngine.calculateMatchScore(profileContext, row)` for the final score; crawler-provided scores are no longer max-merged, so the slider reflects one consistent algorithm.
+   - **ECF crawler dedup** — `crawlECFBenefits()` uses a `seenUrls` Set so the same ECF benefit is not returned multiple times from different sources.
+   - **Loan keyword false positives** — `isLoanLike()` uses phrase-based patterns (e.g. loan program, loan fund, repayment of loan) and exempts grant contexts (loan repayment assistance, loan forgiveness, alternatives to financing, down payment assistance) so valid grants are not filtered out.
+   - **Stable source_id** — `stableSourceIdFromOpportunity()` no longer includes deadline in the hash, so deadline-only updates (e.g. extensions) update the same record instead of creating duplicates.
 
-1. **`normalizeLiveOpportunity`**: now calls `enforceOpportunityPolicy` first; replaces the old
-   ad-hoc URL check + loan-type-only check with the full policy.
+7. **Additional fixes (#4, #6, #8, #9)**
+   - **#4 Triple policy** — Removed redundant policy pass: live path no longer runs `filterByPolicy(normalized)` after normalization (normalization already applies policy), and after rescoring only one `.filter(enforceOpportunityPolicy)` is used (no second `filterByPolicy(rescored)`), so rejection counts are not double-counted.
+   - **#6 Slider fallback message** — When all results are below `min_match_score` and the guardrail returns “best available” results, the API now includes `threshold_fallback_message`: e.g. `"No results met your threshold of 80%. Showing best available matches."` so the UI can show it. Included in both live-only and merged responses when fallback is applied.
+   - **#8 Per-request rejection counts** — `enforceOpportunityPolicy(opp, opts)` accepts optional `opts.rejectionCounts`. When provided, rejections are written to that object instead of the module-level counter. The route passes a request-scoped `rejectionCounts` / `dbRejectionCounts` so concurrent requests and parallel crawlers do not mix stats. `filterByPolicy` uses the same optional object and no longer calls `resetPolicyRejectionCounts()`.
+   - **#9 COALESCE and stale data** — For updates with `record_origin === 'live_crawl'`, nullable fields `description`, `amount_min`, `amount_max`, `amount_description`, `deadline`, and `deadline_type` are set with direct assignment (`?`) instead of `COALESCE(?, column)`, so re-crawls can clear stale values when the source no longer has them.
 
-2. **`runLiveCrawler`**: calls `resetPolicyRejectionCounts()` before each run; returns merged
-   counts (`rejectionCounts + getPolicyRejectionCounts()`) in `validation_rejection_counts`.
-
-3. **Rescored live results**: policy applied after scoring (`.filter(row => enforceOpportunityPolicy(row).ok)`)
-   so no loan or matching-fund opp can sneak through after score adjustment.
-
-4. **`formatDbOpportunity`**: now calls `enforceOpportunityPolicy`; returns `null` for any record
-   that fails policy so it is silently dropped before scoring.
-
-5. **DB fallback scoring path**: calls `resetPolicyRejectionCounts()` then `.filter(enforceOpportunityPolicy)`
-   after `calculateMatchScore`; stores counts in `debug.db.policy_rejection_counts`.
-
-6. **`buildCandidateOpportunityQuery`**: matching-funds exclusion is now **unconditional** (was previously
-   behind `HARD_FILTER_REQUIRES_MATCH` / `HARD_FILTER_MATCH_PERCENTAGE` env flags):
-   - `(requires_match IS NULL OR requires_match = 0/FALSE)`
-   - `(match_percentage IS NULL OR match_percentage = 0)`
-   - Loan exclusion on `opportunity_type` also unconditional.
-
-### Changed — `backend/services/opportunityInserter.js`
-
-Imports `isValidRealUrl`, `isLoanLike`, `isMatchingFunds` from `opportunityPolicy.js` instead of
-`crawlerOpportunityContract.js`. Behavior is identical; the source of truth is now consolidated.
-
-### Changed — `backend/services/crawlers/localFundingCrawler.js`
-
-- Imports `enforceOpportunityPolicy` from `opportunityPolicy.js`.
-- Scoring loop: replaced `if (isLoanOrMatchingFund(opp)) continue` with
-  `if (!enforceOpportunityPolicy(opp).ok) continue` for full policy coverage.
-- `extractInterestedSchoolZips()` is called and anchor list is confirmed as
-  `[profileZip, ...schoolZips]` (up to 4 anchors, 25-mile radius, hard-enforced).
-
-### Changed — `backend/services/crawlers/studentGrantsCrawler.js`
-
-- Imports `enforceOpportunityPolicy`.
-- Added `extractFafsaSignals(profile, signals)` helper that reads:
-  - `pell_eligible`, `efc`/`sai`, `high_financial_need`, `need_level`, `low_income`, `dependency_status`
-  from `profile.sections.financial_information` / `sections.financial`.
-- Federal student aid gate now also checks `fafsaSignals.pellEligible` / `fafsaSignals.highNeed` /
-  `fafsaSignals.lowIncome` in addition to the existing signal checks.
-- Section 4 (school-specific financial aid) now also reads `education.interested_schools` (not just
-  `university_applications.applications`).
-- Added `generateSchoolFinAidUrl(schoolName)` for deterministic URL pattern generation when the
-  school is not in the known-URL lookup table.
-- `enforceOpportunityPolicy` applied to every opportunity before scoring in all 4 sections.
-
----
-
-## 2. Policy enforcement map
-
-```
-Opportunity lifecycle
-─────────────────────
-
-  Live crawler output
-        │
-        ▼
-  normalizeLiveOpportunity()     ← enforceOpportunityPolicy (URL, placeholder, loan, match-funds)
-        │
-        ▼
-  mustNotTerms filter            ← query-plan keyword exclusions
-        │
-        ▼
-  isOpportunityCurrent()         ← deadline check
-        │
-        ▼
-  calculateMatchScore()          ← full profile scoring
-        │
-        ▼
-  post-score policy filter       ← enforceOpportunityPolicy (final guard on rescored opps)
-        │
-        ▼
-  min_match_score threshold      ← slider value from Discover Grants
-        │
-        ▼
-  bulkUpsertFundingOpportunities ← opportunityInserter validates URL + loan/match again
-
-  DB fallback path
-        │
-        ▼
-  buildCandidateOpportunityQuery ← SQL WHERE: no loans (opp type), no requires_match, no match%
-        │
-        ▼
-  formatDbOpportunity()          ← enforceOpportunityPolicy (drops bad DB records silently)
-        │
-        ▼
-  isOpportunityCurrent()
-        │
-        ▼
-  calculateMatchScore()
-        │
-        ▼
-  post-score policy filter       ← enforceOpportunityPolicy
-        │
-        ▼
-  min_match_score threshold
-```
-
----
-
-## 3. Running tests
+## How to Run the Tests
 
 ```bash
-# Unit tests — opportunityPolicy module (49 tests)
+# Unit tests for opportunityPolicy (rejects loans, matching funds, placeholders, requires valid http(s))
 node --test tests/unit/opportunityPolicy.test.mjs
 
-# Unit tests — URL/loan validation helpers (23 tests)
-node --test tests/unit/crawlerValidationHelpers.test.mjs
-
-# Integration tests — DB fallback pipeline with forbidden opps (2 tests)
-node --test tests/unit/realCrawlers-pipeline-policy.test.mjs
-
-# Original contract + inserter tests
-node --test tests/unit/crawler.contract.test.mjs tests/unit/opportunityInserter.test.mjs
-
-# Full unit suite
-node --test tests/unit/
+# Integration-style tests: DB fallback excludes loan, matching_funds, missing URL; min_match_score enforced
+node --test tests/unit/real-crawlers-policy.test.mjs
 ```
 
----
-
-## 4. Running the debug script
-
-The `check-crawler-results.mjs` script runs a crawler against the live API and prints a summary
-including policy rejection counts (why opportunities were dropped).
+## How to Run the Debug Script
 
 ```bash
-# Start the server in another terminal, then:
-ADMIN_TOKEN=<your-jwt> node backend/scripts/check-crawler-results.mjs government_funding <profile_uuid> 50
-ADMIN_TOKEN=<your-jwt> node backend/scripts/check-crawler-results.mjs local_funding <profile_uuid> 0
-ADMIN_TOKEN=<your-jwt> node backend/scripts/check-crawler-results.mjs student_grants <profile_uuid> 60
+# Default: DB summary (opportunities, jobs, pipeline)
+node scripts/check-crawler-results.mjs
+
+# From a saved crawler response JSON (e.g. after POST /api/real-crawlers/run)
+node scripts/check-crawler-results.mjs --response /path/to/response.json
 ```
 
-Example output:
+## Summary Table
 
-```
-────────────────────────────────────────────────────────────
-  RESPONSE SUMMARY
-────────────────────────────────────────────────────────────
-  success         : true
-  count_returned  : 12
-  total_found     : 45
-  min_match_score : 50
-  used_live       : true
-  used_db_fallback: false
-
-────────────────────────────────────────────────────────────
-  POLICY REJECTIONS (total: 8)
-────────────────────────────────────────────────────────────
-     5  █████  loan_like
-     2  ██     no_real_url
-     1  █      matching_funds
-```
-
----
-
-## 5. Invariants guaranteed by this implementation
-
-| Rule | Enforced by |
-|---|---|
-| All opportunities have a valid `http/https` URL | `enforceOpportunityPolicy` in `normalizeLiveOpportunity`, `formatDbOpportunity`, inserter |
-| No placeholder domains (example.com/org/gov, localhost) | `isValidRealUrl` → `isPlaceholderHostname` |
-| No loans (`opportunity_type`, `is_loan`, keyword) | `isLoanLike` in policy + SQL `NOT IN ('loan','loan_program','microloan')` |
-| No matching-funds (`requires_match`, `match_percentage`, keyword) | `isMatchingFunds` in policy + SQL `WHERE requires_match=0 AND match_percentage=0` |
-| No placeholder content (lorem ipsum, TBD, etc.) | `isPlaceholderOpportunity` in policy |
-| min_match_score slider enforced | Threshold filter after scoring in live + DB paths |
-| Local crawler radius exactly 25 miles | `radiusMiles = DEFAULT_SEARCH_RADIUS_MILES` (const, no override) |
-| Local crawler anchors include school ZIPs | `extractInterestedSchoolZips()` called for `[profileZip, ...schoolZips]` |
-| Student crawler uses FAFSA/need signals | `extractFafsaSignals()` gates federal aid and expands school pages |
-| Geo crawler not profile-based | No `profile_id` required; stores by `state`+`zip` in `funding_opportunity_geo_index` |
+| Path | Where policy is enforced |
+|------|---------------------------|
+| Live normalization | `normalizeLiveOpportunity()` → `enforceOpportunityPolicy(raw)` |
+| Live after rescoring | `filterByPolicy` + `.filter(enforceOpportunityPolicy)` |
+| DB candidate query | `buildCandidateOpportunityQuery()` SQL conditions (loans, requires_match, match_percentage, is_loan) |
+| DB format | `formatDbOpportunity()` → `enforceOpportunityPolicy(formatted)` |
+| DB after scoring | `enforceOpportunityPolicy` in filter and `getPolicyRejectionCounts()` for debug |
+| Persistence | `bulkUpsertFundingOpportunities()` → `enforceOpportunityPolicy(opportunity)` before each upsert |
+| Local crawler | `enforceOpportunityPolicy(opp)` before scoring and before push to results |
+| Student crawler | `enforceOpportunityPolicy` on federal aid, signal-specific, school-specific, and live opps |

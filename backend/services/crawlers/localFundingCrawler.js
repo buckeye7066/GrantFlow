@@ -345,7 +345,9 @@ export async function crawlLocalFunding(profileInput, options = {}) {
     }
   }
 
-  // If there is no ZIP or we couldn't resolve any coordinates, don't attempt geo-radius crawling.
+  // Non-negotiable: 25-mile radius is applied from profile ZIP and from each interested-school ZIP.
+  // If there is no ZIP or we couldn't resolve any coordinates, don't attempt geo-radius crawling;
+  // only policy-compliant directory resources (already in results) are returned.
   if (!targetZip || anchors.length === 0) {
     console.log(`[LocalFundingCrawler] Found ${results.length} local opportunities with ${minMatchScore}%+ match`)
     return finalizeLocalResults(results, { facets, queryPlan })

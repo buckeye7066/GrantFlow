@@ -30,8 +30,10 @@ export function resetPolicyRejectionCounts() {
   for (const key of Object.keys(_rejectionCounts)) delete _rejectionCounts[key]
 }
 
-function bumpCount(reason) {
-  _rejectionCounts[reason] = (_rejectionCounts[reason] ?? 0) + 1
+/** Bump a rejection reason into target or module-level counts. */
+function bumpCount(reason, targetCounts = null) {
+  const dest = targetCounts != null ? targetCounts : _rejectionCounts
+  dest[reason] = (dest[reason] ?? 0) + 1
 }
 
 // ─── PLACEHOLDER DOMAINS ─────────────────────────────────────────────────────
@@ -66,16 +68,26 @@ function isPlaceholderHostname(url) {
 
 const LOAN_OPP_TYPES = new Set(['loan', 'loan_program', 'microloan'])
 
-/** Word-boundary regex patterns that indicate a loan opportunity. */
-const LOAN_KEYWORD_RX = [
-  /\bloan\b/,
-  /\bmicroloan\b/,
-  /\bfinancing\b/,
-  /\b(?:apr|annual percentage rate)\b/,
-  /\brepayment\b/,
-  /\brepay\b/,
-  /\bcredit line\b/,
-  /\brevolving credit\b/,
+/** Phrase/pattern that indicate a loan product (avoids false positives on "financing" in grant context). */
+const LOAN_PHRASE_RX = [
+  /\bloan\s+(program|application|fund)\b/i,
+  /\bmicroloan\b/i,
+  /\b(?:apr|annual percentage rate)\b/i,
+  /\bcredit\s+line\b/i,
+  /\brevolving\s+credit\b/i,
+  /\binterest\s+rate\b/i,
+  /\brepay\s+(the\s+)?loan\b/i,
+  /\bloan\s+repayment\s+(schedule|terms)\b/i,
+  /\brepayment\s+(of\s+)?(the\s+)?(loan|funds?)\b/i,
+]
+
+/** Grant-friendly contexts: mention of loans in assistance/forgiveness context — do not treat as loan product. */
+const LOAN_ASSISTANCE_RX = [
+  /\bloan\s+repayment\s+assistance\b/i,
+  /\bloan\s+forgiveness\b/i,
+  /\bstudent\s+loan\s+(forgiveness|repayment\s+assistance)\b/i,
+  /\balternatives?\s+to\s+(traditional\s+)?financing\b/i,
+  /\bdown\s+payment\s+assistance\b/i,
 ]
 
 /** Matching-fund keyword patterns. */
@@ -89,7 +101,7 @@ const MATCH_KEYWORD_RX = [
 
 /**
  * Returns true if the opportunity is a loan, microloan, or financing product.
- * Checks schema fields AND keyword heuristics.
+ * Uses schema fields and phrase-based heuristics; exempts grant contexts (e.g. loan forgiveness, repayment assistance).
  */
 export function isLoanLike(opp) {
   if (!opp || typeof opp !== 'object') return false
@@ -98,7 +110,8 @@ export function isLoanLike(opp) {
   if (LOAN_OPP_TYPES.has(oppType)) return true
   const text =
     `${opp.title || ''} ${opp.description || ''} ${opp.eligibility || ''} ${opp.eligibility_criteria || ''}`.toLowerCase()
-  return LOAN_KEYWORD_RX.some((rx) => rx.test(text))
+  if (LOAN_ASSISTANCE_RX.some((rx) => rx.test(text))) return false
+  return LOAN_PHRASE_RX.some((rx) => rx.test(text))
 }
 
 /**
@@ -119,13 +132,16 @@ export function isMatchingFunds(opp) {
 const PLACEHOLDER_TEXT_PATTERNS = [
   /\blorem\b/i,
   /\bipsum\b/i,
-  /\bcoming soon\b/i,
+  /\bcoming\s+soon\b/i,
   /\bplaceholder\b/i,
   /\btbd\b/i,
   /\btest opportunity\b/i,
   /\bsample opportunity\b/i,
   /\bfoo bar\b/i,
   /^test$/i,
+  /\bstub\b/i,
+  /\bexample\.com\b/i,
+  /\bexample\.org\b/i,
 ]
 
 /**
@@ -171,35 +187,33 @@ export function pickRealUrl(opp) {
  * Check all compliance rules for a single opportunity.
  *
  * @param {object} opp
+ * @param {{ rejectionCounts?: Record<string, number> }} [opts] - Optional per-request counts (avoids shared state).
  * @returns {{ ok: boolean, reason: string|null }}
  */
-export function enforceOpportunityPolicy(opp) {
+export function enforceOpportunityPolicy(opp, opts = {}) {
+  const rejectionCounts = opts.rejectionCounts ?? null
   if (!opp || typeof opp !== 'object') {
-    bumpCount('invalid_object')
+    bumpCount('invalid_object', rejectionCounts)
     return { ok: false, reason: 'invalid_object' }
   }
 
-  // 1. Real URL required
   if (!pickRealUrl(opp)) {
-    bumpCount('no_real_url')
+    bumpCount('no_real_url', rejectionCounts)
     return { ok: false, reason: 'no_real_url' }
   }
 
-  // 2. Not placeholder content
   if (isPlaceholderOpportunity(opp)) {
-    bumpCount('placeholder_text')
+    bumpCount('placeholder_text', rejectionCounts)
     return { ok: false, reason: 'placeholder_text' }
   }
 
-  // 3. Not a loan
   if (isLoanLike(opp)) {
-    bumpCount('loan_like')
+    bumpCount('loan_like', rejectionCounts)
     return { ok: false, reason: 'loan_like' }
   }
 
-  // 4. Not matching-funds
   if (isMatchingFunds(opp)) {
-    bumpCount('matching_funds')
+    bumpCount('matching_funds', rejectionCounts)
     return { ok: false, reason: 'matching_funds' }
   }
 
@@ -214,14 +228,9 @@ export function enforceOpportunityPolicy(opp) {
  */
 export function filterByPolicy(opportunities, opts = {}) {
   const outCounts = opts.rejectionCounts ?? {}
-  resetPolicyRejectionCounts()
   const passed = (Array.isArray(opportunities) ? opportunities : []).filter((opp) => {
-    const p = enforceOpportunityPolicy(opp)
+    const p = enforceOpportunityPolicy(opp, { rejectionCounts: outCounts })
     return p.ok
-  })
-  const counts = getPolicyRejectionCounts()
-  Object.entries(counts).forEach(([k, v]) => {
-    if (v > 0) outCounts[k] = (outCounts[k] ?? 0) + v
   })
   return { passed, rejectionCounts: outCounts }
 }
