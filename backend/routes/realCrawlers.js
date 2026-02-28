@@ -21,6 +21,11 @@ import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js
 import { ensureProfileAccess } from '../utils/accessControl.js'
 import { buildProfileFacets, requireFacets, buildIntentTokens } from '../services/profile/profileTaxonomy.js'
 import { planCrawlerQueries } from '../services/crawlers/queryPlanner.js'
+import {
+  enforceOpportunityPolicy,
+  getPolicyRejectionCounts,
+  resetPolicyRejectionCounts,
+} from '../services/crawlers/opportunityPolicy.js'
 
 const router = express.Router()
 
@@ -120,7 +125,21 @@ function isValidHttpUrl(value) {
   if (typeof value !== 'string' || value.trim().length === 0) return false
   try {
     const parsed = new URL(value)
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
+    // Reject placeholder/example domains per product rules.
+    const host = (parsed.hostname || '').toLowerCase()
+    if (
+      host === 'example.com' ||
+      host.endsWith('.example.com') ||
+      host === 'example.org' ||
+      host.endsWith('.example.org') ||
+      host === 'example.gov' ||
+      host.endsWith('.example.gov') ||
+      host === 'placeholder' ||
+      host.endsWith('.placeholder')
+    )
+      return false
+    return true
   } catch {
     return false
   }
@@ -327,6 +346,13 @@ function normalizeLiveOpportunity(raw, { crawlerType, rejectionCounts = null }) 
     return null
   }
 
+  // Apply unified opportunity policy (URL, placeholder, loan, matching-funds).
+  const policyResult = enforceOpportunityPolicy(raw)
+  if (!policyResult.ok) {
+    bumpRejectionCount(rejectionCounts, policyResult.reason ?? 'policy_rejected')
+    return null
+  }
+
   const title = raw.title ?? raw.name ?? null
   const sponsor = raw.sponsor ?? raw.funder ?? raw.source ?? null
   const rawUrl = raw.url ?? raw.application_url ?? raw.source_url ?? null
@@ -336,16 +362,7 @@ function normalizeLiveOpportunity(raw, { crawlerType, rejectionCounts = null }) 
     return null
   }
 
-  if (!rawUrl || !isValidHttpUrl(rawUrl)) {
-    bumpRejectionCount(rejectionCounts, !rawUrl ? 'missing_url' : 'invalid_url')
-    return null
-  }
-
   const opportunityType = normalizeString(raw.opportunity_type || raw.type || raw.grant_type || 'grant') || 'grant'
-  if (LOAN_TYPES.has(opportunityType)) {
-    bumpRejectionCount(rejectionCounts, 'loan_type_excluded')
-    return null
-  }
 
   const existingScore = typeof raw.match_score === 'number' ? raw.match_score : null
   const existingReasons = Array.isArray(raw.match_reasons) ? raw.match_reasons : []
@@ -499,6 +516,7 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
   })
   const options = { min_match_score: minMatchScore, query_plan: queryPlan }
   const rejectionCounts = {}
+  resetPolicyRejectionCounts()
   const facetReasons = buildFacetReasons(effectiveContext?.facets ?? {})
 
   try {
@@ -628,6 +646,12 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
 
       return { ...row, match_score: mergedScore, match_reasons: mergedReasons }
     })
+    // Apply policy after rescoring (final guard before returning).
+    .filter((row) => {
+      const p = enforceOpportunityPolicy(row)
+      if (!p.ok) { bumpRejectionCount(rejectionCounts, `post_score_policy_${p.reason ?? 'rejected'}`); return false }
+      return true
+    })
 
     let included = rescored
       .filter((row) => {
@@ -655,7 +679,7 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
       opportunities: included,
       error: null,
       query_plan: queryPlan,
-      validation_rejection_counts: rejectionCounts,
+      validation_rejection_counts: { ...rejectionCounts, ...getPolicyRejectionCounts() },
       ...(fallbackApplied ? { score_fallback_applied: true } : {}),
     }
   } catch (error) {
@@ -695,7 +719,7 @@ function formatDbOpportunity(row) {
   const eligibility_bullets = safeParseJSON(row.eligibility_bullets, [])
   const match_reasons = safeParseJSON(row.match_reasons, [])
 
-  return {
+  const formatted = {
     ...row,
     keywords,
     categories,
@@ -704,6 +728,12 @@ function formatDbOpportunity(row) {
     // Normalize url fields used by frontend.
     url: row.application_url ?? row.source_url ?? null,
   }
+
+  // Apply policy so DB records with stale/bad data are never returned.
+  const policyResult = enforceOpportunityPolicy(formatted)
+  if (!policyResult.ok) return null
+
+  return formatted
 }
 
 function buildCandidateOpportunityQuery({ crawlerType, profileContext, tokens, itemRequest, dialect }) {
@@ -711,24 +741,19 @@ function buildCandidateOpportunityQuery({ crawlerType, profileContext, tokens, i
   const conditions = [isPostgres ? 'is_active = TRUE' : 'is_active = 1']
   const params = []
 
-  // Avoid obviously non-grant programs by default.
-  // IMPORTANT:
-  // Matching-funds requirements are NOT exclusive. Do not hard-exclude them by default — penalize in scoring instead.
-  if (HARD_FILTER_REQUIRES_MATCH) {
-    conditions.push(
-      isPostgres
-        ? '(requires_match IS NULL OR requires_match = FALSE)'
-        : "(requires_match IS NULL OR requires_match = 0 OR requires_match = '0' OR requires_match = 'false')",
-    )
-  }
-  if (HARD_FILTER_MATCH_PERCENTAGE) {
-    conditions.push(
-      isPostgres
-        ? '(match_percentage IS NULL OR match_percentage = 0)'
-        : "(match_percentage IS NULL OR match_percentage = 0 OR match_percentage = '0')",
-    )
-  }
+  // Hard-exclude loans (unconditional per product rules).
   conditions.push("(opportunity_type IS NULL OR LOWER(opportunity_type) NOT IN ('loan','loan_program','microloan'))")
+  // Hard-exclude matching-funds/cost-share requirements (unconditional per product rules).
+  conditions.push(
+    isPostgres
+      ? '(requires_match IS NULL OR requires_match = FALSE)'
+      : "(requires_match IS NULL OR requires_match = 0 OR requires_match = '0' OR requires_match = 'false')",
+  )
+  conditions.push(
+    isPostgres
+      ? '(match_percentage IS NULL OR match_percentage = 0)'
+      : "(match_percentage IS NULL OR match_percentage = 0 OR match_percentage = '0')",
+  )
 
   // Exclude expired deadlines by default (rolling/ongoing/NULL are allowed).
   conditions.push(
@@ -1205,17 +1230,23 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     // Score all candidates using the deterministic engine (uses full sections/signals).
     // All opportunities scored uniformly — directory resources earn relevance through matching.
-    const scored = currentCandidates.map((row) => {
-      const { score, reasons } = calculateMatchScore(profileContext, row)
-
-      return {
-        ...row,
-        match_score: score,
-        match_reasons: reasons,
-        // Normalize sponsor/title for UI
-        sponsor: row.sponsor ?? row.funder ?? null,
-      }
-    })
+    resetPolicyRejectionCounts()
+    const scored = currentCandidates
+      .map((row) => {
+        const { score, reasons } = calculateMatchScore(profileContext, row)
+        return {
+          ...row,
+          match_score: score,
+          match_reasons: reasons,
+          // Normalize sponsor/title for UI
+          sponsor: row.sponsor ?? row.funder ?? null,
+        }
+      })
+      // Apply policy after scoring (final guard before returning from DB path).
+      .filter((row) => {
+        const p = enforceOpportunityPolicy(row)
+        return p.ok
+      })
 
     const totalFound = scored.length
 
@@ -1234,6 +1265,7 @@ router.post('/run', ensureAuth, async (req, res) => {
       current: currentCandidates.length,
       expired_excluded: expiredExcluded,
       returned: filteredOpportunities.length,
+      policy_rejection_counts: getPolicyRejectionCounts(),
     }
 
     // Guardrail: if something is being found but everything is filtered out, include score diagnostics.
