@@ -23,8 +23,10 @@ import { buildProfileFacets, requireFacets, buildIntentTokens } from '../service
 import { planCrawlerQueries } from '../services/crawlers/queryPlanner.js'
 import {
   enforceOpportunityPolicy,
+  getPolicyRejectionCounts,
   resetPolicyRejectionCounts,
 } from '../services/crawlers/opportunityPolicy.js'
+import { getWithRetry, postWithRetry } from '../services/crawlers/httpClient.js'
 
 const router = express.Router()
 
@@ -681,7 +683,7 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
       opportunities: included,
       error: null,
       query_plan: queryPlan,
-      validation_rejection_counts: { ...rejectionCounts },
+      validation_rejection_counts: { ...rejectionCounts, ...getPolicyRejectionCounts() },
       ...(fallbackApplied
         ? {
             score_fallback_applied: true,
@@ -1280,7 +1282,7 @@ router.post('/run', ensureAuth, async (req, res) => {
       current: currentCandidates.length,
       expired_excluded: expiredExcluded,
       returned: filteredOpportunities.length,
-      policy_rejection_counts: { ...dbRejectionCounts },
+      policy_rejection_counts: getPolicyRejectionCounts(),
     }
 
     // Guardrail: if something is being found but everything is filtered out, include score diagnostics.
@@ -1662,5 +1664,67 @@ function getCrawlerDescription(type) {
 // We intentionally do not write crawler matches back into funding_opportunities here.
 // funding_opportunities is maintained by the ingestion pipeline; "crawler runs" should
 // query + score existing live opportunities for the selected profile.
+
+/**
+ * Admin health check: test external API connectivity.
+ * GET /api/real-crawlers/health-check
+ * Returns { ok, checks: [{ source, reachable, latency_ms, error }] }
+ */
+router.get('/health-check', ensureAuth, async (req, res) => {
+  const checks = []
+  const testApis = [
+    {
+      source: 'Grants.gov search2',
+      url: 'https://api.grants.gov/v1/api/search2',
+      method: 'POST',
+      body: { keyword: 'health', oppStatuses: 'posted', rows: 1 },
+      extractHits: (parsed) => {
+        const hits = parsed?.data?.oppHits ?? parsed?.oppHits ?? []
+        return Array.isArray(hits) ? hits.length : 0
+      },
+    },
+    {
+      source: 'NIH Grants RSS',
+      url: 'https://grants.nih.gov/grants/guide/newsfeed/fundingopps.xml',
+      method: 'GET',
+      extractHits: (data) => (typeof data === 'string' && data.includes('<item>') ? 1 : 0),
+    },
+  ]
+
+  for (const api of testApis) {
+    const start = Date.now()
+    try {
+      let response
+      if (api.method === 'POST') {
+        response = await postWithRetry(api.url, api.body, { headers: { 'Content-Type': 'application/json' } }, { timeoutMs: 10000, retries: 0 })
+      } else {
+        response = await getWithRetry(api.url, {}, { timeoutMs: 10000, retries: 0 })
+      }
+      const latency = Date.now() - start
+      const parsed = response?.data
+      const hitCount = api.extractHits(parsed)
+      checks.push({
+        source: api.source,
+        reachable: true,
+        latency_ms: latency,
+        hit_count: hitCount,
+        status: response?.status ?? null,
+        error: null,
+      })
+    } catch (err) {
+      checks.push({
+        source: api.source,
+        reachable: false,
+        latency_ms: Date.now() - start,
+        hit_count: 0,
+        status: err?.status ?? err?.response?.status ?? null,
+        error: err?.message || String(err),
+      })
+    }
+  }
+
+  const allReachable = checks.every((c) => c.reachable)
+  res.json({ ok: allReachable, checks })
+})
 
 export default router
