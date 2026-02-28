@@ -76,6 +76,8 @@ const LOAN_PHRASE_RX = [
   /\bcredit\s+line\b/i,
   /\brevolving\s+credit\b/i,
   /\binterest\s+rate\b/i,
+  /\bmonthly\s+payment\b/i,
+  /\bborrower\b/i,
   /\brepay\s+(the\s+)?loan\b/i,
   /\bloan\s+repayment\s+(schedule|terms)\b/i,
   /\brepayment\s+(of\s+)?(the\s+)?(loan|funds?)\b/i,

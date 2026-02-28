@@ -28,6 +28,7 @@ import {
   mergePlanKeywords,
   enforceCrawlerOpportunityContract,
 } from './crawlerOpportunityContract.js'
+import { enforceOpportunityPolicy } from './opportunityPolicy.js'
 
 const GRANTS_GOV_API = 'https://api.grants.gov/v1/api/search2'
 const GRANTS_GOV_DETAIL = 'https://www.grants.gov/search-results-detail/'
@@ -276,7 +277,7 @@ export async function crawlGovernmentFunding(profileInput, options = {}) {
 
           const activeOpps = filterByDeadline(grantsGovResults)
             for (const opp of activeOpps) {
-                        if (isLoanOrMatchingFund(opp)) continue
+                        if (!enforceOpportunityPolicy(opp).ok) continue
 
               const titleKey = (opp.title || '').toLowerCase().trim()
                         if (titleKey && seenTitles.has(titleKey)) continue
@@ -307,7 +308,7 @@ export async function crawlGovernmentFunding(profileInput, options = {}) {
             const nihResults = await searchNIHRSS(searchKeywords)
             const activeOpps = filterByDeadline(nihResults)
             for (const opp of activeOpps) {
-                        if (isLoanOrMatchingFund(opp)) continue
+                        if (!enforceOpportunityPolicy(opp).ok) continue
 
               const titleKey = (opp.title || '').toLowerCase().trim()
                         if (titleKey && seenTitles.has(titleKey)) continue
@@ -341,6 +342,7 @@ export async function crawlGovernmentFunding(profileInput, options = {}) {
             try {
                         const cmsResults = await searchCMSSources(profile, searchKeywords)
                         for (const opp of cmsResults) {
+                                      if (!enforceOpportunityPolicy(opp).ok) continue
                                       const titleKey = (opp.title || '').toLowerCase().trim()
                                       if (titleKey && seenTitles.has(titleKey)) continue
                                       if (titleKey) seenTitles.add(titleKey)
@@ -369,6 +371,7 @@ export async function crawlGovernmentFunding(profileInput, options = {}) {
                   try {
                               const stateResults = await searchStatePortal(statePortal, profileState, searchKeywords)
                               for (const opp of stateResults) {
+                                            if (!enforceOpportunityPolicy(opp).ok) continue
                                             const titleKey = (opp.title || '').toLowerCase().trim()
                                             if (titleKey && seenTitles.has(titleKey)) continue
                                             if (titleKey) seenTitles.add(titleKey)
@@ -625,13 +628,7 @@ async function searchStatePortal(portal, state, searchKeywords) {
         return opportunities
 }
 
-function isLoanOrMatchingFund(opportunity) {
-        const loanKeywords = ['loan', 'repay', 'interest rate', 'apr', 'credit', 'borrower']
-        const matchingKeywords = ['matching funds', 'match required', 'cost share', 'in-kind match']
-        const text = `${opportunity.title} ${opportunity.description} ${opportunity.eligibility}`.toLowerCase()
-        return loanKeywords.some(keyword => text.includes(keyword)) ||
-                  matchingKeywords.some(keyword => text.includes(keyword))
-}
+// Loan/matching-fund detection is now handled centrally by enforceOpportunityPolicy().
 
 function parseAmount(amountStr) {
         if (!amountStr) return 0

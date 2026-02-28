@@ -543,12 +543,18 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
           })(),
         ),
       )
-      const flat = results.flat()
-      const seen = new Set()
-      rawResults = flat.filter((row) => {
-        const key = String(row?.url || row?.application_url || row?.source_url || row?.title || '').trim().toLowerCase()
-        if (!key || seen.has(key)) return false
-        seen.add(key)
+      // De-duplicate across sub-crawlers: the same grants.gov opportunity can be
+      // returned by government_funding, health_resources, special_needs, etc.
+      const seenCrossKeys = new Set()
+      rawResults = results.flat().filter((row) => {
+        const key = String(
+          row?.url || row?.application_url || row?.source_url || row?.title || '',
+        )
+          .toLowerCase()
+          .trim()
+        if (!key) return true // keep items with no key (rare)
+        if (seenCrossKeys.has(key)) return false
+        seenCrossKeys.add(key)
         return true
       })
     } else {
@@ -640,21 +646,13 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
     // earn their relevance through the same matching criteria as every other result.
     const rescored = current.map((row) => {
       const { score: computedScore, reasons: computedReasons } = calculateMatchScore(profileContextForScoring, row)
-      const existingScore = typeof row.match_score === 'number' ? row.match_score : null
-
-      // Single scoring engine: use route-layer matchingEngine only (no max-merge with crawler score).
-      const mergedScore = computedScore
+      // Canonical score: the matchingEngine is the single source of truth.
       const mergedReasons = mergeReasons(row.match_reasons, mergeReasons(computedReasons, facetReasons))
-
-      return { ...row, match_score: mergedScore, match_reasons: mergedReasons }
+      return { ...row, match_score: computedScore, match_reasons: mergedReasons }
     })
-    // Single policy pass after rescoring (no redundant check; counts go to request-scoped rejectionCounts).
-    const rescoredPolicyOk = rescored.filter((row) => {
-      const p = enforceOpportunityPolicy(row, { rejectionCounts })
-      return p.ok
-    })
+    // Policy was already enforced in normalizeLiveOpportunity(); no second check needed.
 
-    let included = rescoredPolicyOk
+    let included = rescored
       .filter((row) => {
         return typeof row.match_score === 'number' && row.match_score >= Number(minMatchScore)
       })
@@ -664,12 +662,15 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
     // Guardrail: real URL sources must not all be dropped when min_match_score is strict.
     // If we have scored results but 0 passed threshold, return top-scoring so profile still gets relevant, URL-verified opps.
     let fallbackApplied = false
-    if (included.length === 0 && rescoredPolicyOk.length > 0) {
-      included = rescoredPolicyOk
+    if (included.length === 0 && rescored.length > 0) {
+      included = rescored
         .filter((o) => typeof o?.match_score === 'number')
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
         .slice(0, 50)
       fallbackApplied = true
+      console.log(
+        `[RealCrawlers] ${crawlerType} live: slider fallback applied — all ${rescored.length} results below min_match_score=${minMatchScore}; returning top ${included.length}`,
+      )
     }
 
     return {

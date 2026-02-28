@@ -19,6 +19,7 @@ import {
   mergePlanKeywords,
   enforceCrawlerOpportunityContract,
 } from './crawlerOpportunityContract.js'
+import { enforceOpportunityPolicy } from './opportunityPolicy.js'
 
 const GRANTS_GOV_API = 'https://api.grants.gov/v1/api/search2'
 const GRANTS_GOV_DETAIL = 'https://www.grants.gov/search-results-detail/'
@@ -609,6 +610,9 @@ export async function crawlSpecialNeeds(profileInput, options = {}) {
                     need_category: needCategory,
           }
 
+          // Apply centralized policy (URL, placeholder, loan, matching-funds) before scoring
+          if (!enforceOpportunityPolicy(opp).ok) continue
+
           // Score using full profile signals
           const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profile)
 
@@ -651,10 +655,6 @@ export async function crawlSpecialNeeds(profileInput, options = {}) {
     return finalizeSpecialNeedsResults(results, { facets, queryPlan })
 }
 
-function isLoan(opportunity) {
-    const loanKeywords = ['loan', 'repay', 'interest', 'credit', 'financing']
-    const text = `${opportunity.title} ${opportunity.description}`.toLowerCase()
-    return loanKeywords.some(keyword => text.includes(keyword))
-}
+// Loan/matching-fund detection is now handled centrally by enforceOpportunityPolicy().
 
 export default { crawlSpecialNeeds }

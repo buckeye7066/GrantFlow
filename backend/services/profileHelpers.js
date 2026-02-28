@@ -1267,17 +1267,223 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     registerKeyword('first generation college student')
   }
 
+  // ============ MEDICAL INSURANCE ============
+  // Insurance plan type unlocks assistance program matching (Medicaid/Medicare → benefits crawlers)
+  const medicalInsurance = sections?.medical_insurance ?? {}
+  if (medicalInsurance.plan_type) {
+    const planType = normalizeString(medicalInsurance.plan_type)
+    if (planType) {
+      registerKeyword(planType)
+      if (/medicaid/i.test(planType)) {
+        assistanceSet.add('medicaid')
+        registerKeyword('medicaid')
+      }
+      if (/medicare/i.test(planType)) {
+        assistanceSet.add('medicare')
+        registerKeyword('medicare')
+      }
+      if (/marketplace|aca/i.test(planType)) {
+        registerKeyword('marketplace insurance')
+      }
+    }
+  }
+  if (medicalInsurance.insurance_provider) {
+    registerKeyword(medicalInsurance.insurance_provider)
+  }
+  if (medicalInsurance.notes) {
+    collectNarrativeKeywords({ notes: medicalInsurance.notes }, registerKeyword)
+  }
+
+  // ============ MEDICAL HISTORY ============
+  // Primary/secondary conditions feed health signals and condition-specific grant matching
+  const medicalHistory = sections?.medical_history ?? {}
+  if (medicalHistory.primary_condition) {
+    const condition = normalizeString(medicalHistory.primary_condition)
+    if (condition) {
+      healthSet.add(condition)
+      registerKeyword(condition)
+    }
+  }
+  if (Array.isArray(medicalHistory.secondary_conditions)) {
+    for (const cond of medicalHistory.secondary_conditions) {
+      const normalized = normalizeString(cond)
+      if (normalized) {
+        healthSet.add(normalized)
+        registerKeyword(normalized)
+      }
+    }
+  }
+  if (medicalHistory.mobility_needs) {
+    registerKeyword(medicalHistory.mobility_needs)
+    healthSet.add('mobility_needs')
+    registerKeyword('mobility assistance')
+  }
+  if (Array.isArray(medicalHistory.dme_needed) && medicalHistory.dme_needed.length > 0) {
+    medicalHistory.dme_needed.forEach((item) => registerKeyword(item))
+    registerKeyword('durable medical equipment')
+    healthSet.add('dme')
+  }
+  if (medicalHistory.letter_support_needed) {
+    registerKeyword('letter of medical necessity')
+  }
+  if (medicalHistory.notes) {
+    collectNarrativeKeywords({ notes: medicalHistory.notes }, registerKeyword)
+  }
+
+  // ============ NONPROFIT COMPLIANCE ============
+  // 501c3/SAM status is critical for federal grant eligibility
+  const nonprofitCompliance = sections?.nonprofit_compliance ?? {}
+  if (nonprofitCompliance.is_501c3) {
+    registerKeyword('501c3')
+    registerKeyword('tax exempt')
+    applicantTypeSet.add('nonprofit')
+    applicantTypeSet.add('501c3')
+  }
+  if (nonprofitCompliance.fiscal_sponsor) {
+    registerKeyword('fiscal sponsor')
+    registerKeyword('fiscal sponsorship')
+    if (nonprofitCompliance.fiscal_sponsor_name) {
+      registerKeyword(nonprofitCompliance.fiscal_sponsor_name)
+    }
+  }
+  if (nonprofitCompliance.sam_registered) {
+    registerKeyword('sam registered')
+    registerKeyword('sam.gov')
+    applicantTypeSet.add('sam_registered')
+  }
+  if (nonprofitCompliance.compliance_notes) {
+    collectNarrativeKeywords({ notes: nonprofitCompliance.compliance_notes }, registerKeyword)
+  }
+
+  // ============ EMPLOYMENT ============
+  // Employment status and career goals feed workforce/training program matching
+  const employment = sections?.employment ?? {}
+  if (employment.current_status) {
+    const status = normalizeString(employment.current_status)
+    if (status) {
+      registerKeyword(status)
+      occupationSet.add(status)
+      if (/unemploy|job.?seek|between.?jobs|laid.?off/i.test(employment.current_status)) {
+        assistanceSet.add('unemployed')
+        registerKeyword('job seeker')
+        registerKeyword('workforce development')
+      }
+      if (/self.?employ|freelance|independent/i.test(employment.current_status)) {
+        applicantTypeSet.add('self_employed')
+        registerKeyword('self employed')
+      }
+      if (/part.?time|underemploy/i.test(employment.current_status)) {
+        assistanceSet.add('underemployed')
+        registerKeyword('underemployed')
+      }
+    }
+  }
+  if (employment.career_goal) {
+    registerKeyword(employment.career_goal)
+    // Career goals are strong intent signals for matching
+    const goalNorm = normalizeString(employment.career_goal)
+    if (goalNorm && goalNorm.length >= 6 && goalNorm.includes(' ')) {
+      intentPhraseSet.add(goalNorm)
+    }
+  }
+  if (employment.experience) {
+    collectNarrativeKeywords({ experience: employment.experience }, registerKeyword)
+  }
+  if (employment.notes) {
+    collectNarrativeKeywords({ notes: employment.notes }, registerKeyword)
+  }
+
+  // ============ HOUSING ============
+  // Housing status drives assistance program eligibility; broadband drives digital divide programs
+  const housing = sections?.housing ?? {}
+  if (housing.status) {
+    const status = normalizeString(housing.status)
+    if (status) {
+      registerKeyword(status)
+      if (/homeless|unhoused|shelter/i.test(housing.status)) {
+        assistanceSet.add('homeless')
+        familySet.add('homeless')
+        registerKeyword('housing insecure')
+        registerKeyword('unhoused')
+      }
+      if (/at.?risk|unstable|transitional/i.test(housing.status)) {
+        assistanceSet.add('housing_at_risk')
+        registerKeyword('housing instability')
+        registerKeyword('at-risk housing')
+      }
+    }
+  }
+  if (housing.type) {
+    registerKeyword(housing.type)
+    if (/rent/i.test(housing.type)) registerKeyword('renter')
+    if (/section.?8|voucher/i.test(housing.type)) {
+      assistanceSet.add('section8_housing')
+      registerKeyword('section 8')
+    }
+  }
+  if (housing.broadband_speed) {
+    registerKeyword('broadband')
+    registerKeyword('internet access')
+    // Low/no broadband signals digital divide programs (ACP, FCC, etc.)
+    if (/none|no.?service|slow|dial.?up|satellite|under.?25/i.test(housing.broadband_speed)) {
+      assistanceSet.add('digital_divide')
+      registerKeyword('digital divide')
+      registerKeyword('broadband access')
+    }
+  }
+  if (Array.isArray(housing.geographic_designation)) {
+    housing.geographic_designation.forEach((desig) => {
+      const norm = normalizeString(desig)
+      if (norm) {
+        registerKeyword(norm)
+        demographicSet.add(norm)
+      }
+    })
+  }
+  if (housing.notes) {
+    collectNarrativeKeywords({ notes: housing.notes }, registerKeyword)
+  }
+
+  // ============ FAMILY (HOUSEHOLD DETAILS) ============
+  // Distinct from family_life: structured household info (size, responsibilities, support)
+  const familyHousehold = sections?.family ?? {}
+  if (familyHousehold.household_size) {
+    const size = parseNumber(familyHousehold.household_size)
+    if (size !== null) {
+      // Merge with financial.householdSize if not already set
+      if (!financial.householdSize) financial.householdSize = size
+      if (size >= 5) registerKeyword('large household')
+      if (size === 1) registerKeyword('single person household')
+    }
+  }
+  if (familyHousehold.responsibilities) {
+    collectNarrativeKeywords({ responsibilities: familyHousehold.responsibilities }, registerKeyword)
+    if (/caregiv|eldercare|childcare|dependent/i.test(familyHousehold.responsibilities)) {
+      familySet.add('caregiver')
+      registerKeyword('caregiver')
+    }
+  }
+  if (familyHousehold.support_system) {
+    collectNarrativeKeywords({ support_system: familyHousehold.support_system }, registerKeyword)
+  }
+  if (familyHousehold.notes) {
+    collectNarrativeKeywords({ notes: familyHousehold.notes }, registerKeyword)
+  }
+
   // ============ RAW SECTIONS PASSTHROUGH ============
   // Store the raw sections for crawlers that need direct access to any field
   const rawSections = sections
 
   // ============ COVERAGE TRACKING ============
-  // Track how much of the profile data was processed to ensure 100% coverage
+  // Track how much of the profile data was processed to ensure 100% coverage.
+  // This list must match ALL section keys in backend/config/profileSchema.js.
   const sectionKeys = Object.keys(sections || {})
   const expectedSections = [
-    'basic_information', 'demographics', 'family_life', 'financial_information',
-    'government_assistance', 'health_medical', 'location_focus', 'military_service',
-    'narrative', 'occupation', 'organization_details', 'university_applications', 'education'
+    'basic_information', 'organization_details', 'financial_information',
+    'government_assistance', 'health_medical', 'medical_insurance', 'medical_history',
+    'nonprofit_compliance', 'small_business_details', 'demographics', 'family_life',
+    'military_service', 'occupation', 'location_focus', 'university_applications',
+    'education', 'employment', 'housing', 'family', 'programs_services', 'narrative',
   ]
   const presentSections = sectionKeys.filter(k => expectedSections.includes(k))
   

@@ -28,6 +28,7 @@ import {
   mergePlanKeywords,
   enforceCrawlerOpportunityContract,
 } from './crawlerOpportunityContract.js'
+import { enforceOpportunityPolicy } from './opportunityPolicy.js'
 
 /**
    * Known organizations that provide specific item categories.
@@ -545,6 +546,9 @@ export async function crawlItemFunding(profileInput, options = {}) {
                     opportunity_type: 'program',
                     item_requested: itemRequest,
           }
+
+          // Apply centralized policy (URL, placeholder, loan, matching-funds) before scoring
+          if (!enforceOpportunityPolicy(opp).ok) continue
 
           // Score using profile if available
           let matchScore = 60 // Base score for category match
