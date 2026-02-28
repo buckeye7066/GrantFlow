@@ -1,9 +1,3 @@
-/**
- * Real Web Crawler API Routes
- * Handles execution of specialized funding crawlers
- * Production version - uses only real data sources
- */
-
 import express from 'express'
 import { ensureAuth } from '../middleware/auth.js'
 import { getProfileWithLocation } from '../services/crawlers/crawlerHelpers.js'
