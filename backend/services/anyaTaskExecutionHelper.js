@@ -142,11 +142,13 @@ export async function listExecutableTasks(db, { profileId = null, limit = 50 } =
  */
 export async function logTaskExecution({ db, runId, taskId, success, message }) {
   try {
-    await appendAnyaRunLog(db, runId, {
-      level: success ? 'info' : 'error',
-      message: `Task ${taskId}: ${message}`,
-      data: { task_id: taskId, success },
-    })
+    await appendAnyaRunLog(
+      db,
+      runId,
+      success ? 'info' : 'error',
+      `Task ${taskId}: ${message}`,
+      { task_id: taskId, success }
+    )
   } catch (error) {
     console.error('[Task Execution] Failed to log execution', error)
   }
