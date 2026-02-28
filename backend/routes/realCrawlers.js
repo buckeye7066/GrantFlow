@@ -23,8 +23,6 @@ import { buildProfileFacets, requireFacets, buildIntentTokens } from '../service
 import { planCrawlerQueries } from '../services/crawlers/queryPlanner.js'
 import {
   enforceOpportunityPolicy,
-  filterByPolicy,
-  getPolicyRejectionCounts,
   resetPolicyRejectionCounts,
 } from '../services/crawlers/opportunityPolicy.js'
 
@@ -346,11 +344,8 @@ function normalizeLiveOpportunity(raw, { crawlerType, rejectionCounts = null }) 
   }
 
   // Apply unified opportunity policy (URL, placeholder, loan, matching-funds).
-  const policyResult = enforceOpportunityPolicy(raw)
-  if (!policyResult.ok) {
-    bumpRejectionCount(rejectionCounts, policyResult.reason ?? 'policy_rejected')
-    return null
-  }
+  const policyResult = enforceOpportunityPolicy(raw, { rejectionCounts })
+  if (!policyResult.ok) return null
 
   const title = raw.title ?? raw.name ?? null
   const sponsor = raw.sponsor ?? raw.funder ?? raw.source ?? null
@@ -548,7 +543,14 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
           })(),
         ),
       )
-      rawResults = results.flat()
+      const flat = results.flat()
+      const seen = new Set()
+      rawResults = flat.filter((row) => {
+        const key = String(row?.url || row?.application_url || row?.source_url || row?.title || '').trim().toLowerCase()
+        if (!key || seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
     } else {
       switch (crawlerType) {
         case 'local_funding':
@@ -613,12 +615,6 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
     let normalized = (Array.isArray(rawResults) ? rawResults : [])
       .map((row) => normalizeLiveOpportunity(row, { crawlerType, rejectionCounts }))
       .filter(Boolean)
-    // Central policy: drop placeholders, loans, matching funds (counts in rejectionCounts)
-    const policyFiltered = filterByPolicy(normalized, { rejectionCounts })
-    normalized = policyFiltered.passed
-    Object.entries(policyFiltered.rejectionCounts || {}).forEach(([k, v]) => {
-      if (v > 0) rejectionCounts[`policy_${k}`] = (rejectionCounts[`policy_${k}`] ?? 0) + v
-    })
     normalized = normalized.filter((row) => {
       const text =
         `${row?.title || ''} ${row?.description || ''} ${(row?.keywords || []).join(' ')} ${(row?.categories || []).join(' ')}`.toLowerCase()
@@ -646,23 +642,16 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
       const { score: computedScore, reasons: computedReasons } = calculateMatchScore(profileContextForScoring, row)
       const existingScore = typeof row.match_score === 'number' ? row.match_score : null
 
-      const mergedScore = existingScore === null ? computedScore : Math.max(existingScore, computedScore)
+      // Single scoring engine: use route-layer matchingEngine only (no max-merge with crawler score).
+      const mergedScore = computedScore
       const mergedReasons = mergeReasons(row.match_reasons, mergeReasons(computedReasons, facetReasons))
 
       return { ...row, match_score: mergedScore, match_reasons: mergedReasons }
     })
-    // Apply policy after rescoring (final guard before returning).
-    .filter((row) => {
-      const p = enforceOpportunityPolicy(row)
-      if (!p.ok) { bumpRejectionCount(rejectionCounts, `post_score_policy_${p.reason ?? 'rejected'}`); return false }
-      return true
-    })
-
-    // Policy pass after rescoring (defense in depth)
-    const policyAfterRescore = filterByPolicy(rescored, { rejectionCounts })
-    const rescoredPolicyOk = policyAfterRescore.passed
-    Object.entries(policyAfterRescore.rejectionCounts || {}).forEach(([k, v]) => {
-      if (v > 0) rejectionCounts[`policy_after_rescore_${k}`] = (rejectionCounts[`policy_after_rescore_${k}`] ?? 0) + v
+    // Single policy pass after rescoring (no redundant check; counts go to request-scoped rejectionCounts).
+    const rescoredPolicyOk = rescored.filter((row) => {
+      const p = enforceOpportunityPolicy(row, { rejectionCounts })
+      return p.ok
     })
 
     let included = rescoredPolicyOk
@@ -691,8 +680,13 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
       opportunities: included,
       error: null,
       query_plan: queryPlan,
-      validation_rejection_counts: { ...rejectionCounts, ...getPolicyRejectionCounts() },
-      ...(fallbackApplied ? { score_fallback_applied: true } : {}),
+      validation_rejection_counts: { ...rejectionCounts },
+      ...(fallbackApplied
+        ? {
+            score_fallback_applied: true,
+            threshold_fallback_message: `No results met your threshold of ${minMatchScore}%. Showing best available matches.`,
+          }
+        : {}),
     }
   } catch (error) {
     const errorMsg = error?.message || String(error)
@@ -724,7 +718,7 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
   }
 }
 
-function formatDbOpportunity(row) {
+function formatDbOpportunity(row, rejectionCounts = null) {
   if (!row) return null
   const keywords = safeParseJSON(row.keywords, [])
   const categories = safeParseJSON(row.categories, [])
@@ -737,12 +731,10 @@ function formatDbOpportunity(row) {
     categories,
     eligibility_bullets,
     match_reasons,
-    // Normalize url fields used by frontend.
     url: row.application_url ?? row.source_url ?? null,
   }
 
-  // Apply policy so DB records with stale/bad data are never returned.
-  const policyResult = enforceOpportunityPolicy(formatted)
+  const policyResult = enforceOpportunityPolicy(formatted, { rejectionCounts })
   if (!policyResult.ok) return null
 
   return formatted
@@ -754,7 +746,12 @@ function buildCandidateOpportunityQuery({ crawlerType, profileContext, tokens, i
   const params = []
 
   // Hard-exclude loans (unconditional per product rules).
-  conditions.push("(opportunity_type IS NULL OR LOWER(opportunity_type) NOT IN ('loan','loan_program','microloan'))")
+  conditions.push("(opportunity_type IS NULL OR LOWER(TRIM(opportunity_type)) NOT IN ('loan','loan_program','microloan'))")
+  if (isPostgres) {
+    conditions.push('(is_loan IS NULL OR is_loan = FALSE)')
+  } else {
+    conditions.push('(is_loan IS NULL OR is_loan = 0)')
+  }
   // Hard-exclude matching-funds/cost-share requirements (unconditional per product rules).
   conditions.push(
     isPostgres
@@ -1162,6 +1159,7 @@ router.post('/run', ensureAuth, async (req, res) => {
           used_live: true,
           used_db_fallback: false,
           debug,
+          ...(live.threshold_fallback_message ? { threshold_fallback_message: live.threshold_fallback_message } : {}),
           ...(debugMeta ? { debug_meta: debugMeta } : {}),
         })
       }
@@ -1179,7 +1177,8 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     // 2) DB matching fallback (fast, stable, always uses full profile data).
     let candidates = []
-    
+    const dbRejectionCounts = {}
+
     try {
       const tokens = buildSearchTokens(profileContext)
       let { sql, params } = buildCandidateOpportunityQuery({
@@ -1189,9 +1188,10 @@ router.post('/run', ensureAuth, async (req, res) => {
         itemRequest: item_request,
         dialect: db?.dialect,
       })
-      candidates = (await db.prepare(sql).all(...params)).map(formatDbOpportunity).filter(Boolean)
+      candidates = (await db.prepare(sql).all(...params))
+        .map((row) => formatDbOpportunity(row, dbRejectionCounts))
+        .filter(Boolean)
 
-      // Relax: if token narrowing yielded 0, retry without tokens so directory-style and broad matches survive.
       if (candidates.length === 0 && ENABLE_TOKEN_NARROWING && tokens.length > 0) {
         console.log('[RealCrawlers] Token narrowing returned 0; retrying DB fallback without token filter')
         const broad = buildCandidateOpportunityQuery({
@@ -1201,7 +1201,9 @@ router.post('/run', ensureAuth, async (req, res) => {
           itemRequest: item_request,
           dialect: db?.dialect,
         })
-        candidates = (await db.prepare(broad.sql).all(...broad.params)).map(formatDbOpportunity).filter(Boolean)
+        candidates = (await db.prepare(broad.sql).all(...broad.params))
+          .map((row) => formatDbOpportunity(row, dbRejectionCounts))
+          .filter(Boolean)
       }
     } catch (crawlerError) {
       console.error(`[RealCrawlers] Crawler ${crawler_type} failed:`, crawlerError)
@@ -1241,9 +1243,6 @@ router.post('/run', ensureAuth, async (req, res) => {
     const currentCandidates = candidates.filter((row) => isOpportunityCurrent(row))
     const expiredExcluded = Math.max(0, candidates.length - currentCandidates.length)
 
-    // Score all candidates using the deterministic engine (uses full sections/signals).
-    // All opportunities scored uniformly — directory resources earn relevance through matching.
-    resetPolicyRejectionCounts()
     const scored = currentCandidates
       .map((row) => {
         const { score, reasons } = calculateMatchScore(profileContext, row)
@@ -1255,13 +1254,12 @@ router.post('/run', ensureAuth, async (req, res) => {
         }
       })
       .filter((row) => {
-        const p = enforceOpportunityPolicy(row)
+        const p = enforceOpportunityPolicy(row, { rejectionCounts: dbRejectionCounts })
         return p.ok
       })
     const scoredPolicyOk = scored
-    const policyRejections = getPolicyRejectionCounts()
-    if (Object.keys(policyRejections).length > 0) {
-      debug.policy_rejections_db = policyRejections
+    if (Object.keys(dbRejectionCounts).length > 0) {
+      debug.policy_rejections_db = { ...dbRejectionCounts }
     }
 
     const totalFound = scoredPolicyOk.length
@@ -1281,7 +1279,7 @@ router.post('/run', ensureAuth, async (req, res) => {
       current: currentCandidates.length,
       expired_excluded: expiredExcluded,
       returned: filteredOpportunities.length,
-      policy_rejection_counts: getPolicyRejectionCounts(),
+      policy_rejection_counts: { ...dbRejectionCounts },
     }
 
     // Guardrail: if something is being found but everything is filtered out, include score diagnostics.
@@ -1322,7 +1320,7 @@ router.post('/run', ensureAuth, async (req, res) => {
       }
     }
 
-    // Guardrail: "0 results" is a failure state.
+    let thresholdFallbackMessage = null
     if (initiallyIncludedCount === 0 && totalFound > 0) {
       filteredOpportunities = scoredPolicyOk
         .filter((o) => typeof o?.match_score === 'number')
@@ -1330,6 +1328,9 @@ router.post('/run', ensureAuth, async (req, res) => {
         .slice(0, 50)
       debug.db.returned = filteredOpportunities.length
       debug.db.fallback_applied = filteredOpportunities.length > 0 ? true : undefined
+      if (filteredOpportunities.length > 0) {
+        thresholdFallbackMessage = `No results met your threshold of ${min_match_score}%. Showing best available matches.`
+      }
     }
 
     // If live had *some* results, merge + dedupe by URL/title so users see real results first.
@@ -1359,6 +1360,9 @@ router.post('/run', ensureAuth, async (req, res) => {
         })
       : undefined
     
+    const fallbackMessage =
+      thresholdFallbackMessage ??
+      (live?.threshold_fallback_message && live.opportunities?.length > 0 ? live.threshold_fallback_message : null)
     res.json({
       success: true,
       crawler_type,
@@ -1371,6 +1375,7 @@ router.post('/run', ensureAuth, async (req, res) => {
       used_live: Boolean(debug.used_live),
       used_db_fallback: Boolean(debug.used_db_fallback),
       debug,
+      ...(fallbackMessage ? { threshold_fallback_message: fallbackMessage } : {}),
       ...(debugMeta ? { debug_meta: debugMeta } : {}),
     })
     

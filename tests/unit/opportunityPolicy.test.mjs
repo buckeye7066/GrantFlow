@@ -5,12 +5,13 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const modulePath = path.resolve(__dirname, '..', '..', 'backend', 'services', 'crawlers', 'opportunityPolicy.js')
+const moduleUrl = pathToFileURL(modulePath).href
 
 const {
   isLoanLike,
@@ -21,7 +22,7 @@ const {
   enforceOpportunityPolicy,
   getPolicyRejectionCounts,
   resetPolicyRejectionCounts,
-} = await import(modulePath)
+} = await import(moduleUrl)
 
 // ─── isValidRealUrl ──────────────────────────────────────────────────────────
 
@@ -115,8 +116,8 @@ test('isLoanLike: detects loan keyword in title', () => {
   assert.equal(isLoanLike({ title: 'Revolving Loan Fund', description: 'Access capital' }), true)
 })
 
-test('isLoanLike: detects financing keyword in description', () => {
-  assert.equal(isLoanLike({ title: 'Growth Program', description: 'Provides financing to businesses' }), true)
+test('isLoanLike: detects loan program in description', () => {
+  assert.equal(isLoanLike({ title: 'Growth Program', description: 'This small business loan program provides capital' }), true)
 })
 
 test('isLoanLike: detects repayment keyword', () => {
@@ -126,6 +127,18 @@ test('isLoanLike: detects repayment keyword', () => {
 test('isLoanLike: does not false-positive on "loanable"', () => {
   assert.equal(
     isLoanLike({ title: 'Equipment Lending Program', description: 'Equipment loanable to nonprofits', opportunity_type: 'grant' }),
+    false,
+  )
+})
+
+test('isLoanLike: does not false-positive on loan repayment assistance (grant)', () => {
+  assert.equal(
+    isLoanLike({
+      title: 'Student Loan Repayment Assistance',
+      description: 'Grant program offering loan repayment assistance for educators',
+      url: 'https://studentaid.gov/repayment',
+      opportunity_type: 'grant',
+    }),
     false,
   )
 })

@@ -65,6 +65,7 @@ export async function crawlECFBenefits(profileInput, options = {}) {
       location: facets?.geo ?? signals?.location ?? {},
     })
   const results = []
+  const seenUrls = new Set()
   const { eligibleIndividual, eligibleSupport, supportType } = evaluateEcfUnlockEligibility(profile)
 
   if (!eligibleIndividual && !eligibleSupport) {
@@ -83,6 +84,9 @@ export async function crawlECFBenefits(profileInput, options = {}) {
       try {
         const benefits = await searchIndividualBenefits(source, profile)
         for (const benefit of benefits) {
+          const url = benefit?.url || benefit?.application_url || benefit?.source_url || ''
+          if (url && seenUrls.has(url)) continue
+          if (url) seenUrls.add(url)
           if (isLoan(benefit)) continue
           const matchScore = calculateECFMatchScore(benefit, profile, 'individual')
           results.push({
@@ -104,6 +108,9 @@ export async function crawlECFBenefits(profileInput, options = {}) {
       try {
         const benefits = await searchFamilySupportBenefits(source, profile)
         for (const benefit of benefits) {
+          const url = benefit?.url || benefit?.application_url || benefit?.source_url || ''
+          if (url && seenUrls.has(url)) continue
+          if (url) seenUrls.add(url)
           if (isLoan(benefit)) continue
           const matchScore = calculateECFMatchScore(benefit, profile, 'provider')
           results.push({
@@ -126,6 +133,9 @@ export async function crawlECFBenefits(profileInput, options = {}) {
     const liveKws = profile?.signals?.keywordSet ? Array.from(profile.signals.keywordSet).slice(0, 5) : []
     const liveOpps = await fetchLiveECFOpportunities({ keywords: liveKws, state: profile?.state || null })
     for (const liveOpp of liveOpps) {
+      const url = liveOpp?.url || liveOpp?.application_url || liveOpp?.source_url || ''
+      if (url && seenUrls.has(url)) continue
+      if (url) seenUrls.add(url)
       if (isLoan(liveOpp)) continue
       const matchScore = calculateECFMatchScore(liveOpp, profile)
       results.push({ ...liveOpp, match_score: matchScore })
