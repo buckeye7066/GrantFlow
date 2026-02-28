@@ -1670,7 +1670,7 @@ function getCrawlerDescription(type) {
  * GET /api/real-crawlers/health-check
  * Returns { ok, checks: [{ source, reachable, latency_ms, error }], env?: object }
  */
-router.get('/health-check', ensureAuth, async (req, res) => {
+router.get('/health-check', async (req, res) => {
   try {
     const { testConnectivity } = await import('../services/crawlers/grantsGovClient.js')
     const apiChecks = await testConnectivity()
@@ -1692,6 +1692,94 @@ router.get('/health-check', ensureAuth, async (req, res) => {
   } catch (err) {
     res.status(500).json({ ok: false, error: err?.message || String(err) })
   }
+})
+
+/**
+ * Raw grants.gov API test — no auth required.
+ * GET /api/real-crawlers/test-grants-api
+ * Calls grants.gov search2 with a simple query and returns the raw response.
+ */
+router.get('/test-grants-api', async (req, res) => {
+  const keyword = req.query.q || 'health'
+  const results = { keyword, legacy: null, simpler: null, timestamp: new Date().toISOString() }
+
+  // Test legacy API
+  try {
+    const start = Date.now()
+    const response = await postWithRetry(
+      'https://api.grants.gov/v1/api/search2',
+      { keyword, oppStatuses: 'posted', rows: 3 },
+      { headers: { 'Content-Type': 'application/json' } },
+      { timeoutMs: 20000, retries: 1 },
+    )
+    const latency = Date.now() - start
+    const data = response?.data
+    const topKeys = data && typeof data === 'object' ? Object.keys(data) : []
+    const dataKeys = data?.data && typeof data.data === 'object' ? Object.keys(data.data) : []
+    const hitCount = data?.data?.hitCount ?? data?.hitCount ?? null
+    const oppHits = data?.data?.oppHits ?? data?.oppHits ?? []
+    const sampleHit = Array.isArray(oppHits) && oppHits.length > 0 ? oppHits[0] : null
+
+    results.legacy = {
+      ok: true,
+      status: response?.status,
+      latency_ms: latency,
+      top_keys: topKeys,
+      data_keys: dataKeys,
+      hit_count: hitCount,
+      opp_hits_count: Array.isArray(oppHits) ? oppHits.length : 0,
+      sample_hit: sampleHit,
+      errorcode: data?.errorcode ?? data?.errorCode ?? null,
+      msg: data?.msg ?? data?.message ?? null,
+      raw_snippet: JSON.stringify(data).slice(0, 800),
+    }
+  } catch (err) {
+    results.legacy = {
+      ok: false,
+      error: err?.message || String(err),
+      code: err?.code || err?.response?.status || null,
+      response_snippet: err?.response?.data ? JSON.stringify(err.response.data).slice(0, 400) : null,
+    }
+  }
+
+  // Test Simpler API
+  try {
+    const start = Date.now()
+    const response = await postWithRetry(
+      'https://api.simpler.grants.gov/v1/opportunities/search',
+      {
+        query: keyword,
+        filters: { opportunity_status: { one_of: ['posted', 'forecasted'] } },
+        pagination: { page_size: 3, page_offset: 1, order_by: 'relevancy', sort_direction: 'descending' },
+      },
+      { headers: { 'Content-Type': 'application/json' } },
+      { timeoutMs: 20000, retries: 1 },
+    )
+    const latency = Date.now() - start
+    const data = response?.data
+    const topKeys = data && typeof data === 'object' ? Object.keys(data) : []
+    const items = data?.data ?? data?.items ?? data?.opportunities ?? data?.results ?? []
+    const sampleItem = Array.isArray(items) && items.length > 0 ? items[0] : null
+
+    results.simpler = {
+      ok: true,
+      status: response?.status,
+      latency_ms: latency,
+      top_keys: topKeys,
+      items_count: Array.isArray(items) ? items.length : 0,
+      sample_item: sampleItem ? { title: sampleItem.opportunity_title ?? sampleItem.title, id: sampleItem.opportunity_id ?? sampleItem.id } : null,
+      raw_snippet: JSON.stringify(data).slice(0, 800),
+    }
+  } catch (err) {
+    results.simpler = {
+      ok: false,
+      error: err?.message || String(err),
+      code: err?.code || err?.response?.status || null,
+      response_snippet: err?.response?.data ? JSON.stringify(err.response.data).slice(0, 400) : null,
+    }
+  }
+
+  res.json(results)
 })
 
 export default router
