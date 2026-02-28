@@ -1668,63 +1668,30 @@ function getCrawlerDescription(type) {
 /**
  * Admin health check: test external API connectivity.
  * GET /api/real-crawlers/health-check
- * Returns { ok, checks: [{ source, reachable, latency_ms, error }] }
+ * Returns { ok, checks: [{ source, reachable, latency_ms, error }], env?: object }
  */
 router.get('/health-check', ensureAuth, async (req, res) => {
-  const checks = []
-  const testApis = [
-    {
-      source: 'Grants.gov search2',
-      url: 'https://api.grants.gov/v1/api/search2',
-      method: 'POST',
-      body: { keyword: 'health', oppStatuses: 'posted', rows: 1 },
-      extractHits: (parsed) => {
-        const hits = parsed?.data?.oppHits ?? parsed?.oppHits ?? []
-        return Array.isArray(hits) ? hits.length : 0
-      },
-    },
-    {
-      source: 'NIH Grants RSS',
-      url: 'https://grants.nih.gov/grants/guide/newsfeed/fundingopps.xml',
-      method: 'GET',
-      extractHits: (data) => (typeof data === 'string' && data.includes('<item>') ? 1 : 0),
-    },
-  ]
+  try {
+    const { testConnectivity } = await import('../services/crawlers/grantsGovClient.js')
+    const apiChecks = await testConnectivity()
 
-  for (const api of testApis) {
-    const start = Date.now()
+    // Also test NIH RSS
+    const nihStart = Date.now()
+    let nihCheck
     try {
-      let response
-      if (api.method === 'POST') {
-        response = await postWithRetry(api.url, api.body, { headers: { 'Content-Type': 'application/json' } }, { timeoutMs: 10000, retries: 0 })
-      } else {
-        response = await getWithRetry(api.url, {}, { timeoutMs: 10000, retries: 0 })
-      }
-      const latency = Date.now() - start
-      const parsed = response?.data
-      const hitCount = api.extractHits(parsed)
-      checks.push({
-        source: api.source,
-        reachable: true,
-        latency_ms: latency,
-        hit_count: hitCount,
-        status: response?.status ?? null,
-        error: null,
-      })
+      const nihResp = await getWithRetry('https://grants.nih.gov/grants/guide/newsfeed/fundingopps.xml', {}, { timeoutMs: 10000, retries: 0 })
+      const hasItems = typeof nihResp?.data === 'string' && nihResp.data.includes('<item>')
+      nihCheck = { source: 'NIH Grants RSS', reachable: true, latency_ms: Date.now() - nihStart, hit_count: hasItems ? 1 : 0, error: null }
     } catch (err) {
-      checks.push({
-        source: api.source,
-        reachable: false,
-        latency_ms: Date.now() - start,
-        hit_count: 0,
-        status: err?.status ?? err?.response?.status ?? null,
-        error: err?.message || String(err),
-      })
+      nihCheck = { source: 'NIH Grants RSS', reachable: false, latency_ms: Date.now() - nihStart, hit_count: 0, error: err?.message || String(err) }
     }
-  }
 
-  const allReachable = checks.every((c) => c.reachable)
-  res.json({ ok: allReachable, checks })
+    const checks = [...apiChecks, nihCheck]
+    const allReachable = checks.every((c) => c.reachable)
+    res.json({ ok: allReachable, checks, env: { LIVE_CRAWL_TIMEOUT_MS, LIVE_CRAWL_PERSIST_OPPS, MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK } })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || String(err) })
+  }
 })
 
 export default router

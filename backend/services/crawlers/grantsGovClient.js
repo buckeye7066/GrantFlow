@@ -10,7 +10,7 @@
  * directly against the grants.gov endpoints.
  */
 
-import { getWithRetry, postWithRetry } from './httpClient.js'
+import { postWithRetry } from './httpClient.js'
 
 // ── Endpoints ──────────────────────────────────────────────────────────────────
 const LEGACY_API = 'https://api.grants.gov/v1/api/search2'
@@ -18,7 +18,7 @@ const SIMPLER_API = 'https://api.simpler.grants.gov/v1/opportunities/search'
 const GRANTS_GOV_DETAIL = 'https://www.grants.gov/search-results-detail/'
 
 // ── Timeouts & limits ─────────────────────────────────────────────────────────
-const API_TIMEOUT_MS = 18_000
+const API_TIMEOUT_MS = 20_000
 const API_RETRIES = 2
 const MAX_ROWS_PER_QUERY = 25
 
@@ -35,11 +35,13 @@ function normaliseLegacyHit(hit) {
   const closeDate = hit.closeDate ?? hit.close_date ?? null
   const openDate = hit.openDate ?? hit.open_date ?? null
   const synopsis = hit.synopsis ?? hit.description ?? null
+  const alnList = Array.isArray(hit.alnList) ? hit.alnList.join(', ') : ''
 
   const description = synopsis || [
     `Federal grant opportunity: ${title}.`,
     agency ? `Funded by ${agency}.` : '',
     number ? `Opportunity number ${number}.` : '',
+    alnList ? `ALN: ${alnList}.` : '',
     'Visit Grants.gov for full eligibility details and application instructions.',
   ].filter(Boolean).join(' ')
 
@@ -140,41 +142,50 @@ async function queryLegacyAPI(keyword, rows = MAX_ROWS_PER_QUERY) {
 
     if (!parsed) {
       console.warn(`[GrantsGovClient] Legacy API returned unparseable body for "${keyword}"`)
-      return { ok: false, hits: [], error: 'unparseable_response' }
+      return { ok: false, hits: [], error: 'unparseable_response', raw_snippet: String(response?.data ?? '').slice(0, 300) }
     }
 
-    // The grants.gov API wraps results in data.data.oppHits OR data.oppHits
+    // The grants.gov API wraps results in various structures — try them all
     const hits =
       parsed?.data?.oppHits ??
       parsed?.oppHits ??
       parsed?.data?.opportunities ??
       parsed?.opportunities ??
+      parsed?.data?.results ??
+      parsed?.results ??
       []
 
-    const rows2 = Array.isArray(hits) ? hits : []
+    const resultRows = Array.isArray(hits) ? hits : []
 
     // Diagnostic: log response structure when 0 results
-    if (rows2.length === 0) {
+    if (resultRows.length === 0) {
       const topKeys = Object.keys(parsed).slice(0, 8).join(', ')
       const errorCode = parsed?.errorcode ?? parsed?.errorCode ?? parsed?.error_code ?? 'none'
-      const msg = parsed?.msg ?? parsed?.message ?? ''
+      const msg = parsed?.msg ?? parsed?.message ?? parsed?.error ?? ''
+      const dataKeys = parsed?.data && typeof parsed.data === 'object'
+        ? Object.keys(parsed.data).slice(0, 8).join(', ')
+        : 'N/A'
+      const hitCount = parsed?.data?.hitCount ?? parsed?.hitCount ?? 'N/A'
       console.warn(
-        `[GrantsGovClient] Legacy API 0 hits for "${keyword}" | errorcode=${errorCode} msg="${msg}" keys=[${topKeys}]`,
+        `[GrantsGovClient] Legacy 0 hits for "${keyword}" | err=${errorCode} msg="${msg}" keys=[${topKeys}] data_keys=[${dataKeys}] hitCount=${hitCount}`,
       )
-      // Also log inner data keys if present
-      if (parsed?.data && typeof parsed.data === 'object') {
-        const innerKeys = Object.keys(parsed.data).slice(0, 8).join(', ')
-        console.warn(`[GrantsGovClient]   inner data keys: [${innerKeys}], hitCount=${parsed.data?.hitCount ?? 'N/A'}`)
+      // If hitCount > 0 but oppHits is empty, there's a parsing problem
+      if (typeof hitCount === 'number' && hitCount > 0) {
+        console.error(`[GrantsGovClient] PARSING BUG: hitCount=${hitCount} but extracted 0 hits!`)
+        const sample = JSON.stringify(parsed?.data ?? parsed).slice(0, 500)
+        console.error(`[GrantsGovClient] Raw data sample: ${sample}`)
       }
+    } else {
+      console.log(`[GrantsGovClient] Legacy "${keyword}" → ${resultRows.length} hits`)
     }
 
-    const normalised = rows2.map(normaliseLegacyHit).filter(Boolean)
+    const normalised = resultRows.map(normaliseLegacyHit).filter(Boolean)
 
     return {
       ok: true,
       hits: normalised,
-      raw_count: rows2.length,
-      hit_count: parsed?.data?.hitCount ?? null,
+      raw_count: resultRows.length,
+      hit_count: parsed?.data?.hitCount ?? parsed?.hitCount ?? null,
     }
   } catch (err) {
     const code = err?.code || err?.response?.status || ''
@@ -184,22 +195,32 @@ async function queryLegacyAPI(keyword, rows = MAX_ROWS_PER_QUERY) {
   }
 }
 
-// ── Simpler.Grants.gov API ────────────────────────────────────────────────────
+// ── Simpler.Grants.gov API (POST with JSON body) ─────────────────────────────
 
 async function querySimplerAPI(keyword, rows = MAX_ROWS_PER_QUERY) {
-  // Simpler API uses GET with query params
-  const params = new URLSearchParams({
+  // Simpler.Grants.gov API uses POST with a structured JSON body
+  const body = {
     query: keyword,
-    status: 'posted,forecasted',
-    page_size: String(Math.min(rows, MAX_ROWS_PER_QUERY)),
-    page: '1',
-    order_by: 'relevancy',
-  })
-
-  const url = `${SIMPLER_API}?${params}`
+    filters: {
+      opportunity_status: {
+        one_of: ['posted', 'forecasted'],
+      },
+    },
+    pagination: {
+      page_size: Math.min(rows, MAX_ROWS_PER_QUERY),
+      page_offset: 1,
+      order_by: 'relevancy',
+      sort_direction: 'descending',
+    },
+  }
 
   try {
-    const response = await getWithRetry(url, {}, { timeoutMs: API_TIMEOUT_MS, retries: API_RETRIES })
+    const response = await postWithRetry(
+      SIMPLER_API,
+      body,
+      { headers: { 'Content-Type': 'application/json' } },
+      { timeoutMs: API_TIMEOUT_MS, retries: API_RETRIES },
+    )
 
     let parsed = response?.data
     if (typeof parsed === 'string') {
@@ -214,28 +235,36 @@ async function querySimplerAPI(keyword, rows = MAX_ROWS_PER_QUERY) {
     // Simpler API wraps results in data or items or opportunities
     const hits =
       parsed?.data ?? parsed?.items ?? parsed?.opportunities ?? parsed?.results ?? []
-    const rows2 = Array.isArray(hits) ? hits : []
+    const resultRows = Array.isArray(hits) ? hits : []
 
-    if (rows2.length === 0) {
+    if (resultRows.length === 0) {
       const topKeys = Object.keys(parsed).slice(0, 8).join(', ')
-      const pagination = parsed?.pagination ?? parsed?.meta ?? null
+      const pagination = parsed?.pagination_info ?? parsed?.pagination ?? parsed?.meta ?? null
       const total = pagination?.total_records ?? pagination?.total ?? parsed?.total ?? 'N/A'
+      const msg = parsed?.message ?? parsed?.error ?? ''
       console.warn(
-        `[GrantsGovClient] Simpler API 0 hits for "${keyword}" | total=${total} keys=[${topKeys}]`,
+        `[GrantsGovClient] Simpler 0 hits for "${keyword}" | total=${total} msg="${msg}" keys=[${topKeys}]`,
       )
+    } else {
+      console.log(`[GrantsGovClient] Simpler "${keyword}" → ${resultRows.length} hits`)
     }
 
-    const normalised = rows2.map(normaliseSimplerHit).filter(Boolean)
+    const normalised = resultRows.map(normaliseSimplerHit).filter(Boolean)
 
     return {
       ok: true,
       hits: normalised,
-      raw_count: rows2.length,
+      raw_count: resultRows.length,
     }
   } catch (err) {
     const code = err?.code || err?.response?.status || ''
     const msg = err?.message || String(err)
-    console.error(`[GrantsGovClient] Simpler API FAILED for "${keyword}": ${code} ${msg}`)
+    // Don't log as error if it's just a 404/405 (endpoint might not exist yet)
+    if (code === 404 || code === 405 || code === '404' || code === '405') {
+      console.warn(`[GrantsGovClient] Simpler API not available (${code}) for "${keyword}"`)
+    } else {
+      console.error(`[GrantsGovClient] Simpler API FAILED for "${keyword}": ${code} ${msg}`)
+    }
     return { ok: false, hits: [], error: `${code} ${msg}`.trim() }
   }
 }
@@ -245,84 +274,48 @@ async function querySimplerAPI(keyword, rows = MAX_ROWS_PER_QUERY) {
 /**
  * Search for grant opportunities using both Grants.gov APIs.
  * Deduplicates by title (case-insensitive).
- *
- * @param {string} keyword  Search query string
- * @param {object} [opts]
- * @param {number} [opts.rows=25]  Max results per API
- * @param {boolean} [opts.legacyOnly=false]  Skip simpler API
- * @param {boolean} [opts.simplerOnly=false]  Skip legacy API
- * @returns {Promise<{ ok: boolean, opportunities: object[], diagnostics: object }>}
  */
 export async function searchGrants(keyword, opts = {}) {
   const { rows = MAX_ROWS_PER_QUERY, legacyOnly = false, simplerOnly = false } = opts
   const diagnostics = { legacy: null, simpler: null, merged: 0 }
 
-  // Run both APIs in parallel
   const [legacyResult, simplerResult] = await Promise.all([
     simplerOnly ? Promise.resolve({ ok: false, hits: [], error: 'skipped' }) : queryLegacyAPI(keyword, rows),
     legacyOnly ? Promise.resolve({ ok: false, hits: [], error: 'skipped' }) : querySimplerAPI(keyword, rows),
   ])
 
   diagnostics.legacy = {
-    ok: legacyResult.ok,
-    count: legacyResult.hits.length,
-    raw_count: legacyResult.raw_count ?? 0,
-    hit_count: legacyResult.hit_count ?? null,
+    ok: legacyResult.ok, count: legacyResult.hits.length,
+    raw_count: legacyResult.raw_count ?? 0, hit_count: legacyResult.hit_count ?? null,
     error: legacyResult.error ?? null,
   }
   diagnostics.simpler = {
-    ok: simplerResult.ok,
-    count: simplerResult.hits.length,
-    raw_count: simplerResult.raw_count ?? 0,
-    error: simplerResult.error ?? null,
+    ok: simplerResult.ok, count: simplerResult.hits.length,
+    raw_count: simplerResult.raw_count ?? 0, error: simplerResult.error ?? null,
   }
 
   // Merge and deduplicate
   const seen = new Set()
   const merged = []
-
   for (const opp of [...legacyResult.hits, ...simplerResult.hits]) {
     const key = (opp.title || '').toLowerCase().trim()
-    if (!key) continue
-    if (seen.has(key)) continue
+    if (!key || seen.has(key)) continue
     seen.add(key)
     merged.push(opp)
   }
-
   diagnostics.merged = merged.length
 
   const anyOk = legacyResult.ok || simplerResult.ok
   if (!anyOk) {
-    console.error(
-      `[GrantsGovClient] BOTH APIs failed for "${keyword}" | legacy: ${legacyResult.error} | simpler: ${simplerResult.error}`,
-    )
-  } else if (merged.length === 0) {
-    console.warn(
-      `[GrantsGovClient] Both APIs returned 0 results for "${keyword}" (both reachable)`,
-    )
-  } else {
-    console.log(
-      `[GrantsGovClient] "${keyword}" → ${merged.length} opportunities (legacy=${legacyResult.hits.length}, simpler=${simplerResult.hits.length})`,
-    )
+    console.error(`[GrantsGovClient] BOTH APIs failed for "${keyword}" | legacy: ${legacyResult.error} | simpler: ${simplerResult.error}`)
   }
 
-  return {
-    ok: anyOk,
-    opportunities: merged,
-    diagnostics,
-  }
+  return { ok: anyOk, opportunities: merged, diagnostics }
 }
 
 /**
  * Run multiple keyword searches in parallel (batched to avoid rate-limits).
  * Returns deduplicated results across ALL queries.
- *
- * @param {Array<{label:string, query:string}>} strategies
- * @param {object} [opts]
- * @param {number} [opts.batchSize=3]  Concurrent queries
- * @param {number} [opts.batchDelayMs=400]  Delay between batches
- * @param {number} [opts.rowsPerQuery=25]  Max results per query
- * @returns {Promise<{ opportunities: object[], diagnostics: object }>}
  */
 export async function searchGrantsBatch(strategies, opts = {}) {
   const { batchSize = 3, batchDelayMs = 400, rowsPerQuery = MAX_ROWS_PER_QUERY } = opts
@@ -330,6 +323,8 @@ export async function searchGrantsBatch(strategies, opts = {}) {
   const seenTitles = new Set()
   const allOpportunities = []
   const perStrategy = {}
+  let legacyReachable = null
+  let simplerReachable = null
 
   for (let i = 0; i < strategies.length; i += batchSize) {
     const batch = strategies.slice(i, i + batchSize)
@@ -349,6 +344,15 @@ export async function searchGrantsBatch(strategies, opts = {}) {
         query: strategy.query,
         count: result.opportunities.length,
         ok: result.ok,
+        legacy_count: result.diagnostics?.legacy?.count ?? 0,
+        simpler_count: result.diagnostics?.simpler?.count ?? 0,
+      }
+
+      if (result.diagnostics?.legacy?.ok != null) {
+        legacyReachable = legacyReachable === null ? result.diagnostics.legacy.ok : (legacyReachable || result.diagnostics.legacy.ok)
+      }
+      if (result.diagnostics?.simpler?.ok != null) {
+        simplerReachable = simplerReachable === null ? result.diagnostics.simpler.ok : (simplerReachable || result.diagnostics.simpler.ok)
       }
 
       for (const opp of result.opportunities) {
@@ -359,21 +363,69 @@ export async function searchGrantsBatch(strategies, opts = {}) {
       }
     }
 
-    // Delay between batches
     if (i + batchSize < strategies.length) {
       await new Promise((r) => setTimeout(r, batchDelayMs))
     }
   }
 
   console.log(
-    `[GrantsGovClient] Batch search: ${strategies.length} strategies → ${allOpportunities.length} unique opportunities`,
+    `[GrantsGovClient] Batch: ${strategies.length} strategies → ${allOpportunities.length} unique opps (legacy=${legacyReachable}, simpler=${simplerReachable})`,
   )
 
   return {
     opportunities: allOpportunities,
-    diagnostics: { strategy_count: strategies.length, per_strategy: perStrategy },
+    diagnostics: {
+      strategy_count: strategies.length,
+      total_opportunities: allOpportunities.length,
+      legacy_api_reachable: legacyReachable,
+      simpler_api_reachable: simplerReachable,
+      per_strategy: perStrategy,
+    },
   }
 }
 
+/**
+ * Quick connectivity test for health-check endpoints.
+ */
+export async function testConnectivity() {
+  const checks = []
+
+  const legacyStart = Date.now()
+  try {
+    const result = await queryLegacyAPI('health', 2)
+    checks.push({
+      source: 'Grants.gov Legacy (search2)', url: LEGACY_API,
+      reachable: result.ok, latency_ms: Date.now() - legacyStart,
+      hit_count: result.hit_count ?? result.raw_count ?? 0,
+      returned: result.hits.length, error: result.error ?? null,
+    })
+  } catch (err) {
+    checks.push({
+      source: 'Grants.gov Legacy (search2)', url: LEGACY_API,
+      reachable: false, latency_ms: Date.now() - legacyStart,
+      hit_count: 0, returned: 0, error: err?.message || String(err),
+    })
+  }
+
+  const simplerStart = Date.now()
+  try {
+    const result = await querySimplerAPI('health', 2)
+    checks.push({
+      source: 'Simpler.Grants.gov', url: SIMPLER_API,
+      reachable: result.ok, latency_ms: Date.now() - simplerStart,
+      hit_count: result.raw_count ?? 0,
+      returned: result.hits.length, error: result.error ?? null,
+    })
+  } catch (err) {
+    checks.push({
+      source: 'Simpler.Grants.gov', url: SIMPLER_API,
+      reachable: false, latency_ms: Date.now() - simplerStart,
+      hit_count: 0, returned: 0, error: err?.message || String(err),
+    })
+  }
+
+  return checks
+}
+
 export { GRANTS_GOV_DETAIL }
-export default { searchGrants, searchGrantsBatch, GRANTS_GOV_DETAIL }
+export default { searchGrants, searchGrantsBatch, testConnectivity, GRANTS_GOV_DETAIL }
