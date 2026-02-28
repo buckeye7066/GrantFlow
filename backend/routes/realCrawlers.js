@@ -104,7 +104,7 @@ const COMPREHENSIVE_CRAWLER_IDS = [
 ]
 
 const LOAN_TYPES = new Set(['loan', 'loan_program', 'microloan'])
-const LIVE_CRAWL_TIMEOUT_MS = Number.parseInt(process.env.LIVE_CRAWL_TIMEOUT_MS ?? '12000', 10) || 12000
+const LIVE_CRAWL_TIMEOUT_MS = Math.max(30000, Number.parseInt(process.env.LIVE_CRAWL_TIMEOUT_MS ?? '30000', 10) || 30000)
 const MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK = Number.parseInt(process.env.MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK ?? '3', 10) || 3
 const LIVE_CRAWL_PERSIST_OPPS = String(process.env.LIVE_CRAWL_PERSIST_OPPS ?? 'true').toLowerCase() !== 'false'
 
