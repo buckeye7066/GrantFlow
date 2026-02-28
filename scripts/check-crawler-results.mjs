@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+/**
+ * Check crawler results and pipeline state from the DB.
+ * For policy rejection counts (why 0 included): run a crawler via POST /api/real-crawlers/run
+ * and inspect response.debug.validation_rejection_counts and response.debug.policy_rejections_db.
+ * Returned count = response.count; top rejection reasons = keys in validation_rejection_counts.
+ */
 import Database from 'better-sqlite3'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
@@ -7,7 +13,13 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
 const dbPath = join(__dirname, '..', 'backend', 'data', 'grantflow.db')
-const db = new Database(dbPath, { readonly: true })
+let db
+try {
+  db = new Database(dbPath, { readonly: true })
+} catch (e) {
+  console.log('Database not found at', dbPath, '- skip or run with valid DB.')
+  process.exit(0)
+}
 
 console.log('=== CRAWLER RESULTS CHECK ===\n')
 
@@ -99,3 +111,4 @@ if (recentGrants.length > 0) {
 
 db.close()
 console.log('\n✓ Database check complete!')
+console.log('\nPolicy rejection counts: run POST /api/real-crawlers/run and check response.debug.validation_rejection_counts and response.debug.policy_rejections_db')

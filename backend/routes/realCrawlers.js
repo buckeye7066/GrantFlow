@@ -23,6 +23,7 @@ import { buildProfileFacets, requireFacets, buildIntentTokens } from '../service
 import { planCrawlerQueries } from '../services/crawlers/queryPlanner.js'
 import {
   enforceOpportunityPolicy,
+  filterByPolicy,
   getPolicyRejectionCounts,
   resetPolicyRejectionCounts,
 } from '../services/crawlers/opportunityPolicy.js'
@@ -107,9 +108,7 @@ const LIVE_CRAWL_TIMEOUT_MS = Number.parseInt(process.env.LIVE_CRAWL_TIMEOUT_MS 
 const MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK = Number.parseInt(process.env.MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK ?? '3', 10) || 3
 const LIVE_CRAWL_PERSIST_OPPS = String(process.env.LIVE_CRAWL_PERSIST_OPPS ?? 'true').toLowerCase() !== 'false'
 
-// Reversible safety toggles: default to SOFT matching (prefer penalties over exclusions).
-const HARD_FILTER_REQUIRES_MATCH = String(process.env.HARD_FILTER_REQUIRES_MATCH ?? '').toLowerCase() === 'true'
-const HARD_FILTER_MATCH_PERCENTAGE = String(process.env.HARD_FILTER_MATCH_PERCENTAGE ?? '').toLowerCase() === 'true'
+// Non-negotiable: matching funds and match-required are always excluded from candidate query and policy.
 // Token narrowing uses profile-derived keywords to pre-filter DB candidates (OR-based, soft match).
 // Default ON so crawlers use profile information for relevance. Set env ENABLE_TOKEN_NARROWING=false to disable.
 const ENABLE_TOKEN_NARROWING = String(process.env.ENABLE_TOKEN_NARROWING ?? 'true').toLowerCase() === 'true'
@@ -611,18 +610,24 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
       }
     }
 
-    const normalized = (Array.isArray(rawResults) ? rawResults : [])
+    let normalized = (Array.isArray(rawResults) ? rawResults : [])
       .map((row) => normalizeLiveOpportunity(row, { crawlerType, rejectionCounts }))
       .filter(Boolean)
-      .filter((row) => {
-        const text =
-          `${row?.title || ''} ${row?.description || ''} ${(row?.keywords || []).join(' ')} ${(row?.categories || []).join(' ')}`.toLowerCase()
-        const blocked = Array.isArray(queryPlan?.mustNotTerms)
-          ? queryPlan.mustNotTerms.some((term) => normalizeString(term) && text.includes(normalizeString(term)))
-          : false
-        if (blocked) bumpRejectionCount(rejectionCounts, 'query_plan_must_not')
-        return !blocked
-      })
+    // Central policy: drop placeholders, loans, matching funds (counts in rejectionCounts)
+    const policyFiltered = filterByPolicy(normalized, { rejectionCounts })
+    normalized = policyFiltered.passed
+    Object.entries(policyFiltered.rejectionCounts || {}).forEach(([k, v]) => {
+      if (v > 0) rejectionCounts[`policy_${k}`] = (rejectionCounts[`policy_${k}`] ?? 0) + v
+    })
+    normalized = normalized.filter((row) => {
+      const text =
+        `${row?.title || ''} ${row?.description || ''} ${(row?.keywords || []).join(' ')} ${(row?.categories || []).join(' ')}`.toLowerCase()
+      const blocked = Array.isArray(queryPlan?.mustNotTerms)
+        ? queryPlan.mustNotTerms.some((term) => normalizeString(term) && text.includes(normalizeString(term)))
+        : false
+      if (blocked) bumpRejectionCount(rejectionCounts, 'query_plan_must_not')
+      return !blocked
+    })
 
     // Score with the FULL profile context (signals + sections + facets) so we use all datapoints consistently.
     const profileContextForScoring = {
@@ -653,7 +658,14 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
       return true
     })
 
-    let included = rescored
+    // Policy pass after rescoring (defense in depth)
+    const policyAfterRescore = filterByPolicy(rescored, { rejectionCounts })
+    const rescoredPolicyOk = policyAfterRescore.passed
+    Object.entries(policyAfterRescore.rejectionCounts || {}).forEach(([k, v]) => {
+      if (v > 0) rejectionCounts[`policy_after_rescore_${k}`] = (rejectionCounts[`policy_after_rescore_${k}`] ?? 0) + v
+    })
+
+    let included = rescoredPolicyOk
       .filter((row) => {
         return typeof row.match_score === 'number' && row.match_score >= Number(minMatchScore)
       })
@@ -663,8 +675,8 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
     // Guardrail: real URL sources must not all be dropped when min_match_score is strict.
     // If we have scored results but 0 passed threshold, return top-scoring so profile still gets relevant, URL-verified opps.
     let fallbackApplied = false
-    if (included.length === 0 && rescored.length > 0) {
-      included = rescored
+    if (included.length === 0 && rescoredPolicyOk.length > 0) {
+      included = rescoredPolicyOk
         .filter((o) => typeof o?.match_score === 'number')
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
         .slice(0, 50)
@@ -1094,12 +1106,13 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     if (live.ok && live.opportunities.length > 0) {
       // Persist discovered opportunities for browsing (even if user doesn't add to pipeline).
-      // This makes the Opportunities page a canonical backlog of crawler discoveries.
+      // Policy: only persist policy-compliant opportunities so forbidden records never enter the database.
       if (LIVE_CRAWL_PERSIST_OPPS) {
         try {
+          const toPersist = live.opportunities.filter((o) => enforceOpportunityPolicy(o).ok)
           const insertedIds = await bulkUpsertFundingOpportunities(
             db,
-            live.opportunities.map((o) => ({
+            toPersist.map((o) => ({
               ...o,
               // Keep these as global opportunities (not tied to a single profile).
               profile_id: null,
@@ -1238,20 +1251,23 @@ router.post('/run', ensureAuth, async (req, res) => {
           ...row,
           match_score: score,
           match_reasons: reasons,
-          // Normalize sponsor/title for UI
           sponsor: row.sponsor ?? row.funder ?? null,
         }
       })
-      // Apply policy after scoring (final guard before returning from DB path).
       .filter((row) => {
         const p = enforceOpportunityPolicy(row)
         return p.ok
       })
+    const scoredPolicyOk = scored
+    const policyRejections = getPolicyRejectionCounts()
+    if (Object.keys(policyRejections).length > 0) {
+      debug.policy_rejections_db = policyRejections
+    }
 
-    const totalFound = scored.length
+    const totalFound = scoredPolicyOk.length
 
     // Filter by minimum match score (default lowered; UI can adjust).
-    let filteredOpportunities = scored
+    let filteredOpportunities = scoredPolicyOk
       .filter((opp) => {
         return typeof opp.match_score === 'number' && opp.match_score >= Number(min_match_score)
       })
@@ -1271,13 +1287,13 @@ router.post('/run', ensureAuth, async (req, res) => {
     // Guardrail: if something is being found but everything is filtered out, include score diagnostics.
     // This is additive (does not change the existing response shape); the UI can ignore it.
     if (initiallyIncludedCount === 0 && totalFound > 0) {
-      const scores = scored
+      const scores = scoredPolicyOk
         .map((o) => (typeof o?.match_score === 'number' ? o.match_score : null))
         .filter((v) => typeof v === 'number')
       const minScore = scores.length ? Math.min(...scores) : null
       const maxScore = scores.length ? Math.max(...scores) : null
       const avgScore = scores.length ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10 : null
-      const topScores = scored
+      const topScores = scoredPolicyOk
         .filter((o) => typeof o?.match_score === 'number')
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
         .slice(0, 5)
@@ -1301,16 +1317,14 @@ router.post('/run', ensureAuth, async (req, res) => {
         removed_summary: {
           expired_excluded: expiredExcluded,
           below_min_match_score: totalFound,
-          directory_present: scored.some((row) => isDirectoryResource(row)),
+          directory_present: scoredPolicyOk.some((row) => isDirectoryResource(row)),
         },
       }
     }
 
     // Guardrail: "0 results" is a failure state.
-    // If we scored anything but filtered everything away, fall back to returning the best-scoring options.
-    // This preserves the response shape while preventing "total_found > 0, included === 0".
     if (initiallyIncludedCount === 0 && totalFound > 0) {
-      filteredOpportunities = scored
+      filteredOpportunities = scoredPolicyOk
         .filter((o) => typeof o?.match_score === 'number')
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
         .slice(0, 50)
@@ -1544,21 +1558,18 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
       })
 
       const candidates = (await db.prepare(sql).all(...params)).map(formatDbOpportunity).filter(Boolean)
-      const scored = candidates
+      const scoredRaw = candidates
         .filter((row) => isOpportunityCurrent(row))
         .map((row) => {
           const { score, reasons } = calculateMatchScore(profileContext, row)
           return { ...row, match_score: score, match_reasons: reasons }
         })
+      const { passed: scored } = filterByPolicy(scoredRaw, {})
 
       const totalFoundForCrawler = scored.length
 
-      // Filter by minimum match score.
-      // If 0 included but we had results, fall back to best-scoring items.
       let filtered = scored
-        .filter((opp) => {
-          return typeof opp.match_score === 'number' && opp.match_score >= Number(min_match_score)
-        })
+        .filter((opp) => typeof opp.match_score === 'number' && opp.match_score >= Number(min_match_score))
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
         .slice(0, 50)
 
@@ -1569,13 +1580,12 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
           .slice(0, 50)
       }
 
-      // If live had *some* results, merge + dedupe so users get real results first.
-      // Note: response shape is preserved; we only adjust counts.
       let merged = filtered
       if (live?.ok && Array.isArray(live.opportunities) && live.opportunities.length > 0) {
+        const livePolicyOk = live.opportunities.filter((o) => enforceOpportunityPolicy(o).ok)
         const seen = new Set()
         const keyOf = (o) => String(o?.url || o?.application_url || o?.source_url || o?.title || '').toLowerCase()
-        merged = [...live.opportunities, ...filtered].filter((o) => {
+        merged = [...livePolicyOk, ...filtered].filter((o) => {
           const key = keyOf(o)
           if (!key) return true
           if (seen.has(key)) return false

@@ -322,6 +322,7 @@ function finalizeStudentResults(rows, { facets, queryPlan }) {
       }),
     )
     .filter(Boolean)
+    .filter((row) => enforceOpportunityPolicy(row).ok)
 }
 
 export async function crawlStudentGrants(profileInput, options = {}) {
@@ -336,13 +337,16 @@ export async function crawlStudentGrants(profileInput, options = {}) {
     const results = []
         const minMatchScore = typeof options.min_match_score === 'number' ? options.min_match_score : 60
 
-  // Null/missing signals must not disqualify; use minimal fallback
   const effectiveSignals = signals ?? profile?.signals ?? {
     keywordSet: new Set(),
     demographics: new Set(),
     applicantTypes: new Set(),
   }
   const profileForCrawler = profile.signals ? profile : { ...profile, signals: effectiveSignals }
+  const fafsaSignals = getFafsaSignals(profile, effectiveSignals)
+  if (fafsaSignals.highNeed || fafsaSignals.pellEligible) {
+    console.log('[StudentGrantsCrawler] FAFSA context:', { pellEligible: fafsaSignals.pellEligible, highNeed: fafsaSignals.highNeed, dependencyStatus: fafsaSignals.dependencyStatus })
+  }
 
   // Extract FAFSA/need-based signals from profile sections and signals
   const fafsaSignals = extractFafsaSignals(profile, effectiveSignals)
@@ -370,15 +374,16 @@ export async function crawlStudentGrants(profileInput, options = {}) {
   for (const aid of FEDERAL_STUDENT_AID) {
         // Check requirements — use consolidated FAFSA signals for need detection
       if (aid._requires?.financial_need) {
-              const hasNeed = fafsaSignals.highNeed ||
-                        fafsaSignals.pellEligible ||
-                        fafsaSignals.lowIncome ||
-                        effectiveSignals.assistance?.has('low_income') ||
-                        effectiveSignals.financial?.needLevel === 'High' ||
-                        effectiveSignals.financial?.needLevel === 'Critical' ||
-                        effectiveSignals.financial?.needLevel === 'Extreme' ||
-                        effectiveSignals.assistance?.has('high_financial_need')
-              if (!hasNeed) continue
+        const hasNeed =
+          fafsaSignals.highNeed ||
+          fafsaSignals.pellEligible ||
+          fafsaSignals.lowIncome ||
+          effectiveSignals.assistance?.has('low_income') ||
+          effectiveSignals.financial?.needLevel === 'High' ||
+          effectiveSignals.financial?.needLevel === 'Critical' ||
+          effectiveSignals.financial?.needLevel === 'Extreme' ||
+          effectiveSignals.assistance?.has('high_financial_need')
+        if (!hasNeed) continue
       }
         if (aid._requires?.military) {
                 if (!effectiveSignals.military?.size) continue
@@ -572,7 +577,6 @@ export async function crawlStudentGrants(profileInput, options = {}) {
   }
 
 
-  // Fetch live education grants from Grants.gov and merge into results
   try {
     const profileState = profile?.state || effectiveSignals?.location?.state || null
     const liveOpps = await fetchLiveStudentOpportunities({ keywords: searchKeywords.slice(0, 5), state: profileState })
@@ -596,6 +600,27 @@ export async function crawlStudentGrants(profileInput, options = {}) {
     return finalizeStudentResults(results, { facets, queryPlan })
 }
 
+/**
+ * Extract FAFSA/financial-aid indicators from profile for federal and state aid inclusion.
+ * @returns {{ pellEligible: boolean, highNeed: boolean, dependencyStatus: string|null }}
+ */
+function getFafsaSignals(profile, signals) {
+  const sections = profile?.sections ?? {}
+  const fin = sections?.financial_information ?? {}
+  const needLevel = fin.financial_need_level ?? signals?.financial?.needLevel ?? ''
+  const highNeed = ['High', 'Critical', 'Extreme'].includes(String(needLevel))
+  const pellEligible =
+    highNeed ||
+    Boolean(signals?.assistance?.has?.('high_financial_need')) ||
+    Boolean(signals?.assistance?.has?.('low_income')) ||
+    Boolean(fin.pell_eligible) ||
+    String(fin.fafsa_filed ?? '').toLowerCase() === 'yes' ||
+    String(fin.fafsa_filed ?? '').toLowerCase() === 'true'
+  const dependencyStatus =
+    fin.dependency_status ?? fin.fafsa_dependency ?? profile?.dependency_status ?? null
+  return { pellEligible, highNeed, dependencyStatus: dependencyStatus ? String(dependencyStatus) : null }
+}
+
 function isStudentProfile(profile) {
     const signals = profile?.signals
     const applicantTypes = signals?.applicantTypes ? Array.from(signals.applicantTypes) : []
@@ -611,29 +636,29 @@ function isStudentProfile(profile) {
 }
 
 function getSchoolFinAidUrl(schoolName) {
-    const schoolUrls = {
-          'Ohio State University': 'https://sfa.osu.edu',
-          'University of Cincinnati': 'https://financialaid.uc.edu',
-          'Case Western Reserve University': 'https://case.edu/financialaid',
-          'University of Tennessee': 'https://onestop.utk.edu/financial-aid/',
-          'Vanderbilt University': 'https://www.vanderbilt.edu/financialaid/',
-          'University of Michigan': 'https://finaid.umich.edu/',
-          'MIT': 'https://sfs.mit.edu/',
-          'Stanford University': 'https://financialaid.stanford.edu/',
-          'Harvard University': 'https://college.harvard.edu/financial-aid',
-    }
-
-  // Direct lookup
+  const schoolUrls = {
+    'Ohio State University': 'https://sfa.osu.edu',
+    'University of Cincinnati': 'https://financialaid.uc.edu',
+    'Case Western Reserve University': 'https://case.edu/financialaid',
+    'University of Tennessee': 'https://onestop.utk.edu/financial-aid/',
+    'Vanderbilt University': 'https://www.vanderbilt.edu/financialaid/',
+    'University of Michigan': 'https://finaid.umich.edu/',
+    'MIT': 'https://sfs.mit.edu/',
+    'Stanford University': 'https://financialaid.stanford.edu/',
+    'Harvard University': 'https://college.harvard.edu/financial-aid',
+    'Penn State University': 'https://studentaid.psu.edu/',
+    'North Carolina State University': 'https://studentservices.ncsu.edu/financial-aid/',
+    'Georgia Tech': 'https://finaid.gatech.edu/',
+    'University of Texas at Austin': 'https://finaid.utexas.edu/',
+    'University of Florida': 'https://www.sfa.ufl.edu/',
+    'University of California Berkeley': 'https://financialaid.berkeley.edu/',
+    'UCLA': 'https://financialaid.ucla.edu/',
+  }
   if (schoolUrls[schoolName]) return schoolUrls[schoolName]
-
-  // Partial match
   const lower = schoolName.toLowerCase()
-    for (const [name, url] of Object.entries(schoolUrls)) {
-          if (lower.includes(name.toLowerCase()) || name.toLowerCase().includes(lower)) {
-                  return url
-          }
-    }
-
+  for (const [name, url] of Object.entries(schoolUrls)) {
+    if (lower.includes(name.toLowerCase()) || name.toLowerCase().includes(lower)) return url
+  }
   return null
 }
 
