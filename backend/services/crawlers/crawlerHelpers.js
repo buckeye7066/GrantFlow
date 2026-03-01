@@ -237,7 +237,6 @@ export function calculateMatchScore(opportunity, profile) {
     }
   }
   return { score: result.score, reasons: result.reasons || [], matchedSignals }
-}asons || [], matchedSignals: result.matchedSignals || [] }
 }
 
 /**
