@@ -40,10 +40,13 @@ function mergeProfileAndData(profile, profileData) {
   if (profileData.sections && typeof profileData.sections === 'object') {
     merged.sections = { ...(profile.sections || {}), ...profileData.sections };
   }
-  if (profileData.signals && typeof profileData.signals === 'object') {
-    merged.signals = { ...(profile.signals || {}), ...profileData.signals };
-  }
-
+    // HARDENED: Do NOT merge profileData.signals over DB-loaded signals.
+    // DB-loaded signals (from loadProfileContext) contain properly constructed Sets;
+    // profileData.signals from req.body may contain JSON arrays that overwrite them.
+    // Keep profile.signals as the authoritative source.
+    if (profile.signals) {
+          merged.signals = profile.signals;
+    }  
   // Copy simple fields (state/city/zip/etc.) if provided
   for (const key of Object.keys(profileData)) {
     if (key === 'sections' || key === 'signals') continue;
@@ -508,10 +511,8 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
     location: effectiveContext?.facets?.geo ?? effectiveContext?.signals?.location ?? {},
   })
   // CRITICAL: Pass min_match_score=0 to sub-crawlers so they return ALL results.
-  // Sub-crawlers use crawlerHelpers.calculateMatchScore (different algorithm) which
-  // prematurely filters results before the route-level matchingEngine scores them.
-  // The route-level scorer (matchingEngine.calculateMatchScore) is the single source
-  // of truth — it will apply the user's actual minMatchScore threshold after rescoring.
+    // Sub-crawlers' calculateMatchScore now delegates to the canonical matchingEngine scorer,
+    // but we keep min_match_score=0 to let the route-level rescoring apply the user's threshold.
   const options = { min_match_score: 0, query_plan: queryPlan }
   const rejectionCounts = {}
   resetPolicyRejectionCounts()
