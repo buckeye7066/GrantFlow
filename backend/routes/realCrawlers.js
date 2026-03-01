@@ -1609,8 +1609,9 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
       }
 
       if (live?.ok && Array.isArray(live.opportunities) && live.opportunities.length > 0) {
-        // Same threshold as /run: if live is "solid", skip DB fallback for this crawler.
-        const shouldSkipFallback = live.opportunities.length >= MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK
+        // Same threshold as /run: skip DB fallback only when we have enough non-directory live results.
+        const nonDirectoryLiveResults = live.opportunities.filter((o) => !isDirectoryResource(o))
+        const shouldSkipFallback = nonDirectoryLiveResults.length >= MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK
         if (shouldSkipFallback) {
           totalFound += Number(live.total_found ?? live.opportunities.length)
           totalInserted += live.opportunities.length
