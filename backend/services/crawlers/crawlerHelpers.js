@@ -226,7 +226,8 @@ function normalizeState(value) {
  */
 export function calculateMatchScore(opportunity, profile) {
     // DELEGATION: Use the canonical scorer from matchingEngine.js (note: args are swapped)
-    return _canonicalMatchScore(profile, opportunity)
+    const result = _canonicalMatchScore(profile, opportunity)
+      return { score: result.score, reasons: result.reasons || [], matchedSignals: result.matchedSignals || [] }
 }
 
 /**
