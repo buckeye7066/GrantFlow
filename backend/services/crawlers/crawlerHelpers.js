@@ -225,9 +225,19 @@ function normalizeState(value) {
  * @returns {Object} { score: number, reasons: string[], matchedSignals: string[] }
  */
 export function calculateMatchScore(opportunity, profile) {
-    // DELEGATION: Use the canonical scorer from matchingEngine.js (note: args are swapped)
-      const result = _canonicalMatchScore(profile, opportunity)
-      return { score: result.score, reasons: result.reasons || [], matchedSignals: result.matchedSignals || [] }
+  // DELEGATION: Use the canonical scorer from matchingEngine.js (note: args are swapped)
+  const result = _canonicalMatchScore(profile, opportunity)
+  // Build matchedSignals from keyword hits (canonical scorer does not track these)
+  const matchedSignals = []
+  const keywordSet = profile.signals?.keywordSet || new Set()
+  const oppText = [opportunity.title, opportunity.description].filter(Boolean).join(' ').toLowerCase()
+  for (const kw of keywordSet) {
+    if (oppText.includes(String(kw).toLowerCase())) {
+      matchedSignals.push(`kw:${kw}`)
+    }
+  }
+  return { score: result.score, reasons: result.reasons || [], matchedSignals }
+}asons || [], matchedSignals: result.matchedSignals || [] }
 }
 
 /**
