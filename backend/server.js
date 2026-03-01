@@ -555,36 +555,14 @@ const allowedMigrations = [
   { table: 'grants', column: 'contact_name', type: 'TEXT' },
   { table: 'grants', column: 'contact_email', type: 'TEXT' },
   { table: 'grants', column: 'contact_phone', type: 'TEXT' },
+  // Loan/grants filtering (realCrawlers buildCandidateOpportunityQuery)
+  { table: 'funding_opportunities', column: 'is_loan', type: 'INTEGER DEFAULT 0' },
 ];
 
 const validTables = new Set(['profiles', 'crawler_jobs', 'users', 'organizations', 'grants', 'funding_opportunities', 'documents']);
 const validColumnPattern = /^[a-z_]+$/;
 
-// This legacy auto-migration is SQLite-only. Postgres must be migrated deterministically via SQL migrations.
-if (db.dialect === 'sqlite') {
-  allowedMigrations.forEach(({ table, column, type }) => {
-    // Validate table and column names to prevent SQL injection
-    if (!validTables.has(table) || !validColumnPattern.test(column)) {
-      console.error(`Migration error: Invalid table "${table}" or column "${column}"`);
-      return;
-    }
-
-    try {
-      db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`).run();
-    } catch (error) {
-      // Column already exists or other error - log only if not duplicate column error
-      if (!error.message.includes('duplicate column')) {
-        console.warn(`Migration warning for ${table}.${column}:`, error.message);
-      }
-    }
-  });
-} else {
-  console.info('[database] Skipping legacy column auto-migrations (dialect != sqlite)');
-}
-
-// Apply full schema only AFTER SQLite column migrations.
-// This prevents schema/index DDL from failing when new columns (e.g. crawler job idempotency)
-// are referenced by indexes but not yet present in older local DBs.
+// Apply full schema first so fresh DBs (e.g. unit tests) have base tables, then add any missing columns.
 if (shouldAutoMigrate) {
   const schemaPath = join(__dirname, 'db', 'schema.sql');
   if (fs.existsSync(schemaPath)) {
@@ -597,6 +575,26 @@ if (shouldAutoMigrate) {
       // Do not hard-exit; keep the service reachable for diagnostics.
     }
   }
+}
+
+// Then add columns that may be missing (schema.sql may not include every migration column).
+// This legacy auto-migration is SQLite-only. Postgres must be migrated deterministically via SQL migrations.
+if (db.dialect === 'sqlite') {
+  allowedMigrations.forEach(({ table, column, type }) => {
+    if (!validTables.has(table) || !validColumnPattern.test(column)) {
+      console.error(`Migration error: Invalid table "${table}" or column "${column}"`);
+      return;
+    }
+    try {
+      db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`).run();
+    } catch (error) {
+      if (!error.message.includes('duplicate column')) {
+        console.warn(`Migration warning for ${table}.${column}:`, error.message);
+      }
+    }
+  });
+} else {
+  console.info('[database] Skipping legacy column auto-migrations (dialect != sqlite)');
 }
 
 // Production hardening (SQLite): if the DB was created before profiles existed (or after an ephemeral reset),
