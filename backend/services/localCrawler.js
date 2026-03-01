@@ -190,7 +190,7 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
           WHERE ${activePredicate}
           AND state = ?
           AND ${noMatchPredicate}
-          AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
+          AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template', 'local_foundation')
           LIMIT 100
         `,
       )
