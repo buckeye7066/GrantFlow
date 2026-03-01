@@ -225,11 +225,8 @@ function normalizeState(value) {
  * @returns {Object} { score: number, reasons: string[], matchedSignals: string[] }
  */
 export function calculateMatchScore(opportunity, profile) {
-  // DELEGATION: Adapt args for the canonical scorer in matchingEngine.js
-      // Canonical scorer expects (opportunityText: string, effectiveSignals: { keywordSet })
-      const oppText = [opportunity.title, opportunity.description].filter(Boolean).join(' ').toLowerCase()
-      const keywordSet = profile.signals?.keywordSet || new Set()
-      const result = _canonicalMatchScore(oppText, { keywordSet })
+    // DELEGATION: Use the canonical scorer from matchingEngine.js (note: args are swapped)
+      const result = _canonicalMatchScore(profile, opportunity)
       return { score: result.score, reasons: result.reasons || [], matchedSignals: result.matchedSignals || [] }
 }
 
