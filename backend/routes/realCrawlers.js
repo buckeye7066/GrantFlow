@@ -103,6 +103,7 @@ const COMPREHENSIVE_CRAWLER_IDS = [
 ]
 
 const LOAN_TYPES = new Set(['loan', 'loan_program', 'microloan'])
+// IMPORTANT: Do NOT wrap with Math.max — tests set LIVE_CRAWL_TIMEOUT_MS=1 to force DB fallback path.
 const LIVE_CRAWL_TIMEOUT_MS = Number.parseInt(process.env.LIVE_CRAWL_TIMEOUT_MS ?? '12000', 10) || 12000
 const MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK = Number.parseInt(process.env.MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK ?? '3', 10) || 3
 const LIVE_CRAWL_PERSIST_OPPS = String(process.env.LIVE_CRAWL_PERSIST_OPPS ?? 'true').toLowerCase() !== 'false'
