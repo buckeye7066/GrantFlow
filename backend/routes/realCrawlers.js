@@ -682,6 +682,18 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
       return { ...row, match_score: computedScore, match_reasons: mergedReasons }
     })
     // Policy was already enforced in normalizeLiveOpportunity(); no second check needed.
+        // Guardrail: directory resources are curated, verified entries that crawlers intentionally
+        // included (e.g. consent-gated trials, community directories). Apply a minimum score floor
+        // so they survive the min_match_score filter even when the profile has sparse signals.
+        const DIRECTORY_SCORE_FLOOR = 50
+        for (const row of rescored) {
+                if (row.is_directory_resource && typeof row.match_score === 'number' && row.match_score < DIRECTORY_SCORE_FLOOR) {
+                          row.match_score = DIRECTORY_SCORE_FLOOR
+                          if (!row.match_reasons) row.match_reasons = []
+                          row.match_reasons.push('Directory resource score floor applied')
+                }
+        }
+    
 
     let included = rescored
       .filter((row) => {
@@ -1311,6 +1323,17 @@ router.post('/run', ensureAuth, async (req, res) => {
       debug.policy_rejections_db = { ...dbRejectionCounts }
     }
 
+
+        // Guardrail: directory resources (opportunity_type=program, curated entries) get a score floor
+        // so they survive the min_match_score filter. Mirrors the live-crawler directory score floor.
+        const DB_DIRECTORY_SCORE_FLOOR = 50
+        for (const row of scoredPolicyOk) {
+                if (isDirectoryResource(row) && typeof row.match_score === 'number' && row.match_score < DB_DIRECTORY_SCORE_FLOOR) {
+                          row.match_score = DB_DIRECTORY_SCORE_FLOOR
+                          if (!row.match_reasons) row.match_reasons = []
+                          row.match_reasons.push('Directory resource score floor applied')
+                }
+        }
     const totalFound = scoredPolicyOk.length
 
     // Filter by minimum match score (default lowered; UI can adjust).

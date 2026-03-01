@@ -66,18 +66,18 @@ export async function saveToProfilePipeline(
     }
 
     // Check if already in pipeline (profile-scoped idempotency).
-    const existing = await db
-      .prepare(
-        `
-          SELECT id
-          FROM grants
-          WHERE profile_id = ?
-            AND funding_opportunity_id = ?
-          LIMIT 1
-        `,
-      )
-      .get(profileId, opportunity.id)
-    
+        const existing = await db
+              .prepare(
+                      `
+                                SELECT id
+                                          FROM grants
+                                                    WHERE profile_id = ?
+                                                                AND (funding_opportunity_id = ? OR title = ?)
+                                                                          LIMIT 1
+                                                                                  `,
+                                                                                        )
+                                                                                              .get(profileId, opportunity.id, opportunity.title)
+                                                                                              
     if (existing) {
       return {
         saved: false,

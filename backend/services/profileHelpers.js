@@ -1114,6 +1114,13 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     collectNarrativeKeywords({ notes: programsServices.notes }, registerKeyword)
   }
 
+      // Extract multi-word focus areas / keywords / interests as intent phrases for matching
+          ;[...(programsServices.focus_areas || []), ...(programsServices.keywords || []), ...(programsServices.interests || [])]
+                .forEach((val) => {
+                        const norm = normalizeString(val)
+                                if (norm.length >= 6 && norm.includes(' ')) intentPhraseSet.add(norm)
+                                      })
+
   // ============ SMALL BUSINESS DETAILS (real funding for business/startup needs: NAICS, USDA, SBA) ============
   const smallBusiness = sections?.small_business_details ?? {}
   if (smallBusiness.naics_code && typeof smallBusiness.naics_code === 'string') {
@@ -1167,6 +1174,16 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   }
   if (narrative.target_population) registerKeyword(narrative.target_population)
   if (narrative.primary_goal) registerKeyword(narrative.primary_goal)
+
+        // Extract multi-word narrative fields as intent phrases (mirrors goalLikeFields logic)
+            ;['primary_goal', 'mission', 'target_population'].forEach((field) => {
+                  const val = narrative[field]
+                        if (!val || typeof val !== 'string') return
+                              val.split(/[,;]+/)
+                                      .map((s) => normalizeString(s))
+                                              .filter((s) => s.length >= 6 && s.includes(' '))
+                                                      .forEach((s) => intentPhraseSet.add(s))
+                                                          })
   if (narrative.funding_amount_needed) {
     // Extract dollar amount
     const amountMatch = String(narrative.funding_amount_needed).match(/\$?([\d,]+)/g)
