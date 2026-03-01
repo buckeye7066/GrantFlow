@@ -13,15 +13,14 @@
 import * as cheerio from 'cheerio'
 import { buildSearchKeywords, calculateMatchScore, filterByDeadline } from './crawlerHelpers.js'
 import { getWithRetry, postWithRetry } from './httpClient.js'
+import { searchGrants } from './grantsGovClient.js'
 import { planCrawlerQueries } from './queryPlanner.js'
 import {
   resolveCrawlerContext,
   mergePlanKeywords,
   enforceCrawlerOpportunityContract,
 } from './crawlerOpportunityContract.js'
-
-const GRANTS_GOV_API = 'https://api.grants.gov/v1/api/search2'
-const GRANTS_GOV_DETAIL = 'https://www.grants.gov/search-results-detail/'
+import { enforceOpportunityPolicy } from './opportunityPolicy.js'
 
 /**
    * Real, verified special needs funding sources organized by category.
@@ -482,60 +481,14 @@ function finalizeSpecialNeedsResults(rows, { facets, queryPlan }) {
     .filter(Boolean)
 }
 
-/** Fetch live special-needs/disability-related opportunities from Grants.gov. */
+/** Fetch live special-needs/disability-related opportunities from Grants.gov (resilient client). */
 async function fetchLiveSpecialNeedsOpportunities({ keywords = [], state = null } = {}) {
   const query = (keywords.length > 0 ? keywords[0] : 'disability assistance grant').toString().trim() || 'disability assistance grant'
   try {
-    const response = await postWithRetry(
-      GRANTS_GOV_API,
-      {
-        keyword: query,
-        oppStatuses: 'posted',
-        sortBy: 'openDate|desc',
-        rows: 15,
-        startRecordNum: 0,
-      },
-      { headers: { 'Content-Type': 'application/json' } },
-      { timeoutMs: 8000, retries: 1 },
-    )
-    let parsed = response?.data
-    if (typeof parsed === 'string') {
-      try {
-        parsed = JSON.parse(parsed)
-      } catch {
-        return []
-      }
-    }
-    const hits = parsed?.data?.oppHits ?? parsed?.oppHits ?? []
-    const rows = Array.isArray(hits) ? hits : []
-    const opportunities = []
-    for (const hit of rows) {
-      const title = hit?.title ?? hit?.oppTitle ?? null
-      if (!title) continue
-      const id = hit?.id ?? hit?.oppId ?? null
-      const number = hit?.number ?? hit?.oppNum ?? hit?.oppNumber ?? null
-      const agencyName = hit?.agencyName ?? hit?.agency ?? hit?.agencyCode ?? null
-      const closeDate = hit?.closeDate ?? hit?.close_date ?? null
-      const description = hit?.synopsis ?? hit?.description ?? null
-      const url = id != null
-        ? `${GRANTS_GOV_DETAIL}${id}`
-        : number
-          ? `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(number))}`
-          : 'https://www.grants.gov/search-grants'
-      opportunities.push({
-        title,
-        sponsor: agencyName,
-        description,
-        url,
-        opportunity_number: number,
-        amount_min: 0,
-        amount_max: 0,
-        deadline: closeDate,
-        deadline_type: closeDate ? 'fixed' : 'rolling',
-        eligibility: '',
-        is_national: true,
-        source_id: id,
-      })
+    const { ok, opportunities } = await searchGrants(query, { rows: 25 })
+    if (!ok) {
+      console.warn('[SpecialNeedsCrawler] Both grants.gov APIs failed for live fetch')
+      return []
     }
     return opportunities
   } catch (err) {
@@ -609,6 +562,9 @@ export async function crawlSpecialNeeds(profileInput, options = {}) {
                     need_category: needCategory,
           }
 
+          // Apply centralized policy (URL, placeholder, loan, matching-funds) before scoring
+          if (!enforceOpportunityPolicy(opp).ok) continue
+
           // Score using full profile signals
           const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profile)
 
@@ -634,6 +590,7 @@ export async function crawlSpecialNeeds(profileInput, options = {}) {
     const profileState = profile?.state || signals?.location?.state || null
     const liveOpps = await fetchLiveSpecialNeedsOpportunities({ keywords: plannerKeywords.slice(0, 5), state: profileState })
     for (const liveOpp of liveOpps) {
+      if (!enforceOpportunityPolicy(liveOpp).ok) continue
       const { score, reasons } = calculateMatchScore(liveOpp, profileForCrawler)
       if (score >= minMatchScore) {
         results.push({ ...liveOpp, match_score: score, match_reasons: reasons })
@@ -651,10 +608,6 @@ export async function crawlSpecialNeeds(profileInput, options = {}) {
     return finalizeSpecialNeedsResults(results, { facets, queryPlan })
 }
 
-function isLoan(opportunity) {
-    const loanKeywords = ['loan', 'repay', 'interest', 'credit', 'financing']
-    const text = `${opportunity.title} ${opportunity.description}`.toLowerCase()
-    return loanKeywords.some(keyword => text.includes(keyword))
-}
+// Loan/matching-fund detection is now handled centrally by enforceOpportunityPolicy().
 
 export default { crawlSpecialNeeds }

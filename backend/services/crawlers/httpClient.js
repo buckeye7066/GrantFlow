@@ -54,6 +54,7 @@ export async function requestWithRetry(config, options = {}) {
     ...config,
   }
 
+  const requestUrl = mergedConfig.url || '(unknown)'
   let lastError = null
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
@@ -63,6 +64,16 @@ export async function requestWithRetry(config, options = {}) {
       if (response.status >= 200 && response.status < 300) {
         return response
       }
+
+      // Log non-success HTTP statuses with details (critical for diagnosing API failures)
+      const bodySnippet = typeof response.data === 'string'
+        ? response.data.slice(0, 200)
+        : typeof response.data === 'object'
+        ? JSON.stringify(response.data).slice(0, 200)
+        : '(no body)'
+      console.warn(
+        `[HttpClient] HTTP ${response.status} from ${requestUrl} (attempt ${attempt + 1}/${retries + 1}): ${bodySnippet}`,
+      )
 
       // Retryable HTTP status
       if (attempt < retries && isRetryableStatus(response.status)) {
@@ -74,10 +85,16 @@ export async function requestWithRetry(config, options = {}) {
       const err = new Error(`HTTP ${response.status}`)
       err.status = response.status
       err.response = response
+      err.requestUrl = requestUrl
       throw err
     } catch (error) {
       lastError = error
+      if (!error.requestUrl) error.requestUrl = requestUrl
       if (attempt < retries && isRetryableAxiosError(error)) {
+        const code = error?.code || ''
+        console.warn(
+          `[HttpClient] Retryable error (${code}) from ${requestUrl} (attempt ${attempt + 1}/${retries + 1}): ${error.message}`,
+        )
         const delay = Math.min(maxDelayMs, baseDelayMs * Math.pow(2, attempt))
         await sleep(jitter(delay))
         continue

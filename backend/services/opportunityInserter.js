@@ -1,5 +1,5 @@
 import crypto from 'crypto'
-import { isValidRealUrl, isLoanLike, isMatchingFunds } from './crawlers/opportunityPolicy.js'
+import { isValidRealUrl, isLoanLike, isMatchingFunds, enforceOpportunityPolicy } from './crawlers/opportunityPolicy.js'
 
 // Backward-compat alias
 const isValidHttpUrl = isValidRealUrl
@@ -26,9 +26,8 @@ function stableSourceIdFromOpportunity(source, opportunity) {
   const url = opportunity?.source_url ?? opportunity?.url ?? opportunity?.application_url ?? null
   const title = opportunity?.title ?? ''
   const sponsor = opportunity?.sponsor ?? ''
-  const deadline = opportunity?.deadline ?? ''
-  const raw = `${source}|${String(url || '').trim().toLowerCase()}|${String(title).trim().toLowerCase()}|${String(sponsor).trim().toLowerCase()}|${String(deadline).trim()}`
-  // Stable, deterministic source_id so repeated crawls don't create duplicates.
+  // Exclude deadline so deadline-only updates (e.g. extensions) don't create new records.
+  const raw = `${source}|${String(url || '').trim().toLowerCase()}|${String(title).trim().toLowerCase()}|${String(sponsor).trim().toLowerCase()}`
   return crypto.createHash('sha256').update(raw).digest('hex').slice(0, 32)
 }
 
@@ -158,9 +157,45 @@ export async function upsertFundingOpportunity(db, opportunity) {
       record_origin: recordOrigin,
     }
 
-    // Conservative merge: never overwrite existing non-null values with null.
-    // Always refresh `updated_at` and `last_crawled`.
-    const update = db.prepare(`
+    // For live_crawl: allow clearing nullable fields when source no longer has them (avoids stale data).
+    const fromLiveCrawl = recordOrigin === 'live_crawl'
+    const update = db.prepare(
+      fromLiveCrawl
+        ? `
+      UPDATE funding_opportunities
+      SET
+        title = COALESCE(?, title),
+        sponsor = COALESCE(?, sponsor),
+        description = ?,
+        source_url = COALESCE(?, source_url),
+        evidence_url = COALESCE(?, evidence_url),
+        contact_info = COALESCE(?, contact_info),
+        record_origin = COALESCE(?, record_origin),
+        eligibility_bullets = COALESCE(?, eligibility_bullets),
+        amount_min = ?,
+        amount_max = ?,
+        amount_description = ?,
+        deadline = ?,
+        deadline_type = ?,
+        application_url = COALESCE(?, application_url),
+        is_national = COALESCE(?, is_national),
+        state = COALESCE(?, state),
+        categories = COALESCE(?, categories),
+        keywords = COALESCE(?, keywords),
+        opportunity_type = COALESCE(?, opportunity_type),
+        type = COALESCE(?, type),
+        last_verified_at = COALESCE(?, last_verified_at),
+        profile_id = COALESCE(?, profile_id),
+        requires_501c3 = COALESCE(?, requires_501c3),
+        requires_match = COALESCE(?, requires_match),
+        match_percentage = COALESCE(?, match_percentage),
+        match_reasons = COALESCE(?, match_reasons),
+        notes = COALESCE(?, notes),
+        updated_at = CURRENT_TIMESTAMP,
+        last_crawled = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `
+        : `
       UPDATE funding_opportunities
       SET
         title = COALESCE(?, title),
@@ -193,7 +228,8 @@ export async function upsertFundingOpportunity(db, opportunity) {
         updated_at = CURRENT_TIMESTAMP,
         last_crawled = CURRENT_TIMESTAMP
       WHERE id = ?
-    `)
+    `,
+    )
 
     await update.run(
       record.title,
@@ -385,9 +421,15 @@ export async function upsertFundingOpportunity(db, opportunity) {
   return { id, inserted: true, skipped: false }
 }
 
+/**
+ * Persist only policy-compliant opportunities. Non-negotiable: loans, matching funds,
+ * placeholders, and invalid/missing URLs are never written to the database.
+ */
 export async function bulkUpsertFundingOpportunities(db, opportunities = []) {
   const inserted = []
   for (const opportunity of opportunities) {
+    const policy = enforceOpportunityPolicy(opportunity)
+    if (!policy.ok) continue
     const result = await upsertFundingOpportunity(db, opportunity)
     if (result?.inserted) inserted.push(result.id)
   }

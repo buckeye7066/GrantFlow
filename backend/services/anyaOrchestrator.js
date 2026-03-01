@@ -691,7 +691,9 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     'why is it broken',
     'why did it fail',
     '0 succeeded',
-    'failed',
+    'crawler failed',
+    'crawlers failed',
+    'jobs failed',
     'no opportunities',
     'is everything ok',
     'is everything working',
@@ -950,10 +952,6 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
         breaker: openAIBreaker.snapshot(),
       })
 
-      if (error?.code === 'CIRCUIT_OPEN') {
-        return "The AI service is temporarily overloaded. Give me 30 seconds and try again."
-      }
-
       const tryAnthropicFallback = async () => {
         try {
           const anthropic = await getAnthropicClient()
@@ -974,6 +972,12 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
           console.error('[Anya] Anthropic fallback failed:', anthErr?.message || anthErr)
           return null
         }
+      }
+
+      if (error?.code === 'CIRCUIT_OPEN') {
+        const anthropicReply = await tryAnthropicFallback()
+        if (anthropicReply) return anthropicReply
+        return "The AI service is temporarily overloaded. Give me 30 seconds and try again."
       }
 
       if (summary.isAuth) {

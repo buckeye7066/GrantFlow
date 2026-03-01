@@ -11,7 +11,8 @@
  */
 
 import { calculateMatchScore, buildSearchKeywords } from './crawlerHelpers.js'
-import { getWithRetry, postWithRetry } from './httpClient.js'
+import { getWithRetry } from './httpClient.js'
+import { searchGrants } from './grantsGovClient.js'
 import { planCrawlerQueries } from './queryPlanner.js'
 import {
   resolveCrawlerContext,
@@ -74,59 +75,47 @@ function buildClinicalTrialsLinks({ conditionNames, state }) {
 
 
 /**
- * Fetch live health-related grant opportunities from Grants.gov API.
- * Queries health, social-services, income-security and recovery categories.
+ * Fetch live health-related grant opportunities from Grants.gov (resilient client) and Benefits.gov.
+ * Queries health-assistance keywords; Benefits.gov adds state-specific health programs.
  */
 async function fetchLiveHealthOpportunities({ state, keywords = [], signals = {} }) {
   const results = []
-  const healthCategories = ['HL', 'ISS', 'DPR'] // Health, Income Security, Drug/Prescription
   const baseKeyword = keywords.slice(0, 3).join(' ') || 'health assistance'
 
-  for (const category of healthCategories) {
-    try {
-      const payload = {
-        rows: 10,
-        oppStatuses: 'posted|forecasted',
-        keyword: baseKeyword,
-        startRecordNum: 0,
-        fundingCategories: category,
-      }
-      const response = await postWithRetry(
-        'https://api.grants.gov/v1/api/search2',
-        payload,
-        { headers: { 'Content-Type': 'application/json', Accept: 'application/json' } },
-        { timeoutMs: 10000, retries: 1 },
-      )
-      const hits = response?.data?.oppHits ?? response?.data?.data?.oppHits ?? []
-      for (const opp of Array.isArray(hits) ? hits.slice(0, 8) : []) {
+  try {
+    const { ok, opportunities: grantOpps } = await searchGrants(baseKeyword, { rows: 25 })
+    if (ok && Array.isArray(grantOpps)) {
+      for (const opp of grantOpps.slice(0, 24)) {
         if (!opp?.title) continue
         results.push({
           title: opp.title,
-          sponsor: opp.agencyName || opp.agency || 'Federal Agency',
-          description: opp.synopsis || 'Federal health assistance opportunity. Visit Grants.gov for eligibility and application details.',
-          url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
-          application_url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
-          source_url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
+          sponsor: opp.sponsor || 'Federal Agency',
+          description: opp.description || 'Federal health assistance opportunity. Visit Grants.gov for eligibility and application details.',
+          url: opp.url || opp.application_url || 'https://www.grants.gov',
+          application_url: opp.application_url || opp.url || 'https://www.grants.gov',
+          source_url: opp.source_url || opp.url || 'https://www.grants.gov',
           state: state || 'nationwide',
           is_national: true,
           opportunity_type: 'grant',
-          deadline_type: opp.closeDate ? 'fixed' : 'rolling',
-          deadline: opp.closeDate || null,
-          categories: ['health', 'federal', category.toLowerCase()],
+          deadline_type: opp.deadline_type || 'rolling',
+          deadline: opp.deadline || null,
+          categories: ['health', 'federal'],
           keywords: ['health', 'federal', 'grant', ...keywords.slice(0, 3)],
           source: 'grants.gov',
         })
       }
-    } catch (err) {
-      console.error('[HealthResourcesCrawler] Grants.gov fetch error for category', category, ':', err.message)
+    } else if (!ok) {
+      console.warn('[HealthResourcesCrawler] Grants.gov APIs failed for live fetch')
     }
+  } catch (err) {
+    console.error('[HealthResourcesCrawler] Grants.gov fetch error:', err.message)
   }
 
   // Also query Benefits.gov for health-related programs in the profile's state
   if (state) {
     try {
       const benefitsUrl = `https://www.benefits.gov/api/benefits?state=${encodeURIComponent(state)}&category=health&pageSize=10`
-      const benefitsRes = await getWithRetry(benefitsUrl, {}, { timeoutMs: 8000, retries: 1 })
+      const benefitsRes = await getWithRetry(benefitsUrl, {}, { timeoutMs: 15000, retries: 2 })
       const programs = benefitsRes?.data?.programs ?? benefitsRes?.data ?? []
       if (Array.isArray(programs)) {
         for (const prog of programs.slice(0, 8)) {
@@ -543,13 +532,17 @@ export async function crawlHealthResources(profile, options = {}) {
   
   // Fetch live health opportunities from Grants.gov and Benefits.gov
   try {
-    const profileState = resolvedProfile?.state || signals?.location?.state || null
-    const searchKws = buildSearchKeywords(resolvedProfile, 8)
-    const liveOpps = await fetchLiveHealthOpportunities({ state: profileState, keywords: searchKws, signals })
+    const profileState = resolvedProfile?.state || effectiveSignals?.location?.state || null
+    const searchKws = buildSearchKeywords(profileForCrawler, 8)
+    const liveOpps = await fetchLiveHealthOpportunities({ state: profileState, keywords: searchKws, signals: effectiveSignals })
     for (const liveOpp of liveOpps) {
-      const { score, reasons } = calculateMatchScore(liveOpp, resolvedProfile)
+      const { score, reasons } = calculateMatchScore(liveOpp, profileForCrawler)
       if (score >= minMatchScore) {
-        selected.push(enforceCrawlerOpportunityContract({ ...liveOpp, match_score: score, match_reasons: reasons }, { crawlerType: 'health_resources', facets, queryPlan }))
+        const contracted = enforceCrawlerOpportunityContract(
+          { ...liveOpp, match_score: score, match_reasons: reasons },
+          { crawlerType: 'health_resources', facets, queryPlan },
+        )
+        if (contracted) selected.push(contracted)
       }
     }
   } catch (liveErr) {

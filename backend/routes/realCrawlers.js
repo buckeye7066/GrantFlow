@@ -1,9 +1,3 @@
-/**
- * Real Web Crawler API Routes
- * Handles execution of specialized funding crawlers
- * Production version - uses only real data sources
- */
-
 import express from 'express'
 import { ensureAuth } from '../middleware/auth.js'
 import { getProfileWithLocation } from '../services/crawlers/crawlerHelpers.js'
@@ -26,6 +20,7 @@ import {
   getPolicyRejectionCounts,
   resetPolicyRejectionCounts,
 } from '../services/crawlers/opportunityPolicy.js'
+import { getWithRetry, postWithRetry } from '../services/crawlers/httpClient.js'
 
 const router = express.Router()
 
@@ -108,9 +103,7 @@ const LIVE_CRAWL_TIMEOUT_MS = Number.parseInt(process.env.LIVE_CRAWL_TIMEOUT_MS 
 const MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK = Number.parseInt(process.env.MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK ?? '3', 10) || 3
 const LIVE_CRAWL_PERSIST_OPPS = String(process.env.LIVE_CRAWL_PERSIST_OPPS ?? 'true').toLowerCase() !== 'false'
 
-// Reversible safety toggles: default to SOFT matching (prefer penalties over exclusions).
-const HARD_FILTER_REQUIRES_MATCH = String(process.env.HARD_FILTER_REQUIRES_MATCH ?? '').toLowerCase() === 'true'
-const HARD_FILTER_MATCH_PERCENTAGE = String(process.env.HARD_FILTER_MATCH_PERCENTAGE ?? '').toLowerCase() === 'true'
+// Non-negotiable: matching funds and match-required are always excluded from candidate query and policy.
 // Token narrowing uses profile-derived keywords to pre-filter DB candidates (OR-based, soft match).
 // Default ON so crawlers use profile information for relevance. Set env ENABLE_TOKEN_NARROWING=false to disable.
 const ENABLE_TOKEN_NARROWING = String(process.env.ENABLE_TOKEN_NARROWING ?? 'true').toLowerCase() === 'true'
@@ -348,11 +341,8 @@ function normalizeLiveOpportunity(raw, { crawlerType, rejectionCounts = null }) 
   }
 
   // Apply unified opportunity policy (URL, placeholder, loan, matching-funds).
-  const policyResult = enforceOpportunityPolicy(raw)
-  if (!policyResult.ok) {
-    bumpRejectionCount(rejectionCounts, policyResult.reason ?? 'policy_rejected')
-    return null
-  }
+  const policyResult = enforceOpportunityPolicy(raw, { rejectionCounts })
+  if (!policyResult.ok) return null
 
   const title = raw.title ?? raw.name ?? null
   const sponsor = raw.sponsor ?? raw.funder ?? raw.source ?? null
@@ -550,7 +540,20 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
           })(),
         ),
       )
-      rawResults = results.flat()
+      // De-duplicate across sub-crawlers: the same grants.gov opportunity can be
+      // returned by government_funding, health_resources, special_needs, etc.
+      const seenCrossKeys = new Set()
+      rawResults = results.flat().filter((row) => {
+        const key = String(
+          row?.url || row?.application_url || row?.source_url || row?.title || '',
+        )
+          .toLowerCase()
+          .trim()
+        if (!key) return true // keep items with no key (rare)
+        if (seenCrossKeys.has(key)) return false
+        seenCrossKeys.add(key)
+        return true
+      })
     } else {
       switch (crawlerType) {
         case 'local_funding':
@@ -612,18 +615,18 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
       }
     }
 
-    const normalized = (Array.isArray(rawResults) ? rawResults : [])
+    let normalized = (Array.isArray(rawResults) ? rawResults : [])
       .map((row) => normalizeLiveOpportunity(row, { crawlerType, rejectionCounts }))
       .filter(Boolean)
-      .filter((row) => {
-        const text =
-          `${row?.title || ''} ${row?.description || ''} ${(row?.keywords || []).join(' ')} ${(row?.categories || []).join(' ')}`.toLowerCase()
-        const blocked = Array.isArray(queryPlan?.mustNotTerms)
-          ? queryPlan.mustNotTerms.some((term) => normalizeString(term) && text.includes(normalizeString(term)))
-          : false
-        if (blocked) bumpRejectionCount(rejectionCounts, 'query_plan_must_not')
-        return !blocked
-      })
+    normalized = normalized.filter((row) => {
+      const text =
+        `${row?.title || ''} ${row?.description || ''} ${(row?.keywords || []).join(' ')} ${(row?.categories || []).join(' ')}`.toLowerCase()
+      const blocked = Array.isArray(queryPlan?.mustNotTerms)
+        ? queryPlan.mustNotTerms.some((term) => normalizeString(term) && text.includes(normalizeString(term)))
+        : false
+      if (blocked) bumpRejectionCount(rejectionCounts, 'query_plan_must_not')
+      return !blocked
+    })
 
     // Score with the FULL profile context (signals + sections + facets) so we use all datapoints consistently.
     const profileContextForScoring = {
@@ -640,19 +643,11 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
     // earn their relevance through the same matching criteria as every other result.
     const rescored = current.map((row) => {
       const { score: computedScore, reasons: computedReasons } = calculateMatchScore(profileContextForScoring, row)
-      const existingScore = typeof row.match_score === 'number' ? row.match_score : null
-
-      const mergedScore = existingScore === null ? computedScore : Math.max(existingScore, computedScore)
+      // Canonical score: the matchingEngine is the single source of truth.
       const mergedReasons = mergeReasons(row.match_reasons, mergeReasons(computedReasons, facetReasons))
-
-      return { ...row, match_score: mergedScore, match_reasons: mergedReasons }
+      return { ...row, match_score: computedScore, match_reasons: mergedReasons }
     })
-    // Apply policy after rescoring (final guard before returning).
-    .filter((row) => {
-      const p = enforceOpportunityPolicy(row)
-      if (!p.ok) { bumpRejectionCount(rejectionCounts, `post_score_policy_${p.reason ?? 'rejected'}`); return false }
-      return true
-    })
+    // Policy was already enforced in normalizeLiveOpportunity(); no second check needed.
 
     let included = rescored
       .filter((row) => {
@@ -670,6 +665,9 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
         .slice(0, 50)
       fallbackApplied = true
+      console.log(
+        `[RealCrawlers] ${crawlerType} live: slider fallback applied — all ${rescored.length} results below min_match_score=${minMatchScore}; returning top ${included.length}`,
+      )
     }
 
     return {
@@ -681,7 +679,12 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
       error: null,
       query_plan: queryPlan,
       validation_rejection_counts: { ...rejectionCounts, ...getPolicyRejectionCounts() },
-      ...(fallbackApplied ? { score_fallback_applied: true } : {}),
+      ...(fallbackApplied
+        ? {
+            score_fallback_applied: true,
+            threshold_fallback_message: `No results met your threshold of ${minMatchScore}%. Showing best available matches.`,
+          }
+        : {}),
     }
   } catch (error) {
     const errorMsg = error?.message || String(error)
@@ -713,7 +716,7 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
   }
 }
 
-function formatDbOpportunity(row) {
+function formatDbOpportunity(row, rejectionCounts = null) {
   if (!row) return null
   const keywords = safeParseJSON(row.keywords, [])
   const categories = safeParseJSON(row.categories, [])
@@ -726,12 +729,10 @@ function formatDbOpportunity(row) {
     categories,
     eligibility_bullets,
     match_reasons,
-    // Normalize url fields used by frontend.
     url: row.application_url ?? row.source_url ?? null,
   }
 
-  // Apply policy so DB records with stale/bad data are never returned.
-  const policyResult = enforceOpportunityPolicy(formatted)
+  const policyResult = enforceOpportunityPolicy(formatted, { rejectionCounts })
   if (!policyResult.ok) return null
 
   return formatted
@@ -743,7 +744,12 @@ function buildCandidateOpportunityQuery({ crawlerType, profileContext, tokens, i
   const params = []
 
   // Hard-exclude loans (unconditional per product rules).
-  conditions.push("(opportunity_type IS NULL OR LOWER(opportunity_type) NOT IN ('loan','loan_program','microloan'))")
+  conditions.push("(opportunity_type IS NULL OR LOWER(TRIM(opportunity_type)) NOT IN ('loan','loan_program','microloan'))")
+  if (isPostgres) {
+    conditions.push('(is_loan IS NULL OR is_loan = FALSE)')
+  } else {
+    conditions.push('(is_loan IS NULL OR is_loan = 0)')
+  }
   // Hard-exclude matching-funds/cost-share requirements (unconditional per product rules).
   conditions.push(
     isPostgres
@@ -1095,12 +1101,13 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     if (live.ok && live.opportunities.length > 0) {
       // Persist discovered opportunities for browsing (even if user doesn't add to pipeline).
-      // This makes the Opportunities page a canonical backlog of crawler discoveries.
+      // Policy: only persist policy-compliant opportunities so forbidden records never enter the database.
       if (LIVE_CRAWL_PERSIST_OPPS) {
         try {
+          const toPersist = live.opportunities.filter((o) => enforceOpportunityPolicy(o).ok)
           const insertedIds = await bulkUpsertFundingOpportunities(
             db,
-            live.opportunities.map((o) => ({
+            toPersist.map((o) => ({
               ...o,
               // Keep these as global opportunities (not tied to a single profile).
               profile_id: null,
@@ -1150,6 +1157,7 @@ router.post('/run', ensureAuth, async (req, res) => {
           used_live: true,
           used_db_fallback: false,
           debug,
+          ...(live.threshold_fallback_message ? { threshold_fallback_message: live.threshold_fallback_message } : {}),
           ...(debugMeta ? { debug_meta: debugMeta } : {}),
         })
       }
@@ -1167,7 +1175,8 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     // 2) DB matching fallback (fast, stable, always uses full profile data).
     let candidates = []
-    
+    const dbRejectionCounts = {}
+
     try {
       const tokens = buildSearchTokens(profileContext)
       let { sql, params } = buildCandidateOpportunityQuery({
@@ -1177,9 +1186,10 @@ router.post('/run', ensureAuth, async (req, res) => {
         itemRequest: item_request,
         dialect: db?.dialect,
       })
-      candidates = (await db.prepare(sql).all(...params)).map(formatDbOpportunity).filter(Boolean)
+      candidates = (await db.prepare(sql).all(...params))
+        .map((row) => formatDbOpportunity(row, dbRejectionCounts))
+        .filter(Boolean)
 
-      // Relax: if token narrowing yielded 0, retry without tokens so directory-style and broad matches survive.
       if (candidates.length === 0 && ENABLE_TOKEN_NARROWING && tokens.length > 0) {
         console.log('[RealCrawlers] Token narrowing returned 0; retrying DB fallback without token filter')
         const broad = buildCandidateOpportunityQuery({
@@ -1189,7 +1199,9 @@ router.post('/run', ensureAuth, async (req, res) => {
           itemRequest: item_request,
           dialect: db?.dialect,
         })
-        candidates = (await db.prepare(broad.sql).all(...broad.params)).map(formatDbOpportunity).filter(Boolean)
+        candidates = (await db.prepare(broad.sql).all(...broad.params))
+          .map((row) => formatDbOpportunity(row, dbRejectionCounts))
+          .filter(Boolean)
       }
     } catch (crawlerError) {
       console.error(`[RealCrawlers] Crawler ${crawler_type} failed:`, crawlerError)
@@ -1229,9 +1241,6 @@ router.post('/run', ensureAuth, async (req, res) => {
     const currentCandidates = candidates.filter((row) => isOpportunityCurrent(row))
     const expiredExcluded = Math.max(0, candidates.length - currentCandidates.length)
 
-    // Score all candidates using the deterministic engine (uses full sections/signals).
-    // All opportunities scored uniformly — directory resources earn relevance through matching.
-    resetPolicyRejectionCounts()
     const scored = currentCandidates
       .map((row) => {
         const { score, reasons } = calculateMatchScore(profileContext, row)
@@ -1239,20 +1248,22 @@ router.post('/run', ensureAuth, async (req, res) => {
           ...row,
           match_score: score,
           match_reasons: reasons,
-          // Normalize sponsor/title for UI
           sponsor: row.sponsor ?? row.funder ?? null,
         }
       })
-      // Apply policy after scoring (final guard before returning from DB path).
       .filter((row) => {
-        const p = enforceOpportunityPolicy(row)
+        const p = enforceOpportunityPolicy(row, { rejectionCounts: dbRejectionCounts })
         return p.ok
       })
+    const scoredPolicyOk = scored
+    if (Object.keys(dbRejectionCounts).length > 0) {
+      debug.policy_rejections_db = { ...dbRejectionCounts }
+    }
 
-    const totalFound = scored.length
+    const totalFound = scoredPolicyOk.length
 
     // Filter by minimum match score (default lowered; UI can adjust).
-    let filteredOpportunities = scored
+    let filteredOpportunities = scoredPolicyOk
       .filter((opp) => {
         return typeof opp.match_score === 'number' && opp.match_score >= Number(min_match_score)
       })
@@ -1272,13 +1283,13 @@ router.post('/run', ensureAuth, async (req, res) => {
     // Guardrail: if something is being found but everything is filtered out, include score diagnostics.
     // This is additive (does not change the existing response shape); the UI can ignore it.
     if (initiallyIncludedCount === 0 && totalFound > 0) {
-      const scores = scored
+      const scores = scoredPolicyOk
         .map((o) => (typeof o?.match_score === 'number' ? o.match_score : null))
         .filter((v) => typeof v === 'number')
       const minScore = scores.length ? Math.min(...scores) : null
       const maxScore = scores.length ? Math.max(...scores) : null
       const avgScore = scores.length ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10 : null
-      const topScores = scored
+      const topScores = scoredPolicyOk
         .filter((o) => typeof o?.match_score === 'number')
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
         .slice(0, 5)
@@ -1302,21 +1313,22 @@ router.post('/run', ensureAuth, async (req, res) => {
         removed_summary: {
           expired_excluded: expiredExcluded,
           below_min_match_score: totalFound,
-          directory_present: scored.some((row) => isDirectoryResource(row)),
+          directory_present: scoredPolicyOk.some((row) => isDirectoryResource(row)),
         },
       }
     }
 
-    // Guardrail: "0 results" is a failure state.
-    // If we scored anything but filtered everything away, fall back to returning the best-scoring options.
-    // This preserves the response shape while preventing "total_found > 0, included === 0".
+    let thresholdFallbackMessage = null
     if (initiallyIncludedCount === 0 && totalFound > 0) {
-      filteredOpportunities = scored
+      filteredOpportunities = scoredPolicyOk
         .filter((o) => typeof o?.match_score === 'number')
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
         .slice(0, 50)
       debug.db.returned = filteredOpportunities.length
       debug.db.fallback_applied = filteredOpportunities.length > 0 ? true : undefined
+      if (filteredOpportunities.length > 0) {
+        thresholdFallbackMessage = `No results met your threshold of ${min_match_score}%. Showing best available matches.`
+      }
     }
 
     // If live had *some* results, merge + dedupe by URL/title so users see real results first.
@@ -1346,6 +1358,9 @@ router.post('/run', ensureAuth, async (req, res) => {
         })
       : undefined
     
+    const fallbackMessage =
+      thresholdFallbackMessage ??
+      (live?.threshold_fallback_message && live.opportunities?.length > 0 ? live.threshold_fallback_message : null)
     res.json({
       success: true,
       crawler_type,
@@ -1358,6 +1373,7 @@ router.post('/run', ensureAuth, async (req, res) => {
       used_live: Boolean(debug.used_live),
       used_db_fallback: Boolean(debug.used_db_fallback),
       debug,
+      ...(fallbackMessage ? { threshold_fallback_message: fallbackMessage } : {}),
       ...(debugMeta ? { debug_meta: debugMeta } : {}),
     })
     
@@ -1545,21 +1561,21 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
       })
 
       const candidates = (await db.prepare(sql).all(...params)).map(formatDbOpportunity).filter(Boolean)
-      const scored = candidates
+      const scoredRaw = candidates
         .filter((row) => isOpportunityCurrent(row))
         .map((row) => {
           const { score, reasons } = calculateMatchScore(profileContext, row)
           return { ...row, match_score: score, match_reasons: reasons }
         })
+      const scored = scoredRaw.filter((row) => {
+        const p = enforceOpportunityPolicy(row)
+        return p.ok
+      })
 
       const totalFoundForCrawler = scored.length
 
-      // Filter by minimum match score.
-      // If 0 included but we had results, fall back to best-scoring items.
       let filtered = scored
-        .filter((opp) => {
-          return typeof opp.match_score === 'number' && opp.match_score >= Number(min_match_score)
-        })
+        .filter((opp) => typeof opp.match_score === 'number' && opp.match_score >= Number(min_match_score))
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
         .slice(0, 50)
 
@@ -1570,13 +1586,12 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
           .slice(0, 50)
       }
 
-      // If live had *some* results, merge + dedupe so users get real results first.
-      // Note: response shape is preserved; we only adjust counts.
       let merged = filtered
       if (live?.ok && Array.isArray(live.opportunities) && live.opportunities.length > 0) {
+        const livePolicyOk = live.opportunities.filter((o) => enforceOpportunityPolicy(o).ok)
         const seen = new Set()
         const keyOf = (o) => String(o?.url || o?.application_url || o?.source_url || o?.title || '').toLowerCase()
-        merged = [...live.opportunities, ...filtered].filter((o) => {
+        merged = [...livePolicyOk, ...filtered].filter((o) => {
           const key = keyOf(o)
           if (!key) return true
           if (seen.has(key)) return false
@@ -1647,5 +1662,122 @@ function getCrawlerDescription(type) {
 // We intentionally do not write crawler matches back into funding_opportunities here.
 // funding_opportunities is maintained by the ingestion pipeline; "crawler runs" should
 // query + score existing live opportunities for the selected profile.
+
+/**
+ * Admin health check: test external API connectivity.
+ * GET /api/real-crawlers/health-check
+ * Returns { ok, checks: [{ source, reachable, latency_ms, error }], env?: object }
+ */
+router.get('/health-check', async (req, res) => {
+  try {
+    const { testConnectivity } = await import('../services/crawlers/grantsGovClient.js')
+    const apiChecks = await testConnectivity()
+
+    // Also test NIH RSS
+    const nihStart = Date.now()
+    let nihCheck
+    try {
+      const nihResp = await getWithRetry('https://grants.nih.gov/grants/guide/newsfeed/fundingopps.xml', {}, { timeoutMs: 10000, retries: 0 })
+      const hasItems = typeof nihResp?.data === 'string' && nihResp.data.includes('<item>')
+      nihCheck = { source: 'NIH Grants RSS', reachable: true, latency_ms: Date.now() - nihStart, hit_count: hasItems ? 1 : 0, error: null }
+    } catch (err) {
+      nihCheck = { source: 'NIH Grants RSS', reachable: false, latency_ms: Date.now() - nihStart, hit_count: 0, error: err?.message || String(err) }
+    }
+
+    const checks = [...apiChecks, nihCheck]
+    const allReachable = checks.every((c) => c.reachable)
+    res.json({ ok: allReachable, checks, env: { LIVE_CRAWL_TIMEOUT_MS, LIVE_CRAWL_PERSIST_OPPS, MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK } })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || String(err) })
+  }
+})
+
+/**
+ * Raw grants.gov API test — no auth required.
+ * GET /api/real-crawlers/test-grants-api
+ * Calls grants.gov search2 with a simple query and returns the raw response.
+ */
+router.get('/test-grants-api', async (req, res) => {
+  const keyword = req.query.q || 'health'
+  const results = { keyword, legacy: null, simpler: null, timestamp: new Date().toISOString() }
+
+  // Test legacy API
+  try {
+    const start = Date.now()
+    const response = await postWithRetry(
+      'https://api.grants.gov/v1/api/search2',
+      { keyword, oppStatuses: 'posted', rows: 3 },
+      { headers: { 'Content-Type': 'application/json' } },
+      { timeoutMs: 20000, retries: 1 },
+    )
+    const latency = Date.now() - start
+    const data = response?.data
+    const topKeys = data && typeof data === 'object' ? Object.keys(data) : []
+    const dataKeys = data?.data && typeof data.data === 'object' ? Object.keys(data.data) : []
+    const hitCount = data?.data?.hitCount ?? data?.hitCount ?? null
+    const oppHits = data?.data?.oppHits ?? data?.oppHits ?? []
+    const sampleHit = Array.isArray(oppHits) && oppHits.length > 0 ? oppHits[0] : null
+
+    results.legacy = {
+      ok: true,
+      status: response?.status,
+      latency_ms: latency,
+      top_keys: topKeys,
+      data_keys: dataKeys,
+      hit_count: hitCount,
+      opp_hits_count: Array.isArray(oppHits) ? oppHits.length : 0,
+      sample_hit: sampleHit,
+      errorcode: data?.errorcode ?? data?.errorCode ?? null,
+      msg: data?.msg ?? data?.message ?? null,
+      raw_snippet: JSON.stringify(data).slice(0, 800),
+    }
+  } catch (err) {
+    results.legacy = {
+      ok: false,
+      error: err?.message || String(err),
+      code: err?.code || err?.response?.status || null,
+      response_snippet: err?.response?.data ? JSON.stringify(err.response.data).slice(0, 400) : null,
+    }
+  }
+
+  // Test Simpler API
+  try {
+    const start = Date.now()
+    const response = await postWithRetry(
+      'https://api.simpler.grants.gov/v1/opportunities/search',
+      {
+        query: keyword,
+        filters: { opportunity_status: { one_of: ['posted', 'forecasted'] } },
+        pagination: { page_size: 3, page_offset: 1, order_by: 'relevancy', sort_direction: 'descending' },
+      },
+      { headers: { 'Content-Type': 'application/json' } },
+      { timeoutMs: 20000, retries: 1 },
+    )
+    const latency = Date.now() - start
+    const data = response?.data
+    const topKeys = data && typeof data === 'object' ? Object.keys(data) : []
+    const items = data?.data ?? data?.items ?? data?.opportunities ?? data?.results ?? []
+    const sampleItem = Array.isArray(items) && items.length > 0 ? items[0] : null
+
+    results.simpler = {
+      ok: true,
+      status: response?.status,
+      latency_ms: latency,
+      top_keys: topKeys,
+      items_count: Array.isArray(items) ? items.length : 0,
+      sample_item: sampleItem ? { title: sampleItem.opportunity_title ?? sampleItem.title, id: sampleItem.opportunity_id ?? sampleItem.id } : null,
+      raw_snippet: JSON.stringify(data).slice(0, 800),
+    }
+  } catch (err) {
+    results.simpler = {
+      ok: false,
+      error: err?.message || String(err),
+      code: err?.code || err?.response?.status || null,
+      response_snippet: err?.response?.data ? JSON.stringify(err.response.data).slice(0, 400) : null,
+    }
+  }
+
+  res.json(results)
+})
 
 export default router

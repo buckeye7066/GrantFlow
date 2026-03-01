@@ -5,12 +5,13 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const modulePath = path.resolve(__dirname, '..', '..', 'backend', 'services', 'crawlers', 'opportunityPolicy.js')
+const moduleUrl = pathToFileURL(modulePath).href
 
 const {
   isLoanLike,
@@ -21,7 +22,7 @@ const {
   enforceOpportunityPolicy,
   getPolicyRejectionCounts,
   resetPolicyRejectionCounts,
-} = await import(modulePath)
+} = await import(moduleUrl)
 
 // ─── isValidRealUrl ──────────────────────────────────────────────────────────
 
@@ -115,12 +116,49 @@ test('isLoanLike: detects loan keyword in title', () => {
   assert.equal(isLoanLike({ title: 'Revolving Loan Fund', description: 'Access capital' }), true)
 })
 
-test('isLoanLike: detects financing keyword in description', () => {
-  assert.equal(isLoanLike({ title: 'Growth Program', description: 'Provides financing to businesses' }), true)
+test('isLoanLike: detects loan program in description', () => {
+  assert.equal(isLoanLike({ title: 'Growth Program', description: 'This small business loan program provides capital' }), true)
 })
 
-test('isLoanLike: detects repayment keyword', () => {
+test('isLoanLike: does NOT false-positive on standalone "financing" keyword', () => {
+  // "financing" alone is too broad — grants that provide "alternatives to financing" were being rejected
+  assert.equal(isLoanLike({ title: 'Growth Program', description: 'Provides financing to businesses' }), false)
+})
+
+test('isLoanLike: detects interest rate keyword', () => {
+  assert.equal(isLoanLike({ title: 'Capital Program', description: 'Low interest rate available to borrowers' }), true)
+})
+
+test('isLoanLike: detects monthly payment keyword', () => {
+  assert.equal(isLoanLike({ title: 'Funding Program', description: 'Easy monthly payment plan for businesses' }), true)
+})
+
+test('isLoanLike: detects borrower keyword', () => {
+  assert.equal(isLoanLike({ title: 'Capital Access', description: 'Requirements for borrower eligibility' }), true)
+})
+
+test('isLoanLike: detects repayment of funds', () => {
   assert.equal(isLoanLike({ title: 'Capital Program', description: 'No repayment required... wait, repayment of funds' }), true)
+})
+
+test('isLoanLike: exempts loan repayment assistance (grants that help repay loans)', () => {
+  assert.equal(
+    isLoanLike({
+      title: 'Student Loan Repayment Assistance',
+      description: 'Grant for student loan repayment assistance for healthcare workers',
+    }),
+    false,
+  )
+})
+
+test('isLoanLike: exempts loan forgiveness programs', () => {
+  assert.equal(
+    isLoanLike({
+      title: 'Public Service Loan Forgiveness',
+      description: 'Loan forgiveness for qualifying public servants',
+    }),
+    false,
+  )
 })
 
 test('isLoanLike: does not false-positive on "loanable"', () => {

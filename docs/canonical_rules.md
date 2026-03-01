@@ -26,7 +26,7 @@ Applies to:
 
 Sources:
 - `README.md`
-- `docs/PRODUCTION_READINESS.md`
+- `docs/PROD_READINESS.md`
 - `docs/AUTH_FLOW_BLUEPRINT.md`
 - `docs/BASE44_GAP_ANALYSIS.md`
 - `OPS_AUTOFIX.md`

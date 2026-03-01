@@ -16,6 +16,7 @@
  */
 import { buildSearchKeywords, calculateMatchScore, filterByDeadline } from './crawlerHelpers.js'
 import { getWithRetry } from './httpClient.js'
+import { searchGrants } from './grantsGovClient.js'
 import { planCrawlerQueries } from './queryPlanner.js'
 import {
   resolveCrawlerContext,
@@ -266,49 +267,42 @@ const SIGNAL_SPECIFIC_SCHOLARSHIPS = {
 
 
 /**
- * Fetch live student grant opportunities from Grants.gov API.
- * Queries the education category (ED) and matches to profile signals.
+ * Fetch live student grant opportunities from Grants.gov (resilient client).
+ * Queries education-related keywords and maps to crawler opportunity shape.
  */
 async function fetchLiveStudentOpportunities({ keywords = [], state = null }) {
-  const results = []
   const keyword = keywords.slice(0, 3).join(' ') || 'education scholarship grant'
   try {
-    const payload = {
-      rows: 20,
-      oppStatuses: 'posted|forecasted',
-      keyword,
-      startRecordNum: 0,
-      fundingCategories: 'ED', // Education
+    const { ok, opportunities: grantOpps } = await searchGrants(keyword, { rows: 20 })
+    if (!ok) {
+      console.warn('[StudentGrantsCrawler] Grants.gov APIs failed for live fetch')
+      return []
     }
-    const response = await getWithRetry(
-      'https://api.grants.gov/v1/api/search2',
-      { method: 'POST', data: payload, headers: { 'Content-Type': 'application/json', Accept: 'application/json' } },
-      { timeoutMs: 10000, retries: 1 },
-    )
-    const hits = response?.data?.oppHits ?? response?.data?.data?.oppHits ?? []
-    for (const opp of Array.isArray(hits) ? hits.slice(0, 15) : []) {
+    const results = []
+    for (const opp of (grantOpps || []).slice(0, 15)) {
       if (!opp?.title) continue
       results.push({
         title: opp.title,
-        sponsor: opp.agencyName || opp.agency || 'Federal Agency',
-        description: opp.synopsis || 'Federal education grant opportunity. Visit Grants.gov for eligibility and application details.',
-        url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
-        application_url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
-        source_url: opp.id ? `https://www.grants.gov/search-results-detail/${opp.id}` : 'https://www.grants.gov',
+        sponsor: opp.sponsor || 'Federal Agency',
+        description: opp.description || 'Federal education grant opportunity. Visit Grants.gov for eligibility and application details.',
+        url: opp.url || opp.application_url || 'https://www.grants.gov',
+        application_url: opp.application_url || opp.url || 'https://www.grants.gov',
+        source_url: opp.source_url || opp.url || 'https://www.grants.gov',
         state: state || 'nationwide',
         is_national: true,
         opportunity_type: 'grant',
-        deadline_type: opp.closeDate ? 'fixed' : 'rolling',
-        deadline: opp.closeDate || null,
+        deadline_type: opp.deadline_type || 'rolling',
+        deadline: opp.deadline || null,
         categories: ['education', 'federal', 'student'],
         keywords: ['education', 'federal', 'grant', 'student', ...keywords.slice(0, 3)],
         source: 'grants.gov',
       })
     }
+    return results
   } catch (err) {
     console.error('[StudentGrantsCrawler] Grants.gov fetch error:', err.message)
+    return []
   }
-  return results
 }
 
 function finalizeStudentResults(rows, { facets, queryPlan }) {
@@ -370,15 +364,16 @@ export async function crawlStudentGrants(profileInput, options = {}) {
   for (const aid of FEDERAL_STUDENT_AID) {
         // Check requirements — use consolidated FAFSA signals for need detection
       if (aid._requires?.financial_need) {
-              const hasNeed = fafsaSignals.highNeed ||
-                        fafsaSignals.pellEligible ||
-                        fafsaSignals.lowIncome ||
-                        effectiveSignals.assistance?.has('low_income') ||
-                        effectiveSignals.financial?.needLevel === 'High' ||
-                        effectiveSignals.financial?.needLevel === 'Critical' ||
-                        effectiveSignals.financial?.needLevel === 'Extreme' ||
-                        effectiveSignals.assistance?.has('high_financial_need')
-              if (!hasNeed) continue
+        const hasNeed =
+          fafsaSignals.highNeed ||
+          fafsaSignals.pellEligible ||
+          fafsaSignals.lowIncome ||
+          effectiveSignals.assistance?.has('low_income') ||
+          effectiveSignals.financial?.needLevel === 'High' ||
+          effectiveSignals.financial?.needLevel === 'Critical' ||
+          effectiveSignals.financial?.needLevel === 'Extreme' ||
+          effectiveSignals.assistance?.has('high_financial_need')
+        if (!hasNeed) continue
       }
         if (aid._requires?.military) {
                 if (!effectiveSignals.military?.size) continue
@@ -415,10 +410,10 @@ export async function crawlStudentGrants(profileInput, options = {}) {
 
   // === 2. SIGNAL-SPECIFIC SCHOLARSHIPS ===
   // For every applicable signal, include matching scholarships
-  const demographicSignals = Array.from(signals.demographics || [])
-    const healthSignals = Array.from(signals.health || [])
-    const familySignals = Array.from(signals.family || [])
-    const genderSignals = Array.from(signals.genders || [])
+  const demographicSignals = Array.from(effectiveSignals.demographics || [])
+    const healthSignals = Array.from(effectiveSignals.health || [])
+    const familySignals = Array.from(effectiveSignals.family || [])
+    const genderSignals = Array.from(effectiveSignals.genders || [])
 
   // Map signal values to scholarship categories
   const signalCategoryMap = {
@@ -611,29 +606,29 @@ function isStudentProfile(profile) {
 }
 
 function getSchoolFinAidUrl(schoolName) {
-    const schoolUrls = {
-          'Ohio State University': 'https://sfa.osu.edu',
-          'University of Cincinnati': 'https://financialaid.uc.edu',
-          'Case Western Reserve University': 'https://case.edu/financialaid',
-          'University of Tennessee': 'https://onestop.utk.edu/financial-aid/',
-          'Vanderbilt University': 'https://www.vanderbilt.edu/financialaid/',
-          'University of Michigan': 'https://finaid.umich.edu/',
-          'MIT': 'https://sfs.mit.edu/',
-          'Stanford University': 'https://financialaid.stanford.edu/',
-          'Harvard University': 'https://college.harvard.edu/financial-aid',
-    }
-
-  // Direct lookup
+  const schoolUrls = {
+    'Ohio State University': 'https://sfa.osu.edu',
+    'University of Cincinnati': 'https://financialaid.uc.edu',
+    'Case Western Reserve University': 'https://case.edu/financialaid',
+    'University of Tennessee': 'https://onestop.utk.edu/financial-aid/',
+    'Vanderbilt University': 'https://www.vanderbilt.edu/financialaid/',
+    'University of Michigan': 'https://finaid.umich.edu/',
+    'MIT': 'https://sfs.mit.edu/',
+    'Stanford University': 'https://financialaid.stanford.edu/',
+    'Harvard University': 'https://college.harvard.edu/financial-aid',
+    'Penn State University': 'https://studentaid.psu.edu/',
+    'North Carolina State University': 'https://studentservices.ncsu.edu/financial-aid/',
+    'Georgia Tech': 'https://finaid.gatech.edu/',
+    'University of Texas at Austin': 'https://finaid.utexas.edu/',
+    'University of Florida': 'https://www.sfa.ufl.edu/',
+    'University of California Berkeley': 'https://financialaid.berkeley.edu/',
+    'UCLA': 'https://financialaid.ucla.edu/',
+  }
   if (schoolUrls[schoolName]) return schoolUrls[schoolName]
-
-  // Partial match
   const lower = schoolName.toLowerCase()
-    for (const [name, url] of Object.entries(schoolUrls)) {
-          if (lower.includes(name.toLowerCase()) || name.toLowerCase().includes(lower)) {
-                  return url
-          }
-    }
-
+  for (const [name, url] of Object.entries(schoolUrls)) {
+    if (lower.includes(name.toLowerCase()) || name.toLowerCase().includes(lower)) return url
+  }
   return null
 }
 
@@ -661,13 +656,21 @@ function extractFafsaSignals(profile, signals) {
     : typeof financial?.sai === 'number' ? financial.sai
     : typeof financial?.expected_family_contribution === 'number' ? financial.expected_family_contribution
     : null
+  const fafsaFiled =
+    String(financial?.fafsa_filed ?? '').toLowerCase() === 'yes' ||
+    String(financial?.fafsa_filed ?? '').toLowerCase() === 'true'
   const pellEligible =
     Boolean(financial?.pell_eligible) ||
     Boolean(financial?.pell_grant_eligible) ||
-    efcOrSai === 0
+    efcOrSai === 0 ||
+    fafsaFiled ||
+    signals?.assistance?.has?.('high_financial_need') ||
+    signals?.assistance?.has?.('low_income')
 
   // High financial need: explicit signals or FAFSA-style markers
+  const needLevel = financial?.financial_need_level ?? financial?.need_level ?? signals?.financial?.needLevel ?? ''
   const highNeed =
+    ['High', 'Critical', 'Extreme'].includes(String(needLevel)) ||
     pellEligible ||
     Boolean(financial?.high_financial_need) ||
     String(financial?.need_level ?? '').toLowerCase() === 'high' ||

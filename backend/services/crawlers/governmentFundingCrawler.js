@@ -21,31 +21,50 @@
  */
 import * as cheerio from 'cheerio'
 import { buildSearchKeywords, calculateMatchScore, filterByDeadline } from './crawlerHelpers.js'
-import { getWithRetry, postWithRetry } from './httpClient.js'
+import { getWithRetry } from './httpClient.js'
+import { searchGrants, searchGrantsBatch, GRANTS_GOV_DETAIL } from './grantsGovClient.js'
 import { planCrawlerQueries } from './queryPlanner.js'
 import {
   resolveCrawlerContext,
   mergePlanKeywords,
   enforceCrawlerOpportunityContract,
 } from './crawlerOpportunityContract.js'
-
-const GRANTS_GOV_API = 'https://api.grants.gov/v1/api/search2'
-const GRANTS_GOV_DETAIL = 'https://www.grants.gov/search-results-detail/'
+import { enforceOpportunityPolicy } from './opportunityPolicy.js'
 
 const NIH_RSS_URL = 'https://grants.nih.gov/grants/guide/newsfeed/fundingopps.xml'
 
 // State grant portals (expandable)
 const STATE_PORTALS = {
-        OH: { name: 'Ohio Grants', searchUrl: 'https://grants.ohio.gov/Public/Search.aspx' },
-        TN: { name: 'Tennessee Grants', searchUrl: 'https://www.tn.gov/finance/grants.html' },
-        CO: { name: 'Colorado Grants', searchUrl: 'https://www.colorado.gov/grants' },
-        TX: { name: 'Texas Grants', searchUrl: 'https://www.texasagriculture.gov/Grants-Services' },
-        CA: { name: 'California Grants', searchUrl: 'https://www.grants.ca.gov/' },
-        NY: { name: 'New York Grants', searchUrl: 'https://grantsmanagement.ny.gov/' },
-        FL: { name: 'Florida Grants', searchUrl: 'https://www.myflorida.com/apps/vbs/vbs_www.main_menu' },
-        PA: { name: 'Pennsylvania Grants', searchUrl: 'https://www.esa.dced.state.pa.us/Login.aspx' },
-        IL: { name: 'Illinois Grants', searchUrl: 'https://www2.illinois.gov/sites/GATA/Grants' },
-        MI: { name: 'Michigan Grants', searchUrl: 'https://www.michigan.gov/leo/bureaus-agencies/ogl' },
+  OH: { name: 'Ohio Grants', searchUrl: 'https://grants.ohio.gov/Public/Search.aspx' },
+  TN: { name: 'Tennessee Grants', searchUrl: 'https://www.tn.gov/finance/grants.html' },
+  CO: { name: 'Colorado Grants', searchUrl: 'https://www.colorado.gov/grants' },
+  TX: { name: 'Texas Grants', searchUrl: 'https://www.texasagriculture.gov/Grants-Services' },
+  CA: { name: 'California Grants', searchUrl: 'https://www.grants.ca.gov/' },
+  NY: { name: 'New York Grants', searchUrl: 'https://grantsmanagement.ny.gov/' },
+  FL: { name: 'Florida Grants', searchUrl: 'https://www.myflorida.com/apps/vbs/vbs_www.main_menu' },
+  PA: { name: 'Pennsylvania Grants', searchUrl: 'https://www.esa.dced.state.pa.us/Login.aspx' },
+  IL: { name: 'Illinois Grants', searchUrl: 'https://www2.illinois.gov/sites/GATA/Grants' },
+  MI: { name: 'Michigan Grants', searchUrl: 'https://www.michigan.gov/leo/bureaus-agencies/ogl' },
+  WV: { name: 'West Virginia Grants', searchUrl: 'https://grants.wv.gov/' },
+  VA: { name: 'Virginia Grants', searchUrl: 'https://www.dhcd.virginia.gov/community-development-block-grant' },
+  NC: { name: 'North Carolina Grants', searchUrl: 'https://www.nc.gov/services/grants' },
+  GA: { name: 'Georgia Grants', searchUrl: 'https://opb.georgia.gov/state-grants' },
+  NJ: { name: 'New Jersey Grants', searchUrl: 'https://www.nj.gov/state/dos_grants.html' },
+  MA: { name: 'Massachusetts Grants', searchUrl: 'https://www.mass.gov/topics/grants-for-individuals' },
+  WA: { name: 'Washington Grants', searchUrl: 'https://ofm.wa.gov/budget/state-budgets-prior-prior/grants' },
+  AZ: { name: 'Arizona Grants', searchUrl: 'https://grants.az.gov/' },
+  IN: { name: 'Indiana Grants', searchUrl: 'https://www.in.gov/ifa/grants/' },
+  MN: { name: 'Minnesota Grants', searchUrl: 'https://mn.gov/admin/government/grants/' },
+  MO: { name: 'Missouri Grants', searchUrl: 'https://oa.mo.gov/accounting/state-grants' },
+  WI: { name: 'Wisconsin Grants', searchUrl: 'https://doa.wi.gov/Pages/StateFinances/GrantsAndLoans.aspx' },
+  MD: { name: 'Maryland Grants', searchUrl: 'https://grants.maryland.gov/' },
+  SC: { name: 'South Carolina Grants', searchUrl: 'https://admin.sc.gov/statewide-grants' },
+  AL: { name: 'Alabama Grants', searchUrl: 'https://comptroller.alabama.gov/grants/' },
+  KY: { name: 'Kentucky Grants', searchUrl: 'https://finance.ky.gov/offices/grants/' },
+  OR: { name: 'Oregon Grants', searchUrl: 'https://www.oregon.gov/biz/programs/grants/pages/default.aspx' },
+  CT: { name: 'Connecticut Grants', searchUrl: 'https://portal.ct.gov/opm/budget/grants-management' },
+  LA: { name: 'Louisiana Grants', searchUrl: 'https://www.doa.la.gov/Pages/osp/Grants/Index.aspx' },
+  OK: { name: 'Oklahoma Grants', searchUrl: 'https://grants.ok.gov/' },
 }
 
 /**
@@ -203,6 +222,57 @@ function buildExhaustiveStrategies(profile) {
           }
         }
 
+  // === INDIVIDUAL-FOCUSED STRATEGIES ===
+  // Grants.gov mostly funds organizations, but many programs directly serve individuals.
+  // For individual/family profiles, add searches for these programs explicitly.
+  const isIndividualProfile =
+    applicantTypes.some(t => ['individual', 'individual_need', 'family', 'medical_assistance'].includes(t)) ||
+    clean(signals?.profileType || '').includes('individual')
+
+  if (isIndividualProfile) {
+    // Core assistance programs that serve individuals
+    const individualPrograms = [
+      { label: 'ind:health-center', query: 'community health center' },
+      { label: 'ind:mental-health', query: 'mental health services grant' },
+      { label: 'ind:disability', query: 'disability services independent living' },
+      { label: 'ind:housing', query: 'housing assistance homeless prevention' },
+      { label: 'ind:energy', query: 'LIHEAP energy assistance low income' },
+      { label: 'ind:food', query: 'food assistance nutrition program' },
+      { label: 'ind:workforce', query: 'workforce development job training' },
+      { label: 'ind:substance', query: 'substance abuse treatment services' },
+      { label: 'ind:childcare', query: 'child care head start early childhood' },
+    ]
+
+    // State-specific individual programs
+    if (state) {
+      individualPrograms.push(
+        { label: 'ind:state-assist', query: `${state} assistance benefits program` },
+        { label: 'ind:state-health', query: `${state} health services community` },
+        { label: 'ind:state-housing', query: `${state} housing community development` },
+      )
+    }
+
+    // Add Appalachian-specific for WV, KY, TN, VA, NC, GA, AL, MS, OH, PA, MD, SC
+    const appalachianStates = new Set(['WV', 'KY', 'TN', 'VA', 'NC', 'GA', 'AL', 'MS', 'OH', 'PA', 'MD', 'SC'])
+    if (state && appalachianStates.has(state)) {
+      individualPrograms.push(
+        { label: 'ind:appalachian', query: 'Appalachian regional commission community' },
+        { label: 'ind:rural', query: 'rural development community facilities' },
+      )
+    }
+
+    // Cross with health/disability signals
+    if (health.length > 0) {
+      individualPrograms.push(
+        { label: 'ind:health-specific', query: `${health[0]} patient assistance program` },
+      )
+    }
+
+    for (const prog of individualPrograms) {
+      strategies.push(prog)
+    }
+  }
+
   // === FALLBACK ===
   if (strategies.length === 0) {
             const allKeywords = buildSearchKeywords(profile, 10)
@@ -218,8 +288,8 @@ function buildExhaustiveStrategies(profile) {
                   return true
         })
 
-  // Cap at 12 strategies to stay within timeout budget (12 parallel API calls, 8s each, ~12s total with concurrency)
-  return unique.slice(0, 12)
+  // Cap at 20 strategies to stay within timeout budget (batch of 3, ~400ms delay, ~20s total with dual API)
+  return unique.slice(0, 20)
 }
 
 function finalizeGovernmentResults(rows, { facets, queryPlan }) {
@@ -270,36 +340,69 @@ export async function crawlGovernmentFunding(profileInput, options = {}) {
   // Below-threshold fallback: when no results pass min_score, return top by score (avoid 0 when we have candidates)
   const belowThreshold = []
 
-  // === GRANTS.GOV: Run ALL strategies in parallel ===
+  // === GRANTS.GOV: dual-API client (legacy + Simpler, merged & deduped) ===
+  let grantsGovTotal = 0
   try {
-            const grantsGovResults = await searchGrantsGovExhaustive(strategies)
+    const grantsGovResults = await searchGrantsGovExhaustive(strategies)
+    grantsGovTotal = grantsGovResults.length
 
-          const activeOpps = filterByDeadline(grantsGovResults)
-            for (const opp of activeOpps) {
-                        if (isLoanOrMatchingFund(opp)) continue
+    const activeOpps = filterByDeadline(grantsGovResults)
+    for (const opp of activeOpps) {
+      if (!enforceOpportunityPolicy(opp).ok) continue
 
-              const titleKey = (opp.title || '').toLowerCase().trim()
-                        if (titleKey && seenTitles.has(titleKey)) continue
-                        if (titleKey) seenTitles.add(titleKey)
+      const titleKey = (opp.title || '').toLowerCase().trim()
+      if (titleKey && seenTitles.has(titleKey)) continue
+      if (titleKey) seenTitles.add(titleKey)
 
-              const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profileForCrawler)
-              const row = {
-                ...opp,
-                match_score: matchScore,
-                match_reasons: reasons,
-                matched_signals: matchedSignals,
-                crawler_type: 'government_funding',
-                funding_level: 'federal',
-                source: 'Grants.gov',
-              }
-              if (matchScore >= minMatchScore) {
-                results.push(row)
-              } else {
-                belowThreshold.push(row)
-              }
-            }
+      const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profileForCrawler)
+      const row = {
+        ...opp,
+        match_score: matchScore,
+        match_reasons: reasons,
+        matched_signals: matchedSignals,
+        crawler_type: 'government_funding',
+        funding_level: 'federal',
+        source: 'Grants.gov',
+      }
+      if (matchScore >= minMatchScore) {
+        results.push(row)
+      } else {
+        belowThreshold.push(row)
+      }
+    }
   } catch (error) {
-            console.error(`[GovernmentCrawler] Grants.gov error:`, error.message)
+    console.error(`[GovernmentCrawler] Grants.gov error:`, error.message)
+  }
+
+  // === BROAD FALLBACK: If all strategies returned 0, try a single broad query via resilient client ===
+  if (grantsGovTotal === 0 && profileState) {
+    try {
+      console.log('[GovernmentCrawler] All strategies returned 0 — running broad state fallback')
+      const broadQuery = `${profileState} grant assistance`
+      const { opportunities: broadOpps } = await searchGrants(broadQuery, { rows: 25 })
+      console.log(`[GovernmentCrawler] Broad fallback returned ${broadOpps?.length ?? 0} raw hits`)
+      for (const opp of broadOpps ?? []) {
+        const title = opp?.title ?? null
+        if (!title) continue
+        const titleKey = title.toLowerCase().trim()
+        if (titleKey && seenTitles.has(titleKey)) continue
+        if (titleKey) seenTitles.add(titleKey)
+        const decorated = { ...opp, _discovery_strategy: 'broad_state_fallback' }
+        if (!enforceOpportunityPolicy(decorated).ok) continue
+        const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(decorated, profileForCrawler)
+        belowThreshold.push({
+          ...decorated,
+          match_score: matchScore,
+          match_reasons: reasons,
+          matched_signals: matchedSignals,
+          crawler_type: 'government_funding',
+          funding_level: 'federal',
+          source: 'Grants.gov',
+        })
+      }
+    } catch (broadErr) {
+      console.error('[GovernmentCrawler] Broad fallback error:', broadErr?.message ?? broadErr, broadErr?.requestUrl || '')
+    }
   }
 
   // === NIH RSS ===
@@ -307,7 +410,7 @@ export async function crawlGovernmentFunding(profileInput, options = {}) {
             const nihResults = await searchNIHRSS(searchKeywords)
             const activeOpps = filterByDeadline(nihResults)
             for (const opp of activeOpps) {
-                        if (isLoanOrMatchingFund(opp)) continue
+                        if (!enforceOpportunityPolicy(opp).ok) continue
 
               const titleKey = (opp.title || '').toLowerCase().trim()
                         if (titleKey && seenTitles.has(titleKey)) continue
@@ -341,6 +444,7 @@ export async function crawlGovernmentFunding(profileInput, options = {}) {
             try {
                         const cmsResults = await searchCMSSources(profile, searchKeywords)
                         for (const opp of cmsResults) {
+                                      if (!enforceOpportunityPolicy(opp).ok) continue
                                       const titleKey = (opp.title || '').toLowerCase().trim()
                                       if (titleKey && seenTitles.has(titleKey)) continue
                                       if (titleKey) seenTitles.add(titleKey)
@@ -369,6 +473,7 @@ export async function crawlGovernmentFunding(profileInput, options = {}) {
                   try {
                               const stateResults = await searchStatePortal(statePortal, profileState, searchKeywords)
                               for (const opp of stateResults) {
+                                            if (!enforceOpportunityPolicy(opp).ok) continue
                                             const titleKey = (opp.title || '').toLowerCase().trim()
                                             if (titleKey && seenTitles.has(titleKey)) continue
                                             if (titleKey) seenTitles.add(titleKey)
@@ -388,7 +493,7 @@ export async function crawlGovernmentFunding(profileInput, options = {}) {
                                             }
                               }
                   } catch (error) {
-                              console.error(`[GovernmentCrawler] State portal error:`, error.message)
+                              console.error(`[GovernmentCrawler] State portal error for ${profileState}:`, error.message)
                   }
         }
 
@@ -404,7 +509,7 @@ export async function crawlGovernmentFunding(profileInput, options = {}) {
   results.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
 
   console.log(`[GovernmentCrawler] Exhaustive discovery found ${results.length} matching opportunities (min_score=${minMatchScore})`)
-        return finalizeGovernmentResults(results, { facets, queryPlan })
+  return finalizeGovernmentResults(results, { facets, queryPlan })
 }
 
 /**
@@ -412,94 +517,22 @@ export async function crawlGovernmentFunding(profileInput, options = {}) {
  * Each strategy gets its own API call with focused keywords.
  */
 async function searchGrantsGovExhaustive(strategies) {
-        const allOpportunities = []
-                const seenIds = new Set()
-
-  const queryPromises = strategies.map(async (strategy) => {
-            try {
-                        console.log(`[GovernmentCrawler] Grants.gov "${strategy.label}": "${strategy.query}"`)
-
-              const searchParams = {
-                            keyword: strategy.query,
-                            oppStatuses: 'posted',
-                            sortBy: 'openDate|desc',
-                            rows: 15,
-                            startRecordNum: 0,
-              }
-
-              const response = await postWithRetry(
-                            GRANTS_GOV_API,
-                            searchParams,
-                    { headers: { 'Content-Type': 'application/json' } },
-                    { timeoutMs: 8000, retries: 1 },
-                          )
-
-              let parsed = response?.data
-                        if (typeof parsed === 'string') {
-                                      try { parsed = JSON.parse(parsed) } catch { return [] }
-                        }
-
-              const hits = parsed?.data?.oppHits ?? parsed?.oppHits ?? []
-                          const rows = Array.isArray(hits) ? hits : []
-                                      const results = []
-
-                                                  for (const hit of rows) {
-                                                                const title = hit?.title ?? hit?.oppTitle ?? null
-                                                                if (!title) continue
-
-                          const id = hit?.id ?? hit?.oppId ?? null
-                                                                const idKey = String(id ?? title)
-                                                                if (seenIds.has(idKey)) continue
-                                                                seenIds.add(idKey)
-
-                          const number = hit?.number ?? hit?.oppNum ?? hit?.oppNumber ?? null
-                                                                const agencyName = hit?.agencyName ?? hit?.agency ?? hit?.agencyCode ?? null
-                                                                const closeDate = hit?.closeDate ?? hit?.close_date ?? null
-                                                                const openDate = hit?.openDate ?? hit?.open_date ?? null
-                                                                const description = hit?.synopsis ?? hit?.description ?? null
-
-                          const url = id != null
-                                                                  ? `${GRANTS_GOV_DETAIL}${id}`
-                                          : number
-                                                                    ? `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(number))}`
-                                            : 'https://www.grants.gov/search-grants'
-
-                          results.push({
-                                          title,
-                                          sponsor: agencyName,
-                                          description,
-                                          url,
-                                          opportunity_number: number,
-                                          amount_min: 0,
-                                          amount_max: 0,
-                                          amount_description: null,
-                                          deadline: closeDate,
-                                          open_date: openDate,
-                                          deadline_type: closeDate ? 'fixed' : 'rolling',
-                                          eligibility: '',
-                                          is_national: true,
-                                          source_id: id,
-                                          _discovery_strategy: strategy.label,
-                          })
-                                                  }
-
-              console.log(`[GovernmentCrawler] Strategy "${strategy.label}" returned ${results.length} results`)
-                        return results
-            } catch (error) {
-                        console.error(`[GovernmentCrawler] Strategy "${strategy.label}" failed:`, error.message)
-                        return []
-            }
+  // Delegate to the dual-API client (legacy + simpler.grants.gov)
+  const { opportunities, diagnostics } = await searchGrantsBatch(strategies, {
+    batchSize: 3,
+    batchDelayMs: 400,
+    rowsPerQuery: 25,
   })
 
-  const settled = await Promise.allSettled(queryPromises)
-        for (const result of settled) {
-                  if (result.status === 'fulfilled' && Array.isArray(result.value)) {
-                              allOpportunities.push(...result.value)
-                  }
-        }
+  console.log(`[GovernmentCrawler] Dual-API batch: ${opportunities.length} unique results from ${strategies.length} strategies`)
+  if (diagnostics?.per_strategy) {
+    const summary = Object.entries(diagnostics.per_strategy)
+      .map(([label, info]) => `${label}=${info.count}`)
+      .join(', ')
+    console.log(`[GovernmentCrawler] Per-strategy: ${summary}`)
+  }
 
-  console.log(`[GovernmentCrawler] Combined ${allOpportunities.length} unique results from ${strategies.length} strategies`)
-        return allOpportunities
+  return opportunities
 }
 
 /**
@@ -625,13 +658,7 @@ async function searchStatePortal(portal, state, searchKeywords) {
         return opportunities
 }
 
-function isLoanOrMatchingFund(opportunity) {
-        const loanKeywords = ['loan', 'repay', 'interest rate', 'apr', 'credit', 'borrower']
-        const matchingKeywords = ['matching funds', 'match required', 'cost share', 'in-kind match']
-        const text = `${opportunity.title} ${opportunity.description} ${opportunity.eligibility}`.toLowerCase()
-        return loanKeywords.some(keyword => text.includes(keyword)) ||
-                  matchingKeywords.some(keyword => text.includes(keyword))
-}
+// Loan/matching-fund detection is now handled centrally by enforceOpportunityPolicy().
 
 function parseAmount(amountStr) {
         if (!amountStr) return 0
