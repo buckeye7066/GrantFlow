@@ -7,6 +7,7 @@
  */
 
 import { loadProfileContext, extractStateFromContext, extractZipFromContext, extractCityFromContext, summarizeProfileSignals } from '../profileHelpers.js'
+import { calculateMatchScore as _canonicalMatchScore } from '../matchingEngine.js'
 
 /**
  * Load complete profile context including ALL profile sections and derived signals.
@@ -102,6 +103,8 @@ const AMBIGUOUS_SINGLE_WORDS = new Set([
 /**
  * Build search keywords from ALL profile signals.
  * Returns an array of the most relevant keywords for API searches.
+  * @deprecated Prefer buildSearchTokens() in realCrawlers.js (taxonomy-first, canonical).
+   * This signals-first variant is used by live crawlers but should be consolidated.
  */
 export function buildSearchKeywords(profile, maxKeywords = 25) {
   const signals = profile.signals
@@ -214,12 +217,17 @@ function normalizeState(value) {
 /**
  * Comprehensive match scoring using 100% of profile signals.
  * This function MUST be used by all crawlers for scoring opportunities.
+  * @deprecated Now delegates to the canonical calculateMatchScore in matchingEngine.js.
+   * The old duplicate scoring logic (310 lines) is retained below as dead code for reference.
  * 
  * @param {Object} opportunity - The funding opportunity to score
  * @param {Object} profile - Profile object with signals attached
  * @returns {Object} { score: number, reasons: string[], matchedSignals: string[] }
  */
 export function calculateMatchScore(opportunity, profile) {
+    // DELEGATION: Use the canonical scorer from matchingEngine.js (note: args are swapped)
+    return _canonicalMatchScore(profile, opportunity)
+  
   const signals = profile.signals
   const reasons = []
   const matchedSignals = []
