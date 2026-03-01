@@ -98,12 +98,14 @@ const COMPREHENSIVE_CRAWLER_IDS = [
 ]
 
 const LOAN_TYPES = new Set(['loan', 'loan_program', 'microloan'])
-// IMPORTANT: Do NOT wrap with Math.max — tests set LIVE_CRAWL_TIMEOUT_MS=1 to force DB fallback path.
-const LIVE_CRAWL_TIMEOUT_MS = Number.parseInt(process.env.LIVE_CRAWL_TIMEOUT_MS ?? '12000', 10) || 12000
+// Railway env had stale 12000 which kills crawlers. Default 60s; allow env override for tests (e.g. 1ms to force DB fallback).
+const LIVE_CRAWL_TIMEOUT_MS = Math.max(1, Number.parseInt(process.env.LIVE_CRAWL_TIMEOUT_MS ?? '60000', 10) || 60000)
 const MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK = Number.parseInt(process.env.MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK ?? '3', 10) || 3
 const LIVE_CRAWL_PERSIST_OPPS = String(process.env.LIVE_CRAWL_PERSIST_OPPS ?? 'true').toLowerCase() !== 'false'
 
-// Non-negotiable: matching funds and match-required are always excluded from candidate query and policy.
+// Reversible safety toggles: default to SOFT matching (prefer penalties over exclusions).
+const HARD_FILTER_REQUIRES_MATCH = String(process.env.HARD_FILTER_REQUIRES_MATCH ?? '').toLowerCase() === 'true'
+const HARD_FILTER_MATCH_PERCENTAGE = String(process.env.HARD_FILTER_MATCH_PERCENTAGE ?? '').toLowerCase() === 'true'
 // Token narrowing uses profile-derived keywords to pre-filter DB candidates (OR-based, soft match).
 // Default ON so crawlers use profile information for relevance. Set env ENABLE_TOKEN_NARROWING=false to disable.
 const ENABLE_TOKEN_NARROWING = String(process.env.ENABLE_TOKEN_NARROWING ?? 'true').toLowerCase() === 'true'
@@ -505,7 +507,12 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
     facets: effectiveContext?.facets ?? {},
     location: effectiveContext?.facets?.geo ?? effectiveContext?.signals?.location ?? {},
   })
-  const options = { min_match_score: minMatchScore, query_plan: queryPlan }
+  // CRITICAL: Pass min_match_score=0 to sub-crawlers so they return ALL results.
+  // Sub-crawlers use crawlerHelpers.calculateMatchScore (different algorithm) which
+  // prematurely filters results before the route-level matchingEngine scores them.
+  // The route-level scorer (matchingEngine.calculateMatchScore) is the single source
+  // of truth — it will apply the user's actual minMatchScore threshold after rescoring.
+  const options = { min_match_score: 0, query_plan: queryPlan }
   const rejectionCounts = {}
   resetPolicyRejectionCounts()
   const facetReasons = buildFacetReasons(effectiveContext?.facets ?? {})
@@ -513,33 +520,59 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
   try {
     let rawResults = []
     if (crawlerType === 'comprehensive') {
+      const subcrawlerErrors = {}
+      const subcrawlerCounts = {}
       const results = await Promise.all(
         COMPREHENSIVE_CRAWLER_IDS.map((id) =>
           (async () => {
+            const subcrawlerStart = Date.now()
             try {
+              let res
               switch (id) {
                 case 'local_funding':
-                  return await withTimeout(crawlLocalFunding(effectiveContext, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                  res = await withTimeout(crawlLocalFunding(effectiveContext, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                  break
                 case 'government_funding':
-                  return await withTimeout(crawlGovernmentFunding(effectiveContext, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                  res = await withTimeout(crawlGovernmentFunding(effectiveContext, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                  break
                 case 'student_grants':
-                  return await withTimeout(crawlStudentGrants(effectiveContext, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                  res = await withTimeout(crawlStudentGrants(effectiveContext, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                  break
                 case 'health_resources':
-                  return await withTimeout(crawlHealthResources(effectiveContext, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                  res = await withTimeout(crawlHealthResources(effectiveContext, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                  break
                 case 'special_needs':
-                  return await withTimeout(crawlSpecialNeeds(effectiveContext, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                  res = await withTimeout(crawlSpecialNeeds(effectiveContext, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                  break
                 case 'ecf_benefits':
-                  return await withTimeout(crawlECFBenefits(effectiveContext, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                  res = await withTimeout(crawlECFBenefits(effectiveContext, options), LIVE_CRAWL_TIMEOUT_MS, id)
+                  break
                 default:
-                  return []
+                  res = []
               }
+              const arr = Array.isArray(res) ? res : []
+              subcrawlerCounts[id] = { found: arr.length, duration_ms: Date.now() - subcrawlerStart }
+              return arr
             } catch (err) {
-              console.warn(`[RealCrawlers] comprehensive: ${id} failed:`, err?.message || err)
+              const msg = err?.message || String(err)
+              console.warn(`[RealCrawlers] comprehensive: ${id} failed:`, msg)
+              subcrawlerErrors[id] = {
+                error: msg,
+                code: err?.code || null,
+                duration_ms: Date.now() - subcrawlerStart,
+              }
               return []
             }
           })(),
         ),
       )
+      // Attach subcrawler diagnostics for the response
+      options.__subcrawler_errors = subcrawlerErrors
+      options.__subcrawler_counts = subcrawlerCounts
+      console.log(`[RealCrawlers] COMPREHENSIVE SUBCRAWLER RESULTS:`, JSON.stringify(subcrawlerCounts))
+      if (Object.keys(subcrawlerErrors).length > 0) {
+        console.error(`[RealCrawlers] SUBCRAWLER ERRORS:`, JSON.stringify(subcrawlerErrors))
+      }
       // De-duplicate across sub-crawlers: the same grants.gov opportunity can be
       // returned by government_funding, health_resources, special_needs, etc.
       const seenCrossKeys = new Set()
@@ -554,6 +587,7 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
         seenCrossKeys.add(key)
         return true
       })
+      console.log(`[RealCrawlers] Cross-dedup: ${results.flat().length} total → ${rawResults.length} unique`)
     } else {
       switch (crawlerType) {
         case 'local_funding':
@@ -667,6 +701,8 @@ async function runLiveCrawler({ crawlerType, profileContext, itemRequest, minMat
       })
       .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
       .slice(0, 50)
+
+    console.log(`[RealCrawlers] Scoring: ${rawResults.length} raw → ${normalized.length} normalized → ${current.length} current → ${rescored.length} scored → ${included.length} above threshold (min=${minMatchScore})`)
 
     // Guardrail: real URL sources must not all be dropped when min_match_score is strict.
     // If we have scored results but 0 passed threshold, return top-scoring so profile still gets relevant, URL-verified opps.
@@ -1144,10 +1180,24 @@ router.post('/run', ensureAuth, async (req, res) => {
         total_found: live.total_found ?? live.opportunities.length,
         query_plan: live.query_plan ?? routeQueryPlan,
         validation_rejection_counts: live.validation_rejection_counts ?? {},
+        subcrawler_errors: live.subcrawler_errors ?? null,
+        subcrawler_counts: live.subcrawler_counts ?? null,
       }
 
-      // If live results are solid, skip fallback; otherwise optionally augment with DB.
-      const shouldSkipFallback = live.opportunities.length >= MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK
+      // If live results include enough REAL (non-directory) results, skip fallback.
+      // Directory resources (United Way locator, Benefits.gov, HUD, etc.) are static links
+      // that always return — they must NOT count toward the "we have enough" threshold,
+      // otherwise the DB catalog (which may contain actual grants) is never queried.
+      const nonDirectoryLiveResults = live.opportunities.filter(o => !isDirectoryResource(o))
+      debug.live.non_directory_count = nonDirectoryLiveResults.length
+      debug.live.directory_count = live.opportunities.length - nonDirectoryLiveResults.length
+      if (nonDirectoryLiveResults.length === 0 && live.opportunities.length > 0) {
+        console.warn(
+          `[RealCrawlers] ${crawler_type}: all ${live.opportunities.length} live results are directory resources — live API calls returned 0 actual grants. DB catalog will be queried.`,
+          { subcrawler_errors: live.subcrawler_errors, subcrawler_counts: live.subcrawler_counts },
+        )
+      }
+      const shouldSkipFallback = nonDirectoryLiveResults.length >= MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK
       if (shouldSkipFallback) {
         const duration = Date.now() - startTime
         const debugMeta = adminDebugRequested
@@ -1169,7 +1219,6 @@ router.post('/run', ensureAuth, async (req, res) => {
           used_live: true,
           used_db_fallback: false,
           debug,
-          ...(live.threshold_fallback_message ? { threshold_fallback_message: live.threshold_fallback_message } : {}),
           ...(debugMeta ? { debug_meta: debugMeta } : {}),
         })
       }
@@ -1182,6 +1231,8 @@ router.post('/run', ensureAuth, async (req, res) => {
         error: live.error || null,
         query_plan: live.query_plan ?? routeQueryPlan,
         validation_rejection_counts: live.validation_rejection_counts ?? {},
+        subcrawler_errors: live.subcrawler_errors ?? null,
+        subcrawler_counts: live.subcrawler_counts ?? null,
       }
     }
 
@@ -1801,6 +1852,155 @@ router.get('/test-grants-api', async (req, res) => {
   }
 
   res.json(results)
+})
+
+/**
+ * DIAGNOSTIC: Find profile IDs by name.
+ * GET /api/real-crawlers/find-profile?name=melissa
+ * No auth required (temporary for debugging).
+ */
+router.get('/find-profile', async (req, res) => {
+  const name = req.query.name || ''
+  if (!name || name.length < 2) return res.json({ error: 'Provide ?name=... (at least 2 chars)' })
+  try {
+    const db = req.db
+    if (!db || typeof db.prepare !== 'function') {
+      return res.status(500).json({ error: 'Database not available' })
+    }
+    const pattern = `%${String(name).trim()}%`
+    const rows = await db.prepare(
+      'SELECT id, name, display_name, state, primary_type, applicant_type, city, zip_code FROM profiles WHERE name LIKE ? OR display_name LIKE ? LIMIT 10',
+    ).all(pattern, pattern)
+    res.json({ count: rows.length, profiles: rows })
+  } catch (err) {
+    res.status(500).json({ error: err?.message || String(err) })
+  }
+})
+
+/**
+ * DIAGNOSTIC: Full pipeline trace — no DB, no auth.
+ * GET /api/real-crawlers/diagnose?state=WV&type=individual_need&need=disability_support
+ * Tests: strategy building, API calls, scoring — with simulated profile.
+ */
+router.get('/diagnose', async (req, res) => {
+  const startTime = Date.now()
+  const state = req.query.state || 'WV'
+  const profileType = req.query.type || 'individual_need'
+  const need = req.query.need || 'disability_support'
+  const extra = req.query.keywords || ''
+  const diagnostics = { params: { state, type: profileType, need, extra }, steps: {} }
+
+  try {
+    // Build a simulated profile with signals matching Melissa's profile
+    const signals = {
+      location: { state, city: null, zip: null },
+      applicantTypes: new Set([profileType]),
+      interests: new Set(need ? [need.replace(/_/g, ' ')] : []),
+      demographics: new Set(),
+      health: new Set(need === 'disability_support' ? ['disability', 'special needs'] : []),
+      assistance: new Set(['government assistance']),
+      family: new Set(),
+      military: new Set(),
+      occupation: new Set(),
+      phrases: new Set(),
+      keywordSet: new Set([
+        ...(need ? need.split('_') : []),
+        ...(extra ? extra.split(',').map(s => s.trim()) : []),
+        'grant', 'assistance', 'support',
+      ]),
+      profileType,
+    }
+    const fakeProfile = {
+      state,
+      primary_type: profileType,
+      applicant_type: profileType,
+      signals,
+      sections: {},
+    }
+
+    diagnostics.steps.simulated_signals = {
+      location: signals.location,
+      applicantTypes: Array.from(signals.applicantTypes),
+      interests: Array.from(signals.interests),
+      health: Array.from(signals.health),
+      assistance: Array.from(signals.assistance),
+      keywordSet_size: signals.keywordSet.size,
+      keywordSet: Array.from(signals.keywordSet),
+    }
+
+    // Step 1: Build strategies
+    const { buildExhaustiveStrategies } = await import('../services/crawlers/governmentFundingCrawler.js')
+    const strategies = buildExhaustiveStrategies(fakeProfile)
+    diagnostics.steps.strategies = {
+      count: strategies.length,
+      list: strategies.map(s => ({ label: s.label, query: s.query })),
+    }
+
+    // Step 2: Run first 3 strategies against grants.gov
+    const { searchGrants } = await import('../services/crawlers/grantsGovClient.js')
+    const apiResults = []
+    for (const strategy of strategies.slice(0, 3)) {
+      const result = await searchGrants(strategy.query, { rows: 5 })
+      apiResults.push({
+        label: strategy.label,
+        query: strategy.query,
+        ok: result.ok,
+        count: result.opportunities.length,
+        legacy_ok: result.diagnostics?.legacy?.ok,
+        legacy_count: result.diagnostics?.legacy?.count,
+        legacy_hit_count: result.diagnostics?.legacy?.hit_count,
+        legacy_error: result.diagnostics?.legacy?.error,
+        simpler_error: result.diagnostics?.simpler?.error,
+        titles: result.opportunities.slice(0, 3).map(o => o.title),
+      })
+    }
+    diagnostics.steps.api_results = apiResults
+
+    // Step 3: Score sample results
+    const allOpps = []
+    for (const strategy of strategies.slice(0, 3)) {
+      const result = await searchGrants(strategy.query, { rows: 5 })
+      allOpps.push(...result.opportunities)
+    }
+
+    if (allOpps.length > 0) {
+      // Deduplicate
+      const seen = new Set()
+      const unique = []
+      for (const opp of allOpps) {
+        const key = (opp.title || '').toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        unique.push(opp)
+      }
+
+      const profileContext = {
+        profile: fakeProfile,
+        signals,
+        facets: {
+          geo: { state },
+          intent: { primary_need_category: need, keywords: Array.from(signals.keywordSet) },
+          profile: { primary_profile_type: profileType, applicant_types: [profileType] },
+        },
+      }
+
+      const scored = unique.slice(0, 10).map(opp => {
+        const { score, reasons } = calculateMatchScore(profileContext, opp)
+        return { title: opp.title, score, reasons, sponsor: opp.sponsor }
+      })
+      scored.sort((a, b) => b.score - a.score)
+      diagnostics.steps.scoring = scored
+    }
+
+    diagnostics.ok = true
+    diagnostics.total_duration_ms = Date.now() - startTime
+    res.json(diagnostics)
+  } catch (err) {
+    diagnostics.error = err?.message || String(err)
+    diagnostics.stack = err?.stack?.split('\n').slice(0, 8)
+    diagnostics.total_duration_ms = Date.now() - startTime
+    res.status(500).json(diagnostics)
+  }
 })
 
 export default router

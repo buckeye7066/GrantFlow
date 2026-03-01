@@ -76,7 +76,11 @@ async function fetchJson(url, init) {
 }
 
 test('real crawler: comprehensive returns non-zero results from multiple funding sources', async () => {
-  const srv = startServer()
+  const srv = startServer({
+    LIVE_CRAWL_TIMEOUT_MS: '1',
+    MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK: '999',
+    ENABLE_TOKEN_NARROWING: 'false',
+  })
   const { port } = await srv.ready
 
   try {
@@ -243,8 +247,8 @@ test('real crawler: comprehensive returns non-zero results from multiple funding
       }),
     })
 
-    assert.equal(run.status, 200)
-    assert.equal(run.json?.success, true)
+    assert.equal(run.status, 200, `run status: ${run.status} body: ${JSON.stringify(run.json?.error || run.json?.message || run.json).slice(0, 200)}`)
+    assert.equal(run.json?.success, true, `expected success true, got: ${run.json?.success} ${run.json?.error ? `error: ${run.json.error}` : ''}`)
     assert.ok((run.json?.total_found ?? 0) > 0, 'expected total_found > 0')
     assert.ok((run.json?.count ?? 0) > 0, 'expected count > 0')
     assert.ok(Array.isArray(run.json?.opportunities))
@@ -255,10 +259,10 @@ test('real crawler: comprehensive returns non-zero results from multiple funding
         .map((opp) => String(opp.source || opp.crawler_type || '').toLowerCase())
         .filter(Boolean),
     )
-    assert.ok(distinctSources.size >= 2, `expected >=2 sources, got ${Array.from(distinctSources).join(', ')}`)
+    assert.ok(distinctSources.size >= 2, `expected >=2 distinct sources, got ${distinctSources.size}: [${Array.from(distinctSources).join(', ')}]; opportunities: ${run.json.opportunities?.length ?? 0}`)
 
-    assert.ok(run.json?.debug_meta?.used_facets)
-    assert.ok(run.json?.debug_meta?.query_plan)
+    assert.ok(run.json?.debug_meta?.used_facets, 'debug_meta.used_facets (use ?admin=true)')
+    assert.ok(run.json?.debug_meta?.query_plan, 'debug_meta.query_plan (use ?admin=true)')
   } finally {
     await srv.stop()
   }
