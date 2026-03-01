@@ -19,7 +19,7 @@ This repository contains the core application code.  A separate marketing site i
 - **Outreach/CRM** – manage relationships with grantors and partners.
 - **Admin tooling** – built‑in admin UI for configuration, user management, and health monitoring.
 
-For a complete feature specification, see `docs/GRANTFLOW-SPEC.md`.
+For documentation, see **`docs/README.md`** (index). Key: **`docs/CRAWLERS.md`** (crawlers), **`docs/ENVIRONMENT.md`** (env vars), **`docs/VERCEL_RAILWAY_DEPLOYMENT.md`** (deploy).
 
 ## Getting started
 

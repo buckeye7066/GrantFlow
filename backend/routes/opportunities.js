@@ -337,6 +337,7 @@ router.get('/', async (req, res) => {
       source,
       geo_run_id: geoRunIdParam,
       run_id: runIdParam,
+      geo_zip: geoZipParam,
       deadline_after: deadlineAfter,
       deadline_before: deadlineBefore,
       is_national: isNational,
@@ -451,6 +452,17 @@ router.get('/', async (req, res) => {
     if (hasGeoRun) {
       baseConditions.push('gi.geo_run_id = ?');
       baseParams.push(String(geoRunId));
+    }
+
+    // Filter by geo_zip (works with or without a geo_run_id)
+    if (geoZipParam) {
+      const geoZipNorm = String(geoZipParam).trim();
+      if (hasGeoRun) {
+        baseConditions.push('gi.zip = ?');
+      } else {
+        baseConditions.push(`${prefix}geo_zip = ?`);
+      }
+      baseParams.push(geoZipNorm);
     }
 
     // Apply compliance on a copy, preserving the base query for fallback behavior.
@@ -1015,6 +1027,210 @@ router.get('/meta/export', async (req, res) => {
   } catch (error) {
     console.error('Error exporting opportunities:', error);
     if (!res.headersSent) { res.status(500).json({ error: error.message }); } else { res.end(); }
+  }
+});
+
+// ============ GEO BROWSING ENDPOINTS ============
+
+/**
+ * GET /geo/summary
+ * Returns the state → zip hierarchy with opportunity counts for tree navigation.
+ * No profile needed. Anyone authenticated can browse.
+ */
+router.get('/geo/summary', async (req, res) => {
+  try {
+    const db = req.db;
+    const dialect = db?.dialect;
+
+    // Count opportunities per state+zip from the geo index (preferred) or fallback to geo_zip column.
+    let rows;
+    try {
+      rows = await db.prepare(`
+        SELECT
+          gi.state,
+          gi.zip,
+          gi.county,
+          COUNT(DISTINCT gi.opportunity_id) AS opportunity_count
+        FROM funding_opportunity_geo_index gi
+        JOIN funding_opportunities fo ON fo.id = gi.opportunity_id
+        WHERE fo.is_active = ${dialect === 'sqlite' ? '1' : 'true'}
+        GROUP BY gi.state, gi.zip, gi.county
+        ORDER BY gi.state ASC, gi.zip ASC
+      `).all();
+    } catch {
+      // Fallback: geo index table may not exist; use columns on funding_opportunities
+      rows = await db.prepare(`
+        SELECT
+          state,
+          geo_zip AS zip,
+          geo_county AS county,
+          COUNT(*) AS opportunity_count
+        FROM funding_opportunities
+        WHERE is_active = ${dialect === 'sqlite' ? '1' : 'true'}
+          AND geo_zip IS NOT NULL
+          AND geo_zip != ''
+        GROUP BY state, geo_zip, geo_county
+        ORDER BY state ASC, geo_zip ASC
+      `).all();
+    }
+
+    // Build hierarchical response: { states: [ { state, zips: [ { zip, county, count } ] } ] }
+    const stateMap = new Map();
+    for (const row of rows) {
+      const st = row.state || 'Unknown';
+      if (!stateMap.has(st)) {
+        stateMap.set(st, { state: st, opportunity_count: 0, zips: [] });
+      }
+      const entry = stateMap.get(st);
+      const count = Number(row.opportunity_count) || 0;
+      entry.opportunity_count += count;
+      entry.zips.push({
+        zip: row.zip || null,
+        county: row.county || null,
+        opportunity_count: count,
+      });
+    }
+
+    const states = Array.from(stateMap.values()).sort((a, b) => a.state.localeCompare(b.state));
+    const totalOpportunities = states.reduce((sum, s) => sum + s.opportunity_count, 0);
+
+    res.json({
+      ok: true,
+      total_opportunities: totalOpportunities,
+      total_states: states.length,
+      total_zips: rows.length,
+      states,
+    });
+  } catch (error) {
+    console.error('[opportunities/geo/summary] Error:', error);
+    res.status(500).json({ error: error?.message || String(error) });
+  }
+});
+
+/**
+ * GET /geo/scored
+ * Returns geo-tagged opportunities for a specific state and/or zip, with optional
+ * profile-based match scoring. This is the primary data endpoint for the geo browse view.
+ *
+ * Query params:
+ *   state    - 2-letter state code (required)
+ *   geo_zip  - 5-digit zip (optional, narrows within state)
+ *   profile_id - Profile to score against (optional; omit for admin/raw view)
+ *   limit    - max results (default 200, max 500)
+ *   offset   - pagination offset
+ */
+router.get('/geo/scored', async (req, res) => {
+  try {
+    const db = req.db;
+    const dialect = db?.dialect;
+    const {
+      state,
+      geo_zip: geoZip,
+      profile_id: profileId,
+      limit: rawLimit = '200',
+      offset: rawOffset = '0',
+    } = req.query;
+
+    if (!state) {
+      return res.status(400).json({ error: 'state parameter is required' });
+    }
+
+    const parsedLimit = Math.min(Math.max(1, parseInt(rawLimit, 10) || 200), 500);
+    const parsedOffset = Math.max(0, parseInt(rawOffset, 10) || 0);
+    const normalizedState = String(state).toUpperCase().trim();
+
+    // Build query
+    const conditions = [
+      `fo.is_active = ${dialect === 'sqlite' ? '1' : 'true'}`,
+      'fo.state = ?',
+    ];
+    const params = [normalizedState];
+
+    if (geoZip) {
+      conditions.push('gi.zip = ?');
+      params.push(String(geoZip).trim());
+    }
+
+    let rows;
+    try {
+      // Prefer geo index join for per-zip data
+      rows = await db.prepare(`
+        SELECT DISTINCT fo.*, gi.zip AS geo_zip, gi.county AS geo_county, gi.source AS geo_source
+        FROM funding_opportunities fo
+        JOIN funding_opportunity_geo_index gi ON gi.opportunity_id = fo.id
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY fo.title ASC
+        LIMIT ? OFFSET ?
+      `).all(...params, parsedLimit, parsedOffset);
+    } catch {
+      // Fallback: no geo index table
+      const fallbackConditions = [
+        `is_active = ${dialect === 'sqlite' ? '1' : 'true'}`,
+        'state = ?',
+      ];
+      const fallbackParams = [normalizedState];
+      if (geoZip) {
+        fallbackConditions.push('geo_zip = ?');
+        fallbackParams.push(String(geoZip).trim());
+      }
+      rows = await db.prepare(`
+        SELECT *
+        FROM funding_opportunities
+        WHERE ${fallbackConditions.join(' AND ')}
+        ORDER BY title ASC
+        LIMIT ? OFFSET ?
+      `).all(...fallbackParams, parsedLimit, parsedOffset);
+    }
+
+    // Count total for pagination
+    let total = rows.length;
+    try {
+      const countRow = await db.prepare(`
+        SELECT COUNT(DISTINCT fo.id) AS cnt
+        FROM funding_opportunities fo
+        JOIN funding_opportunity_geo_index gi ON gi.opportunity_id = fo.id
+        WHERE ${conditions.join(' AND ')}
+      `).get(...params);
+      total = countRow?.cnt ?? rows.length;
+    } catch {
+      // ignore - use rows.length
+    }
+
+    // Decorate rows
+    const decorated = rows.map(decorateOpportunity).filter(Boolean);
+
+    // If profile_id provided, compute match scores using the canonical matchingEngine.
+    if (profileId && profileId !== 'all' && profileId !== 'admin') {
+      try {
+        const { loadProfileContext } = await import('../services/profileHelpers.js');
+        const { calculateMatchScore } = await import('../services/matchingEngine.js');
+
+        const profileContext = await loadProfileContext(db, profileId);
+        for (const opp of decorated) {
+          const result = calculateMatchScore(profileContext, opp);
+          opp.match_score = result.score;
+          opp.match_reasons = result.reasons || [];
+        }
+
+        // Sort by score descending so best matches appear first
+        decorated.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0));
+      } catch (scoringError) {
+        console.warn('[opportunities/geo/scored] Profile scoring failed, returning unscored:', scoringError?.message);
+        // Continue without scores rather than failing the request
+      }
+    }
+
+    res.json({
+      ok: true,
+      state: normalizedState,
+      geo_zip: geoZip || null,
+      profile_id: profileId || null,
+      total,
+      data: decorated,
+    });
+  } catch (error) {
+    console.error('[opportunities/geo/scored] Error:', error);
+    res.status(500).json({ error: error?.message || String(error) });
   }
 });
 

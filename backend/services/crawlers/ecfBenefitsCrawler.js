@@ -9,6 +9,7 @@ import { getWithRetry, postWithRetry } from './httpClient.js'
 import * as cheerio from 'cheerio'
 import { planCrawlerQueries } from './queryPlanner.js'
 import { resolveCrawlerContext, enforceCrawlerOpportunityContract } from './crawlerOpportunityContract.js'
+import { enforceOpportunityPolicy } from './opportunityPolicy.js'
 
 const ECF_SOURCES = {
   individual: [
@@ -65,94 +66,101 @@ export async function crawlECFBenefits(profileInput, options = {}) {
       location: facets?.geo ?? signals?.location ?? {},
     })
   const results = []
-  
+  const seenUrls = new Set()
   const { eligibleIndividual, eligibleSupport, supportType } = evaluateEcfUnlockEligibility(profile)
-  
+
   if (!eligibleIndividual && !eligibleSupport) {
     console.log('[ECFBenefitsCrawler] Locked: profile not eligible for ECF CHOICES (participant/caregiver/provider)')
     return results
   }
-  
-  console.log(`[ECFBenefitsCrawler] Starting ECF benefits search`)
+
+  // ECF and similar state benefit programs are eligibility-based: profile either qualifies or does not.
+  // Slider does not apply; if we reach here, include all non-loan benefits that pass the contract.
   console.log(
-    `[ECFBenefitsCrawler] Individual eligible: ${eligibleIndividual}, Support eligible: ${eligibleSupport}${
-      eligibleSupport ? ` (${supportType})` : ''
-    }`,
+    `[ECFBenefitsCrawler] Starting ECF benefits search (eligibility-based; slider not used). Individual: ${eligibleIndividual}, Support: ${eligibleSupport}${eligibleSupport ? ` (${supportType})` : ''}`,
   )
-  
-  // Search individual benefits if eligible
+
   if (eligibleIndividual) {
     for (const source of ECF_SOURCES.individual) {
       try {
         const benefits = await searchIndividualBenefits(source, profile)
-        
         for (const benefit of benefits) {
-          if (isLoan(benefit)) continue
-          
+          const url = benefit?.url || benefit?.application_url || benefit?.source_url || ''
+          if (url && seenUrls.has(url)) continue
+          if (url) seenUrls.add(url)
+          if (!enforceOpportunityPolicy(benefit).ok) continue
           const matchScore = calculateECFMatchScore(benefit, profile, 'individual')
-          
-          if (matchScore >= 80) {
-            results.push({
-              ...benefit,
-              match_score: matchScore,
-              crawler_type: 'ecf_benefits',
-              benefit_type: 'individual',
-              source: source.name
-            })
-          }
+          results.push({
+            ...benefit,
+            match_score: matchScore,
+            crawler_type: 'ecf_benefits',
+            benefit_type: 'individual',
+            source: source.name
+          })
         }
       } catch (error) {
         console.error(`[ECFBenefitsCrawler] Error searching ${source.name}:`, error.message)
       }
     }
   }
-  
-  // Search family/provider support if provider
+
   if (eligibleSupport) {
     for (const source of ECF_SOURCES.family_support) {
       try {
         const benefits = await searchFamilySupportBenefits(source, profile)
-        
         for (const benefit of benefits) {
-          if (isLoan(benefit)) continue
-          
+          const url = benefit?.url || benefit?.application_url || benefit?.source_url || ''
+          if (url && seenUrls.has(url)) continue
+          if (url) seenUrls.add(url)
+          if (!enforceOpportunityPolicy(benefit).ok) continue
           const matchScore = calculateECFMatchScore(benefit, profile, 'provider')
-          
-          if (matchScore >= 80) {
-            results.push({
-              ...benefit,
-              match_score: matchScore,
-              crawler_type: 'ecf_benefits',
-              benefit_type: 'family_support',
-              source: source.name
-            })
-          }
+          results.push({
+            ...benefit,
+            match_score: matchScore,
+            crawler_type: 'ecf_benefits',
+            benefit_type: 'family_support',
+            source: source.name
+          })
         }
       } catch (error) {
         console.error(`[ECFBenefitsCrawler] Error searching ${source.name}:`, error.message)
       }
     }
   }
-  
-  console.log(`[ECFBenefitsCrawler] Found ${results.length} ECF benefits with 80%+ match`)
-  
-  // Fetch live Grants.gov and Benefits.gov ECF/Medicaid opportunities
+
+  console.log(`[ECFBenefitsCrawler] Found ${results.length} ECF benefits (eligibility-based)`)
+
   try {
     const liveKws = profile?.signals?.keywordSet ? Array.from(profile.signals.keywordSet).slice(0, 5) : []
     const liveOpps = await fetchLiveECFOpportunities({ keywords: liveKws, state: profile?.state || null })
     for (const liveOpp of liveOpps) {
-      if (isLoan(liveOpp)) continue
+      const url = liveOpp?.url || liveOpp?.application_url || liveOpp?.source_url || ''
+      if (url && seenUrls.has(url)) continue
+      if (url) seenUrls.add(url)
+      if (!enforceOpportunityPolicy(liveOpp).ok) continue
       const matchScore = calculateECFMatchScore(liveOpp, profile)
-      if (matchScore >= 60) {
-        results.push({ ...liveOpp, match_score: matchScore })
-      }
+      results.push({ ...liveOpp, match_score: matchScore })
     }
     console.log(`[ECFBenefitsCrawler] Added ${liveOpps.length} live Grants.gov/Benefits.gov opportunities`)
   } catch (liveErr) {
     console.error('[ECFBenefitsCrawler] Live fetch error:', liveErr.message)
   }
 
-  return finalizeEcfResults(results, { facets, queryPlan })
+  // De-duplicate across individual, family_support, and live sources (by url/title key)
+  const seenKeys = new Set()
+  const deduped = results.filter((row) => {
+    const key = String(
+      row?.url || row?.application_url || row?.source_url || row?.title || '',
+    )
+      .toLowerCase()
+      .trim()
+    if (!key) return true
+    if (seenKeys.has(key)) return false
+    seenKeys.add(key)
+    return true
+  })
+
+  return finalizeEcfResults(deduped, { facets, queryPlan })
 }
 
 
@@ -351,7 +359,11 @@ export function checkIfProvider(profile) {
     sections?.organization_details?.organization_type?.type ||
     null
 
-  const services = Array.isArray(profile?.services) ? profile.services : []
+  const services = Array.isArray(sections?.programs_services?.focus_areas)
+    ? sections.programs_services.focus_areas
+    : Array.isArray(sections?.programs_services?.keywords)
+      ? sections.programs_services.keywords
+      : []
 
   // Be conservative: avoid false positives for individual profiles.
   // Only treat as provider when there's a strong provider signal.
@@ -538,45 +550,57 @@ async function searchFamilySupportBenefits(source, profile) {
 
 function calculateECFMatchScore(benefit, profile, type) {
   let score = 70 // Base score for ECF benefits
-  
+  const sections = profile?.sections ?? {}
+  const signals = profile?.signals
+
   // Type-specific scoring
   if (type === 'individual' && checkECFEligibility(profile)) {
     score += 15
   }
-  
+
   if (type === 'provider' && checkIfProvider(profile)) {
     score += 15
   }
-  
-  // Category matching
-  const profileNeeds = profile.support_needs || profile.service_needs || []
+
+  // Category matching — read support needs from health_medical section and signals
+  const healthSection = sections?.health_medical ?? {}
+  const rawSupportNeeds = Array.isArray(healthSection.support_needs)
+    ? healthSection.support_needs
+    : typeof healthSection.support_needs === 'string'
+      ? healthSection.support_needs.split(/[,;\n]+/).map((v) => v.trim()).filter(Boolean)
+      : []
+  const signalHealth = signals?.health ? Array.from(signals.health) : []
+  const profileNeeds = [...new Set([...rawSupportNeeds, ...signalHealth])].filter(Boolean)
   const benefitCategories = benefit.benefit_categories || []
-  
-  const matchedCategories = profileNeeds.filter(need => 
-    benefitCategories.some(cat => cat.toLowerCase().includes(need.toLowerCase()))
+
+  const matchedCategories = profileNeeds.filter((need) =>
+    benefitCategories.some((cat) => cat.toLowerCase().includes(String(need).toLowerCase())),
   )
-  
+
   if (matchedCategories.length > 0) {
     score += Math.min(20, matchedCategories.length * 10)
   }
-  
+
   // State match for state programs
-  if (benefit.sponsor?.includes('Tennessee') && profile.state === 'TN') {
+  const profileState = signals?.location?.state ?? profile?.state ?? null
+  if (benefit.sponsor?.includes('Tennessee') && String(profileState).toUpperCase() === 'TN') {
     score += 10
   }
-  
-  // Disability type match
-  if (profile.disability_type && benefit.eligibility?.toLowerCase().includes(profile.disability_type.toLowerCase())) {
-    score += 10
+
+  // Disability type match — read from health_medical section
+  const disabilityTypes = Array.isArray(healthSection.disability_type)
+    ? healthSection.disability_type
+    : []
+  for (const dt of disabilityTypes) {
+    if (dt && benefit.eligibility?.toLowerCase().includes(String(dt).toLowerCase())) {
+      score += 10
+      break
+    }
   }
-  
+
   return Math.min(100, Math.round(score))
 }
 
-function isLoan(benefit) {
-  const loanKeywords = ['loan', 'repay', 'interest', 'borrow']
-  const text = `${benefit.title} ${benefit.description}`.toLowerCase()
-  return loanKeywords.some(keyword => text.includes(keyword))
-}
+// Loan/matching-fund detection is now handled centrally by enforceOpportunityPolicy().
 
 export default { crawlECFBenefits }

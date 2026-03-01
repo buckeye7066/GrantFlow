@@ -52,7 +52,7 @@ export default function DiscoverGrants() {
   const navigate = useNavigate()
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const [searchResults, setSearchResults] = useState([]);
-  const [minMatchScore, setMinMatchScore] = useState(60);
+  const [minMatchScore, setMinMatchScore] = useState(35);
   const [isSearching, setIsSearching] = useState(false);
   const [profileCompletionHint, setProfileCompletionHint] = useState(null)
   const profileSelectorRef = React.useRef(null)
@@ -158,7 +158,7 @@ export default function DiscoverGrants() {
     queryFn: async () => {
       if (!effectiveProfileId) return { opportunities: [] }
       // Bypass readiness gates so Discover always shows catalog matches when backend has opportunities
-      return apiFetch(`/api/matching/profile/${effectiveProfileId}/opportunities?min_score=50&limit=200&skip_readiness_check=1`)
+      return apiFetch(`/api/matching/profile/${effectiveProfileId}/opportunities?min_score=30&limit=200&skip_readiness_check=1`)
     },
     enabled: authReady && Boolean(effectiveProfileId),
     staleTime: 2 * 60 * 1000,

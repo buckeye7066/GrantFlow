@@ -12,7 +12,7 @@
 import { safeParseArrayField } from './profileHelpers.js'
 import { buildProfileSignals } from './profileHelpers.js'
 
-/**h
+/**
  * Calculate deterministic match score between profile and opportunity
  * @param {Object} profile - User/organization profile
  * @param {Object} opportunity - Funding opportunity

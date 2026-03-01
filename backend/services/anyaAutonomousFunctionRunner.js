@@ -205,7 +205,9 @@ export async function runAutonomousCrawlers(options, context) {
       })
     })
     
-    // If not waiting, let dispatches run in background
+    // If not waiting, let dispatches run in background.
+    // NOTE: Retry logic and opportunity saving only run when waitForCompletion=true.
+    // For background jobs, retries are handled by the crawler dispatcher itself.
     if (!waitForCompletion) {
       // Fire and forget - don't await
       Promise.all(dispatchPromises).catch(err => {
@@ -583,18 +585,17 @@ export async function saveCrawlerResultsToGlobal(options, context) {
       return { message: 'Job not completed, skipping global save' }
     }
 
-    // Get all opportunities created for this profile during this job
-    // This assumes opportunities have a created_at timestamp we can use
+    // Get all opportunities created or updated for this profile during this job
     const opportunities = db
       .prepare(
         `
         SELECT * FROM funding_opportunities
         WHERE profile_id = ?
-          AND created_at >= ?
-        ORDER BY created_at DESC
+          AND (created_at >= ? OR updated_at >= ?)
+        ORDER BY updated_at DESC
         `
       )
-      .all(job.profile_id, job.started_at)
+      .all(job.profile_id, job.started_at, job.started_at)
 
     let savedToGlobal = 0
 

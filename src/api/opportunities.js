@@ -56,3 +56,12 @@ export async function bulkImportOpportunities(opportunities) {
     body: JSON.stringify({ opportunities }),
   })
 }
+
+export async function getGeoSummary() {
+  return apiFetch("/api/opportunities/geo/summary")
+}
+
+export async function getGeoScored(params = {}) {
+  const query = buildQuery(params)
+  return apiFetch(`/api/opportunities/geo/scored${query}`)
+}
