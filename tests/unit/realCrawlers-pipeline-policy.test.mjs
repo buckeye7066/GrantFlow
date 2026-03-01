@@ -82,8 +82,9 @@ async function fetchJson(url, init) {
 }
 
 test('pipeline policy: DB fallback drops loans, matching-funds, missing-URL; keeps valid grant', async () => {
-  // Force live crawl timeout so we always use DB fallback path
-  const srv = startServer({ LIVE_CRAWL_TIMEOUT_MS: '1' })
+  // Force live crawl timeout so we always use DB fallback path.
+  // Disable token narrowing so the seeded valid grant is not filtered out by profile-derived LIKE clauses.
+  const srv = startServer({ LIVE_CRAWL_TIMEOUT_MS: '1', ENABLE_TOKEN_NARROWING: 'false' })
   const { port } = await srv.ready
 
   try {
@@ -214,10 +215,14 @@ test('pipeline policy: DB fallback drops loans, matching-funds, missing-URL; kee
     const opps = run.json.opportunities
     const titles = opps.map((o) => o.title)
 
-    // Valid grant must be present
+    // Valid grant must be present (guardrail may return top-scoring when none pass min_score)
+    assert.ok(
+      opps.length > 0,
+      `Expected at least one opportunity from DB fallback. Got: ${JSON.stringify(titles)}. success=${run.json?.success} total_found=${run.json?.total_found}`,
+    )
     assert.ok(
       titles.some((t) => t && t.includes('Ohio Community Development')),
-      `Expected valid grant in results. Got: ${JSON.stringify(titles)}`,
+      `Expected valid grant "Ohio Community Development" in results. Got titles: ${JSON.stringify(titles)}`,
     )
 
     // Loan must not be returned

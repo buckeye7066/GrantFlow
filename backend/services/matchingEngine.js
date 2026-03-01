@@ -460,6 +460,32 @@ function eligibilityMatchesApplicantType(opportunity, profile) {
     .flatMap((t) => typeKeywords[t] || [t])
     .filter(Boolean)
     .map((t) => String(t))
+
+  // For individual_need profiles, also match grants that SERVE individuals even
+  // when the grant recipient is an organization (state, nonprofit, health center).
+  // Most grants.gov opportunities fund organizations that provide services to individuals.
+  const individualServesKeywords = [
+    'assistance', 'benefits', 'services', 'support program',
+    'patients', 'families', 'beneficiaries', 'recipients', 'consumers',
+    'low income', 'low-income', 'underserved', 'vulnerable', 'disadvantaged',
+    'community health', 'mental health', 'substance abuse', 'behavioral health',
+    'housing assistance', 'energy assistance', 'food assistance', 'nutrition',
+    'disability', 'special needs', 'rehabilitation', 'independent living',
+    'workforce', 'job training', 'employment', 'education',
+    'child care', 'head start', 'early childhood',
+    'medicaid', 'medicare', 'health center', 'clinic',
+    'emergency', 'crisis', 'shelter', 'homeless',
+    'tribal', 'rural', 'appalachian', 'coal community',
+  ]
+  const isIndividualType = profileTypesToCheck.some(t =>
+    t === 'individual_need' || t === 'individual' || t === 'family' ||
+    t === 'medical_assistance' || t === 'student' || t === 'college_student' ||
+    t === 'high_school_student'
+  )
+  if (isIndividualType) {
+    keywords.push(...individualServesKeywords)
+  }
+
   const eligibilityText = eligibility.join(' ').toLowerCase();
   const oppText = `${opportunity.title || ''} ${opportunity.description || ''}`.toLowerCase();
   
