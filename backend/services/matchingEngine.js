@@ -1,21 +1,34 @@
-function calculateMatchScore(opportunityText, effectiveSignals) {
+function calculateMatchScore(profile, opportunity) {
     const matchedSignals = [];
     const scores = {};
     const reasons = {};
 
-    // Existing logic to calculate scores and reasons...
+    // Build a searchable text blob from the opportunity object fields
+    const opportunityText = [
+        opportunity?.title || '',
+        opportunity?.description || '',
+        ...(Array.isArray(opportunity?.categories) ? opportunity.categories : []),
+        ...(Array.isArray(opportunity?.keywords) ? opportunity.keywords : []),
+    ].join(' ').toLowerCase();
 
-    // Adding matched signals
-    for (const keyword of effectiveSignals.keywordSet) {
-        const regex = new RegExp(`\b${keyword}\b`, 'g'); // match whole word
-        if (regex.test(opportunityText)) {
-            matchedSignals.push(`kw:${keyword}`);
+    // Support both profile.signals.keywordSet (enrichedProfile) and bare signals
+    const effectiveSignals = profile?.signals || profile;
+
+    // Match each keyword against the opportunity text using whole-word boundaries
+    if (effectiveSignals?.keywordSet) {
+        for (const keyword of effectiveSignals.keywordSet) {
+            // Escape special regex chars so keywords like "501(c)(3)" don't throw
+            const escaped = String(keyword).replace(/[.*+?^${}()|[\\]\]/g, '\$&');
+            const regex = new RegExp(`\b${escaped}\b`, 'g'); // \b = word boundary
+            if (regex.test(opportunityText)) {
+                matchedSignals.push(`kw:${keyword}`);
+            }
         }
     }
 
     return {
         score: scores,
         reasons: reasons,
-        matchedSignals: matchedSignals
+        matchedSignals: matchedSignals,
     };
 }
