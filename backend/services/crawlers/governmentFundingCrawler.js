@@ -21,7 +21,7 @@
  */
 import * as cheerio from 'cheerio'
 import { buildSearchKeywords, calculateMatchScore, filterByDeadline } from './crawlerHelpers.js'
-import { getWithRetry } from './httpClient.js'
+import { getWithRetry, postWithRetry } from './httpClient.js'
 import { searchGrants, searchGrantsBatch, GRANTS_GOV_DETAIL } from './grantsGovClient.js'
 import { planCrawlerQueries } from './queryPlanner.js'
 import {
@@ -31,40 +31,42 @@ import {
 } from './crawlerOpportunityContract.js'
 import { enforceOpportunityPolicy } from './opportunityPolicy.js'
 
+const GRANTS_GOV_API = 'https://api.grants.gov/v1/api/search2'
+
 const NIH_RSS_URL = 'https://grants.nih.gov/grants/guide/newsfeed/fundingopps.xml'
 
 // State grant portals (expandable)
 const STATE_PORTALS = {
-  OH: { name: 'Ohio Grants', searchUrl: 'https://grants.ohio.gov/Public/Search.aspx' },
-  TN: { name: 'Tennessee Grants', searchUrl: 'https://www.tn.gov/finance/grants.html' },
-  CO: { name: 'Colorado Grants', searchUrl: 'https://www.colorado.gov/grants' },
-  TX: { name: 'Texas Grants', searchUrl: 'https://www.texasagriculture.gov/Grants-Services' },
-  CA: { name: 'California Grants', searchUrl: 'https://www.grants.ca.gov/' },
-  NY: { name: 'New York Grants', searchUrl: 'https://grantsmanagement.ny.gov/' },
-  FL: { name: 'Florida Grants', searchUrl: 'https://www.myflorida.com/apps/vbs/vbs_www.main_menu' },
-  PA: { name: 'Pennsylvania Grants', searchUrl: 'https://www.esa.dced.state.pa.us/Login.aspx' },
-  IL: { name: 'Illinois Grants', searchUrl: 'https://www2.illinois.gov/sites/GATA/Grants' },
-  MI: { name: 'Michigan Grants', searchUrl: 'https://www.michigan.gov/leo/bureaus-agencies/ogl' },
-  WV: { name: 'West Virginia Grants', searchUrl: 'https://grants.wv.gov/' },
-  VA: { name: 'Virginia Grants', searchUrl: 'https://www.dhcd.virginia.gov/community-development-block-grant' },
-  NC: { name: 'North Carolina Grants', searchUrl: 'https://www.nc.gov/services/grants' },
-  GA: { name: 'Georgia Grants', searchUrl: 'https://opb.georgia.gov/state-grants' },
-  NJ: { name: 'New Jersey Grants', searchUrl: 'https://www.nj.gov/state/dos_grants.html' },
-  MA: { name: 'Massachusetts Grants', searchUrl: 'https://www.mass.gov/topics/grants-for-individuals' },
-  WA: { name: 'Washington Grants', searchUrl: 'https://ofm.wa.gov/budget/state-budgets-prior-prior/grants' },
-  AZ: { name: 'Arizona Grants', searchUrl: 'https://grants.az.gov/' },
-  IN: { name: 'Indiana Grants', searchUrl: 'https://www.in.gov/ifa/grants/' },
-  MN: { name: 'Minnesota Grants', searchUrl: 'https://mn.gov/admin/government/grants/' },
-  MO: { name: 'Missouri Grants', searchUrl: 'https://oa.mo.gov/accounting/state-grants' },
-  WI: { name: 'Wisconsin Grants', searchUrl: 'https://doa.wi.gov/Pages/StateFinances/GrantsAndLoans.aspx' },
-  MD: { name: 'Maryland Grants', searchUrl: 'https://grants.maryland.gov/' },
-  SC: { name: 'South Carolina Grants', searchUrl: 'https://admin.sc.gov/statewide-grants' },
-  AL: { name: 'Alabama Grants', searchUrl: 'https://comptroller.alabama.gov/grants/' },
-  KY: { name: 'Kentucky Grants', searchUrl: 'https://finance.ky.gov/offices/grants/' },
-  OR: { name: 'Oregon Grants', searchUrl: 'https://www.oregon.gov/biz/programs/grants/pages/default.aspx' },
-  CT: { name: 'Connecticut Grants', searchUrl: 'https://portal.ct.gov/opm/budget/grants-management' },
-  LA: { name: 'Louisiana Grants', searchUrl: 'https://www.doa.la.gov/Pages/osp/Grants/Index.aspx' },
-  OK: { name: 'Oklahoma Grants', searchUrl: 'https://grants.ok.gov/' },
+        OH: { name: 'Ohio Grants', searchUrl: 'https://grants.ohio.gov/Public/Search.aspx' },
+        TN: { name: 'Tennessee Grants', searchUrl: 'https://www.tn.gov/finance/grants.html' },
+        CO: { name: 'Colorado Grants', searchUrl: 'https://www.colorado.gov/grants' },
+        TX: { name: 'Texas Grants', searchUrl: 'https://www.texasagriculture.gov/Grants-Services' },
+        CA: { name: 'California Grants', searchUrl: 'https://www.grants.ca.gov/' },
+        NY: { name: 'New York Grants', searchUrl: 'https://grantsmanagement.ny.gov/' },
+        FL: { name: 'Florida Grants', searchUrl: 'https://www.myflorida.com/apps/vbs/vbs_www.main_menu' },
+        PA: { name: 'Pennsylvania Grants', searchUrl: 'https://www.esa.dced.state.pa.us/Login.aspx' },
+        IL: { name: 'Illinois Grants', searchUrl: 'https://www2.illinois.gov/sites/GATA/Grants' },
+        MI: { name: 'Michigan Grants', searchUrl: 'https://www.michigan.gov/leo/bureaus-agencies/ogl' },
+        WV: { name: 'West Virginia Grants', searchUrl: 'https://grants.wv.gov/' },
+        VA: { name: 'Virginia Grants', searchUrl: 'https://www.dhcd.virginia.gov/community-development-block-grant' },
+        NC: { name: 'North Carolina Grants', searchUrl: 'https://www.nc.gov/services/grants' },
+        GA: { name: 'Georgia Grants', searchUrl: 'https://opb.georgia.gov/state-grants' },
+        NJ: { name: 'New Jersey Grants', searchUrl: 'https://www.nj.gov/state/dos_grants.html' },
+        MA: { name: 'Massachusetts Grants', searchUrl: 'https://www.mass.gov/topics/grants-for-individuals' },
+        WA: { name: 'Washington Grants', searchUrl: 'https://ofm.wa.gov/budget/state-budgets-prior-prior/grants' },
+        AZ: { name: 'Arizona Grants', searchUrl: 'https://grants.az.gov/' },
+        IN: { name: 'Indiana Grants', searchUrl: 'https://www.in.gov/ifa/grants/' },
+        MN: { name: 'Minnesota Grants', searchUrl: 'https://mn.gov/admin/government/grants/' },
+        MO: { name: 'Missouri Grants', searchUrl: 'https://oa.mo.gov/accounting/state-grants' },
+        WI: { name: 'Wisconsin Grants', searchUrl: 'https://doa.wi.gov/Pages/StateFinances/GrantsAndLoans.aspx' },
+        MD: { name: 'Maryland Grants', searchUrl: 'https://grants.maryland.gov/' },
+        SC: { name: 'South Carolina Grants', searchUrl: 'https://admin.sc.gov/statewide-grants' },
+        AL: { name: 'Alabama Grants', searchUrl: 'https://comptroller.alabama.gov/grants/' },
+        KY: { name: 'Kentucky Grants', searchUrl: 'https://finance.ky.gov/offices/grants/' },
+        OR: { name: 'Oregon Grants', searchUrl: 'https://www.oregon.gov/biz/programs/grants/pages/default.aspx' },
+        CT: { name: 'Connecticut Grants', searchUrl: 'https://portal.ct.gov/opm/budget/grants-management' },
+        LA: { name: 'Louisiana Grants', searchUrl: 'https://www.doa.la.gov/Pages/osp/Grants/Index.aspx' },
+        OK: { name: 'Oklahoma Grants', searchUrl: 'https://grants.ok.gov/' },
 }
 
 /**
@@ -73,7 +75,7 @@ const STATE_PORTALS = {
        * Cross-signal combinations catch opportunities that span categories.
        * Phrases from the profile's own words catch specific programs.
        */
-function buildExhaustiveStrategies(profile) {
+export function buildExhaustiveStrategies(profile) {
         const signals = profile?.signals
         if (!signals) return [{ label: 'fallback', query: 'grant assistance program' }]
 
@@ -340,7 +342,7 @@ export async function crawlGovernmentFunding(profileInput, options = {}) {
   // Below-threshold fallback: when no results pass min_score, return top by score (avoid 0 when we have candidates)
   const belowThreshold = []
 
-  // === GRANTS.GOV: dual-API client (legacy + Simpler, merged & deduped) ===
+  // === GRANTS.GOV: Run ALL strategies in parallel ===
   let grantsGovTotal = 0
   try {
     const grantsGovResults = await searchGrantsGovExhaustive(strategies)
@@ -374,34 +376,53 @@ export async function crawlGovernmentFunding(profileInput, options = {}) {
     console.error(`[GovernmentCrawler] Grants.gov error:`, error.message)
   }
 
-  // === BROAD FALLBACK: If all strategies returned 0, try a single broad query via resilient client ===
+  // === BROAD FALLBACK: If all specific strategies returned 0, try a single broad query ===
   if (grantsGovTotal === 0 && profileState) {
     try {
       console.log('[GovernmentCrawler] All strategies returned 0 — running broad state fallback')
       const broadQuery = `${profileState} grant assistance`
-      const { opportunities: broadOpps } = await searchGrants(broadQuery, { rows: 25 })
-      console.log(`[GovernmentCrawler] Broad fallback returned ${broadOpps?.length ?? 0} raw hits`)
-      for (const opp of broadOpps ?? []) {
-        const title = opp?.title ?? null
+      const response = await postWithRetry(
+        GRANTS_GOV_API,
+        { keyword: broadQuery, oppStatuses: 'forecasted|posted', rows: 25 },
+        { headers: { 'Content-Type': 'application/json' } },
+        { timeoutMs: 15000, retries: 2 },
+      )
+      let parsed = response?.data
+      if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed) } catch { parsed = null } }
+      const hits = parsed?.data?.oppHits ?? parsed?.oppHits ?? parsed?.data?.opportunities ?? parsed?.opportunities ?? []
+      const rows = Array.isArray(hits) ? hits : []
+      console.log(`[GovernmentCrawler] Broad fallback returned ${rows.length} raw hits`)
+      for (const hit of rows) {
+        const title = hit?.title ?? hit?.oppTitle ?? hit?.opportunityTitle ?? null
         if (!title) continue
         const titleKey = title.toLowerCase().trim()
         if (titleKey && seenTitles.has(titleKey)) continue
         if (titleKey) seenTitles.add(titleKey)
-        const decorated = { ...opp, _discovery_strategy: 'broad_state_fallback' }
-        if (!enforceOpportunityPolicy(decorated).ok) continue
-        const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(decorated, profileForCrawler)
+        const id = hit?.id ?? hit?.oppId ?? null
+        const number = hit?.number ?? hit?.oppNum ?? hit?.oppNumber ?? null
+        const rawDesc = hit?.synopsis ?? hit?.description ?? null
+        const agencyFb = hit?.agencyName ?? hit?.agency ?? null
+        const opp = {
+          title,
+          sponsor: agencyFb,
+          description: rawDesc || `Federal grant opportunity: ${title}.${agencyFb ? ` Funded by ${agencyFb}.` : ''}${number ? ` Opportunity ${number}.` : ''} Visit Grants.gov for full details.`,
+          url: id != null ? `${GRANTS_GOV_DETAIL}${id}` : 'https://www.grants.gov/search-grants',
+          opportunity_number: number,
+          amount_min: 0, amount_max: 0, amount_description: null,
+          deadline: hit?.closeDate ?? null,
+          deadline_type: hit?.closeDate ? 'fixed' : 'rolling',
+          eligibility: '', is_national: true, source_id: id,
+          _discovery_strategy: 'broad_state_fallback',
+        }
+        if (!enforceOpportunityPolicy(opp).ok) continue
+        const { score: matchScore, reasons, matchedSignals } = calculateMatchScore(opp, profileForCrawler)
         belowThreshold.push({
-          ...decorated,
-          match_score: matchScore,
-          match_reasons: reasons,
-          matched_signals: matchedSignals,
-          crawler_type: 'government_funding',
-          funding_level: 'federal',
-          source: 'Grants.gov',
+          ...opp, match_score: matchScore, match_reasons: reasons, matched_signals: matchedSignals,
+          crawler_type: 'government_funding', funding_level: 'federal', source: 'Grants.gov',
         })
       }
     } catch (broadErr) {
-      console.error('[GovernmentCrawler] Broad fallback error:', broadErr?.message ?? broadErr, broadErr?.requestUrl || '')
+      console.error(`[GovernmentCrawler] Broad fallback error:`, broadErr.message, broadErr.requestUrl || '')
     }
   }
 

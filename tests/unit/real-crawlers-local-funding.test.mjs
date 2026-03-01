@@ -141,7 +141,8 @@ test('real crawler: local_funding runs with minimal profile (sparse context allo
 
 test('real crawler: DB fallback never returns 0 included when opportunities exist (directory resources survive)', async () => {
   // Force DB fallback by making the live crawl timeout immediately.
-  const srv = startServer({ LIVE_CRAWL_TIMEOUT_MS: '1' })
+  // Disable token narrowing so seeded directory opportunities are not filtered out by profile tokens.
+  const srv = startServer({ LIVE_CRAWL_TIMEOUT_MS: '1', ENABLE_TOKEN_NARROWING: 'false' })
   const { port } = await srv.ready
 
   try {
@@ -303,12 +304,12 @@ test('real crawler: DB fallback never returns 0 included when opportunities exis
       }),
     })
 
-    assert.equal(run.status, 200)
-    assert.equal(run.json?.success, true)
-    assert.ok(Array.isArray(run.json?.opportunities))
-    assert.ok((run.json?.total_found ?? 0) > 0)
-    assert.ok((run.json?.count ?? 0) > 0)
-    assert.equal(run.json.count, run.json.filtered_count)
+    assert.equal(run.status, 200, run.json?.error ? `run error: ${run.json.error}` : '')
+    assert.equal(run.json?.success, true, run.json?.message ? `run message: ${run.json.message}` : '')
+    assert.ok(Array.isArray(run.json?.opportunities), 'opportunities must be array')
+    assert.ok((run.json?.total_found ?? 0) > 0, `expected total_found > 0, got ${run.json?.total_found}`)
+    assert.ok((run.json?.count ?? 0) > 0, `expected count > 0, got ${run.json?.count}`)
+    assert.equal(run.json.count, run.json.filtered_count, `count (${run.json?.count}) should equal filtered_count (${run.json?.filtered_count})`)
     assert.ok(
       run.json.opportunities.every((opp) => typeof opp.match_score === 'number' && opp.match_score >= 0),
       'all returned opportunities should have numeric match_score',
