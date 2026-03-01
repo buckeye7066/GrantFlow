@@ -712,8 +712,7 @@ function calculateDeadlineUrgency(opportunity) {
   }
 }
 
+
 export default {
   calculateMatchScore
 }
-
-Stop Claude
