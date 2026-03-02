@@ -549,11 +549,6 @@ export async function crawlHealthResources(profile, options = {}) {
     console.error('[HealthResourcesCrawler] Live fetch error:', liveErr.message)
   }
 
-  // Enforce consent gating: strip any clinicaltrials.gov results that slipped through via live fetch
-  if (!includeTrials) {
-    selected = selected.filter((row) => !String(row.url || row.source_url || '').includes('clinicaltrials.gov'))
-  }
-
   return selected
     .slice(0, 20)
     .map((row) =>
@@ -565,5 +560,11 @@ export async function crawlHealthResources(profile, options = {}) {
       }),
     )
     .filter(Boolean)
+    // Enforce consent gating as the LAST step (after contract normalization)
+    .filter((row) => {
+      if (includeTrials) return true
+      const allUrls = [row.url, row.source_url, row.application_url].filter(Boolean).join(' ').toLowerCase()
+      return !allUrls.includes('clinicaltrials.gov')
+    })
 }
 
