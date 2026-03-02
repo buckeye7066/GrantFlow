@@ -18,6 +18,45 @@ import { scheduleGrantApplicationApproach } from '../services/grantApplicationAp
 
 const router = express.Router();
 
+function parseOpportunityContact(opportunity) {
+  let ci = {}
+  try {
+    const raw = opportunity.contact_info
+    ci = typeof raw === 'string' ? JSON.parse(raw) : (raw || {})
+  } catch { /* ignore */ }
+  const desc = `${opportunity.description || ''} ${opportunity.applicationNote || ''}`.toLowerCase()
+  let method = opportunity.application_method || null
+  if (!method) {
+    if (desc.includes('fax')) method = 'fax'
+    else if (desc.includes('mail') && !desc.includes('email')) method = 'print_and_mail'
+    else if (opportunity.application_url || opportunity.url) method = 'portal'
+  }
+  return {
+    name: ci.name || opportunity.contact_name || null,
+    email: ci.email || opportunity.contact_email || null,
+    phone: ci.phone || opportunity.contact_phone || null,
+    fax: ci.fax || opportunity.funder_fax || null,
+    address: ci.address || opportunity.funder_address || null,
+    method,
+  }
+}
+
+const FIELD_ALIASES = {
+  funder_email: 'contact_email',
+  funder_phone: 'contact_phone',
+  url: 'application_url',
+  portal_url: 'application_url',
+  application_instructions: 'application_steps',
+}
+
+function normalizeGrantFields(data) {
+  const out = {}
+  for (const [key, value] of Object.entries(data)) {
+    out[FIELD_ALIASES[key] || key] = value
+  }
+  return out
+}
+
 // Whitelist of allowed columns for UPDATE operations
 const ALLOWED_GRANT_COLUMNS = new Set([
   'organization_id', 'funding_opportunity_id', 'title', 'funder', 'deadline',
@@ -25,6 +64,7 @@ const ALLOWED_GRANT_COLUMNS = new Set([
   'application_url',
   'match_score', 'match_reasons', 'notes', 'requirements', 'eligibility',
   'application_steps', 'contact_name', 'contact_email', 'contact_phone',
+  'funder_fax', 'funder_address', 'application_method',
 
   // AI Coach input fields
   'program_description',
@@ -667,10 +707,14 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Grant not found' });
     }
     
-    // Parse JSON fields
+    // Parse JSON fields and provide frontend-expected aliases
     const parsed = {
       ...grant,
-      match_reasons: safeParseJSON(grant.match_reasons, [])
+      match_reasons: safeParseJSON(grant.match_reasons, []),
+      funder_email: grant.contact_email || null,
+      funder_phone: grant.contact_phone || null,
+      url: grant.application_url || null,
+      application_instructions: grant.application_steps || null,
     };
     
     // Get related data
@@ -828,9 +872,9 @@ router.post('/', mutationRateLimiter, async (req, res) => {
     if (!(await ensureOrganizationAccess(req, res, String(data.organization_id)))) return
 
     const id = crypto.randomUUID();
-    
-    // Sanitize columns against whitelist
-    const sanitizedData = sanitizeColumns(data, ALLOWED_GRANT_COLUMNS);
+
+    // Normalize frontend aliases → canonical column names, then sanitize
+    const sanitizedData = sanitizeColumns(normalizeGrantFields(data), ALLOWED_GRANT_COLUMNS);
     
     // Stringify JSON fields
     if (sanitizedData.match_reasons && Array.isArray(sanitizedData.match_reasons)) {
@@ -863,8 +907,8 @@ router.put('/:id', mutationRateLimiter, async (req, res) => {
 
     const data = req.body;
     
-    // Sanitize columns against whitelist
-    const sanitizedData = sanitizeColumns(data, ALLOWED_GRANT_COLUMNS);
+    // Normalize frontend aliases → canonical column names, then sanitize
+    const sanitizedData = sanitizeColumns(normalizeGrantFields(data), ALLOWED_GRANT_COLUMNS);
     
     if (Object.keys(sanitizedData).length === 0) {
       return res.status(400).json({ error: 'No valid fields to update' });
@@ -1416,14 +1460,16 @@ router.post('/from-opportunity', async (req, res, next) => {
       const amountRequested = normalizeMoney(opportunity.amount_max ?? opportunity.amount_min ?? null)
       const notes = coerceString(opportunity.description, { maxLen: 500 })
       
+      const contactInfo = parseOpportunityContact(opportunity)
       if (hasProfileId) {
         await tx.prepare(`
           INSERT INTO grants (
             id, organization_id, profile_id, funding_opportunity_id, title, funder, 
             deadline, status, match_score, match_reasons, application_url,
-            amount_requested, notes
+            amount_requested, notes,
+            contact_name, contact_email, contact_phone, funder_fax, funder_address, application_method
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           id, 
           finalOrgId,
@@ -1436,16 +1482,19 @@ router.post('/from-opportunity', async (req, res, next) => {
           insertMatchReasons,
           opportunity.application_url,
           amountRequested,
-          notes
+          notes,
+          contactInfo.name, contactInfo.email, contactInfo.phone,
+          contactInfo.fax, contactInfo.address, contactInfo.method
         );
       } else {
         await tx.prepare(`
           INSERT INTO grants (
             id, organization_id, funding_opportunity_id, title, funder, 
             deadline, status, match_score, match_reasons, application_url,
-            amount_requested, notes
+            amount_requested, notes,
+            contact_name, contact_email, contact_phone, funder_fax, funder_address, application_method
           )
-          VALUES (?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           id, 
           finalOrgId,
@@ -1457,7 +1506,9 @@ router.post('/from-opportunity', async (req, res, next) => {
           insertMatchReasons,
           opportunity.application_url,
           amountRequested,
-          notes
+          notes,
+          contactInfo.name, contactInfo.email, contactInfo.phone,
+          contactInfo.fax, contactInfo.address, contactInfo.method
         );
       }
       

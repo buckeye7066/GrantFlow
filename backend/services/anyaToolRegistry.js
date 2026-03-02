@@ -2,6 +2,12 @@ import path from 'path'
 import { promises as fs } from 'fs'
 import { randomUUID } from 'crypto'
 import {
+  generateMedicalNecessityDocument,
+  extractMedicalProfile,
+  scanPipelineForMedNec,
+  DOCUMENT_TYPES,
+} from './medicalNecessity.js'
+import {
   adminCodeCrawl,
   adminCodeLint,
   adminCodeAnalyze,
@@ -878,6 +884,7 @@ registerTool({
         enum: [
           'local',
           'scholarship',
+          'curated_benefits',
           'comprehensive',
           'item_search',
           'avatar_lookup',
@@ -1185,7 +1192,7 @@ registerTool({
         type: 'array',
         items: {
           type: 'string',
-          enum: ['local', 'scholarship', 'comprehensive', 'item_search', 'profile_enrichment', 'avatar_lookup']
+          enum: ['local', 'scholarship', 'curated_benefits', 'comprehensive', 'item_search', 'profile_enrichment', 'avatar_lookup']
         },
         description: 'Array of crawler types to trigger (default: all)'
       },
@@ -1196,9 +1203,7 @@ registerTool({
     const { profileId, crawlerTypes } = params
     const { db } = context
     
-    // Default to all crawler types if not specified
-    // Note: 'national' has been deprecated in favor of 'comprehensive' with parameters.mode='geo' (Geo Crawl)
-    const types = crawlerTypes || ['local', 'scholarship', 'comprehensive', 'profile_enrichment']
+    const types = crawlerTypes || ['local', 'scholarship', 'curated_benefits', 'comprehensive', 'profile_enrichment']
     
     const jobIds = []
     for (const crawlerType of types) {
@@ -1212,6 +1217,7 @@ registerTool({
       const defaultParams = {
         local: { radius_miles: 25, max_results: 100 },
         scholarship: { max_results: 50 },
+        curated_benefits: { maxResults: 100 },
         comprehensive: { max_results: 200 },
         profile_enrichment: {},
         avatar_lookup: {},
@@ -1248,8 +1254,8 @@ registerTool({
       profileId: { type: 'string', description: 'Profile ID to schedule crawlers for' },
       crawlerType: {
         type: 'string',
-        enum: ['local', 'scholarship', 'comprehensive', 'item_search', 'profile_enrichment', 'avatar_lookup'],
-        description: 'Type of crawler to schedule. Note: Use comprehensive with parameters.mode=geo for Geo Crawl.'
+        enum: ['local', 'scholarship', 'curated_benefits', 'comprehensive', 'item_search', 'profile_enrichment', 'avatar_lookup'],
+        description: 'Type of crawler to schedule. curated_benefits runs the new profile-matched system. Use comprehensive with parameters.mode=geo for Geo Crawl.'
       },
       schedule: { type: 'string', description: 'Cron expression (e.g., "0 9 * * 1" for every Monday at 9am)' },
       enabled: { type: 'boolean', description: 'Whether schedule is enabled (default: true)' },
@@ -1575,6 +1581,7 @@ registerTool({
           enum: [
             'local',
             'scholarship',
+            'curated_benefits',
             'health_resources',
             'comprehensive',
             'profile_enrichment',
@@ -1583,7 +1590,7 @@ registerTool({
             'item_gift_search',
           ]
         },
-        description: 'Types of crawlers to run (default: [local, scholarship, comprehensive, profile_enrichment]). Use comprehensive with mode=geo for Geo Crawl.'
+        description: 'Types of crawlers to run (default: [local, scholarship, curated_benefits, comprehensive, profile_enrichment]). curated_benefits runs the new profile-matched benefits/scholarships system.'
       },
       maxRetries: { type: 'integer', description: 'Maximum retries for failed jobs (default: 3)', minimum: 0, maximum: 10 },
       waitForCompletion: { type: 'boolean', description: 'Wait for jobs to complete (default: false)' },
@@ -2044,7 +2051,7 @@ registerTool({
 
 registerTool({
   name: 'grants.writeLOI',
-  description: 'Generate a Letter of Intent (LOI) draft for a specific grant opportunity, grounded in the user profile and grant requirements.',
+  description: 'Generate a full Letter of Intent (LOI) draft for a specific grant opportunity, using the profile data to write at MBA-level grant writer quality.',
   schema: {
     type: 'object',
     properties: {
@@ -2060,32 +2067,27 @@ registerTool({
     const opp = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(params.opportunityId)
     if (!opp) throw new Error(`Opportunity ${params.opportunityId} not found`)
 
-    let profile = null
-    if (profileId) {
-      profile = await db.prepare('SELECT * FROM organizations WHERE id = ?').get(profileId)
-    }
+    const profileData = await gatherProfileData(db, profileId)
 
     return {
       type: 'loi_draft',
-      opportunity: { title: opp.title, sponsor: opp.sponsor, deadline: opp.deadline },
-      profile: profile ? { name: profile.name, type: profile.applicant_type } : null,
+      opportunity: { id: opp.id, title: opp.title, sponsor: opp.sponsor, deadline: opp.deadline, description: opp.description, url: opp.url, application_url: opp.application_url, contact_info: opp.contact_info },
+      profile: profileData,
       instructions: params.customInstructions || null,
-      prompt: `Draft a Letter of Intent for "${opp.title}" by ${opp.sponsor}. ` +
-        (profile ? `Applicant: ${profile.name} (${profile.applicant_type}).` : '') +
-        (opp.eligibility_bullets ? ` Eligibility: ${opp.eligibility_bullets}.` : '') +
-        (params.customInstructions ? ` Instructions: ${params.customInstructions}` : ''),
+      writingDirective: LOI_WRITING_DIRECTIVE,
+      submissionInfo: extractSubmissionInfo(opp),
     }
   },
 })
 
 registerTool({
   name: 'grants.writeNeedsStatement',
-  description: 'Generate a needs statement section for a grant proposal, based on profile data and the target opportunity.',
+  description: 'Generate a compelling needs statement section for a grant proposal, grounded in real profile data, at MBA-level grant writer quality.',
   schema: {
     type: 'object',
     properties: {
       opportunityId: { type: 'string', description: 'The funding opportunity ID' },
-      focusArea: { type: 'string', description: 'Specific area of need to emphasize (e.g., "healthcare access", "education equity")' },
+      focusArea: { type: 'string', description: 'Specific area of need to emphasize (e.g., "healthcare access", "housing stability")' },
     },
     required: ['opportunityId'],
   },
@@ -2096,22 +2098,153 @@ registerTool({
     const opp = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(params.opportunityId)
     if (!opp) throw new Error(`Opportunity ${params.opportunityId} not found`)
 
-    let profile = null
-    if (profileId) {
-      profile = await db.prepare('SELECT * FROM organizations WHERE id = ?').get(profileId)
-    }
+    const profileData = await gatherProfileData(db, profileId)
 
     return {
       type: 'needs_statement',
-      opportunity: { title: opp.title, sponsor: opp.sponsor },
-      profile: profile ? { name: profile.name } : null,
+      opportunity: { id: opp.id, title: opp.title, sponsor: opp.sponsor, description: opp.description },
+      profile: profileData,
       focusArea: params.focusArea || null,
-      prompt: `Write a compelling needs statement for "${opp.title}". ` +
-        (params.focusArea ? `Focus on: ${params.focusArea}. ` : '') +
-        (profile ? `Organization: ${profile.name}.` : ''),
+      writingDirective: NEEDS_STATEMENT_WRITING_DIRECTIVE,
     }
   },
 })
+
+registerTool({
+  name: 'grants.writeFullApplication',
+  description: 'Generate a complete grant/benefit application with all required sections, using profile data, at MBA-level grant writer quality. Includes submission instructions.',
+  schema: {
+    type: 'object',
+    properties: {
+      opportunityId: { type: 'string', description: 'The funding opportunity ID' },
+      grantId: { type: 'string', description: 'The pipeline grant ID (if already in pipeline)' },
+      sections: { type: 'array', items: { type: 'string' }, description: 'Specific sections to write (e.g., ["narrative", "budget", "timeline"]). Omit for all sections.' },
+    },
+    required: ['opportunityId'],
+  },
+  handler: async (params, context) => {
+    const { db, profileId } = context
+    if (!db) throw new Error('Database connection unavailable')
+
+    const opp = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(params.opportunityId)
+    if (!opp) throw new Error(`Opportunity ${params.opportunityId} not found`)
+
+    let grant = null
+    if (params.grantId) {
+      grant = await db.prepare('SELECT * FROM grants WHERE id = ?').get(params.grantId)
+    }
+
+    const profileData = await gatherProfileData(db, profileId)
+    const submission = extractSubmissionInfo(opp)
+
+    return {
+      type: 'full_application',
+      opportunity: { id: opp.id, title: opp.title, sponsor: opp.sponsor, deadline: opp.deadline, description: opp.description, url: opp.url, application_url: opp.application_url, contact_info: opp.contact_info },
+      grant: grant ? { id: grant.id, status: grant.status, notes: grant.notes, application_method: grant.application_method } : null,
+      profile: profileData,
+      requestedSections: params.sections || null,
+      writingDirective: FULL_APPLICATION_WRITING_DIRECTIVE,
+      submissionInfo: submission,
+    }
+  },
+})
+
+registerTool({
+  name: 'grants.getSubmissionInfo',
+  description: 'Get complete submission details for a grant/opportunity: portal URL, mailing address, fax number, email, phone, and step-by-step instructions.',
+  schema: {
+    type: 'object',
+    properties: {
+      opportunityId: { type: 'string', description: 'The funding opportunity ID' },
+      grantId: { type: 'string', description: 'The pipeline grant ID' },
+    },
+  },
+  handler: async (params, context) => {
+    const { db } = context
+    if (!db) throw new Error('Database connection unavailable')
+
+    let opp = null, grant = null
+    if (params.opportunityId) {
+      opp = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(params.opportunityId)
+    }
+    if (params.grantId) {
+      grant = await db.prepare('SELECT * FROM grants WHERE id = ?').get(params.grantId)
+      if (!opp && grant?.funding_opportunity_id) {
+        opp = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(grant.funding_opportunity_id)
+      }
+    }
+    if (!opp && !grant) throw new Error('Provide opportunityId or grantId')
+
+    return {
+      type: 'submission_info',
+      submission: extractSubmissionInfo(opp || {}),
+      grant: grant ? { application_url: grant.application_url, application_method: grant.application_method, contact_name: grant.contact_name, contact_email: grant.contact_email, contact_phone: grant.contact_phone, funder_fax: grant.funder_fax, funder_address: grant.funder_address } : null,
+    }
+  },
+})
+
+async function gatherProfileData(db, profileId) {
+  if (!profileId) return null
+  const profile = await db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
+  if (!profile) return null
+  const sections = await db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId)
+  const parsed = {}
+  for (const s of (sections || [])) {
+    try { parsed[s.section_key] = typeof s.data === 'string' ? JSON.parse(s.data) : s.data } catch { /* skip */ }
+  }
+  const demo = parsed.demographics || parsed.personal_info || {}
+  return { id: profile.id, name: profile.display_name, type: profile.primary_type, state: demo.state || null, city: demo.city || null, zip: demo.zip_code || null, sections: parsed }
+}
+
+function extractSubmissionInfo(opp) {
+  let contact = {}
+  try { contact = typeof opp.contact_info === 'string' ? JSON.parse(opp.contact_info) : (opp.contact_info || {}) } catch { /* ignore */ }
+  const desc = `${opp.description || ''} ${opp.applicationNote || ''}`.toLowerCase()
+  let method = 'portal'
+  if (desc.includes('fax')) method = 'fax'
+  else if (desc.includes('mail') && !desc.includes('email')) method = 'print_and_mail'
+  else if (desc.includes('call') || desc.includes('phone')) method = 'phone'
+  return {
+    method,
+    portalUrl: opp.application_url || opp.url || null,
+    mailingAddress: contact.address || null,
+    faxNumber: contact.fax || null,
+    email: contact.email || null,
+    phone: contact.phone || null,
+    contactName: contact.name || null,
+    website: contact.website || opp.url || null,
+    applicationNote: opp.applicationNote || null,
+  }
+}
+
+const LOI_WRITING_DIRECTIVE = `You are a seasoned grant writer with an MBA and 15+ years of experience securing funding for individuals and organizations. Write a compelling, professional Letter of Intent that:
+- Opens with a clear statement of purpose and funding amount requested
+- Demonstrates alignment between the applicant's needs and the funder's mission
+- Uses specific data from the profile (demographics, health, financial, family, education)
+- Articulates measurable outcomes and impact
+- Maintains a confident, professional tone
+- Follows standard LOI format: Introduction, Statement of Need, Project Description, Budget Summary, Conclusion
+- Is ready to print, sign, and submit`
+
+const NEEDS_STATEMENT_WRITING_DIRECTIVE = `You are a seasoned grant writer with an MBA and 15+ years of experience. Write a compelling needs statement that:
+- Grounds every claim in the applicant's actual profile data
+- Cites relevant statistics for the geographic area and population
+- Connects individual/community need to the funder's priorities
+- Uses authoritative, data-driven language without being clinical
+- Builds an emotional narrative anchored in facts
+- Is 300-500 words unless otherwise specified`
+
+const FULL_APPLICATION_WRITING_DIRECTIVE = `You are a seasoned grant writer with an MBA and 15+ years of experience securing federal, state, and foundation funding. Write a complete grant application that:
+- Addresses every required section with professional, compelling content
+- Uses the applicant's real profile data throughout (no placeholders)
+- Writes needs statements grounded in demographics, health conditions, financial data, and geographic factors
+- Creates realistic budgets based on actual amounts and needs
+- Includes a clear project description with measurable objectives
+- Writes at the highest professional standard — this must compete with applications from funded organizations
+- Provides all submission instructions: where to send, how to submit, deadlines, and required attachments
+- If the application must be printed and mailed, provide the complete mailing address
+- If it requires fax, provide the fax number
+- If it's a portal submission, provide the portal URL and step-by-step instructions for the portal`
 
 registerTool({
   name: 'grants.summarizeMatches',
@@ -2149,6 +2282,106 @@ registerTool({
         amount: o.amount_description,
         url: o.source_url,
       })),
+    }
+  },
+})
+
+// ─── Medical Necessity Tools ─────────────────────────────────────────────────
+
+registerTool({
+  name: 'medical.generateLOMN',
+  description: 'Generate a Letter of Medical Necessity (LOMN) for the current profile. Uses real health data from the profile to create a professional document ready for physician review and signature.',
+  schema: {
+    type: 'object',
+    properties: {
+      documentType: {
+        type: 'string',
+        enum: Object.values(DOCUMENT_TYPES),
+        description: 'Type of medical document to generate. Defaults to letter_of_medical_necessity.',
+      },
+      opportunityId: { type: 'string', description: 'Optional funding opportunity ID this document supports' },
+      grantId: { type: 'string', description: 'Optional pipeline grant ID this document supports' },
+      specificEquipment: { type: 'string', description: 'Specific equipment being requested (e.g., "power wheelchair", "CPAP machine")' },
+      specificCondition: { type: 'string', description: 'Specific condition to focus on if multiple exist' },
+      additionalContext: { type: 'string', description: 'Any additional instructions or context' },
+    },
+  },
+  handler: async (params, context) => {
+    const { db, profileId } = context
+    if (!db) throw new Error('Database connection unavailable')
+    if (!profileId) throw new Error('No profile selected. Please select a profile first.')
+
+    const result = await generateMedicalNecessityDocument(db, profileId, {
+      documentType: params.documentType || DOCUMENT_TYPES.LOMN,
+      opportunityId: params.opportunityId || null,
+      grantId: params.grantId || null,
+      specificEquipment: params.specificEquipment || null,
+      specificCondition: params.specificCondition || null,
+      additionalContext: params.additionalContext || null,
+    })
+
+    return result
+  },
+})
+
+registerTool({
+  name: 'medical.reviewProfile',
+  description: 'Review the current profile\'s medical data to summarize conditions, disabilities, DME needs, functional limitations, and insurance. Useful before generating medical documents.',
+  schema: { type: 'object', properties: {} },
+  handler: async (_params, context) => {
+    const { db, profileId } = context
+    if (!db) throw new Error('Database connection unavailable')
+    if (!profileId) throw new Error('No profile selected.')
+
+    const medProfile = await extractMedicalProfile(db, profileId)
+    if (!medProfile) throw new Error('Profile not found')
+
+    return {
+      type: 'medical_profile_review',
+      name: medProfile.name,
+      conditions: medProfile.conditions,
+      disabilities: medProfile.disabilities,
+      dmeNeeds: medProfile.dmeNeeds,
+      functionalLimitations: medProfile.functionalLimitations,
+      insurance: medProfile.insurance,
+      supportNeeds: medProfile.supportNeeds,
+      supportNeedsLevel: medProfile.supportNeedsLevel,
+      physician: medProfile.physician,
+      letterSupportNeeded: medProfile.letterSupportNeeded,
+      medicaid: medProfile.medicaid,
+      medicare: medProfile.medicare,
+      waiverProgram: medProfile.waiverProgram,
+      financialContext: medProfile.financialContext,
+      familyContext: medProfile.familyContext,
+      readiness: {
+        hasConditions: medProfile.conditions.length > 0,
+        hasDisabilities: medProfile.disabilities.length > 0,
+        hasDMENeeds: medProfile.dmeNeeds.length > 0,
+        hasPhysician: Boolean(medProfile.physician?.name),
+        hasInsurance: Boolean(medProfile.insurance?.provider),
+        canGenerateLOMN: medProfile.conditions.length > 0 || medProfile.disabilities.length > 0,
+      },
+    }
+  },
+})
+
+registerTool({
+  name: 'medical.scanPipeline',
+  description: 'Scan the profile\'s pipeline grants to identify which ones require medical necessity documentation (LOMN, disability verification, DME justification, etc.).',
+  schema: { type: 'object', properties: {} },
+  handler: async (_params, context) => {
+    const { db, profileId } = context
+    if (!db) throw new Error('Database connection unavailable')
+    if (!profileId) throw new Error('No profile selected.')
+
+    const flagged = await scanPipelineForMedNec(db, profileId)
+    return {
+      type: 'pipeline_med_nec_scan',
+      totalFlagged: flagged.length,
+      items: flagged,
+      recommendation: flagged.length > 0
+        ? `Found ${flagged.length} pipeline item(s) that may require medical necessity documentation. Use medical.generateLOMN with the grantId to generate documents.`
+        : 'No pipeline items currently require medical necessity documentation.',
     }
   },
 })

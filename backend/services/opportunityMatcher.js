@@ -87,8 +87,9 @@ export async function saveToProfilePipeline(
       }
     }
     
-    // Add to pipeline
+    // Add to pipeline — preserve application URL, contact info, amounts, and submission method
     const grantId = crypto.randomUUID()
+    const contactInfo = parseContactInfo(opportunity)
     await db
       .prepare(
         `
@@ -103,8 +104,16 @@ export async function saveToProfilePipeline(
             deadline,
             match_score,
             match_reasons,
-            notes
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            notes,
+            application_url,
+            application_method,
+            contact_name,
+            contact_email,
+            contact_phone,
+            amount_requested,
+            amount_min,
+            amount_max
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
@@ -119,6 +128,14 @@ export async function saveToProfilePipeline(
         matchPercentage,
         JSON.stringify(profileContext?.match_reasons ?? opportunity.match_reasons ?? []),
         `Auto-added: ${matchPercentage}% match for profile ${profileId} (threshold ${threshold}%)`,
+        opportunity.application_url || opportunity.applicationUrl || opportunity.url || null,
+        opportunity.application_method || opportunity.submission_method || guessMethodFromOpportunity(opportunity) || null,
+        contactInfo.name,
+        contactInfo.email,
+        contactInfo.phone,
+        opportunity.amount_max || opportunity.maxAmount || null,
+        opportunity.amount_min || opportunity.amountMin || null,
+        opportunity.amount_max || opportunity.amountMax || null,
       )
     
     console.log(`[opportunityMatcher] Added to pipeline: ${opportunity.title} (${matchPercentage}% match for profile ${profileId})`)
@@ -213,4 +230,32 @@ export async function processCrawledOpportunities(db, opportunities, profileId, 
   console.log(`  - ${results.savedGlobally} saved globally`)
   
   return results
+}
+
+function parseContactInfo(opportunity) {
+  let name = null, email = null, phone = null
+  const ci = opportunity.contact_info || opportunity.contact || null
+  if (ci) {
+    if (typeof ci === 'string') {
+      try { const parsed = JSON.parse(ci); name = parsed.name; email = parsed.email; phone = parsed.phone } catch { /* ignore */ }
+    } else if (typeof ci === 'object') {
+      name = ci.name || null; email = ci.email || null; phone = ci.phone || null
+    }
+  }
+  return {
+    name: name || opportunity.contact_name || null,
+    email: email || opportunity.contact_email || null,
+    phone: phone || opportunity.contact_phone || null,
+  }
+}
+
+function guessMethodFromOpportunity(opportunity) {
+  const text = `${opportunity.applicationNote || ''} ${opportunity.description || ''} ${opportunity.application_url || ''}`.toLowerCase()
+  if (text.includes('fax')) return 'fax'
+  if (text.includes('mail') && !text.includes('email')) return 'print_and_mail'
+  if (text.includes('portal') || text.includes('.gov') || text.includes('apply online')) return 'portal'
+  if (text.includes('call') || text.includes('phone')) return 'phone_contact'
+  if (text.includes('email')) return 'email_contact'
+  if (opportunity.application_url || opportunity.applicationUrl || opportunity.url) return 'portal'
+  return null
 }

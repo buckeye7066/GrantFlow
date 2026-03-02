@@ -20,7 +20,20 @@
  * CRITICAL: No fabricated data. Every result must have a real URL.
  */
 import * as cheerio from 'cheerio'
-import { buildSearchKeywords, calculateMatchScore } from './crawlerHelpers.js'
+import { calculateMatchScore } from '../matchingEngine.js'
+
+function buildSearchKeywords(profile, maxKeywords = 10) {
+  const kw = new Set();
+  const signals = profile?.signals || {};
+  if (signals.keywordSet instanceof Set) signals.keywordSet.forEach(k => kw.add(k));
+  if (signals.interests instanceof Set) signals.interests.forEach(k => kw.add(k));
+  const loc = signals.location || {};
+  if (loc.state) kw.add(loc.state);
+  if (loc.city) kw.add(loc.city);
+  const name = profile?.display_name || profile?.name || '';
+  if (name) kw.add(name.split(/\s+/)[0]);
+  return [...kw].slice(0, maxKeywords);
+}
 import { getWithRetry } from './httpClient.js'
 import { planCrawlerQueries } from './queryPlanner.js'
 import {

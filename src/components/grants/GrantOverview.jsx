@@ -376,16 +376,16 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                 </CardContent>
             </Card>
 
-            {/* Application Method Card */}
-            {grant.application_method && (
-                <Card className="shadow-lg border-0">
-                    <CardHeader>
-                        <CardTitle className="flex items-center gap-2">
-                            <FileCheck className="w-5 h-5 text-blue-600" />
-                            How to Apply
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent>
+            {/* How to Apply / Submission Details Card */}
+            <Card className="shadow-lg border-0">
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                        <FileCheck className="w-5 h-5 text-blue-600" />
+                        How to Apply
+                    </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                    {grant.application_method && (
                         <div className="flex items-start gap-3">
                             <Badge className={`${getApplicationMethodColor(grant.application_method)} px-3 py-1 text-sm`}>
                                 {getApplicationMethodLabel(grant.application_method)}
@@ -394,9 +394,45 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                                 <p className="text-slate-700 flex-1">{grant.application_instructions}</p>
                             )}
                         </div>
-                    </CardContent>
-                </Card>
-            )}
+                    )}
+
+                    {(grant.application_url || grant.url) && (
+                        <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-slate-600">Portal/Apply Link:</span>
+                            <a href={grant.application_url || grant.url} target="_blank" rel="noopener noreferrer"
+                               className="text-blue-600 hover:underline text-sm truncate max-w-md">
+                                {grant.application_url || grant.url}
+                            </a>
+                        </div>
+                    )}
+
+                    {(grant.funder_address || grant.funder_fax || grant.funder_email || grant.funder_phone || grant.contact_name || grant.contact_email || grant.contact_phone) && (
+                        <div className="bg-slate-50 rounded-lg p-4 space-y-2">
+                            <h4 className="text-sm font-semibold text-slate-700">Contact & Submission Details</h4>
+                            {(grant.contact_name || grant.funder_email || grant.funder_phone) && (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                                    {grant.contact_name && <div><span className="text-slate-500">Contact:</span> <span className="font-medium">{grant.contact_name}</span></div>}
+                                    {(grant.funder_email || grant.contact_email) && <div><span className="text-slate-500">Email:</span> <a href={`mailto:${grant.funder_email || grant.contact_email}`} className="text-blue-600 hover:underline">{grant.funder_email || grant.contact_email}</a></div>}
+                                    {(grant.funder_phone || grant.contact_phone) && <div><span className="text-slate-500">Phone:</span> <a href={`tel:${grant.funder_phone || grant.contact_phone}`} className="text-blue-600 hover:underline">{grant.funder_phone || grant.contact_phone}</a></div>}
+                                </div>
+                            )}
+                            {grant.funder_fax && (
+                                <div className="text-sm"><span className="text-slate-500">Fax:</span> <span className="font-medium">{grant.funder_fax}</span></div>
+                            )}
+                            {grant.funder_address && (
+                                <div className="text-sm">
+                                    <span className="text-slate-500">Mailing Address:</span>
+                                    <div className="font-medium whitespace-pre-line mt-1 bg-white p-2 rounded border">{grant.funder_address}</div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {!grant.application_method && !grant.application_url && !grant.url && !grant.funder_email && !grant.contact_email && (
+                        <p className="text-slate-500 text-sm italic">No application method information available yet. Ask Anya to help research how to apply.</p>
+                    )}
+                </CardContent>
+            </Card>
 
             <Card className="shadow-lg border-0">
                 <CardHeader>

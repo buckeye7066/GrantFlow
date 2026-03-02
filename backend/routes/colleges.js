@@ -1,11 +1,11 @@
 /**
  * Colleges / Local Funding API
  * GET /api/colleges/local-funding?zip=XXXXX&radiusMiles=25
- * Returns local funding resources for a ZIP. Uses localFundingCrawler when profile/signals available.
+ * Returns local funding resources for a ZIP from the funding_opportunities table.
  */
 
 import express from 'express'
-import { crawlLocalFunding } from '../services/crawlers/localFundingCrawler.js'
+import zipcodes from 'zipcodes'
 
 const router = express.Router()
 
@@ -51,46 +51,45 @@ router.get('/local-funding', async (req, res) => {
   }
 
   try {
-    const minimalProfile = {
-      sections: {},
-      signals: {
-        location: { zip, city: null, state: null },
-        keywordSet: new Set(),
-        interests: new Set(),
-        demographics: new Set(),
-      },
-      zip_code: zip,
-      zip,
-      state: null,
-      city: null,
+    const lookup = zipcodes.lookup(zip)
+    const state = lookup?.state || null
+
+    const db = req.db
+    let rows = []
+
+    if (state) {
+      rows = db.prepare(`
+        SELECT title, source_url, application_url, sponsor, source, state
+        FROM funding_opportunities
+        WHERE is_active = 1
+          AND (state = ? OR state = 'nationwide' OR is_national = 1)
+        ORDER BY updated_at DESC
+        LIMIT 50
+      `).all(state)
+    } else {
+      rows = db.prepare(`
+        SELECT title, source_url, application_url, sponsor, source, state
+        FROM funding_opportunities
+        WHERE is_active = 1
+          AND (is_national = 1 OR state = 'nationwide')
+        ORDER BY updated_at DESC
+        LIMIT 50
+      `).all()
     }
 
-    const rawResults = await crawlLocalFunding(minimalProfile, {
-      radius_miles: radiusMiles,
-      min_match_score: 50,
-      include_directory_resources: 'true',
-    })
+    const results = rows.map((r) => ({
+      title: r.title ?? 'Local resource',
+      url: r.application_url ?? r.source_url ?? '',
+      source: r.sponsor ?? r.source ?? 'Local',
+    })).filter((r) => r.url && r.url.startsWith('http'))
 
-    const hasDistanceData = rawResults.some((r) => r.distance_miles != null)
-    const radiusFilteringApplied = hasDistanceData
-    let results = rawResults.map((r) => ({
-      title: r.title ?? r.sponsor ?? 'Local resource',
-      url: r.application_url ?? r.url ?? r.source_url ?? '',
-      source: r.source ?? r.sponsor ?? 'Local',
-      distanceMiles: r.distance_miles ?? undefined,
-    }))
-
-    if (radiusFilteringApplied) {
-      results = results.filter((r) => r.distanceMiles == null || r.distanceMiles <= radiusMiles)
-    }
-
-    console.info(`[colleges/local-funding] ${requestId} zip=${zip} radius=${radiusMiles} results=${results.length} filtering=${radiusFilteringApplied}`)
+    console.info(`[colleges/local-funding] ${requestId} zip=${zip} state=${state} results=${results.length}`)
 
     return res.json({
       success: true,
       zip,
       radiusMiles,
-      radiusFilteringApplied,
+      radiusFilteringApplied: false,
       results,
       request_id: requestId,
     })

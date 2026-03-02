@@ -4,8 +4,7 @@ import { fileURLToPath } from 'url'
 import { dirname, join, resolve } from 'path'
 import { processAvatarLookupJob } from './avatarCrawler.js'
 import { processLocalCrawlerJob } from './localCrawler.js'
-import { processScholarshipCrawlerJob } from './scholarshipCrawler.js'
-import { processHealthResourcesCrawlerJob } from './healthResourcesCrawler.js'
+// scholarshipCrawler + health_resources removed — replaced by curated_benefits via crawlerManager
 import { runComprehensiveCrawler as processComprehensiveCrawlerJob } from './comprehensiveCrawlerOptimized.js'
 import { processItemCrawlerJob } from './itemCrawler.js'
 import { processItemGiftCrawlerJob } from './itemGiftCrawler.js'
@@ -17,6 +16,7 @@ import { processProfileEnrichmentJob } from './profileEnrichment.js'
 import { processNationalJob } from './nationalJobRouter.js'
 import { logFailedJob, determineSeverity } from './deadLetterQueue.js'
 import { acquireCrawlerLock } from './crawlerConcurrencyGuard.js'
+import { runCrawler as runCuratedCrawler } from './crawlers/crawlerManager.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -43,11 +43,32 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId))
 }
 
+async function processCuratedBenefitsJob({ db, job, profileContext }) {
+  const profileId = job?.profile_id || profileContext?.profile?.id;
+  if (!profileId) throw new Error('curated_benefits requires a profile_id');
+  const params = typeof job?.parameters === 'string' ? JSON.parse(job.parameters) : (job?.parameters || {});
+  const result = await runCuratedCrawler(db, profileId, {
+    minScore: params.minScore ?? 25,
+    maxResults: params.maxResults ?? 100,
+  });
+  return {
+    result_count: result.results.length,
+    result_meta: {
+      total_matched: result.results.length,
+      state: result.analysis?.location?.state,
+      applicant_type: result.analysis?.applicantType,
+      top_match: result.results[0]?.name || null,
+      statePortal: result.statePortal?.benefitsPortal || null,
+    },
+  };
+}
+
 const HANDLERS = {
   avatar_lookup: processAvatarLookupJob,
   local: processLocalCrawlerJob,
-  scholarship: processScholarshipCrawlerJob,
-  health_resources: processHealthResourcesCrawlerJob,
+  scholarship: processCuratedBenefitsJob,
+  curated_benefits: processCuratedBenefitsJob,
+  health_resources: processCuratedBenefitsJob,
   comprehensive: processComprehensiveCrawlerJob,
   national: processNationalJob,
   item_search: processItemCrawlerJob,

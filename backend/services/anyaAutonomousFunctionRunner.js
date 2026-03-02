@@ -76,7 +76,7 @@ export async function runAutonomousCrawlers(options, context) {
   const {
     profileIds = null,
     // Note: 'national' deprecated; use 'comprehensive' with parameters.mode='geo' for Geo Crawl
-    crawlerTypes = ['local', 'scholarship', 'comprehensive', 'profile_enrichment'],
+    crawlerTypes = ['local', 'scholarship', 'curated_benefits', 'comprehensive', 'profile_enrichment'],
     maxRetries = 3,
     waitForCompletion = false,
     timeoutMinutes = 30,
@@ -446,6 +446,7 @@ async function saveHighMatchesToProfile(options, context) {
     const sourcesByJobType = {
       local: ['local_foundation'],
       scholarship: ['scholarship_crawler'],
+      curated_benefits: ['curated_benefits'],
       health_resources: ['health_resources_crawler'],
       comprehensive: ['verified_real'],
       item_search: ['item_funding'],
