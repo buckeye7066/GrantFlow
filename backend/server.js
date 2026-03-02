@@ -2046,6 +2046,30 @@ if (process.env.NODE_ENV !== 'test') {
     const actualPort = server.address()?.port ?? PORT;
     console.log('[Server] Ready on port', actualPort);
 
+    // Auto-heal: expand record_origin CHECK constraint if it's still the old 4-value version.
+    // Migration 0034 does this but may not have been applied.
+    if (db.dialect === 'postgres') {
+      (async () => {
+        try {
+          await db.exec(`
+            ALTER TABLE funding_opportunities
+              DROP CONSTRAINT IF EXISTS funding_opportunities_record_origin_check;
+            ALTER TABLE funding_opportunities
+              ADD CONSTRAINT funding_opportunities_record_origin_check
+              CHECK (record_origin IN (
+                'live_crawl','curated_verified','manual','synthetic',
+                'funding_api','url_import','directory_resource',
+                'directory:health_resources','directory:student_grants',
+                'discovered','geo_crawl','seeded','imported'
+              ));
+          `)
+          console.log('[startup] record_origin CHECK constraint verified/expanded')
+        } catch (e) {
+          console.warn('[startup] record_origin constraint fix skipped:', e?.message)
+        }
+      })()
+    }
+
     // Reset jobs stuck in 'running' from a previous process crash/restart (no persistent worker).
     (async () => {
       try {
