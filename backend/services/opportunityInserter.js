@@ -1,4 +1,4 @@
-himport crypto from 'crypto'
+import crypto from 'crypto'
 import { isValidRealUrl, isLoanLike, isMatchingFunds, enforceOpportunityPolicy } from './crawlers/opportunityPolicy.js'
 
 // Backward-compat alias
