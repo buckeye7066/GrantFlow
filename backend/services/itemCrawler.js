@@ -158,14 +158,19 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
     ? '(requires_match IS NULL OR requires_match = FALSE)'
     : '(requires_match = 0 OR requires_match IS NULL)'
 
-  const dbOpps = await db.prepare(`
-    SELECT * FROM funding_opportunities 
-    WHERE ${activePredicate}
-    AND ${noMatchPredicate}
-    AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
-    AND (${keywordConditions})
-    LIMIT 50
-  `).all(...keywordParams)
+  let dbOpps = []
+  try {
+    dbOpps = await db.prepare(`
+      SELECT * FROM funding_opportunities 
+      WHERE ${activePredicate}
+      AND ${noMatchPredicate}
+      AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
+      AND (${keywordConditions})
+      LIMIT 50
+    `).all(...keywordParams) || []
+  } catch (err) {
+    console.error('[itemCrawler] Error querying database for opportunities:', err.message)
+  }
   
   console.log(`[itemCrawler] Found ${dbOpps.length} matching opportunities in database`)
   

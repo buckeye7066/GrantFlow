@@ -216,7 +216,12 @@ export async function processComprehensiveCrawlerJob({ db, job, dataDir, profile
           LIMIT 200
         `
 
-  const dbOpps = await db.prepare(dbOppsQuery).all()
+  let dbOpps = []
+  try {
+    dbOpps = await db.prepare(dbOppsQuery).all() || []
+  } catch (err) {
+    console.error('[comprehensiveCrawler] Error querying database for opportunities:', err.message)
+  }
   
   console.log(`[comprehensiveCrawler] Found ${dbOpps.length} real opportunities in database`)
   

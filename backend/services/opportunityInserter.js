@@ -47,8 +47,9 @@ function toDbBoolean(db, value) {
 // Allowed record_origin values — must match the DB CHECK constraint
 const ALLOWED_RECORD_ORIGINS = new Set([
     'live_crawl', 'curated_verified', 'manual', 'synthetic',
-    'directory_resource', 'discovered', 'funding_api',
-    'geo_crawl', 'seeded', 'imported',
+    'funding_api', 'url_import', 'directory_resource',
+    'directory:health_resources', 'directory:student_grants',
+    'discovered', 'geo_crawl', 'seeded', 'imported',
   ])
 
 function deriveRecordOrigin(opportunity) {
