@@ -1914,83 +1914,127 @@ registerTool({
   },
 })
 
-// ============================================================================
-// Geo Crawl Tools (Admin — Sequential State Crawling)
-// ============================================================================
+// ── Geo Crawl: Run through all states sequentially ──
+const US_STATES = [
+  'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA',
+  'HI','ID','IL','IN','IA','KS','KY','LA','ME','MD',
+  'MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ',
+  'NM','NY','NC','ND','OH','OK','OR','PA','RI','SC',
+  'SD','TN','TX','UT','VT','VA','WA','WV','WI','WY',
+]
 
 registerTool({
   name: 'admin.geoCrawl.runAllStates',
-  description: 'Run geo-based crawling for all 50 US states sequentially. Dispatches a single job that processes states in batches. Admin only.',
+  description:
+    'Start a geo crawl that runs through all 50 US states sequentially. ' +
+    'Creates a single comprehensive crawler job with run_all_states=true. ' +
+    'Use admin.geoCrawl.status to monitor progress. Admin only.',
   requiresAdmin: true,
   schema: {
     type: 'object',
     properties: {
-      states: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'Specific state codes to crawl (default: all 50 states). Example: ["OH","CA","TN"]',
+      startState: {
+        type: 'string',
+        description: 'Optional 2-letter state code to start from (default: AL). Useful for resuming.',
+        enum: US_STATES,
       },
-      maxZips: {
+      maxZipsPerState: {
         type: 'integer',
+        description: 'Max ZIP codes to sample per state (default: 5)',
         minimum: 1,
-        maximum: 500,
-        description: 'Max ZIPs per state (default: 10)',
+        maximum: 25,
+      },
+      discoverLocalResources: {
+        type: 'boolean',
+        description: 'Also discover local community resources per ZIP (default: true)',
       },
     },
   },
   handler: async (params, context) => {
     const { db } = context
     if (!db) throw new Error('Database connection unavailable')
-    const { dispatchCrawlerJob } = await import('./crawlerDispatcher.js')
 
+    const maxZips = params.maxZipsPerState ?? 5
     const jobId = randomUUID()
-    await db.prepare(`
-      INSERT INTO crawler_jobs (id, crawler_type, status, parameters, created_at)
-      VALUES (?, 'comprehensive', 'queued', ?, ${db.dialect === 'postgres' ? 'NOW()' : "datetime('now')"})
-    `).run(jobId, JSON.stringify({
+    const geoRunId = randomUUID()
+
+    const parameters = JSON.stringify({
       mode: 'geo',
-      run_all_states: !params.states,
-      states: params.states || undefined,
-      max_zips: params.maxZips || 10,
-    }))
+      geo_run_id: geoRunId,
+      run_all_states: true,
+      start_state: params.startState ?? null,
+      max_zips: maxZips,
+      discover_local_resources: params.discoverLocalResources ?? true,
+      offline_only: false,
+    })
 
-    dispatchCrawlerJob({ db, jobId, uploadDir: null, getOpenAI: null }).catch(() => {})
+    await db
+      .prepare(
+        `INSERT INTO crawler_jobs (id, type, status, profile_id, organization_id, parameters, requested_by)
+         VALUES (?, 'comprehensive', 'queued', NULL, NULL, ?, 'anya_admin')`,
+      )
+      .run(jobId, parameters)
 
-    return { jobId, message: `Geo crawl job queued (${params.states ? params.states.join(', ') : 'all 50 states'})` }
+    try {
+      const { dispatchCrawlerJob } = await import('./crawlerDispatcher.js')
+      dispatchCrawlerJob({ db, jobId }).catch(() => {})
+    } catch { /* ignore */ }
+
+    return {
+      ok: true,
+      message: `Geo crawl started — all 50 states, ${maxZips} ZIPs each.`,
+      crawler_job_id: jobId,
+      geo_run_id: geoRunId,
+      states_count: US_STATES.length,
+      max_zips_per_state: maxZips,
+      tip: 'Use admin.geoCrawl.status to monitor progress.',
+    }
   },
 })
 
 registerTool({
   name: 'admin.geoCrawl.status',
-  description: 'Get the status and progress of geo crawl runs. Admin only.',
+  description: 'Check the status of a running or recent geo crawl. Admin only.',
   requiresAdmin: true,
   schema: {
     type: 'object',
     properties: {
-      limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Number of recent runs to show (default: 5)' },
+      jobId: { type: 'string', description: 'Crawler job ID to check (omit for most recent geo crawl)' },
     },
   },
   handler: async (params, context) => {
     const { db } = context
     if (!db) throw new Error('Database connection unavailable')
-    const limit = params.limit || 5
 
-    const runs = await db.prepare(`
-      SELECT * FROM geo_crawl_runs
-      ORDER BY created_at DESC
-      LIMIT ?
-    `).all(limit)
+    const jobId = params.jobId
+    let job
+    if (jobId) {
+      job = await db.prepare('SELECT * FROM crawler_jobs WHERE id = ? LIMIT 1').get(jobId)
+    } else {
+      job = await db.prepare(
+        `SELECT * FROM crawler_jobs
+         WHERE type = 'comprehensive'
+           AND parameters LIKE '%"mode":"geo"%'
+         ORDER BY created_at DESC LIMIT 1`,
+      ).get()
+    }
+    if (!job) return { ok: false, message: 'No geo crawl job found.' }
 
-    const activeJobs = await db.prepare(`
-      SELECT id, status, parameters, started_at, completed_at, error
-      FROM crawler_jobs
-      WHERE crawler_type = 'comprehensive'
-        AND parameters LIKE '%"mode":"geo"%'
-      ORDER BY created_at DESC
-      LIMIT ?
-    `).all(limit)
+    let parsedParams = {}
+    try { parsedParams = JSON.parse(job.parameters || '{}') } catch { /* ok */ }
 
-    return { runs: runs || [], jobs: activeJobs || [] }
+    return {
+      ok: true,
+      job_id: job.id,
+      status: job.status,
+      started_at: job.started_at,
+      completed_at: job.completed_at,
+      result_count: job.result_count,
+      error: job.error ?? null,
+      geo_run_id: parsedParams.geo_run_id ?? null,
+      run_all_states: parsedParams.run_all_states ?? false,
+      max_zips: parsedParams.max_zips ?? null,
+    }
   },
 })
 
