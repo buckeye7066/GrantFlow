@@ -549,6 +549,11 @@ export async function crawlHealthResources(profile, options = {}) {
     console.error('[HealthResourcesCrawler] Live fetch error:', liveErr.message)
   }
 
+  // Enforce consent gating: strip any clinicaltrials.gov results that slipped through via live fetch
+  if (!includeTrials) {
+    selected = selected.filter((row) => !String(row.url || row.source_url || '').includes('clinicaltrials.gov'))
+  }
+
   return selected
     .slice(0, 20)
     .map((row) =>
