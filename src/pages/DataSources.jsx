@@ -100,24 +100,72 @@ export default function DataSources() {
     },
   });
 
-  const crawlers = [
-    {
-      name: 'Grants.gov',
-      function: 'crawlGrantsGov',
-      logSource: 'grants_gov',
-      description: 'Federal grants database - comprehensive government funding',
-      icon: '🏛️',
-      needsProfile: false,
-    },
-    {
-      name: 'Benefits.gov',
-      function: 'crawlBenefitsGov',
-      logSource: 'benefits_gov',
-      description: 'Government benefits and assistance programs',
-      icon: '🏥',
-      needsProfile: true,
-    },
-  ];
+    const crawlers = [
+      {
+              name: 'Grants.gov',
+              function: 'crawlGrantsGov',
+              logSource: 'grants_gov',
+              description: 'Federal grants database - comprehensive government funding',
+              icon: '🏛️',
+              needsProfile: false,
+      },
+      {
+              name: 'Benefits.gov',
+              function: 'crawlBenefitsGov',
+              logSource: 'benefits_gov',
+              description: 'Government benefits and assistance programs',
+              icon: '🏥',
+              needsProfile: true,
+      },
+      {
+              name: 'Health Resources',
+              function: 'crawlHealthResources',
+              logSource: 'health_resources',
+              description: 'Health-related grants, patient assistance, and medical funding',
+              icon: '💊',
+              needsProfile: true,
+      },
+      {
+              name: 'Special Needs',
+              function: 'crawlSpecialNeeds',
+              logSource: 'special_needs',
+              description: 'Disability, special education, and accessibility funding',
+              icon: '♿',
+              needsProfile: true,
+      },
+      {
+              name: 'Student Grants',
+              function: 'crawlStudentGrants',
+              logSource: 'student_grants',
+              description: 'Scholarships, FAFSA-linked aid, and campus-based funding',
+              icon: '🎓',
+              needsProfile: true,
+      },
+      {
+              name: 'ECF Benefits',
+              function: 'crawlEcfBenefits',
+              logSource: 'ecf_benefits',
+              description: 'Emergency Connectivity Fund and digital access programs',
+              icon: '📡',
+              needsProfile: true,
+      },
+      {
+              name: 'Local Funding',
+              function: 'crawlLocalFunding',
+              logSource: 'local_funding',
+              description: 'Community foundations, local nonprofits, and regional grants',
+              icon: '📍',
+              needsProfile: true,
+      },
+      {
+              name: 'Item Funding',
+              function: 'crawlItemFunding',
+              logSource: 'item_matching',
+              description: 'Funding for specific requested items (vehicles, equipment, etc.)',
+              icon: '🛒',
+              needsProfile: true,
+      },
+        ];
 
   const getLatestLog = (crawler) => {
     const src = crawler?.logSource ? String(crawler.logSource) : normalizeLogSource(crawler?.name)
