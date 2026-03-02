@@ -230,102 +230,101 @@ function intentDisambiguation({ facets, mustTerms, shouldTerms, mustNotTerms, re
   }
 }
 
-// Weight matrix: how relevant each profile facet group is to each crawler type (0.0–1.0).
 const SECTION_RELEVANCE = {
-  comprehensive:      { financial: 0.6, health: 0.4, demographics: 0.5, education: 0.5, military: 0.5, family: 0.5, government: 0.6, organization: 0.7 },
-  local_funding:      { financial: 0.8, health: 0.3, demographics: 0.6, education: 0.3, military: 0.3, family: 0.6, government: 0.5, organization: 0.4 },
-  government_funding: { financial: 0.7, health: 0.3, demographics: 0.5, education: 0.4, military: 0.5, family: 0.4, government: 0.9, organization: 0.8 },
-  student_grants:     { financial: 0.8, health: 0.2, demographics: 0.6, education: 1.0, military: 0.4, family: 0.5, government: 0.4, organization: 0.2 },
-  health_resources:   { financial: 0.5, health: 1.0, demographics: 0.4, education: 0.2, military: 0.3, family: 0.6, government: 0.5, organization: 0.3 },
-  special_needs:      { financial: 0.5, health: 0.9, demographics: 0.6, education: 0.5, military: 0.4, family: 0.7, government: 0.6, organization: 0.3 },
-  item_matching:      { financial: 0.7, health: 0.5, demographics: 0.4, education: 0.3, military: 0.4, family: 0.5, government: 0.3, organization: 0.3 },
-  ecf_benefits:       { financial: 0.6, health: 0.8, demographics: 0.5, education: 0.3, military: 0.3, family: 0.7, government: 0.8, organization: 0.3 },
+  comprehensive:      { financial: 0.7, health: 0.6, demographics: 0.6, education: 0.6, military: 0.7, family: 0.5, assistance: 0.7, organization: 0.6 },
+  government_funding: { financial: 1.0, organization: 1.0, demographics: 0.5, military: 0.7, education: 0.5, assistance: 0.8, health: 0.3, family: 0.3 },
+  local_funding:      { financial: 0.8, family: 0.8, demographics: 0.7, assistance: 0.9, health: 0.5, education: 0.3, military: 0.5, organization: 0.5 },
+  student_grants:     { education: 1.0, financial: 0.9, demographics: 0.8, military: 0.6, family: 0.5, health: 0.3, assistance: 0.3, organization: 0.0 },
+  health_resources:   { health: 1.0, assistance: 0.9, financial: 0.7, demographics: 0.5, family: 0.5, military: 0.3, education: 0.0, organization: 0.3 },
+  special_needs:      { health: 1.0, assistance: 1.0, family: 0.7, financial: 0.7, demographics: 0.5, military: 0.3, education: 0.0, organization: 0.3 },
+  item_matching:      { health: 0.6, financial: 0.8, family: 0.5, assistance: 0.7, demographics: 0.4, military: 0.5, education: 0.3, organization: 0.5 },
+  ecf_benefits:       { assistance: 1.0, health: 0.9, family: 0.8, financial: 0.7, demographics: 0.5, military: 0.3, education: 0.0, organization: 0.0 },
 }
 
-const FACET_EXTRACTORS = {
-  financial: (f) => {
-    const terms = []
-    const income = f?.financial?.income_range || f?.financial?.annual_income
-    if (income) terms.push('low income assistance', 'financial hardship')
-    if (f?.financial?.receives_benefits) terms.push('public benefits recipient')
-    if (f?.financial?.employment_status === 'unemployed') terms.push('unemployment assistance')
-    return terms
-  },
-  health: (f) => {
-    const terms = []
-    const conditions = Array.isArray(f?.health?.conditions) ? f.health.conditions : []
-    for (const c of conditions.slice(0, 3)) terms.push(`${c} assistance`)
-    if (f?.health?.disability) terms.push('disability support', 'disability grant')
-    if (f?.health?.mental_health) terms.push('mental health resources')
-    return terms
-  },
-  demographics: (f) => {
-    const terms = []
-    if (f?.demographics?.age_group === 'senior') terms.push('senior assistance')
-    if (f?.demographics?.age_group === 'youth') terms.push('youth programs')
-    if (f?.demographics?.gender) terms.push(`${f.demographics.gender} programs`)
-    if (f?.demographics?.race_ethnicity) terms.push(`${f.demographics.race_ethnicity} grants`)
-    return terms
-  },
-  education: (f) => {
-    const terms = []
-    if (f?.education?.level) terms.push(`${f.education.level} student aid`)
-    if (f?.education?.enrolled) terms.push('enrolled student grants')
-    if (f?.education?.field) terms.push(`${f.education.field} scholarship`)
-    return terms
-  },
-  military: (f) => {
-    const terms = []
-    if (f?.military?.veteran) terms.push('veteran benefits', 'VA assistance')
-    if (f?.military?.active_duty) terms.push('military family support')
-    if (f?.military?.branch) terms.push(`${f.military.branch} grants`)
-    return terms
-  },
-  family: (f) => {
-    const terms = []
-    if (f?.family?.single_parent) terms.push('single parent assistance')
-    if (f?.family?.dependents > 0) terms.push('family support programs')
-    if (f?.family?.caregiver) terms.push('caregiver relief', 'respite care')
-    return terms
-  },
-  government: (f) => {
-    const terms = []
-    const progs = Array.isArray(f?.assistance?.programs) ? f.assistance.programs : []
-    for (const p of progs.slice(0, 3)) terms.push(p)
-    if (f?.assistance?.medicaid) terms.push('medicaid waiver')
-    if (f?.assistance?.snap) terms.push('SNAP benefits')
-    if (f?.assistance?.ssi) terms.push('SSI recipient resources')
-    return terms
-  },
-  organization: (f) => {
-    const terms = []
-    const orgType = f?.profile?.primary_profile_type || f?.profile?.organization_type
-    if (orgType) terms.push(`${orgType} funding`)
-    if (f?.profile?.tax_exempt) terms.push('501c3 grants')
-    return terms
-  },
-}
-
-export function profileSignalTerms(crawlerType, facets = {}) {
-  const weights = SECTION_RELEVANCE[crawlerType] || SECTION_RELEVANCE.comprehensive
+function profileSignalTerms(facets = {}, crawlerType = 'comprehensive') {
+  const weights = SECTION_RELEVANCE[crawlerType] ?? SECTION_RELEVANCE.comprehensive
   const mustTerms = []
   const shouldTerms = []
 
-  for (const [section, weight] of Object.entries(weights)) {
-    const extractor = FACET_EXTRACTORS[section]
-    if (!extractor || weight <= 0) continue
-    const terms = extractor(facets).filter(Boolean)
-    for (const term of terms) {
-      if (weight >= 0.8) mustTerms.push(term)
-      else if (weight >= 0.3) shouldTerms.push(term)
-    }
+  function addIf(weight, term) {
+    if (!term) return
+    if (weight >= 0.8) mustTerms.push(term)
+    else if (weight >= 0.3) shouldTerms.push(term)
   }
+
+  const fin = facets?.financial ?? {}
+  const finW = weights.financial ?? 0.3
+  if (fin.annual_income_bracket) addIf(finW, `${fin.annual_income_bracket} income assistance`)
+  if (fin.below_poverty_line) addIf(finW, 'low income grant')
+  if (fin.annual_budget) addIf(Math.min(finW, 0.5), 'organizational funding')
+
+  const health = facets?.health ?? {}
+  const healthW = weights.health ?? 0.3
+  const conditions = Array.isArray(health.conditions) ? health.conditions : []
+  for (const c of conditions.slice(0, 4)) {
+    addIf(healthW, `${normalizeString(c)} patient assistance`)
+  }
+  const disabilities = Array.isArray(health.disability_types) ? health.disability_types : []
+  for (const d of disabilities.slice(0, 3)) {
+    addIf(healthW, `${normalizeString(d)} disability support`)
+  }
+
+  const demo = facets?.demographics ?? {}
+  const demoW = weights.demographics ?? 0.3
+  if (demo.veteran === true || demo.is_veteran === true) addIf(Math.max(demoW, 0.7), 'veteran grant')
+  if (demo.age_bracket === 'senior' || demo.age >= 65) addIf(demoW, 'senior assistance program')
+  if (demo.age_bracket === 'youth' || (demo.age && demo.age < 25)) addIf(demoW, 'youth grant')
+  if (demo.race_ethnicity && typeof demo.race_ethnicity === 'string') {
+    addIf(Math.min(demoW, 0.5), `${normalizeString(demo.race_ethnicity)} scholarship`)
+  }
+  if (demo.gender === 'female' || demo.gender === 'woman') addIf(Math.min(demoW, 0.5), 'women grant program')
+  if (demo.first_generation) addIf(demoW, 'first generation student')
+
+  const edu = facets?.education ?? {}
+  const eduW = weights.education ?? 0.3
+  if (edu.education_level) addIf(eduW, `${normalizeString(edu.education_level)} education assistance`)
+  if (edu.field_of_study) addIf(eduW, `${normalizeString(edu.field_of_study)} scholarship`)
+  if (edu.institution_type === 'hbcu') addIf(eduW, 'HBCU scholarship')
+  if (edu.institution_type === 'community_college') addIf(eduW, 'community college grant')
+  if (edu.gpa && Number(edu.gpa) >= 3.5) addIf(Math.min(eduW, 0.5), 'merit scholarship')
+
+  const mil = facets?.military ?? {}
+  const milW = weights.military ?? 0.3
+  if (mil.is_veteran || mil.service_branch) addIf(milW, 'veteran benefits')
+  if (mil.service_branch) addIf(milW, `${normalizeString(mil.service_branch)} veteran assistance`)
+  if (mil.is_active_duty) addIf(milW, 'active duty military support')
+  if (mil.combat_veteran) addIf(milW, 'combat veteran grant')
+  if (mil.military_spouse) addIf(milW, 'military spouse assistance')
+
+  const fam = facets?.family ?? {}
+  const famW = weights.family ?? 0.3
+  if (fam.single_parent) addIf(famW, 'single parent assistance')
+  if (fam.household_size && Number(fam.household_size) >= 5) addIf(famW, 'large family support')
+  if (fam.has_dependents_with_disability) addIf(famW, 'family disability support')
+  if (fam.foster_care || fam.aging_out_foster) addIf(Math.max(famW, 0.7), 'foster youth grant')
+
+  const assist = facets?.assistance ?? {}
+  const assistW = weights.assistance ?? 0.3
+  if (assist.receives_snap || assist.snap) addIf(assistW, 'SNAP recipient benefits')
+  if (assist.receives_ssi || assist.ssi) addIf(assistW, 'SSI recipient programs')
+  if (assist.receives_ssdi || assist.ssdi) addIf(assistW, 'SSDI recipient assistance')
+  if (assist.receives_tanf || assist.tanf) addIf(assistW, 'TANF additional benefits')
+  if (assist.medicaid) addIf(assistW, 'medicaid enrollee programs')
+  if (assist.section_8 || assist.housing_voucher) addIf(assistW, 'housing voucher holder programs')
+
+  const org = facets?.organization ?? {}
+  const orgW = weights.organization ?? 0.3
+  if (org.organization_type === 'nonprofit' || org.nonprofit_ready) addIf(orgW, 'nonprofit grant')
+  if (org.organization_type === 'church' || org.organization_type === 'faith_based') addIf(orgW, 'faith based organization grant')
+  if (org.organization_type === 'school') addIf(orgW, 'school district grant')
 
   return {
     mustTerms: uniqueStrings(mustTerms).slice(0, 8),
     shouldTerms: uniqueStrings(shouldTerms).slice(0, 16),
   }
 }
+
+export { profileSignalTerms }
 
 export function planCrawlerQueries({ crawlerType, facets = {}, location = null }) {
   const normalizedCrawlerType = normalizeString(crawlerType || 'comprehensive') || 'comprehensive'
@@ -346,9 +345,9 @@ export function planCrawlerQueries({ crawlerType, facets = {}, location = null }
   shouldTerms.push(...geoTerms(effectiveLocation))
   shouldTerms.push(...applicantTerms(facets))
 
-  const profileTerms = profileSignalTerms(normalizedCrawlerType, facets)
-  mustTerms.push(...profileTerms.mustTerms)
-  shouldTerms.push(...profileTerms.shouldTerms)
+  const signalTerms = profileSignalTerms(facets, normalizedCrawlerType)
+  mustTerms.push(...signalTerms.mustTerms)
+  shouldTerms.push(...signalTerms.shouldTerms)
 
   // Crawler-specific baselines.
   if (normalizedCrawlerType === 'student_grants') {
