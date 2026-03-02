@@ -444,7 +444,7 @@ function eligibilityMatchesApplicantType(opportunity, profile) {
     'family': ['family', 'household', 'parent', 'families'],
     'organization': ['organization', 'org', 'agency', 'entity'],
     'nonprofit': ['nonprofit', 'non-profit', '501(c)(3)', 'charity', 'charitable'],
-    'small_business': ['small business', 'business', 'enterprise', 'company', 'smb', 'microenterprise', 'startup', 'entrepreneur', 'usda', 'sba', 'rural development', 'community development'],
+    'small_business': ['small business', 'enterprise', 'microenterprise', 'startup', 'entrepreneur', 'sba', 'smb'],
     'student': ['student', 'scholar', 'undergraduate', 'graduate', 'college'],
     'college_student': ['college student', 'undergraduate', 'university student'],
     'high_school_student': ['high school', 'secondary student', 'k-12'],
@@ -464,19 +464,12 @@ function eligibilityMatchesApplicantType(opportunity, profile) {
   // For individual_need profiles, also match grants that SERVE individuals even
   // when the grant recipient is an organization (state, nonprofit, health center).
   // Most grants.gov opportunities fund organizations that provide services to individuals.
-  const individualServesKeywords = [
-    'assistance', 'benefits', 'services', 'support program',
-    'patients', 'families', 'beneficiaries', 'recipients', 'consumers',
-    'low income', 'low-income', 'underserved', 'vulnerable', 'disadvantaged',
-    'community health', 'mental health', 'substance abuse', 'behavioral health',
-    'housing assistance', 'energy assistance', 'food assistance', 'nutrition',
-    'disability', 'special needs', 'rehabilitation', 'independent living',
-    'workforce', 'job training', 'employment', 'education',
-    'child care', 'head start', 'early childhood',
-    'medicaid', 'medicare', 'health center', 'clinic',
-    'emergency', 'crisis', 'shelter', 'homeless',
-    'tribal', 'rural', 'appalachian', 'coal community',
-  ]
+  // Only include terms that strongly indicate the grant DIRECTLY serves individuals,
+    // not generic words that appear in almost every federal grant.
+    const individualServesKeywords = [
+      'individual assistance', 'personal grant', 'household assistance',
+      'direct cash', 'direct payment', 'individual benefit',
+    ]
   const isIndividualType = profileTypesToCheck.some(t =>
     t === 'individual_need' || t === 'individual' || t === 'family' ||
     t === 'medical_assistance' || t === 'student' || t === 'college_student' ||
@@ -628,7 +621,7 @@ function calculateKeywordOverlap(profile, opportunity) {
       continue;
     }
     if (oppText.includes(kw)) {
-      matches += 0.1;
+      matches += 0; // Was 0.1 — disabled: single-word text matches are too noisy
     }
   }
 
@@ -656,8 +649,8 @@ function calculateCategoryMatch(profile, opportunity) {
       const ocLower = String(oc).toLowerCase();
       if (pcLower === ocLower) {
         matches += 5; // Exact match
-      } else if (pcLower.includes(ocLower) || ocLower.includes(pcLower)) {
-        matches += 2; // Partial match
+      } else if (pcLower.length > 5 && ocLower.length > 5 && (pcLower.includes(ocLower) || ocLower.includes(pcLower))) {
+        matches += 2; // Partial match — only for multi-word/long terms
       }
     });
   });
