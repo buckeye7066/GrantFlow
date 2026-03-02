@@ -493,6 +493,16 @@ export async function mergeProfiles(db, {
       const keys = Object.keys(updates)
       if (keys.length === 0) return null
       if (dryRun) return { type: 'profiles.update', winnerId, set: updates }
+
+      // Clear transferred fields on the loser FIRST to avoid unique constraint violations
+      // (e.g., ux_profiles_user_id requires user_id to be unique across all profiles)
+      if (updates.user_id) {
+        await tx.prepare('UPDATE profiles SET user_id = NULL WHERE id = ?').run(loserProfile.id)
+      }
+      if (updates.organization_id) {
+        await tx.prepare('UPDATE profiles SET organization_id = NULL WHERE id = ?').run(loserProfile.id)
+      }
+
       const sets = keys.map((k) => `${k} = ?`).join(', ')
       await tx.prepare(`UPDATE profiles SET ${sets} WHERE id = ?`).run(...keys.map((k) => updates[k]), winnerId)
       Object.assign(winner, updates)
@@ -708,13 +718,19 @@ export async function mergeProfiles(db, {
       if (dryRun) {
         changes.push({ type: 'profiles.delete', id: loserId })
       } else {
+        // Clear user_id on loser before deletion to prevent unique constraint violations
+        // (ux_profiles_user_id) if the loser still has a user_id at this point
+        try {
+          await tx.prepare('UPDATE profiles SET user_id = NULL WHERE id = ? AND user_id IS NOT NULL').run(loserId)
+        } catch { /* best effort */ }
+
         try {
           await tx.prepare('DELETE FROM profiles WHERE id = ?').run(loserId)
           changes.push({ type: 'profiles.delete', id: loserId })
         } catch (deleteError) {
           // Postgres can enforce FK constraints that SQLite doesn't. If hard-delete fails,
           // soft-delete instead so the merge operation succeeds without leaving data inconsistent.
-          await tx.prepare("UPDATE profiles SET status = 'deleted' WHERE id = ?").run(loserId)
+          await tx.prepare("UPDATE profiles SET status = 'deleted', user_id = NULL WHERE id = ?").run(loserId)
           changes.push({
             type: 'profiles.soft_delete',
             id: loserId,
