@@ -77,6 +77,9 @@ export default function AdminAnyaConsole() {
           <div className="space-y-2">
             <Label>Payload (JSON)</Label>
             <Textarea value={payload} onChange={(e) => setPayload(e.target.value)} className="min-h-[90px]" />
+            <p className="text-[11px] text-slate-400">
+              Geo Crawl tip: <code>{`{"states":["OH","CA"]}`}</code> or <code>{`{"state":"TN","zip_list":["37201"]}`}</code>
+            </p>
           </div>
 
           <div className="flex flex-wrap gap-2">
@@ -114,6 +117,28 @@ export default function AdminAnyaConsole() {
             <Button onClick={() => run("Test buttons", "/api/anya/autonomous/buttons")} disabled={busy} variant="outline">
               {busy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <PlayCircle className="w-4 h-4 mr-2" />}
               Test buttons
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={async () => {
+                setBusy(true)
+                try {
+                  let parsed = {}
+                  try { parsed = JSON.parse(payload || "{}") } catch { parsed = {} }
+                  const body = { run_all_states: true, ...parsed }
+                  const res = await post("/api/geo-crawl/start", body)
+                  toast({ title: "Geo Crawl All States", description: res?.message || `Job ${res?.jobId || ''} started` })
+                  await refresh()
+                } catch (err) {
+                  toast({ title: "Geo Crawl failed", description: err.message, variant: "destructive" })
+                } finally {
+                  setBusy(false)
+                }
+              }}
+              disabled={busy}
+            >
+              {busy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <PlayCircle className="w-4 h-4 mr-2" />}
+              Geo Crawl All States
             </Button>
             <Button onClick={refresh} disabled={busy} variant="ghost">
               <RefreshCw className="w-4 h-4 mr-2" />

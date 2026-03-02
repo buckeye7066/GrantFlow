@@ -221,15 +221,27 @@ export function enforceCrawlerOpportunityContract(
     keywords,
     eligibility_bullets: eligibilityBullets,
     opportunity_type: opportunityType,
-    record_origin:
-      rawOpportunity.record_origin ??
-      recordOrigin ??
-      (opportunityType === 'program' ? 'directory_resource' : 'live_crawl'),
+    record_origin: normalizeRecordOrigin(
+      rawOpportunity.record_origin ?? recordOrigin ?? (opportunityType === 'program' ? 'directory_resource' : 'live_crawl')
+    ),
     crawler_type: crawlerType,
     match_reasons: matchReasons,
   }
 
   return normalized
+}
+
+const ALLOWED_RECORD_ORIGINS = new Set([
+  'live_crawl', 'curated_verified', 'manual', 'synthetic',
+  'funding_api', 'url_import', 'directory_resource',
+  'directory:health_resources', 'directory:student_grants',
+  'discovered', 'geo_crawl', 'seeded', 'imported',
+])
+
+export function normalizeRecordOrigin(value) {
+  if (typeof value === 'string' && ALLOWED_RECORD_ORIGINS.has(value)) return value
+  if (typeof value === 'string' && value.startsWith('directory:')) return 'directory_resource'
+  return 'live_crawl'
 }
 
 export default {
@@ -239,4 +251,5 @@ export default {
   mergePlanKeywords,
   violatesMustNot,
   enforceCrawlerOpportunityContract,
+  normalizeRecordOrigin,
 }
