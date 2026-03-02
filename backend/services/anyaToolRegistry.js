@@ -1913,3 +1913,198 @@ registerTool({
     return getToolUsageStats(db, { toolName, limit })
   },
 })
+
+// ============================================================================
+// Geo Crawl Tools (Admin — Sequential State Crawling)
+// ============================================================================
+
+registerTool({
+  name: 'admin.geoCrawl.runAllStates',
+  description: 'Run geo-based crawling for all 50 US states sequentially. Dispatches a single job that processes states in batches. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      states: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Specific state codes to crawl (default: all 50 states). Example: ["OH","CA","TN"]',
+      },
+      maxZips: {
+        type: 'integer',
+        minimum: 1,
+        maximum: 500,
+        description: 'Max ZIPs per state (default: 10)',
+      },
+    },
+  },
+  handler: async (params, context) => {
+    const { db } = context
+    if (!db) throw new Error('Database connection unavailable')
+    const { dispatchCrawlerJob } = await import('./crawlerDispatcher.js')
+
+    const jobId = randomUUID()
+    await db.prepare(`
+      INSERT INTO crawler_jobs (id, crawler_type, status, parameters, created_at)
+      VALUES (?, 'comprehensive', 'queued', ?, ${db.dialect === 'postgres' ? 'NOW()' : "datetime('now')"})
+    `).run(jobId, JSON.stringify({
+      mode: 'geo',
+      run_all_states: !params.states,
+      states: params.states || undefined,
+      max_zips: params.maxZips || 10,
+    }))
+
+    dispatchCrawlerJob({ db, jobId, uploadDir: null, getOpenAI: null }).catch(() => {})
+
+    return { jobId, message: `Geo crawl job queued (${params.states ? params.states.join(', ') : 'all 50 states'})` }
+  },
+})
+
+registerTool({
+  name: 'admin.geoCrawl.status',
+  description: 'Get the status and progress of geo crawl runs. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Number of recent runs to show (default: 5)' },
+    },
+  },
+  handler: async (params, context) => {
+    const { db } = context
+    if (!db) throw new Error('Database connection unavailable')
+    const limit = params.limit || 5
+
+    const runs = await db.prepare(`
+      SELECT * FROM geo_crawl_runs
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(limit)
+
+    const activeJobs = await db.prepare(`
+      SELECT id, status, parameters, started_at, completed_at, error
+      FROM crawler_jobs
+      WHERE crawler_type = 'comprehensive'
+        AND parameters LIKE '%"mode":"geo"%'
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(limit)
+
+    return { runs: runs || [], jobs: activeJobs || [] }
+  },
+})
+
+// ============================================================================
+// Grant Writing Tools (End-User — LOI, Proposals, Needs Statements)
+// ============================================================================
+
+registerTool({
+  name: 'grants.writeLOI',
+  description: 'Generate a Letter of Intent (LOI) draft for a specific grant opportunity, grounded in the user profile and grant requirements.',
+  schema: {
+    type: 'object',
+    properties: {
+      opportunityId: { type: 'string', description: 'The funding opportunity ID to write the LOI for' },
+      customInstructions: { type: 'string', description: 'Additional instructions or focus areas for the LOI' },
+    },
+    required: ['opportunityId'],
+  },
+  handler: async (params, context) => {
+    const { db, profileId } = context
+    if (!db) throw new Error('Database connection unavailable')
+
+    const opp = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(params.opportunityId)
+    if (!opp) throw new Error(`Opportunity ${params.opportunityId} not found`)
+
+    let profile = null
+    if (profileId) {
+      profile = await db.prepare('SELECT * FROM organizations WHERE id = ?').get(profileId)
+    }
+
+    return {
+      type: 'loi_draft',
+      opportunity: { title: opp.title, sponsor: opp.sponsor, deadline: opp.deadline },
+      profile: profile ? { name: profile.name, type: profile.applicant_type } : null,
+      instructions: params.customInstructions || null,
+      prompt: `Draft a Letter of Intent for "${opp.title}" by ${opp.sponsor}. ` +
+        (profile ? `Applicant: ${profile.name} (${profile.applicant_type}).` : '') +
+        (opp.eligibility_bullets ? ` Eligibility: ${opp.eligibility_bullets}.` : '') +
+        (params.customInstructions ? ` Instructions: ${params.customInstructions}` : ''),
+    }
+  },
+})
+
+registerTool({
+  name: 'grants.writeNeedsStatement',
+  description: 'Generate a needs statement section for a grant proposal, based on profile data and the target opportunity.',
+  schema: {
+    type: 'object',
+    properties: {
+      opportunityId: { type: 'string', description: 'The funding opportunity ID' },
+      focusArea: { type: 'string', description: 'Specific area of need to emphasize (e.g., "healthcare access", "education equity")' },
+    },
+    required: ['opportunityId'],
+  },
+  handler: async (params, context) => {
+    const { db, profileId } = context
+    if (!db) throw new Error('Database connection unavailable')
+
+    const opp = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(params.opportunityId)
+    if (!opp) throw new Error(`Opportunity ${params.opportunityId} not found`)
+
+    let profile = null
+    if (profileId) {
+      profile = await db.prepare('SELECT * FROM organizations WHERE id = ?').get(profileId)
+    }
+
+    return {
+      type: 'needs_statement',
+      opportunity: { title: opp.title, sponsor: opp.sponsor },
+      profile: profile ? { name: profile.name } : null,
+      focusArea: params.focusArea || null,
+      prompt: `Write a compelling needs statement for "${opp.title}". ` +
+        (params.focusArea ? `Focus on: ${params.focusArea}. ` : '') +
+        (profile ? `Organization: ${profile.name}.` : ''),
+    }
+  },
+})
+
+registerTool({
+  name: 'grants.summarizeMatches',
+  description: 'Summarize the top matching grant opportunities for the current profile, with key eligibility notes.',
+  schema: {
+    type: 'object',
+    properties: {
+      limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Max matches to summarize (default: 10)' },
+      minScore: { type: 'number', minimum: 0, maximum: 100, description: 'Minimum match score (default: 50)' },
+    },
+  },
+  handler: async (params, context) => {
+    const { db, profileId } = context
+    if (!db) throw new Error('Database connection unavailable')
+
+    const limit = params.limit || 10
+    const minScore = params.minScore || 50
+
+    const opps = await db.prepare(`
+      SELECT title, sponsor, match_score, deadline, amount_description, source_url, categories
+      FROM funding_opportunities
+      WHERE is_active = ${db.dialect === 'postgres' ? 'TRUE' : '1'}
+        AND match_score >= ?
+      ORDER BY match_score DESC
+      LIMIT ?
+    `).all(minScore, limit)
+
+    return {
+      count: opps?.length || 0,
+      opportunities: (opps || []).map(o => ({
+        title: o.title,
+        sponsor: o.sponsor,
+        score: o.match_score,
+        deadline: o.deadline,
+        amount: o.amount_description,
+        url: o.source_url,
+      })),
+    }
+  },
+})

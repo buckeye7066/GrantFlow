@@ -576,7 +576,8 @@ export async function crawlItemFunding(profileInput, options = {}) {
   // === 2. LIVE WEB SEARCH for the specific item ===
   try {
         console.log(`[ItemFundingCrawler] Searching web for "${itemRequest}"...`)
-        const webResults = await searchWebForItem(itemRequest, profile)
+        const rawWebResults = await searchWebForItem(itemRequest, profile)
+        const webResults = Array.isArray(rawWebResults) ? rawWebResults : []
 
       console.log(`[ItemFundingCrawler] Web search found ${webResults.length} results`)
 

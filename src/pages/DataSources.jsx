@@ -1,19 +1,38 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
+import { runRealCrawler } from '@/api/crawlers';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Loader2, Play, CheckCircle, AlertCircle, Database, TrendingUp, Building2, Clock } from 'lucide-react';
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
+import { Loader2, Play, CheckCircle, AlertCircle, Database, TrendingUp, Building2, Clock, ExternalLink, X, ChevronDown, ChevronUp } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { format } from 'date-fns';
 import { useCrawlJobTracker } from '@/hooks/useCrawlJobTracker'
 import { createLogger } from '@/utils/logger'
 
+const PROFILE_SIGNAL_TAGS = {
+  comprehensive: ['health', 'financial', 'education', 'demographics', 'military'],
+  government_funding: ['government', 'organization', 'financial'],
+  local_funding: ['financial', 'family', 'demographics'],
+  student_grants: ['education', 'financial', 'demographics'],
+  health_resources: ['health', 'family', 'government'],
+  special_needs: ['health', 'family', 'demographics'],
+  ecf_benefits: ['health', 'government', 'family'],
+  item_matching: ['financial', 'health', 'family'],
+}
+
 export default function DataSources() {
   const [selectedOrgId, setSelectedOrgId] = useState(null);
   const [crawlingInBackground, setCrawlingInBackground] = useState([]);
+  const [expandedStat, setExpandedStat] = useState(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerResults, setDrawerResults] = useState([]);
+  const [drawerTitle, setDrawerTitle] = useState('');
+  const [itemRequests, setItemRequests] = useState({});
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const log = React.useMemo(() => createLogger('DataSourcesPage'), [])
@@ -39,140 +58,94 @@ export default function DataSources() {
     return String(name || '').toLowerCase().replace(/\./g, '_')
   }
 
-  // Auto-select first organization if none selected
   useEffect(() => {
     if (!selectedOrgId && organizations.length > 0) {
       setSelectedOrgId(organizations[0].id);
     }
   }, [organizations, selectedOrgId]);
 
-  const crawlMutation = useMutation({
-    mutationFn: async ({ crawlerName, logSource, payload }) => {
-      await base44.functions.invoke(crawlerName, payload)
-      return { crawlerName, logSource, startedAt: Date.now() };
+  const crawlers = [
+    {
+      name: 'Grants.gov',
+      function: 'crawlGrantsGov',
+      crawlerType: 'government_funding',
+      logSource: 'grants_gov',
+      description: 'Federal grants database — comprehensive government funding',
+      icon: '🏛️',
+      needsProfile: false,
     },
-    onSuccess: (data) => {
-      const jobKey = String(data.crawlerName)
-      const logSource = String(data.logSource || '')
-      const startedAt = Number(data.startedAt || Date.now())
-      const baseline = logSource ? (crawlLogs.find((l) => String(l?.source || '') === logSource)?.id ?? null) : null
-
-      setCrawlingInBackground(prev => [...prev, jobKey]);
-      toast({
-        title: '🚀 Crawler Started',
-        description: `${data.crawlerName} is running in the background. Check back in 1-2 minutes.`,
-        duration: 4000,
-      });
-
-      tracker.track({
-        key: `crawl:${jobKey}:${startedAt}`,
-        timeoutMs: 4 * 60 * 1000,
-        poll: async () => {
-          const logs = await base44.entities.CrawlLog.list('-created_date', 50)
-          const src = logSource || normalizeLogSource(jobKey)
-          const latest = Array.isArray(logs) ? logs.find((l) => String(l?.source || '') === src) : null
-          if (!latest || !latest.id) return { done: false }
-          if (baseline && String(latest.id) === String(baseline)) return { done: false }
-          const status = String(latest.status || '').toLowerCase()
-          if (status === 'completed') return { done: true, status: 'completed' }
-          if (status === 'failed') return { done: true, status: 'failed', message: latest.errorMessage || 'Crawler failed' }
-          return { done: false }
-        },
-        onDone: (res) => {
-          setCrawlingInBackground((prev) => prev.filter((name) => name !== jobKey))
-          queryClient.invalidateQueries({ queryKey: ['crawlLogs'] })
-          queryClient.invalidateQueries({ queryKey: ['fundingOpportunities'] })
-          if (res?.status === 'failed') {
-            toast({ variant: 'destructive', title: 'Crawler failed', description: res?.message || 'Check the crawl log for details.' })
-          } else {
-            toast({ title: '✅ Crawler complete', description: 'Results are now available.' })
-          }
-        },
-      })
+    {
+      name: 'Benefits.gov',
+      function: 'crawlBenefitsGov',
+      crawlerType: 'comprehensive',
+      logSource: 'benefits_gov',
+      description: 'Government benefits and assistance programs',
+      icon: '🏥',
+      needsProfile: true,
     },
-    onError: (error, variables) => {
-      log.error('failed to start crawler', variables?.crawlerName, error)
-      toast({
-        variant: "destructive",
-        title: "Crawl Failed",
-        description: error.message || "An error occurred while starting the crawler.",
-      });
+    {
+      name: 'Health Resources',
+      function: 'crawlHealthResources',
+      crawlerType: 'health_resources',
+      logSource: 'health_resources',
+      description: 'Health-related grants, patient assistance, and medical funding',
+      icon: '💊',
+      needsProfile: true,
     },
-  });
-
-    const crawlers = [
-      {
-              name: 'Grants.gov',
-              function: 'crawlGrantsGov',
-              logSource: 'grants_gov',
-              description: 'Federal grants database - comprehensive government funding',
-              icon: '🏛️',
-              needsProfile: false,
-      },
-      {
-              name: 'Benefits.gov',
-              function: 'crawlBenefitsGov',
-              logSource: 'benefits_gov',
-              description: 'Government benefits and assistance programs',
-              icon: '🏥',
-              needsProfile: true,
-      },
-      {
-              name: 'Health Resources',
-              function: 'crawlHealthResources',
-              logSource: 'health_resources',
-              description: 'Health-related grants, patient assistance, and medical funding',
-              icon: '💊',
-              needsProfile: true,
-      },
-      {
-              name: 'Special Needs',
-              function: 'crawlSpecialNeeds',
-              logSource: 'special_needs',
-              description: 'Disability, special education, and accessibility funding',
-              icon: '♿',
-              needsProfile: true,
-      },
-      {
-              name: 'Student Grants',
-              function: 'crawlStudentGrants',
-              logSource: 'student_grants',
-              description: 'Scholarships, FAFSA-linked aid, and campus-based funding',
-              icon: '🎓',
-              needsProfile: true,
-      },
-      {
-              name: 'ECF Benefits',
-              function: 'crawlEcfBenefits',
-              logSource: 'ecf_benefits',
-              description: 'Emergency Connectivity Fund and digital access programs',
-              icon: '📡',
-              needsProfile: true,
-      },
-      {
-              name: 'Local Funding',
-              function: 'crawlLocalFunding',
-              logSource: 'local_funding',
-              description: 'Community foundations, local nonprofits, and regional grants',
-              icon: '📍',
-              needsProfile: true,
-      },
-      {
-              name: 'Item Funding',
-              function: 'crawlItemFunding',
-              logSource: 'item_matching',
-              description: 'Funding for specific requested items (vehicles, equipment, etc.)',
-              icon: '🛒',
-              needsProfile: true,
-      },
-        ];
+    {
+      name: 'Special Needs',
+      function: 'crawlSpecialNeeds',
+      crawlerType: 'special_needs',
+      logSource: 'special_needs',
+      description: 'Disability, special education, and accessibility funding',
+      icon: '♿',
+      needsProfile: true,
+    },
+    {
+      name: 'Student Grants',
+      function: 'crawlStudentGrants',
+      crawlerType: 'student_grants',
+      logSource: 'student_grants',
+      description: 'Scholarships, FAFSA-linked aid, and campus-based funding',
+      icon: '🎓',
+      needsProfile: true,
+    },
+    {
+      name: 'ECF Benefits',
+      function: 'crawlEcfBenefits',
+      crawlerType: 'ecf_benefits',
+      logSource: 'ecf_benefits',
+      description: 'Emergency Connectivity Fund and digital access programs',
+      icon: '📡',
+      needsProfile: true,
+    },
+    {
+      name: 'Local Funding',
+      function: 'crawlLocalFunding',
+      crawlerType: 'local_funding',
+      logSource: 'local_funding',
+      description: 'Community foundations, local nonprofits, and regional grants',
+      icon: '📍',
+      needsProfile: true,
+    },
+    {
+      name: 'Item Funding',
+      function: 'crawlItemFunding',
+      crawlerType: 'item_matching',
+      logSource: 'item_matching',
+      description: 'Funding for specific requested items (vehicles, equipment, etc.)',
+      icon: '🛒',
+      needsProfile: true,
+      hasItemInput: true,
+    },
+  ];
 
   const getLatestLog = (crawler) => {
     const src = crawler?.logSource ? String(crawler.logSource) : normalizeLogSource(crawler?.name)
     return crawlLogs.find((log) => String(log?.source || '') === src);
   };
 
-  const handleRunCrawler = (crawler) => {
+  const handleRunCrawler = async (crawler) => {
     if (!selectedOrgId && crawler.needsProfile) {
       toast({
         variant: "destructive",
@@ -182,22 +155,101 @@ export default function DataSources() {
       return;
     }
 
-    const payload = {};
-    
-    // Add organization_id for crawlers that need profile context
-    if (crawler.needsProfile && selectedOrgId) {
-      payload.organization_id = selectedOrgId;
-      payload.profile_id = selectedOrgId
-    }
+    const jobKey = String(crawler.function)
+    setCrawlingInBackground(prev => [...prev, jobKey]);
 
-    crawlMutation.mutate({ 
-      crawlerName: crawler.function,
-      logSource: crawler.logSource,
-      payload 
-    });
+    try {
+      const data = await runRealCrawler({
+        profileId: selectedOrgId || 'default',
+        crawlerType: crawler.crawlerType,
+        minMatchScore: 0,
+        itemRequest: crawler.hasItemInput ? (itemRequests[crawler.function] || null) : null,
+      })
+
+      toast({
+        title: '🚀 Crawler Complete',
+        description: `${crawler.name}: found ${data?.opportunities?.length ?? 0} results.`,
+        duration: 4000,
+      });
+
+      if (data?.opportunities?.length > 0) {
+        setDrawerTitle(crawler.name)
+        setDrawerResults(data.opportunities)
+        setDrawerOpen(true)
+      }
+
+      queryClient.invalidateQueries({ queryKey: ['crawlLogs'] })
+      queryClient.invalidateQueries({ queryKey: ['fundingOpportunities'] })
+    } catch (err) {
+      log.error('crawler failed', crawler.function, err)
+      toast({
+        variant: "destructive",
+        title: "Crawl Failed",
+        description: err.message || "An error occurred while running the crawler.",
+      });
+    } finally {
+      setCrawlingInBackground(prev => prev.filter(name => name !== jobKey));
+    }
   };
 
   const selectedOrg = organizations.find(o => o.id === selectedOrgId);
+
+  const statCards = [
+    {
+      id: 'total',
+      label: 'Total Opportunities',
+      value: opportunities.length,
+      icon: Database,
+      color: 'text-blue-500',
+      valueColor: 'text-slate-900',
+      detail: () => {
+        const bySource = {}
+        for (const opp of opportunities) {
+          const s = opp.source || 'unknown'
+          bySource[s] = (bySource[s] || 0) + 1
+        }
+        return Object.entries(bySource).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}: ${v}`).join(', ')
+      }
+    },
+    {
+      id: 'crawlers',
+      label: 'Available Crawlers',
+      value: crawlers.length,
+      icon: TrendingUp,
+      color: 'text-emerald-500',
+      valueColor: 'text-emerald-600',
+      detail: () => crawlers.map(c => `${c.icon} ${c.name}`).join(', ')
+    },
+    {
+      id: 'completed',
+      label: 'Successful Crawls',
+      value: crawlLogs.filter(log => log.status === 'completed').length,
+      icon: CheckCircle,
+      color: 'text-green-500',
+      valueColor: 'text-green-600',
+      detail: () => {
+        const completed = crawlLogs.filter(l => l.status === 'completed')
+        const bySource = {}
+        for (const l of completed) {
+          const s = l.source || 'unknown'
+          bySource[s] = (bySource[s] || 0) + 1
+        }
+        return Object.entries(bySource).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}: ${v}`).join(', ')
+      }
+    },
+    {
+      id: 'errors',
+      label: 'Recent Errors',
+      value: crawlLogs.filter(log => log.status === 'failed').length,
+      icon: AlertCircle,
+      color: 'text-red-500',
+      valueColor: 'text-red-600',
+      detail: () => {
+        const failed = crawlLogs.filter(l => l.status === 'failed')
+        return failed.slice(0, 5).map(l => `${l.source}: ${l.errorMessage || 'unknown'}`).join('; ') || 'No recent errors'
+      }
+    },
+  ]
 
   if (isLoadingOrgs || isLoadingLogs || isLoadingOpportunities) {
     return (
@@ -260,10 +312,10 @@ export default function DataSources() {
                 <Loader2 className="w-5 h-5 animate-spin text-amber-600" />
                 <div className="flex-1">
                   <p className="text-sm font-semibold text-amber-900">
-                    {crawlingInBackground.length} crawler{crawlingInBackground.length > 1 ? 's' : ''} running in background
+                    {crawlingInBackground.length} crawler{crawlingInBackground.length > 1 ? 's' : ''} running
                   </p>
                   <p className="text-xs text-amber-700">
-                    Page will auto-refresh every 10 seconds. Continue working!
+                    Results will appear when complete.
                   </p>
                 </div>
               </div>
@@ -271,63 +323,43 @@ export default function DataSources() {
           )}
         </div>
 
-        {/* Stats */}
+        {/* Clickable Stats */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-sm text-slate-500">Total Opportunities</div>
-                  <div className="text-3xl font-bold text-slate-900 mt-1">
-                    {opportunities.length}
+          {statCards.map(stat => {
+            const Icon = stat.icon
+            const isExpanded = expandedStat === stat.id
+            return (
+              <Card
+                key={stat.id}
+                className="cursor-pointer hover:shadow-md transition-shadow"
+                onClick={() => setExpandedStat(isExpanded ? null : stat.id)}
+              >
+                <CardContent className="pt-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-sm text-slate-500">{stat.label}</div>
+                      <div className={`text-3xl font-bold mt-1 ${stat.valueColor}`}>
+                        {stat.value}
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-center gap-1">
+                      <Icon className={`w-10 h-10 opacity-50 ${stat.color}`} />
+                      {isExpanded ? (
+                        <ChevronUp className="w-4 h-4 text-slate-400" />
+                      ) : (
+                        <ChevronDown className="w-4 h-4 text-slate-400" />
+                      )}
+                    </div>
                   </div>
-                </div>
-                <Database className="w-10 h-10 text-blue-500 opacity-50" />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-sm text-slate-500">Available Crawlers</div>
-                  <div className="text-3xl font-bold text-emerald-600 mt-1">
-                    {crawlers.length}
-                  </div>
-                </div>
-                <TrendingUp className="w-10 h-10 text-emerald-500 opacity-50" />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-sm text-slate-500">Successful Crawls</div>
-                  <div className="text-3xl font-bold text-green-600 mt-1">
-                    {crawlLogs.filter(log => log.status === 'completed').length}
-                  </div>
-                </div>
-                <CheckCircle className="w-10 h-10 text-green-500 opacity-50" />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-sm text-slate-500">Recent Errors</div>
-                  <div className="text-3xl font-bold text-red-600 mt-1">
-                    {crawlLogs.filter(log => log.status === 'failed').length}
-                  </div>
-                </div>
-                <AlertCircle className="w-10 h-10 text-red-500 opacity-50" />
-              </div>
-            </CardContent>
-          </Card>
+                  {isExpanded && (
+                    <div className="mt-3 pt-3 border-t text-xs text-slate-600 leading-relaxed">
+                      {stat.detail()}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )
+          })}
         </div>
 
         {!selectedOrgId ? (
@@ -343,13 +375,14 @@ export default function DataSources() {
         ) : (
           <>
             <h2 className="text-2xl font-bold text-slate-900 mb-4">
-              Data Sources for {selectedOrg.name}
+              Data Sources for {selectedOrg?.name}
             </h2>
 
             <div className="grid md:grid-cols-2 gap-6">
               {crawlers.map(crawler => {
                 const latestLog = getLatestLog(crawler);
                 const isCrawling = crawlingInBackground.includes(crawler.function);
+                const signalTags = PROFILE_SIGNAL_TAGS[crawler.crawlerType] || []
 
                 return (
                   <Card key={crawler.name} className={`shadow-lg border-0 ${isCrawling ? 'bg-amber-50 border-amber-200 border-2' : ''}`}>
@@ -372,6 +405,15 @@ export default function DataSources() {
                             )}
                           </CardTitle>
                           <CardDescription className="mt-2">{crawler.description}</CardDescription>
+                          {signalTags.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-2">
+                              {signalTags.map(tag => (
+                                <Badge key={tag} variant="secondary" className="text-[10px] px-1.5 py-0">
+                                  {tag}
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
                         </div>
                         {latestLog?.status === 'completed' && !isCrawling && (
                           <Badge className="bg-green-100 text-green-700 border-green-200">
@@ -389,7 +431,16 @@ export default function DataSources() {
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <div className="grid grid-cols-2 gap-4">
-                        <div>
+                        <div
+                          className="cursor-pointer hover:bg-slate-50 rounded-lg p-2 -m-2 transition-colors"
+                          onClick={() => {
+                            if (latestLog?.recordsFound > 0) {
+                              setDrawerTitle(`${crawler.name} — Found`)
+                              setDrawerResults([])
+                              setDrawerOpen(true)
+                            }
+                          }}
+                        >
                           <p className="text-sm text-slate-500">Records Found</p>
                           <p className="text-2xl font-bold text-slate-900">
                             {latestLog?.recordsFound || 0}
@@ -415,10 +466,19 @@ export default function DataSources() {
                         </div>
                       )}
 
+                      {crawler.hasItemInput && (
+                        <Input
+                          placeholder="What item do you need? (e.g., wheelchair van)"
+                          value={itemRequests[crawler.function] || ''}
+                          onChange={(e) => setItemRequests(prev => ({ ...prev, [crawler.function]: e.target.value }))}
+                          className="text-sm"
+                        />
+                      )}
+
                       <Button
                         onClick={() => handleRunCrawler(crawler)}
                         className="w-full bg-blue-600 hover:bg-blue-700"
-                        disabled={isCrawling}
+                        disabled={isCrawling || (crawler.hasItemInput && !itemRequests[crawler.function])}
                       >
                         {isCrawling ? (
                           <>
@@ -497,6 +557,58 @@ export default function DataSources() {
           </Card>
         </div>
       </div>
+
+      {/* Results Drawer */}
+      <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
+        <SheetContent side="right" className="w-full sm:max-w-lg overflow-y-auto">
+          <SheetHeader>
+            <SheetTitle>{drawerTitle}</SheetTitle>
+            <SheetDescription>
+              {drawerResults.length} opportunity{drawerResults.length !== 1 ? 'ies' : 'y'} found
+            </SheetDescription>
+          </SheetHeader>
+          <div className="mt-6 space-y-4">
+            {drawerResults.length === 0 && (
+              <p className="text-sm text-slate-500 text-center py-8">
+                No detailed results available for this view.
+              </p>
+            )}
+            {drawerResults.map((opp, i) => (
+              <Card key={opp.id || opp.source_url || i} className="border">
+                <CardContent className="p-4 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <h4 className="font-semibold text-sm text-slate-900 leading-tight">
+                      {opp.title || 'Untitled'}
+                    </h4>
+                    {opp.match_score != null && (
+                      <Badge variant={opp.match_score >= 70 ? 'default' : 'secondary'} className="shrink-0">
+                        {Math.round(opp.match_score)}%
+                      </Badge>
+                    )}
+                  </div>
+                  {opp.sponsor && (
+                    <p className="text-xs text-slate-500">{opp.sponsor}</p>
+                  )}
+                  {opp.description && (
+                    <p className="text-xs text-slate-600 line-clamp-3">{opp.description}</p>
+                  )}
+                  {(opp.application_url || opp.source_url || opp.url) && (
+                    <a
+                      href={opp.application_url || opp.source_url || opp.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      Apply / Learn more
+                    </a>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

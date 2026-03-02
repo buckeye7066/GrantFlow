@@ -2069,6 +2069,31 @@ if (process.env.NODE_ENV !== 'test') {
       }
     })();
 
+    // Background queue poller: pick up orphaned 'queued' jobs that were never dispatched.
+    const QUEUE_POLL_INTERVAL_MS = Number(process.env.QUEUE_POLL_INTERVAL_MS) || 60_000
+    setInterval(async () => {
+      try {
+        const nowExpr = db.dialect === 'postgres' ? 'NOW()' : "datetime('now')"
+        const rows = await db.prepare(`
+          SELECT id FROM crawler_jobs
+          WHERE status = 'queued'
+          ORDER BY created_at ASC
+          LIMIT 3
+        `).all()
+        if (rows && rows.length > 0) {
+          console.log(`[queue-poller] Found ${rows.length} orphaned queued job(s), dispatching...`)
+          for (const job of rows) {
+            dispatchCrawlerJob({ db, jobId: job.id, uploadDir: uploadsDir, getOpenAI: null }).catch((err) => {
+              console.error(`[queue-poller] Failed to dispatch job ${job.id}:`, err?.message || err)
+            })
+          }
+        }
+      } catch (err) {
+        console.error('[queue-poller] Error:', err?.message || err)
+      }
+    }, QUEUE_POLL_INTERVAL_MS)
+    console.log(`[startup] Background queue poller active (interval: ${QUEUE_POLL_INTERVAL_MS}ms)`)
+
     // Expose a stable in-process base URL for Anya autonomous function tests.
     // NOTE: When PORT=0 (ephemeral), the actual listening port differs from process.env.PORT.
     try {
