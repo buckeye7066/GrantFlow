@@ -2046,6 +2046,29 @@ if (process.env.NODE_ENV !== 'test') {
     const actualPort = server.address()?.port ?? PORT;
     console.log('[Server] Ready on port', actualPort);
 
+    // Reset jobs stuck in 'running' from a previous process crash/restart (no persistent worker).
+    (async () => {
+      try {
+        if (db.dialect === 'postgres') {
+          const r = await db.prepare(`
+            UPDATE crawler_jobs
+            SET status = 'failed', error = 'Auto-reset: stuck after server restart', completed_at = NOW()
+            WHERE status = 'running' AND started_at < (NOW() - INTERVAL '30 minutes')
+          `).run();
+          if (r?.changes > 0) console.log(`[startup] Reset ${r.changes} stuck crawler job(s)`);
+        } else {
+          const r = db.prepare(`
+            UPDATE crawler_jobs
+            SET status = 'failed', error = 'Auto-reset: stuck after server restart', completed_at = datetime('now')
+            WHERE status = 'running' AND started_at < datetime('now', '-30 minutes')
+          `).run();
+          if (r?.changes > 0) console.log(`[startup] Reset ${r.changes} stuck crawler job(s)`);
+        }
+      } catch (err) {
+        console.error('[startup] Failed to reset stuck jobs:', err?.message || err);
+      }
+    })();
+
     // Expose a stable in-process base URL for Anya autonomous function tests.
     // NOTE: When PORT=0 (ephemeral), the actual listening port differs from process.env.PORT.
     try {
