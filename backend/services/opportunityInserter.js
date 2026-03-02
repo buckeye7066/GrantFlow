@@ -1,4 +1,4 @@
-import crypto from 'crypto'
+himport crypto from 'crypto'
 import { isValidRealUrl, isLoanLike, isMatchingFunds, enforceOpportunityPolicy } from './crawlers/opportunityPolicy.js'
 
 // Backward-compat alias
@@ -44,10 +44,20 @@ function toDbBoolean(db, value) {
   return db?.dialect === 'postgres' ? bool : bool ? 1 : 0
 }
 
+// Allowed record_origin values — must match the DB CHECK constraint
+const ALLOWED_RECORD_ORIGINS = new Set([
+    'live_crawl', 'curated_verified', 'manual', 'synthetic',
+    'directory_resource', 'discovered', 'funding_api',
+    'geo_crawl', 'seeded', 'imported',
+  ])
+
 function deriveRecordOrigin(opportunity) {
-  const origin = opportunity?.record_origin
-  if (typeof origin === 'string' && origin.length > 0) return origin
-  return 'live_crawl'
+    const origin = opportunity?.record_origin
+    if (typeof origin === 'string' && origin.length > 0) {
+          // Validate against allowed values; fall back to 'live_crawl' if unknown
+          return ALLOWED_RECORD_ORIGINS.has(origin) ? origin : 'live_crawl'
+    }
+    return 'live_crawl'
 }
 
 function normalizeDateLikeOrNull(value) {
