@@ -1054,6 +1054,28 @@ router.post('/run', ensureAuth, async (req, res) => {
       console.log('[RealCrawlers] Profile location (authoritative):', { state: profileContext.facets.geo.state, zip: profileContext.facets.geo.zip, city: profileContext.facets.geo.city })
     }
 
+    // ── Route-level consent gating for clinicaltrials.gov ──────────────
+    // The health crawler filters these in its own return, but the DB fallback
+    // path can re-introduce them from a prior consent-true run.  This helper
+    // strips them from ANY final opportunity array when consent is absent.
+    const _consentForTrials = (() => {
+      if (crawler_type !== 'health_resources') return true          // only gate health
+      const health = profileContext?.sections?.health_medical ?? {}
+      return (
+        String(req.body?.include_trials ?? '').toLowerCase() === 'true' ||
+        req.body?.include_trials === true ||
+        Boolean(health.consent_for_studies)
+      )
+    })()
+    const applyConsentGating = (opps) => {
+      if (_consentForTrials) return opps
+      return opps.filter((row) => {
+        const urls = [row.url, row.source_url, row.application_url]
+          .filter(Boolean).join(' ').toLowerCase()
+        return !urls.includes('clinicaltrials.gov')
+      })
+    }
+
     const coveragePct =
       profileContext?.coverage?.field_map_coverage?.signal_coverage_pct ??
       profileContext?.coverage?.field_map_coverage?.pct ??
@@ -1216,7 +1238,7 @@ router.post('/run', ensureAuth, async (req, res) => {
           filtered_count: live.opportunities.length,
           min_match_score,
           duration,
-          opportunities: live.opportunities,
+          opportunities: applyConsentGating(live.opportunities),
           used_live: true,
           used_db_fallback: false,
           debug,
@@ -1444,7 +1466,7 @@ router.post('/run', ensureAuth, async (req, res) => {
       filtered_count: merged.length,
       min_match_score,
       duration,
-      opportunities: merged,
+      opportunities: applyConsentGating(merged),
       used_live: Boolean(debug.used_live),
       used_db_fallback: Boolean(debug.used_db_fallback),
       debug,
