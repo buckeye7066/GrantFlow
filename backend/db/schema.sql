@@ -327,7 +327,9 @@ CREATE TABLE IF NOT EXISTS grants (
   contact_name TEXT,
   contact_email TEXT,
   contact_phone TEXT,
-  
+  funder_fax TEXT,
+  funder_address TEXT,
+
   -- Tracking
   assigned_to TEXT,
   priority TEXT CHECK(priority IN ('low', 'medium', 'high', 'urgent'))
@@ -1942,3 +1944,41 @@ CREATE INDEX IF NOT EXISTS idx_service_purchases_user ON service_purchases(user_
 CREATE INDEX IF NOT EXISTS idx_milestone_purchase ON milestone_payments(purchase_id);
 CREATE INDEX IF NOT EXISTS idx_hourly_time_purchase ON hourly_time_entries(purchase_id);
 CREATE INDEX IF NOT EXISTS idx_hourly_invoice_purchase ON hourly_invoices(purchase_id);
+
+-- Curated crawler system tables (v2)
+CREATE TABLE IF NOT EXISTS crawl_results (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  profile_id TEXT NOT NULL,
+  program_id TEXT NOT NULL,
+  program_name TEXT NOT NULL,
+  program_url TEXT,
+  program_description TEXT,
+  match_score INTEGER NOT NULL,
+  match_reasons TEXT,
+  matched_categories TEXT,
+  program_type TEXT,
+  funding_type TEXT,
+  max_amount REAL,
+  source_type TEXT,
+  crawled_at DATETIME DEFAULT (datetime('now')),
+  UNIQUE(profile_id, program_id)
+);
+
+CREATE TABLE IF NOT EXISTS crawl_metadata (
+  profile_id TEXT PRIMARY KEY,
+  needs TEXT,
+  demographics TEXT,
+  health_signals TEXT,
+  family_signals TEXT,
+  military_signals TEXT,
+  state TEXT,
+  county TEXT,
+  state_portal_url TEXT,
+  state_portal_name TEXT,
+  county_contacts TEXT,
+  total_matches INTEGER,
+  crawled_at DATETIME DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_crawl_results_profile ON crawl_results(profile_id);
+CREATE INDEX IF NOT EXISTS idx_crawl_results_score ON crawl_results(match_score DESC);

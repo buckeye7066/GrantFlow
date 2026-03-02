@@ -21,15 +21,10 @@ import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js';
 import { logAuditEvent, queryAuditLogs, getAuditSummary, cleanupAuditLogs, AUDIT_CATEGORIES, SEVERITY } from '../services/auditService.js';
 import { initializeFeatureFlags, isFeatureEnabled, getAllFlags, updateFlag, createFlagOverride, removeFlagOverride, getFlagOverrides, cleanupExpiredOverrides } from '../services/featureFlagService.js';
-import { getProfileWithLocation } from '../services/crawlers/crawlerHelpers.js';
 import { getRequestError } from '../services/requestIdErrorStore.js';
 import { extractTextFromFile } from '../services/documentTextExtraction.js'
-import { crawlLocalFunding } from '../services/crawlers/localFundingCrawler.js';
-import { crawlGovernmentFunding } from '../services/crawlers/governmentFundingCrawler.js';
-import { crawlStudentGrants } from '../services/crawlers/studentGrantsCrawler.js';
-import { crawlSpecialNeeds } from '../services/crawlers/specialNeedsCrawler.js';
 import { crawlItemFunding } from '../services/crawlers/itemFundingCrawler.js';
-import { crawlECFBenefits } from '../services/crawlers/ecfBenefitsCrawler.js';
+import { runCrawler as runCuratedCrawlerForAudit } from '../services/crawlers/crawlerManager.js';
 import { findDuplicateProfileGroups, mergeProfiles } from '../services/profileDedupeService.js'
 import { ensureAdminUser, isAdminUser, addProfileEmails, listProfileEmails } from '../utils/accessControl.js'
 import { repairProfileOwnership } from '../utils/profileOwnershipRepair.js'
@@ -127,12 +122,8 @@ const US_STATE_CODES = Object.freeze([
 ]);
 
 const CRAWLER_AUDIT_TYPES = [
-  'local_funding',
-  'government_funding',
-  'student_grants',
-  'special_needs',
+  'curated_benefits',
   'item_matching',
-  'ecf_benefits',
 ];
 
 function nowIso() {
@@ -3803,31 +3794,15 @@ router.post('/crawlers/audit-live', async (req, res) => {
 
     for (const p of profiles) {
       const profileId = p.id;
-      let profile = null;
-      let profileContextError = null;
-      try {
-        profile = await getProfileWithLocation(req.db, profileId);
-      } catch (error) {
-        profileContextError = error?.message || String(error);
-      }
-
-      const signals = profile?.signals ?? null;
-      const location = signals?.location ?? {};
-      const keywordCount = signals?.keywordSet?.size ?? 0;
-      const coverage = signals?.coverage ?? null;
 
       const profileRow = {
         profile_id: profileId,
         display_name: p.display_name,
         primary_type: p.primary_type,
         status: p.status,
-        coverage,
-        signals_summary: {
-          has_zip: Boolean(location?.zip),
-          has_state: Boolean(location?.state),
-          keyword_count: keywordCount,
-        },
-        error: profileContextError,
+        coverage: null,
+        signals_summary: {},
+        error: null,
         crawlers: [],
       };
 
@@ -3837,47 +3812,31 @@ router.post('/crawlers/audit-live', async (req, res) => {
         let errorMessage = null;
         let opportunities = [];
 
-        // Pre-flight "why would this be 0" hints (fast, high-signal).
         const hints = [];
-        if (!profile) {
-          hints.push('profile_context_failed');
-        } else {
-          if (crawlerType === 'local_funding' && !location?.zip) hints.push('missing_zip');
-          if (crawlerType === 'item_matching' && !item_request) hints.push('missing_item_request');
-          if (crawlerType === 'student_grants') {
-            const t = String(p.primary_type || '').toLowerCase();
-            const isStudent = ['high_school_student', 'college_student', 'graduate_student', 'student'].includes(t);
-            if (!isStudent) hints.push('not_student_profile');
-          }
-        }
+        if (crawlerType === 'item_matching' && !item_request) hints.push('missing_item_request');
 
         try {
-          if (!profile) {
-            ok = false;
-            errorMessage = profileContextError || 'Profile context unavailable';
+          if (crawlerType === 'item_matching') {
+            const itemResult = await withTimeout(
+              crawlItemFunding({ id: profileId }, { item_request }),
+              Math.max(1000, Number(timeout_ms) || 20000),
+              `audit:item_matching`,
+            );
+            opportunities = Array.isArray(itemResult) ? itemResult : [];
           } else {
-            const opts = { min_match_score: Number(min_match_score) || 50 };
-            const promise = (() => {
-              switch (crawlerType) {
-                case 'local_funding':
-                  return crawlLocalFunding(profile, opts);
-                case 'government_funding':
-                  return crawlGovernmentFunding(profile, opts);
-                case 'student_grants':
-                  return crawlStudentGrants(profile, opts);
-                case 'special_needs':
-                  return crawlSpecialNeeds(profile, opts);
-                case 'item_matching':
-                  return crawlItemFunding(profile, { item_request });
-                case 'ecf_benefits':
-                  return crawlECFBenefits(profile, opts);
-                default:
-                  return Promise.resolve([]);
-              }
-            })();
-
-            const raw = await withTimeout(promise, Math.max(1000, Number(timeout_ms) || 20000), `audit:${crawlerType}`);
-            opportunities = Array.isArray(raw) ? raw : [];
+            const curatedResult = await withTimeout(
+              runCuratedCrawlerForAudit(req.db, profileId, {
+                minScore: Math.max(1, Math.floor((Number(min_match_score) || 50) * 0.25)),
+                maxResults: 100,
+              }),
+              Math.max(1000, Number(timeout_ms) || 20000),
+              `audit:${crawlerType}`,
+            );
+            opportunities = Array.isArray(curatedResult?.results) ? curatedResult.results : [];
+            profileRow.coverage = curatedResult?.analysis ? {
+              state: curatedResult.analysis.location?.state,
+              needs: [...(curatedResult.analysis.needs || [])],
+            } : null;
           }
         } catch (error) {
           ok = false;
