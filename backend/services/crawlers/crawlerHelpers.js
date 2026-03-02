@@ -270,7 +270,7 @@ export function formatOpportunity(opp, profile) {
     match_reasons: reasons,
     matched_signals: matchedSignals,
     source: opp.source || 'crawler',
-    state: opp.state || profile.signals?.location?.state || profile.state,
+    state: opp.state || null, // Do NOT fall back to profile state — it creates false geo matches
     is_loan: opp.is_loan || false,
     requires_match: opp.requires_match || false,
   }
