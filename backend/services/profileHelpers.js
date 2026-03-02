@@ -273,39 +273,59 @@ export async function buildProfileContext(db, profileId, options = {}) {
 }
 
 export function extractZipFromContext({ profile, sections, jobParameters = {} }) {
+  const addr = sections?.basic_information?.address
+  const compAddr = sections?.comprehensive_application?.address
   const candidates = [
     jobParameters.zip,
     jobParameters.primary_zip,
     sections?.basic_information?.zip,
+    sections?.basic_information?.zip_code,
     sections?.basic_information?.postal_code,
     sections?.basic_information?.address_zip,
+    addr?.zip_code,
+    addr?.zip,
+    addr?.postal_code,
     sections?.comprehensive_application?.zip,
+    sections?.comprehensive_application?.zip_code,
     sections?.comprehensive_application?.postal_code,
+    compAddr?.zip_code,
+    compAddr?.zip,
+    compAddr?.postal_code,
     sections?.location_focus?.primary_zip,
     sections?.location_focus?.service_zip,
     sections?.location_focus?.zip,
+    sections?.location_focus?.zip_code,
     sections?.organization_details?.zip,
+    sections?.organization_details?.zip_code,
     sections?.organization_details?.hq_zip,
+    sections?.demographics?.zip_code,
+    sections?.demographics?.zip,
     profile?.postal_code,
+    profile?.zip_code,
   ]
 
   const zip = candidates.find(
-    (value) => typeof value === 'string' && /^\d{5}$/.test(value.trim()),
+    (value) => typeof value === 'string' && /^\d{5}/.test(value.trim()),
   )
 
-  return zip?.trim() ?? null
+  return zip ? zip.trim().slice(0, 5) : null
 }
 
 export function extractStateFromContext({ profile, sections, jobParameters = {} }) {
+  const addr = sections?.basic_information?.address
+  const compAddr = sections?.comprehensive_application?.address
   const candidates = [
     jobParameters.state,
     sections?.basic_information?.state,
     sections?.basic_information?.address_state,
+    addr?.state,
     sections?.comprehensive_application?.state,
     sections?.comprehensive_application?.address_state,
+    compAddr?.state,
     sections?.location_focus?.state,
     sections?.location_focus?.primary_state,
     sections?.organization_details?.state,
+    sections?.demographics?.state,
     profile?.state,
   ]
 
@@ -428,12 +448,20 @@ function collectTrueFlags(section = {}, mapping = {}) {
 }
 
 function extractCityFromSections({ sections, jobParameters = {}, profile }) {
+  const addr = sections?.basic_information?.address
+  const compAddr = sections?.comprehensive_application?.address
   const candidates = [
     jobParameters.city,
     sections?.basic_information?.city,
     sections?.basic_information?.address_city,
+    addr?.city,
+    sections?.comprehensive_application?.city,
+    compAddr?.city,
     sections?.location_focus?.primary_city,
     sections?.location_focus?.service_city,
+    sections?.location_focus?.city,
+    sections?.organization_details?.city,
+    sections?.demographics?.city,
     profile?.city,
   ]
   const city = candidates.find((value) => typeof value === 'string' && value.trim().length > 0)
