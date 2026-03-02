@@ -33,6 +33,48 @@ import { SCHOLARSHIPS } from './data/scholarships.js';
 import { generateStatePrograms, isStateInRegistry } from './data/stateBase.js';
 import { upsertFundingOpportunity } from '../opportunityInserter.js';
 
+let crawlSchemaEnsured = false;
+async function ensureCrawlSchema(db) {
+  if (crawlSchemaEnsured) return;
+  try {
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS crawl_results (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_id TEXT NOT NULL,
+        program_id TEXT NOT NULL,
+        program_name TEXT NOT NULL,
+        program_url TEXT,
+        program_description TEXT,
+        match_score INTEGER DEFAULT 0,
+        match_reasons TEXT,
+        matched_categories TEXT,
+        program_type TEXT,
+        funding_type TEXT,
+        max_amount TEXT,
+        source_type TEXT,
+        crawled_at DATETIME DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_crawl_results_profile ON crawl_results(profile_id);
+      CREATE INDEX IF NOT EXISTS idx_crawl_results_score ON crawl_results(match_score DESC);
+      CREATE TABLE IF NOT EXISTS crawl_metadata (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_id TEXT NOT NULL UNIQUE,
+        state TEXT,
+        analysis_json TEXT,
+        county_contacts TEXT,
+        total_matches INTEGER,
+        crawled_at DATETIME DEFAULT (datetime('now'))
+      );
+    `);
+    crawlSchemaEnsured = true;
+  } catch (err) {
+    if (!String(err?.message).includes('already exists')) {
+      console.error('[CrawlerManager] Schema ensure error:', err.message);
+    }
+    crawlSchemaEnsured = true;
+  }
+}
+
 // Dynamic state data loader — tries dedicated file first, falls back to auto-generated
 async function loadStateData(stateCode) {
   if (!stateCode) return { benefits: [], countyResources: null, meta: null };
@@ -259,6 +301,8 @@ function filterDeptContactsByInterest(deptContacts, interests, sports, gender) {
  */
 export async function runCrawler(db, profileId, options = {}) {
   const { minScore = 25, maxResults = 100, forceRefresh = false } = options;
+
+  await ensureCrawlSchema(db);
 
   console.log(`\n[CrawlerManager] ═══════════════════════════════════════`);
   console.log(`[CrawlerManager] Starting crawl for profile: ${profileId}`);
