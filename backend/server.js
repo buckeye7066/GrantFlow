@@ -2046,8 +2046,7 @@ if (process.env.NODE_ENV !== 'test') {
     const actualPort = server.address()?.port ?? PORT;
     console.log('[Server] Ready on port', actualPort);
 
-    // Auto-heal: expand record_origin CHECK constraint if it's still the old 4-value version.
-    // Migration 0034 does this but may not have been applied.
+    // Auto-heal Postgres CHECK constraints that may be outdated if migrations haven't run.
     if (db.dialect === 'postgres') {
       (async () => {
         try {
@@ -2066,6 +2065,21 @@ if (process.env.NODE_ENV !== 'test') {
           console.log('[startup] record_origin CHECK constraint verified/expanded')
         } catch (e) {
           console.warn('[startup] record_origin constraint fix skipped:', e?.message)
+        }
+
+        try {
+          await db.exec(`
+            ALTER TABLE grants DROP CONSTRAINT IF EXISTS grants_status_check;
+            ALTER TABLE grants ADD CONSTRAINT grants_status_check CHECK (status IN (
+              'discovery','discovered','interested','auto_applied','drafting',
+              'application_prep','revision','portal','submitted','pending_review',
+              'follow_up','awarded','report','declined_no_review','declined','closed',
+              'app_prep','under_review','rejected','archived'
+            ));
+          `)
+          console.log('[startup] grants status CHECK constraint verified/expanded')
+        } catch (e) {
+          console.warn('[startup] grants status constraint fix skipped:', e?.message)
         }
       })()
     }

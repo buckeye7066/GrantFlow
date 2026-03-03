@@ -156,7 +156,7 @@ class APIClient {
     }
     
     // If the original request was to /refresh, don't try again - just fail
-    if (originalRequest?.url?.includes('/auth/refresh')) {
+    if (originalRequest?.endpoint?.includes('/auth/refresh')) {
       console.warn('[APIClient] Refresh endpoint failed, clearing auth state');
       this.clearToken();
       if (this.onAuthFailure) {
@@ -618,6 +618,7 @@ class APIClient {
         // Proactive refresh:
         // If we have a refresh token and the stored access expiry is near/over due,
         // refresh before calling `/api/auth/me` so we avoid noisy 401s.
+        // Uses raw fetch() to avoid triggering the wrapper's own 401 → handleUnauthorized loop.
         try {
           if (typeof window !== 'undefined') {
             const refreshToken = this.getRefreshToken?.()
@@ -625,14 +626,28 @@ class APIClient {
             const expiryMs = expiryRaw ? Number(expiryRaw) : NaN
             const leewayMs = 60 * 1000
             if (refreshToken && (!Number.isFinite(expiryMs) || expiryMs <= Date.now() + leewayMs)) {
-              await this.fetch('/api/auth/refresh', {
+              const resp = await fetch(`${this.baseUrl}/api/auth/refresh`, {
                 method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
                 body: JSON.stringify({ refreshToken }),
               })
+              if (resp.ok) {
+                const data = await resp.json()
+                if (data?.accessToken) this.setToken(data.accessToken)
+                if (data?.refreshToken) this.setRefreshToken(data.refreshToken)
+              } else {
+                // Refresh token is dead — clear it so handleUnauthorized won't retry
+                log.debug('proactive refresh failed; clearing refresh token')
+                this.refreshToken = null
+                if (typeof window !== 'undefined') {
+                  localStorage.removeItem('grantflow:refresh-token')
+                }
+              }
             }
           }
         } catch {
-          // Best-effort only. If refresh fails, `/api/auth/me` will handle it.
+          // Network/parse error — best-effort, fall through to /api/auth/me
         }
 
         return await this.fetch('/api/auth/me');
