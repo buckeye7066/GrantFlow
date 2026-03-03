@@ -36,10 +36,13 @@ import { upsertFundingOpportunity } from '../opportunityInserter.js';
 let crawlSchemaEnsured = false;
 async function ensureCrawlSchema(db) {
   if (crawlSchemaEnsured) return;
+  const isPg = db?.dialect === 'postgres';
+  const pk = isPg ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT';
+  const ts = isPg ? 'TIMESTAMPTZ DEFAULT now()' : "DATETIME DEFAULT (datetime('now'))";
   try {
     await db.exec(`
       CREATE TABLE IF NOT EXISTS crawl_results (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id ${pk},
         profile_id TEXT NOT NULL,
         program_id TEXT NOT NULL,
         program_name TEXT NOT NULL,
@@ -52,18 +55,18 @@ async function ensureCrawlSchema(db) {
         funding_type TEXT,
         max_amount TEXT,
         source_type TEXT,
-        crawled_at DATETIME DEFAULT (datetime('now'))
+        crawled_at ${ts}
       );
       CREATE INDEX IF NOT EXISTS idx_crawl_results_profile ON crawl_results(profile_id);
       CREATE INDEX IF NOT EXISTS idx_crawl_results_score ON crawl_results(match_score DESC);
       CREATE TABLE IF NOT EXISTS crawl_metadata (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id ${pk},
         profile_id TEXT NOT NULL UNIQUE,
         state TEXT,
         analysis_json TEXT,
         county_contacts TEXT,
         total_matches INTEGER,
-        crawled_at DATETIME DEFAULT (datetime('now'))
+        crawled_at ${ts}
       );
     `);
     crawlSchemaEnsured = true;
@@ -385,6 +388,9 @@ export async function runCrawler(db, profileId, options = {}) {
  * Clears old results and writes new ones.
  */
 async function storeResults(db, profileId, results, analysis, stateMeta, countyContacts) {
+  const isPg = db?.dialect === 'postgres';
+  const nowExpr = isPg ? 'now()' : "datetime('now')";
+
   try {
     await db.prepare('DELETE FROM crawl_results WHERE profile_id = ?').run(profileId);
 
@@ -394,7 +400,7 @@ async function storeResults(db, profileId, results, analysis, stateMeta, countyC
         match_score, match_reasons, matched_categories,
         program_type, funding_type, max_amount,
         source_type, crawled_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${nowExpr})
     `);
 
     for (const result of results) {
@@ -414,27 +420,48 @@ async function storeResults(db, profileId, results, analysis, stateMeta, countyC
       );
     }
 
-    await db.prepare(`
-      INSERT OR REPLACE INTO crawl_metadata (
-        profile_id, needs, demographics, health_signals,
-        family_signals, military_signals, state, county,
-        state_portal_url, state_portal_name,
-        county_contacts, total_matches, crawled_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `).run(
-      profileId,
-      JSON.stringify([...analysis.needs]),
-      JSON.stringify([...analysis.demographics]),
-      JSON.stringify([...analysis.health]),
-      JSON.stringify([...analysis.family]),
-      JSON.stringify([...analysis.military]),
-      analysis.location.state,
-      analysis.location.county,
-      stateMeta?.benefitsPortal || null,
-      stateMeta?.benefitsPortalName || null,
-      countyContacts ? JSON.stringify(countyContacts) : null,
-      results.length,
-    );
+    // Upsert crawl metadata — store analysis as a single JSON blob for cross-dialect compat
+    const analysisJson = JSON.stringify({
+      needs: [...analysis.needs],
+      demographics: [...analysis.demographics],
+      health: [...analysis.health],
+      family: [...analysis.family],
+      military: [...analysis.military],
+      county: analysis.location.county,
+      statePortalUrl: stateMeta?.benefitsPortal || null,
+      statePortalName: stateMeta?.benefitsPortalName || null,
+    });
+
+    if (isPg) {
+      await db.prepare(`
+        INSERT INTO crawl_metadata (profile_id, state, analysis_json, county_contacts, total_matches, crawled_at)
+        VALUES (?, ?, ?, ?, ?, now())
+        ON CONFLICT (profile_id) DO UPDATE SET
+          state = EXCLUDED.state,
+          analysis_json = EXCLUDED.analysis_json,
+          county_contacts = EXCLUDED.county_contacts,
+          total_matches = EXCLUDED.total_matches,
+          crawled_at = now()
+      `).run(
+        profileId,
+        analysis.location.state,
+        analysisJson,
+        countyContacts ? JSON.stringify(countyContacts) : null,
+        results.length,
+      );
+    } else {
+      await db.prepare(`
+        INSERT OR REPLACE INTO crawl_metadata (
+          profile_id, state, analysis_json, county_contacts, total_matches, crawled_at
+        ) VALUES (?, ?, ?, ?, ?, datetime('now'))
+      `).run(
+        profileId,
+        analysis.location.state,
+        analysisJson,
+        countyContacts ? JSON.stringify(countyContacts) : null,
+        results.length,
+      );
+    }
     console.log(`[CrawlerManager]   Occupation: [${[...(analysis.occupation || [])]}]`);
     console.log(`[CrawlerManager]   Immigration: [${[...(analysis.immigration || [])]}]`);
     console.log(`[CrawlerManager]   Geographic: [${[...(analysis.geographic || [])]}]`);
