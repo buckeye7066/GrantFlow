@@ -219,6 +219,71 @@ function buildDemographicSignals(profile, organization, sections) {
  * ENHANCED: Uses ALL profile data points for comprehensive matching
  * Scoring designed to achieve 80%+ matches for well-aligned opportunities
  */
+/**
+ * Filter out opportunities that are irrelevant for a given profile.
+ * Removes informational pages, copay/patient-assistance programs for non-medical profiles,
+ * and health directory sites when the profile has no health conditions.
+ */
+function isIrrelevantForProfile(opp, signals) {
+  const title = (opp.title || opp.program_name || '').toLowerCase();
+  const desc = (opp.description || opp.summary || '').toLowerCase();
+  const combined = title + ' ' + desc;
+
+  // 1. Filter informational/directory pages (not actual funding)
+  const infoPatterns = [
+    'health topics', 'health information', 'medlineplus', 'cdc.gov',
+    'webmd', 'mayo clinic information', 'healthfinder',
+    'patient education', 'health library', 'medical encyclopedia',
+    'disease information', 'condition overview'
+  ];
+  if (infoPatterns.some(p => combined.includes(p))) return true;
+
+  // 2. Filter copay/patient-assistance programs when profile has no health conditions
+  const hasHealthNeeds = signals.health && signals.health.size > 0;
+  if (!hasHealthNeeds) {
+    const copayPatterns = [
+      'copay assistance', 'copay foundation', 'copay relief',
+      'patient assistance program', 'patient advocate',
+      'medication assistance', 'prescription assistance',
+      'drug assistance', 'needymeds', 'pan foundation',
+      'healthwell foundation', 'patient access network',
+      'rx assistance', 'pharmaceutical assistance'
+    ];
+    if (copayPatterns.some(p => combined.includes(p))) return true;
+  }
+
+  // 3. Filter generic health resource directories for non-medical profiles
+  if (!hasHealthNeeds) {
+    const healthDirPatterns = [
+      'medicaid: contact', 'medicare: contact',
+      'find a doctor', 'find a clinic', 'health insurance marketplace',
+      'healthcare.gov', 'find local health', 'community health center'
+    ];
+    if (healthDirPatterns.some(p => combined.includes(p))) return true;
+  }
+
+  // 4. Filter transportation/ride assistance unless profile specifically needs it
+  const needsTransport = signals.keywords && (signals.keywords.has('transportation') || signals.keywords.has('ride assistance'));
+  if (!needsTransport && combined.includes('transportation assistance') && !combined.includes('business')) return true;
+
+  return false;
+}
+
+/**
+ * Detect if profile has business/entrepreneurship intent
+ */
+function detectBusinessIntent(signals) {
+  const bizKeywords = [
+    'small business', 'startup', 'entrepreneur', 'business grant',
+    'microenterprise', 'food truck', 'mobile food', 'restaurant',
+    'sba', 'usda', 'business plan', 'commercial', 'franchise',
+    'self-employment', 'sole proprietor', 'llc', 'business loan',
+    'naics', 'business development', 'storefront', 'retail'
+  ];
+  if (!signals.keywords) return false;
+  return bizKeywords.some(k => signals.keywords.has(k));
+}
+
 function calculateMatchScore(signals, opp) {
   let score = 40; // Start at 40% base - must earn the rest
   const matchedFields = [];
@@ -388,6 +453,23 @@ function calculateMatchScore(signals, opp) {
     });
   }
   
+  // Business/entrepreneurship intent bonus (up to 20 points)
+  const oppText2 = `${opp.title || ''} ${opp.description || ''}`.toLowerCase();
+  const bizOppTerms = ['small business', 'startup', 'entrepreneur', 'microenterprise',
+    'business grant', 'sba', 'usda rural', 'economic development', 'business development',
+    'food truck', 'mobile food', 'commercial kitchen', 'food service'];
+  const isBizOpp = bizOppTerms.some(t => oppText2.includes(t));
+  if (isBizOpp) {
+    // Check if profile also has business intent via keywords
+    const profileBizTerms = ['small business', 'startup', 'entrepreneur', 'food truck',
+      'microenterprise', 'business grant', 'sba', 'usda', 'restaurant', 'food service'];
+    const profileHasBiz = profileBizTerms.some(t => signals.keywords && signals.keywords.has(t));
+    if (profileHasBiz) {
+      score += 20;
+      matchedFields.push('business intent match');
+    }
+  }
+
   // BONUS: Multiple category matches (up to 15 points)
   // If matching in 3+ categories, likely a strong fit
   if (matchStrength >= 5) {
@@ -550,8 +632,13 @@ router.post('/comprehensiveMatch', async (req, res) => {
       family: [...demographicSignals.family]
     }));
     
+    // Filter out irrelevant opportunities before scoring
+    const filteredOpportunities = opportunities.filter(opp => !isIrrelevantForProfile(opp, demographicSignals));
+    const hasBizIntent = detectBusinessIntent(demographicSignals);
+    console.log(`[comprehensiveMatch] Filtered ${opportunities.length - filteredOpportunities.length} irrelevant opportunities, ${filteredOpportunities.length} remaining. Business intent: ${hasBizIntent}`);
+
     // Calculate fit scores for each opportunity using comprehensive demographic signals
-    const scoredOpportunities = opportunities.map(opp => {
+    const scoredOpportunities = filteredOpportunities.map(opp => {
       // Use the new comprehensive scoring function
       const { score: fit_score, matchedFields } = calculateMatchScore(demographicSignals, opp);
       
