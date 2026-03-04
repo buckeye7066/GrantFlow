@@ -89,6 +89,7 @@ const NEED_MAP = {
   burial:             ['burial','funeral','cremation'],
   tax:                ['tax','eitc','vita','tax prep'],
   scholarship:        ['scholarship','fafsa','financial aid','pell grant','endowment','merit','tuition assistance','student aid','oneapp'],
+  business:           ['business','entrepreneur','startup','self-employ','microenterprise','small business','sba','freelance','side hustle','llc','sole proprietor'],
 };
 
 /**
