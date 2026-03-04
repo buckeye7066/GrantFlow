@@ -29,6 +29,7 @@ import { analyzeProfile } from './profileAnalyzer.js';
 import { matchPrograms } from './matchEngine.js';
 import { FEDERAL_BENEFITS } from './data/federalBenefits.js';
 import { NATIONAL_PROGRAMS } from './data/nationalPrograms.js';
+import { BUSINESS_PROGRAMS } from './data/businessPrograms.js';
 import { SCHOLARSHIPS } from './data/scholarships.js';
 import { generateStatePrograms, isStateInRegistry } from './data/stateBase.js';
 import { upsertFundingOpportunity } from '../opportunityInserter.js';
@@ -326,16 +327,27 @@ export async function runCrawler(db, profileId, options = {}) {
   // Include scholarships only for student profiles
   const scholarshipPrograms = analysis.applicantType === 'student' ? SCHOLARSHIPS : [];
 
+  // Include business programs when profile has business/entrepreneurship intent
+  const hasBizIntent = analysis.occupation.has('small_business_owner')
+    || analysis.occupation.has('minority_owned_business')
+    || analysis.occupation.has('women_owned_business')
+    || analysis.needs.has('employment')
+    || analysis.applicantType === 'organization'
+    || (analysis.keywords || []).some(k => /business|entrepreneur|startup|self.?employ|microenterprise/i.test(k));
+  const businessPrograms = hasBizIntent ? BUSINESS_PROGRAMS : [];
+
   const allPrograms = [
     ...FEDERAL_BENEFITS,
     ...stateData.benefits,
     ...NATIONAL_PROGRAMS,
+    ...businessPrograms,
     ...scholarshipPrograms,
   ];
 
   console.log(`[CrawlerManager]   Federal programs:  ${FEDERAL_BENEFITS.length}`);
   console.log(`[CrawlerManager]   State programs:    ${stateData.benefits.length}`);
   console.log(`[CrawlerManager]   National programs: ${NATIONAL_PROGRAMS.length}`);
+  console.log(`[CrawlerManager]   Business programs: ${businessPrograms.length}${hasBizIntent ? '' : ' (skipped — no biz intent)'}`);
   console.log(`[CrawlerManager]   Scholarships:      ${scholarshipPrograms.length}`);
   console.log(`[CrawlerManager]   Total candidates:  ${allPrograms.length}`);
 

@@ -393,10 +393,11 @@ export const NATIONAL_PROGRAMS = [
     name: 'SBA Small Business Resources & Grants',
     description: 'Small Business Administration resources including grants, counseling, and training for small business owners. Includes programs for minority, women, and veteran-owned businesses.',
     url: 'https://www.sba.gov/funding-programs',
-    categories: ['cash_assistance','employment'],
+    categories: ['business','cash_assistance','employment'],
     type: 'referral',
     fundingType: 'referral_service',
     occupationMatch: ['small_business_owner','minority_owned_business','women_owned_business'],
+    intentMatch: ['business','entrepreneurship','self_employment'],
   },
 
   // ════════════════════════════════════════

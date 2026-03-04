@@ -1,0 +1,341 @@
+/**
+ * businessPrograms.js
+ *
+ * Small business grants, microenterprise programs, self-employment
+ * opportunities, and entrepreneurship resources for individuals.
+ *
+ * Every URL is a real application, intake, or resource page.
+ * NO loans. NO matching funds. NO VC / equity investment.
+ */
+
+export const BUSINESS_PROGRAMS = [
+
+  // ════════════════════════════════════════
+  // SBA & FEDERAL BUSINESS PROGRAMS
+  // ════════════════════════════════════════
+  {
+    id: 'biz-sba-grants',
+    name: 'SBA Small Business Grants & Funding Programs',
+    description: 'Directory of all active SBA grant programs including SBIR, STTR, Community Advantage, and disaster-related grants for small businesses.',
+    url: 'https://www.sba.gov/funding-programs/grants',
+    categories: ['business', 'employment', 'cash_assistance'],
+    type: 'portal',
+    fundingType: 'direct_grant',
+    occupationMatch: ['small_business_owner', 'minority_owned_business', 'women_owned_business'],
+    priority: 1,
+    intentMatch: ['business', 'entrepreneurship', 'self_employment'],
+  },
+  {
+    id: 'biz-sbir',
+    name: 'SBIR / STTR — Small Business Innovation Research',
+    description: 'Federal grants for small businesses engaged in R&D with commercialization potential. Over $4B awarded annually across 11 federal agencies. Phase I awards typically $50K–$275K.',
+    url: 'https://www.sbir.gov/about',
+    categories: ['business', 'employment', 'cash_assistance'],
+    type: 'grant',
+    fundingType: 'direct_grant',
+    maxAmount: 275000,
+    occupationMatch: ['small_business_owner'],
+    intentMatch: ['business', 'entrepreneurship', 'innovation'],
+    eligibility: { requiresSmallBusiness: true },
+  },
+  {
+    id: 'biz-sba-8a',
+    name: 'SBA 8(a) Business Development Program',
+    description: 'Nine-year business development program for socially and economically disadvantaged small businesses. Provides mentoring, procurement preferences, and business training.',
+    url: 'https://www.sba.gov/federal-contracting/contracting-assistance-programs/8a-business-development-program',
+    categories: ['business', 'employment', 'cash_assistance'],
+    type: 'assistance',
+    fundingType: 'direct_service',
+    occupationMatch: ['small_business_owner', 'minority_owned_business'],
+    demographicMatch: ['african_american', 'hispanic_latino', 'asian_american', 'native_american'],
+    intentMatch: ['business', 'entrepreneurship'],
+  },
+  {
+    id: 'biz-sba-wosb',
+    name: 'SBA Women-Owned Small Business (WOSB) Program',
+    description: 'Federal contracting opportunities set aside for women-owned small businesses. Free certification and access to sole-source contracts up to $7M.',
+    url: 'https://www.sba.gov/federal-contracting/contracting-assistance-programs/women-owned-small-business-federal-contracting-program',
+    categories: ['business', 'employment', 'cash_assistance'],
+    type: 'assistance',
+    fundingType: 'direct_service',
+    occupationMatch: ['small_business_owner', 'women_owned_business'],
+    demographicMatch: ['female'],
+    intentMatch: ['business', 'entrepreneurship'],
+  },
+  {
+    id: 'biz-mbda',
+    name: 'Minority Business Development Agency (MBDA)',
+    description: 'Federal agency providing business consulting, capital access, and contract opportunities to minority-owned businesses. 40+ business centers nationwide.',
+    url: 'https://www.mbda.gov/',
+    categories: ['business', 'employment', 'cash_assistance'],
+    type: 'assistance',
+    fundingType: 'direct_service',
+    occupationMatch: ['small_business_owner', 'minority_owned_business'],
+    demographicMatch: ['african_american', 'hispanic_latino', 'asian_american', 'native_american'],
+    intentMatch: ['business', 'entrepreneurship'],
+  },
+
+  // ════════════════════════════════════════
+  // MICROENTERPRISE & SELF-EMPLOYMENT
+  // ════════════════════════════════════════
+  {
+    id: 'biz-acf-afi',
+    name: 'Assets for Independence (AFI) / IDA Programs',
+    description: 'Individual Development Account programs that match your savings 2:1 or more for starting a business, buying a home, or education. Savings typically $500–$2,000 matched to $1,000–$8,000.',
+    url: 'https://idaresources.acf.hhs.gov/',
+    categories: ['business', 'employment', 'cash_assistance'],
+    type: 'grant',
+    fundingType: 'direct_grant',
+    maxAmount: 8000,
+    eligibility: { requiresLowIncome: true },
+    intentMatch: ['business', 'self_employment', 'microenterprise'],
+  },
+  {
+    id: 'biz-score',
+    name: 'SCORE — Free Business Mentoring & Training',
+    description: 'Free mentoring from 10,000+ volunteer business experts. Workshops on business planning, marketing, financial management, and startup guidance. Funded by the SBA.',
+    url: 'https://www.score.org/',
+    categories: ['business', 'employment'],
+    type: 'assistance',
+    fundingType: 'direct_service',
+    occupationMatch: ['small_business_owner'],
+    intentMatch: ['business', 'entrepreneurship', 'self_employment'],
+  },
+  {
+    id: 'biz-accion',
+    name: 'Accion Opportunity Fund — Microenterprise Grants',
+    description: 'Small business grants and microloans for underserved entrepreneurs. Grant programs specifically for women, minorities, and low-income business owners. No collateral required.',
+    url: 'https://www.accionopportunityfund.org/',
+    categories: ['business', 'employment', 'cash_assistance'],
+    type: 'grant',
+    fundingType: 'direct_grant',
+    maxAmount: 10000,
+    occupationMatch: ['small_business_owner', 'minority_owned_business', 'women_owned_business'],
+    intentMatch: ['business', 'microenterprise', 'self_employment'],
+  },
+  {
+    id: 'biz-grameen',
+    name: 'Grameen America — Microenterprise for Women',
+    description: 'Microenterprise support for women in poverty. Provides small business training, financial literacy, and micro-grants to help women start or grow income-generating businesses.',
+    url: 'https://www.grameenamerica.org/',
+    categories: ['business', 'employment', 'cash_assistance'],
+    type: 'assistance',
+    fundingType: 'direct_service',
+    demographicMatch: ['female'],
+    eligibility: { requiresLowIncome: true },
+    intentMatch: ['business', 'microenterprise', 'self_employment'],
+  },
+  {
+    id: 'biz-kiva',
+    name: 'Kiva U.S. — 0% Interest Crowdfunded Business Support',
+    description: 'Interest-free crowdfunded support up to $15,000 for small businesses and entrepreneurs. No credit score minimum. Prioritizes underserved communities.',
+    url: 'https://www.kiva.org/borrow',
+    categories: ['business', 'employment', 'cash_assistance'],
+    type: 'assistance',
+    fundingType: 'direct_service',
+    maxAmount: 15000,
+    occupationMatch: ['small_business_owner'],
+    intentMatch: ['business', 'microenterprise', 'self_employment'],
+  },
+
+  // ════════════════════════════════════════
+  // VETERAN BUSINESS PROGRAMS
+  // ════════════════════════════════════════
+  {
+    id: 'biz-sba-vosb',
+    name: 'SBA Veteran-Owned Small Business (VOSB) Program',
+    description: 'Federal contracting set-asides for veteran-owned and service-disabled veteran-owned small businesses. Includes Boots to Business entrepreneurship training for transitioning service members.',
+    url: 'https://www.sba.gov/federal-contracting/contracting-assistance-programs/veteran-assistance-programs',
+    categories: ['business', 'employment', 'cash_assistance'],
+    type: 'assistance',
+    fundingType: 'direct_service',
+    militaryMatch: ['veteran', 'disabled_veteran'],
+    occupationMatch: ['small_business_owner'],
+    intentMatch: ['business', 'entrepreneurship'],
+  },
+  {
+    id: 'biz-boots-to-business',
+    name: 'Boots to Business — Veteran Entrepreneurship Training',
+    description: 'Free SBA entrepreneurship training for veterans, service members, and military spouses. Two-day course plus 8-week online follow-up. Includes business plan development.',
+    url: 'https://www.sba.gov/sba-learning-platform/boots-business',
+    categories: ['business', 'employment', 'education'],
+    type: 'assistance',
+    fundingType: 'direct_service',
+    militaryMatch: ['veteran', 'active_duty', 'military_spouse'],
+    intentMatch: ['business', 'entrepreneurship', 'self_employment'],
+  },
+  {
+    id: 'biz-streetshares',
+    name: 'StreetShares Foundation — Veteran Business Grant',
+    description: 'Annual grant program for veteran and military spouse entrepreneurs. Awards up to $15,000 for business startup or growth costs.',
+    url: 'https://streetsharesfoundation.org/',
+    categories: ['business', 'cash_assistance', 'employment'],
+    type: 'grant',
+    fundingType: 'direct_grant',
+    maxAmount: 15000,
+    militaryMatch: ['veteran', 'military_spouse'],
+    occupationMatch: ['small_business_owner'],
+    intentMatch: ['business', 'entrepreneurship'],
+  },
+
+  // ════════════════════════════════════════
+  // GRANT COMPETITIONS & PITCH PROGRAMS
+  // ════════════════════════════════════════
+  {
+    id: 'biz-fedex-grant',
+    name: 'FedEx Small Business Grant Contest',
+    description: 'Annual grant competition awarding $250,000+ in total prizes to small businesses. Grand prize is $50,000 grant plus FedEx services.',
+    url: 'https://www.fedex.com/en-us/small-business/grant-contest.html',
+    categories: ['business', 'cash_assistance'],
+    type: 'grant',
+    fundingType: 'direct_grant',
+    maxAmount: 50000,
+    occupationMatch: ['small_business_owner'],
+    intentMatch: ['business', 'entrepreneurship'],
+  },
+  {
+    id: 'biz-nav-grant',
+    name: 'Nav Small Business Grant',
+    description: 'Quarterly $10,000 grant for small business owners. No purchase necessary. Open to US-based businesses with revenue under $10M.',
+    url: 'https://www.nav.com/business-grants/',
+    categories: ['business', 'cash_assistance'],
+    type: 'grant',
+    fundingType: 'direct_grant',
+    maxAmount: 10000,
+    occupationMatch: ['small_business_owner'],
+    intentMatch: ['business'],
+  },
+  {
+    id: 'biz-amber-grant',
+    name: 'Amber Grant for Women — WomensNet',
+    description: 'Monthly $10,000 grant for women-owned businesses. One monthly winner each year competes for an additional $25,000 year-end grant.',
+    url: 'https://ambergrantsforwomen.com/',
+    categories: ['business', 'cash_assistance'],
+    type: 'grant',
+    fundingType: 'direct_grant',
+    maxAmount: 25000,
+    demographicMatch: ['female'],
+    occupationMatch: ['small_business_owner', 'women_owned_business'],
+    intentMatch: ['business', 'entrepreneurship'],
+  },
+  {
+    id: 'biz-nase-growth',
+    name: 'NASE Growth Grants',
+    description: 'Up to $4,000 grants from the National Association for the Self-Employed to help micro-businesses grow. Covers marketing, equipment, hiring, or expansion.',
+    url: 'https://www.nase.org/become-a-member/member-benefits/business-resources/growth-grants',
+    categories: ['business', 'cash_assistance', 'employment'],
+    type: 'grant',
+    fundingType: 'direct_grant',
+    maxAmount: 4000,
+    occupationMatch: ['small_business_owner'],
+    intentMatch: ['business', 'self_employment', 'microenterprise'],
+  },
+
+  // ════════════════════════════════════════
+  // MINORITY & COMMUNITY BUSINESS PROGRAMS
+  // ════════════════════════════════════════
+  {
+    id: 'biz-nul-entrepreneurship',
+    name: 'National Urban League — Entrepreneurship Centers',
+    description: 'Business training, mentoring, and access to capital for minority entrepreneurs through local Urban League affiliates. Includes Entrepreneurship Centers in 30+ cities.',
+    url: 'https://nul.org/program/entrepreneurship',
+    categories: ['business', 'employment', 'cash_assistance'],
+    type: 'assistance',
+    fundingType: 'direct_service',
+    demographicMatch: ['african_american', 'hispanic_latino'],
+    occupationMatch: ['small_business_owner', 'minority_owned_business'],
+    intentMatch: ['business', 'entrepreneurship'],
+  },
+  {
+    id: 'biz-liftfund',
+    name: 'LiftFund — Community Business Grants',
+    description: 'Microenterprise grants and support for underserved entrepreneurs in 13 states. Provides business coaching, financial training, and capital access for businesses often overlooked by traditional lenders.',
+    url: 'https://www.liftfund.com/',
+    categories: ['business', 'employment', 'cash_assistance'],
+    type: 'assistance',
+    fundingType: 'direct_service',
+    occupationMatch: ['small_business_owner'],
+    intentMatch: ['business', 'microenterprise', 'self_employment'],
+  },
+  {
+    id: 'biz-eileen-fisher',
+    name: 'Eileen Fisher Women-Owned Business Grant',
+    description: 'Annual grants of $10,000 each for women-owned businesses that are beyond the startup phase and focused on social and environmental impact.',
+    url: 'https://www.eileenfisher.com/grants',
+    categories: ['business', 'cash_assistance'],
+    type: 'grant',
+    fundingType: 'direct_grant',
+    maxAmount: 10000,
+    demographicMatch: ['female'],
+    occupationMatch: ['women_owned_business', 'small_business_owner'],
+    intentMatch: ['business', 'entrepreneurship'],
+  },
+
+  // ════════════════════════════════════════
+  // SELF-EMPLOYMENT & WORKFORCE TRANSITION
+  // ════════════════════════════════════════
+  {
+    id: 'biz-dol-self-employment',
+    name: 'Self-Employment Assistance Program (SEA)',
+    description: 'State programs allowing unemployment insurance recipients to start their own businesses instead of searching for wage employment. Available in select states.',
+    url: 'https://www.dol.gov/general/topic/unemployment-insurance/selfemployment',
+    categories: ['business', 'employment', 'cash_assistance'],
+    type: 'assistance',
+    fundingType: 'direct_service',
+    intentMatch: ['self_employment', 'business', 'entrepreneurship'],
+  },
+  {
+    id: 'biz-sba-community-advantage',
+    name: 'SBA Community Advantage Program',
+    description: 'Mission-focused lending up to $350,000 for small businesses in underserved markets. Prioritizes businesses in low-income areas, veteran-owned, and minority-owned businesses.',
+    url: 'https://www.sba.gov/funding-programs/loans/community-advantage',
+    categories: ['business', 'employment', 'cash_assistance'],
+    type: 'assistance',
+    fundingType: 'direct_service',
+    occupationMatch: ['small_business_owner', 'minority_owned_business', 'women_owned_business'],
+    geoMatch: ['rural', 'urban_underserved'],
+    intentMatch: ['business'],
+  },
+  {
+    id: 'biz-native-cdfi',
+    name: 'Native CDFI Network — Indigenous Business Support',
+    description: 'Community Development Financial Institutions serving Native communities. Provides business grants, training, and technical assistance for Native American entrepreneurs.',
+    url: 'https://nativecdfi.net/',
+    categories: ['business', 'employment', 'cash_assistance'],
+    type: 'assistance',
+    fundingType: 'direct_service',
+    demographicMatch: ['native_american'],
+    occupationMatch: ['small_business_owner'],
+    intentMatch: ['business', 'microenterprise'],
+  },
+
+  // ════════════════════════════════════════
+  // RURAL & AGRICULTURAL BUSINESS
+  // ════════════════════════════════════════
+  {
+    id: 'biz-usda-rbeg',
+    name: 'USDA Rural Business Development Grants',
+    description: 'Grants for rural small business development including training, technical assistance, and startup capital. Targets businesses in communities under 50,000 population.',
+    url: 'https://www.rd.usda.gov/programs-services/business-programs/rural-business-development-grants',
+    categories: ['business', 'employment', 'cash_assistance'],
+    type: 'grant',
+    fundingType: 'direct_grant',
+    geoMatch: ['rural', 'appalachian'],
+    intentMatch: ['business', 'entrepreneurship'],
+  },
+  {
+    id: 'biz-usda-value-added',
+    name: 'USDA Value-Added Producer Grants (VAPG)',
+    description: 'Grants up to $75,000 (planning) or $250,000 (working capital) for agricultural producers creating value-added products from raw commodities.',
+    url: 'https://www.rd.usda.gov/programs-services/business-programs/value-added-producer-grants',
+    categories: ['business', 'employment', 'cash_assistance'],
+    type: 'grant',
+    fundingType: 'direct_grant',
+    maxAmount: 250000,
+    occupationMatch: ['farmer'],
+    geoMatch: ['rural'],
+    intentMatch: ['business', 'entrepreneurship'],
+  },
+];
+
+export default BUSINESS_PROGRAMS;
