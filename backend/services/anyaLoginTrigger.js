@@ -151,6 +151,10 @@ export async function initializeAnyaForAdmin(db, user, profileId = null, { uploa
         max_results: 200,
       }),
       profile_enrichment: await createCrawlerJob(db, profileId, 'profile_enrichment', {}),
+            government_funding: await createCrawlerJob(db, profileId, 'government_funding', {}),
+            special_needs: await createCrawlerJob(db, profileId, 'special_needs', {}),
+            ecf_hcbs: await createCrawlerJob(db, profileId, 'ecf_hcbs', {}),
+            student_grants: await createCrawlerJob(db, profileId, 'student_grants', {}),
     }
     
     // Dispatch each crawler job to actually start them (fire and forget)
