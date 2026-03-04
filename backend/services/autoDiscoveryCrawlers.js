@@ -1,4 +1,4 @@
-import { dispatchCrawlerJob } from './crawlerDispatcher.js'
+himport { dispatchCrawlerJob } from './crawlerDispatcher.js'
 import { randomUUID } from 'crypto'
 import { buildProfileSignals } from './profileHelpers.js'
 
@@ -180,6 +180,41 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
         fallback_zip_limit: 100 // Start with 100 zips, expand over time
       }
     })
+
+        // 4. Government Funding crawler (federal and state grants)
+        jobs.push({
+                id: randomUUID(),
+                type: 'government_funding',
+                profile_id: profileId,
+                parameters: {}
+        })
+
+        // 5. Student Grants crawler (scholarships, tuition assistance)
+        // Always queue — even non-students may qualify for education-adjacent grants
+        if (isStudent) {
+                jobs.push({
+                          id: randomUUID(),
+                          type: 'student_grants',
+                          profile_id: profileId,
+                          parameters: {}
+                })
+        }
+
+        // 6. Special Needs crawler (disability services, adaptive equipment)
+        jobs.push({
+                id: randomUUID(),
+                type: 'special_needs',
+                profile_id: profileId,
+                parameters: {}
+        })
+
+        // 7. ECF / HCBS Benefits crawler (Medicaid waivers, community-based services)
+        jobs.push({
+                id: randomUUID(),
+                type: 'ecf_hcbs',
+                profile_id: profileId,
+                parameters: {}
+        })
     
     // Insert all jobs into database
     const insertStmt = db.prepare(`
