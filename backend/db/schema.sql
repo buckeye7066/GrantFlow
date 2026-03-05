@@ -1972,6 +1972,7 @@ CREATE TABLE IF NOT EXISTS crawl_metadata (
   family_signals TEXT,
   military_signals TEXT,
   state TEXT,
+              analysis_json TEXT,
   county TEXT,
   state_portal_url TEXT,
   state_portal_name TEXT,
