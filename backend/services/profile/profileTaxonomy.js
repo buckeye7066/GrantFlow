@@ -560,6 +560,16 @@ function deriveIntent({ facets }) {
   const foodTokenHits = tokenHits(['food', 'food bank', 'food pantry', 'nutrition'])
   const transportTokenHits = tokenHits(['transportation', 'van', 'vehicle', 'bus'])
 
+  const legalAidTokenHits = tokenHits([
+    'eviction', 'legal aid', 'legal clinic', 'pro bono', 'court', 'custody', 'immigration',
+  ])
+  const charityCareTokenHits = tokenHits([
+    'charity care', 'free clinic', 'sliding scale', 'copay', 'patient assistance', 'medical bills',
+  ])
+  const workforceTrainingTokenHits = tokenHits([
+    'licensure', 'wioa', 'etpl', 'vocational', 'certification', 'apprenticeship', 'tuition assistance',
+  ])
+
   const hasBusinessSignals =
     occupation.small_business_owner === true ||
     textTokens.some((token) =>
@@ -592,6 +602,29 @@ function deriveIntent({ facets }) {
     occupation.healthcare_worker === true &&
     textTokens.some((token) => ['nursing', 'nurse', 'nclex', 'licensure', 'license'].includes(token))
   const hasTransportSignals = textTokens.some((token) => ['transportation', 'van', 'vehicle', 'bus'].includes(token))
+
+  const hasLegalAidSignals =
+    family.domestic_violence_survivor === true ||
+    family.trafficking_survivor === true ||
+    textTokens.some((token) =>
+      ['eviction', 'legal aid', 'legal clinic', 'immigration', 'custody', 'pro bono', 'court'].includes(token),
+    )
+  const hasCharityCareSignals =
+    health.chronic_illness === true ||
+    health.terminal_illness === true ||
+    textTokens.some((token) =>
+      [
+        'charity care', 'financial assistance policy', 'medical bills', 'hospital bill',
+        'copay assistance', 'patient assistance', 'free clinic', 'sliding scale',
+      ].includes(token),
+    )
+  const hasWorkforceTrainingSignals =
+    textTokens.some((token) =>
+      [
+        'licensure', 'training', 'wioa', 'etpl', 'tuition assistance', 'no cost training',
+        'workforce', 'vocational', 'certification', 'apprenticeship',
+      ].includes(token),
+    )
 
   let category = 'general_assistance'
   if (hasBusinessSignals) category = 'business_startup'
@@ -631,6 +664,9 @@ function deriveIntent({ facets }) {
     veteran_support: (hasVeteranSignals ? 1 : 0) + (veteranTokenHits > 0 ? 1 : 0),
     food_security: (hasFoodSignals ? 1 : 0) + (foodTokenHits > 0 ? 1 : 0),
     transportation_access: (hasTransportSignals ? 1 : 0) + (transportTokenHits > 0 ? 1 : 0),
+    legal_aid: (hasLegalAidSignals ? 1 : 0) + (legalAidTokenHits > 0 ? 1 : 0),
+    charity_care: (hasCharityCareSignals ? 1 : 0) + (charityCareTokenHits > 0 ? 1 : 0),
+    workforce_training: (hasWorkforceTrainingSignals ? 1 : 0) + (workforceTrainingTokenHits > 0 ? 1 : 0),
     general_assistance: textTokens.length > 0 ? 1 : 0,
   }
   const selectedEvidence = evidenceByCategory[category] ?? 0
@@ -1006,11 +1042,14 @@ export function buildIntentTokens({ facets } = {}) {
     business_startup: ['small business grant', 'startup', 'entrepreneur'],
     education: ['scholarship', 'tuition assistance', 'classroom grant'],
     disability_support: ['disability support', 'accessible services'],
-    healthcare_support: ['medical assistance', 'patient support'],
-    housing_stability: ['housing assistance', 'rent support', 'eviction prevention'],
+    healthcare_support: ['medical assistance', 'patient support', 'charity care', 'free clinic', 'sliding scale', 'patient assistance program'],
+    housing_stability: ['housing assistance', 'rent support', 'eviction prevention', 'legal aid housing', 'tenant rights'],
     veteran_support: ['veteran assistance', 'military family support'],
     food_security: ['food assistance', 'nutrition support', 'pantry access'],
     transportation_access: ['transportation assistance', 'vehicle grant'],
+    legal_aid: ['pro bono legal', 'legal aid', 'legal clinic', 'free legal services', 'eviction defense', 'immigration legal'],
+    charity_care: ['charity care', 'free clinic', 'patient assistance', 'copay assistance', 'financial assistance policy', 'sliding scale clinic'],
+    workforce_training: ['workforce training', 'wioa', 'etpl', 'tuition assistance', 'no cost training', 'vocational rehabilitation', 'apprenticeship'],
   }
   if (category && categoryExpansions[category]) {
     shouldTerms.push(...categoryExpansions[category])
@@ -1021,6 +1060,30 @@ export function buildIntentTokens({ facets } = {}) {
   }
   if (allowAggressiveMustNot && category === 'food_security' && mustNotTerms.length === 0) {
     mustNotTerms.push('food truck startup', 'restaurant franchise')
+  }
+
+  // Pro bono / in-kind: when profile signals strongly indicate specific needs,
+  // inject targeted service-type search terms so crawlers surface them.
+  const proBonoNeeds = facets?.family ?? {}
+  const proBonoHealth = facets?.health ?? {}
+  const proBonoAssistance = facets?.assistance ?? {}
+
+  if (proBonoNeeds.homeless === true || proBonoNeeds.domestic_violence_survivor === true ||
+      category === 'housing_stability' || category === 'legal_aid') {
+    shouldTerms.push('legal aid', 'eviction prevention', 'pro bono legal', 'tenant rights intake')
+    if (proBonoNeeds.domestic_violence_survivor === true) {
+      mustTerms.push('domestic violence legal aid')
+    }
+  }
+  if (proBonoHealth.chronic_illness === true || proBonoHealth.terminal_illness === true ||
+      category === 'healthcare_support' || category === 'charity_care') {
+    shouldTerms.push('charity care', 'patient assistance program', 'free clinic', 'sliding scale')
+  }
+  if (category === 'workforce_training' || category === 'education') {
+    shouldTerms.push('wioa training', 'etpl provider', 'no cost training', 'tuition waiver')
+  }
+  if (proBonoAssistance.medicaid === true || proBonoAssistance.medicare === true) {
+    shouldTerms.push('copay assistance', 'prescription assistance program')
   }
 
   return {
