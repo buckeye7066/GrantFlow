@@ -1515,6 +1515,58 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     collectNarrativeKeywords({ notes: familyHousehold.notes }, registerKeyword)
   }
 
+  // ============ PRO BONO / IN-KIND SIGNAL INJECTION ============
+  // When profile signals indicate needs that can be met by non-cash services,
+  // automatically inject search terms so crawlers surface pro bono / in-kind resources.
+  const proBonoTerms = new Set()
+
+  if (familySet.has('homeless') || familySet.has('domestic_violence_survivor') ||
+      assistanceSet.has('housing_at_risk') || assistanceSet.has('homeless')) {
+    ;['legal aid', 'eviction prevention', 'pro bono legal', 'tenant rights', 'housing intake'].forEach(t => {
+      proBonoTerms.add(t); registerKeyword(t)
+    })
+  }
+  if (familySet.has('domestic_violence_survivor') || familySet.has('trafficking_survivor')) {
+    ;['domestic violence hotline', 'protective order', 'victim services', 'crisis intervention'].forEach(t => {
+      proBonoTerms.add(t); registerKeyword(t)
+    })
+  }
+  if (healthSet.has('chronic_illness') || healthSet.has('terminal') || healthSet.has('cancer') ||
+      healthSet.has('dialysis') || healthSet.has('hiv')) {
+    ;['charity care', 'patient assistance program', 'free clinic', 'sliding scale', 'copay assistance',
+      'financial assistance policy'].forEach(t => { proBonoTerms.add(t); registerKeyword(t) })
+  }
+  if (healthSet.has('mental_health') || healthSet.has('recovery')) {
+    ;['free counseling', 'community mental health', 'behavioral health clinic', 'crisis hotline'].forEach(t => {
+      proBonoTerms.add(t); registerKeyword(t)
+    })
+  }
+  if (healthSet.has('dme') || healthSet.has('wheelchair') || healthSet.has('amputee')) {
+    ;['donated equipment', 'dme loaner', 'assistive technology', 'equipment donation program'].forEach(t => {
+      proBonoTerms.add(t); registerKeyword(t)
+    })
+  }
+  if (occupationSet.has('healthcare_worker') || occupationSet.has('nurse') ||
+      keywordSet.has('licensure') || keywordSet.has('nclex') || keywordSet.has('certification')) {
+    ;['wioa training', 'etpl provider', 'no cost training', 'tuition waiver', 'workforce training board',
+      'vocational rehabilitation'].forEach(t => { proBonoTerms.add(t); registerKeyword(t) })
+  }
+  if (assistanceSet.has('unemployed') || assistanceSet.has('displaced_worker') || assistanceSet.has('underemployed')) {
+    ;['workforce development', 'job training program', 'career center', 'wioa', 'one-stop center'].forEach(t => {
+      proBonoTerms.add(t); registerKeyword(t)
+    })
+  }
+  if (demographicSet.has('immigrant') || keywordSet.has('immigration') || keywordSet.has('refugee') || keywordSet.has('daca')) {
+    ;['immigration legal aid', 'free immigration clinic', 'refugee resettlement', 'pro bono immigration'].forEach(t => {
+      proBonoTerms.add(t); registerKeyword(t)
+    })
+  }
+  if (familySet.has('formerly_incarcerated') || familySet.has('former_incarcerated')) {
+    ;['reentry services', 'expungement clinic', 'pro bono reentry', 'second chance program'].forEach(t => {
+      proBonoTerms.add(t); registerKeyword(t)
+    })
+  }
+
   // ============ RAW SECTIONS PASSTHROUGH ============
   // Store the raw sections for crawlers that need direct access to any field
   const rawSections = sections
@@ -1558,6 +1610,7 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     health: healthSet,
     family: familySet,
     occupation: occupationSet,
+    proBonoTerms,
     location,
     academics,
     financial,
