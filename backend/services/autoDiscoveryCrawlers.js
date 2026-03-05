@@ -1,4 +1,4 @@
-himport { dispatchCrawlerJob } from './crawlerDispatcher.js'
+import { dispatchCrawlerJob } from './crawlerDispatcher.js'
 import { randomUUID } from 'crypto'
 import { buildProfileSignals } from './profileHelpers.js'
 
