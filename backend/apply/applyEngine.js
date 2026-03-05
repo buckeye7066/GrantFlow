@@ -740,7 +740,7 @@ export async function autoPopulate({ db, applicationId }) {
   ]
 
   // Generate AI content for each section using profile data
-  const aiContent = await generateApplicationSections(grant, opportunity, profileData, defaultSections)
+  const aiContent = await generateApplicationSections(db, grant, opportunity, profileData, defaultSections)
 
   await db.withTransaction(async () => {
     const patch = {
@@ -796,7 +796,7 @@ async function gatherProfileForApplication(db, grant) {
   return { ...profile, sections: parsed }
 }
 
-async function generateApplicationSections(grant, opportunity, profile, sectionDefs) {
+async function generateApplicationSections(db, grant, opportunity, profile, sectionDefs) {
   const result = {}
   let openai = null
   try { openai = createOpenAIClient({ allowMissing: true }).openai } catch { /* no key */ }
