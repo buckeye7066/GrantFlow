@@ -21,7 +21,42 @@ const SOURCE_LABELS = {
   comprehensive: 'Search',
   catalog: 'Catalog',
   discovery: 'Discovery',
+  pro_bono_legal: 'Pro Bono Legal',
+  charity_care: 'Charity Care',
+  workforce_training: 'Workforce Training',
+  in_kind: 'In-Kind',
+  pro_bono_in_kind: 'Pro Bono / In-Kind',
 };
+
+const OPPORTUNITY_TYPE_LABELS = {
+  grant: 'Grant',
+  scholarship: 'Scholarship',
+  benefit: 'Benefit',
+  program: 'Program',
+  pro_bono: 'Pro Bono',
+  in_kind: 'In-Kind',
+  charity_care: 'Charity Care',
+  training_paid: 'Free Training',
+  legal_aid: 'Legal Aid',
+  clinic_service: 'Clinic Service',
+  equipment_donation: 'Equipment Donation',
+};
+
+const FUNDING_TYPE_LABELS = {
+  cash: 'Cash',
+  service: 'Service',
+  cost_coverage: 'Cost Coverage',
+  referral: 'Referral',
+};
+
+function getOpportunityTypeBadge(opp) {
+  const oppType = opp?.opportunity_type || opp?.type || '';
+  const fundingType = opp?.funding_type || '';
+  const label = OPPORTUNITY_TYPE_LABELS[oppType] || null;
+  const fundingLabel = FUNDING_TYPE_LABELS[fundingType] || null;
+  const isProBono = ['pro_bono', 'in_kind', 'charity_care', 'training_paid', 'legal_aid', 'clinic_service', 'equipment_donation'].includes(oppType);
+  return { label, fundingLabel, isProBono };
+}
 
 function formatSourceLabel(source) {
   if (!source || typeof source !== 'string') return 'Funding source';
@@ -330,6 +365,21 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
                     {formatSourceLabel(opp.source || opp.crawler_type)}
                   </Badge>
                 )}
+                {(() => {
+                  const { label, fundingLabel, isProBono } = getOpportunityTypeBadge(opp);
+                  return isProBono ? (
+                    <>
+                      <Badge variant="secondary" className="text-xs shrink-0 bg-purple-100 text-purple-800 border-purple-200">
+                        {label || 'Service'}
+                      </Badge>
+                      {fundingLabel && (
+                        <Badge variant="outline" className="text-xs shrink-0 border-purple-200 text-purple-700">
+                          {fundingLabel}
+                        </Badge>
+                      )}
+                    </>
+                  ) : null;
+                })()}
               </div>
               <div className="flex-grow">
                  <GrantCard 

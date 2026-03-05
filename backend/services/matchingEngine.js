@@ -12,11 +12,17 @@
 import { safeParseArrayField } from './profileHelpers.js'
 import { buildProfileSignals } from './profileHelpers.js'
 
+const PRO_BONO_OPPORTUNITY_TYPES = new Set([
+  'pro_bono', 'in_kind', 'charity_care', 'training_paid',
+  'legal_aid', 'clinic_service', 'equipment_donation',
+])
+const SERVICE_FUNDING_TYPES = new Set(['service', 'cost_coverage', 'referral'])
+
 /**
  * Calculate deterministic match score between profile and opportunity
  * @param {Object} profile - User/organization profile
  * @param {Object} opportunity - Funding opportunity
- * @returns {Object} { score: number (0-100), reasons: string[] }
+ * @returns {Object} { score: number (0-100), reasons: string[], match_explain: object }
  */
 export function calculateMatchScore(profile, opportunity) {
   // Allow passing a full profileContext { profile, sections, signals } for richer matching.
@@ -186,10 +192,109 @@ export function calculateMatchScore(profile, opportunity) {
     score -= 25
     reasons.push('Credit repair/counseling penalty')
   }
-  
+
+  // ── PRO BONO / IN-KIND SCORING ──
+  const isProBono = PRO_BONO_OPPORTUNITY_TYPES.has(opportunityType)
+  const fundingType = normalizeString(opportunity?.funding_type || '')
+  const isServiceType = SERVICE_FUNDING_TYPES.has(fundingType)
+  const matchedNeeds = []
+  const matchedSignals = []
+
+  if (isProBono || isServiceType) {
+    // Pro bono/in-kind: full credit even when amount is null (it's a service, not cash)
+    if (opportunity.amount_min == null && opportunity.amount_max == null) {
+      score += 5
+      reasons.push('Pro bono/in-kind: service value (no cash amount required)')
+    }
+
+    // Service specificity bonus: direct intake URL > general info > directory
+    const appUrl = normalizeString(opportunity?.application_url || '')
+    const srcUrl = normalizeString(opportunity?.source_url || '')
+    const hasDirectIntake = /apply|intake|enroll|request|sign.?up|register/i.test(appUrl) || /apply|intake|enroll/i.test(srcUrl)
+    const isDirectory = /directory|finder|find-|search|lookup|look-up/i.test(appUrl) || /directory|finder/i.test(srcUrl)
+
+    if (hasDirectIntake) {
+      score += 5
+      reasons.push('Service specificity: direct intake/application URL (+5)')
+    } else if (!isDirectory) {
+      score += 2
+      reasons.push('Service specificity: program-specific URL (+2)')
+    } else {
+      score -= 3
+      reasons.push('Service specificity: directory page only (-3)')
+    }
+
+    // Pro bono needs alignment check
+    const proBonoTermsOnProfile = effectiveSignals?.proBonoTerms ?? new Set()
+    if (proBonoTermsOnProfile.size > 0) {
+      let proBonoHits = 0
+      for (const term of proBonoTermsOnProfile) {
+        if (oppText.includes(normalizeString(term))) {
+          proBonoHits++
+          matchedNeeds.push(term)
+        }
+      }
+      if (proBonoHits > 0) {
+        const boost = Math.min(15, proBonoHits * 5)
+        score += boost
+        reasons.push(`Pro bono need alignment (${proBonoHits} needs matched, +${boost})`)
+      }
+    }
+
+    // Penalty for mismatched pro bono (e.g. medical copay shown to non-medical profiles)
+    const proBonoMismatchTokens = {
+      pro_bono: ['legal', 'attorney', 'court', 'eviction', 'tenant'],
+      charity_care: ['medical', 'patient', 'copay', 'clinic', 'hospital', 'health'],
+      clinic_service: ['clinic', 'health center', 'primary care'],
+      training_paid: ['training', 'wioa', 'workforce', 'vocational', 'certification'],
+      equipment_donation: ['equipment', 'computer', 'assistive', 'technology'],
+    }
+    const mismatchTokens = proBonoMismatchTokens[opportunityType] || []
+    if (mismatchTokens.length > 0 && proBonoTermsOnProfile.size === 0) {
+      const oppHasSpecificFocus = mismatchTokens.some(t => oppText.includes(t))
+      const profileHasMatchingSignals = mismatchTokens.some(t => {
+        const kws = effectiveSignals?.keywordSet ?? new Set()
+        return kws.has(t)
+      })
+      if (oppHasSpecificFocus && !profileHasMatchingSignals) {
+        score -= 8
+        reasons.push('Pro bono mismatch: service focus does not match profile signals (-8)')
+      }
+    }
+  }
+
+  // Collect matched signals for match_explain
+  if (geoTier && geoTier !== 'mismatch' && geoTier !== 'unknown') matchedSignals.push(`geo:${geoTier}`)
+  if (hasApplicantTypeSignals && eligibilityMatchesApplicantType(opportunity, effectiveSignals ?? effectiveProfile))
+    matchedSignals.push('applicant_type')
+  if (keywordScore > 0) matchedSignals.push('keywords')
+  if (categoryScore > 0) matchedSignals.push('category')
+  if (isProBono) matchedSignals.push(`opportunity_type:${opportunityType}`)
+  if (isServiceType) matchedSignals.push(`funding_type:${fundingType}`)
+
+  const finalScore = Math.max(0, Math.min(100, score))
+
+  const match_explain = {
+    matchedNeeds: matchedNeeds.length > 0 ? matchedNeeds : undefined,
+    matchedSignals,
+    scoreBreakdown: {
+      geo: geoPoints,
+      applicant_type: hasApplicantTypeSignals && eligibilityMatchesApplicantType(opportunity, effectiveSignals ?? effectiveProfile) ? 25 : 0,
+      keyword: keywordScore,
+      category: categoryScore,
+      facet: facetAdjustments.points,
+      amount: amountInRange(effectiveProfile?.funding_amount_needed, opportunity) ? 10 : 0,
+      deadline: deadlineScore,
+      pro_bono: isProBono ? (finalScore - Math.max(0, Math.min(100, score - (isProBono ? 0 : 0)))) : 0,
+      total: finalScore,
+    },
+    reasons: reasons.length > 0 ? reasons : ['No specific matches found'],
+  }
+
   return { 
-    score: Math.max(0, Math.min(100, score)), 
-    reasons: reasons.length > 0 ? reasons : ['No specific matches found']
+    score: finalScore, 
+    reasons: reasons.length > 0 ? reasons : ['No specific matches found'],
+    match_explain,
   };
 }
 
@@ -302,11 +407,14 @@ function calculateFacetAdjustments({ facets, opportunity, oppText }) {
     business_startup: ['small business', 'startup', 'entrepreneur', 'sba', 'microenterprise', 'food truck'],
     education: ['student', 'scholarship', 'tuition', 'classroom', 'college', 'school', 'nclex', 'licensure'],
     disability_support: ['disability', 'special needs', 'assistive', 'accessible', 'autism', 'blind', 'deaf'],
-    healthcare_support: ['healthcare', 'medical', 'patient', 'hospital', 'treatment', 'copay', 'rx'],
-    housing_stability: ['housing', 'rent', 'eviction', 'shelter', 'utility', 'homeless'],
+    healthcare_support: ['healthcare', 'medical', 'patient', 'hospital', 'treatment', 'copay', 'rx', 'charity care', 'free clinic', 'sliding scale'],
+    housing_stability: ['housing', 'rent', 'eviction', 'shelter', 'utility', 'homeless', 'tenant rights'],
     veteran_support: ['veteran', 'military', 'va ', 'service member'],
     food_security: ['food assistance', 'nutrition', 'food bank', 'food pantry', 'meal'],
     transportation_access: ['transportation', 'vehicle', 'transit', 'bus pass', 'mobility'],
+    legal_aid: ['legal aid', 'pro bono', 'legal clinic', 'eviction defense', 'attorney', 'court'],
+    charity_care: ['charity care', 'patient assistance', 'free clinic', 'copay', 'sliding scale', 'financial assistance policy'],
+    workforce_training: ['workforce', 'wioa', 'etpl', 'vocational', 'apprenticeship', 'job training', 'certification'],
     general_assistance: ['grant', 'assistance', 'support'],
   }
   const allCategoryKeys = Object.keys(categoryTokens)
