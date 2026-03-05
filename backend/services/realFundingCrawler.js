@@ -659,6 +659,259 @@ async function crawlScholarships(state = null) {
 }
 
 /**
+ * Crawl pro bono, in-kind, and service-based assistance (national + state)
+ * These are NON-CASH resources: legal aid, charity care, free clinics,
+ * workforce training boards, equipment donation programs, etc.
+ */
+async function crawlProBonoAndInKind(state = null) {
+  const opportunities = [];
+  const stateName = state ? STATE_NAMES[state] || state : null;
+
+  // ── LEGAL AID (National) ──
+  const legalAidNational = [
+    {
+      title: 'Legal Services Corporation (LSC) - Find Legal Aid',
+      sponsor: 'Legal Services Corporation',
+      source: 'pro_bono_legal',
+      source_id: 'lsc-find-legal-aid',
+      source_url: 'https://www.lsc.gov/about-lsc/what-legal-aid/get-legal-help',
+      description: 'LSC funds 132 independent nonprofit legal aid programs serving every county in the US. Free legal assistance for low-income individuals in civil matters including housing, family law, consumer issues, and public benefits.',
+      application_url: 'https://www.lsc.gov/about-lsc/what-legal-aid/get-legal-help',
+      opportunity_type: 'pro_bono',
+      funding_type: 'service',
+      categories: ['legal aid', 'pro bono', 'civil legal', 'housing'],
+      keywords: ['legal aid', 'pro bono', 'eviction defense', 'tenant rights', 'family law', 'free legal', 'low income legal'],
+      eligibility_bullets: ['Household income at or below 125% of federal poverty level', 'Civil (non-criminal) legal matters', 'US citizen or eligible non-citizen'],
+      is_national: true, state: state || 'nationwide', is_real: true, requires_501c3: false, requires_match: false,
+    },
+    {
+      title: 'LawHelp.org - Free Legal Help Directory',
+      sponsor: 'Pro Bono Net',
+      source: 'pro_bono_legal',
+      source_id: 'lawhelp-org',
+      source_url: 'https://www.lawhelp.org/',
+      description: 'National directory of free legal aid programs, legal hotlines, and self-help resources for low-income people. Find legal help by state and topic including eviction, domestic violence, immigration, and benefits.',
+      application_url: 'https://www.lawhelp.org/',
+      opportunity_type: 'pro_bono',
+      funding_type: 'referral',
+      categories: ['legal aid', 'pro bono', 'legal directory'],
+      keywords: ['legal aid', 'pro bono', 'free legal', 'legal hotline', 'eviction', 'domestic violence legal'],
+      eligibility_bullets: ['Low-income individuals', 'Topics vary by provider'],
+      is_national: true, state: state || 'nationwide', is_real: true, requires_501c3: false, requires_match: false,
+    },
+    {
+      title: 'National Domestic Violence Hotline - Legal Help',
+      sponsor: 'National Domestic Violence Hotline',
+      source: 'pro_bono_legal',
+      source_id: 'ndvh-legal',
+      source_url: 'https://www.thehotline.org/',
+      description: 'Free, confidential support 24/7 for survivors of domestic violence. Connects to local legal aid, emergency shelters, safety planning, and protective order assistance.',
+      application_url: 'https://www.thehotline.org/',
+      opportunity_type: 'pro_bono',
+      funding_type: 'service',
+      categories: ['domestic violence', 'legal aid', 'crisis intervention', 'shelter'],
+      keywords: ['domestic violence', 'protective order', 'victim services', 'crisis hotline', 'safety planning', 'emergency shelter'],
+      eligibility_bullets: ['Anyone affected by domestic violence', '24/7 availability', 'Confidential and free'],
+      is_national: true, state: state || 'nationwide', is_real: true, requires_501c3: false, requires_match: false,
+    },
+  ];
+
+  // ── CHARITY CARE / PATIENT ASSISTANCE (National) ──
+  const charityCareNational = [
+    {
+      title: 'NeedyMeds - Patient Assistance Program Database',
+      sponsor: 'NeedyMeds Inc.',
+      source: 'charity_care',
+      source_id: 'needymeds-pap',
+      source_url: 'https://www.needymeds.org/',
+      description: 'Comprehensive database of patient assistance programs (PAPs), free/low-cost clinics, copay assistance cards, and drug discount programs. Searchable by medication, diagnosis, or location.',
+      application_url: 'https://www.needymeds.org/',
+      opportunity_type: 'charity_care',
+      funding_type: 'cost_coverage',
+      categories: ['patient assistance', 'prescription', 'copay assistance', 'free clinic'],
+      keywords: ['patient assistance program', 'copay assistance', 'prescription help', 'free medication', 'drug discount', 'needymeds'],
+      eligibility_bullets: ['Varies by program - income-based', 'US resident', 'Must have valid prescription'],
+      is_national: true, state: state || 'nationwide', is_real: true, requires_501c3: false, requires_match: false,
+    },
+    {
+      title: 'HRSA Health Center Finder - Free/Sliding Scale Clinics',
+      sponsor: 'Health Resources & Services Administration',
+      source: 'charity_care',
+      source_id: 'hrsa-health-centers',
+      source_url: 'https://findahealthcenter.hrsa.gov/',
+      description: 'Federally Qualified Health Centers (FQHCs) provide primary care, dental, mental health, and substance abuse services on a sliding fee scale based on ability to pay. No one is turned away.',
+      application_url: 'https://findahealthcenter.hrsa.gov/',
+      opportunity_type: 'clinic_service',
+      funding_type: 'service',
+      categories: ['free clinic', 'primary care', 'dental', 'mental health', 'sliding scale'],
+      keywords: ['free clinic', 'sliding scale', 'community health center', 'fqhc', 'primary care', 'dental', 'mental health'],
+      eligibility_bullets: ['Open to everyone regardless of ability to pay', 'Sliding fee scale based on income', 'No insurance required'],
+      is_national: true, state: state || 'nationwide', is_real: true, requires_501c3: false, requires_match: false,
+    },
+    {
+      title: 'PAN Foundation - Copay Assistance',
+      sponsor: 'Patient Access Network Foundation',
+      source: 'charity_care',
+      source_id: 'pan-foundation',
+      source_url: 'https://www.panfoundation.org/',
+      description: 'Helps underinsured patients with out-of-pocket costs for prescribed medications. Covers copays, coinsurance, and deductibles for over 70 disease-specific funds.',
+      application_url: 'https://www.panfoundation.org/patients/',
+      opportunity_type: 'charity_care',
+      funding_type: 'cost_coverage',
+      categories: ['copay assistance', 'prescription', 'patient assistance'],
+      keywords: ['copay assistance', 'coinsurance help', 'deductible assistance', 'prescription cost', 'underinsured'],
+      eligibility_bullets: ['Insured (Medicare, Medicaid, or commercial)', 'Income at or below 400% FPL', 'Prescribed medication in a covered disease fund'],
+      is_national: true, state: state || 'nationwide', is_real: true, requires_501c3: false, requires_match: false,
+    },
+    {
+      title: 'Hill-Burton Free & Reduced Cost Care',
+      sponsor: 'HRSA / Hill-Burton Program',
+      source: 'charity_care',
+      source_id: 'hill-burton',
+      source_url: 'https://www.hrsa.gov/get-health-care/affordable/hill-burton/index.html',
+      description: 'Hospitals and facilities that received Hill-Burton funds are obligated to provide free or reduced-cost care to eligible patients. Covers inpatient and outpatient services.',
+      application_url: 'https://www.hrsa.gov/get-health-care/affordable/hill-burton/facilities.html',
+      opportunity_type: 'charity_care',
+      funding_type: 'cost_coverage',
+      categories: ['charity care', 'hospital', 'free care', 'financial assistance'],
+      keywords: ['hill-burton', 'charity care', 'hospital financial assistance', 'free hospital care', 'medical bills'],
+      eligibility_bullets: ['Income at or below current poverty guidelines', 'Must apply at a Hill-Burton obligated facility', 'Covers certain services at participating facilities'],
+      is_national: true, state: state || 'nationwide', is_real: true, requires_501c3: false, requires_match: false,
+    },
+  ];
+
+  // ── WORKFORCE TRAINING (National) ──
+  const workforceNational = [
+    {
+      title: 'CareerOneStop - WIOA Training Programs',
+      sponsor: 'U.S. Department of Labor',
+      source: 'workforce_training',
+      source_id: 'careeronestop-wioa',
+      source_url: 'https://www.careeronestop.org/LocalHelp/AmericanJobCenters/find-american-job-centers.aspx',
+      description: 'American Job Centers provide free career services, job training, and WIOA-funded tuition assistance. Eligible Training Provider List (ETPL) programs offer no-cost vocational and occupational training.',
+      application_url: 'https://www.careeronestop.org/LocalHelp/AmericanJobCenters/find-american-job-centers.aspx',
+      opportunity_type: 'training_paid',
+      funding_type: 'cost_coverage',
+      categories: ['workforce training', 'wioa', 'job training', 'career services', 'tuition assistance'],
+      keywords: ['wioa', 'etpl', 'job training', 'workforce development', 'one-stop center', 'career services', 'tuition assistance', 'no cost training'],
+      eligibility_bullets: ['Adults, dislocated workers, and youth (varies by program)', 'Income eligibility may apply for WIOA-funded training', 'Basic career services are free to all'],
+      is_national: true, state: state || 'nationwide', is_real: true, requires_501c3: false, requires_match: false,
+    },
+    {
+      title: 'Job Corps - Free Education and Training',
+      sponsor: 'U.S. Department of Labor',
+      source: 'workforce_training',
+      source_id: 'job-corps',
+      source_url: 'https://www.jobcorps.gov/',
+      description: 'Free education and vocational training program for young people ages 16-24. Includes housing, meals, health care, and hands-on career technical training in over 100 career areas.',
+      application_url: 'https://www.jobcorps.gov/recruiting/enrollment',
+      opportunity_type: 'training_paid',
+      funding_type: 'cost_coverage',
+      categories: ['job training', 'youth', 'education', 'vocational', 'free training'],
+      keywords: ['job corps', 'free training', 'youth employment', 'vocational training', 'career technical education'],
+      eligibility_bullets: ['Ages 16-24', 'Low-income (income criteria apply)', 'US citizen, national, or lawfully admitted'],
+      is_national: true, state: state || 'nationwide', is_real: true, requires_501c3: false, requires_match: false,
+    },
+    {
+      title: 'Vocational Rehabilitation Services',
+      sponsor: 'Rehabilitation Services Administration',
+      source: 'workforce_training',
+      source_id: 'voc-rehab',
+      source_url: 'https://rsa.ed.gov/',
+      description: 'State-federal program providing employment-related services to individuals with disabilities. Services include job training, education assistance, assistive technology, and job placement.',
+      application_url: 'https://rsa.ed.gov/about/states',
+      opportunity_type: 'training_paid',
+      funding_type: 'service',
+      categories: ['vocational rehabilitation', 'disability', 'job training', 'assistive technology'],
+      keywords: ['vocational rehabilitation', 'voc rehab', 'disability employment', 'assistive technology', 'job placement', 'rehabilitation services'],
+      eligibility_bullets: ['Must have a physical or mental disability', 'Disability must be a barrier to employment', 'Must require VR services to prepare for or obtain employment'],
+      is_national: true, state: state || 'nationwide', is_real: true, requires_501c3: false, requires_match: false,
+    },
+  ];
+
+  // ── EQUIPMENT DONATION / IN-KIND ──
+  const inKindNational = [
+    {
+      title: 'National Cristina Foundation - Computer & Technology Donations',
+      sponsor: 'National Cristina Foundation',
+      source: 'in_kind',
+      source_id: 'cristina-foundation',
+      source_url: 'https://www.cristina.org/',
+      description: 'Connects donated computers and technology to nonprofits, schools, and individuals with disabilities. Provides technology access for job training, education, and independent living.',
+      application_url: 'https://www.cristina.org/get-technology.html',
+      opportunity_type: 'equipment_donation',
+      funding_type: 'service',
+      categories: ['technology', 'computer donation', 'disability', 'education'],
+      keywords: ['computer donation', 'technology donation', 'assistive technology', 'donated equipment', 'digital access'],
+      eligibility_bullets: ['Nonprofits, schools, and individuals with disabilities', 'Must demonstrate need for technology', 'Fill out online request form'],
+      is_national: true, state: state || 'nationwide', is_real: true, requires_501c3: false, requires_match: false,
+    },
+    {
+      title: 'Modest Needs - Self-Sufficiency Grants',
+      sponsor: 'Modest Needs Foundation',
+      source: 'in_kind',
+      source_id: 'modest-needs',
+      source_url: 'https://www.modestneeds.org/',
+      description: 'Provides small grants directly to individuals and families in temporary financial crisis. Pays bills directly to prevent eviction, utility shutoff, or loss of essential services.',
+      application_url: 'https://www.modestneeds.org/apply-for-help/',
+      opportunity_type: 'in_kind',
+      funding_type: 'cost_coverage',
+      categories: ['emergency assistance', 'bill payment', 'crisis prevention', 'individual grants'],
+      keywords: ['emergency grant', 'bill payment assistance', 'eviction prevention', 'utility assistance', 'individual grant'],
+      eligibility_bullets: ['Employed or receiving regular income', 'Not currently receiving public assistance', 'Experiencing a one-time emergency expense'],
+      is_national: true, state: state || 'nationwide', is_real: true, requires_501c3: false, requires_match: false,
+    },
+  ];
+
+  opportunities.push(...legalAidNational, ...charityCareNational, ...workforceNational, ...inKindNational);
+
+  // State-specific pro bono entries
+  if (state) {
+    opportunities.push({
+      id: randomUUID(),
+      title: `${stateName} Legal Aid Society / Legal Services`,
+      sponsor: `${stateName} Legal Aid`,
+      source: 'pro_bono_legal',
+      source_id: `legal-aid-${state}`,
+      source_url: `https://www.lawhelp.org/find-help/`,
+      description: `Free legal services for low-income residents of ${stateName}. Covers eviction defense, domestic violence, public benefits, consumer protection, and family law matters.`,
+      application_url: 'https://www.lawhelp.org/find-help/',
+      opportunity_type: 'pro_bono',
+      funding_type: 'service',
+      categories: ['legal aid', 'pro bono', 'eviction defense', 'family law'],
+      keywords: ['legal aid', 'free legal', stateName?.toLowerCase(), 'eviction defense', 'pro bono', 'tenant rights'],
+      eligibility_bullets: [`Must be a resident of ${stateName}`, 'Income at or below 125-200% FPL', 'Civil (non-criminal) legal matter'],
+      is_national: false, state, is_real: true, requires_501c3: false, requires_match: false,
+    });
+
+    opportunities.push({
+      id: randomUUID(),
+      title: `${stateName} Workforce Development Board - WIOA Training`,
+      sponsor: `${stateName} Department of Labor`,
+      source: 'workforce_training',
+      source_id: `wioa-${state}`,
+      source_url: 'https://www.careeronestop.org/LocalHelp/AmericanJobCenters/find-american-job-centers.aspx',
+      description: `WIOA-funded training and career services in ${stateName}. Eligible Training Provider List (ETPL) programs cover tuition, books, and supplies for in-demand occupations.`,
+      application_url: 'https://www.careeronestop.org/LocalHelp/AmericanJobCenters/find-american-job-centers.aspx',
+      opportunity_type: 'training_paid',
+      funding_type: 'cost_coverage',
+      categories: ['workforce training', 'wioa', 'job training', 'tuition assistance'],
+      keywords: ['wioa', 'etpl', 'workforce', stateName?.toLowerCase(), 'job training', 'tuition assistance', 'no cost training'],
+      eligibility_bullets: [`Must be a resident of ${stateName}`, 'Adults and dislocated workers', 'Income eligibility may apply'],
+      is_national: false, state, is_real: true, requires_501c3: false, requires_match: false,
+    });
+  }
+
+  // Set IDs for entries that don't have them
+  for (const opp of opportunities) {
+    if (!opp.id) opp.id = randomUUID();
+  }
+
+  console.log(`[RealCrawler] Pro Bono/In-Kind: Found ${opportunities.length} opportunities`);
+  return opportunities;
+}
+
+/**
  * Main crawler function - crawl all sources for a state
  */
 export async function crawlRealOpportunities(db, state = null, options = {}) {
@@ -750,6 +1003,16 @@ export async function crawlRealOpportunities(db, state = null, options = {}) {
       errors.push({ source: 'scholarships', error: error.message });
       console.error('[RealCrawler] Scholarships crawl failed:', error.message);
     }
+  }
+
+  // Pro bono / In-kind / Service-based assistance (always included)
+  try {
+    const proBono = await crawlProBonoAndInKind(state);
+    allOpportunities.push(...proBono);
+    onProgress?.({ source: 'pro_bono_in_kind', count: proBono.length });
+  } catch (error) {
+    errors.push({ source: 'pro_bono_in_kind', error: error.message });
+    console.error('[RealCrawler] Pro bono/in-kind crawl failed:', error.message);
   }
   
   // Loan/matching detection - skip before upsert (consistent with crawlerHelpers)
@@ -896,5 +1159,6 @@ export default {
   crawlStateGrants,
   crawlCommunityFoundations,
   crawlCorporateGiving,
-  crawlScholarships
+  crawlScholarships,
+  crawlProBonoAndInKind,
 };

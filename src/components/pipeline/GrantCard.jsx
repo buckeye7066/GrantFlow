@@ -116,6 +116,25 @@ export default function GrantCard({ grant, organization, organizationName, onSta
                 </Badge>
               </HelpTip>
             )}
+          {/* Pro Bono / In-Kind / Service Type Badge */}
+          {['pro_bono', 'in_kind', 'charity_care', 'training_paid', 'legal_aid', 'clinic_service', 'equipment_donation'].includes(grant.opportunity_type) && (
+            <Badge variant="secondary" className="text-xs bg-purple-100 text-purple-800 border-purple-200">
+              {{
+                pro_bono: 'Pro Bono',
+                in_kind: 'In-Kind',
+                charity_care: 'Charity Care',
+                training_paid: 'Free Training',
+                legal_aid: 'Legal Aid',
+                clinic_service: 'Clinic Service',
+                equipment_donation: 'Equipment',
+              }[grant.opportunity_type] || 'Service'}
+            </Badge>
+          )}
+          {grant.funding_type && ['service', 'cost_coverage', 'referral'].includes(grant.funding_type) && (
+            <Badge variant="outline" className="text-xs border-purple-200 text-purple-700">
+              {{service: 'Service', cost_coverage: 'Cost Coverage', referral: 'Referral'}[grant.funding_type]}
+            </Badge>
+          )}
         </div>
         {(onStarToggle || onDelete) && (
           <DropdownMenu open={showMenu} onOpenChange={setShowMenu}>
