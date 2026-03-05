@@ -66,6 +66,7 @@ import { ensureProfileOrgLinks } from './utils/ensureProfileOrgLinks.js'
 import { runStartupOperations } from './services/anyaStartupOperations.js';
 import ensureMinimumNationalOpportunities from './utils/ensureMinimumNationalOpportunities.js';
 import seedAssistanceDirectories from './utils/seedAssistanceDirectories.js';
+import seedFaithBasedHousing from './utils/seedFaithBasedHousing.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { attachRequestContext } from './middleware/requestContext.js';
 import { MAX_JSON_BODY_SIZE } from './config/constants.js';
@@ -992,6 +993,24 @@ try {
   }
 } catch (error) {
   console.warn('[startup] Failed to seed assistance directories:', error?.message || error)
+}
+
+try {
+  const faithCount = db
+    .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source = 'faith_based_assistance' AND state = 'OH' AND is_active = 1")
+    .get()?.count ?? 0
+  if (faithCount < 6) {
+    console.info('[startup] Seeding faith-based housing assistance (Lorain County OH)...')
+    const result = await seedFaithBasedHousing(db)
+    const afterCount = db
+      .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source = 'faith_based_assistance' AND state = 'OH' AND is_active = 1")
+      .get()?.count
+    console.info('[startup] Seeded faith-based housing', { ...result, after: afterCount })
+  } else {
+    console.info('[startup] Faith-based housing already seeded', { count: faithCount })
+  }
+} catch (error) {
+  console.warn('[startup] Failed to seed faith-based housing:', error?.message || error)
 }
 
 function resolveJwtSecret() {
