@@ -117,10 +117,10 @@ export async function analyzeProfile(db, profileOrId) {
   }
 
   const basic     = sections.basic_information || {};
-  const health    = sections.health_medical || {};
+  const health    = sections.health_medical || sections.medical || {};
   const medHist   = sections.medical_history || {};
   const medIns    = sections.medical_insurance || {};
-  const family    = sections.family_life || {};
+  const family    = sections.family_life || sections.family || {};
   const mil       = sections.military_service || {};
   const edu       = sections.education || {};
   const fin       = sections.financial_information || sections.financial || {};
@@ -133,6 +133,8 @@ export async function analyzeProfile(db, profileOrId) {
   const comp      = sections.comprehensive_application || {};
   const npComp    = sections.nonprofit_compliance || {};
   const smBiz     = sections.small_business_details || {};
+  // Alternate-schema medical section (UUID profiles store 'medical' instead of 'health_medical')
+  const medAlt    = sections.medical || {};
 
   // ── Location (handle nested address objects AND plain address strings) ──
   const rawAddr = basic.address;
@@ -218,8 +220,11 @@ export async function analyzeProfile(db, profileOrId) {
 
   // ── Health (conditions array + all boolean flags from application) ──
   const healthSignals = new Set();
-  const conditions = collectValues(sections, 'health_medical.conditions', 'health_medical.disability_type');
-  for (const c of conditions.map(lower)) {
+  const conditions = collectValues(sections, 'health_medical.conditions', 'health_medical.disability_type',
+    'medical.conditions', 'medical.disability_type', 'medical.disabilities');
+  // Also include notes from health/medical sections as free-text condition hints
+  const healthNotes = lower([health.notes, medAlt.notes, health.chronic_illness_type].filter(Boolean).join(' '));
+  for (const c of [...conditions.map(lower), ...(healthNotes.length > 0 ? healthNotes.split(/[,;]+/).map(s => s.trim()).filter(Boolean) : [])]) {
     if (c.includes('disab')) healthSignals.add('disability');
     if (c.includes('cancer')) healthSignals.add('cancer');
     if (c.includes('kidney') || c.includes('dialysis')) healthSignals.add('kidney_disease');
@@ -293,8 +298,7 @@ export async function analyzeProfile(db, profileOrId) {
   if (family.trafficking_survivor || comp.trafficking_survivor) { familySignals.add('trafficking_survivor'); needs.add('housing'); needs.add('legal'); }
   if (family.disaster_survivor || comp.disaster_survivor) { familySignals.add('disaster_survivor'); needs.add('housing'); }
   if (family.formerly_incarcerated || comp.formerly_incarcerated) familySignals.add('formerly_incarcerated');
-  const familySec = sections.family || {};
-  const householdSize = parseInt(family.household_size || familySec.household_size || basic.household_size || fin.household_size || comp.household_size) || null;
+  const householdSize = parseInt(family.household_size || basic.household_size || fin.household_size || comp.household_size) || null;
   if (family.has_children || family.dependents > 0 || (householdSize > 1)) familySignals.add('has_children');
   if (comp.minor_child) familySignals.add('has_children');
   if (housing.status === 'at-risk') needs.add('housing');
@@ -329,6 +333,20 @@ export async function analyzeProfile(db, profileOrId) {
   if (gov.tanf_recipient || comp.tanf_recipient) needs.add('cash_assistance');
   if (gov.section8_housing || comp.section8_housing) needs.add('housing');
   if (gov.medicaid_waiver_program && gov.medicaid_waiver_program !== 'none') needs.add('healthcare');
+
+  // ── Assistance programs from medical section (alternate schema) ──
+  const assistPrograms = Array.isArray(medAlt.assistance_programs) ? medAlt.assistance_programs.map(lower) : [];
+  for (const prog of assistPrograms) {
+    if (prog.includes('ssdi')) { needs.add('disability'); needs.add('cash_assistance'); }
+    if (prog.includes('ssi')) { needs.add('disability'); needs.add('cash_assistance'); }
+    if (prog.includes('medicaid')) needs.add('healthcare');
+    if (prog.includes('medicare')) needs.add('healthcare');
+    if (prog.includes('snap')) needs.add('food');
+    if (prog.includes('tanf')) needs.add('cash_assistance');
+    if (prog.includes('section') && prog.includes('8')) needs.add('housing');
+    if (prog.includes('liheap')) needs.add('utilities');
+    if (prog.includes('wic')) needs.add('food');
+  }
 
   // ── Occupation signals ──
   const occupationSignals = new Set();
@@ -377,7 +395,14 @@ export async function analyzeProfile(db, profileOrId) {
   if (housing.status === 'shelter' || housing.status === 'transitional') needs.add('housing');
 
   // ── Narrative/Barriers → keyword extraction for broader matching ──
-  const narrativeText = lower([narr.barriers_faced, narr.special_circumstances, narr.mission, narr.primary_goal, employ.career_goal].filter(Boolean).join(' '));
+  const narrativeText = lower([
+    narr.barriers_faced, narr.special_circumstances, narr.mission, narr.primary_goal,
+    narr.statement_of_need, narr.goals,
+    employ.career_goal, employ.notes,
+    family.notes, family.responsibilities,
+    health.notes, medAlt.notes,
+    housing.notes,
+  ].filter(Boolean).join(' '));
   for (const [need, triggers] of Object.entries(NEED_MAP)) {
     if (triggers.some(t => narrativeText.includes(t))) needs.add(need);
   }

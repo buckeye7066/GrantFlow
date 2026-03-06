@@ -88,7 +88,14 @@ export const CRAWLER_JOB_TYPES = [
   'avatar_lookup',
   'document_ingest',
   'pipeline_automation',
-  'profile_enrichment'
+  'profile_enrichment',
+  'curated_benefits',
+  'government_funding',
+  'student_grants',
+  'ecf_benefits',
+  'special_needs',
+  'local_funding',
+  'item_matching',
 ];
 
 export const CRAWLER_JOB_STATUSES = [

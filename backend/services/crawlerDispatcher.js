@@ -47,9 +47,23 @@ async function processCuratedBenefitsJob({ db, job, profileContext }) {
   const profileId = job?.profile_id || profileContext?.profile?.id;
   if (!profileId) throw new Error('curated_benefits requires a profile_id');
   const params = typeof job?.parameters === 'string' ? JSON.parse(job.parameters) : (job?.parameters || {});
+  // Map job types to strategy IDs (e.g. 'scholarship' → 'student_grants', 'health_resources' → 'health_resources')
+  const JOB_TYPE_TO_STRATEGY = {
+    scholarship: 'student_grants',
+    curated_benefits: 'curated_benefits',
+    health_resources: 'health_resources',
+    government_funding: 'government_funding',
+    student_grants: 'student_grants',
+    ecf_benefits: 'ecf_benefits',
+    special_needs: 'special_needs',
+    local_funding: 'local_funding',
+    item_matching: 'item_matching',
+  };
+  const crawlerType = JOB_TYPE_TO_STRATEGY[job?.type] || 'comprehensive';
   const result = await runCuratedCrawler(db, profileId, {
     minScore: params.minScore ?? 25,
     maxResults: params.maxResults ?? 100,
+    crawlerType,
   });
   return {
     result_count: result.results.length,
@@ -76,6 +90,12 @@ const HANDLERS = {
   document_ingest: processDocumentIngestionJob,
   pipeline_automation: processPipelineAutomationJob,
   profile_enrichment: processProfileEnrichmentJob,
+  government_funding: processCuratedBenefitsJob,
+  student_grants: processCuratedBenefitsJob,
+  ecf_benefits: processCuratedBenefitsJob,
+  special_needs: processCuratedBenefitsJob,
+  local_funding: processCuratedBenefitsJob,
+  item_matching: processCuratedBenefitsJob,
 }
 
 function parseJSON(value) {
