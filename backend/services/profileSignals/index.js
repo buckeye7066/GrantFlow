@@ -113,7 +113,7 @@ function extractAssistancePrograms(sections) {
     for (const prog of medAlt.assistance_programs) {
       const p = String(prog).toLowerCase().trim();
       if (p.includes('ssdi') && !programs.includes('ssdi')) programs.push('ssdi');
-      if (p.includes('ssi') && !p.includes('ssdi') && !programs.includes('ssi')) programs.push('ssi');
+      if (p.includes('ssi') && !programs.includes('ssi')) programs.push('ssi');
       if (p.includes('medicaid') && !programs.includes('medicaid')) programs.push('medicaid');
       if (p.includes('medicare') && !programs.includes('medicare')) programs.push('medicare');
       if (p.includes('snap') && !programs.includes('snap')) programs.push('snap');
