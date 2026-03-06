@@ -1,38 +1,28 @@
 /**
  * crawlerManager.js
- * 
- * THE COMPLETE REPLACEMENT for the old crawler system.
- * 
- * Old system: 6 crawlers all querying Grants.gov (wrong database)
- *             with Benefits.gov API calls that silently fail.
- * 
- * New system: Profile analysis → curated program matching → scored results.
- * 
+ *
+ * Strategy-routed crawler pipeline.
+ *
  * Data flow:
- *   1. Profile → profileAnalyzer → structured needs
- *   2. Load curated data: federal benefits + state benefits + national programs
- *   3. Match programs against needs → scored results
- *   4. Store results in database
- * 
- * DELETE the following old files entirely:
- *   - governmentFundingCrawler.js
- *   - localFundingCrawler.js  
- *   - ecfBenefitsCrawler.js
- *   - healthResourcesCrawler.js
- *   - specialNeedsCrawler.js
- *   - studentGrantsCrawler.js
- *   - crawlerHelpers.js (old)
- *   - profileHelpers.js (old)
+ *   1. Profile → profileSignals → canonical signals + intents
+ *   2. Strategy registry selects candidate sources + scoring rules
+ *   3. Load curated data per strategy
+ *   4. Match programs → scored results with match_explain
+ *   5. URL policy enforcement
+ *   6. Store results
  */
 
-import { analyzeProfile } from './profileAnalyzer.js';
+import { loadProfileSignals } from '../profileSignals/index.js';
 import { matchPrograms } from './matchEngine.js';
+import { getStrategy, checkGates } from './strategyRegistry.js';
 import { FEDERAL_BENEFITS } from './data/federalBenefits.js';
 import { NATIONAL_PROGRAMS } from './data/nationalPrograms.js';
 import { BUSINESS_PROGRAMS } from './data/businessPrograms.js';
 import { SCHOLARSHIPS } from './data/scholarships.js';
 import { generateStatePrograms, isStateInRegistry } from './data/stateBase.js';
 import { upsertFundingOpportunity } from '../opportunityInserter.js';
+
+// ── Schema bootstrap ──
 
 let crawlSchemaEnsured = false;
 async function ensureCrawlSchema(db) {
@@ -79,74 +69,121 @@ async function ensureCrawlSchema(db) {
   }
 }
 
-// Dynamic state data loader — tries dedicated file first, falls back to auto-generated
+// ── State data loader ──
+
 async function loadStateData(stateCode) {
   if (!stateCode) return { benefits: [], countyResources: null, meta: null };
-
-  // 1. Try dedicated state file (WV.js, TN.js, etc.)
   try {
     const mod = await import(`./data/states/${stateCode}.js`);
-    console.log(`[CrawlerManager] Loaded dedicated state file for ${stateCode}`);
     return {
       benefits: (mod.STATE_BENEFITS || []).map(b => ({ ...b, stateRestriction: stateCode })),
       countyResources: mod.COUNTY_RESOURCES || {},
       meta: mod.STATE_META || null,
     };
-  } catch {
-    // No dedicated file — fall through to auto-generated
-  }
+  } catch { /* no dedicated file */ }
 
-  // 2. Auto-generate from state registry
   if (isStateInRegistry(stateCode)) {
     const generated = generateStatePrograms(stateCode);
-    console.log(`[CrawlerManager] Auto-generated ${generated.benefits.length} programs for ${stateCode} from registry`);
     return {
       benefits: generated.benefits.map(b => ({ ...b, stateRestriction: stateCode })),
       countyResources: generated.countyResources || {},
       meta: generated.meta,
     };
   }
-
-  console.warn(`[CrawlerManager] No data for state ${stateCode}. Using federal/national only.`);
   return { benefits: [], countyResources: null, meta: null };
 }
 
-/**
- * Generate per-school funding opportunity cards from university application portal data.
- * Each school with populated financial-aid portals, department contacts, etc. gets cards
- * injected directly into the results so they appear as clickable funding opportunities.
- */
+// ── Source label map ──
+
+const SOURCE_LABELS = {
+  federal: 'Federal Benefits',
+  state: 'State Programs',
+  national: 'National Programs',
+  business: 'Business Programs',
+  scholarships: 'Scholarships',
+  schoolCards: 'School Cards',
+};
+
+// ── Candidate loader: builds program array per strategy ──
+
+function loadCandidates(strategy, stateData, analysis, intents) {
+  const sources = new Set(strategy.candidateSources);
+  const candidateCounts = {};
+  const programs = [];
+
+  if (sources.has('federal')) {
+    programs.push(...FEDERAL_BENEFITS);
+    candidateCounts.federal = FEDERAL_BENEFITS.length;
+  }
+
+  if (sources.has('state')) {
+    programs.push(...stateData.benefits);
+    candidateCounts.state = stateData.benefits.length;
+  }
+
+  if (sources.has('national')) {
+    // For health_resources / special_needs, filter national programs to relevant categories
+    if (strategy.categoryFilter) {
+      const catSet = new Set(strategy.categoryFilter);
+      const filtered = NATIONAL_PROGRAMS.filter(p =>
+        (p.categories || []).some(c => catSet.has(c))
+      );
+      programs.push(...filtered);
+      candidateCounts.national = filtered.length;
+    } else {
+      programs.push(...NATIONAL_PROGRAMS);
+      candidateCounts.national = NATIONAL_PROGRAMS.length;
+    }
+  }
+
+  if (sources.has('business')) {
+    const hasBizIntent = intents.has('business')
+      || analysis.occupation.has('small_business_owner')
+      || analysis.occupation.has('minority_owned_business')
+      || analysis.occupation.has('women_owned_business')
+      || analysis.needs.has('employment')
+      || analysis.applicantType === 'organization';
+
+    if (hasBizIntent) {
+      programs.push(...BUSINESS_PROGRAMS);
+      candidateCounts.business = BUSINESS_PROGRAMS.length;
+    } else {
+      candidateCounts.business = 0;
+    }
+  }
+
+  if (sources.has('scholarships')) {
+    if (analysis.applicantType === 'student' || intents.has('education')) {
+      programs.push(...SCHOLARSHIPS);
+      candidateCounts.scholarships = SCHOLARSHIPS.length;
+    } else {
+      candidateCounts.scholarships = 0;
+    }
+  }
+
+  return { programs, candidateCounts };
+}
+
+// ── School cards generator ──
+
 function generateSchoolCards(analysis) {
   const schools = analysis.schools || [];
   if (schools.length === 0) return [];
-
   const cards = [];
-  const gender = analysis.demographics?.gender || null;
+  const gender = analysis.demographics?.has?.('female') ? 'female' : (analysis.demographics?.has?.('male') ? 'male' : null);
 
   for (const school of schools) {
     const prefix = school.name;
     const slug = (school.id || school.name).replace(/\s+/g, '-').toLowerCase();
     const baseScore = 85;
     const hasPortal = !!school.portals?.financialAid;
-
-    // Construct a Google-searchable fallback URL when no portal is stored
     const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(school.name + ' financial aid office')}`;
-
-    // Financial Aid card — ALWAYS generated for every target school
     const finaidUrl = school.portals?.financialAid || school.website || searchUrl;
-    const finaidDesc = school.portals?.financialAid
-      ? `Apply for institutional scholarships, grants, and work-study through ${prefix}'s financial aid portal.`
-      : `${prefix} is a target school. Add the financial aid portal URL in the school card to get direct-link access.`;
-    const finaidExtra = [
-      school.fafsaCode ? `FAFSA Code: ${school.fafsaCode}` : null,
-      school.financialAidDeadline ? `Aid deadline: ${school.financialAidDeadline}` : null,
-      school.tuition ? `Tuition: $${school.tuition.toLocaleString()}` : null,
-    ].filter(Boolean).join('. ');
 
     cards.push({
       id: `school-finaid-${slug}`,
       name: `${prefix} — Financial Aid`,
-      description: `${finaidDesc}${finaidExtra ? ' ' + finaidExtra + '.' : ''}`,
+      description: `Apply for institutional scholarships, grants, and work-study through ${prefix}'s financial aid portal.${school.fafsaCode ? ` FAFSA Code: ${school.fafsaCode}.` : ''}`,
       url: finaidUrl,
       categories: ['education', 'financial'],
       type: 'school_portal',
@@ -157,12 +194,11 @@ function generateSchoolCards(analysis) {
       schoolName: prefix,
     });
 
-    // Admissions Portal card — only when URL is present
     if (school.portals?.admissions) {
       cards.push({
         id: `school-admissions-${slug}`,
         name: `${prefix} — Admissions Portal`,
-        description: `Track your application status, submit documents, and communicate with ${prefix}'s admissions office.`,
+        description: `Track your application status and communicate with ${prefix}'s admissions office.`,
         url: school.portals.admissions,
         categories: ['education'],
         type: 'school_portal',
@@ -174,231 +210,262 @@ function generateSchoolCards(analysis) {
       });
     }
 
-    // Department contacts matching student interests
-    if (school.departmentContacts && school.departmentContacts.length > 0) {
-      const relevantDepts = filterDeptContactsByInterest(
-        school.departmentContacts,
-        analysis.interests,
-        analysis.sports,
-        gender,
-      );
-
+    if (school.departmentContacts?.length > 0) {
+      const relevantDepts = filterDeptContacts(school.departmentContacts, analysis.interests, analysis.sports, gender);
       for (const dept of relevantDepts) {
         const deptSlug = (dept.area || 'dept').replace(/\s+/g, '-').toLowerCase();
-        const contactLines = [];
-        if (dept.name) contactLines.push(dept.name);
-        if (dept.title) contactLines.push(dept.title);
-        if (dept.email) contactLines.push(dept.email);
-        if (dept.phone) contactLines.push(dept.phone);
-
+        const contactLines = [dept.name, dept.title, dept.email, dept.phone].filter(Boolean).join(' | ');
         cards.push({
           id: `school-dept-${slug}-${deptSlug}`,
           name: `${prefix} — ${dept.area || 'Department Contact'}`,
-          description: `Contact for ${dept.area || 'this program'} at ${prefix}. ${contactLines.join(' | ')}`,
+          description: `Contact for ${dept.area || 'this program'} at ${prefix}. ${contactLines}`,
           url: dept.url || school.website || searchUrl,
           categories: ['education'],
           type: 'school_department',
           fundingType: 'department_contact',
           matchScore: baseScore + 3,
           matchReasons: [`Department contact for interest: ${dept.area}`],
-          contact: {
-            name: dept.name || null,
-            title: dept.title || null,
-            email: dept.email || null,
-            phone: dept.phone || null,
-          },
+          contact: { name: dept.name, title: dept.title, email: dept.email, phone: dept.phone },
           schoolName: prefix,
         });
       }
     }
-
-    // Counseling / advising card
-    if (school.portals?.counseling) {
-      cards.push({
-        id: `school-counseling-${slug}`,
-        name: `${prefix} — Academic Counseling & Advising`,
-        description: `Access academic counseling, disability services, and advising resources at ${prefix}.`,
-        url: school.portals.counseling,
-        categories: ['education'],
-        type: 'school_portal',
-        fundingType: 'support_service',
-        matchScore: baseScore - 5,
-        matchReasons: [`Counseling portal for target school: ${prefix}`],
-        schoolName: prefix,
-      });
-    }
-
-    // Transcript / Score sending cards
-    if (school.portals?.transcripts || school.portals?.sendScores) {
-      const urls = [];
-      if (school.portals.transcripts) urls.push({ label: 'Transcripts', url: school.portals.transcripts });
-      if (school.portals.sendScores) urls.push({ label: 'Send Scores', url: school.portals.sendScores });
-
-      cards.push({
-        id: `school-docs-${slug}`,
-        name: `${prefix} — Transcript & Score Submission`,
-        description: `Submit official transcripts and test scores to ${prefix}. ${urls.map(u => u.label + ': ' + u.url).join(' | ')}`,
-        url: urls[0].url,
-        categories: ['education'],
-        type: 'school_portal',
-        fundingType: 'application_resource',
-        matchScore: baseScore - 10,
-        matchReasons: [`Document submission portal for target school: ${prefix}`],
-        schoolName: prefix,
-      });
-    }
   }
-
   return cards;
 }
 
 function extractPrimaryContact(contacts, labelHint) {
-  if (!contacts || contacts.length === 0) return null;
-  const match = contacts.find(c =>
-    c.label && c.label.toLowerCase().includes(labelHint.toLowerCase()),
-  );
-  const c = match || contacts[0];
-  if (!c.name && !c.email && !c.phone) return null;
-  return { name: c.name, title: c.title, email: c.email, phone: c.phone };
+  if (!contacts?.length) return null;
+  const c = contacts.find(c => c.label?.toLowerCase().includes(labelHint.toLowerCase())) || contacts[0];
+  return (c.name || c.email || c.phone) ? { name: c.name, title: c.title, email: c.email, phone: c.phone } : null;
 }
 
-function filterDeptContactsByInterest(deptContacts, interests, sports, gender) {
-  const interestSet = interests instanceof Set ? interests : new Set(interests || []);
-  const sportSet = sports instanceof Set ? sports : new Set(sports || []);
-  const allInterests = new Set([...interestSet, ...sportSet]);
-
-  if (allInterests.size === 0) return deptContacts;
-
-  const needleSet = new Set();
-  for (const interest of allInterests) {
-    needleSet.add(String(interest).toLowerCase().trim());
-  }
-
+function filterDeptContacts(deptContacts, interests, sports, gender) {
+  const all = new Set([...(interests || []), ...(sports || [])]);
+  if (all.size === 0) return deptContacts;
+  const needles = [...all].map(s => String(s).toLowerCase());
   return deptContacts.filter(dept => {
-    const haystack = [dept.area, dept.category, dept.name, dept.title]
-      .filter(Boolean)
-      .map(s => s.toLowerCase())
-      .join(' ');
-
-    for (const needle of needleSet) {
-      if (haystack.includes(needle)) {
-        if (gender && dept.genderTarget && dept.genderTarget !== 'any' && dept.genderTarget !== 'unknown') {
-          const gNorm = gender.toLowerCase();
-          const tNorm = dept.genderTarget.toLowerCase();
-          if (gNorm === 'female' && tNorm === 'men') continue;
-          if (gNorm === 'male' && tNorm === 'women') continue;
-        }
-        return true;
+    const hay = [dept.area, dept.category, dept.name, dept.title].filter(Boolean).join(' ').toLowerCase();
+    for (const n of needles) {
+      if (!hay.includes(n)) continue;
+      if (gender && dept.genderTarget && !['any','unknown'].includes(dept.genderTarget)) {
+        if (gender === 'female' && dept.genderTarget.toLowerCase() === 'men') continue;
+        if (gender === 'male' && dept.genderTarget.toLowerCase() === 'women') continue;
       }
+      return true;
     }
     return false;
   });
 }
 
+// ── URL policy enforcement ──
+
+function enforceUrlPolicy(results, policy) {
+  if (policy === 'relaxed') return { accepted: results, demoted: [] };
+
+  const accepted = [];
+  const demoted = [];
+
+  for (const r of results) {
+    const url = r.url || r.applicationUrl || '';
+    const hasRealUrl = /^https?:\/\/.+/.test(url);
+    const isDirectory = r.type === 'portal' || r.type === 'referral' || r.type === 'school_portal';
+
+    if (policy === 'strict' && !hasRealUrl && !isDirectory) {
+      demoted.push(r);
+    } else {
+      r._urlPolicy = {
+        urlUsed: url || null,
+        isDirectory,
+        acceptedReason: hasRealUrl ? 'valid_url' : (isDirectory ? 'directory_fallback' : 'no_url_kept'),
+      };
+      accepted.push(r);
+    }
+  }
+  return { accepted, demoted };
+}
+
+// ── PII redaction for Vercel-safe debug output ──
+
+const PII_KEYS = new Set([
+  'name', 'display_name', 'email', 'phone', 'ssn', 'social_security',
+  'address', 'street', 'dob', 'date_of_birth', 'birth_date',
+  'first_name', 'last_name', 'full_name', 'password', 'token',
+]);
+
+function redactPII(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) return obj.map(redactPII);
+  const safe = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (PII_KEYS.has(k.toLowerCase())) {
+      safe[k] = '[REDACTED]';
+    } else if (typeof v === 'object' && v !== null) {
+      safe[k] = redactPII(v);
+    } else {
+      safe[k] = v;
+    }
+  }
+  return safe;
+}
+
 /**
  * Run the full crawler pipeline for a profile.
- * 
- * @param {Object} db - Database connection
- * @param {string} profileId - Profile ID to crawl for
- * @param {Object} options - { minScore, maxResults, forceRefresh }
- * @returns {Object} { results, analysis, statePortal, countyContacts }
+ *
+ * @param {Object} db
+ * @param {string} profileId
+ * @param {Object} options - { minScore, maxResults, forceRefresh, crawlerType }
+ * @returns {{ results, analysis, statePortal, countyContacts, debug }}
  */
 export async function runCrawler(db, profileId, options = {}) {
-  const { minScore = 25, maxResults = 100, forceRefresh = false } = options;
+  const { minScore, maxResults, forceRefresh = false, crawlerType = 'comprehensive' } = options;
+  const timing = {};
+  const t0 = Date.now();
 
   await ensureCrawlSchema(db);
 
-  console.log(`\n[CrawlerManager] ═══════════════════════════════════════`);
-  console.log(`[CrawlerManager] Starting crawl for profile: ${profileId}`);
-  console.log(`[CrawlerManager] ═══════════════════════════════════════\n`);
+  // ── Step 1: Load profile signals ──
+  const t1 = Date.now();
+  const { signals: analysis, intents, assistancePrograms, rawInputs } = await loadProfileSignals(db, profileId);
+  timing.signalLoad_ms = Date.now() - t1;
 
-  // ── Step 1: Analyze the profile ──
-  console.log('[CrawlerManager] Step 1: Analyzing profile...');
-  const analysis = await analyzeProfile(db, profileId);
-  
-  if (!analysis.location.state) {
-    console.warn('[CrawlerManager] WARNING: No state detected in profile. Results will be federal/national only.');
+  // ── Step 2: Resolve strategy ──
+  const strategy = getStrategy(crawlerType);
+  const effectiveMinScore = minScore ?? strategy.minScore;
+  const effectiveMaxResults = maxResults ?? strategy.maxResults;
+  const gateResult = checkGates(strategy, intents);
+
+  console.log(`[CrawlerManager] strategy=${strategy.id} profile=${profileId} intents=[${[...intents]}]`);
+
+  if (gateResult.gated) {
+    console.log(`[CrawlerManager] Strategy "${strategy.id}" gated: ${gateResult.reason}`);
+    return {
+      results: [],
+      analysis,
+      statePortal: null,
+      countyContacts: null,
+      debug: {
+        strategy: strategy.id,
+        gated: true,
+        gateReason: gateResult.reason,
+        intents: [...intents],
+        candidateCounts: {},
+        timing: { ...timing, total_ms: Date.now() - t0 },
+      },
+    };
   }
 
-  // ── Step 2: Load all program data ──
-  console.log('[CrawlerManager] Step 2: Loading program data...');
+  // ── Step 3: Load candidate programs per strategy ──
+  const t3 = Date.now();
   const stateData = await loadStateData(analysis.location.state);
-  
-  // Include scholarships only for student profiles
-  const scholarshipPrograms = analysis.applicantType === 'student' ? SCHOLARSHIPS : [];
+  const { programs: allPrograms, candidateCounts } = loadCandidates(strategy, stateData, analysis, intents);
 
-  // Include business programs when profile has business/entrepreneurship intent
-  const hasBizIntent = analysis.occupation.has('small_business_owner')
-    || analysis.occupation.has('minority_owned_business')
-    || analysis.occupation.has('women_owned_business')
-    || analysis.needs.has('employment')
-    || analysis.applicantType === 'organization'
-    || (analysis.keywords || []).some(k => /business|entrepreneur|startup|self.?employ|microenterprise/i.test(k));
-  const businessPrograms = hasBizIntent ? BUSINESS_PROGRAMS : [];
-
-  const allPrograms = [
-    ...FEDERAL_BENEFITS,
-    ...stateData.benefits,
-    ...NATIONAL_PROGRAMS,
-    ...businessPrograms,
-    ...scholarshipPrograms,
-  ];
-
-  console.log(`[CrawlerManager]   Federal programs:  ${FEDERAL_BENEFITS.length}`);
-  console.log(`[CrawlerManager]   State programs:    ${stateData.benefits.length}`);
-  console.log(`[CrawlerManager]   National programs: ${NATIONAL_PROGRAMS.length}`);
-  console.log(`[CrawlerManager]   Business programs: ${businessPrograms.length}${hasBizIntent ? '' : ' (skipped — no biz intent)'}`);
-  console.log(`[CrawlerManager]   Scholarships:      ${scholarshipPrograms.length}`);
-  console.log(`[CrawlerManager]   Total candidates:  ${allPrograms.length}`);
-
-  // ── Step 3: Match and score ──
-  console.log('[CrawlerManager] Step 3: Matching programs to profile needs...');
-  const results = matchPrograms(allPrograms, analysis, { minScore, maxResults });
-
-  console.log(`[CrawlerManager]   Matched programs:  ${results.length}`);
-  if (results.length > 0) {
-    console.log(`[CrawlerManager]   Top match: ${results[0].name} (${results[0].matchScore}%)`);
-    console.log(`[CrawlerManager]   Lowest match: ${results[results.length - 1].name} (${results[results.length - 1].matchScore}%)`);
+  let schoolCards = [];
+  if (strategy.candidateSources.includes('schoolCards') && analysis.schools?.length > 0) {
+    schoolCards = generateSchoolCards(analysis);
+    candidateCounts.schoolCards = schoolCards.length;
   }
+  timing.candidateLoad_ms = Date.now() - t3;
 
-  // ── Step 4: Generate per-school funding cards from university application portals ──
-  const schoolCards = generateSchoolCards(analysis);
+  const totalCandidates = allPrograms.length + schoolCards.length;
+  console.log(`[CrawlerManager] Candidates: ${JSON.stringify(candidateCounts)} total=${totalCandidates}`);
+
+  // ── Step 4: Match and score ──
+  const t4 = Date.now();
+  const matchOpts = {
+    minScore: effectiveMinScore,
+    maxResults: effectiveMaxResults,
+    strategyId: strategy.id,
+    needEmphasis: strategy.needEmphasis,
+    intentBoost: strategy.intentBoost,
+  };
+
+  const results = matchPrograms(allPrograms, analysis, matchOpts);
+
+  // Extract match engine stats (attached as non-enumerable by matchPrograms)
+  const matchStats = results._matchStats || {};
+
   if (schoolCards.length > 0) {
+    for (const card of schoolCards) {
+      card.match_explain = {
+        crawler_type: crawlerType,
+        strategy_id: strategy.id,
+        matchedSignals: ['education', 'target_school'],
+        matchedNeeds: ['education', 'scholarship'],
+        matchedNeedTerms: [card.schoolName],
+        scoreBreakdown: { locality: 0, eligibility: 0, specificity: card.matchScore, trust: 10, penalties: 0 },
+        urlPolicy: { urlUsed: card.url, isDirectory: true, acceptedReason: 'school_portal' },
+      };
+    }
     results.push(...schoolCards);
     results.sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0));
-    console.log(`[CrawlerManager]   School-specific cards: ${schoolCards.length}`);
   }
+  timing.matching_ms = Date.now() - t4;
 
-  // ── Step 5: Resolve county-level contacts ──
+  // ── Step 5: URL policy enforcement ──
+  const { accepted, demoted } = enforceUrlPolicy(results, strategy.urlPolicy);
+
+  // ── Step 6: Resolve county contacts ──
   let countyContacts = null;
   if (analysis.location.county && stateData.countyResources) {
     const countyKey = analysis.location.county.toLowerCase().replace(/\s+county$/i, '').trim();
     countyContacts = stateData.countyResources[countyKey] || null;
-    if (countyContacts) {
-      console.log(`[CrawlerManager]   Found county contacts for: ${analysis.location.county}`);
-    }
   }
 
-  // ── Step 6: Store results ──
-  console.log('[CrawlerManager] Step 5: Storing results...');
-  await storeResults(db, profileId, results, analysis, stateData.meta, countyContacts);
+  // ── Step 7: Store results ──
+  const t7 = Date.now();
+  await storeResults(db, profileId, accepted, analysis, stateData.meta, countyContacts);
+  timing.storage_ms = Date.now() - t7;
+  timing.total_ms = Date.now() - t0;
 
-  console.log(`\n[CrawlerManager] ═══════════════════════════════════════`);
-  console.log(`[CrawlerManager] Crawl complete. ${results.length} programs matched.`);
-  console.log(`[CrawlerManager] ═══════════════════════════════════════\n`);
+  // ── Debug summary (PII-safe) ──
+  const safeRawInputs = redactPII(rawInputs);
+
+  const debug = {
+    strategy: strategy.id,
+    gated: false,
+    intents: [...intents],
+    assistancePrograms,
+    candidateCounts,
+    totalCandidates,
+    matchedCount: accepted.length,
+    demotedForUrl: demoted.length,
+    schoolCards: schoolCards.length,
+    minScore: effectiveMinScore,
+    maxResults: effectiveMaxResults,
+    matchStats: {
+      dupId: matchStats.dupId || 0,
+      dupUrl: matchStats.dupUrl || 0,
+      dupName: matchStats.dupName || 0,
+      informational: matchStats.informational || 0,
+      excluded: matchStats.excluded || 0,
+      nullScore: matchStats.nullScore || 0,
+      belowMin: matchStats.belowMin || 0,
+    },
+    timing,
+    rawInputs: safeRawInputs,
+  };
+
+  console.log(
+    `[CrawlerManager] Done strategy=${strategy.id} ` +
+    `accepted=${accepted.length} demoted=${demoted.length} schoolCards=${schoolCards.length} ` +
+    `dedup(id:${matchStats.dupId||0} url:${matchStats.dupUrl||0} name:${matchStats.dupName||0}) ` +
+    `filtered(info:${matchStats.informational||0} excl:${matchStats.excluded||0}) ` +
+    `scored(null:${matchStats.nullScore||0} low:${matchStats.belowMin||0}) ` +
+    `timing=${JSON.stringify(timing)}`
+  );
 
   return {
-    results,
+    results: accepted,
     analysis,
     statePortal: stateData.meta,
     countyContacts,
+    debug,
   };
 }
 
-/**
- * Store results in the database.
- * Clears old results and writes new ones.
- */
+// ── Store results ──
+
 async function storeResults(db, profileId, results, analysis, stateMeta, countyContacts) {
   const isPg = db?.dialect === 'postgres';
   const nowExpr = isPg ? 'now()' : "datetime('now')";
@@ -417,22 +484,16 @@ async function storeResults(db, profileId, results, analysis, stateMeta, countyC
 
     for (const result of results) {
       await stmt.run(
-        profileId,
-        result.id,
-        result.name,
+        profileId, result.id, result.name,
         result.url || result.applicationUrl || null,
-        result.description,
-        result.matchScore,
+        result.description, result.matchScore,
         JSON.stringify(result.matchReasons),
         JSON.stringify(result.matchedCategories),
-        result.type,
-        result.fundingType,
-        result.maxAmount || null,
-        result.id?.startsWith('school-') ? 'school' : (result.stateRestriction ? 'state' : (result.id.startsWith('fed-') ? 'federal' : 'national')),
+        result.type, result.fundingType, result.maxAmount || null,
+        result.id?.startsWith('school-') ? 'school' : (result.stateRestriction ? 'state' : (result.id?.startsWith('fed-') ? 'federal' : 'national')),
       );
     }
 
-    // Upsert crawl metadata — store analysis as a single JSON blob for cross-dialect compat
     const analysisJson = JSON.stringify({
       needs: [...analysis.needs],
       demographics: [...analysis.demographics],
@@ -449,65 +510,36 @@ async function storeResults(db, profileId, results, analysis, stateMeta, countyC
         INSERT INTO crawl_metadata (profile_id, state, analysis_json, county_contacts, total_matches, crawled_at)
         VALUES (?, ?, ?, ?, ?, now())
         ON CONFLICT (profile_id) DO UPDATE SET
-          state = EXCLUDED.state,
-          analysis_json = EXCLUDED.analysis_json,
-          county_contacts = EXCLUDED.county_contacts,
-          total_matches = EXCLUDED.total_matches,
-          crawled_at = now()
-      `).run(
-        profileId,
-        analysis.location.state,
-        analysisJson,
-        countyContacts ? JSON.stringify(countyContacts) : null,
-        results.length,
-      );
+          state = EXCLUDED.state, analysis_json = EXCLUDED.analysis_json,
+          county_contacts = EXCLUDED.county_contacts, total_matches = EXCLUDED.total_matches, crawled_at = now()
+      `).run(profileId, analysis.location.state, analysisJson, countyContacts ? JSON.stringify(countyContacts) : null, results.length);
     } else {
       await db.prepare(`
-        INSERT OR REPLACE INTO crawl_metadata (
-          profile_id, state, analysis_json, county_contacts, total_matches, crawled_at
-        ) VALUES (?, ?, ?, ?, ?, datetime('now'))
-      `).run(
-        profileId,
-        analysis.location.state,
-        analysisJson,
-        countyContacts ? JSON.stringify(countyContacts) : null,
-        results.length,
-      );
+        INSERT OR REPLACE INTO crawl_metadata (profile_id, state, analysis_json, county_contacts, total_matches, crawled_at)
+        VALUES (?, ?, ?, ?, ?, datetime('now'))
+      `).run(profileId, analysis.location.state, analysisJson, countyContacts ? JSON.stringify(countyContacts) : null, results.length);
     }
-    console.log(`[CrawlerManager]   Occupation: [${[...(analysis.occupation || [])]}]`);
-    console.log(`[CrawlerManager]   Immigration: [${[...(analysis.immigration || [])]}]`);
-    console.log(`[CrawlerManager]   Geographic: [${[...(analysis.geographic || [])]}]`);
 
-    console.log(`[CrawlerManager]   Stored ${results.length} results + metadata in crawl_results`);
-
-    // Also upsert into funding_opportunities so results appear as clickable cards
     let fundingUpserted = 0;
     for (const result of results) {
       try {
         const isSchoolCard = result.id?.startsWith('school-');
         const contactObj = result.contact || null;
-        const contactInfo = contactObj
-          ? [contactObj.name, contactObj.title, contactObj.email, contactObj.phone].filter(Boolean).join(' | ')
-          : null;
+        const contactInfo = contactObj ? [contactObj.name, contactObj.title, contactObj.email, contactObj.phone].filter(Boolean).join(' | ') : null;
 
-        const opp = {
+        await upsertFundingOpportunity(db, {
           title: result.name,
           description: result.description,
-          sponsor: isSchoolCard
-            ? (result.schoolName || 'University Program')
-            : result.stateRestriction
-              ? `${result.stateRestriction} State Program`
-              : (result.id.startsWith('fed-') ? 'Federal Program' : (result.id.startsWith('sch-') ? 'Scholarship / Financial Aid' : 'National Program')),
-          source: isSchoolCard ? 'school_portal' : (result.id.startsWith('sch-') ? 'scholarship_crawler' : 'curated_benefits'),
-          source_url: result.url || result.applicationUrl || null,
-          url: result.url || result.applicationUrl || null,
+          sponsor: isSchoolCard ? (result.schoolName || 'University Program') : result.stateRestriction ? `${result.stateRestriction} State Program` : (result.id?.startsWith('fed-') ? 'Federal Program' : 'National Program'),
+          source: isSchoolCard ? 'school_portal' : 'curated_benefits',
+          source_url: result.url || null,
+          url: result.url || null,
           application_url: result.applicationUrl || result.url || null,
           state: result.stateRestriction || 'nationwide',
           is_national: !result.stateRestriction,
-          opportunity_type: isSchoolCard ? 'school_resource' : (result.type === 'portal' ? 'directory' : (result.type === 'grant' ? 'grant' : 'program')),
-          type: isSchoolCard ? 'DIRECTORY' : (result.type === 'portal' ? 'DIRECTORY' : 'OPPORTUNITY'),
-          deadline_type: result.recurring ? 'rolling' : (result.deadline || 'rolling'),
-          amount_min: null,
+          opportunity_type: isSchoolCard ? 'school_resource' : (result.type === 'portal' ? 'directory' : result.type === 'grant' ? 'grant' : 'program'),
+          type: (isSchoolCard || result.type === 'portal') ? 'DIRECTORY' : 'OPPORTUNITY',
+          deadline_type: result.recurring ? 'rolling' : 'rolling',
           amount_max: result.maxAmount || null,
           contact_info: contactInfo,
           categories: JSON.stringify(result.categories || []),
@@ -515,65 +547,35 @@ async function storeResults(db, profileId, results, analysis, stateMeta, countyC
           match_reasons: JSON.stringify(result.matchReasons || []),
           match_score: result.matchScore,
           funding_type: result.fundingType,
-          record_origin: isSchoolCard ? 'curated_verified' : 'curated_verified',
+          record_origin: 'curated_verified',
           last_verified_at: new Date().toISOString(),
           profile_id: isSchoolCard ? profileId : null,
-        };
-        await upsertFundingOpportunity(db, opp);
+        });
         fundingUpserted++;
-      } catch (upsertErr) {
-        console.warn(`[CrawlerManager] funding_opportunities upsert failed for ${result.id}: ${upsertErr.message}`);
+      } catch (e) {
+        console.warn(`[CrawlerManager] upsert failed for ${result.id}: ${e.message}`);
       }
     }
-    console.log(`[CrawlerManager]   Upserted ${fundingUpserted} into funding_opportunities`);
+    console.log(`[CrawlerManager] Stored ${results.length} crawl_results + ${fundingUpserted} funding_opportunities`);
   } catch (err) {
     console.error('[CrawlerManager] Error storing results:', err.message);
     throw err;
   }
 }
 
-/**
- * Database schema for new tables.
- * Run this once to create/update tables.
- */
 export const SCHEMA = `
--- Drop old crawler results if migrating
--- DROP TABLE IF EXISTS grant_results;
-
 CREATE TABLE IF NOT EXISTS crawl_results (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  profile_id TEXT NOT NULL,
-  program_id TEXT NOT NULL,
-  program_name TEXT NOT NULL,
-  program_url TEXT,
-  program_description TEXT,
-  match_score INTEGER NOT NULL,
-  match_reasons TEXT, -- JSON array
-  matched_categories TEXT, -- JSON array
-  program_type TEXT, -- 'benefit', 'grant', 'assistance', 'portal', 'referral'
-  funding_type TEXT, -- 'direct_benefit', 'direct_grant', 'direct_service', 'referral_service'
-  max_amount REAL,
-  source_type TEXT, -- 'federal', 'state', 'national'
-  crawled_at DATETIME DEFAULT (datetime('now')),
+  profile_id TEXT NOT NULL, program_id TEXT NOT NULL, program_name TEXT NOT NULL,
+  program_url TEXT, program_description TEXT, match_score INTEGER NOT NULL,
+  match_reasons TEXT, matched_categories TEXT, program_type TEXT, funding_type TEXT,
+  max_amount REAL, source_type TEXT, crawled_at DATETIME DEFAULT (datetime('now')),
   UNIQUE(profile_id, program_id)
 );
-
 CREATE TABLE IF NOT EXISTS crawl_metadata (
-  profile_id TEXT PRIMARY KEY,
-  needs TEXT, -- JSON array
-  demographics TEXT, -- JSON array
-  health_signals TEXT, -- JSON array
-  family_signals TEXT, -- JSON array
-  military_signals TEXT, -- JSON array
-  state TEXT,
-  county TEXT,
-  state_portal_url TEXT,
-  state_portal_name TEXT,
-  county_contacts TEXT, -- JSON
-  total_matches INTEGER,
-  crawled_at DATETIME DEFAULT (datetime('now'))
+  profile_id TEXT PRIMARY KEY, state TEXT, analysis_json TEXT,
+  county_contacts TEXT, total_matches INTEGER, crawled_at DATETIME DEFAULT (datetime('now'))
 );
-
 CREATE INDEX IF NOT EXISTS idx_crawl_results_profile ON crawl_results(profile_id);
 CREATE INDEX IF NOT EXISTS idx_crawl_results_score ON crawl_results(match_score DESC);
 `;
