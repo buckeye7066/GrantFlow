@@ -408,7 +408,8 @@ export async function analyzeProfile(db, profileOrId) {
   }
 
   // ── Education / Student signals (full application coverage) ──
-  const uniApps = sections.university_applications?.applications || [];
+  const uniApps = Array.isArray(sections.university_applications?.applications)
+    ? sections.university_applications.applications : [];
   const progServices = sections.programs_services || {};
   const education = {
     level: edu.highest_level || null,
