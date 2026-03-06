@@ -261,8 +261,8 @@ test('real crawler: comprehensive returns non-zero results from multiple funding
     )
     assert.ok(distinctSources.size >= 2, `expected >=2 distinct sources, got ${distinctSources.size}: [${Array.from(distinctSources).join(', ')}]; opportunities: ${run.json.opportunities?.length ?? 0}`)
 
-    assert.ok(run.json?.debug_meta?.used_facets, 'debug_meta.used_facets (use ?admin=true)')
-    assert.ok(run.json?.debug_meta?.query_plan, 'debug_meta.query_plan (use ?admin=true)')
+    assert.ok(run.json?.debug?.analysis, 'debug.analysis should contain profile signals (use ?admin=true)')
+    assert.ok(run.json?.debug?.strategy, 'debug.strategy should name the active strategy (use ?admin=true)')
   } finally {
     await srv.stop()
   }

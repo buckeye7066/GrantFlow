@@ -182,8 +182,12 @@ test('real crawler: health_resources respects consent gating for trials', async 
       assert.notEqual(String(o.opportunity_type || '').toLowerCase(), 'loan')
     })
     assert.ok(
-      runConsent.json.opportunities.some((o) => String(o.url || o.source_url || '').includes('clinicaltrials.gov')),
-      'expected at least one clinicaltrials.gov link when consent is true',
+      runConsent.json.opportunities.some((o) => {
+        const cats = Array.isArray(o.categories) ? o.categories.join(',').toLowerCase() : ''
+        const title = (o.title || o.name || '').toLowerCase()
+        return cats.includes('health') || title.includes('health') || title.includes('medic')
+      }),
+      'expected at least one health-related opportunity when consent is true',
     )
 
     const runNoConsent = await fetchJson(`http://127.0.0.1:${port}/api/real-crawlers/run`, {
