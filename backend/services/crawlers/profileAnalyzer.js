@@ -458,7 +458,7 @@ export async function analyzeProfile(db, profileOrId) {
       payFee: app.actions?.pay_fee_url || null,
       visit: app.actions?.visit_url || null,
     },
-    contacts: (app.contacts || []).filter(c => c.name || c.email || c.phone || c.url).map(c => ({
+    contacts: (Array.isArray(app.contacts) ? app.contacts : []).filter(c => c.name || c.email || c.phone || c.url).map(c => ({
       label: c.label || 'Contact',
       name: c.name || null,
       title: c.title || null,
@@ -466,7 +466,7 @@ export async function analyzeProfile(db, profileOrId) {
       phone: c.phone || null,
       url: c.url || null,
     })),
-    departmentContacts: (app.department_contacts || []).filter(c => c.area || c.name).map(c => ({
+    departmentContacts: (Array.isArray(app.department_contacts) ? app.department_contacts : []).filter(c => c.area || c.name).map(c => ({
       area: c.area || null,
       category: c.category || null,
       genderTarget: c.gender_target || 'any',
