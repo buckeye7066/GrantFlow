@@ -182,10 +182,10 @@ router.post('/run', ensureAuth, async (req, res) => {
         matchStats: result.debug?.matchStats || {},
         timing: result.debug?.timing || {},
         analysis: {
-          state: result.analysis.location.state,
-          city: result.analysis.location.city,
-          zip: result.analysis.location.zip,
-          county: result.analysis.location.county,
+          state: result.analysis.location?.state,
+          city: result.analysis.location?.city,
+          zip: result.analysis.location?.zip,
+          county: result.analysis.location?.county,
           needs: [...result.analysis.needs],
           demographics: [...result.analysis.demographics],
           health: [...result.analysis.health],
@@ -323,6 +323,7 @@ function getCrawlerDescription(type) {
     student_grants: 'Education grants and scholarships (Pell Grant, FSEOG, etc.)',
     health_resources: 'Healthcare assistance programs and patient support foundations',
     ecf_benefits: 'ECF CHOICES benefits and disability support services',
+    curated_benefits: 'Verified and curated benefit programs (federal, state, national)',
     item_matching: 'Matches specific item requests with funding sources',
     special_needs: 'Disability-specific programs and services',
   }

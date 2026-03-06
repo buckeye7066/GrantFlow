@@ -18,10 +18,15 @@
 
 function detectProfileIntents(analysis) {
     const intents = new Set();
+    const occ = analysis.occupation || new Set();
+    const needs = analysis.needs || new Set();
+    const health = analysis.health || new Set();
+    const military = analysis.military || new Set();
+    const family = analysis.family || new Set();
 
-  if (analysis.occupation.has('small_business_owner') ||
-            analysis.occupation.has('minority_owned_business') ||
-            analysis.occupation.has('women_owned_business') ||
+  if (occ.has?.('small_business_owner') ||
+            occ.has?.('minority_owned_business') ||
+            occ.has?.('women_owned_business') ||
             (analysis.keywords || []).some(k =>
                       /business|entrepreneur|startup|self.?employ|microenterprise|food\s*truck|mobile\s*food/i.test(k))) {
         intents.add('business');
@@ -30,27 +35,38 @@ function detectProfileIntents(analysis) {
   }
 
   if (analysis.applicantType === 'student' ||
-            analysis.needs.has('scholarship') ||
-            analysis.needs.has('education')) {
+            needs.has?.('scholarship') ||
+            needs.has?.('education')) {
         intents.add('education');
   }
 
-  if (analysis.health.size > 0 ||
-            analysis.needs.has('disability')) {
+  if (health.size > 0 || needs.has?.('disability') || needs.has?.('healthcare')) {
         intents.add('healthcare');
   }
 
-  if (analysis.military.size > 0) {
+  if (military.size > 0) {
         intents.add('military');
   }
 
-  if (analysis.needs.has('housing') || analysis.family.has('homeless')) {
+  if (needs.has?.('housing') || family.has?.('homeless')) {
         intents.add('housing');
   }
 
-  if (analysis.needs.has('employment') && !intents.has('business')) {
+  if (needs.has?.('employment') && !intents.has('business')) {
         intents.add('workforce');
   }
+
+  if (health.has?.('disability') || health.has?.('physical_disability')
+    || health.has?.('developmental_disability') || needs.has?.('disability')) {
+        intents.add('special_needs');
+  }
+
+  if (needs.has?.('utilities')) intents.add('utilities');
+  if (needs.has?.('food')) intents.add('food');
+  if (needs.has?.('childcare')) intents.add('childcare');
+  if (needs.has?.('transportation')) intents.add('transportation');
+  if (needs.has?.('mental_health') || health.has?.('mental_health')) intents.add('mental_health');
+  if (needs.has?.('substance_recovery') || health.has?.('substance_recovery')) intents.add('substance_recovery');
 
   return intents;
 }
@@ -217,13 +233,17 @@ function normalizeName(name) {
 /**
  * Score a single program against a profile analysis.
  * Returns null (no match) or scored object with 0-100.
+ *
+ * @param {Object} program
+ * @param {Object} analysis
+ * @param {Object} [strategyOpts] - { needEmphasis, intentBoost, intents }
  */
-export function scoreProgram(program, analysis) {
+export function scoreProgram(program, analysis, strategyOpts = {}) {
     let score = 0;
     let maxPossible = 0;
     const matchReasons = [];
 
-  const intents = detectProfileIntents(analysis);
+  const intents = strategyOpts.intents || detectProfileIntents(analysis);
 
   // ── Hard gate: requiresMedicalCondition with no health signals ──
   if (program.eligibility?.requiresMedicalCondition && analysis.health.size === 0) {
@@ -254,39 +274,73 @@ export function scoreProgram(program, analysis) {
           }
     }
 
-  if (categoryHits === 0) return null;
+  // Portals/referrals are general-purpose — give a baseline even with 0 category hits
+  if (categoryHits === 0) {
+    if (program.type === 'portal' || program.type === 'referral') {
+      categoryHits = 0.25;
+      matchReasons.push('General assistance resource');
+    } else {
+      return null;
+    }
+  }
 
   // Score based on absolute category matches, not ratio of needs matched.
-  // Profiles with many needs should NOT be penalized for having broad assistance requirements.
   // 1 hit = 12, 2 hits = 22, 3 hits = 32, 4+ hits = 40
   const BASE_CAT_SCORE = 12;
   const ADDITIONAL_PER_CAT_HIT = 10;
   const MAX_ADDITIONAL_CAT_HITS = 3;
-  const categoryScore = Math.min(40, categoryHits >= 1 ? BASE_CAT_SCORE + Math.min(MAX_ADDITIONAL_CAT_HITS, categoryHits - 1) * ADDITIONAL_PER_CAT_HIT : 0);
+  const categoryScore = Math.min(40, categoryHits >= 1 ? BASE_CAT_SCORE + Math.min(MAX_ADDITIONAL_CAT_HITS, categoryHits - 1) * ADDITIONAL_PER_CAT_HIT : Math.round(categoryHits * BASE_CAT_SCORE));
     score += categoryScore;
     maxPossible += 40;
 
   // ── Intent alignment (up to 25 points) ──
   maxPossible += 25;
-    const intentBonus = computeIntentBonus(program, intents);
+    let intentBonus = computeIntentBonus(program, intents);
+
+    // Apply strategy-level intentBoost when the program matches a boosted intent
+    const boostMap = strategyOpts.intentBoost || {};
+    for (const [boostIntent, boostPts] of Object.entries(boostMap)) {
+      if (intents.has(boostIntent) && (program.intentMatch || []).includes(boostIntent)) {
+        intentBonus = Math.min(35, intentBonus + boostPts);
+      }
+    }
+
     if (intentBonus > 0) {
           score += intentBonus;
           matchReasons.push('Strong intent alignment with your profile');
     } else if (program.intentMatch && program.intentMatch.length > 0) {
-          // Program declares intents but NONE match profile → penalize
-      score += 0;
+          score += 0;
     } else {
-          score += 5; // baseline — program doesn't declare intent tags
+          score += 5;
+    }
+
+    // ── needEmphasis bonus (up to 10 points) ──
+    const needEmphasis = strategyOpts.needEmphasis || [];
+    if (needEmphasis.length > 0) {
+      let emphasisHits = 0;
+      for (const emph of needEmphasis) {
+        if (programCats.has(emph)) emphasisHits++;
+      }
+      if (emphasisHits > 0) {
+        const emphasisBonus = Math.min(10, emphasisHits * 5);
+        score += emphasisBonus;
+        maxPossible += 10;
+        matchReasons.push(`Emphasis match: ${emphasisHits} prioritised categories`);
+      }
     }
 
   // ── State match (20 points) ──
   maxPossible += 20;
+    const profileState = analysis.location?.state;
     if (!program.stateRestriction) {
           score += 15;
           matchReasons.push('Available nationwide');
-    } else if (program.stateRestriction === analysis.location.state) {
+    } else if (profileState && program.stateRestriction === profileState) {
           score += 20;
-          matchReasons.push(`Available in ${analysis.location.state}`);
+          matchReasons.push(`Available in ${profileState}`);
+    } else if (!profileState) {
+          score += 5;
+          matchReasons.push(`State-specific program (${program.stateRestriction}) — your state not set`);
     } else {
           return null;
     }
@@ -440,7 +494,7 @@ export function scoreProgram(program, analysis) {
       } else if (program.schoolMatch.zips?.some(z => schoolZips.includes(z))) {
               score += 4;
               matchReasons.push('School is in the program service area');
-      } else if (program.schoolMatch.states?.some(s => schoolStates.includes(s) || s === analysis.location.state)) {
+      } else if (program.schoolMatch.states?.some(s => schoolStates.includes(s) || s === analysis.location?.state)) {
               score += 3;
               matchReasons.push(`Program available in student's state`);
       }
@@ -530,8 +584,8 @@ export function scoreProgram(program, analysis) {
       scoreBreakdown: {
         category: Math.round(categoryScore),
         intent: intentBonus,
-        locality: program.stateRestriction === analysis.location.state ? 20 : (!program.stateRestriction ? 15 : 0),
-        eligibility: score - categoryScore - intentBonus - (program.stateRestriction === analysis.location.state ? 20 : 15),
+        locality: (profileState && program.stateRestriction === profileState) ? 20 : (!program.stateRestriction ? 15 : (!profileState ? 5 : 0)),
+        eligibility: score - categoryScore - intentBonus - ((profileState && program.stateRestriction === profileState) ? 20 : (!program.stateRestriction ? 15 : 5)),
         trust: (program.type === 'portal' || program.type === 'referral') ? 5 : 0,
         penalties: negPenalty,
         normalized: normalizedScore,
@@ -551,7 +605,9 @@ export function scoreProgram(program, analysis) {
  * @returns {Array} Ranked, scored, deduplicated results
  */
 export function matchPrograms(allPrograms, analysis, options = {}) {
-  const { minScore = 30, maxResults = 50, strategyId = 'comprehensive' } = options;
+  const { minScore = 30, maxResults = 50, strategyId = 'comprehensive',
+    needEmphasis, intentBoost, intents } = options;
+  const strategyOpts = { needEmphasis, intentBoost, intents };
 
   const results = [];
   const seenIds = new Set();
@@ -587,7 +643,7 @@ export function matchPrograms(allPrograms, analysis, options = {}) {
     if (isExcluded(program)) { stats.excluded++; continue; }
 
     // Score against profile
-    const scored = scoreProgram(program, analysis);
+    const scored = scoreProgram(program, analysis, strategyOpts);
     if (!scored) { stats.nullScore++; continue; }
     if (scored.matchScore < minScore) { stats.belowMin++; continue; }
 
