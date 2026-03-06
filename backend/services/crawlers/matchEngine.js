@@ -256,7 +256,10 @@ export function scoreProgram(program, analysis) {
 
   if (categoryHits === 0) return null;
 
-  const categoryScore = Math.min(40, (categoryHits / Math.max(profileNeeds.size, 1)) * 40);
+  // Score based on absolute category matches, not ratio of needs matched.
+  // Profiles with many needs should NOT be penalized for having broad assistance requirements.
+  // 1 hit = 12, 2 hits = 22, 3 hits = 32, 4+ hits = 40
+  const categoryScore = Math.min(40, categoryHits >= 1 ? 12 + Math.min(3, categoryHits - 1) * 10 : 0);
     score += categoryScore;
     maxPossible += 40;
 

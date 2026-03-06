@@ -30,6 +30,7 @@ export const SCHOLARSHIPS = [
     fundingType: 'direct_grant',
     priority: 1,
     studentMatch: ['first_generation'],
+  intentMatch: ['education'],
   },
   {
     id: 'sch-oneapp-wv',
@@ -43,6 +44,7 @@ export const SCHOLARSHIPS = [
     fundingType: 'direct_grant',
     priority: 1,
     studentMatch: ['first_generation'],
+  intentMatch: ['education'],
   },
   {
     id: 'sch-cfwv-promise',
@@ -57,6 +59,7 @@ export const SCHOLARSHIPS = [
     recurring: true,
     maxAmount: 5000,
     studentMatch: ['first_generation'],
+  intentMatch: ['education'],
   },
   {
     id: 'sch-wv-higher-ed-grant',
@@ -70,6 +73,7 @@ export const SCHOLARSHIPS = [
     fundingType: 'direct_grant',
     recurring: true,
     maxAmount: 3200,
+  intentMatch: ['education'],
   },
   {
     id: 'sch-wv-invests',
@@ -83,6 +87,7 @@ export const SCHOLARSHIPS = [
     fundingType: 'direct_grant',
     recurring: true,
     studentMatch: ['first_generation'],
+  intentMatch: ['education'],
   },
 
   // ════════════════════════════════════════
@@ -101,6 +106,7 @@ export const SCHOLARSHIPS = [
     recurring: true,
     maxAmount: 6300,
     priority: 1,
+  intentMatch: ['education'],
   },
   {
     id: 'sch-tn-promise',
@@ -115,6 +121,7 @@ export const SCHOLARSHIPS = [
     recurring: true,
     priority: 1,
     studentMatch: ['community_service','first_generation'],
+  intentMatch: ['education'],
   },
   {
     id: 'sch-tn-reconnect',
@@ -128,6 +135,7 @@ export const SCHOLARSHIPS = [
     fundingType: 'direct_grant',
     recurring: true,
     studentMatch: ['first_generation'],
+  intentMatch: ['education'],
   },
   {
     id: 'sch-tn-step-up',
@@ -141,6 +149,7 @@ export const SCHOLARSHIPS = [
     fundingType: 'direct_grant',
     recurring: true,
     maxAmount: 2000,
+  intentMatch: ['education'],
   },
   {
     id: 'sch-tn-aspire',
@@ -154,6 +163,7 @@ export const SCHOLARSHIPS = [
     fundingType: 'direct_grant',
     recurring: true,
     maxAmount: 2250,
+  intentMatch: ['education'],
   },
   {
     id: 'sch-tn-student-assistance',
@@ -167,6 +177,7 @@ export const SCHOLARSHIPS = [
     fundingType: 'direct_grant',
     recurring: true,
     maxAmount: 4000,
+  intentMatch: ['education'],
   },
 
   // ════════════════════════════════════════
@@ -184,6 +195,7 @@ export const SCHOLARSHIPS = [
     recurring: true,
     maxAmount: 7395,
     studentMatch: ['first_generation'],
+  intentMatch: ['education'],
   },
   {
     id: 'sch-fseog',
@@ -196,6 +208,7 @@ export const SCHOLARSHIPS = [
     fundingType: 'direct_grant',
     recurring: true,
     maxAmount: 4000,
+  intentMatch: ['education'],
   },
   {
     id: 'sch-teach-grant',
@@ -209,6 +222,7 @@ export const SCHOLARSHIPS = [
     recurring: true,
     maxAmount: 4000,
     interestMatch: ['teaching','education','special education','math','science','bilingual','english language'],
+  intentMatch: ['education'],
   },
 
   // ════════════════════════════════════════
@@ -225,6 +239,7 @@ export const SCHOLARSHIPS = [
     fundingType: 'direct_grant',
     maxAmount: 5000,
     interestMatch: ['forensics','forensic science','criminal justice','criminology','pathology','toxicology','digital forensics'],
+  intentMatch: ['education'],
   },
   {
     id: 'sch-cj-scholarships',
@@ -236,6 +251,7 @@ export const SCHOLARSHIPS = [
     type: 'referral',
     fundingType: 'referral_service',
     interestMatch: ['forensics','criminal justice','criminology','law enforcement','cybersecurity','homeland security'],
+  intentMatch: ['education'],
   },
   {
     id: 'sch-stem-scholarships',
@@ -247,6 +263,7 @@ export const SCHOLARSHIPS = [
     type: 'referral',
     fundingType: 'referral_service',
     interestMatch: ['science','technology','engineering','mathematics','computer science','biology','chemistry','physics','nursing','pre-med'],
+  intentMatch: ['education'],
   },
   {
     id: 'sch-nursing-scholarships',
@@ -258,6 +275,7 @@ export const SCHOLARSHIPS = [
     type: 'grant',
     fundingType: 'direct_grant',
     interestMatch: ['nursing','healthcare','pre-med','medical','dental','pharmacy','public health'],
+  intentMatch: ['education', 'healthcare'],
   },
   {
     id: 'sch-music-scholarships',
@@ -269,6 +287,7 @@ export const SCHOLARSHIPS = [
     type: 'referral',
     fundingType: 'referral_service',
     interestMatch: ['band','marching band','orchestra','choir','music','theater','drama','dance','performing arts'],
+  intentMatch: ['education'],
   },
   {
     id: 'sch-trades-scholarships',
@@ -280,6 +299,7 @@ export const SCHOLARSHIPS = [
     type: 'referral',
     fundingType: 'referral_service',
     interestMatch: ['welding','hvac','electrical','plumbing','automotive','cosmetology','carpentry','construction','diesel','machining'],
+  intentMatch: ['education'],
   },
   {
     id: 'sch-business-scholarships',
@@ -291,6 +311,7 @@ export const SCHOLARSHIPS = [
     type: 'referral',
     fundingType: 'referral_service',
     interestMatch: ['business','accounting','finance','marketing','entrepreneurship','economics','management'],
+  intentMatch: ['education', 'business'],
   },
 
   // ════════════════════════════════════════
@@ -307,6 +328,7 @@ export const SCHOLARSHIPS = [
     fundingType: 'direct_grant',
     interestMatch: ['basketball','football','soccer','volleyball','baseball','softball','tennis','swimming','track','cross country','golf','wrestling','lacrosse','hockey','gymnastics','rowing','water polo'],
     sportGender: 'any',
+  intentMatch: ['education'],
   },
   {
     id: 'sch-naia-scholarships',
@@ -319,6 +341,7 @@ export const SCHOLARSHIPS = [
     fundingType: 'direct_grant',
     interestMatch: ['basketball','football','soccer','volleyball','baseball','softball','tennis','swimming','track','cross country','golf','wrestling','lacrosse'],
     sportGender: 'any',
+  intentMatch: ['education'],
   },
   {
     id: 'sch-volleyball-women',
@@ -332,6 +355,7 @@ export const SCHOLARSHIPS = [
     interestMatch: ['volleyball'],
     sportGender: 'female',
     demographicMatch: ['female'],
+  intentMatch: ['education'],
   },
   {
     id: 'sch-volleyball-men',
@@ -345,6 +369,7 @@ export const SCHOLARSHIPS = [
     interestMatch: ['volleyball'],
     sportGender: 'male',
     demographicMatch: ['male'],
+  intentMatch: ['education'],
   },
   {
     id: 'sch-basketball-women',
@@ -358,6 +383,7 @@ export const SCHOLARSHIPS = [
     interestMatch: ['basketball'],
     sportGender: 'female',
     demographicMatch: ['female'],
+  intentMatch: ['education'],
   },
   {
     id: 'sch-football',
@@ -371,6 +397,7 @@ export const SCHOLARSHIPS = [
     interestMatch: ['football'],
     sportGender: 'male',
     demographicMatch: ['male'],
+  intentMatch: ['education'],
   },
   {
     id: 'sch-cheerleading',
@@ -383,6 +410,7 @@ export const SCHOLARSHIPS = [
     fundingType: 'referral_service',
     interestMatch: ['cheerleading','cheer','dance'],
     sportGender: 'any',
+  intentMatch: ['education'],
   },
   {
     id: 'sch-track-field',
@@ -395,6 +423,7 @@ export const SCHOLARSHIPS = [
     fundingType: 'referral_service',
     interestMatch: ['track','cross country','track and field','running'],
     sportGender: 'any',
+  intentMatch: ['education'],
   },
 
   // ════════════════════════════════════════
@@ -411,6 +440,7 @@ export const SCHOLARSHIPS = [
     fundingType: 'direct_grant',
     demographicMatch: ['african_american'],
     maxAmount: 10000,
+  intentMatch: ['education'],
   },
   {
     id: 'sch-hispanic-scholarship-fund',
@@ -423,6 +453,7 @@ export const SCHOLARSHIPS = [
     fundingType: 'direct_grant',
     demographicMatch: ['hispanic_latino'],
     maxAmount: 5000,
+  intentMatch: ['education'],
   },
   {
     id: 'sch-aises',
@@ -436,6 +467,7 @@ export const SCHOLARSHIPS = [
     demographicMatch: ['native_american'],
     interestMatch: ['science','technology','engineering','mathematics'],
     maxAmount: 10000,
+  intentMatch: ['education'],
   },
   {
     id: 'sch-first-gen',
@@ -448,6 +480,7 @@ export const SCHOLARSHIPS = [
     fundingType: 'referral_service',
     studentMatch: ['first_generation'],
     demographicMatch: ['first_generation'],
+  intentMatch: ['education'],
   },
   {
     id: 'sch-lgbtq',
@@ -460,6 +493,7 @@ export const SCHOLARSHIPS = [
     fundingType: 'referral_service',
     demographicMatch: ['lgbtq'],
     maxAmount: 28000,
+  intentMatch: ['education'],
   },
   {
     id: 'sch-women-stem',
@@ -472,6 +506,7 @@ export const SCHOLARSHIPS = [
     fundingType: 'referral_service',
     demographicMatch: ['female'],
     interestMatch: ['science','technology','engineering','mathematics','computer science','cybersecurity'],
+  intentMatch: ['education'],
   },
   {
     id: 'sch-veteran-dependents',
@@ -483,6 +518,7 @@ export const SCHOLARSHIPS = [
     type: 'referral',
     fundingType: 'referral_service',
     militaryMatch: ['veteran','military_spouse','active_duty'],
+  intentMatch: ['education', 'military'],
   },
 
   // ════════════════════════════════════════
@@ -499,6 +535,7 @@ export const SCHOLARSHIPS = [
     fundingType: 'direct_grant',
     maxAmount: 20000,
     studentMatch: ['community_service','valedictorian'],
+  intentMatch: ['education'],
   },
   {
     id: 'sch-elks-mvs',
@@ -511,6 +548,7 @@ export const SCHOLARSHIPS = [
     fundingType: 'direct_grant',
     maxAmount: 50000,
     studentMatch: ['community_service'],
+  intentMatch: ['education'],
   },
   {
     id: 'sch-questbridge',
@@ -522,6 +560,7 @@ export const SCHOLARSHIPS = [
     type: 'grant',
     fundingType: 'direct_grant',
     studentMatch: ['first_generation'],
+  intentMatch: ['education'],
   },
 
   // ════════════════════════════════════════
@@ -536,6 +575,7 @@ export const SCHOLARSHIPS = [
     eligibility: { requiresStudent: true },
     type: 'portal',
     fundingType: 'referral_service',
+  intentMatch: ['education'],
   },
   {
     id: 'sch-fastweb',
@@ -546,6 +586,7 @@ export const SCHOLARSHIPS = [
     eligibility: { requiresStudent: true },
     type: 'portal',
     fundingType: 'referral_service',
+  intentMatch: ['education'],
   },
   {
     id: 'sch-college-board',
@@ -556,6 +597,7 @@ export const SCHOLARSHIPS = [
     eligibility: { requiresStudent: true },
     type: 'portal',
     fundingType: 'referral_service',
+  intentMatch: ['education'],
   },
   {
     id: 'sch-going-merry',
@@ -566,6 +608,7 @@ export const SCHOLARSHIPS = [
     eligibility: { requiresStudent: true },
     type: 'portal',
     fundingType: 'referral_service',
+  intentMatch: ['education'],
   },
   {
     id: 'sch-bold-org',
@@ -576,6 +619,7 @@ export const SCHOLARSHIPS = [
     eligibility: { requiresStudent: true },
     type: 'portal',
     fundingType: 'referral_service',
+  intentMatch: ['education'],
   },
 
   // ════════════════════════════════════════
@@ -591,6 +635,7 @@ export const SCHOLARSHIPS = [
     type: 'referral',
     fundingType: 'referral_service',
     healthMatch: ['disability','physical_disability','visual_impairment','hearing_impairment','mental_health'],
+  intentMatch: ['education', 'special_needs'],
   },
 
   // ════════════════════════════════════════
@@ -607,6 +652,7 @@ export const SCHOLARSHIPS = [
     fundingType: 'direct_grant',
     maxAmount: 37000,
     interestMatch: ['research','science','engineering','social science','graduate','phd','masters'],
+  intentMatch: ['education'],
   },
 ];
 

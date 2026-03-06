@@ -23,6 +23,7 @@ export const NATIONAL_PROGRAMS = [
     eligibility: { incomeLimit: 'Varies by location — case-by-case' },
     type: 'assistance',
     fundingType: 'direct_service',
+      intentMatch: ['utilities', 'housing', 'food'],
   },
   {
     id: 'np-catholic-charities',
@@ -33,6 +34,7 @@ export const NATIONAL_PROGRAMS = [
     eligibility: { incomeLimit: 'Case-by-case' },
     type: 'assistance',
     fundingType: 'direct_service',
+      intentMatch: ['utilities', 'housing', 'food', 'healthcare'],
   },
   {
     id: 'np-st-vincent',
@@ -43,6 +45,7 @@ export const NATIONAL_PROGRAMS = [
     eligibility: { incomeLimit: 'Case-by-case, home visit assessment' },
     type: 'assistance',
     fundingType: 'direct_service',
+      intentMatch: ['utilities', 'housing', 'food', 'healthcare'],
   },
   {
     id: 'np-modest-needs',
@@ -54,6 +57,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'grant',
     fundingType: 'direct_grant',
     maxAmount: 1500,
+      intentMatch: ['utilities', 'housing', 'healthcare', 'transportation'],
   },
   {
     id: 'np-united-way',
@@ -63,6 +67,7 @@ export const NATIONAL_PROGRAMS = [
     categories: ['utilities','housing','food','healthcare','employment','mental_health','legal','childcare','transportation'],
     type: 'referral',
     fundingType: 'referral_service',
+      intentMatch: ['utilities', 'housing', 'food', 'healthcare', 'transportation', 'childcare', 'legal'],
   },
 
   // ════════════════════════════════════════
@@ -77,6 +82,7 @@ export const NATIONAL_PROGRAMS = [
     eligibility: { incomeLimit: '150-200% FPL depending on program' },
     type: 'grant',
     fundingType: 'direct_grant',
+      intentMatch: ['utilities'],
   },
   {
     id: 'np-nef-utility',
@@ -86,6 +92,7 @@ export const NATIONAL_PROGRAMS = [
     categories: ['utilities','weatherization'],
     type: 'referral',
     fundingType: 'referral_service',
+      intentMatch: ['utilities'],
   },
 
   // ════════════════════════════════════════
@@ -100,6 +107,7 @@ export const NATIONAL_PROGRAMS = [
     eligibility: { incomeLimit: 'Varies — many have no formal requirements' },
     type: 'assistance',
     fundingType: 'direct_service',
+      intentMatch: ['food'],
   },
   {
     id: 'np-meals-on-wheels',
@@ -112,6 +120,7 @@ export const NATIONAL_PROGRAMS = [
     fundingType: 'direct_service',
     demographicMatch: ['senior'],
     healthMatch: ['disability','physical_disability'],
+      intentMatch: ['food', 'special_needs'],
   },
 
   // ════════════════════════════════════════
@@ -125,6 +134,7 @@ export const NATIONAL_PROGRAMS = [
     categories: ['healthcare'],
     type: 'referral',
     fundingType: 'referral_service',
+      intentMatch: ['healthcare'],
   },
   {
     id: 'np-rxassist',
@@ -134,6 +144,7 @@ export const NATIONAL_PROGRAMS = [
     categories: ['healthcare'],
     type: 'referral',
     fundingType: 'referral_service',
+      intentMatch: ['healthcare'],
   },
   {
     id: 'np-paf',
@@ -145,6 +156,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'grant',
     fundingType: 'direct_grant',
     healthMatch: ['cancer','chronic_illness','kidney_disease','heart_disease','diabetes','rare_disease','hiv_aids','multiple_sclerosis'],
+      intentMatch: ['healthcare', 'special_needs'],
   },
   {
     id: 'np-healthwell',
@@ -156,6 +168,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'grant',
     fundingType: 'direct_grant',
     healthMatch: ['cancer','chronic_illness','kidney_disease','diabetes','rare_disease','hiv_aids','multiple_sclerosis'],
+      intentMatch: ['healthcare', 'special_needs'],
   },
   {
     id: 'np-pan-foundation',
@@ -167,6 +180,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'grant',
     fundingType: 'direct_grant',
     healthMatch: ['cancer','chronic_illness','kidney_disease','rare_disease','hiv_aids','multiple_sclerosis'],
+      intentMatch: ['healthcare', 'special_needs'],
   },
   {
     id: 'np-acs-grants',
@@ -178,6 +192,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'assistance',
     fundingType: 'direct_service',
     healthMatch: ['cancer'],
+      intentMatch: ['healthcare'],
   },
   {
     id: 'np-kidney-fund',
@@ -190,6 +205,7 @@ export const NATIONAL_PROGRAMS = [
     fundingType: 'direct_grant',
     healthMatch: ['kidney_disease'],
     maxAmount: 2000,
+      intentMatch: ['healthcare', 'special_needs'],
   },
 
   // ════════════════════════════════════════
@@ -205,6 +221,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'referral',
     fundingType: 'referral_service',
     healthMatch: ['mental_health','substance_recovery'],
+      intentMatch: ['mental_health', 'substance_recovery'],
   },
   {
     id: 'np-samhsa-treatment',
@@ -215,6 +232,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'referral',
     fundingType: 'referral_service',
     healthMatch: ['mental_health','substance_recovery'],
+      intentMatch: ['mental_health', 'substance_recovery'],
   },
   {
     id: 'np-nami',
@@ -226,6 +244,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'assistance',
     fundingType: 'direct_service',
     healthMatch: ['mental_health'],
+      intentMatch: ['mental_health'],
   },
 
   // ════════════════════════════════════════
@@ -241,6 +260,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'assistance',
     fundingType: 'direct_service',
     militaryMatch: ['veteran','disabled_veteran'],
+      intentMatch: ['military', 'healthcare'],
   },
   {
     id: 'np-operation-homefront',
@@ -252,6 +272,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'grant',
     fundingType: 'direct_grant',
     militaryMatch: ['veteran','active_duty','military_spouse'],
+      intentMatch: ['military', 'housing'],
   },
 
   // ════════════════════════════════════════
@@ -267,6 +288,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'assistance',
     fundingType: 'direct_service',
     healthMatch: ['disability','visual_impairment','physical_disability'],
+      intentMatch: ['workforce', 'special_needs'],
   },
   {
     id: 'np-nfb',
@@ -278,6 +300,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'assistance',
     fundingType: 'direct_service',
     healthMatch: ['visual_impairment'],
+      intentMatch: ['special_needs', 'education'],
   },
 
   // ════════════════════════════════════════
@@ -293,6 +316,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'assistance',
     fundingType: 'direct_service',
     familyMatch: ['domestic_violence'],
+      intentMatch: ['housing', 'legal'],
   },
 
   // ════════════════════════════════════════
@@ -307,6 +331,7 @@ export const NATIONAL_PROGRAMS = [
     eligibility: { incomeLimit: 'Varies — must demonstrate need for employment' },
     type: 'assistance',
     fundingType: 'direct_service',
+      intentMatch: ['transportation'],
   },
 
   // ════════════════════════════════════════
@@ -354,6 +379,7 @@ export const NATIONAL_PROGRAMS = [
     occupationMatch: ['educator'],
     studentMatch: ['educator'],
     recurring: true,
+      intentMatch: ['education'],
   },
   {
     id: 'np-first-responder-childrens',
@@ -365,6 +391,7 @@ export const NATIONAL_PROGRAMS = [
     fundingType: 'direct_grant',
     occupationMatch: ['firefighter','ems_worker','law_enforcement'],
     familyMatch: ['has_children'],
+      intentMatch: ['education'],
   },
   {
     id: 'np-nurse-corps',
@@ -376,6 +403,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'grant',
     fundingType: 'direct_grant',
     occupationMatch: ['healthcare_worker'],
+      intentMatch: ['education', 'healthcare'],
   },
   {
     id: 'np-usda-farm-grants',
@@ -387,6 +415,7 @@ export const NATIONAL_PROGRAMS = [
     fundingType: 'direct_grant',
     occupationMatch: ['farmer'],
     geoMatch: ['rural'],
+      intentMatch: ['workforce'],
   },
   {
     id: 'np-sba-resources',
@@ -413,6 +442,7 @@ export const NATIONAL_PROGRAMS = [
     fundingType: 'direct_service',
     immigrationMatch: ['refugee'],
     eligibility: { requiresImmigrationStatus: true },
+      intentMatch: ['housing', 'healthcare', 'workforce'],
   },
   {
     id: 'np-irc',
@@ -423,6 +453,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'assistance',
     fundingType: 'direct_service',
     immigrationMatch: ['refugee','new_immigrant','permanent_resident'],
+      intentMatch: ['housing', 'healthcare', 'workforce', 'legal'],
   },
   {
     id: 'np-uscri',
@@ -433,6 +464,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'assistance',
     fundingType: 'direct_service',
     immigrationMatch: ['refugee','new_immigrant'],
+      intentMatch: ['legal', 'housing'],
   },
 
   // ════════════════════════════════════════
@@ -447,6 +479,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'referral',
     fundingType: 'referral_service',
     geoMatch: ['appalachian','rural'],
+      intentMatch: ['workforce', 'utilities'],
   },
   {
     id: 'np-rural-health',
@@ -457,6 +490,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'referral',
     fundingType: 'referral_service',
     geoMatch: ['rural'],
+      intentMatch: ['healthcare'],
   },
 
   // ════════════════════════════════════════
@@ -472,6 +506,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'assistance',
     fundingType: 'direct_service',
     familyMatch: ['trafficking_survivor'],
+      intentMatch: ['housing', 'legal'],
   },
   {
     id: 'np-fema-individual',
@@ -482,6 +517,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'grant',
     fundingType: 'direct_grant',
     familyMatch: ['disaster_survivor'],
+      intentMatch: ['housing'],
   },
 
   // ════════════════════════════════════════
@@ -496,6 +532,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'referral',
     fundingType: 'referral_service',
     familyMatch: ['formerly_incarcerated'],
+      intentMatch: ['workforce', 'housing', 'legal'],
   },
 
   // ════════════════════════════════════════
@@ -510,6 +547,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'referral',
     fundingType: 'referral_service',
     familyMatch: ['foster_youth'],
+      intentMatch: ['education'],
   },
   {
     id: 'np-chafee-etv',
@@ -523,6 +561,7 @@ export const NATIONAL_PROGRAMS = [
     maxAmount: 5000,
     familyMatch: ['foster_youth'],
     studentMatch: ['foster_youth'],
+      intentMatch: ['education'],
   },
 
   // ════════════════════════════════════════
@@ -537,6 +576,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'referral',
     fundingType: 'referral_service',
     familyMatch: ['caregiver','grandparent_caregiver'],
+      intentMatch: ['healthcare'],
   },
   {
     id: 'np-generations-united',
@@ -547,6 +587,7 @@ export const NATIONAL_PROGRAMS = [
     type: 'referral',
     fundingType: 'referral_service',
     familyMatch: ['grandparent_caregiver'],
+      intentMatch: ['legal', 'childcare'],
   },
 ];
 
