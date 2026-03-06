@@ -2,6 +2,8 @@ import express from 'express'
 import { ensureAuth } from '../middleware/auth.js'
 import { runCrawler, SCHEMA } from '../services/crawlers/crawlerManager.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
+import { expandNeed, scoreNeedMatch } from '../services/crawlers/needTaxonomy.js'
+import { getStrategy, listStrategies } from '../services/crawlers/strategyRegistry.js'
 
 const router = express.Router()
 
@@ -68,6 +70,7 @@ function mapResultToFrontendShape(result) {
       ? Object.entries(result.eligibility).map(([k, v]) => `${k.replace(/([A-Z])/g, ' $1').trim()}: ${v}`)
       : [],
     application_note: result.applicationNote || null,
+    match_explain: result.match_explain || null,
   }
 }
 
@@ -110,17 +113,38 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     console.log(`[RealCrawlers] Running ${crawler_type} for profile ${profile_id}`)
 
+    const strategy = getStrategy(crawler_type)
+
     const result = await runCrawler(db, profile_id, {
       minScore: Math.max(1, Math.floor(min_match_score * 0.25)),
-      maxResults: 100,
+      maxResults: strategy.maxResults || 100,
+      crawlerType: crawler_type,
     })
+
+    // If strategy was gated, return early with reason
+    if (result.debug?.gated) {
+      const duration = Date.now() - startTime
+      return res.json({
+        success: true,
+        crawler_type,
+        count: 0,
+        total_found: 0,
+        filtered_count: 0,
+        min_match_score,
+        duration,
+        opportunities: [],
+        gated: true,
+        gate_reason: result.debug.gateReason,
+        debug: result.debug,
+      })
+    }
 
     const mapped = result.results.map(mapResultToFrontendShape)
 
     let filtered = mapped
       .filter((opp) => typeof opp.match_score === 'number' && opp.match_score >= min_match_score)
       .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
-      .slice(0, 100)
+      .slice(0, strategy.maxResults || 100)
 
     let thresholdFallbackMessage = null
     if (filtered.length === 0 && mapped.length > 0) {
@@ -149,6 +173,14 @@ router.post('/run', ensureAuth, async (req, res) => {
       used_db_fallback: false,
       used_curated: true,
       debug: {
+        strategy: result.debug?.strategy || crawler_type,
+        intents: result.debug?.intents || [],
+        candidateCounts: result.debug?.candidateCounts || {},
+        totalCandidates: result.debug?.totalCandidates || 0,
+        matchedCount: result.debug?.matchedCount || 0,
+        demotedForUrl: result.debug?.demotedForUrl || 0,
+        matchStats: result.debug?.matchStats || {},
+        timing: result.debug?.timing || {},
         analysis: {
           state: result.analysis.location.state,
           city: result.analysis.location.city,
@@ -164,20 +196,6 @@ router.post('/run', ensureAuth, async (req, res) => {
           geographic: result.analysis.geographic ? [...result.analysis.geographic] : [],
           applicantType: result.analysis.applicantType,
           income: result.analysis.income || null,
-          education: result.analysis.education || null,
-          interests: result.analysis.interests ? [...result.analysis.interests] : [],
-          sports: result.analysis.sports ? [...result.analysis.sports] : [],
-          schools: (result.analysis.schools || []).map(s => ({
-            name: s.name,
-            state: s.state,
-            zip: s.zip,
-            hasFinancialAidPortal: !!s.portals?.financialAid,
-            hasAdmissionsPortal: !!s.portals?.admissions,
-            contactCount: (s.contacts || []).length,
-            deptContactCount: (s.departmentContacts || []).length,
-            interestCount: (s.interests || []).length,
-          })),
-          organization: result.analysis.organization || null,
         },
         state_portal: result.statePortal,
         county_contacts: result.countyContacts,
@@ -191,6 +209,7 @@ router.post('/run', ensureAuth, async (req, res) => {
       error: 'Crawler execution failed',
       message: error?.message || String(error),
       crawler_type,
+      min_match_score,
       opportunities: [],
     })
   }
@@ -246,32 +265,39 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
   try {
     const startAt = Date.now()
 
-    const result = await runCrawler(db, profile_id, {
-      minScore: Math.max(1, Math.floor(Number(min_match_score) * 0.25)),
-      maxResults: 50,
-    })
-
-    const mapped = result.results.map(mapResultToFrontendShape)
-    const filtered = mapped
-      .filter((opp) => typeof opp.match_score === 'number' && opp.match_score >= Number(min_match_score))
-      .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
-      .slice(0, 50)
-
-    totalFound = result.results.length
-    totalInserted = filtered.length
-
     for (const crawlerType of crawler_types) {
       if (!CRAWLER_TYPES.includes(crawlerType)) {
         failed.push({ crawler: crawlerType, error: 'Invalid crawler type', status: 400 })
         continue
       }
-      succeeded.push({
-        crawler: crawlerType,
-        found: result.results.length,
-        inserted: filtered.length,
-        duration_ms: Date.now() - startAt,
-        used_curated: true,
-      })
+      try {
+        const result = await runCrawler(db, profile_id, {
+          minScore: Math.max(1, Math.floor(Number(min_match_score) * 0.25)),
+          maxResults: 50,
+          crawlerType,
+        })
+
+        const mapped = result.results.map(mapResultToFrontendShape)
+        const filtered = mapped
+          .filter((opp) => typeof opp.match_score === 'number' && opp.match_score >= Number(min_match_score))
+          .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+          .slice(0, 50)
+
+        totalFound += result.results.length
+        totalInserted += filtered.length
+
+        succeeded.push({
+          crawler: crawlerType,
+          found: result.results.length,
+          inserted: filtered.length,
+          duration_ms: Date.now() - startAt,
+          used_curated: true,
+          gated: result.debug?.gated || false,
+          gate_reason: result.debug?.gateReason || null,
+        })
+      } catch (crawlErr) {
+        failed.push({ crawler: crawlerType, error: crawlErr?.message || String(crawlErr), status: 500 })
+      }
     }
   } catch (error) {
     console.error('[RealCrawlers] Error in run-multiple:', error)
@@ -328,18 +354,102 @@ router.get('/find-profile', async (req, res) => {
 })
 
 /**
+ * Specific need search.
+ * POST /api/real-crawlers/specific-need
+ */
+router.post('/specific-need', ensureAuth, async (req, res) => {
+  const { profile_id, need_text, min_match_score = 30, max_results = 20 } = req.body
+
+  if (!profile_id) return res.status(400).json({ error: 'profile_id is required' })
+  if (!need_text || typeof need_text !== 'string' || need_text.trim().length < 2) {
+    return res.status(400).json({ error: 'need_text is required (at least 2 characters)' })
+  }
+
+  if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
+
+  try {
+    const db = req.db
+    const startTime = Date.now()
+
+    const expandedNeed = expandNeed(need_text)
+
+    const result = await runCrawler(db, profile_id, {
+      minScore: 1,
+      maxResults: 200,
+      crawlerType: 'comprehensive',
+    })
+
+    // Re-score all results against the specific need
+    const needScored = []
+    for (const opp of result.results) {
+      const needMatch = scoreNeedMatch(opp, expandedNeed)
+      if (needMatch && needMatch.score >= Number(min_match_score)) {
+        const mapped = mapResultToFrontendShape(opp)
+        mapped.need_match = {
+          score: needMatch.score,
+          matchedTerms: needMatch.matchedTerms,
+          canonicalNeed: needMatch.canonicalNeed,
+          expandedFrom: need_text,
+          matchedKey: expandedNeed.matchedKey,
+        }
+        // Blend: 60% profile match + 40% need match
+        mapped.combined_score = Math.round(mapped.match_score * 0.6 + needMatch.score * 0.4)
+        needScored.push(mapped)
+      }
+    }
+
+    needScored.sort((a, b) => (b.combined_score ?? 0) - (a.combined_score ?? 0))
+    const final = needScored.slice(0, Number(max_results))
+
+    const duration = Date.now() - startTime
+
+    res.json({
+      success: true,
+      need_text,
+      expanded: {
+        canonicalNeed: expandedNeed.canonicalNeed,
+        matchedKey: expandedNeed.matchedKey,
+        synonyms: expandedNeed.synonyms?.slice(0, 10),
+        programCategories: expandedNeed.programCategories,
+      },
+      count: final.length,
+      total_candidates: result.results.length,
+      duration,
+      opportunities: final,
+    })
+  } catch (error) {
+    console.error('[RealCrawlers] Error in specific-need:', error)
+    res.status(200).json({
+      success: false,
+      error: 'Specific need search failed',
+      message: error?.message || String(error),
+      opportunities: [],
+    })
+  }
+})
+
+/**
+ * List strategies with gate info.
+ * GET /api/real-crawlers/strategies
+ */
+router.get('/strategies', ensureAuth, (_req, res) => {
+  res.json({ strategies: listStrategies() })
+})
+
+/**
  * Health check (simplified — no external API dependencies).
  * GET /api/real-crawlers/health-check
  */
 router.get('/health-check', async (_req, res) => {
   res.json({
     ok: true,
-    system: 'curated_program_matcher_v3',
+    system: 'strategy_router_v4',
     checks: [
       { source: 'Federal Benefits DB', reachable: true, program_count: 26 },
       { source: 'National Programs DB', reachable: true, program_count: 43 },
-      { source: 'State Programs', reachable: true, note: 'Dynamic per-state loading (WV, TN, etc.)' },
+      { source: 'Business Programs DB', reachable: true, program_count: 25 },
       { source: 'Scholarships DB', reachable: true, program_count: 40 },
+      { source: 'State Programs', reachable: true, note: 'Dynamic per-state loading' },
     ],
   })
 })

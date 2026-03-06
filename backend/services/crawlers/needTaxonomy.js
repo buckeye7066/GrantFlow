@@ -1,0 +1,230 @@
+/**
+ * needTaxonomy.js
+ *
+ * Expands a user's free-text need description into:
+ *   - canonicalNeed: the normalised need category
+ *   - synonyms: related terms for broader matching
+ *   - mustTerms: terms that MUST appear for a strong match
+ *   - programCategories: which program categories to search
+ */
+
+const TAXONOMY = {
+  rent: {
+    canonicalNeed: 'housing',
+    synonyms: ['rental assistance', 'arrears', 'eviction prevention', 'homelessness prevention',
+      'rapid rehousing', 'emergency rent', 'past due rent', 'security deposit',
+      'housing stability', 'rent relief', 'tenant assistance'],
+    programCategories: ['housing', 'cash_assistance'],
+  },
+  housing: {
+    canonicalNeed: 'housing',
+    synonyms: ['shelter', 'transitional housing', 'section 8', 'public housing',
+      'home repair', 'weatherization', 'mortgage assistance', 'housing authority'],
+    programCategories: ['housing', 'weatherization'],
+  },
+  utilities: {
+    canonicalNeed: 'utilities',
+    synonyms: ['LIHEAP', 'energy assistance', 'shutoff prevention', 'electric bill',
+      'gas bill', 'water bill', 'utility arrears', 'disconnect notice',
+      'power bill', 'heating assistance', 'cooling assistance', 'WAP'],
+    programCategories: ['utilities', 'weatherization'],
+  },
+  training: {
+    canonicalNeed: 'employment',
+    synonyms: ['workforce training', 'WIOA', 'ETPL', 'tuition assistance', 'exam fee',
+      'certification support', 'licensure', 'nursing licensure prep', 'PROBE class',
+      'vocational training', 'job training', 'career readiness', 'GED prep',
+      'CDL training', 'apprenticeship', 'on-the-job training', 'job retraining'],
+    programCategories: ['employment', 'education'],
+  },
+  licensure: {
+    canonicalNeed: 'employment',
+    synonyms: ['licensure exam', 'PROBE class', 'certification fee', 'nursing exam',
+      'CNA training', 'professional license', 'board exam', 'NCLEX prep',
+      'state board', 'credential evaluation'],
+    programCategories: ['employment', 'education'],
+  },
+  medical: {
+    canonicalNeed: 'healthcare',
+    synonyms: ['charity care', 'patient assistance', 'copay assistance', 'prescription help',
+      'free clinic', 'sliding scale', 'uninsured', 'disease foundation',
+      'medical bills', 'hospital charity', 'health coverage'],
+    programCategories: ['healthcare'],
+  },
+  food: {
+    canonicalNeed: 'food',
+    synonyms: ['SNAP', 'food stamps', 'food bank', 'food pantry', 'WIC', 'meals on wheels',
+      'congregate meals', 'backpack program', 'summer meals', 'groceries'],
+    programCategories: ['food'],
+  },
+  childcare: {
+    canonicalNeed: 'childcare',
+    synonyms: ['daycare', 'head start', 'preschool', 'CCDF', 'child care subsidy',
+      'after school', 'summer care', 'latchkey'],
+    programCategories: ['childcare'],
+  },
+  transportation: {
+    canonicalNeed: 'transportation',
+    synonyms: ['bus pass', 'vehicle donation', 'car repair', 'transit',
+      'ride share', 'medical transportation', 'NEMT'],
+    programCategories: ['transportation'],
+  },
+  internet: {
+    canonicalNeed: 'internet',
+    synonyms: ['broadband', 'ACP', 'Lifeline', 'connectivity', 'digital equity',
+      'WiFi', 'hotspot', 'low-cost internet'],
+    programCategories: ['internet'],
+  },
+  disability: {
+    canonicalNeed: 'disability',
+    synonyms: ['SSI', 'SSDI', 'adaptive equipment', 'assistive technology',
+      'vocational rehabilitation', 'independent living', 'home modification',
+      'personal care', 'HCBS waiver', 'supported employment'],
+    programCategories: ['disability', 'healthcare', 'employment'],
+  },
+  business: {
+    canonicalNeed: 'business',
+    synonyms: ['small business grant', 'microenterprise', 'SBA', 'startup funding',
+      'self-employment', 'entrepreneur', 'SBIR', 'minority business',
+      'women-owned business', 'veteran business', 'SCORE'],
+    programCategories: ['business', 'employment', 'cash_assistance'],
+  },
+  legal: {
+    canonicalNeed: 'legal',
+    synonyms: ['legal aid', 'free lawyer', 'immigration attorney', 'court help',
+      'expungement', 'custody', 'protective order', 'eviction defense'],
+    programCategories: ['legal'],
+  },
+  mental_health: {
+    canonicalNeed: 'mental_health',
+    synonyms: ['counseling', 'therapy', 'crisis intervention', 'behavioral health',
+      'psychiatric', 'depression', 'anxiety', 'PTSD', 'suicide prevention'],
+    programCategories: ['mental_health', 'healthcare'],
+  },
+  substance: {
+    canonicalNeed: 'substance_recovery',
+    synonyms: ['addiction', 'rehab', 'detox', 'MAT', 'naloxone', 'sober living',
+      'opioid', 'drug treatment', 'alcohol treatment', 'recovery house'],
+    programCategories: ['substance_recovery', 'mental_health', 'healthcare'],
+  },
+};
+
+// Build a reverse-lookup: keyword → taxonomy entry
+const KEYWORD_INDEX = new Map();
+for (const [key, entry] of Object.entries(TAXONOMY)) {
+  KEYWORD_INDEX.set(key, entry);
+  for (const syn of entry.synonyms) {
+    const norm = syn.toLowerCase();
+    if (!KEYWORD_INDEX.has(norm)) KEYWORD_INDEX.set(norm, entry);
+  }
+}
+
+/**
+ * Expand a free-text need into taxonomy terms.
+ *
+ * @param {string} needText - e.g. "emergency rent", "PROBE class", "utility shutoff"
+ * @returns {{ canonicalNeed, synonyms, mustTerms, programCategories, matchedKey }}
+ */
+export function expandNeed(needText) {
+  const text = (needText || '').toLowerCase().trim();
+  if (!text) return null;
+
+  // Direct key match
+  for (const [key, entry] of Object.entries(TAXONOMY)) {
+    if (text.includes(key)) {
+      return {
+        canonicalNeed: entry.canonicalNeed,
+        synonyms: entry.synonyms,
+        mustTerms: [key, ...text.split(/\s+/).filter(w => w.length > 2)],
+        programCategories: entry.programCategories,
+        matchedKey: key,
+      };
+    }
+  }
+
+  // Synonym match
+  for (const [syn, entry] of KEYWORD_INDEX.entries()) {
+    if (text.includes(syn)) {
+      return {
+        canonicalNeed: entry.canonicalNeed,
+        synonyms: entry.synonyms,
+        mustTerms: [syn, ...text.split(/\s+/).filter(w => w.length > 2)],
+        programCategories: entry.programCategories,
+        matchedKey: syn,
+      };
+    }
+  }
+
+  // Fallback: treat each word as a potential need
+  const words = text.split(/\s+/).filter(w => w.length > 2);
+  for (const word of words) {
+    for (const [key, entry] of Object.entries(TAXONOMY)) {
+      if (key.includes(word) || entry.synonyms.some(s => s.toLowerCase().includes(word))) {
+        return {
+          canonicalNeed: entry.canonicalNeed,
+          synonyms: entry.synonyms,
+          mustTerms: words,
+          programCategories: entry.programCategories,
+          matchedKey: key,
+        };
+      }
+    }
+  }
+
+  return {
+    canonicalNeed: null,
+    synonyms: [],
+    mustTerms: words,
+    programCategories: [],
+    matchedKey: null,
+  };
+}
+
+/**
+ * Score how well a program matches an expanded need.
+ * Returns 0-100 or null if no match.
+ */
+export function scoreNeedMatch(program, expandedNeed) {
+  if (!expandedNeed || !program) return null;
+
+  const programText = `${program.name || ''} ${program.description || ''} ${(program.categories || []).join(' ')}`.toLowerCase();
+  let score = 0;
+  const matchedTerms = [];
+
+  // Category overlap
+  const cats = new Set(program.categories || []);
+  for (const cat of expandedNeed.programCategories) {
+    if (cats.has(cat)) {
+      score += 25;
+      matchedTerms.push(`category:${cat}`);
+    }
+  }
+
+  // Must-term presence
+  for (const term of expandedNeed.mustTerms) {
+    if (programText.includes(term.toLowerCase())) {
+      score += 15;
+      matchedTerms.push(`term:${term}`);
+    }
+  }
+
+  // Synonym presence
+  let synHits = 0;
+  for (const syn of expandedNeed.synonyms) {
+    if (programText.includes(syn.toLowerCase())) {
+      synHits++;
+      if (synHits <= 3) matchedTerms.push(`synonym:${syn}`);
+    }
+  }
+  score += Math.min(30, synHits * 10);
+
+  if (score === 0) return null;
+
+  return {
+    score: Math.min(100, score),
+    matchedTerms,
+    canonicalNeed: expandedNeed.canonicalNeed,
+  };
+}
+
+export default { expandNeed, scoreNeedMatch, TAXONOMY };

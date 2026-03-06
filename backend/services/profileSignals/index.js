@@ -1,0 +1,171 @@
+/**
+ * profileSignals/index.js
+ *
+ * THE single canonical module for extracting profile signals.
+ * Wraps profileAnalyzer and adds:
+ *   - rawInputs (safe subset of raw sections for debugging)
+ *   - intents (derived from signals for strategy routing)
+ *   - assistancePrograms (currently enrolled gov programs)
+ *
+ * Every crawler MUST use this module; duplicate extraction logic is forbidden.
+ */
+
+import { analyzeProfile } from '../crawlers/profileAnalyzer.js';
+
+/**
+ * Detect high-level intents from analyzed signals.
+ * Used by strategy registry to select/weight data sources.
+ */
+function deriveIntents(analysis) {
+  const intents = new Set();
+
+  if (analysis.occupation.has('small_business_owner')
+    || analysis.occupation.has('minority_owned_business')
+    || analysis.occupation.has('women_owned_business')
+    || analysis.needs.has('business')
+    || (analysis.keywords || []).some(k => /business|entrepreneur|startup|self.?employ|microenterprise/i.test(k))) {
+    intents.add('business');
+  }
+
+  if (analysis.applicantType === 'student' || analysis.needs.has('scholarship') || analysis.needs.has('education')) {
+    intents.add('education');
+  }
+
+  if (analysis.health.size > 0 || analysis.needs.has('healthcare') || analysis.needs.has('disability')) {
+    intents.add('healthcare');
+  }
+
+  if (analysis.military.size > 0) {
+    intents.add('military');
+  }
+
+  if (analysis.needs.has('housing') || analysis.family.has('homeless')) {
+    intents.add('housing');
+  }
+
+  if (analysis.needs.has('employment') && !intents.has('business')) {
+    intents.add('workforce');
+  }
+
+  if (analysis.needs.has('utilities') || analysis.needs.has('weatherization')) {
+    intents.add('utilities');
+  }
+
+  if (analysis.needs.has('food')) {
+    intents.add('food');
+  }
+
+  if (analysis.needs.has('childcare')) {
+    intents.add('childcare');
+  }
+
+  if (analysis.needs.has('transportation')) {
+    intents.add('transportation');
+  }
+
+  if (analysis.needs.has('internet')) {
+    intents.add('broadband');
+  }
+
+  if (analysis.needs.has('legal')) {
+    intents.add('legal');
+  }
+
+  if (analysis.health.has('disability') || analysis.health.has('physical_disability')
+    || analysis.health.has('developmental_disability') || analysis.health.has('visual_impairment')
+    || analysis.health.has('hearing_impairment') || analysis.needs.has('disability')) {
+    intents.add('special_needs');
+  }
+
+  if (analysis.needs.has('mental_health') || analysis.health.has('mental_health')) {
+    intents.add('mental_health');
+  }
+
+  if (analysis.needs.has('substance_recovery') || analysis.health.has('substance_recovery')) {
+    intents.add('substance_recovery');
+  }
+
+  return intents;
+}
+
+/**
+ * Extract government assistance programs the profile is currently enrolled in.
+ */
+function extractAssistancePrograms(sections) {
+  const gov = sections.government_assistance || {};
+  const comp = sections.comprehensive_application || {};
+  const programs = [];
+
+  if (gov.medicaid_enrolled || comp.medicaid_enrolled) programs.push('medicaid');
+  if (gov.medicare_recipient || comp.medicare_recipient) programs.push('medicare');
+  if (gov.ssi_recipient || comp.ssi_recipient) programs.push('ssi');
+  if (gov.ssdi_recipient || comp.ssdi_recipient) programs.push('ssdi');
+  if (gov.snap_recipient || comp.snap_recipient) programs.push('snap');
+  if (gov.tanf_recipient || comp.tanf_recipient) programs.push('tanf');
+  if (gov.section8_housing || comp.section8_housing) programs.push('section8');
+  if (gov.liheap_recipient || comp.liheap_recipient) programs.push('liheap');
+  if (gov.wic_recipient || comp.wic_recipient) programs.push('wic');
+  if (gov.medicaid_waiver_program && gov.medicaid_waiver_program !== 'none') programs.push('medicaid_waiver');
+
+  return programs;
+}
+
+/**
+ * Build a safe raw-inputs snapshot for debugging (no PII beyond what the profile already has).
+ */
+function buildRawInputs(profile, sections) {
+  const sectionKeys = Object.keys(sections);
+  const fieldCounts = {};
+  for (const key of sectionKeys) {
+    const data = sections[key];
+    fieldCounts[key] = data && typeof data === 'object' ? Object.keys(data).length : 0;
+  }
+
+  return {
+    profileId: profile.id,
+    displayName: profile.display_name || profile.name || null,
+    primaryType: profile.primary_type || null,
+    tags: (() => {
+      let t = profile.tags;
+      if (typeof t === 'string') { try { t = JSON.parse(t); } catch { t = []; } }
+      return Array.isArray(t) ? t : [];
+    })(),
+    sectionKeys,
+    fieldCounts,
+    hasNarrative: !!(sections.narrative?.barriers_faced || sections.narrative?.special_circumstances),
+    hasComprehensiveApp: !!sections.comprehensive_application,
+    hasUniversityApps: !!(sections.university_applications?.applications?.length),
+  };
+}
+
+/**
+ * Load ALL profile data and produce canonical signals.
+ *
+ * @param {Object} db - Database handle
+ * @param {string} profileId
+ * @returns {{ signals, intents, assistancePrograms, rawInputs }}
+ */
+export async function loadProfileSignals(db, profileId) {
+  const profile = await db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId);
+  if (!profile) throw new Error(`Profile not found: ${profileId}`);
+
+  const rows = await db.prepare(
+    'SELECT section_key, data FROM profile_sections WHERE profile_id = ?'
+  ).all(profileId);
+
+  const sections = {};
+  for (const r of (rows || [])) {
+    try {
+      sections[r.section_key] = typeof r.data === 'string' ? JSON.parse(r.data) : r.data;
+    } catch { /* skip unparseable */ }
+  }
+
+  const signals = await analyzeProfile(db, { ...profile, sections });
+  const intents = deriveIntents(signals);
+  const assistancePrograms = extractAssistancePrograms(sections);
+  const rawInputs = buildRawInputs(profile, sections);
+
+  return { signals, intents, assistancePrograms, rawInputs };
+}
+
+export default { loadProfileSignals };

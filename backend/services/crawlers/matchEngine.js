@@ -499,11 +499,40 @@ export function scoreProgram(program, analysis) {
   // ── Normalize to 0-100 ──
   const normalizedScore = Math.round(Math.min(100, (score / maxPossible) * 100));
 
+  // Build matched signals list
+  const matchedSignals = [];
+  if (categoryHits > 0) matchedSignals.push('category');
+  if (intentBonus > 0) matchedSignals.push('intent');
+  if (program.demographicMatch?.some(d => analysis.demographics.has(d))) matchedSignals.push('demographic');
+  if (program.healthMatch?.some(h => analysis.health.has(h))) matchedSignals.push('health');
+  if (program.militaryMatch?.some(m => analysis.military.has(m))) matchedSignals.push('military');
+  if (program.familyMatch?.some(f => analysis.family.has(f))) matchedSignals.push('family');
+  if (program.occupationMatch?.some(o => analysis.occupation?.has(o))) matchedSignals.push('occupation');
+  if (program.geoMatch?.some(g => analysis.geographic?.has(g))) matchedSignals.push('geographic');
+
+  const matchedCategories = [...programCats].filter(c => profileNeeds.has(c));
+
   return {
-        ...program,
-        matchScore: normalizedScore,
-        matchReasons,
-        matchedCategories: [...programCats].filter(c => profileNeeds.has(c)),
+    ...program,
+    matchScore: normalizedScore,
+    matchReasons,
+    matchedCategories,
+    match_explain: {
+      matchedSignals,
+      matchedNeeds: matchedCategories,
+      matchedNeedTerms: matchReasons.filter(r => r.startsWith('Matches your need:')).map(r => r.replace('Matches your need: ', '')),
+      scoreBreakdown: {
+        category: Math.round(categoryScore),
+        intent: intentBonus,
+        locality: program.stateRestriction === analysis.location.state ? 20 : (!program.stateRestriction ? 15 : 0),
+        eligibility: score - categoryScore - intentBonus - (program.stateRestriction === analysis.location.state ? 20 : 15),
+        trust: (program.type === 'portal' || program.type === 'referral') ? 5 : 0,
+        penalties: negPenalty,
+        normalized: normalizedScore,
+        raw: score,
+        maxPossible,
+      },
+    },
   };
 }
 
@@ -516,61 +545,74 @@ export function scoreProgram(program, analysis) {
  * @returns {Array} Ranked, scored, deduplicated results
  */
 export function matchPrograms(allPrograms, analysis, options = {}) {
-    const { minScore = 30, maxResults = 50 } = options;
+  const { minScore = 30, maxResults = 50, strategyId = 'comprehensive' } = options;
 
   const results = [];
-    const seenIds = new Set();
-    const seenUrls = new Set();
-    const seenNames = new Set();
-    let stats = { total: 0, dupId: 0, dupUrl: 0, dupName: 0, excluded: 0,
-                                 informational: 0, copayGated: 0, belowMin: 0, nullScore: 0 };
+  const seenIds = new Set();
+  const seenUrls = new Set();
+  const seenNames = new Set();
+  let stats = { total: 0, dupId: 0, dupUrl: 0, dupName: 0, excluded: 0,
+    informational: 0, copayGated: 0, belowMin: 0, nullScore: 0 };
 
   for (const program of allPrograms) {
-        stats.total++;
+    stats.total++;
 
-      // Dedup by ID
-      if (seenIds.has(program.id)) { stats.dupId++; continue; }
-        seenIds.add(program.id);
+    // Dedup by ID
+    if (seenIds.has(program.id)) { stats.dupId++; continue; }
+    seenIds.add(program.id);
 
-      // Dedup by URL
-      const normUrl = normalizeUrl(program.url);
-        if (normUrl && seenUrls.has(normUrl)) { stats.dupUrl++; continue; }
-        if (normUrl) seenUrls.add(normUrl);
+    // Dedup by URL
+    const normUrl = normalizeUrl(program.url);
+    if (normUrl && seenUrls.has(normUrl)) { stats.dupUrl++; continue; }
+    if (normUrl) seenUrls.add(normUrl);
 
-      // Dedup by name
-      const normName = normalizeName(program.name);
-        if (normName && seenNames.has(normName)) { stats.dupName++; continue; }
-        if (normName) seenNames.add(normName);
+    // Dedup by name
+    const normName = normalizeName(program.name);
+    if (normName && seenNames.has(normName)) { stats.dupName++; continue; }
+    if (normName) seenNames.add(normName);
 
-      // Filter informational-only pages
-      if (isInformationalOnly(program)) { stats.informational++; continue; }
+    // Filter informational-only pages
+    if (isInformationalOnly(program)) { stats.informational++; continue; }
 
-      // Filter copay/patient-assistance when no matching conditions
-      if (isCopayOrPatientAssistanceIrrelevant(program, analysis)) { stats.copayGated++; continue; }
+    // Filter copay/patient-assistance when no matching conditions
+    if (isCopayOrPatientAssistanceIrrelevant(program, analysis)) { stats.copayGated++; continue; }
 
-      // Filter loans/matching funds
-      if (isExcluded(program)) { stats.excluded++; continue; }
+    // Filter loans/matching funds
+    if (isExcluded(program)) { stats.excluded++; continue; }
 
-      // Score against profile
-      const scored = scoreProgram(program, analysis);
-        if (!scored) { stats.nullScore++; continue; }
-        if (scored.matchScore < minScore) { stats.belowMin++; continue; }
+    // Score against profile
+    const scored = scoreProgram(program, analysis);
+    if (!scored) { stats.nullScore++; continue; }
+    if (scored.matchScore < minScore) { stats.belowMin++; continue; }
 
-      results.push(scored);
+    // Attach strategy context to match_explain
+    if (scored.match_explain) {
+      scored.match_explain.crawler_type = strategyId;
+      scored.match_explain.strategy_id = strategyId;
+      scored.match_explain.urlPolicy = {
+        urlUsed: scored.url || scored.applicationUrl || null,
+        isDirectory: scored.type === 'portal' || scored.type === 'referral',
+        acceptedReason: (scored.url || scored.applicationUrl) ? 'valid_url' : 'no_url',
+      };
+    }
+
+    results.push(scored);
   }
 
   // Sort by score descending, then by priority
   results.sort((a, b) => {
-        if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
-        return (a.priority || 99) - (b.priority || 99);
+    if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
+    return (a.priority || 99) - (b.priority || 99);
   });
 
   console.log(`[MatchEngine] ${stats.total} candidates -> ${results.length} matched | ` +
-                  `dedup(id:${stats.dupId} url:${stats.dupUrl} name:${stats.dupName}) ` +
-                  `filtered(info:${stats.informational} copay:${stats.copayGated} excl:${stats.excluded}) ` +
-                  `scored(null:${stats.nullScore} low:${stats.belowMin})`);
+    `dedup(id:${stats.dupId} url:${stats.dupUrl} name:${stats.dupName}) ` +
+    `filtered(info:${stats.informational} copay:${stats.copayGated} excl:${stats.excluded}) ` +
+    `scored(null:${stats.nullScore} low:${stats.belowMin})`);
 
-  return results.slice(0, maxResults);
+  const sliced = results.slice(0, maxResults);
+  sliced._matchStats = stats;
+  return sliced;
 }
 
 export default { scoreProgram, matchPrograms };
