@@ -558,9 +558,11 @@ const allowedMigrations = [
   { table: 'grants', column: 'contact_phone', type: 'TEXT' },
   // Loan/grants filtering (realCrawlers buildCandidateOpportunityQuery)
   { table: 'funding_opportunities', column: 'is_loan', type: 'INTEGER DEFAULT 0' },
+  // Crawl metadata analysis blob (migration 032 / crawl metadata)
+  { table: 'crawl_metadata', column: 'analysis_json', type: 'TEXT' },
 ];
 
-const validTables = new Set(['profiles', 'crawler_jobs', 'users', 'organizations', 'grants', 'funding_opportunities', 'documents']);
+const validTables = new Set(['profiles', 'crawler_jobs', 'users', 'organizations', 'grants', 'funding_opportunities', 'documents', 'crawl_metadata']);
 const validColumnPattern = /^[a-z_]+$/;
 
 // Apply full schema first so fresh DBs (e.g. unit tests) have base tables, then add any missing columns.
