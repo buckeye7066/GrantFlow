@@ -378,6 +378,7 @@ export async function runCrawler(db, profileId, options = {}) {
     strategyId: strategy.id,
     needEmphasis: strategy.needEmphasis,
     intentBoost: strategy.intentBoost,
+    intents,
   };
 
   const results = matchPrograms(allPrograms, analysis, matchOpts);
