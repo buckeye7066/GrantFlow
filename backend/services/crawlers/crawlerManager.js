@@ -138,10 +138,10 @@ function loadCandidates(strategy, stateData, analysis, intents) {
 
   if (sources.has('business')) {
     const hasBizIntent = intents.has('business')
-      || analysis.occupation.has('small_business_owner')
-      || analysis.occupation.has('minority_owned_business')
-      || analysis.occupation.has('women_owned_business')
-      || analysis.needs.has('employment')
+      || analysis.occupation?.has('small_business_owner')
+      || analysis.occupation?.has('minority_owned_business')
+      || analysis.occupation?.has('women_owned_business')
+      || analysis.needs?.has('employment')
       || analysis.applicantType === 'organization';
 
     if (hasBizIntent) {
@@ -357,7 +357,7 @@ export async function runCrawler(db, profileId, options = {}) {
 
   // ── Step 3: Load candidate programs per strategy ──
   const t3 = Date.now();
-  const stateData = await loadStateData(analysis.location.state);
+  const stateData = await loadStateData(analysis.location?.state);
   const { programs: allPrograms, candidateCounts } = loadCandidates(strategy, stateData, analysis, intents);
 
   let schoolCards = [];
@@ -407,7 +407,7 @@ export async function runCrawler(db, profileId, options = {}) {
 
   // ── Step 6: Resolve county contacts ──
   let countyContacts = null;
-  if (analysis.location.county && stateData.countyResources) {
+  if (analysis.location?.county && stateData.countyResources) {
     const countyKey = analysis.location.county.toLowerCase().replace(/\s+county$/i, '').trim();
     countyContacts = stateData.countyResources[countyKey] || null;
   }
@@ -495,12 +495,12 @@ async function storeResults(db, profileId, results, analysis, stateMeta, countyC
     }
 
     const analysisJson = JSON.stringify({
-      needs: [...analysis.needs],
-      demographics: [...analysis.demographics],
-      health: [...analysis.health],
-      family: [...analysis.family],
-      military: [...analysis.military],
-      county: analysis.location.county,
+      needs: [...(analysis.needs || [])],
+      demographics: [...(analysis.demographics || [])],
+      health: [...(analysis.health || [])],
+      family: [...(analysis.family || [])],
+      military: [...(analysis.military || [])],
+      county: analysis.location?.county,
       statePortalUrl: stateMeta?.benefitsPortal || null,
       statePortalName: stateMeta?.benefitsPortalName || null,
     });
@@ -512,12 +512,12 @@ async function storeResults(db, profileId, results, analysis, stateMeta, countyC
         ON CONFLICT (profile_id) DO UPDATE SET
           state = EXCLUDED.state, analysis_json = EXCLUDED.analysis_json,
           county_contacts = EXCLUDED.county_contacts, total_matches = EXCLUDED.total_matches, crawled_at = now()
-      `).run(profileId, analysis.location.state, analysisJson, countyContacts ? JSON.stringify(countyContacts) : null, results.length);
+      `).run(profileId, analysis.location?.state, analysisJson, countyContacts ? JSON.stringify(countyContacts) : null, results.length);
     } else {
       await db.prepare(`
         INSERT OR REPLACE INTO crawl_metadata (profile_id, state, analysis_json, county_contacts, total_matches, crawled_at)
         VALUES (?, ?, ?, ?, ?, datetime('now'))
-      `).run(profileId, analysis.location.state, analysisJson, countyContacts ? JSON.stringify(countyContacts) : null, results.length);
+      `).run(profileId, analysis.location?.state, analysisJson, countyContacts ? JSON.stringify(countyContacts) : null, results.length);
     }
 
     let fundingUpserted = 0;
