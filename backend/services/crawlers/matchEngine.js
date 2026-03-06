@@ -259,7 +259,10 @@ export function scoreProgram(program, analysis) {
   // Score based on absolute category matches, not ratio of needs matched.
   // Profiles with many needs should NOT be penalized for having broad assistance requirements.
   // 1 hit = 12, 2 hits = 22, 3 hits = 32, 4+ hits = 40
-  const categoryScore = Math.min(40, categoryHits >= 1 ? 12 + Math.min(3, categoryHits - 1) * 10 : 0);
+  const BASE_CAT_SCORE = 12;
+  const ADDITIONAL_PER_CAT_HIT = 10;
+  const MAX_ADDITIONAL_CAT_HITS = 3;
+  const categoryScore = Math.min(40, categoryHits >= 1 ? BASE_CAT_SCORE + Math.min(MAX_ADDITIONAL_CAT_HITS, categoryHits - 1) * ADDITIONAL_PER_CAT_HIT : 0);
     score += categoryScore;
     maxPossible += 40;
 

@@ -224,7 +224,7 @@ export async function analyzeProfile(db, profileOrId) {
     'medical.conditions', 'medical.disability_type', 'medical.disabilities');
   // Also include notes from health/medical sections as free-text condition hints
   const healthNotes = lower([health.notes, medAlt.notes, health.chronic_illness_type].filter(Boolean).join(' '));
-  for (const c of [...conditions.map(lower), ...(healthNotes ? healthNotes.split(/[,;]+/).map(s => s.trim()).filter(Boolean) : [])]) {
+  for (const c of [...conditions.map(lower), ...(healthNotes.length > 0 ? healthNotes.split(/[,;]+/).map(s => s.trim()).filter(Boolean) : [])]) {
     if (c.includes('disab')) healthSignals.add('disability');
     if (c.includes('cancer')) healthSignals.add('cancer');
     if (c.includes('kidney') || c.includes('dialysis')) healthSignals.add('kidney_disease');
