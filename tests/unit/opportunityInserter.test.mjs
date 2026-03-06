@@ -31,6 +31,7 @@ function createDb() {
       categories TEXT DEFAULT '[]',
       keywords TEXT DEFAULT '[]',
       opportunity_type TEXT,
+      funding_type TEXT,
       type TEXT DEFAULT 'OPPORTUNITY',
       last_verified_at DATETIME,
       profile_id TEXT,

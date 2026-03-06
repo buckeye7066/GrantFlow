@@ -111,9 +111,8 @@ test('real-crawlers: DB fallback excludes loan, matching_funds, missing URL; ret
   assert.ok(!titles.includes('No URL Grant'), 'missing URL must not be returned')
   assert.ok(opps.every((o) => (o?.url || o?.application_url || o?.source_url || '').startsWith('http')), 'all returned must have real URL')
   assert.ok(opps.every((o) => String(o?.opportunity_type || '').toLowerCase() !== 'loan'), 'no loan type in results')
-  if (opps.length > 0) {
-    assert.ok(titles.includes('Valid Federal Grant') || opps.some((o) => o?.title?.includes('Valid')), 'valid grant should be eligible to appear')
-  }
+  assert.ok(opps.length > 0, 'curated pipeline should return at least one policy-compliant opportunity for an individual_need profile in TN')
+  assert.ok(opps.every((o) => String(o?.opportunity_type || '').toLowerCase() !== 'loan'), 'returned results must not include loans')
 })
 
 test('real-crawlers: min_match_score threshold enforced', async () => {

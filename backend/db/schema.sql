@@ -182,6 +182,7 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   categories TEXT DEFAULT '[]', -- JSON array
   keywords TEXT DEFAULT '[]', -- JSON array
   opportunity_type TEXT, -- 'grant', 'scholarship', 'loan', 'benefit', etc.
+  funding_type TEXT,
   type TEXT DEFAULT 'OPPORTUNITY' CHECK(type IN ('OPPORTUNITY', 'PROGRAM', 'DIRECTORY')),
   evidence_url TEXT, -- URL used to verify this opportunity
   last_verified_at DATETIME, -- Last time this was verified as real
