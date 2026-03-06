@@ -94,6 +94,7 @@ function deriveIntents(analysis) {
 function extractAssistancePrograms(sections) {
   const gov = sections.government_assistance || {};
   const comp = sections.comprehensive_application || {};
+  const medAlt = sections.medical || {};
   const programs = [];
 
   if (gov.medicaid_enrolled || comp.medicaid_enrolled) programs.push('medicaid');
@@ -106,6 +107,21 @@ function extractAssistancePrograms(sections) {
   if (gov.liheap_recipient || comp.liheap_recipient) programs.push('liheap');
   if (gov.wic_recipient || comp.wic_recipient) programs.push('wic');
   if (gov.medicaid_waiver_program && gov.medicaid_waiver_program !== 'none') programs.push('medicaid_waiver');
+
+  // Extract from alternate-schema medical.assistance_programs array
+  if (Array.isArray(medAlt.assistance_programs)) {
+    for (const prog of medAlt.assistance_programs) {
+      const p = String(prog).toLowerCase().trim();
+      if (p.includes('ssdi') && !programs.includes('ssdi')) programs.push('ssdi');
+      if (p.includes('ssi') && !p.includes('ssdi') && !programs.includes('ssi')) programs.push('ssi');
+      if (p.includes('medicaid') && !programs.includes('medicaid')) programs.push('medicaid');
+      if (p.includes('medicare') && !programs.includes('medicare')) programs.push('medicare');
+      if (p.includes('snap') && !programs.includes('snap')) programs.push('snap');
+      if (p.includes('tanf') && !programs.includes('tanf')) programs.push('tanf');
+      if (p.includes('liheap') && !programs.includes('liheap')) programs.push('liheap');
+      if (p.includes('wic') && !programs.includes('wic')) programs.push('wic');
+    }
+  }
 
   return programs;
 }
