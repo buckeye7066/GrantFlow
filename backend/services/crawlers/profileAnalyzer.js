@@ -92,6 +92,15 @@ const NEED_MAP = {
   business:           ['business','entrepreneur','startup','self-employ','microenterprise','small business','sba','freelance','side hustle','llc','sole proprietor'],
 };
 
+/** Coerce a value into an array. Handles JSON strings, objects, null/undefined, etc. */
+function safeArray(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try { const parsed = JSON.parse(value); if (Array.isArray(parsed)) return parsed; } catch { /* not JSON */ }
+  }
+  return [];
+}
+
 /**
  * @param {Object} db - Database handle
  * @param {string|Object} profileOrId
@@ -496,7 +505,7 @@ export async function analyzeProfile(db, profileOrId) {
       payFee: app.actions?.pay_fee_url || null,
       visit: app.actions?.visit_url || null,
     },
-    contacts: (Array.isArray(app.contacts) ? app.contacts : []).filter(c => c.name || c.email || c.phone || c.url).map(c => ({
+    contacts: safeArray(app.contacts).filter(c => c.name || c.email || c.phone || c.url).map(c => ({
       label: c.label || 'Contact',
       name: c.name || null,
       title: c.title || null,
@@ -504,7 +513,7 @@ export async function analyzeProfile(db, profileOrId) {
       phone: c.phone || null,
       url: c.url || null,
     })),
-    departmentContacts: (Array.isArray(app.department_contacts) ? app.department_contacts : []).filter(c => c.area || c.name).map(c => ({
+    departmentContacts: safeArray(app.department_contacts).filter(c => c.area || c.name).map(c => ({
       area: c.area || null,
       category: c.category || null,
       genderTarget: c.gender_target || 'any',
