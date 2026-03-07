@@ -418,6 +418,9 @@ export default function DiscoverGrants() {
             descriptionMd: opportunity.descriptionMd || opportunity.description,
             eligibilityBullets: opportunity.eligibilityBullets || [],
             source: opportunity.source || 'discovery',
+            contact_info: opportunity.contact_info || opportunity.contact || null,
+            application_method: opportunity.application_method || null,
+            applicationNote: opportunity.application_note || opportunity.applicationNote || null,
           },
         }),
       })

@@ -110,6 +110,14 @@ export const STATE_REGISTRY = {
     },
     housingUrl: 'https://www.calhfa.ca.gov/',
     housingName: 'California Housing Finance Agency',
+    extraPrograms: [
+      { id: 'ca-calworks-childcare', name: 'CalWORKs Stage 1 Child Care', description: 'Subsidized child care for CalWORKs participants in California. Covers care for children while parents work, train, or attend school.', url: 'https://www.cdss.ca.gov/calworks-child-care', categories: ['childcare', 'cash_assistance'], type: 'benefit', fundingType: 'direct_benefit', recurring: true, familyMatch: ['has_children', 'single_parent'] },
+      { id: 'ca-ebt-restaurant', name: 'California Restaurant Meals Program', description: 'Allows homeless, elderly, or disabled CalFresh recipients to use EBT at participating restaurants. Available in many California counties.', url: 'https://www.cdss.ca.gov/rmp', categories: ['food'], type: 'benefit', fundingType: 'direct_benefit', recurring: true },
+      { id: 'ca-golden-state-stimulus', name: 'California Earned Income Tax Credit (CalEITC)', description: 'State-level earned income tax credit for California workers earning under $30,950. Can be combined with federal EITC for additional refund.', url: 'https://www.ftb.ca.gov/file/personal/credits/california-earned-income-tax-credit.html', categories: ['tax', 'cash_assistance'], type: 'benefit', fundingType: 'tax_credit', recurring: true },
+      { id: 'ca-ihss', name: 'In-Home Supportive Services (IHSS)', description: 'Pays for in-home care for aged, blind, or disabled Californians on Medi-Cal. Covers housekeeping, meal prep, personal care, and paramedical services.', url: 'https://www.cdss.ca.gov/in-home-supportive-services', categories: ['disability', 'healthcare'], type: 'benefit', fundingType: 'direct_service', recurring: true, healthMatch: ['disability', 'physical_disability'] },
+      { id: 'ca-care', name: 'California Alternate Rates for Energy (CARE)', description: '30-35% discount on gas and electric bills for income-qualified California households. Available from PG&E, SCE, SDG&E, and SoCalGas.', url: 'https://www.cpuc.ca.gov/industries-and-topics/electrical-energy/electric-costs/care-fera-702', categories: ['utilities'], type: 'benefit', fundingType: 'direct_benefit', recurring: true },
+      { id: 'ca-rapid-rehousing', name: 'California Emergency Solutions and Housing (CESH)', description: 'State-funded rapid rehousing and homelessness prevention for Californians. Provides rental assistance, move-in costs, and case management.', url: 'https://www.hcd.ca.gov/grants-and-funding/programs-active/cesh', categories: ['housing'], type: 'grant', fundingType: 'direct_benefit' },
+    ],
   },
   CO: {
     name: 'Colorado',
@@ -205,6 +213,13 @@ export const STATE_REGISTRY = {
     },
     housingUrl: 'https://www.floridahousing.org/',
     housingName: 'Florida Housing Finance Corporation',
+    extraPrograms: [
+      { id: 'fl-kidcare', name: 'Florida KidCare', description: 'Affordable health insurance for uninsured Florida children under 19. Four programs based on age/income: Medicaid, MediKids, Healthy Kids, and CMS.', url: 'https://www.floridakidcare.org/', categories: ['healthcare'], type: 'benefit', fundingType: 'direct_benefit', recurring: true, familyMatch: ['has_children'] },
+      { id: 'fl-liheap-crisis', name: 'Florida LIHEAP Crisis Assistance', description: 'Emergency energy assistance for Florida households facing utility shutoff or already disconnected. One-time payment up to $600 for electric/gas bills.', url: 'https://www.myflorida.com/accessflorida/', categories: ['utilities'], type: 'benefit', fundingType: 'direct_benefit' },
+      { id: 'fl-careersource', name: 'CareerSource Florida', description: 'Statewide workforce system with 24 local boards. Provides job placement, training scholarships, career counseling, and youth programs across Florida.', url: 'https://careersourceflorida.com/', categories: ['employment', 'education'], type: 'portal', fundingType: 'direct_service' },
+      { id: 'fl-sail', name: 'Florida SAIL (State Apartment Incentive Loan)', description: 'Low-interest loans for affordable housing development in Florida. Provides rental assistance for very low-income families, elderly, and persons with disabilities.', url: 'https://www.floridahousing.org/programs/developers-702', categories: ['housing'], type: 'benefit', fundingType: 'direct_benefit' },
+      { id: 'fl-bright-futures', name: 'Florida Bright Futures Scholarship', description: 'Merit-based scholarship for Florida high school graduates attending state colleges and universities. Covers 75-100% of tuition based on GPA and test scores.', url: 'https://www.floridastudentfinancialaidsg.org/SAPHome/SAPHome?url=home', categories: ['scholarship', 'education'], type: 'scholarship', fundingType: 'scholarship' },
+    ],
   },
   GA: {
     name: 'Georgia',
@@ -224,6 +239,13 @@ export const STATE_REGISTRY = {
     },
     housingUrl: 'https://www.dca.ga.gov/',
     housingName: 'Georgia Department of Community Affairs',
+    extraPrograms: [
+      { id: 'ga-peachcare', name: 'PeachCare for Kids', description: 'Low-cost health insurance for uninsured Georgia children under 19 in families with incomes up to 247% FPL. Covers doctor visits, hospital stays, prescriptions, dental, and vision.', url: 'https://dch.georgia.gov/peachcare-kids', categories: ['healthcare'], type: 'benefit', fundingType: 'direct_benefit', recurring: true, familyMatch: ['has_children'] },
+      { id: 'ga-hap', name: 'Georgia Homeowner Assistance Fund', description: 'Mortgage payment assistance and housing counseling for Georgia homeowners who experienced financial hardship. Covers past-due mortgage payments, property taxes, and insurance.', url: 'https://www.dca.ga.gov/', categories: ['housing'], type: 'benefit', fundingType: 'direct_benefit' },
+      { id: 'ga-caps', name: 'Georgia CAPS (Childcare & Parent Services)', description: 'Subsidized child care for low-income working Georgia families. Covers care at licensed centers and family homes while parents work, attend school, or participate in training.', url: 'https://caps.decal.ga.gov/', categories: ['childcare'], type: 'benefit', fundingType: 'direct_benefit', recurring: true, familyMatch: ['has_children', 'single_parent'] },
+      { id: 'ga-goodwill', name: 'Georgia Goodwill Career Centers', description: 'Free career training, job placement, and employment support services across Georgia. Includes digital skills, GED preparation, and financial literacy programs.', url: 'https://www.goodwillng.org/', categories: ['employment', 'education'], type: 'portal', fundingType: 'direct_service', recurring: true },
+      { id: 'ga-crisis-line', name: 'Georgia Crisis & Access Line (GCAL)', description: 'Free 24/7 crisis intervention and behavioral health referral line for all Georgia residents. Connects callers to local mental health, substance abuse, and crisis services.', url: 'https://www.georgiacollaborative.com/providers/georgia-crisis-access-line-gcal/', categories: ['mental_health', 'substance_recovery'], type: 'referral', fundingType: 'referral_service', recurring: true },
+    ],
   },
   HI: {
     name: 'Hawaii',
@@ -281,6 +303,13 @@ export const STATE_REGISTRY = {
     },
     housingUrl: 'https://www.ihda.org/',
     housingName: 'Illinois Housing Development Authority',
+    extraPrograms: [
+      { id: 'il-allkids', name: 'All Kids Health Insurance', description: 'Comprehensive health insurance for uninsured children in Illinois regardless of immigration status. Covers medical, dental, vision, prescriptions, and hospital care.', url: 'https://hfs.illinois.gov/medicalprograms/allkids.html', categories: ['healthcare'], type: 'benefit', fundingType: 'direct_benefit', recurring: true, familyMatch: ['has_children'] },
+      { id: 'il-aabd', name: 'IL Aid to the Aged, Blind and Disabled (AABD)', description: 'Monthly cash grants for elderly (65+), blind, or disabled Illinois residents. Provides income supplement beyond SSI/SSDI.', url: 'https://www.dhs.state.il.us/page.aspx?item=30358', categories: ['cash_assistance', 'disability'], type: 'benefit', fundingType: 'direct_benefit', recurring: true },
+      { id: 'il-rental-payment', name: 'Illinois Rental Payment Program (ILRPP)', description: 'Emergency rental assistance for Illinois tenants at risk of eviction. Covers past-due rent and utility arrears.', url: 'https://www.ihda.org/', categories: ['housing', 'utilities'], type: 'benefit', fundingType: 'direct_benefit' },
+      { id: 'il-csbg', name: 'IL Community Services Block Grant', description: 'Funding through Illinois Community Action Agencies for low-income residents. Covers emergency assistance, transportation, job training, and self-sufficiency programs.', url: 'https://www.dhs.state.il.us/page.aspx?item=30440', categories: ['cash_assistance', 'employment', 'transportation'], type: 'benefit', fundingType: 'direct_service', recurring: true },
+      { id: 'il-circuit-breaker', name: 'IL Senior Citizens Real Estate Tax Deferral', description: 'Illinois program allowing qualifying seniors (65+) to defer property tax payments. Also includes Pharmaceutical Assistance and property tax exemptions for seniors.', url: 'https://tax.illinois.gov/localgovernments/property/taxrelief.html', categories: ['housing', 'cash_assistance'], type: 'benefit', fundingType: 'direct_benefit', recurring: true },
+    ],
   },
   IN: {
     name: 'Indiana',
@@ -452,6 +481,13 @@ export const STATE_REGISTRY = {
     },
     housingUrl: 'https://www.michigan.gov/mshda',
     housingName: 'Michigan State Housing Development Authority',
+    extraPrograms: [
+      { id: 'mi-healthy-kids', name: 'Healthy Kids Dental (MI)', description: 'Comprehensive dental coverage for Michigan children on Medicaid. Covers preventive, restorative, and emergency dental services at participating dentists statewide.', url: 'https://www.michigan.gov/mdhhs/assistance-programs/medicaid/dental', categories: ['healthcare'], type: 'benefit', fundingType: 'direct_benefit', recurring: true, familyMatch: ['has_children'] },
+      { id: 'mi-shp', name: 'Michigan State Housing Development Authority Programs', description: 'Homebuyer assistance, down payment help, and affordable housing programs for Michigan residents. Includes MI Home Loan, down payment assistance up to $7,500, and homebuyer education.', url: 'https://www.michigan.gov/mshda', categories: ['housing'], type: 'portal', fundingType: 'direct_benefit' },
+      { id: 'mi-pure-opportunity', name: 'Michigan Pure Opportunity Scholarship', description: 'Michigan college tuition assistance for foster youth, former foster youth, and adoptees. Covers tuition and fees at Michigan public colleges and universities.', url: 'https://www.michigan.gov/mistudentaid', categories: ['scholarship', 'education'], type: 'scholarship', fundingType: 'scholarship', recurring: true },
+      { id: 'mi-works', name: 'Michigan Works! Career Centers', description: 'Free career and employment services at 100+ locations across Michigan. Resume help, job search, career training, skilled trades programs, and employer connections.', url: 'https://www.michiganworks.org/', categories: ['employment', 'education'], type: 'portal', fundingType: 'direct_service', recurring: true },
+      { id: 'mi-serca', name: 'Michigan State Emergency Relief (SER)', description: 'Emergency assistance for Michigan residents facing a crisis. Covers energy/utility payments, home repairs, burial costs, moving expenses, and other emergency needs.', url: 'https://www.michigan.gov/mdhhs/assistance-programs/emergency-services/state-emergency-relief', categories: ['utilities', 'housing', 'cash_assistance'], type: 'benefit', fundingType: 'direct_benefit' },
+    ],
   },
   MN: {
     name: 'Minnesota',
@@ -642,6 +678,13 @@ export const STATE_REGISTRY = {
     },
     housingUrl: 'https://hcr.ny.gov/',
     housingName: 'NY Homes & Community Renewal',
+    extraPrograms: [
+      { id: 'ny-heap', name: 'New York HEAP (Home Energy Assistance)', description: 'Regular and emergency HEAP benefits for low-income New Yorkers to pay heating costs. Emergency component prevents utility shutoffs. Apply at local Department of Social Services.', url: 'https://otda.ny.gov/programs/heap/', categories: ['utilities'], type: 'benefit', fundingType: 'direct_benefit' },
+      { id: 'ny-tap', name: 'NY TAP (Tuition Assistance Program)', description: 'New York\'s largest college financial aid grant program. Awards up to $5,665/year for eligible NY residents attending in-state colleges.', url: 'https://www.hesc.ny.gov/pay-for-college/apply-for-financial-aid/nys-tap.html', categories: ['scholarship', 'education'], type: 'scholarship', fundingType: 'scholarship', recurring: true },
+      { id: 'ny-essential-plan', name: 'NY Essential Plan (Health Insurance)', description: 'Low-cost or free health insurance for New Yorkers who don\'t qualify for Medicaid but earn up to 200% FPL. Covers doctor visits, prescriptions, mental health, dental, and vision.', url: 'https://nystateofhealth.ny.gov/', categories: ['healthcare'], type: 'benefit', fundingType: 'direct_benefit', recurring: true },
+      { id: 'ny-erap', name: 'NY Emergency Rental Assistance', description: 'Rental and utility arrears assistance for income-eligible NY tenants who experienced financial hardship. Covers up to 12 months of rent and utility arrears.', url: 'https://otda.ny.gov/programs/emergency-rental-assistance/', categories: ['housing', 'utilities'], type: 'benefit', fundingType: 'direct_benefit' },
+      { id: 'ny-excelsior', name: 'Excelsior Scholarship (NY)', description: 'Tuition-free attendance at SUNY and CUNY schools for NY families earning up to $125,000. Covers tuition after other aid is applied.', url: 'https://www.hesc.ny.gov/pay-for-college/financial-aid/types-of-financial-aid/nys-grants-scholarships-awards/the-excelsior-scholarship.html', categories: ['scholarship', 'education'], type: 'scholarship', fundingType: 'scholarship', recurring: true },
+    ],
   },
   NC: {
     name: 'North Carolina',
@@ -661,6 +704,13 @@ export const STATE_REGISTRY = {
     },
     housingUrl: 'https://www.nchfa.com/',
     housingName: 'NC Housing Finance Agency',
+    extraPrograms: [
+      { id: 'nc-health-choice', name: 'NC Health Choice for Children', description: 'Health insurance for uninsured North Carolina children ages 6-18 in families with incomes up to 211% FPL. Covers doctor visits, hospital, dental, vision, prescriptions, and mental health.', url: 'https://medicaid.ncdhhs.gov/beneficiaries/get-started/health-choice-children', categories: ['healthcare'], type: 'benefit', fundingType: 'direct_benefit', recurring: true, familyMatch: ['has_children'] },
+      { id: 'nc-erap', name: 'NC Emergency Rental Assistance', description: 'Rental and utility payment assistance for North Carolina renters who experienced COVID-related financial hardship. Covers past-due and future rent, utilities, and relocation costs.', url: 'https://www.rebuild.nc.gov/era', categories: ['housing', 'utilities'], type: 'benefit', fundingType: 'direct_benefit' },
+      { id: 'nc-ncworks', name: 'NCWorks Career Centers', description: 'Free employment services across NC including job search assistance, resume workshops, skills assessments, career counseling, and referrals to training programs. Over 80 locations statewide.', url: 'https://www.ncworks.gov/', categories: ['employment', 'education'], type: 'portal', fundingType: 'direct_service', recurring: true },
+      { id: 'nc-crisis-services', name: 'NC Crisis Services (Hope4NC)', description: 'Free 24/7 mental health and substance use crisis hotline for all North Carolina residents. Call or text 1-855-587-3463. Provides immediate support, referrals, and connection to local services.', url: 'https://www.hope4nc.org/', categories: ['mental_health', 'substance_recovery'], type: 'referral', fundingType: 'referral_service', recurring: true },
+      { id: 'nc-scc-grant', name: 'NC Community College System Grants', description: 'Tuition and fee grants for NC community college students. Includes NC Education Lottery Scholarship, Childcare Grant, and CGSG (Community College Grant/State Grant).', url: 'https://www.cfnc.org/pay-for-college/grants/', categories: ['scholarship', 'education'], type: 'scholarship', fundingType: 'scholarship', recurring: true },
+    ],
   },
   ND: {
     name: 'North Dakota',
@@ -699,6 +749,13 @@ export const STATE_REGISTRY = {
     },
     housingUrl: 'https://ohiohome.org/',
     housingName: 'Ohio Housing Finance Agency',
+    extraPrograms: [
+      { id: 'oh-heap', name: 'Ohio HEAP (Home Energy Assistance Program)', description: 'Helps Ohio low-income households pay winter heating bills. Also includes Summer Crisis Program for cooling assistance and Winter Crisis Program for emergency furnace repair/replacement.', url: 'https://development.ohio.gov/individual/energy-assistance/heap', categories: ['utilities'], type: 'benefit', fundingType: 'direct_benefit', recurring: true },
+      { id: 'oh-prc', name: 'Ohio Prevention, Retention & Contingency (PRC)', description: 'Emergency cash assistance for Ohio families with children to prevent/address a crisis. Covers car repair, work uniforms, rent deposit, utility deposit, and other emergency needs.', url: 'https://jfs.ohio.gov/owd/PRC/index.stm', categories: ['cash_assistance', 'transportation', 'employment'], type: 'benefit', fundingType: 'direct_benefit', familyMatch: ['has_children', 'single_parent'] },
+      { id: 'oh-golden-buckeye', name: 'Ohio Golden Buckeye Card', description: 'Discount program for Ohio residents age 60+ and those with disabilities. Provides discounts on prescriptions, groceries, dining, travel, and more at thousands of participating businesses.', url: 'https://aging.ohio.gov/care-and-living/get-help/golden-buckeye-program', categories: ['food', 'healthcare', 'transportation'], type: 'benefit', fundingType: 'discount_program', recurring: true },
+      { id: 'oh-passport', name: 'Ohio PASSPORT Waiver', description: 'Ohio Medicaid home care waiver for adults 60+ who need nursing home level of care but wish to remain at home. Provides home health aides, adult day care, meals, transportation, and personal care.', url: 'https://aging.ohio.gov/care-and-living/get-help/passport', categories: ['healthcare', 'disability', 'housing'], type: 'benefit', fundingType: 'direct_service', recurring: true, healthMatch: ['disability'] },
+      { id: 'oh-odjfs-training', name: 'Ohio Workforce Innovation & Opportunity Act (WIOA)', description: 'Free job training, career counseling, and education services for Ohio adults, dislocated workers, and youth through OhioMeansJobs centers. Includes tuition assistance for in-demand occupations.', url: 'https://jfs.ohio.gov/owd/wioa/', categories: ['employment', 'education'], type: 'benefit', fundingType: 'direct_service', recurring: true },
+    ],
   },
   OK: {
     name: 'Oklahoma',
@@ -756,6 +813,13 @@ export const STATE_REGISTRY = {
     },
     housingUrl: 'https://www.phfa.org/',
     housingName: 'Pennsylvania Housing Finance Agency',
+    extraPrograms: [
+      { id: 'pa-chip', name: 'PA CHIP (Children\'s Health Insurance)', description: 'Free or low-cost health insurance for uninsured children and teens in Pennsylvania. Covers doctor visits, prescriptions, dental, vision, and mental health with no co-pays for most families.', url: 'https://www.chipcoverspakids.com/', categories: ['healthcare'], type: 'benefit', fundingType: 'direct_benefit', recurring: true, familyMatch: ['has_children'] },
+      { id: 'pa-property-tax', name: 'PA Property Tax/Rent Rebate Program', description: 'Rebates on property taxes or rent paid for qualifying Pennsylvanians age 65+, widows/widowers 50+, and people with disabilities 18+. Income limit $45,000 for homeowners, $15,000 for renters.', url: 'https://www.revenue.pa.gov/IncentivesCreditsPrograms/PropertyTaxRentRebateProgram/', categories: ['housing', 'cash_assistance'], type: 'benefit', fundingType: 'direct_benefit', recurring: true },
+      { id: 'pa-ga', name: 'PA General Assistance (GA)', description: 'Cash and medical assistance for single adults and childless couples in Pennsylvania who are ineligible for other programs. Covers short-term needs including emergency shelter.', url: 'https://www.compass.state.pa.us/', categories: ['cash_assistance', 'housing'], type: 'benefit', fundingType: 'direct_benefit', recurring: true },
+      { id: 'pa-liheap-crisis', name: 'PA LIHEAP Crisis Grant', description: 'Emergency utility assistance for Pennsylvania households facing shutoff or without heat. Provides direct vendor payments. Apply through your local County Assistance Office.', url: 'https://www.dhs.pa.gov/Services/Assistance/Pages/LIHEAP.aspx', categories: ['utilities'], type: 'benefit', fundingType: 'direct_benefit' },
+      { id: 'pa-snap-emp', name: 'PA SNAP Employment & Training', description: 'Free job training, education, and support services for SNAP recipients in Pennsylvania. Includes job search assistance, GED classes, vocational training, and transportation help.', url: 'https://www.dhs.pa.gov/Services/Assistance/Pages/SNAP-Employment-and-Training.aspx', categories: ['employment', 'education', 'food'], type: 'benefit', fundingType: 'direct_service', recurring: true },
+    ],
   },
   RI: {
     name: 'Rhode Island',
@@ -832,6 +896,13 @@ export const STATE_REGISTRY = {
     },
     housingUrl: 'https://www.tdhca.state.tx.us/',
     housingName: 'Texas Department of Housing & Community Affairs',
+    extraPrograms: [
+      { id: 'tx-chip', name: 'Texas CHIP (Children\'s Health Insurance)', description: 'Low-cost health coverage for uninsured Texas children. Covers doctor visits, prescriptions, dental, vision, and mental health. Families pay $50/year or less.', url: 'https://www.hhs.texas.gov/services/health/medicaid-chip/programs/chip', categories: ['healthcare'], type: 'benefit', fundingType: 'direct_benefit', recurring: true, familyMatch: ['has_children'] },
+      { id: 'tx-ceap', name: 'Texas CEAP (Utility Assistance)', description: 'Comprehensive Energy Assistance Program helps low-income Texans pay utility bills. One-time payment directly to utility company through local community action agencies.', url: 'https://www.tdhca.state.tx.us/community-affairs/ceap/', categories: ['utilities'], type: 'benefit', fundingType: 'direct_benefit' },
+      { id: 'tx-workforce-solutions', name: 'Texas Workforce Solutions', description: 'Employment services including job search assistance, skills training, child care assistance for working parents, and unemployment benefits in Texas.', url: 'https://www.twc.texas.gov/', categories: ['employment', 'childcare', 'education'], type: 'portal', fundingType: 'direct_service' },
+      { id: 'tx-snap-et', name: 'SNAP Employment & Training (Texas)', description: 'Free education and job training for Texas SNAP recipients. Covers GED prep, vocational training, and job readiness. Participants may receive transportation and dependent care reimbursement.', url: 'https://www.twc.texas.gov/snap-employment-training', categories: ['employment', 'education', 'food'], type: 'benefit', fundingType: 'direct_service', recurring: true },
+      { id: 'tx-bootstrap-veterans', name: 'Texas Veterans Commission Fund for Veterans\' Assistance', description: 'Grants to organizations serving Texas veterans and their families. Covers housing, employment, mental health, legal services, and emergency assistance.', url: 'https://www.tvc.texas.gov/grants/', categories: ['housing', 'employment', 'mental_health'], type: 'grant', fundingType: 'direct_benefit', militaryMatch: ['veteran'] },
+    ],
   },
   UT: {
     name: 'Utah',

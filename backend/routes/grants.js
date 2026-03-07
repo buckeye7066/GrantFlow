@@ -1158,7 +1158,6 @@ router.post('/from-opportunity', async (req, res, next) => {
         opportunity = {
           title,
           sponsor: coerceString(opportunity_data.sponsor, { maxLen: 500 }),
-          // Preserve raw deadline for expiry checks (normalizeDateForDb may return null for non-ISO formats)
           deadline_raw: rawDeadline,
           deadline: normalizedDeadline,
           deadline_type: coerceString(opportunity_data.deadline_type, { maxLen: 50 }) || null,
@@ -1168,6 +1167,9 @@ router.post('/from-opportunity', async (req, res, next) => {
           description: coerceString(opportunity_data.descriptionMd || opportunity_data.description, { maxLen: 50_000 }),
           eligibility_bullets: JSON.stringify(coerceArray(opportunity_data.eligibilityBullets)),
           source: coerceString(opportunity_data.source, { maxLen: 200 }) || 'discovery',
+          contact_info: opportunity_data.contact_info || null,
+          application_method: coerceString(opportunity_data.application_method, { maxLen: 100 }) || null,
+          applicationNote: coerceString(opportunity_data.applicationNote, { maxLen: 2000 }) || null,
         };
         console.log('[grants/from-opportunity] Using direct opportunity data for:', opportunity.title);
       } catch (parseError) {
