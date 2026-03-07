@@ -111,6 +111,43 @@ export async function analyzeProfile(db, profileOrId) {
       try { sections[r.section_key] = typeof r.data === 'string' ? JSON.parse(r.data) : r.data; }
       catch { /* skip */ }
     }
+
+    // Fallback: if profile_sections is empty, hydrate from profiles table columns
+    if (Object.keys(sections).length === 0 && profile) {
+      console.log('[ProfileAnalyzer] Fallback: hydrating sections from profiles table columns');
+      const COL_MAP = {
+        basic_information: 'basic_information',
+        education_information: 'education',
+        employment_information: 'employment',
+        health_information: 'health_medical',
+        financial_information: 'financial_information',
+        housing_information: 'housing',
+      };
+      for (const [col, secKey] of Object.entries(COL_MAP)) {
+        if (profile[col]) {
+          try {
+            const parsed = typeof profile[col] === 'string' ? JSON.parse(profile[col]) : profile[col];
+            if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+              sections[secKey] = parsed;
+            }
+          } catch { /* skip unparseable */ }
+        }
+      }
+
+      // additional_information contains mixed family/military/demographic fields —
+      // hydrate into the section keys the analyzer expects
+      if (profile.additional_information) {
+        try {
+          const addl = typeof profile.additional_information === 'string'
+            ? JSON.parse(profile.additional_information) : profile.additional_information;
+          if (addl && typeof addl === 'object') {
+            if (!sections.family_life) sections.family_life = addl;
+            if (!sections.military_service && (addl.veteran !== undefined || addl.active_duty !== undefined))
+              sections.military_service = addl;
+          }
+        } catch { /* skip */ }
+      }
+    }
   } else {
     profile = profileOrId;
     sections = profile.sections || {};
