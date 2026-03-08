@@ -86,6 +86,35 @@ export async function fetchCrawlerStatus(profileId) {
  * @param {Object} [opts.itemRequest]
  * @returns {Promise<Object>}
  */
+/**
+ * Search for a specific need/item using curated data + live web search.
+ * Calls POST /api/real-crawlers/specific-need which runs the full pipeline
+ * plus DuckDuckGo web search and known item source catalogs.
+ */
+export async function searchSpecificNeed({
+  profileId,
+  needText,
+  minMatchScore = 20,
+  maxResults = 30,
+}) {
+  const pid = typeof profileId === 'string' ? profileId.trim() : null
+  if (!pid) {
+    throw new Error('profile_id is required. Select a profile first.')
+  }
+  if (!needText || typeof needText !== 'string' || needText.trim().length < 2) {
+    throw new Error('Enter what you are looking for (at least 2 characters).')
+  }
+  return apiFetch('/api/real-crawlers/specific-need', {
+    method: 'POST',
+    body: JSON.stringify({
+      profile_id: pid,
+      need_text: needText.trim(),
+      min_match_score: minMatchScore,
+      max_results: maxResults,
+    }),
+  })
+}
+
 export async function runRealCrawler({
   profileId,
   crawlerType,
