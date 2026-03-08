@@ -1213,4 +1213,113 @@ Return ONLY valid JSON:
   }
 });
 
+/**
+ * Analyze a profile and generate a smart list of items/services the person
+ * likely needs, based on their goals and situation. Then for each item,
+ * indicate whether it can be donated, granted, or must be purchased.
+ *
+ * POST /api/ai/discover-needs
+ * Body: { profile_id, custom_goal?: string }
+ */
+router.post('/discover-needs', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_AI), async (req, res) => {
+  try {
+    const { profile_id, custom_goal } = req.body;
+    if (!profile_id) return res.status(400).json({ error: 'profile_id is required' });
+
+    const profile = await req.db.prepare(`
+      SELECT p.*
+      FROM profiles p
+      WHERE p.id = ?
+    `).get(profile_id);
+
+    if (!profile) return res.status(404).json({ error: 'Profile not found' });
+
+    const parseSafe = (v) => { try { return typeof v === 'string' ? JSON.parse(v) : v; } catch { return {}; } };
+    const p = {
+      basic: parseSafe(profile.basic_information),
+      education: parseSafe(profile.education_information),
+      employment: parseSafe(profile.employment_information),
+      health: parseSafe(profile.health_information),
+      financial: parseSafe(profile.financial_information),
+      housing: parseSafe(profile.housing_information),
+      additional: parseSafe(profile.additional_information),
+    };
+
+    const applicantName = [p.basic?.first_name, p.basic?.last_name].filter(Boolean).join(' ') || 'Applicant';
+
+    const prompt = `You are an expert needs assessor and resource navigator. Analyze this person's profile and identify EVERY tangible item, service, credential, or resource they need to achieve their goals.
+
+=== PROFILE ===
+Name: ${applicantName}
+Location: ${[p.basic?.city, p.basic?.state].filter(Boolean).join(', ') || 'Unknown'}
+${custom_goal ? `Stated Goal: ${custom_goal}` : ''}
+Education: ${JSON.stringify(p.education || {}).slice(0, 500)}
+Employment: ${JSON.stringify(p.employment || {}).slice(0, 500)}
+Health: ${JSON.stringify(p.health || {}).slice(0, 400)}
+Financial: ${JSON.stringify(p.financial || {}).slice(0, 400)}
+Housing: ${JSON.stringify(p.housing || {}).slice(0, 400)}
+Additional: ${JSON.stringify(p.additional || {}).slice(0, 400)}
+
+=== INSTRUCTIONS ===
+Based on everything in this profile, generate a comprehensive list of items and services this person needs. Think about:
+- Their stated or implied goals (career, business, education, health, housing)
+- What equipment, tools, credentials, or services those goals require
+- What barriers exist (financial, health, transportation) and what items address them
+- Both the big-ticket items AND the smaller necessities people often forget
+
+For each item, classify it into one of these funding paths:
+- "donation" — organizations exist that donate this item for free
+- "grant" — grants or programs exist that fund the purchase of this item
+- "benefit" — a government benefit or assistance program covers this
+- "scholarship" — educational funding covers this
+- "self_fund" — typically must be purchased, but may have discount programs
+
+Return ONLY valid JSON:
+{
+  "goal_summary": "1-2 sentence summary of what this person is trying to achieve",
+  "items": [
+    {
+      "name": "the specific item or service",
+      "category": "equipment|credential|service|technology|vehicle|training|supplies|housing|medical|legal",
+      "why_needed": "brief explanation of why this person specifically needs it",
+      "funding_path": "donation|grant|benefit|scholarship|self_fund",
+      "search_terms": "what to search for to find funding (optimized for web search)",
+      "priority": "critical|high|medium|low",
+      "estimated_cost": "$X - $Y or free"
+    }
+  ]
+}
+
+Generate 8-20 items, ordered by priority (critical first). Be SPECIFIC to this person's situation — not generic. If they want to start a food truck, list the actual items (food truck, commercial equipment, food handler's license, POS system, commissary access, etc.). If they need nursing license reinstatement, list the specific classes, exam fees, background checks, etc.`;
+
+    const openai = getOpenAI();
+    if (!openai) return res.status(503).json({ error: 'AI provider not configured' });
+
+    const completion = await openai.chat.completions.create({
+      model: DEFAULT_OPENAI_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.4,
+      max_tokens: 4000,
+    });
+
+    const rawText = extractCompletionText(completion);
+    let parsed = null;
+    try { parsed = JSON.parse(rawText); } catch {
+      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) try { parsed = JSON.parse(jsonMatch[0]); } catch { /* use raw */ }
+    }
+
+    res.json({
+      success: true,
+      profile_id,
+      applicant_name: applicantName,
+      custom_goal: custom_goal || null,
+      result: parsed || { raw: rawText },
+    });
+  } catch (error) {
+    console.error('[discover-needs] Error:', error);
+    res.status(500).json(formatError(error));
+  }
+});
+
 export default router;

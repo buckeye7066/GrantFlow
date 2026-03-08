@@ -30,6 +30,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { listOpportunities, listOpportunityStates } from "@/api/opportunities"
 import ProfileSelect from "@/components/shared/ProfileSelect"
 import { getItemSuggestions } from "@/api/items"
+import NeedsDiscoveryPanel from "@/components/ai/NeedsDiscoveryPanel"
 
 const NOT_AVAILABLE = 'N/A'
 import { listProfiles, getProfile } from "@/api/profiles"
@@ -744,6 +745,17 @@ export default function ItemFunding() {
           </CardContent>
         </Card>
       </header>
+
+      {/* AI Needs Discovery — only shows when a profile is selected */}
+      {hasSelectedProfile && (
+        <NeedsDiscoveryPanel
+          profileId={filters.profileId}
+          onSearchItem={(searchText) => {
+            setFilters((prev) => ({ ...prev, item: searchText }))
+            setSubmittedItem(searchText)
+          }}
+        />
+      )}
 
       {isLoading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
