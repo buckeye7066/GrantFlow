@@ -66,7 +66,6 @@ export default function GrantDetail() {
   const [isPortalAssistantOpen, setIsPortalAssistantOpen] = useState(false);
   const [isApplicationAssistantOpen, setIsApplicationAssistantOpen] = useState(false);
   const [isSubmissionAssistantOpen, setIsSubmissionAssistantOpen] = useState(false);
-  const [isPortalAssistantOpen, setIsPortalAssistantOpen] = useState(false);
   const [activeTab, setActiveTab] = useState(initialTab);
   
   // Install click tracer for debugging
@@ -475,13 +474,12 @@ export default function GrantDetail() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {isPortalAssistantOpen && organization && ( 
-        <GrantPortalAssistant 
-          open={isPortalAssistantOpen} 
-          onClose={() => setIsPortalAssistantOpen(false)} 
-          grant={grant} 
-          organization={organization} 
-        /> 
+      {isPortalAssistantOpen && (
+        <PortalAssistantPanel
+          open={isPortalAssistantOpen}
+          onClose={() => setIsPortalAssistantOpen(false)}
+          grant={grant}
+        />
       )}
 
       {isApplicationAssistantOpen && organization && (
@@ -499,14 +497,6 @@ export default function GrantDetail() {
           onClose={() => setIsSubmissionAssistantOpen(false)}
           grant={grant}
           organization={organization}
-        />
-      )}
-
-      {isPortalAssistantOpen && (
-        <PortalAssistantPanel
-          open={isPortalAssistantOpen}
-          onClose={() => setIsPortalAssistantOpen(false)}
-          grant={grant}
         />
       )}
     </div>
