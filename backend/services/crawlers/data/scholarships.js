@@ -654,6 +654,81 @@ export const SCHOLARSHIPS = [
     interestMatch: ['research','science','engineering','social science','graduate','phd','masters'],
   intentMatch: ['education'],
   },
+
+  // ════════════════════════════════════════
+  // STUDENT HOUSING / LIVING EXPENSES
+  // ════════════════════════════════════════
+  {
+    id: 'sch-housing-scholarships',
+    name: 'Scholarships.com — Housing & Living Expense Scholarships',
+    description: 'Scholarships that cover room and board, off-campus housing, and living expenses. Many scholarships include housing stipends or cost-of-attendance funding beyond tuition.',
+    url: 'https://www.scholarships.com/financial-aid/college-scholarships/scholarships-by-type/room-and-board-scholarships/',
+    categories: ['scholarship', 'education', 'housing'],
+    eligibility: { requiresStudent: true },
+    type: 'referral',
+    fundingType: 'referral_service',
+    intentMatch: ['education', 'housing'],
+  },
+  {
+    id: 'sch-emergency-aid-ncan',
+    name: 'NCAN — Emergency Aid & Completion Grants for Students',
+    description: 'National College Attainment Network resources for emergency aid programs that cover housing, food, transportation, and other basic needs preventing students from completing their degree.',
+    url: 'https://www.ncan.org/page/EmergencyAid',
+    categories: ['scholarship', 'education', 'housing', 'cash_assistance'],
+    eligibility: { requiresStudent: true },
+    type: 'referral',
+    fundingType: 'direct_grant',
+    intentMatch: ['education', 'housing'],
+  },
+  {
+    id: 'sch-bold-housing',
+    name: 'Bold.org — Housing & Living Expense Scholarships',
+    description: 'Search thousands of no-essay and low-barrier scholarships on Bold.org that can be used for off-campus rent, room and board, and living costs. Free to apply.',
+    url: 'https://bold.org/scholarships/',
+    categories: ['scholarship', 'education', 'housing'],
+    eligibility: { requiresStudent: true },
+    type: 'portal',
+    fundingType: 'direct_grant',
+    intentMatch: ['education', 'housing'],
+  },
+  {
+    id: 'sch-college-housing-assistance',
+    name: 'ScholarshipOwl — Off-Campus Housing Scholarships',
+    description: 'Curated scholarships for students needing help with off-campus housing costs, apartment rent, and living expenses while attending college.',
+    url: 'https://scholarshipowl.com/scholarships/type/housing-scholarships',
+    categories: ['scholarship', 'education', 'housing'],
+    eligibility: { requiresStudent: true },
+    type: 'portal',
+    fundingType: 'direct_grant',
+    intentMatch: ['education', 'housing'],
+  },
+  {
+    id: 'sch-fastweb-housing',
+    name: 'Fastweb — Room & Board / Housing Scholarships',
+    description: 'Search Fastweb for scholarships that include room and board, housing stipends, or can be applied to off-campus living expenses.',
+    url: 'https://www.fastweb.com/college-scholarships',
+    categories: ['scholarship', 'education', 'housing'],
+    eligibility: { requiresStudent: true },
+    type: 'portal',
+    fundingType: 'referral_service',
+    intentMatch: ['education', 'housing'],
+  },
+
+  // ════════════════════════════════════════
+  // NURSING / HEALTHCARE PROFESSIONAL SCHOLARSHIPS
+  // ════════════════════════════════════════
+  {
+    id: 'sch-nursing-license-aid',
+    name: 'Nurse.org — Nursing Scholarships & License Aid Resources',
+    description: 'Comprehensive list of nursing scholarships, license reinstatement resources, NCLEX prep funding, and nursing re-entry program scholarships. Covers BSN, ADN, LPN, and graduate nursing.',
+    url: 'https://nurse.org/scholarships-and-grants/',
+    categories: ['scholarship', 'education', 'healthcare'],
+    eligibility: { requiresStudent: true },
+    type: 'referral',
+    fundingType: 'referral_service',
+    interestMatch: ['nursing', 'healthcare', 'medical'],
+    intentMatch: ['education', 'healthcare'],
+  },
 ];
 
 export default SCHOLARSHIPS;

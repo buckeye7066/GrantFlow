@@ -589,6 +589,95 @@ export const NATIONAL_PROGRAMS = [
     familyMatch: ['grandparent_caregiver'],
       intentMatch: ['legal', 'childcare'],
   },
+
+  // ════════════════════════════════════════
+  // NONPROFIT VEHICLE / EQUIPMENT GRANTS
+  // ════════════════════════════════════════
+  {
+    id: 'np-mobility-van-grant',
+    name: 'GrantWatch — Van & Vehicle Grants for Nonprofits',
+    description: 'Curated database of van and vehicle grants for nonprofits, churches, and community organizations. Includes 15-passenger vans, buses, and fleet vehicles. Filter by state and eligibility.',
+    url: 'https://www.grantwatch.com/cat/41/vehicle-grants.html',
+    categories: ['transportation', 'equipment', 'business'],
+    type: 'portal',
+    fundingType: 'direct_grant',
+    intentMatch: ['transportation', 'business'],
+  },
+  {
+    id: 'np-usda-community-facilities',
+    name: 'USDA Community Facilities Direct Loan & Grant Program',
+    description: 'Grants and low-interest loans for essential community facilities in rural areas including vehicles, vans, and equipment for nonprofits, tribal organizations, and public entities.',
+    url: 'https://www.rd.usda.gov/programs-services/community-facilities/community-facilities-direct-loan-grant-program',
+    categories: ['equipment', 'transportation', 'business'],
+    type: 'benefit',
+    fundingType: 'direct_grant',
+    intentMatch: ['transportation', 'business'],
+  },
+  {
+    id: 'np-foundations-org',
+    name: 'Foundation Directory Online — Equipment & Vehicle Grants',
+    description: 'Search engine for foundation grants including vehicle purchases, equipment, and capital expenditures for 501(c)(3) organizations.',
+    url: 'https://fconline.foundationcenter.org/',
+    categories: ['equipment', 'transportation', 'business'],
+    type: 'portal',
+    fundingType: 'direct_grant',
+    intentMatch: ['business'],
+  },
+  {
+    id: 'np-good360',
+    name: 'Good360 — Product Philanthropy for Nonprofits',
+    description: 'Connects nonprofits with donated goods including vehicles, equipment, supplies, and technology from corporate donors. Free to join for 501(c)(3) organizations.',
+    url: 'https://good360.org/',
+    categories: ['equipment', 'transportation', 'business'],
+    type: 'portal',
+    fundingType: 'in_kind',
+    intentMatch: ['business'],
+  },
+
+  // ════════════════════════════════════════
+  // WORKFORCE / LICENSE REINSTATEMENT
+  // ════════════════════════════════════════
+  {
+    id: 'np-wioa-training',
+    name: 'WIOA — Workforce Innovation and Opportunity Act Training Vouchers',
+    description: 'Federal funding through local American Job Centers for occupational training, certification exams, license reinstatement classes, and career re-entry programs. Covers tuition for approved training providers including nursing PROBE classes, NCLEX prep, CDL, and more.',
+    url: 'https://www.careeronestop.org/LocalHelp/local-help.aspx',
+    categories: ['employment', 'education'],
+    type: 'benefit',
+    fundingType: 'direct_benefit',
+    recurring: true,
+    intentMatch: ['employment', 'education'],
+  },
+  {
+    id: 'np-nurse-reentry',
+    name: 'National Council of State Boards of Nursing — Nurse Re-Entry Resources',
+    description: 'State-by-state resources for nurses seeking license reinstatement, including PROBE ethics classes, refresher courses, remediation programs, and state board requirements.',
+    url: 'https://www.ncsbn.org/nursing-regulation/practice/nurse-reentry.page',
+    categories: ['employment', 'education', 'healthcare'],
+    type: 'portal',
+    fundingType: 'referral_service',
+    intentMatch: ['employment', 'healthcare'],
+  },
+  {
+    id: 'np-hrsa-nurse-corps',
+    name: 'HRSA Nurse Corps — Loan Repayment & Scholarship',
+    description: 'Federal program providing loan repayment and scholarships for nurses who work in underserved communities. Can help fund nursing education, re-entry, and credential restoration.',
+    url: 'https://bhw.hrsa.gov/funding/apply-loan-repayment/nurse-corps',
+    categories: ['education', 'healthcare', 'employment'],
+    type: 'benefit',
+    fundingType: 'direct_grant',
+    intentMatch: ['healthcare', 'education'],
+  },
+  {
+    id: 'np-vocational-rehab',
+    name: 'State Vocational Rehabilitation — License & Certification Assistance',
+    description: 'State VR agencies can fund professional license reinstatement costs, exam fees, remediation classes, and training for individuals with disabilities or barriers to employment. Covers PROBE classes, board exams, and credential evaluations.',
+    url: 'https://rsa.ed.gov/about/states',
+    categories: ['employment', 'education', 'disability'],
+    type: 'benefit',
+    fundingType: 'direct_benefit',
+    intentMatch: ['employment', 'disability'],
+  },
 ];
 
 export default NATIONAL_PROGRAMS;

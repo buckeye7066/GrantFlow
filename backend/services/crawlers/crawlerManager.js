@@ -210,6 +210,38 @@ function generateSchoolCards(analysis) {
       });
     }
 
+    // Housing / off-campus resources card
+    const housingUrl = school.portals?.housing || `https://www.google.com/search?q=${encodeURIComponent(school.name + ' off-campus housing scholarships student housing')}`;
+    cards.push({
+      id: `school-housing-${slug}`,
+      name: `${prefix} — Housing & Off-Campus Resources`,
+      description: `Search for housing scholarships, off-campus assistance, and student housing resources at ${prefix}. Many schools offer emergency housing funds and cost-of-attendance adjustments that cover off-campus rent.`,
+      url: housingUrl,
+      categories: ['education', 'housing', 'scholarship'],
+      type: 'school_portal',
+      fundingType: 'institutional_aid',
+      matchScore: baseScore,
+      matchReasons: [`Housing resources for target school: ${prefix}`],
+      contact: extractPrimaryContact(school.contacts, 'Housing') || extractPrimaryContact(school.contacts, 'Financial Aid'),
+      schoolName: prefix,
+    });
+
+    // Scholarship search card specific to this school
+    const scholarshipSearchUrl = `https://www.google.com/search?q=${encodeURIComponent(school.name + ' scholarships grants financial aid')}`;
+    cards.push({
+      id: `school-scholarships-${slug}`,
+      name: `${prefix} — Institutional Scholarships & Grants`,
+      description: `Search for scholarships, grants, and financial aid specific to ${prefix}. Includes merit aid, need-based grants, departmental awards, and endowed scholarships.`,
+      url: school.portals?.scholarships || scholarshipSearchUrl,
+      categories: ['education', 'scholarship'],
+      type: 'school_portal',
+      fundingType: 'institutional_aid',
+      matchScore: baseScore + 2,
+      matchReasons: [`Institutional scholarships for target school: ${prefix}`],
+      contact: extractPrimaryContact(school.contacts, 'Financial Aid'),
+      schoolName: prefix,
+    });
+
     if (school.departmentContacts?.length > 0) {
       const relevantDepts = filterDeptContacts(school.departmentContacts, analysis.interests, analysis.sports, gender);
       for (const dept of relevantDepts) {

@@ -29,18 +29,27 @@ const TAXONOMY = {
       'power bill', 'heating assistance', 'cooling assistance', 'WAP'],
     programCategories: ['utilities', 'weatherization'],
   },
+  license_reinstatement: {
+    canonicalNeed: 'employment',
+    synonyms: ['PROBE class', 'nursing ethics', 'license reinstatement', 'board reinstatement',
+      'professional license', 'nursing license', 'NCLEX prep', 'board exam prep',
+      'disciplinary remediation', 'ethics class', 'continuing education nursing',
+      'license renewal', 'credential restoration', 'nurse re-entry', 'nurse refresher',
+      'remediation program', 'state board nursing'],
+    programCategories: ['employment', 'education', 'healthcare'],
+  },
   training: {
     canonicalNeed: 'employment',
     synonyms: ['workforce training', 'WIOA', 'ETPL', 'tuition assistance', 'exam fee',
-      'certification support', 'licensure', 'nursing licensure prep', 'PROBE class',
+      'certification support', 'licensure', 'nursing licensure prep',
       'vocational training', 'job training', 'career readiness', 'GED prep',
       'CDL training', 'apprenticeship', 'on-the-job training', 'job retraining'],
     programCategories: ['employment', 'education'],
   },
   licensure: {
     canonicalNeed: 'employment',
-    synonyms: ['licensure exam', 'PROBE class', 'certification fee', 'nursing exam',
-      'CNA training', 'professional license', 'board exam', 'NCLEX prep',
+    synonyms: ['licensure exam', 'certification fee', 'nursing exam',
+      'CNA training', 'board exam',
       'state board', 'credential evaluation'],
     programCategories: ['employment', 'education'],
   },
@@ -107,6 +116,37 @@ const TAXONOMY = {
       'opioid', 'drug treatment', 'alcohol treatment', 'recovery house'],
     programCategories: ['substance_recovery', 'mental_health', 'healthcare'],
   },
+  vehicle: {
+    canonicalNeed: 'transportation',
+    synonyms: ['15 passenger van', 'van for nonprofit', 'passenger van', 'church van',
+      'nonprofit vehicle', 'organization vehicle', 'cargo van', 'bus grant',
+      'vehicle donation', 'fleet grant', 'transit vehicle', 'ministry van',
+      'community van', 'shuttle van', 'van purchase grant', 'vehicle purchase',
+      'bus for nonprofit', 'handicap van', 'wheelchair van', 'adaptive vehicle'],
+    programCategories: ['transportation', 'equipment', 'business'],
+  },
+  equipment: {
+    canonicalNeed: 'business',
+    synonyms: ['equipment grant', 'nonprofit equipment', 'capital equipment',
+      'organizational supplies', 'tools grant', 'machinery', 'office equipment',
+      'commercial equipment', 'program supplies'],
+    programCategories: ['business', 'equipment', 'cash_assistance'],
+  },
+  scholarship: {
+    canonicalNeed: 'education',
+    synonyms: ['scholarship', 'tuition aid', 'student grant', 'merit aid',
+      'need-based aid', 'financial aid', 'student assistance', 'tuition waiver',
+      'college fund', 'endowment', 'fellowship', 'stipend'],
+    programCategories: ['scholarship', 'education'],
+  },
+  student_housing: {
+    canonicalNeed: 'housing',
+    synonyms: ['off-campus housing', 'student housing', 'college housing', 'dorm cost',
+      'room and board', 'housing scholarship', 'housing stipend', 'living expenses',
+      'housing allowance', 'residence hall', 'apartment assistance student',
+      'campus housing', 'student rent', 'student living'],
+    programCategories: ['housing', 'scholarship', 'education'],
+  },
 };
 
 // Build a reverse-lookup: keyword → taxonomy entry
@@ -129,30 +169,51 @@ export function expandNeed(needText) {
   const text = (needText || '').toLowerCase().trim();
   if (!text) return null;
 
-  // Direct key match
+  // Direct key match — prefer longest matching key for specificity
+  const keyMatches = [];
   for (const [key, entry] of Object.entries(TAXONOMY)) {
     if (text.includes(key)) {
-      return {
-        canonicalNeed: entry.canonicalNeed,
-        synonyms: entry.synonyms,
-        mustTerms: [key, ...text.split(/\s+/).filter(w => w.length > 2)],
-        programCategories: entry.programCategories,
-        matchedKey: key,
-      };
+      keyMatches.push({ key, entry });
     }
   }
+  if (keyMatches.length > 0) {
+    keyMatches.sort((a, b) => b.key.length - a.key.length);
+    const best = keyMatches[0];
+    // Merge categories from all matching keys for broader coverage
+    const allCats = new Set(best.entry.programCategories);
+    for (const km of keyMatches.slice(1)) {
+      for (const c of km.entry.programCategories) allCats.add(c);
+    }
+    return {
+      canonicalNeed: best.entry.canonicalNeed,
+      synonyms: best.entry.synonyms,
+      mustTerms: [best.key, ...text.split(/\s+/).filter(w => w.length > 2)],
+      programCategories: [...allCats],
+      matchedKey: best.key,
+    };
+  }
 
-  // Synonym match
+  // Synonym match — prefer longest matching synonym for specificity
+  const synMatches = [];
   for (const [syn, entry] of KEYWORD_INDEX.entries()) {
     if (text.includes(syn)) {
-      return {
-        canonicalNeed: entry.canonicalNeed,
-        synonyms: entry.synonyms,
-        mustTerms: [syn, ...text.split(/\s+/).filter(w => w.length > 2)],
-        programCategories: entry.programCategories,
-        matchedKey: syn,
-      };
+      synMatches.push({ syn, entry });
     }
+  }
+  if (synMatches.length > 0) {
+    synMatches.sort((a, b) => b.syn.length - a.syn.length);
+    const best = synMatches[0];
+    const allCats = new Set(best.entry.programCategories);
+    for (const sm of synMatches.slice(1)) {
+      for (const c of sm.entry.programCategories) allCats.add(c);
+    }
+    return {
+      canonicalNeed: best.entry.canonicalNeed,
+      synonyms: best.entry.synonyms,
+      mustTerms: [best.syn, ...text.split(/\s+/).filter(w => w.length > 2)],
+      programCategories: [...allCats],
+      matchedKey: best.syn,
+    };
   }
 
   // Fallback: treat each word as a potential need

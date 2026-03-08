@@ -4,6 +4,7 @@ import { runCrawler, SCHEMA } from '../services/crawlers/crawlerManager.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
 import { expandNeed, scoreNeedMatch } from '../services/crawlers/needTaxonomy.js'
 import { getStrategy, listStrategies } from '../services/crawlers/strategyRegistry.js'
+import { searchWebForItem, KNOWN_ITEM_SOURCES, parseItemRequest } from '../services/crawlers/itemFundingCrawler.js'
 
 const router = express.Router()
 
@@ -447,14 +448,16 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
 
     const expandedNeed = expandNeed(need_text)
 
+    // 1. Run curated crawler pipeline
     const result = await runCrawler(db, profile_id, {
       minScore: 1,
       maxResults: 200,
       crawlerType: 'comprehensive',
     })
 
-    // Re-score all results against the specific need
+    // Re-score all curated results against the specific need
     const needScored = []
+    const seenUrls = new Set()
     for (const opp of result.results) {
       const needMatch = scoreNeedMatch(opp, expandedNeed)
       if (needMatch && needMatch.score >= Number(min_match_score)) {
@@ -466,10 +469,96 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
           expandedFrom: need_text,
           matchedKey: expandedNeed.matchedKey,
         }
-        // Blend: 60% profile match + 40% need match
         mapped.combined_score = Math.round(mapped.match_score * 0.6 + needMatch.score * 0.4)
+        mapped.result_source = 'curated'
         needScored.push(mapped)
+        if (mapped.url) seenUrls.add(mapped.url.toLowerCase().replace(/\/$/, ''))
       }
+    }
+
+    // 2. Run item-specific web search for the exact need text
+    let webSearchCount = 0
+    try {
+      const parsed = parseItemRequest(need_text)
+
+      // Pull matching KNOWN_ITEM_SOURCES
+      for (const category of parsed.categories) {
+        const sources = KNOWN_ITEM_SOURCES[category] || []
+        for (const src of sources) {
+          const urlKey = src.url.toLowerCase().replace(/\/$/, '')
+          if (seenUrls.has(urlKey)) continue
+          seenUrls.add(urlKey)
+          needScored.push({
+            id: `item-known-${category}-${webSearchCount}`,
+            title: src.name,
+            description: src.description,
+            url: src.url,
+            application_url: src.url,
+            match_score: 70,
+            combined_score: 70,
+            categories: [category, 'item_funding'],
+            source: 'item_known_source',
+            result_source: 'item_catalog',
+            need_match: {
+              score: 70,
+              matchedTerms: [`category:${category}`],
+              canonicalNeed: expandedNeed?.canonicalNeed || category,
+              expandedFrom: need_text,
+              matchedKey: category,
+            },
+          })
+          webSearchCount++
+        }
+      }
+
+      // Live DuckDuckGo web search for the specific need
+      const profileRow = await db.prepare('SELECT * FROM profiles WHERE id = ?').get(profile_id)
+      const basicInfo = (() => { try { return typeof profileRow?.basic_information === 'string' ? JSON.parse(profileRow.basic_information) : (profileRow?.basic_information || {}) } catch { return {} } })()
+      const webProfile = {
+        signals: {
+          location: { state: basicInfo.state, city: basicInfo.city },
+          military: new Set(),
+          assistance: new Set(),
+          health: new Set(),
+        },
+      }
+      const webResults = await searchWebForItem(need_text, webProfile)
+      console.log(`[specific-need] Web search for "${need_text}" found ${webResults.length} results`)
+
+      for (const wr of webResults) {
+        const urlKey = (wr.url || '').toLowerCase().replace(/\/$/, '')
+        if (seenUrls.has(urlKey)) continue
+        seenUrls.add(urlKey)
+
+        const needMatch = scoreNeedMatch(
+          { name: wr.title, description: wr.description, categories: expandedNeed?.programCategories || [] },
+          expandedNeed
+        )
+        const needScore = needMatch?.score || 40
+
+        needScored.push({
+          id: `web-${webSearchCount}`,
+          title: wr.title,
+          description: wr.description || `Found via web search for "${need_text}"`,
+          url: wr.url,
+          application_url: wr.url,
+          match_score: 50,
+          combined_score: Math.round(50 * 0.4 + needScore * 0.6),
+          categories: expandedNeed?.programCategories || ['general'],
+          source: 'web_search',
+          result_source: 'web_search',
+          need_match: {
+            score: needScore,
+            matchedTerms: needMatch?.matchedTerms || [`web:${need_text}`],
+            canonicalNeed: expandedNeed?.canonicalNeed || null,
+            expandedFrom: need_text,
+            matchedKey: 'web_search',
+          },
+        })
+        webSearchCount++
+      }
+    } catch (webErr) {
+      console.error('[specific-need] Web search failed (non-fatal):', webErr.message)
     }
 
     needScored.sort((a, b) => (b.combined_score ?? 0) - (a.combined_score ?? 0))
@@ -481,13 +570,14 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
       success: true,
       need_text,
       expanded: {
-        canonicalNeed: expandedNeed.canonicalNeed,
-        matchedKey: expandedNeed.matchedKey,
-        synonyms: expandedNeed.synonyms?.slice(0, 10),
-        programCategories: expandedNeed.programCategories,
+        canonicalNeed: expandedNeed?.canonicalNeed || null,
+        matchedKey: expandedNeed?.matchedKey || null,
+        synonyms: expandedNeed?.synonyms?.slice(0, 10) || [],
+        programCategories: expandedNeed?.programCategories || [],
       },
       count: final.length,
       total_candidates: result.results.length,
+      web_search_results: webSearchCount,
       duration,
       opportunities: final,
     })
