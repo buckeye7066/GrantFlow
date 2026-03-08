@@ -30,6 +30,7 @@ import ProposalCoachPanel from '../components/proposals/ProposalCoachPanel';
 import { useToast } from "@/components/ui/use-toast";
 import { installClickTracer } from '../components/shared/clickTracer';
 import SubmissionAssistant from '../components/proposals/SubmissionAssistant';
+import PortalAssistantPanel from '../components/ai/PortalAssistantPanel';
 import { createLogger } from '@/utils/logger';
 import { apiFetch } from "@/api/client"
 
@@ -65,6 +66,7 @@ export default function GrantDetail() {
   const [isPortalAssistantOpen, setIsPortalAssistantOpen] = useState(false);
   const [isApplicationAssistantOpen, setIsApplicationAssistantOpen] = useState(false);
   const [isSubmissionAssistantOpen, setIsSubmissionAssistantOpen] = useState(false);
+  const [isPortalAssistantOpen, setIsPortalAssistantOpen] = useState(false);
   const [activeTab, setActiveTab] = useState(initialTab);
   
   // Install click tracer for debugging
@@ -398,6 +400,7 @@ export default function GrantDetail() {
           <Tabs value={activeTab} onValueChange={setActiveTab} className="bg-white rounded-xl shadow-sm border">
             <TabsList className="p-2 m-2">
                 <TabsTrigger value="coach"><Brain className="w-4 h-4 mr-2"/>AI Coach</TabsTrigger>
+                <TabsTrigger value="portal-assist" onClick={(e) => { e.preventDefault(); setIsPortalAssistantOpen(true); }}><Sparkles className="w-4 h-4 mr-2"/>Portal Assistant</TabsTrigger>
                 <TabsTrigger value="checklist"><CheckSquare className="w-4 h-4 mr-2"/>Checklist</TabsTrigger>
                 <TabsTrigger value="budget"><DollarSign className="w-4 h-4 mr-2"/>Budget</TabsTrigger>
                 <TabsTrigger value="timelogs"><Clock className="w-4 h-4 mr-2"/>Time Logs</TabsTrigger>
@@ -496,6 +499,14 @@ export default function GrantDetail() {
           onClose={() => setIsSubmissionAssistantOpen(false)}
           grant={grant}
           organization={organization}
+        />
+      )}
+
+      {isPortalAssistantOpen && (
+        <PortalAssistantPanel
+          open={isPortalAssistantOpen}
+          onClose={() => setIsPortalAssistantOpen(false)}
+          grant={grant}
         />
       )}
     </div>
