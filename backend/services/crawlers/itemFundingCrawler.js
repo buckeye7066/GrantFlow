@@ -686,4 +686,5 @@ function isLoan(opportunity) {
     return loanKeywords.some(keyword => text.includes(keyword))
 }
 
-export default { crawlItemFunding }
+export { searchWebForItem, KNOWN_ITEM_SOURCES, parseItemRequest }
+export default { crawlItemFunding, searchWebForItem, KNOWN_ITEM_SOURCES, parseItemRequest }
