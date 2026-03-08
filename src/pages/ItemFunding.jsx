@@ -33,7 +33,7 @@ import { getItemSuggestions } from "@/api/items"
 
 const NOT_AVAILABLE = 'N/A'
 import { listProfiles, getProfile } from "@/api/profiles"
-import { createCrawlerJob } from "@/api/crawlers"
+import { createCrawlerJob, searchSpecificNeed } from "@/api/crawlers"
 import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/authStore"
 import { canUseFeature } from "@/utils/tier"
@@ -359,6 +359,21 @@ export default function ItemFunding() {
     enabled: submittedItem.trim().length > 0,
   })
 
+  // Live web + curated search via /specific-need (only when profile selected)
+  const liveSearchQuery = useQuery({
+    queryKey: ["item-live-search", submittedItem, filters.profileId],
+    queryFn: () =>
+      searchSpecificNeed({
+        profileId: filters.profileId,
+        needText: submittedItem,
+        minMatchScore: 15,
+        maxResults: 40,
+      }),
+    enabled: submittedItem.trim().length > 0 && Boolean(filters.profileId) && filters.profileId !== "all",
+    retry: 1,
+    staleTime: 5 * 60 * 1000,
+  })
+
   const selectedProfile = selectedProfileQuery.data ?? null
   const selectedTier = selectedProfile?.billing?.tier ?? null
   const canItemFunding = isAdmin || canUseFeature(selectedProfile?.billing, "enable_item_funding")
@@ -367,29 +382,73 @@ export default function ItemFunding() {
   const opportunities = opportunitiesResponse?.data ?? []
   const totalResults = typeof opportunitiesResponse?.total === "number" ? opportunitiesResponse.total : opportunities.length
 
-  const scoredResults = useMemo(() => {
-    const data = opportunities
-    if (!submittedItem) return []
+  // Live search results from specific-need endpoint
+  const liveResults = liveSearchQuery.data?.opportunities ?? []
+  const liveWebCount = liveSearchQuery.data?.web_search_results ?? 0
 
-    return data
-      .map((opportunity) => {
-        const match = scoreItemMatch(opportunity, submittedItem, selectedProfile)
-        const reasons =
-          match.reasons?.length > 0
-            ? match.reasons
-            : Array.isArray(opportunity.match_reasons)
-            ? opportunity.match_reasons
-            : []
-        return {
-          opportunity,
-          match: {
-            ...match,
-            reasons,
-          },
-        }
+  const scoredResults = useMemo(() => {
+    if (!submittedItem) return []
+    const seenUrls = new Set()
+    const merged = []
+
+    // Live results first (already scored by backend)
+    for (const opp of liveResults) {
+      const urlKey = (opp.url || opp.application_url || '').toLowerCase().replace(/\/$/, '')
+      if (urlKey && seenUrls.has(urlKey)) continue
+      if (urlKey) seenUrls.add(urlKey)
+      merged.push({
+        opportunity: {
+          id: opp.id,
+          title: opp.title,
+          description: opp.description,
+          url: opp.url || opp.application_url,
+          application_url: opp.application_url || opp.url,
+          source: opp.source || opp.result_source || 'Live Search',
+          categories: opp.categories || [],
+          match_reasons: opp.need_match?.matchedTerms || opp.match_reasons || [],
+          amount_min: opp.amount_min,
+          amount_max: opp.amount_max,
+          deadline: opp.deadline,
+          deadline_type: opp.deadline_type || 'rolling',
+          state: opp.state,
+          is_national: opp.is_national ?? true,
+          opportunity_type: opp.opportunity_type || opp.type || 'program',
+          sponsor: opp.sponsor || opp.source,
+        },
+        match: {
+          score: opp.combined_score || opp.match_score || 50,
+          reasons: [
+            ...(opp.need_match?.matchedTerms || []),
+            opp.result_source === 'web_search' ? 'Found via live web search' :
+            opp.result_source === 'item_catalog' ? 'Known item source' :
+            'Matched from curated data',
+          ],
+          overlap: [],
+          disqualified: false,
+        },
       })
-      .sort((a, b) => b.match.score - a.match.score)
-  }, [opportunities, submittedItem, selectedProfile])
+    }
+
+    // Static DB results (deduped against live)
+    for (const opp of opportunities) {
+      const urlKey = (opp.url || opp.application_url || opp.source_url || '').toLowerCase().replace(/\/$/, '')
+      if (urlKey && seenUrls.has(urlKey)) continue
+      if (urlKey) seenUrls.add(urlKey)
+      const match = scoreItemMatch(opp, submittedItem, selectedProfile)
+      const reasons =
+        match.reasons?.length > 0
+          ? match.reasons
+          : Array.isArray(opp.match_reasons)
+          ? opp.match_reasons
+          : []
+      merged.push({
+        opportunity: opp,
+        match: { ...match, reasons },
+      })
+    }
+
+    return merged.sort((a, b) => b.match.score - a.match.score)
+  }, [liveResults, opportunities, submittedItem, selectedProfile])
 
   const results = useMemo(() => {
     if (!scoredResults.length) return []
@@ -401,7 +460,7 @@ export default function ItemFunding() {
     [scoredResults],
   )
 
-  const isLoading = opportunitiesQuery.isLoading && submittedItem
+  const isLoading = (opportunitiesQuery.isLoading || liveSearchQuery.isLoading) && submittedItem
 
   const handleSearch = () => {
     if (!filters.item.trim()) {
@@ -551,8 +610,9 @@ export default function ItemFunding() {
             </div>
             <h1 className="text-3xl md:text-4xl font-bold text-slate-900">Find funding for a specific item</h1>
             <p className="text-sm md:text-base text-slate-600 max-w-3xl">
-              Search grants, scholarships, endowments, and local programs that underwrite tangible needs—vehicles, equipment,
-              technology, lab gear, adaptive devices. By default we hide loans and match-required programs; you can toggle them on to review terms.
+              Tell us exactly what you need and we will search curated databases AND the live web to find grants, donations,
+              and programs that fund it. Works for anything: vehicles, equipment, training classes, adaptive devices, scholarships,
+              license fees, and more. Select a profile to unlock real-time web search.
             </p>
           </div>
           <div className="rounded-2xl border border-emerald-200 bg-emerald-50/80 p-4 shadow-sm space-y-2 text-sm text-emerald-800 max-w-md">
@@ -668,8 +728,16 @@ export default function ItemFunding() {
               </div>
               {submittedItem ? (
                 <p className="text-xs text-slate-500">
-                  Showing {totalResults} grant{totalResults === 1 ? "" : "s"} for{" "}
+                  Showing {results.length} result{results.length === 1 ? "" : "s"} for{" "}
                   <span className="font-semibold text-slate-700">{submittedItem}</span>
+                  {liveWebCount > 0 ? (
+                    <span className="text-emerald-600 ml-1">({liveWebCount} from live web search)</span>
+                  ) : null}
+                  {liveSearchQuery.isLoading ? (
+                    <span className="text-blue-500 ml-1 inline-flex items-center gap-1">
+                      <Loader2 className="w-3 h-3 animate-spin" /> searching web…
+                    </span>
+                  ) : null}
                 </p>
               ) : null}
             </div>
@@ -714,33 +782,45 @@ export default function ItemFunding() {
             <ShoppingCart className="w-12 h-12 mx-auto text-slate-300" />
             <h3 className="text-xl font-semibold text-slate-900">No results with the current filters</h3>
             <div className="space-y-2 text-sm text-slate-600">
-              <p>
-                We found <span className="font-semibold text-slate-800">{totalResults}</span> opportunities matching{" "}
-                <span className="font-semibold text-slate-800">{submittedItem}</span>, but none are currently visible.
-              </p>
-              {disqualifiedCount > 0 ? (
+              {!hasSelectedProfile ? (
                 <p>
-                  <span className="font-semibold text-slate-800">{disqualifiedCount}</span> were excluded because they require
-                  matching funds or repayment. Toggle <span className="font-semibold">“Show match/loan results”</span> to
-                  review them.
+                  <span className="font-semibold text-blue-600">Select a profile above</span> to unlock live web search.
+                  {" "}We will search the internet in real time for programs, donations, and grants that fund{" "}
+                  <span className="font-semibold text-slate-800">{submittedItem}</span>.
+                </p>
+              ) : liveSearchQuery.isLoading ? (
+                <p className="flex items-center justify-center gap-2">
+                  <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
+                  Searching the web for <span className="font-semibold text-slate-800">{submittedItem}</span>...
                 </p>
               ) : (
-                <p>Try a broader keyword (e.g., “software”, “equipment”, “technology”, “vehicle”) or run the crawler sweep.</p>
+                <>
+                  <p>
+                    We searched curated databases and the open web for{" "}
+                    <span className="font-semibold text-slate-800">{submittedItem}</span>, but nothing met the current filters.
+                  </p>
+                  {disqualifiedCount > 0 ? (
+                    <p>
+                      <span className="font-semibold text-slate-800">{disqualifiedCount}</span> were excluded because they require
+                      matching funds or repayment. Toggle <span className="font-semibold">Show match/loan results</span> to
+                      review them.
+                    </p>
+                  ) : (
+                    <p>Try different keywords (e.g., van grant nonprofit, equipment funding, vehicle donation).</p>
+                  )}
+                </>
               )}
             </div>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <Button variant="outline" onClick={handleRequestItemCrawler}>
-                Request funding crawler
-              </Button>
-              <Button variant="outline" onClick={handleRequestItemGiftCrawler}>
-                Find donation / gift programs
-              </Button>
-            </div>
-            {!canItemFunding ? (
-              <p className="text-xs text-amber-700">
-                Item funding is gated by tier. Ask an admin to upgrade the billing tier to enable crawlers.
-              </p>
-            ) : null}
+            {hasSelectedProfile && !liveSearchQuery.isLoading && (
+              <div className="flex flex-col sm:flex-row gap-2 justify-center">
+                <Button variant="outline" onClick={handleRequestItemCrawler}>
+                  Queue deeper crawler sweep
+                </Button>
+                <Button variant="outline" onClick={handleRequestItemGiftCrawler}>
+                  Find donation / gift programs
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       ) : (
