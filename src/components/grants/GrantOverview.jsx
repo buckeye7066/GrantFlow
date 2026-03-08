@@ -66,7 +66,7 @@ const getMatchScoreColor = (score) => {
 
 const capitalize = (s) => (s && s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' ')) || "";
 
-export default function GrantOverview({ grant, organization, onUpdate }) {
+export default function GrantOverview({ grant, organization, onUpdate, onOpenPrintApp }) {
     const { toast } = useToast();
     const queryClient = useQueryClient();
     const [isVerifying, setIsVerifying] = useState(false);
@@ -415,6 +415,11 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                                 )}
                                 {grant.funder_email && (
                                     <div><strong>Email to:</strong> <a href={`mailto:${grant.funder_email}`} className="underline font-semibold">{grant.funder_email}</a></div>
+                                )}
+                                {(grant.funder_address || grant.funder_fax) && onOpenPrintApp && (
+                                    <Button size="sm" onClick={onOpenPrintApp} className="mt-2 gap-2 bg-blue-600 hover:bg-blue-700">
+                                        <FileCheck className="w-4 h-4" /> Generate Printable Application
+                                    </Button>
                                 )}
                             </AlertDescription>
                         </Alert>

@@ -5,7 +5,7 @@ import { base44 } from '@/api/base44Client';
 import { Link, useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import { Button } from '@/components/ui/button';
-import { Loader2, ArrowLeft, Edit, Trash2, Star, CheckSquare, Sparkles, DollarSign, ArrowRightSquare, Shield, Brain, Clock } from 'lucide-react';
+import { Loader2, ArrowLeft, Edit, Trash2, Star, CheckSquare, Sparkles, DollarSign, ArrowRightSquare, Shield, Brain, Clock, FileText } from 'lucide-react';
 import GrantOverview from '../components/grants/GrantOverview';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import Checklist from '../components/workflow/Checklist';
@@ -31,6 +31,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { installClickTracer } from '../components/shared/clickTracer';
 import SubmissionAssistant from '../components/proposals/SubmissionAssistant';
 import PortalAssistantPanel from '../components/ai/PortalAssistantPanel';
+import PrintableApplicationPanel from '../components/ai/PrintableApplicationPanel';
 import { createLogger } from '@/utils/logger';
 import { apiFetch } from "@/api/client"
 
@@ -66,6 +67,7 @@ export default function GrantDetail() {
   const [isPortalAssistantOpen, setIsPortalAssistantOpen] = useState(false);
   const [isApplicationAssistantOpen, setIsApplicationAssistantOpen] = useState(false);
   const [isSubmissionAssistantOpen, setIsSubmissionAssistantOpen] = useState(false);
+  const [isPrintableAppOpen, setIsPrintableAppOpen] = useState(false);
   const [activeTab, setActiveTab] = useState(initialTab);
   
   // Install click tracer for debugging
@@ -395,11 +397,12 @@ export default function GrantDetail() {
 
       <main className="max-w-7xl mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
-          <GrantOverview grant={grant} organization={organization} />
+          <GrantOverview grant={grant} organization={organization} onOpenPrintApp={() => setIsPrintableAppOpen(true)} />
           <Tabs value={activeTab} onValueChange={setActiveTab} className="bg-white rounded-xl shadow-sm border">
             <TabsList className="p-2 m-2">
                 <TabsTrigger value="coach"><Brain className="w-4 h-4 mr-2"/>AI Coach</TabsTrigger>
                 <TabsTrigger value="portal-assist" onClick={(e) => { e.preventDefault(); setIsPortalAssistantOpen(true); }}><Sparkles className="w-4 h-4 mr-2"/>Portal Assistant</TabsTrigger>
+                <TabsTrigger value="print-app" onClick={(e) => { e.preventDefault(); setIsPrintableAppOpen(true); }}><FileText className="w-4 h-4 mr-2"/>Print Application</TabsTrigger>
                 <TabsTrigger value="checklist"><CheckSquare className="w-4 h-4 mr-2"/>Checklist</TabsTrigger>
                 <TabsTrigger value="budget"><DollarSign className="w-4 h-4 mr-2"/>Budget</TabsTrigger>
                 <TabsTrigger value="timelogs"><Clock className="w-4 h-4 mr-2"/>Time Logs</TabsTrigger>
@@ -497,6 +500,14 @@ export default function GrantDetail() {
           onClose={() => setIsSubmissionAssistantOpen(false)}
           grant={grant}
           organization={organization}
+        />
+      )}
+
+      {isPrintableAppOpen && (
+        <PrintableApplicationPanel
+          open={isPrintableAppOpen}
+          onClose={() => setIsPrintableAppOpen(false)}
+          grant={grant}
         />
       )}
     </div>

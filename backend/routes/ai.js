@@ -1067,4 +1067,150 @@ Return your response as JSON:
   }
 });
 
+/**
+ * Generate a complete, print-ready application for physical submission (mail/fax).
+ * POST /api/ai/generate-printable-application
+ * Body: { grant_id }
+ */
+router.post('/generate-printable-application', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_AI), async (req, res) => {
+  try {
+    const { grant_id } = req.body;
+    if (!grant_id) return res.status(400).json({ error: 'grant_id is required' });
+
+    const grantAccess = await ensureGrantAccess(req, res, String(grant_id));
+    if (!grantAccess) return;
+
+    const grant = await req.db.prepare(`
+      SELECT g.*, o.name AS org_name, o.mission AS org_mission,
+             o.applicant_type AS org_type, o.city AS org_city, o.state AS org_state,
+             o.ein AS org_ein, o.annual_budget AS org_budget, o.website AS org_website,
+             o.phone AS org_phone, o.address AS org_address,
+             p.basic_information, p.education_information, p.employment_information,
+             p.health_information, p.financial_information, p.housing_information,
+             p.additional_information
+      FROM grants g
+      LEFT JOIN organizations o ON g.organization_id = o.id
+      LEFT JOIN profiles p ON g.profile_id = p.id
+      WHERE g.id = ?
+    `).get(grant_id);
+
+    if (!grant) return res.status(404).json({ error: 'Grant not found' });
+
+    const parseSafe = (v) => { try { return typeof v === 'string' ? JSON.parse(v) : v; } catch { return {}; } };
+    const p = {
+      basic: parseSafe(grant.basic_information),
+      education: parseSafe(grant.education_information),
+      employment: parseSafe(grant.employment_information),
+      health: parseSafe(grant.health_information),
+      financial: parseSafe(grant.financial_information),
+      housing: parseSafe(grant.housing_information),
+      additional: parseSafe(grant.additional_information),
+    };
+
+    const applicantName = [p.basic?.first_name, p.basic?.last_name].filter(Boolean).join(' ') || 'Applicant';
+    const applicantAddr = [p.basic?.address, p.basic?.city, p.basic?.state, p.basic?.zip].filter(Boolean).join(', ');
+    const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+
+    const prompt = `You are a seasoned grant writer with an MBA and 20+ years securing millions in funding. Write a complete, formal application package ready for physical submission (print, mail, or fax).
+
+=== FUNDING SOURCE ===
+Title: ${grant.title || grant.name || 'Funding Opportunity'}
+Funder: ${grant.funder_name || grant.org_name || 'Funding Organization'}
+Description: ${grant.description || 'N/A'}
+Amount: ${grant.amount || grant.amount_max || 'Not specified'}
+Deadline: ${grant.deadline || 'Rolling/Open'}
+Submission: ${grant.funder_address ? 'Mail to: ' + grant.funder_address : ''}${grant.funder_fax ? ' | Fax to: ' + grant.funder_fax : ''}${grant.funder_email ? ' | Email to: ' + grant.funder_email : ''}
+
+=== APPLICANT ===
+Name: ${applicantName}
+Address: ${applicantAddr || 'Not provided'}
+Phone: ${p.basic?.phone || 'Not provided'}
+Email: ${p.basic?.email || 'Not provided'}
+Household: ${p.basic?.household_size || 'Unknown'} members
+Income: $${p.financial?.annual_income || p.basic?.annual_income || 'Unknown'}/year
+Education: ${JSON.stringify(p.education || {}).slice(0, 400)}
+Employment: ${JSON.stringify(p.employment || {}).slice(0, 400)}
+Health: ${JSON.stringify(p.health || {}).slice(0, 300)}
+Housing: ${JSON.stringify(p.housing || {}).slice(0, 300)}
+Additional: ${JSON.stringify(p.additional || {}).slice(0, 300)}
+${grant.org_name ? 'Organization: ' + grant.org_name : ''}
+${grant.org_mission ? 'Mission: ' + grant.org_mission : ''}
+${grant.org_ein ? 'EIN: ' + grant.org_ein : ''}
+
+=== INSTRUCTIONS ===
+Generate a COMPLETE application package as JSON with these sections:
+
+1. cover_letter: A formal, persuasive cover letter (full text) addressed to the funder. Include:
+   - Professional letterhead info (applicant name, address, date)
+   - Specific reference to the funding opportunity by name
+   - Compelling statement of need using real profile data (quantify: income, household size, specific needs)
+   - Clear alignment between the applicant's situation and the funder's mission
+   - Professional closing with signature line
+
+2. narrative: A 2-3 paragraph statement of need/project narrative that:
+   - Opens with the applicant's specific situation and quantified need
+   - Demonstrates exactly how this funding addresses their situation
+   - Shows the impact/outcome if funded
+   - Uses persuasive but honest language — no fabrication
+
+3. budget_justification: If applicable, a brief budget narrative explaining how funds will be used
+
+4. sections: Array of any additional form sections the funder likely requires, each with:
+   - section_name, content (the completed answer)
+
+5. submission_instructions: Step-by-step checklist for the applicant:
+   - What to print
+   - What to sign
+   - What supporting documents to include (ID, proof of income, etc.)
+   - Where to mail/fax/deliver
+   - Deadline reminder
+
+6. missing_items: Array of things the applicant needs to gather/verify before submitting
+
+Return ONLY valid JSON:
+{
+  "cover_letter": "full text...",
+  "narrative": "full text...",
+  "budget_justification": "text or null",
+  "sections": [{ "section_name": "...", "content": "..." }],
+  "submission_instructions": ["step 1...", "step 2..."],
+  "missing_items": ["item 1...", "item 2..."],
+  "addressed_to": { "name": "...", "title": "...", "organization": "...", "address": "...", "fax": "...", "email": "..." },
+  "applicant": { "name": "${applicantName}", "address": "${applicantAddr}", "date": "${today}" }
+}`;
+
+    const openai = getOpenAI();
+    if (!openai) return res.status(503).json({ error: 'AI provider not configured' });
+
+    const completion = await openai.chat.completions.create({
+      model: DEFAULT_OPENAI_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.3,
+      max_tokens: 6000,
+    });
+
+    const rawText = extractCompletionText(completion);
+    let parsed = null;
+    try { parsed = JSON.parse(rawText); } catch {
+      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) try { parsed = JSON.parse(jsonMatch[0]); } catch { /* use raw */ }
+    }
+
+    res.json({
+      success: true,
+      application: parsed || { raw: rawText },
+      grant_title: grant.title || grant.name,
+      funder: grant.funder_name || grant.org_name || null,
+      submission: {
+        address: grant.funder_address || null,
+        fax: grant.funder_fax || null,
+        email: grant.funder_email || null,
+      },
+    });
+  } catch (error) {
+    console.error('[generate-printable-application] Error:', error);
+    res.status(500).json(formatError(error));
+  }
+});
+
 export default router;
