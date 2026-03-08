@@ -192,6 +192,17 @@ export function generateStatePrograms(stateCode) {
     },
   ];
 
+  // Append state-specific enrichment programs when present
+  if (Array.isArray(reg.extraPrograms)) {
+    for (const ep of reg.extraPrograms) {
+      benefits.push({
+        ...ep,
+        id: ep.id || `${sc}-extra-${benefits.length}`,
+        stateRestriction: stateCode,
+      });
+    }
+  }
+
   return { benefits, meta, countyResources: {} };
 }
 

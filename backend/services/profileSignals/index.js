@@ -197,6 +197,9 @@ export async function loadProfileSignals(db, profileId) {
           const parsed = typeof profile[col] === 'string' ? JSON.parse(profile[col]) : profile[col];
           if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
             sections[secKey] = parsed;
+            if (col === 'employment_information' && !sections.occupation) {
+              sections.occupation = parsed;
+            }
           }
         } catch { /* skip */ }
       }

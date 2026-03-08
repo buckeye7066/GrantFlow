@@ -7,6 +7,74 @@ import { getStrategy, listStrategies } from '../services/crawlers/strategyRegist
 
 const router = express.Router()
 
+/**
+ * Query funding_opportunities table for the user's state + national opportunities.
+ * Returns results mapped to the same frontend shape as curated results.
+ * Deduplicates against curated results by title normalization.
+ */
+async function queryNearbyOpportunities(db, analysis, curatedTitles, limit = 50) {
+  if (!db || typeof db.prepare !== 'function') return [];
+  const state = analysis?.location?.state;
+  try {
+    const rows = await db.prepare(`
+      SELECT id, title, description, sponsor, source, source_url, url, application_url,
+             state, is_national, opportunity_type, type, deadline_type, amount_max,
+             contact_info, categories, keywords, match_reasons, match_score,
+             funding_type, record_origin
+      FROM funding_opportunities
+      WHERE (state = ? OR state = 'nationwide' OR is_national = 1)
+      ORDER BY match_score DESC NULLS LAST, last_verified_at DESC NULLS LAST
+      LIMIT ?
+    `).all(state || 'nationwide', limit);
+
+    const normalizeTitle = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const seenTitles = new Set(curatedTitles.map(normalizeTitle));
+
+    return (rows || [])
+      .filter(row => {
+        const norm = normalizeTitle(row.title);
+        if (seenTitles.has(norm)) return false;
+        seenTitles.add(norm);
+        return true;
+      })
+      .map(row => ({
+        id: row.id || `fo-${row.title?.slice(0, 20)}`,
+        title: row.title,
+        name: row.title,
+        description: row.description,
+        url: row.url || row.application_url || row.source_url || null,
+        application_url: row.application_url || row.url || null,
+        source_url: row.source_url || row.url || null,
+        match_score: row.match_score || 50,
+        match_reasons: safeJsonParse(row.match_reasons, []),
+        categories: safeJsonParse(row.categories, []),
+        opportunity_type: row.opportunity_type || row.type || 'program',
+        funding_type: row.funding_type || null,
+        amount_max: row.amount_max || null,
+        amount_description: row.amount_max ? `Up to ${row.amount_max}` : null,
+        sponsor: row.sponsor || (row.is_national ? 'National Program' : `${row.state} Program`),
+        source: row.source || 'discovered',
+        record_origin: row.record_origin || 'geo_crawl',
+        is_directory_resource: row.type === 'DIRECTORY',
+        deadline_type: row.deadline_type || 'rolling',
+        is_national: Boolean(row.is_national),
+        state: row.state || null,
+        contact_info: row.contact_info || null,
+        eligibility_bullets: [],
+        match_explain: { source: 'funding_opportunities_db', nearYou: true },
+      }));
+  } catch (err) {
+    console.warn('[RealCrawlers] queryNearbyOpportunities failed (continuing):', err?.message);
+    return [];
+  }
+}
+
+function safeJsonParse(val, fallback) {
+  if (Array.isArray(val)) return val;
+  if (!val || typeof val !== 'string') return fallback;
+  try { return JSON.parse(val); } catch { return fallback; }
+}
+
 const CRAWLER_TYPES = [
   'comprehensive',
   'curated_benefits',
@@ -141,14 +209,19 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     const mapped = result.results.map(mapResultToFrontendShape)
 
-    let filtered = mapped
+    // Merge "near you" opportunities from funding_opportunities table
+    const curatedTitles = mapped.map(o => o.title || o.name || '');
+    const nearbyOpps = await queryNearbyOpportunities(db, result.analysis, curatedTitles, 30);
+    const allMapped = [...mapped, ...nearbyOpps];
+
+    let filtered = allMapped
       .filter((opp) => typeof opp.match_score === 'number' && opp.match_score >= min_match_score)
       .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
-      .slice(0, strategy.maxResults || 100)
+      .slice(0, (strategy.maxResults || 100) + nearbyOpps.length)
 
     let thresholdFallbackMessage = null
-    if (filtered.length === 0 && mapped.length > 0) {
-      filtered = mapped
+    if (filtered.length === 0 && allMapped.length > 0) {
+      filtered = allMapped
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
         .slice(0, 50)
       thresholdFallbackMessage = `No results met your threshold of ${min_match_score}%. Showing best available matches.`
@@ -157,7 +230,7 @@ router.post('/run', ensureAuth, async (req, res) => {
     const duration = Date.now() - startTime
 
     console.log(
-      `[RealCrawlers] ${crawler_type}: ${result.results.length} matched → ${filtered.length} returned (min_score=${min_match_score}) in ${duration}ms`,
+      `[RealCrawlers] ${crawler_type}: ${result.results.length} curated + ${nearbyOpps.length} nearby → ${filtered.length} returned (min_score=${min_match_score}) in ${duration}ms`,
     )
 
     res.json({

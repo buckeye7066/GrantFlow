@@ -396,6 +396,37 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                         </div>
                     )}
 
+                    {['portal', 'submitted', 'application_prep', 'revision'].includes(grant.status) && (grant.application_url || grant.url || grant.funder_address || grant.funder_fax) && (
+                        <Alert className="border-2 border-blue-200 bg-blue-50">
+                            <Info className="h-4 w-4 text-blue-600" />
+                            <AlertTitle className="text-blue-900">Ready to Submit</AlertTitle>
+                            <AlertDescription className="text-blue-800 space-y-2">
+                                {(grant.application_url || grant.url) && (
+                                    <div>
+                                        <strong>Apply online:</strong>{' '}
+                                        <a href={grant.application_url || grant.url} target="_blank" rel="noopener noreferrer" className="underline font-semibold">{grant.application_url || grant.url}</a>
+                                    </div>
+                                )}
+                                {grant.funder_address && (
+                                    <div><strong>Mail to:</strong> <span className="font-medium">{grant.funder_address}</span></div>
+                                )}
+                                {grant.funder_fax && (
+                                    <div><strong>Fax to:</strong> <span className="font-medium">{grant.funder_fax}</span></div>
+                                )}
+                                {grant.funder_email && (
+                                    <div><strong>Email to:</strong> <a href={`mailto:${grant.funder_email}`} className="underline font-semibold">{grant.funder_email}</a></div>
+                                )}
+                            </AlertDescription>
+                        </Alert>
+                    )}
+
+                    {grant.application_steps && (
+                        <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4">
+                            <h4 className="text-sm font-semibold text-indigo-900 mb-2">Step-by-Step Submission Guide</h4>
+                            <div className="text-sm text-indigo-800 whitespace-pre-line">{grant.application_steps}</div>
+                        </div>
+                    )}
+
                     {(grant.application_url || grant.url) && (
                         <div className="flex items-center gap-2">
                             <span className="text-sm font-medium text-slate-600">Portal/Apply Link:</span>

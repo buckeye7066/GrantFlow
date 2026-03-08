@@ -138,6 +138,10 @@ export async function analyzeProfile(db, profileOrId) {
             const parsed = typeof profile[col] === 'string' ? JSON.parse(profile[col]) : profile[col];
             if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
               sections[secKey] = parsed;
+              // employment_information feeds both 'employment' and 'occupation' signals
+              if (col === 'employment_information' && !sections.occupation) {
+                sections.occupation = parsed;
+              }
             }
           } catch { /* skip unparseable */ }
         }
@@ -412,6 +416,32 @@ export async function analyzeProfile(db, profileOrId) {
   if (occ.union_member || comp.union_member) occupationSignals.add('union_member');
   if (occ.farmer || comp.farmer) occupationSignals.add('farmer');
   if (occ.truck_driver || comp.truck_driver) occupationSignals.add('truck_driver');
+
+  // Derive occupation signals from employment_information fields (job_title, occupation, employment_status)
+  const empOccRaw = lower(employ.occupation || employ.job_title || occ.occupation || occ.job_title || '');
+  if (empOccRaw) {
+    const OCC_KEYWORD_MAP = {
+      healthcare_worker: /nurse|doctor|physician|pharm|medical|health\s*care|dental|therapist|cna|lpn|rn|md/,
+      educator: /teacher|professor|instructor|tutor|educator|faculty|school/,
+      firefighter: /firefighter|fire\s*department/,
+      law_enforcement: /police|sheriff|officer|law\s*enforce|detective|trooper/,
+      farmer: /farm|ranch|agri/,
+      truck_driver: /truck|cdl|driver|transport/,
+      clergy: /pastor|minister|clergy|priest|chaplain|reverend/,
+      ems_worker: /ems|paramedic|emt|emergency\s*med/,
+      public_servant: /government|civil\s*serv|public\s*serv|city\s*employ|state\s*employ|federal\s*employ/,
+      small_business_owner: /business\s*own|entrepreneur|self.?employ|freelanc|sole\s*propr/,
+      retail_worker: /retail|cashier|store|sales\s*assoc/,
+      food_service: /restaurant|food\s*serv|cook|chef|waiter|waitress|server/,
+      construction: /construct|carpenter|plumber|electrician|welder|mason/,
+    };
+    for (const [signal, pattern] of Object.entries(OCC_KEYWORD_MAP)) {
+      if (pattern.test(empOccRaw)) occupationSignals.add(signal);
+    }
+  }
+  const empStatus = lower(employ.employment_status || occ.employment_status || '');
+  if (empStatus.includes('unemploy') || employ.looking_for_work) needs.add('employment');
+  if (empStatus.includes('self') || empStatus.includes('freelanc')) occupationSignals.add('small_business_owner');
 
   // ── Immigration / Citizenship signals ──
   const immigrationSignals = new Set();
