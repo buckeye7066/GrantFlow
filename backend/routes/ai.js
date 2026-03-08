@@ -920,4 +920,151 @@ router.post('/invoke', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_AI), asy
   }
 });
 
+/**
+ * AI Portal Assistant — reads a funding portal page and helps users
+ * answer application questions using their profile data.
+ *
+ * POST /api/ai/portal-assist
+ * Body: { grant_id, portal_url?, questions?: string[], page_content?: string }
+ */
+router.post('/portal-assist', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_AI), async (req, res) => {
+  try {
+    const { grant_id, portal_url, questions, page_content } = req.body;
+    if (!grant_id) return res.status(400).json({ error: 'grant_id is required' });
+
+    const grantAccess = await ensureGrantAccess(req, res, String(grant_id));
+    if (!grantAccess) return;
+
+    const grant = await req.db.prepare(`
+      SELECT g.*, o.name AS org_name, o.mission AS org_mission,
+             o.applicant_type AS org_type, o.city AS org_city, o.state AS org_state,
+             o.ein AS org_ein, o.annual_budget AS org_budget,
+             p.basic_information, p.education_information, p.employment_information,
+             p.health_information, p.financial_information, p.housing_information,
+             p.additional_information
+      FROM grants g
+      LEFT JOIN organizations o ON g.organization_id = o.id
+      LEFT JOIN profiles p ON g.profile_id = p.id
+      WHERE g.id = ?
+    `).get(grant_id);
+
+    if (!grant) return res.status(404).json({ error: 'Grant not found' });
+
+    // Parse profile sections
+    const parseSafe = (v) => { try { return typeof v === 'string' ? JSON.parse(v) : v; } catch { return {}; } };
+    const profile = {
+      basic: parseSafe(grant.basic_information),
+      education: parseSafe(grant.education_information),
+      employment: parseSafe(grant.employment_information),
+      health: parseSafe(grant.health_information),
+      financial: parseSafe(grant.financial_information),
+      housing: parseSafe(grant.housing_information),
+      additional: parseSafe(grant.additional_information),
+    };
+
+    // Fetch portal page content if URL given and no content provided
+    let portalContent = page_content || '';
+    if (!portalContent && portal_url) {
+      try {
+        const resp = await fetch(portal_url, {
+          headers: { 'User-Agent': 'GrantFlow Application Assistant/1.0' },
+          signal: AbortSignal.timeout(15000),
+        });
+        if (resp.ok) {
+          const html = await resp.text();
+          portalContent = html
+            .replace(/<script[\s\S]*?<\/script>/gi, '')
+            .replace(/<style[\s\S]*?<\/style>/gi, '')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/\s{2,}/g, ' ')
+            .slice(0, 12000);
+        }
+      } catch (e) {
+        console.warn('[portal-assist] Failed to fetch portal:', e?.message);
+      }
+    }
+
+    const questionsText = Array.isArray(questions) && questions.length > 0
+      ? questions.map((q, i) => `Q${i + 1}: ${q}`).join('\n')
+      : '';
+
+    const prompt = `You are an expert grant writer with an MBA and 20 years of experience securing funding for individuals and organizations. You write with precision, confidence, and persuasive clarity.
+
+A user is applying for funding and needs help answering the application questions. Use their profile data to craft compelling, specific, truthful answers. Never fabricate facts — only use information from the profile. If information is missing, note what the applicant should add and provide a strong template they can customize.
+
+=== FUNDING SOURCE ===
+Title: ${grant.title || grant.name || 'Unknown'}
+Funder: ${grant.funder_name || grant.org_name || 'Unknown'}
+Description: ${grant.description || ''}
+Amount: ${grant.amount || grant.amount_max || 'Not specified'}
+URL: ${grant.application_url || grant.url || portal_url || ''}
+
+=== APPLICANT PROFILE ===
+Name: ${profile.basic?.first_name || ''} ${profile.basic?.last_name || ''}
+Location: ${profile.basic?.city || ''}, ${profile.basic?.state || ''} ${profile.basic?.zip || ''}
+Household size: ${profile.basic?.household_size || 'Unknown'}
+Income: ${profile.financial?.annual_income || profile.basic?.annual_income || 'Unknown'}
+Education: ${JSON.stringify(profile.education || {}).slice(0, 500)}
+Employment: ${JSON.stringify(profile.employment || {}).slice(0, 500)}
+Health: ${JSON.stringify(profile.health || {}).slice(0, 300)}
+Housing: ${JSON.stringify(profile.housing || {}).slice(0, 300)}
+Additional: ${JSON.stringify(profile.additional || {}).slice(0, 300)}
+${grant.org_name ? `Organization: ${grant.org_name}` : ''}
+${grant.org_mission ? `Mission: ${grant.org_mission}` : ''}
+${grant.org_ein ? `EIN: ${grant.org_ein}` : ''}
+
+${portalContent ? `=== PORTAL PAGE CONTENT ===\n${portalContent.slice(0, 8000)}` : ''}
+
+${questionsText ? `=== QUESTIONS TO ANSWER ===\n${questionsText}` : `=== TASK ===\nAnalyze the funding source and portal content. Identify all questions or sections the applicant needs to complete. For each one, provide a polished, MBA-level draft answer using the profile data. Format as numbered sections.`}
+
+For each answer:
+1. Write a complete, submission-ready response (not bullet points)
+2. Use specific details from the profile (income, location, household, needs)
+3. Demonstrate clear alignment between the applicant's situation and the funder's mission
+4. If a question asks about need, be specific and compelling — quantify where possible
+5. Flag any fields where the applicant should verify or add information
+
+Return your response as JSON:
+{
+  "answers": [
+    {
+      "question": "the question or section name",
+      "answer": "the complete draft answer",
+      "confidence": "high|medium|low",
+      "missing_info": "what the applicant should verify/add, or null"
+    }
+  ],
+  "summary": "brief overview of the application strength",
+  "tips": ["actionable tip 1", "actionable tip 2"]
+}`;
+
+    const openai = getOpenAI();
+    if (!openai) return res.status(503).json({ error: 'AI provider not configured' });
+
+    const completion = await openai.chat.completions.create({
+      model: DEFAULT_OPENAI_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.4,
+      max_tokens: 4000,
+    });
+
+    const rawText = extractCompletionText(completion);
+    let parsed = null;
+    try { parsed = JSON.parse(rawText); } catch {
+      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) try { parsed = JSON.parse(jsonMatch[0]); } catch { /* use raw */ }
+    }
+
+    res.json({
+      success: true,
+      result: parsed || { raw: rawText },
+      grant_title: grant.title || grant.name,
+      portal_url: portal_url || grant.application_url || grant.url || null,
+    });
+  } catch (error) {
+    console.error('[portal-assist] Error:', error);
+    res.status(500).json(formatError(error));
+  }
+});
+
 export default router;
