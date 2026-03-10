@@ -1,6 +1,10 @@
 import express from 'express';
 import { ensureProfileAccess, isAdminUser, requireAuthenticatedUser } from '../utils/accessControl.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
+import { isJunkOpportunity } from '../services/contentFilter.js'
+import { calculateMatchScore as scoreOpportunity } from '../services/matchingEngine.js'
+import { loadProfileContext } from '../services/profileHelpers.js'
+import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 
 const router = express.Router();
 
@@ -220,55 +224,7 @@ function buildDemographicSignals(profile, organization, sections) {
  * ENHANCED: Uses ALL profile data points for comprehensive matching
  * Scoring designed to achieve 80%+ matches for well-aligned opportunities
  */
-/**
- * Filter out opportunities that are irrelevant for a given profile.
- * Removes informational pages, copay/patient-assistance programs for non-medical profiles,
- * and health directory sites when the profile has no health conditions.
- */
-function isIrrelevantForProfile(opp, signals) {
-  const title = (opp.title || opp.program_name || '').toLowerCase();
-  const desc = (opp.description || opp.summary || '').toLowerCase();
-  const combined = title + ' ' + desc;
-
-  // 1. Filter informational/directory pages (not actual funding)
-  const infoPatterns = [
-    'health topics', 'health information', 'medlineplus', 'cdc.gov',
-    'webmd', 'mayo clinic information', 'healthfinder',
-    'patient education', 'health library', 'medical encyclopedia',
-    'disease information', 'condition overview'
-  ];
-  if (infoPatterns.some(p => combined.includes(p))) return true;
-
-  // 2. Filter copay/patient-assistance programs when profile has no health conditions
-  const hasHealthNeeds = signals.health && signals.health.size > 0;
-  if (!hasHealthNeeds) {
-    const copayPatterns = [
-      'copay assistance', 'copay foundation', 'copay relief',
-      'patient assistance program', 'patient advocate',
-      'medication assistance', 'prescription assistance',
-      'drug assistance', 'needymeds', 'pan foundation',
-      'healthwell foundation', 'patient access network',
-      'rx assistance', 'pharmaceutical assistance'
-    ];
-    if (copayPatterns.some(p => combined.includes(p))) return true;
-  }
-
-  // 3. Filter generic health resource directories for non-medical profiles
-  if (!hasHealthNeeds) {
-    const healthDirPatterns = [
-      'medicaid: contact', 'medicare: contact',
-      'find a doctor', 'find a clinic', 'health insurance marketplace',
-      'healthcare.gov', 'find local health', 'community health center'
-    ];
-    if (healthDirPatterns.some(p => combined.includes(p))) return true;
-  }
-
-  // 4. Filter transportation/ride assistance unless profile specifically needs it
-  const needsTransport = signals.keywords && (signals.keywords.has('transportation') || signals.keywords.has('ride assistance'));
-  if (!needsTransport && combined.includes('transportation assistance') && !combined.includes('business')) return true;
-
-  return false;
-}
+// Content/junk filtering handled by shared isJunkOpportunity() from services/contentFilter.js
 
 /**
  * Detect if profile has business/entrepreneurship intent
@@ -285,206 +241,8 @@ function detectBusinessIntent(signals) {
   return bizKeywords.some(k => signals.keywords.has(k));
 }
 
-function calculateMatchScore(signals, opp) {
-  let score = 40; // Start at 40% base - must earn the rest
-  const matchedFields = [];
-  let matchStrength = 0; // Track how many categories match
-  
-  // Parse opportunity keywords and categories
-  let oppKeywords = [];
-  let oppCategories = [];
-  let eligibility = [];
-  
-  try { oppKeywords = JSON.parse(opp.keywords || '[]'); } catch (e) { /* ignore */ }
-  try { oppCategories = JSON.parse(opp.categories || '[]'); } catch (e) { /* ignore */ }
-  try { eligibility = JSON.parse(opp.eligibility_bullets || '[]'); } catch (e) { /* ignore */ }
-  
-  // Combine all opportunity terms for matching
-  const oppTerms = new Set([
-    ...oppKeywords.map(k => k.toLowerCase()),
-    ...oppCategories.map(c => c.toLowerCase()),
-    ...eligibility.map(e => e.toLowerCase())
-  ]);
-  
-  // Also check opportunity title and description
-  const oppText = `${opp.title || ''} ${opp.description || ''}`.toLowerCase();
-  
-  // Keyword matching (up to 30 points) - INCREASED
-  let keywordMatches = 0;
-  signals.keywords.forEach(keyword => {
-    // Check in structured terms
-    for (const term of oppTerms) {
-      if (term.includes(keyword) || keyword.includes(term)) {
-        keywordMatches++;
-        matchedFields.push(keyword);
-        break;
-      }
-    }
-    // Also check in title/description for bonus
-    if (oppText.includes(keyword)) {
-      keywordMatches += 0.5;
-    }
-  });
-  score += Math.min(30, Math.floor(keywordMatches * 5));
-  
-  // Demographic matching (up to 15 points)
-  let demoMatches = 0;
-  signals.demographics.forEach(demo => {
-    for (const term of oppTerms) {
-      if (term.includes(demo) || demo.includes(term)) {
-        demoMatches++;
-        matchedFields.push('demographic: ' + demo);
-        break;
-      }
-    }
-  });
-  score += Math.min(15, demoMatches * 5);
-  
-  // Military status matching (up to 20 points) - INCREASED significantly
-  if (signals.military.size > 0) {
-    let militaryScore = 0;
-    signals.military.forEach(mil => {
-      for (const term of oppTerms) {
-        if (term.includes(mil) || mil.includes(term) || oppText.includes(mil)) {
-          militaryScore += 7;
-          matchedFields.push('military: ' + mil);
-          break;
-        }
-      }
-    });
-    score += Math.min(20, militaryScore);
-  }
-  
-  // Faith-based/ministry matching (up to 15 points) - NEW
-  const faithTerms = ['faith-based', 'faith', 'ministry', 'missions', 'religious', 'church'];
-  let faithMatches = 0;
-  faithTerms.forEach(ft => {
-    if (signals.keywords.has(ft)) {
-      for (const term of oppTerms) {
-        if (term.includes(ft) || ft.includes(term)) {
-          faithMatches++;
-          matchedFields.push('faith: ' + ft);
-          break;
-        }
-      }
-    }
-  });
-  score += Math.min(15, faithMatches * 5);
-  
-  // Assistance program matching (up to 10 points)
-  let assistMatches = 0;
-  signals.assistance.forEach(assist => {
-    for (const term of oppTerms) {
-      if (term.includes(assist) || assist.includes(term)) {
-        assistMatches++;
-        matchedFields.push('assistance: ' + assist);
-        break;
-      }
-    }
-  });
-  score += Math.min(10, assistMatches * 5);
-  
-  // Family situation matching (up to 10 points)
-  let familyMatches = 0;
-  signals.family.forEach(fam => {
-    for (const term of oppTerms) {
-      if (term.includes(fam) || fam.includes(term)) {
-        familyMatches++;
-        matchedFields.push('family: ' + fam);
-        break;
-      }
-    }
-  });
-  score += Math.min(10, familyMatches * 5);
-  
-  // Health/disability matching (up to 15 points) - INCREASED
-  let healthMatches = 0;
-  signals.health.forEach(h => {
-    for (const term of oppTerms) {
-      if (term.includes(h) || h.includes(term)) {
-        healthMatches++;
-        matchedFields.push('health: ' + h);
-        break;
-      }
-    }
-    // Also check description
-    if (oppText.includes(h)) {
-      healthMatches += 0.5;
-    }
-  });
-  score += Math.min(15, Math.floor(healthMatches * 5));
-  
-  // Location matching (up to 10 points) - INCREASED
-  if (opp.state) {
-    for (const loc of signals.location) {
-      if (opp.state.toLowerCase() === loc || (opp.description && opp.description.toLowerCase().includes(loc))) {
-        score += 10;
-        matchedFields.push('location: ' + loc);
-        matchStrength++;
-        break;
-      }
-    }
-  }
-  
-  // Education level matching (up to 10 points)
-  if (signals.education && signals.education.size > 0) {
-    signals.education.forEach(edu => {
-      for (const term of oppTerms) {
-        if (term.includes(edu) || edu.includes(term) || oppText.includes(edu)) {
-          score += 5;
-          matchedFields.push('education: ' + edu);
-          matchStrength++;
-          break;
-        }
-      }
-    });
-  }
-  
-  // Financial need matching (up to 10 points)
-  if (signals.financial && signals.financial.size > 0) {
-    signals.financial.forEach(fin => {
-      for (const term of oppTerms) {
-        if (term.includes(fin) || fin.includes(term) || oppText.includes(fin)) {
-          score += 5;
-          matchedFields.push('financial: ' + fin);
-          matchStrength++;
-          break;
-        }
-      }
-    });
-  }
-  
-  // Business/entrepreneurship intent bonus (up to 20 points)
-  const oppText2 = `${opp.title || ''} ${opp.description || ''}`.toLowerCase();
-  const bizOppTerms = ['small business', 'startup', 'entrepreneur', 'microenterprise',
-    'business grant', 'sba', 'usda rural', 'economic development', 'business development',
-    'food truck', 'mobile food', 'commercial kitchen', 'food service'];
-  const isBizOpp = bizOppTerms.some(t => oppText2.includes(t));
-  if (isBizOpp) {
-    // Check if profile also has business intent via keywords
-    const profileBizTerms = ['small business', 'startup', 'entrepreneur', 'food truck',
-      'microenterprise', 'business grant', 'sba', 'usda', 'restaurant', 'food service'];
-    const profileHasBiz = profileBizTerms.some(t => signals.keywords && signals.keywords.has(t));
-    if (profileHasBiz) {
-      score += 20;
-      matchedFields.push('business intent match');
-    }
-  }
-
-  // BONUS: Multiple category matches (up to 15 points)
-  // If matching in 3+ categories, likely a strong fit
-  if (matchStrength >= 5) {
-    score += 15;
-    matchedFields.push('strong multi-category match');
-  } else if (matchStrength >= 3) {
-    score += 10;
-    matchedFields.push('good multi-category match');
-  } else if (matchStrength >= 2) {
-    score += 5;
-  }
-  
-  return { score: Math.min(100, score), matchedFields };
-}
+// Scoring handled by the shared matchingEngine (scoreOpportunity) for consistency
+// with Smart Matcher. Imported as `scoreOpportunity` at the top of this file.
 
 /**
  * Comprehensive AI Match endpoint
@@ -503,54 +261,35 @@ router.post('/comprehensiveMatch', async (req, res) => {
 
     const user = req.user ?? { role: 'guest' }
 
-    // Get profile from database if profile_id is provided
-    let profile = profile_json;
+    // Build full profile context (same path as Smart Matcher for consistent scoring)
+    let profile, profileContext, organization, profileSections = {};
     if (typeof profile_json === 'string') {
       if (!(await ensureProfileAccess(req, res, profile_json))) return
-      const profileRow = req.db
-        .prepare('SELECT * FROM profiles WHERE id = ?')
-        .get(profile_json);
-      
-      if (!profileRow) {
-        return res.status(404).json({
-          success: false,
-          error: 'Profile not found'
-        });
+      try {
+        const baseContext = await loadProfileContext(req.db, profile_json)
+        profileContext = buildProfileFacets(baseContext)
+        profile = profileContext.profile
+        organization = profileContext.organization ?? null
+        profileSections = profileContext.sections ?? {}
+      } catch (e) {
+        return res.status(404).json({ success: false, error: 'Profile not found' })
       }
-      
-      profile = profileRow;
     } else if (!isAdminUser(user)) {
-      // Prevent non-admin callers from submitting arbitrary profile JSON blobs that could be
-      // confused with stored profiles in downstream code.
       return res.status(403).json({
         success: false,
         error: 'Non-admin requests must provide a profile_id string',
       })
-    }
-
-    // Fetch linked organization for demographic data
-    let organization = null;
-    if (profile.organization_id) {
-      organization = req.db
-        .prepare('SELECT * FROM organizations WHERE id = ?')
-        .get(profile.organization_id);
-    }
-
-    // Fetch all profile sections for detailed data
-    const profileSections = {};
-    const sectionRows = req.db
-      .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
-      .all(profile.id);
-    
-    sectionRows.forEach(row => {
-      try {
-        profileSections[row.section_key] = JSON.parse(row.data || '{}');
-      } catch (e) {
-        profileSections[row.section_key] = {};
+    } else {
+      profile = profile_json
+      profileContext = { profile }
+      if (profile.organization_id) {
+        organization = req.db
+          .prepare('SELECT * FROM organizations WHERE id = ?')
+          .get(profile.organization_id) ?? null
       }
-    });
+    }
 
-    // Build comprehensive demographic signals from all sources
+    // Demographic signals for query optimization and debug logging
     const demographicSignals = buildDemographicSignals(profile, organization, profileSections);
 
     // Extract search criteria from profile
@@ -636,35 +375,43 @@ router.post('/comprehensiveMatch', async (req, res) => {
       family: [...demographicSignals.family]
     }));
     
-    // Filter out irrelevant opportunities before scoring
-    const filteredOpportunities = opportunities.filter(opp => !isIrrelevantForProfile(opp, demographicSignals));
+    const filterHints = {
+      hasHealthNeeds: demographicSignals.health && demographicSignals.health.size > 0,
+      needsTransport: demographicSignals.keywords && (demographicSignals.keywords.has('transportation') || demographicSignals.keywords.has('ride assistance')),
+    };
+    const filteredOpportunities = opportunities.filter(opp => !isJunkOpportunity(opp, filterHints));
     const hasBizIntent = detectBusinessIntent(demographicSignals);
     console.log(`[comprehensiveMatch] Filtered ${opportunities.length - filteredOpportunities.length} irrelevant opportunities, ${filteredOpportunities.length} remaining. Business intent: ${hasBizIntent}`);
 
-    // Calculate fit scores for each opportunity using comprehensive demographic signals
     const scoredOpportunities = filteredOpportunities.map(opp => {
-      // Use the new comprehensive scoring function
-      const { score: fit_score, matchedFields } = calculateMatchScore(demographicSignals, opp);
-      
-      // Filter out placeholder URLs
+      const computed = scoreOpportunity(profileContext, opp);
+
       let url = opp.url || opp.application_url;
       if (url && (url.includes('example.org') || url.includes('example.com') || url.includes('placeholder'))) {
         url = null;
       }
-      
+
+      let eligSummary = ''
+      try {
+        const bullets = typeof opp.eligibility_bullets === 'string' ? JSON.parse(opp.eligibility_bullets) : opp.eligibility_bullets
+        eligSummary = Array.isArray(bullets) ? bullets.join('; ') : (opp.eligibility_bullets || '')
+      } catch { eligSummary = opp.eligibility_bullets || '' }
+
       return {
         id: opp.id,
         source_id: opp.source_id,
         program_name: opp.title || opp.program_name,
         sponsor: opp.sponsor || opp.funder,
-        url: url,
+        url,
         deadline: opp.deadline,
-    amount_min: null,    amount_max: null,        description: opp.description || opp.summary,
-        eligibility_summary: Array.isArray(opp.eligibility_bullets) 
-          ? opp.eligibility_bullets.join('; ')
-          : (opp.eligibility_bullets || ''),
-        fit_score,
-        matched_fields: matchedFields.slice(0, 10) // Return top 10 matched fields
+        amount_min: opp.amount_min ?? null,
+        amount_max: opp.amount_max ?? null,
+        description: opp.description || opp.summary,
+        eligibility_summary: eligSummary,
+        fit_score: computed.score,
+        match_score: computed.score,
+        match_reasons: computed.reasons,
+        matched_fields: computed.reasons.slice(0, 10),
       };
     });
     
@@ -684,9 +431,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
       console.log(`[comprehensiveMatch] Top 5 scores:`, JSON.stringify(topScores));
     }
     
-    // Filter opportunities - lowered threshold to 60% for better results
-    // Veterans, disabled, and single parents should match many opportunities
-    const matchThreshold = 60;
+    const matchThreshold = 50;
     const highScoring = scoredOpportunities
       .filter(o => o.fit_score >= matchThreshold)
       .sort((a, b) => b.fit_score - a.fit_score);
