@@ -1,5 +1,6 @@
 import express from 'express';
 import { ensureProfileAccess, isAdminUser, requireAuthenticatedUser } from '../utils/accessControl.js'
+import { trustedOriginClause } from '../utils/recordOrigins.js'
 
 const router = express.Router();
 
@@ -564,9 +565,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
     // Exclude fake/synthetic sources
     conditions.push(`(source IS NULL OR source NOT IN ('comprehensive_crawler', 'synthetic', 'template', 'fake'))`);
 
-        // CRITICAL FIX: Only return records from TRUSTED sources.
-            // Old crawlers stored informational pages (CDC, MedlinePlus, NeedyMeds, etc.) as funding opportunities.
-                conditions.push("(record_origin IS NOT NULL AND record_origin IN ('curated_verified','curated_benefits','curated_program','scholarship_crawler','school_portal','grants_gov','verified_real','cof_foundation_locator'))");
+        conditions.push(trustedOriginClause());
                 
     
     const isPostgres = req.db?.dialect === 'postgres'

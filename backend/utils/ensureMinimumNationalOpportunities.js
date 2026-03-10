@@ -4,6 +4,7 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
 import { seedRealOpportunities } from './seedRealOpportunities.js'
+import { trustedOriginClause } from './recordOrigins.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -53,7 +54,7 @@ function countRealNational(db) {
           AND is_national = 1
           AND source_url IS NOT NULL
           AND source_url != ''
-          AND record_origin IN ('live_crawl','curated_verified')
+          AND ${trustedOriginClause()}
       `
     : `
         SELECT COUNT(*) AS count

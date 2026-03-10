@@ -87,6 +87,7 @@ import stripeWebhookRouter from './routes/stripeWebhook.js'
 import { seedServiceCatalogFromExtract } from './services/serviceCatalogStore.js'
 import adminServiceCatalogRouter from './routes/adminServiceCatalog.js'
 import collegesRouter from './routes/colleges.js'
+import { allowedOriginCheckSQL } from './utils/recordOrigins.js'
 
 // Validate environment variables early (fail-fast in production).
 const { env: ENV } = assertEnv()
@@ -2074,12 +2075,7 @@ if (process.env.NODE_ENV !== 'test') {
               DROP CONSTRAINT IF EXISTS funding_opportunities_record_origin_check;
             ALTER TABLE funding_opportunities
               ADD CONSTRAINT funding_opportunities_record_origin_check
-              CHECK (record_origin IN (
-                'live_crawl','curated_verified','manual','synthetic',
-                'funding_api','url_import','directory_resource',
-                'directory:health_resources','directory:student_grants',
-                'discovered','geo_crawl','seeded','imported'
-              ));
+              CHECK (${allowedOriginCheckSQL()});
           `)
           console.log('[startup] record_origin CHECK constraint verified/expanded')
         } catch (e) {

@@ -21,6 +21,7 @@
    */
 
 import pg from 'pg'
+import { UNTRUSTED_ORIGINS } from '../utils/recordOrigins.js'
 const { Client } = pg
 
 const DATABASE_URL = process.env.DATABASE_URL
@@ -31,16 +32,8 @@ if (!DATABASE_URL) {
     process.exit(1)
 }
 
-const TRUSTED_RECORD_ORIGINS = [
-    'curated_verified',
-    'curated_benefits',
-    'curated_program',
-    'scholarship_crawler',
-    'school_portal',
-    'grants_gov',
-    'verified_real',
-    'cof_foundation_locator',
-  ]
+// Blocklist approach: deactivate only explicitly untrusted origins (from shared module).
+// All other origins (including new crawler types) are considered valid.
 
 const INFORMATIONAL_TITLE_PATTERNS = [
     '%health topics%',
@@ -83,15 +76,15 @@ async function main() {
         const activeRes = await client.query('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = true')
         console.log(`\nCurrent state: ${totalRes.rows[0].count} total, ${activeRes.rows[0].count} active\n`)
 
-      // Step 2: Deactivate records without trusted record_origin
-      const originPlaceholders = TRUSTED_RECORD_ORIGINS.map((_, i) => `$${i + 1}`).join(',')
+      // Step 2: Deactivate records with explicitly untrusted origins (blocklist)
+      const originPlaceholders = UNTRUSTED_ORIGINS.map((_, i) => `$${i + 1}`).join(',')
         const untrustedRes = await client.query(
                 `UPDATE funding_opportunities
                        SET is_active = false
                               WHERE is_active = true
-                                       AND (record_origin IS NULL OR record_origin NOT IN (${originPlaceholders}))
+                                       AND record_origin IN (${originPlaceholders})
                                               RETURNING id, title, record_origin, source`,
-                TRUSTED_RECORD_ORIGINS
+                UNTRUSTED_ORIGINS
               )
         console.log(`Deactivated ${untrustedRes.rowCount} records with untrusted record_origin:`)
         for (const row of untrustedRes.rows.slice(0, 20)) {
