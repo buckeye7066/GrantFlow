@@ -306,9 +306,7 @@ async function fixMissingRoute(test, context) {
           userId: actorUserId,
           details: { route: routePath, file: routeFile, reason: 'blocked_in_production' },
         })
-        const err = new Error('Auto-route generation is disabled in production')
-        err.code = 'AUTO_ROUTE_GENERATION_DISABLED'
-        throw err
+        return { success: false, reason: 'AUTO_ROUTE_GENERATION_DISABLED' }
       }
 
       // SECURITY: auto route generation is disabled by default and never allowed in production.
