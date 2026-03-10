@@ -6,25 +6,15 @@ import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
 import { getDataReadiness } from '../services/dataReadinessService.js'
 import { checkProfileReadiness } from '../services/profileReadinessService.js'
+import { trustedOriginClause } from '../utils/recordOrigins.js'
 
 const router = express.Router()
 
 /**
-   * Only return records from TRUSTED sources.
-   * This is the critical gate that keeps informational/directory junk out of results.
-   * Old crawlers stored CDC, MedlinePlus, NeedyMeds, Patient Advocate Foundation,
-   * 211.org directory pages, etc. as "funding opportunities" — they are NOT.
+   * Junk origins (synthetic, manual) are excluded via a shared blocklist
+   * in utils/recordOrigins.js. Content-level junk (CDC, MedlinePlus, etc.)
+   * is caught by isInformationalResult() below.
    */
-const TRUSTED_RECORD_ORIGINS = [
-    'curated_verified',
-    'curated_benefits',
-    'curated_program',
-    'scholarship_crawler',
-    'school_portal',
-    'grants_gov',
-    'verified_real',
-    'cof_foundation_locator',
-  ]
 
 /**
    * Post-scoring filter: reject results that are clearly informational pages,
@@ -255,15 +245,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                              : '(is_loan = 0 OR is_loan IS NULL)',
                          )
 
-      // ════════════════════════════════════════════════════════════════════════
-      // CRITICAL FIX: Only return records from TRUSTED sources.
-      // This prevents old crawler junk (CDC pages, MedlinePlus, NeedyMeds,
-      // Patient Advocate Foundation, Medicaid directories, 211.org, etc.)
-      // from contaminating results.
-      // ════════════════════════════════════════════════════════════════════════
-      const originPlaceholders = TRUSTED_RECORD_ORIGINS.map(() => '?').join(',')
-                   conditions.push(`(record_origin IS NOT NULL AND record_origin IN (${originPlaceholders}))`)
-                   params.push(...TRUSTED_RECORD_ORIGINS)
+      conditions.push(trustedOriginClause())
 
       // Exclude synthetic/template sources
       conditions.push("(source IS NULL OR source NOT IN ('synthetic','template'))")

@@ -1,5 +1,6 @@
 import crypto from 'crypto'
 import { isValidRealUrl, isLoanLike, isMatchingFunds, enforceOpportunityPolicy } from './crawlers/opportunityPolicy.js'
+import { ALLOWED_RECORD_ORIGINS } from '../utils/recordOrigins.js'
 
 // Backward-compat alias
 const isValidHttpUrl = isValidRealUrl
@@ -44,13 +45,7 @@ function toDbBoolean(db, value) {
   return db?.dialect === 'postgres' ? bool : bool ? 1 : 0
 }
 
-// Allowed record_origin values — must match the DB CHECK constraint
-const ALLOWED_RECORD_ORIGINS = new Set([
-    'live_crawl', 'curated_verified', 'manual', 'synthetic',
-    'funding_api', 'url_import', 'directory_resource',
-    'directory:health_resources', 'directory:student_grants',
-    'discovered', 'geo_crawl', 'seeded', 'imported',
-  ])
+// ALLOWED_RECORD_ORIGINS imported from ../utils/recordOrigins.js
 
 function deriveRecordOrigin(opportunity) {
     const origin = opportunity?.record_origin
