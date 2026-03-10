@@ -18,6 +18,15 @@ const PRO_BONO_OPPORTUNITY_TYPES = new Set([
 ])
 const SERVICE_FUNDING_TYPES = new Set(['service', 'cost_coverage', 'referral'])
 
+const AMBIGUOUS_SINGLE_WORDS = new Set([
+  'food', 'care', 'home', 'house', 'school', 'community',
+  'child', 'children', 'work', 'service', 'support', 'program',
+  'help', 'need', 'general', 'special', 'local', 'national',
+  'plan', 'fund', 'grant', 'money', 'bank', 'credit', 'loan',
+  'start', 'open', 'build', 'make', 'create',
+  'resource', 'free', 'apply', 'person', 'people',
+])
+
 /**
  * Calculate deterministic match score between profile and opportunity
  * @param {Object} profile - User/organization profile
@@ -646,15 +655,6 @@ function calculateKeywordOverlap(profile, opportunity) {
   const profileKeywords = safeParseArrayField(profile.keywords, []);
   const focusAreas = safeParseArrayField(profile.focus_areas, []);
   const programAreas = safeParseArrayField(profile.program_areas, []);
-
-  const AMBIGUOUS_SINGLE_WORDS = new Set([
-    'food', 'care', 'home', 'house', 'school', 'community',
-    'child', 'children', 'work', 'service', 'support', 'program',
-    'help', 'need', 'general', 'special', 'local', 'national',
-    'plan', 'fund', 'grant', 'money', 'bank', 'credit', 'loan',
-    'start', 'open', 'build', 'make', 'create',
-    'resource', 'free', 'apply', 'person', 'people',
-  ]);
 
   const allTerms = [
     ...phraseSet,

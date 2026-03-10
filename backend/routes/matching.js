@@ -239,10 +239,16 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                              )
                      .all(...params, limit)
 
-      const healthSignals = profileContext?.signals?.health ?? profileContext?.facets?.health ?? null
+      const healthSet = profileContext?.signals?.health
+      const healthFacets = profileContext?.facets?.health ?? {}
       const kws = profileContext?.signals?.keywordSet ?? new Set()
       const filterHints = {
-              hasHealthNeeds: healthSignals ? (healthSignals.disability_types?.length > 0 || healthSignals.visual_impairment || healthSignals.hearing_impairment || kws.has('disability') || kws.has('chronic') || kws.has('mental health') || kws.has('epilepsy')) : undefined,
+              hasHealthNeeds:
+                (healthSet instanceof Set && healthSet.size > 0) ||
+                healthFacets.disability_types?.length > 0 ||
+                healthFacets.visual_impairment || healthFacets.hearing_impairment ||
+                healthFacets.chronic_illness || healthFacets.mental_health_condition ||
+                kws.has('disability') || kws.has('chronic') || kws.has('mental health') || kws.has('epilepsy'),
               needsTransport: kws.has('transportation') || kws.has('ride assistance'),
       }
 
