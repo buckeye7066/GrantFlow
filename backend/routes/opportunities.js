@@ -1,6 +1,7 @@
 import express from 'express';
 import crypto from 'crypto';
 import { isAdminUser, requireAuthenticatedUser } from '../utils/accessControl.js'
+import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 
 const router = express.Router();
 
@@ -377,6 +378,10 @@ router.get('/', async (req, res) => {
 
     const baseConditions = [`${prefix}is_active = ?`];
     const baseParams = [sqlBool(true)];
+
+    const tableAlias = hasGeoRun ? 'fo' : undefined;
+    baseConditions.push(trustedOriginClause(tableAlias));
+    baseConditions.push(trustedSourceClause(tableAlias));
 
     // Default guardrail: exclude expired fixed-deadline opportunities.
     // Keep directory-style resources regardless of deadline, and keep rolling/ongoing.
@@ -1054,6 +1059,8 @@ router.get('/geo/summary', async (req, res) => {
         FROM funding_opportunity_geo_index gi
         JOIN funding_opportunities fo ON fo.id = gi.opportunity_id
         WHERE fo.is_active = ${dialect === 'sqlite' ? '1' : 'true'}
+          AND ${trustedOriginClause('fo')}
+          AND ${trustedSourceClause('fo')}
         GROUP BY gi.state, gi.zip, gi.county
         ORDER BY gi.state ASC, gi.zip ASC
       `).all();
@@ -1067,6 +1074,7 @@ router.get('/geo/summary', async (req, res) => {
           COUNT(*) AS opportunity_count
         FROM funding_opportunities
         WHERE is_active = ${dialect === 'sqlite' ? '1' : 'true'}
+          AND ${trustedOriginClause()} AND ${trustedSourceClause()}
           AND geo_zip IS NOT NULL
           AND geo_zip != ''
         GROUP BY state, geo_zip, geo_county
@@ -1139,10 +1147,11 @@ router.get('/geo/scored', async (req, res) => {
     const parsedOffset = Math.max(0, parseInt(rawOffset, 10) || 0);
     const normalizedState = String(state).toUpperCase().trim();
 
-    // Build query
     const conditions = [
       `fo.is_active = ${dialect === 'sqlite' ? '1' : 'true'}`,
       'fo.state = ?',
+      trustedOriginClause('fo'),
+      trustedSourceClause('fo'),
     ];
     const params = [normalizedState];
 
@@ -1153,7 +1162,6 @@ router.get('/geo/scored', async (req, res) => {
 
     let rows;
     try {
-      // Prefer geo index join for per-zip data
       rows = await db.prepare(`
         SELECT DISTINCT fo.*, gi.zip AS geo_zip, gi.county AS geo_county, gi.source AS geo_source
         FROM funding_opportunities fo
@@ -1163,10 +1171,11 @@ router.get('/geo/scored', async (req, res) => {
         LIMIT ? OFFSET ?
       `).all(...params, parsedLimit, parsedOffset);
     } catch {
-      // Fallback: no geo index table
       const fallbackConditions = [
         `is_active = ${dialect === 'sqlite' ? '1' : 'true'}`,
         'state = ?',
+        trustedOriginClause(),
+        trustedSourceClause(),
       ];
       const fallbackParams = [normalizedState];
       if (geoZip) {

@@ -7,6 +7,7 @@ import { formatError } from '../middleware/errorHandler.js';
 import { validatePagination } from '../utils/validation.js';
 import { DEFAULT_OPENAI_MODEL, OPENAI_TIMEOUT_MS, MAX_PROMPT_LENGTH } from '../config/constants.js';
 import { calculateMatchScore } from '../services/matchingEngine.js';
+import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js';
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';
 import { enforceTierCapability } from '../middleware/entitlements.js'
 import { TIER_CAPABILITIES } from '../utils/tierGating.js'
@@ -122,10 +123,10 @@ router.post('/comprehensive-match', async (req, res) => {
   try {
     const { profile } = req.body
     
-    // Get all opportunities from database
     const opportunities = await req.db.prepare(`
       SELECT * FROM funding_opportunities 
       WHERE is_active = TRUE 
+      AND ${trustedOriginClause()} AND ${trustedSourceClause()}
       ORDER BY created_at DESC 
       LIMIT 100
     `).all()
@@ -210,10 +211,10 @@ router.post('/match', async (req, res) => {
     const focusAreas = safeParseJSON(profile.focus_areas, []);
     const programAreas = safeParseJSON(profile.program_areas, []);
     
-    // Get opportunities matching state or national
     let query = `
       SELECT * FROM funding_opportunities 
       WHERE is_active = TRUE 
+      AND ${trustedOriginClause()} AND ${trustedSourceClause()}
       AND (is_national = TRUE OR state = ? OR state IS NULL)
     `;
     const params = [profile.state];
@@ -361,10 +362,10 @@ router.post('/match/ai', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_AI), a
         SELECT * FROM funding_opportunities WHERE id IN (${placeholders})
       `).all(...opportunity_ids);
     } else {
-      // Get basic matches first
       opportunities = await req.db.prepare(`
         SELECT * FROM funding_opportunities 
         WHERE is_active = TRUE 
+        AND ${trustedOriginClause()} AND ${trustedSourceClause()}
         AND (is_national = TRUE OR state = ? OR state IS NULL)
         AND (deadline >= CURRENT_DATE OR deadline IS NULL OR deadline_type = 'rolling')
         LIMIT ?

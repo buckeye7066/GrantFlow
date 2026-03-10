@@ -42,10 +42,12 @@ export const UNTRUSTED_ORIGINS = ['synthetic', 'manual']
 /**
  * Returns a SQL fragment: (record_origin IS NULL OR record_origin NOT IN ('synthetic','manual'))
  * Safe for both SQLite and Postgres.
+ * @param {string} [alias] - Optional table alias, e.g. 'fo' → 'fo.record_origin'
  */
-export function trustedOriginClause() {
+export function trustedOriginClause(alias) {
+  const col = alias ? `${alias}.record_origin` : 'record_origin'
   const quoted = UNTRUSTED_ORIGINS.map(o => `'${o}'`).join(',')
-  return `(record_origin IS NULL OR record_origin NOT IN (${quoted}))`
+  return `(${col} IS NULL OR ${col} NOT IN (${quoted}))`
 }
 
 /**
@@ -57,10 +59,12 @@ export const UNTRUSTED_SOURCES = ['synthetic', 'template', 'comprehensive_crawle
 /**
  * Returns a SQL fragment for the `source` column blocklist.
  * e.g. (source IS NULL OR source NOT IN ('synthetic','template','comprehensive_crawler','fake'))
+ * @param {string} [alias] - Optional table alias, e.g. 'fo' → 'fo.source'
  */
-export function trustedSourceClause() {
+export function trustedSourceClause(alias) {
+  const col = alias ? `${alias}.source` : 'source'
   const quoted = UNTRUSTED_SOURCES.map(o => `'${o}'`).join(',')
-  return `(source IS NULL OR source NOT IN (${quoted}))`
+  return `(${col} IS NULL OR ${col} NOT IN (${quoted}))`
 }
 
 /**
