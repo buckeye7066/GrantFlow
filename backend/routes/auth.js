@@ -5,7 +5,7 @@ import jwt from 'jsonwebtoken'
 import twilio from 'twilio'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
-import { initializeAnyaForAdmin } from '../services/anyaLoginTrigger.js'
+import { initializeAnyaOnLogin } from '../services/anyaLoginTrigger.js'
 import { recordClientSignInEvent } from '../services/adminLoginEventStore.js'
 import { getOpenAIOptional } from '../utils/aiProviders.js'
 import { loadEnv, getJwtSecretOrThrow } from '../config/env.js'
@@ -1981,13 +1981,12 @@ router.post('/email/verify', async (req, res) => {
     ipAddress: req.ip,
   })
 
-  // Initialize Anya for admin users on login
+  // Initialize Anya for every user on login (crawlers scoped to their profile)
   let anyaInfo = null
   try {
-    anyaInfo = await initializeAnyaForAdmin(req.db, user, activeProfileId, { uploadDir, getOpenAI })
+    anyaInfo = await initializeAnyaOnLogin(req.db, user, activeProfileId, { uploadDir, getOpenAI })
   } catch (error) {
     console.error('[auth] Failed to initialize Anya:', error)
-    // Don't fail the login if Anya initialization fails
   }
 
   // Auto-trigger discovery crawlers on email login (fire and forget)
@@ -2007,7 +2006,6 @@ router.post('/email/verify', async (req, res) => {
     user: buildUserPayload(user, profiles, activeProfileId),
   }
 
-  // Include Anya session info if available
   if (anyaInfo) {
     response.anya = {
       session_id: anyaInfo.sessionId,
@@ -2015,9 +2013,9 @@ router.post('/email/verify', async (req, res) => {
       profile_id: anyaInfo.profileId,
     }
   }
-  
-  // Trigger Anya's autonomous operations for admin login if configured
-  if (req.db?.dialect !== 'postgres' && user.role === 'admin' && process.env.ANYA_RUN_ON_ADMIN_LOGIN === 'true') {
+
+  // Trigger Anya's autonomous scheduler for admin login if configured
+  if (user.role === 'admin' && process.env.ANYA_RUN_ON_ADMIN_LOGIN === 'true') {
     import('../services/anyaAutonomousScheduler.js')
       .then(({ runOnAdminLogin }) => {
         runOnAdminLogin(req.db, user.id).catch(err => {
@@ -2270,13 +2268,12 @@ router.post('/phone/verify', async (req, res) => {
     ipAddress: req.ip,
   })
 
-  // Initialize Anya for admin users on login
+  // Initialize Anya for every user on login (crawlers scoped to their profile)
   let anyaInfo = null
   try {
-    anyaInfo = await initializeAnyaForAdmin(req.db, user, activeProfileId, { uploadDir, getOpenAI })
+    anyaInfo = await initializeAnyaOnLogin(req.db, user, activeProfileId, { uploadDir, getOpenAI })
   } catch (error) {
     console.error('[auth] Failed to initialize Anya:', error)
-    // Don't fail the login if Anya initialization fails
   }
 
   // Auto-trigger discovery crawlers on phone login (fire and forget)

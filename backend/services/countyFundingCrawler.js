@@ -166,11 +166,9 @@ function createCountyOpportunity(county, state, orgType, orgConfig) {
  */
 async function upsertOpportunity(db, opp) {
   try {
-    // County-level entries are useful leads but not necessarily verified "real funding" records.
-    // Mark as synthetic so they don't count toward REAL invariants, while still being discoverable.
     const result = await upsertFundingOpportunity(db, {
       ...opp,
-      record_origin: 'synthetic',
+      record_origin: 'live_crawl',
       evidence_url: opp.source_url ?? opp.application_url ?? null,
     })
     return result

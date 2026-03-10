@@ -23,6 +23,14 @@ function stableIdFromUrl(url) {
 
 function hasColumn(db, tableName, columnName) {
   try {
+    if (db?.dialect === 'postgres') {
+      const row = db.prepare(`
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = ? AND column_name = ?
+        LIMIT 1
+      `).get(tableName, columnName.toLowerCase())
+      return Boolean(row)
+    }
     const cols = db.prepare(`PRAGMA table_info(${tableName})`).all()
     return cols.some((c) => String(c.name).toLowerCase() === String(columnName).toLowerCase())
   } catch {
@@ -43,15 +51,15 @@ function ensureRecordOriginColumn(db) {
 }
 
 function countRealNational(db) {
-  // REAL definition: active + national + has URL + positive classification
-  // Back-compat: if record_origin column doesn't exist yet, treat unknowns as live_crawl for counting.
+  const isPg = db?.dialect === 'postgres'
+  const activeVal = isPg ? 'TRUE' : '1'
   const hasOrigin = hasColumn(db, 'funding_opportunities', 'record_origin')
   const sql = hasOrigin
     ? `
         SELECT COUNT(*) AS count
         FROM funding_opportunities
-        WHERE is_active = 1
-          AND is_national = 1
+        WHERE is_active = ${activeVal}
+          AND is_national = ${activeVal}
           AND source_url IS NOT NULL
           AND source_url != ''
           AND ${trustedOriginClause()}
@@ -59,8 +67,8 @@ function countRealNational(db) {
     : `
         SELECT COUNT(*) AS count
         FROM funding_opportunities
-        WHERE is_active = 1
-          AND is_national = 1
+        WHERE is_active = ${activeVal}
+          AND is_national = ${activeVal}
           AND source_url IS NOT NULL
           AND source_url != ''
       `

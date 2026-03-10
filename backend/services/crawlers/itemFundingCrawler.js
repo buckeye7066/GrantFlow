@@ -583,7 +583,7 @@ export async function crawlItemFunding(profileInput, options = {}) {
                       let matchedSignals = []
 
                               if (signals) {
-                                        const result = calculateMatchScore(opp, profile)
+                                        const result = calculateMatchScore(profile, opp)
                                         matchScore = Math.max(matchScore, result.score)
                                         reasons = [...result.reasons, ...reasons]
                                         matchedSignals = result.matchedSignals || []
@@ -639,7 +639,7 @@ export async function crawlItemFunding(profileInput, options = {}) {
               let matchedSignals = []
 
                       if (signals) {
-                                const result = calculateMatchScore(opp, profile)
+                                const result = calculateMatchScore(profile, opp)
                                 matchScore = Math.max(matchScore, result.score)
                                 reasons = [...result.reasons, ...reasons]
                                 matchedSignals = result.matchedSignals || []
