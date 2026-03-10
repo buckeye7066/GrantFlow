@@ -1310,14 +1310,14 @@ registerTool({
 
     const stats = await db.prepare(`
       SELECT 
-        crawler_type,
+        type,
         COUNT(*) as total,
         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
         SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
         SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) as in_progress
       FROM crawler_jobs
       WHERE ${since24hPredicate}
-      GROUP BY crawler_type
+      GROUP BY type
     `).all()
     
     const alerts = []
@@ -1325,7 +1325,7 @@ registerTool({
     
     for (const stat of stats) {
       const failureRate = stat.total > 0 ? stat.failed / stat.total : 0
-      summary[stat.crawler_type] = {
+      summary[stat.type] = {
         total: stat.total,
         completed: stat.completed,
         failed: stat.failed,
@@ -1336,7 +1336,7 @@ registerTool({
       if (failureRate > alertThreshold && stat.total >= 3) {
         alerts.push({
           type: 'high_failure_rate',
-          crawler_type: stat.crawler_type,
+          crawler_type: stat.type,
           failure_rate: failureRate.toFixed(2),
           failed_count: stat.failed,
           total_count: stat.total,
@@ -1351,7 +1351,7 @@ registerTool({
         : `created_at < datetime('now', '-2 hours')`
 
     const stuckJobs = await db.prepare(`
-      SELECT id, crawler_type, created_at
+      SELECT id, type, created_at
       FROM crawler_jobs
       WHERE status = 'in_progress'
         AND ${stuckPredicate}
@@ -1361,7 +1361,7 @@ registerTool({
       alerts.push({
         type: 'stuck_jobs',
         count: stuckJobs.length,
-        jobs: stuckJobs.map(j => ({ id: j.id, type: j.crawler_type })),
+        jobs: stuckJobs.map(j => ({ id: j.id, type: j.type })),
       })
     }
     
@@ -2245,46 +2245,6 @@ const FULL_APPLICATION_WRITING_DIRECTIVE = `You are a seasoned grant writer with
 - If the application must be printed and mailed, provide the complete mailing address
 - If it requires fax, provide the fax number
 - If it's a portal submission, provide the portal URL and step-by-step instructions for the portal`
-
-registerTool({
-  name: 'grants.summarizeMatches',
-  description: 'Summarize the top matching grant opportunities for the current profile, with key eligibility notes.',
-  schema: {
-    type: 'object',
-    properties: {
-      limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Max matches to summarize (default: 10)' },
-      minScore: { type: 'number', minimum: 0, maximum: 100, description: 'Minimum match score (default: 50)' },
-    },
-  },
-  handler: async (params, context) => {
-    const { db, profileId } = context
-    if (!db) throw new Error('Database connection unavailable')
-
-    const limit = params.limit || 10
-    const minScore = params.minScore || 50
-
-    const opps = await db.prepare(`
-      SELECT title, sponsor, match_score, deadline, amount_description, source_url, categories
-      FROM funding_opportunities
-      WHERE is_active = ${db.dialect === 'postgres' ? 'TRUE' : '1'}
-        AND match_score >= ?
-      ORDER BY match_score DESC
-      LIMIT ?
-    `).all(minScore, limit)
-
-    return {
-      count: opps?.length || 0,
-      opportunities: (opps || []).map(o => ({
-        title: o.title,
-        sponsor: o.sponsor,
-        score: o.match_score,
-        deadline: o.deadline,
-        amount: o.amount_description,
-        url: o.source_url,
-      })),
-    }
-  },
-})
 
 // ─── Medical Necessity Tools ─────────────────────────────────────────────────
 

@@ -123,9 +123,11 @@ router.post('/comprehensive-match', async (req, res) => {
   try {
     const { profile } = req.body
     
+    const isPostgres = req.db?.dialect === 'postgres'
+    const activeVal = isPostgres ? 'TRUE' : '1'
     const opportunities = await req.db.prepare(`
       SELECT * FROM funding_opportunities 
-      WHERE is_active = TRUE 
+      WHERE is_active = ${activeVal}
       AND ${trustedOriginClause()} AND ${trustedSourceClause()}
       ORDER BY created_at DESC 
       LIMIT 100
@@ -211,11 +213,13 @@ router.post('/match', async (req, res) => {
     const focusAreas = safeParseJSON(profile.focus_areas, []);
     const programAreas = safeParseJSON(profile.program_areas, []);
     
+    const isPostgresMatch = req.db?.dialect === 'postgres'
+    const activeMatch = isPostgresMatch ? 'TRUE' : '1'
     let query = `
       SELECT * FROM funding_opportunities 
-      WHERE is_active = TRUE 
+      WHERE is_active = ${activeMatch}
       AND ${trustedOriginClause()} AND ${trustedSourceClause()}
-      AND (is_national = TRUE OR state = ? OR state IS NULL)
+      AND (is_national = ${activeMatch} OR state = ? OR state IS NULL)
     `;
     const params = [profile.state];
     
@@ -362,11 +366,13 @@ router.post('/match/ai', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_AI), a
         SELECT * FROM funding_opportunities WHERE id IN (${placeholders})
       `).all(...opportunity_ids);
     } else {
+      const isPg = req.db?.dialect === 'postgres'
+      const actVal = isPg ? 'TRUE' : '1'
       opportunities = await req.db.prepare(`
         SELECT * FROM funding_opportunities 
-        WHERE is_active = TRUE 
+        WHERE is_active = ${actVal}
         AND ${trustedOriginClause()} AND ${trustedSourceClause()}
-        AND (is_national = TRUE OR state = ? OR state IS NULL)
+        AND (is_national = ${actVal} OR state = ? OR state IS NULL)
         AND (deadline >= CURRENT_DATE OR deadline IS NULL OR deadline_type = 'rolling')
         LIMIT ?
       `).all(profile.state, limit * 2);

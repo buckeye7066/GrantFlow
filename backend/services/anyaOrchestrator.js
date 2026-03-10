@@ -1171,6 +1171,7 @@ export async function invokeTool(db, user, toolName, params, { sessionId } = {})
     user,
     db,
     sessionId,
+    profileId: user?.activeProfileId ?? user?.profile_id ?? null,
     uploadDir,
     getOpenAI,
   })

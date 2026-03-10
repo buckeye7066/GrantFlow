@@ -194,13 +194,13 @@ export default function PrintableApplicationPanel({ open, onClose, grant }) {
                     {app.addressed_to?.organization && <p className="font-semibold">{app.addressed_to.organization}</p>}
                     {app.addressed_to?.name && <p className="text-sm">{app.addressed_to.name}{app.addressed_to.title ? `, ${app.addressed_to.title}` : ''}</p>}
                     {(app.addressed_to?.address || result?.submission?.address) && (
-                      <p className="text-sm flex items-start gap-2 mt-1"><Mail className="w-4 h-4 mt-0.5" />{app.addressed_to?.address || result.submission.address}</p>
+                      <p className="text-sm flex items-start gap-2 mt-1"><Mail className="w-4 h-4 mt-0.5" />{app.addressed_to?.address || result?.submission?.address}</p>
                     )}
                     {(app.addressed_to?.fax || result?.submission?.fax) && (
-                      <p className="text-sm flex items-start gap-2 mt-1"><Phone className="w-4 h-4 mt-0.5" />Fax: {app.addressed_to?.fax || result.submission.fax}</p>
+                      <p className="text-sm flex items-start gap-2 mt-1"><Phone className="w-4 h-4 mt-0.5" />Fax: {app.addressed_to?.fax || result?.submission?.fax}</p>
                     )}
                     {(app.addressed_to?.email || result?.submission?.email) && (
-                      <p className="text-sm mt-1">Email: {app.addressed_to?.email || result.submission.email}</p>
+                      <p className="text-sm mt-1">Email: {app.addressed_to?.email || result?.submission?.email}</p>
                     )}
                   </CardContent>
                 </Card>

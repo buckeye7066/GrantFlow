@@ -343,8 +343,8 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
   
   // Build profile signals
   const signals = buildProfileSignals(profileContext)
-  const profileState = profileContext.state || profileContext.signals?.location?.state
-  const profileId = profileContext.id
+  const profileState = profileContext.profile?.state || profileContext.signals?.location?.state
+  const profileId = profileContext.profile_id || profileContext.profile?.id
   
   console.log('[comprehensiveCrawler] Profile signals:', summarizeProfileSignals(signals))
   console.log('[comprehensiveCrawler] Profile state:', profileState)

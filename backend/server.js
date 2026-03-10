@@ -2213,12 +2213,9 @@ if (process.env.NODE_ENV !== 'test') {
   }
   
   // Start Anya autonomous operations 5 seconds after server is ready.
-  // Postgres migration rollout: disable autonomous startup until all DB call sites are async-safe and
-  // boolean/int comparisons have been normalized for Postgres.
-  if (process.env.ANYA_AUTONOMOUS_ENABLED === 'true' && db.dialect === 'sqlite') {
+  if (process.env.ANYA_AUTONOMOUS_ENABLED === 'true') {
     setTimeout(() => {
       if (process.env.ANYA_RUN_ON_STARTUP === 'true') {
-        // Run full autonomous operations (code scan, tests, crawlers)
         import('./services/anyaAutonomousScheduler.js')
           .then(({ runOnStartup }) => {
             console.log('[Anya] Starting autonomous operations on server startup...');
@@ -2230,14 +2227,35 @@ if (process.env.NODE_ENV !== 'test') {
             console.error('[Anya] Failed to import autonomous scheduler:', err?.message || err);
           });
       } else {
-        // Run original crawler operations only
         runStartupOperations(db).catch(err => {
           console.error('[Anya] Failed to complete crawler operations:', err);
         });
       }
     }, 5000);
+
+    // Wire up the scheduled runner (e.g. daily at 3 AM).
+    // checkSchedule is a lightweight hour-check; call it every 30 minutes.
+    if (process.env.ANYA_RUN_ON_SCHEDULE === 'true') {
+      const SCHEDULE_CHECK_MS = 30 * 60 * 1000
+      setInterval(() => {
+        import('./services/anyaAutonomousScheduler.js')
+          .then(({ checkSchedule }) => {
+            checkSchedule(db).catch(err => {
+              console.error('[Anya] Scheduled check failed:', err?.message || err);
+            });
+          })
+          .catch(() => {});
+      }, SCHEDULE_CHECK_MS);
+      console.log('[Anya] Scheduled runner enabled (checking every 30 min)');
+    }
   } else {
-    console.log('[Anya] Autonomous operations disabled (set ANYA_AUTONOMOUS_ENABLED=true to enable)');
+    // Even without autonomous operations, run basic startup crawlers
+    setTimeout(() => {
+      runStartupOperations(db).catch(err => {
+        console.error('[Anya] Failed to complete crawler operations:', err);
+      });
+    }, 5000);
+    console.log('[Anya] Autonomous operations disabled — running basic startup crawlers only');
   }
 
   // Optional: continuous national programs crawler (Track A/B programs)

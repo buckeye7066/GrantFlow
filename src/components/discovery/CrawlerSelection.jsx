@@ -340,7 +340,7 @@ export default function CrawlerSelection({
     // Combine all successful results
     const successfulResults = allResults
       .filter(r => r.success)
-      .flatMap(r => r.data.opportunities || []);
+      .flatMap(r => r.data?.opportunities ?? []);
 
     const failedResults = allResults.filter(r => !r.success);
 

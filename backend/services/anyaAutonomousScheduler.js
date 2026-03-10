@@ -288,28 +288,34 @@ export async function runOnAdminLogin(db, userId) {
   return runAllAutonomousOperations({ db, user: { id: userId, role: 'admin' } }, 'admin_login')
 }
 
+let _lastScheduledRunDate = null
+
 /**
- * Check if operations should run on schedule
- * This would be called by a cron job or interval timer
+ * Check if operations should run on schedule.
+ * Called by a setInterval in server.js (every 30 min).
+ * Guards against double-execution within the same calendar day.
  */
 export async function checkSchedule(db) {
   if (!AUTONOMOUS_CONFIG.runOnSchedule) {
     return null
   }
   
-  // In production, you'd use a proper cron library like node-cron
-  // For now, this is a placeholder that could be called periodically
-  const hour = new Date().getHours()
-  
-  // Simple check: run at 3 AM (or configured hour)
+  const now = new Date()
+  const hour = now.getHours()
   const scheduleHour = parseInt(AUTONOMOUS_CONFIG.schedule.split(' ')[1]) || 3
   
-  if (hour === scheduleHour) {
-    console.log('[Anya Scheduler] Running scheduled operations...')
-    return runAllAutonomousOperations({ db }, 'schedule')
+  if (hour !== scheduleHour) {
+    return null
   }
-  
-  return null
+
+  const today = now.toISOString().slice(0, 10)
+  if (_lastScheduledRunDate === today) {
+    return null
+  }
+
+  _lastScheduledRunDate = today
+  console.log('[Anya Scheduler] Running scheduled operations...')
+  return runAllAutonomousOperations({ db }, 'schedule')
 }
 
 /**

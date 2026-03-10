@@ -329,7 +329,7 @@ router.post('/searchOpportunities', async (req, res) => {
     // Format results
     const results = (opportunities || []).map(opp => {
       // Filter out placeholder URLs
-      let url = opp.url || opp.application_url;null
+      let url = opp.url || opp.application_url || null
       if (url && (url.includes('example.org') || url.includes('example.com') || url.includes('placeholder'))) {
         url = null;
       }
