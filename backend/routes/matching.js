@@ -7,63 +7,15 @@ import { ensureProfileAccess } from '../utils/accessControl.js'
 import { getDataReadiness } from '../services/dataReadinessService.js'
 import { checkProfileReadiness } from '../services/profileReadinessService.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
+import { isJunkOpportunity } from '../services/contentFilter.js'
 
 const router = express.Router()
 
 /**
    * Junk origins (synthetic, manual) are excluded via a shared blocklist
    * in utils/recordOrigins.js. Content-level junk (CDC, MedlinePlus, etc.)
-   * is caught by isInformationalResult() below.
+   * is caught by the shared isJunkOpportunity() filter from services/contentFilter.js.
    */
-
-/**
-   * Post-scoring filter: reject results that are clearly informational pages,
-   * generic health directories, or resource listings rather than actual funding.
-   */
-function isInformationalResult(opp) {
-    const title = (opp.title || '').toLowerCase()
-    const desc = (opp.description || '').toLowerCase()
-    const url = (opp.url || opp.application_url || opp.source_url || '').toLowerCase()
-    const sponsor = (opp.sponsor || '').toLowerCase()
-    const combined = title + ' ' + desc
-
-  // Informational health pages (not funding)
-  const infoPatterns = [
-        'health topics', 'health information', 'medlineplus', 'health library',
-        'medical encyclopedia', 'disease information', 'condition overview',
-        'patient education', 'health topic', 'disease fact sheet',
-        'symptoms and causes', 'what is', 'about this condition',
-      ]
-    if (infoPatterns.some(p => combined.includes(p))) return true
-
-  // Informational domains
-  const infoDomains = [
-        'cdc.gov', 'medlineplus.gov', 'mayoclinic.org', 'webmd.com',
-        'healthline.com', 'wikipedia.org', 'nih.gov/health',
-        'niddk.nih.gov', 'ninds.nih.gov', 'nei.nih.gov',
-      ]
-    if (infoDomains.some(d => url.includes(d))) return true
-
-  // Generic contact/directory pages
-  const dirPatterns = [
-        'contact your state', 'find a doctor', 'find a clinic',
-        'find local help', 'connect to help', 'state contact directory',
-        'office locator', 'provider directory',
-      ]
-    if (dirPatterns.some(p => combined.includes(p))) return true
-
-  // Copay/patient assistance that are really just directories
-  const copayDirPatterns = [
-        'copay assistance', 'copay foundation', 'patient assistance program',
-        'patient advocate foundation', 'needymeds', 'pan foundation',
-        'healthwell foundation', 'rx assistance',
-      ]
-    // Only filter if it's not from a trusted source
-  if (copayDirPatterns.some(p => combined.includes(p)) &&
-            !opp.record_origin?.startsWith('curated')) return true
-
-  return false
-}
 
 function requireAuth(req, res) {
     if (!req.ctx?.userId) {
@@ -287,10 +239,16 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                              )
                      .all(...params, limit)
 
+      const healthSignals = profileContext?.signals?.health ?? profileContext?.facets?.health ?? null
+      const kws = profileContext?.signals?.keywordSet ?? new Set()
+      const filterHints = {
+              hasHealthNeeds: healthSignals ? (healthSignals.disability_types?.length > 0 || healthSignals.visual_impairment || healthSignals.hearing_impairment || kws.has('disability') || kws.has('chronic') || kws.has('mental health') || kws.has('epilepsy')) : undefined,
+              needsTransport: kws.has('transportation') || kws.has('ride assistance'),
+      }
+
       const scored = candidates
                      .map((opp) => {
-                               // Post-scoring filter: reject informational/directory pages
-                                  if (isInformationalResult(opp)) return null
+                                  if (isJunkOpportunity(opp, filterHints)) return null
 
                                   const computed = calculateMatchScore(profileContext, opp)
                                return {
