@@ -49,6 +49,21 @@ export function trustedOriginClause() {
 }
 
 /**
+ * Source values (the `source` column) that should never appear in user-facing results.
+ * Unified across matching.js and discovery.js to prevent drift.
+ */
+export const UNTRUSTED_SOURCES = ['synthetic', 'template', 'comprehensive_crawler', 'fake']
+
+/**
+ * Returns a SQL fragment for the `source` column blocklist.
+ * e.g. (source IS NULL OR source NOT IN ('synthetic','template','comprehensive_crawler','fake'))
+ */
+export function trustedSourceClause() {
+  const quoted = UNTRUSTED_SOURCES.map(o => `'${o}'`).join(',')
+  return `(source IS NULL OR source NOT IN (${quoted}))`
+}
+
+/**
  * Returns a Postgres CHECK constraint body using every allowed origin.
  * e.g. "record_origin IN ('live_crawl','curated_verified', ...)"
  */
