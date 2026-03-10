@@ -2,6 +2,7 @@ import fs from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 import crypto from 'crypto'
+import { ALLOWED_RECORD_ORIGINS } from './recordOrigins.js'
 
 function resolveBaselineSeedPath() {
   const __filename = fileURLToPath(import.meta.url)
@@ -66,8 +67,7 @@ function normalizeGrantStatus(raw) {
 
 function normalizeRecordOrigin(raw) {
   const v = String(raw ?? '').trim()
-  const allowed = new Set(['live_crawl', 'curated_verified', 'manual', 'synthetic'])
-  return allowed.has(v) ? v : 'curated_verified'
+  return ALLOWED_RECORD_ORIGINS.has(v) ? v : 'curated_verified'
 }
 
 function normalizeDocumentStatus(raw) {
