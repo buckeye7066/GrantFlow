@@ -28,6 +28,7 @@ export default function SmartMatcher() {
       const qs = new URLSearchParams()
       qs.set('min_score', String(minScore))
       qs.set('limit', '500')
+      qs.set('skip_readiness_check', '1')
       if (searchQuery?.trim()) qs.set('q', searchQuery.trim())
       return await apiFetch(`/api/matching/profile/${selectedProfileId}/opportunities?${qs.toString()}`)
     },
