@@ -6,7 +6,7 @@ import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
 import { getDataReadiness } from '../services/dataReadinessService.js'
 import { checkProfileReadiness } from '../services/profileReadinessService.js'
-import { trustedOriginClause } from '../utils/recordOrigins.js'
+import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 
 const router = express.Router()
 
@@ -247,8 +247,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
 
       conditions.push(trustedOriginClause())
 
-      // Exclude synthetic/template sources
-      conditions.push("(source IS NULL OR source NOT IN ('synthetic','template'))")
+      conditions.push(trustedSourceClause())
 
       // Keep results current
       conditions.push(

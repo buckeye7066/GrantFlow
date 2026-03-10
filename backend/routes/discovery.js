@@ -1,6 +1,6 @@
 import express from 'express';
 import { ensureProfileAccess, isAdminUser, requireAuthenticatedUser } from '../utils/accessControl.js'
-import { trustedOriginClause } from '../utils/recordOrigins.js'
+import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 
 const router = express.Router();
 
@@ -563,7 +563,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
     const params = [];
     
     // Exclude fake/synthetic sources
-    conditions.push(`(source IS NULL OR source NOT IN ('comprehensive_crawler', 'synthetic', 'template', 'fake'))`);
+    conditions.push(trustedSourceClause());
 
         conditions.push(trustedOriginClause());
                 

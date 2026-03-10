@@ -950,6 +950,7 @@ CREATE INDEX IF NOT EXISTS idx_grants_deadline ON grants(deadline);
 CREATE INDEX IF NOT EXISTS idx_opportunities_deadline ON funding_opportunities(deadline);
 CREATE INDEX IF NOT EXISTS idx_opportunities_is_active ON funding_opportunities(is_active);
 CREATE INDEX IF NOT EXISTS idx_opportunities_state ON funding_opportunities(state);
+CREATE INDEX IF NOT EXISTS idx_fo_record_origin_active ON funding_opportunities(record_origin, is_active);
 CREATE INDEX IF NOT EXISTS idx_milestones_due_date ON milestones(due_date);
 CREATE INDEX IF NOT EXISTS idx_milestones_grant_id ON milestones(grant_id);
 CREATE INDEX IF NOT EXISTS idx_documents_organization_id ON documents(organization_id);
