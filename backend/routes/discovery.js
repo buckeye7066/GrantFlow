@@ -466,7 +466,9 @@ router.post('/searchOpportunities', async (req, res) => {
     const params = [];
     const isPostgres = req.db?.dialect === 'postgres';
 
-    // Unconditional exclusion of loans and matching-required funds
+    conditions.push(trustedOriginClause());
+    conditions.push(trustedSourceClause());
+
     conditions.push(
       isPostgres
         ? '(requires_match IS NULL OR requires_match = FALSE)'
