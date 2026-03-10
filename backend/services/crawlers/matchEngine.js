@@ -223,11 +223,10 @@ function normalizeUrl(url) {
     }
 }
 
-function normalizeName(name) {
-    return (name || '').toLowerCase()
-      .replace(/[^a-z0-9]+/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+function normalizeName(name, sponsor, state) {
+    const base = (name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const suffix = [sponsor, state].filter(Boolean).map(s => String(s).toLowerCase().trim()).join('|');
+    return suffix ? `${base}||${suffix}` : base;
 }
 
 /**
@@ -245,10 +244,9 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
 
   const intents = strategyOpts.intents || detectProfileIntents(analysis);
 
-  // ── Hard gate: requiresMedicalCondition with no health signals ──
-  if (program.eligibility?.requiresMedicalCondition && analysis.health.size === 0) {
-        return null;
-  }
+  // Track eligibility mismatch penalty instead of hard-gating.
+  // Mismatches reduce score; they must not discard results entirely.
+  let eligibilityPenalty = 0;
 
   // ── Category match (most important — 40 points max) ──
   const programCats = new Set(program.categories || []);
@@ -274,13 +272,16 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
           }
     }
 
-  // Portals/referrals are general-purpose — give a baseline even with 0 category hits
+  // Portals/referrals are general-purpose — give a baseline even with 0 category hits.
+  // Non-portal programs with 0 category hits get a heavy penalty but are NOT discarded —
+  // they may still match on demographics, military, health, or other profile signals.
   if (categoryHits === 0) {
     if (program.type === 'portal' || program.type === 'referral') {
       categoryHits = 0.25;
       matchReasons.push('General assistance resource');
     } else {
-      return null;
+      eligibilityPenalty -= 20;
+      matchReasons.push('No direct category match (penalty)');
     }
   }
 
@@ -342,15 +343,18 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
           score += 5;
           matchReasons.push(`State-specific program (${program.stateRestriction}) — your state not set`);
     } else {
-          return null;
+          eligibilityPenalty -= 30;
+          matchReasons.push(`State mismatch: ${program.stateRestriction} vs ${profileState} (penalty)`);
     }
 
   // ── Applicant type match (10 points) ──
   maxPossible += 10;
     if (program.applicantType && program.applicantType !== analysis.applicantType) {
-          return null;
+          eligibilityPenalty -= 25;
+          matchReasons.push(`Applicant type: ${program.applicantType} (you: ${analysis.applicantType})`);
+    } else {
+          score += 10;
     }
-    score += 10;
 
   // ── Demographic match (10 points) ──
   maxPossible += 10;
@@ -376,7 +380,8 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
           } else if (program.eligibility?.requiresMedicalCondition ||
                                     program.eligibility?.requiresCancer ||
                                     program.eligibility?.requiresKidneyDisease) {
-                  return null;
+                  eligibilityPenalty -= 30;
+                  matchReasons.push('Requires specific medical condition (not in profile)');
           } else {
                   score += 1; // Reduced from 2 — healthcare programs with no health match deserve less
           }
@@ -384,9 +389,8 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
           score += 7;
     }
 
-  // ── Negative match penalty ──
+  // ── Negative match penalty (only hard-gate on truly disqualifying negatives) ──
   const negPenalty = computeNegativePenalty(program, analysis);
-    if (negPenalty <= -100) return null;
     score += negPenalty;
 
   // ── Military match (5 points) ──
@@ -397,7 +401,8 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
                   score += 5;
                   milHits.forEach(m => matchReasons.push(`Matches military status: ${m}`));
           } else if (program.eligibility?.requiresVeteran || program.eligibility?.requiresMilitaryConnection) {
-                  return null;
+                  eligibilityPenalty -= 30;
+                  matchReasons.push('Requires veteran/military status (not in profile)');
           } else {
                   score += 1;
           }
@@ -413,7 +418,8 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
                   score += 5;
                   famHits.forEach(f => matchReasons.push(`Matches family status: ${f}`));
           } else if (program.eligibility?.requiresChildren) {
-                  return null;
+                  eligibilityPenalty -= 20;
+                  matchReasons.push('Requires children/dependents (not in profile)');
           }
     } else {
           score += 3;
@@ -443,7 +449,8 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
                 }
                 score += Math.min(10, eduScore);
         } else if (program.eligibility?.requiresStudent) {
-                return null;
+                eligibilityPenalty -= 25;
+                matchReasons.push('Requires student status (not in profile)');
         }
   }
 
@@ -473,7 +480,8 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
                         interestScore += 3;
                         matchReasons.push(`${program.sportGender === 'any' ? 'Athletic' : program.sportGender.charAt(0).toUpperCase() + program.sportGender.slice(1)} sports match`);
               } else if (program.sportGender && !genderMatch) {
-                        return null;
+                        eligibilityPenalty -= 20;
+                        matchReasons.push(`Sport gender mismatch: requires ${program.sportGender}`);
               }
       }
 
@@ -508,7 +516,8 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
                 score += 5;
                 occHits.forEach(o => matchReasons.push(`Matches occupation: ${o}`));
         } else if (program.eligibility?.requiresOccupation) {
-                return null;
+                eligibilityPenalty -= 25;
+                matchReasons.push('Requires specific occupation (not in profile)');
         }
   }
 
@@ -520,7 +529,8 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
                 score += 5;
                 immHits.forEach(i => matchReasons.push(`Matches immigration status: ${i}`));
         } else if (program.eligibility?.requiresImmigrationStatus) {
-                return null;
+                eligibilityPenalty -= 25;
+                matchReasons.push('Requires specific immigration status (not in profile)');
         }
   }
 
@@ -556,8 +566,11 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
         score += 5;
   }
 
+  // ── Apply accumulated eligibility penalties ──
+  score += eligibilityPenalty;
+
   // ── Normalize to 0-100 ──
-  const normalizedScore = Math.round(Math.min(100, (score / maxPossible) * 100));
+  const normalizedScore = Math.max(0, Math.round(Math.min(100, (score / maxPossible) * 100)));
 
   // Build matched signals list
   const matchedSignals = [];
@@ -628,8 +641,7 @@ export function matchPrograms(allPrograms, analysis, options = {}) {
     if (normUrl && seenUrls.has(normUrl)) { stats.dupUrl++; continue; }
     if (normUrl) seenUrls.add(normUrl);
 
-    // Dedup by name
-    const normName = normalizeName(program.name);
+    const normName = normalizeName(program.name, program.sponsor, program.stateRestriction);
     if (normName && seenNames.has(normName)) { stats.dupName++; continue; }
     if (normName) seenNames.add(normName);
 
