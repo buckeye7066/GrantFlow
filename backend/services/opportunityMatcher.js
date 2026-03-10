@@ -66,18 +66,18 @@ export async function saveToProfilePipeline(
     }
 
     // Check if already in pipeline (profile-scoped idempotency).
-        const existing = await db
-              .prepare(
-                      `
-                                SELECT id
-                                          FROM grants
-                                                    WHERE profile_id = ?
-                                                                AND (funding_opportunity_id = ? OR title = ?)
-                                                                          LIMIT 1
-                                                                                  `,
-                                                                                        )
-                                                                                              .get(profileId, opportunity.id, opportunity.title)
-                                                                                              
+    const existing = await db
+      .prepare(
+        `
+          SELECT id
+          FROM grants
+          WHERE profile_id = ?
+            AND (funding_opportunity_id = ? OR title = ?)
+          LIMIT 1
+        `,
+      )
+      .get(profileId, opportunity.id, opportunity.title)
+
     if (existing) {
       return {
         saved: false,
@@ -196,7 +196,7 @@ export async function trackGlobalOpportunity(db, opportunity) {
 /**
  * Process crawled opportunities and save appropriately
  */
-export async function processCrawledOpportunities(db, opportunities, profileId, profileContext) {
+export async function processCrawledOpportunities(db, opportunities, profileId, profileContext, minMatchThreshold = 80) {
   const results = {
     total: opportunities.length,
     savedToPipeline: 0,
@@ -208,9 +208,9 @@ export async function processCrawledOpportunities(db, opportunities, profileId, 
     // Calculate match percentage
     const matchPercentage = calculateMatchPercentage(opportunity, profileContext)
     
-    // Save to pipeline if > 80% match
-    if (matchPercentage >= 80) {
-      const pipelineResult = await saveToProfilePipeline(db, opportunity, profileId, profileContext, matchPercentage)
+    // Save to pipeline if match meets threshold
+    if (matchPercentage >= minMatchThreshold) {
+      const pipelineResult = await saveToProfilePipeline(db, opportunity, profileId, profileContext, matchPercentage, minMatchThreshold)
       if (pipelineResult.saved) {
         results.savedToPipeline++
         results.matches.push({
@@ -226,7 +226,7 @@ export async function processCrawledOpportunities(db, opportunities, profileId, 
   }
   
   console.log(`[opportunityMatcher] Processed ${results.total} opportunities:`)
-  console.log(`  - ${results.savedToPipeline} saved to pipeline (>80% match)`)
+  console.log(`  - ${results.savedToPipeline} saved to pipeline (≥${minMatchThreshold}% match)`)
   console.log(`  - ${results.savedGlobally} saved globally`)
   
   return results
