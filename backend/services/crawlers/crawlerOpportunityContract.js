@@ -1,3 +1,5 @@
+import { ALLOWED_RECORD_ORIGINS } from '../../utils/recordOrigins.js'
+
 function normalizeString(value) {
   if (typeof value !== 'string') return ''
   return value.trim()
@@ -231,12 +233,7 @@ export function enforceCrawlerOpportunityContract(
   return normalized
 }
 
-const ALLOWED_RECORD_ORIGINS = new Set([
-  'live_crawl', 'curated_verified', 'manual', 'synthetic',
-  'funding_api', 'url_import', 'directory_resource',
-  'directory:health_resources', 'directory:student_grants',
-  'discovered', 'geo_crawl', 'seeded', 'imported',
-])
+// ALLOWED_RECORD_ORIGINS imported from ../../utils/recordOrigins.js
 
 export function normalizeRecordOrigin(value) {
   if (typeof value === 'string' && ALLOWED_RECORD_ORIGINS.has(value)) return value
