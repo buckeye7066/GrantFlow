@@ -385,19 +385,33 @@ async function searchWebForItem(itemRequest, profile) {
           queries.push(`"${itemRequest}" program ${state}`)
     }
 
-  // Demographic-enhanced queries
+  // Profile-enhanced queries: use ALL available signals for targeted searches
   if (signals?.military?.size > 0) {
-        queries.push(`"${itemRequest}" veteran`)
+    queries.push(`"${itemRequest}" veteran`)
   }
-    if (signals?.assistance?.has('low_income')) {
-          queries.push(`"${itemRequest}" low income`)
-    }
-    if (signals?.health?.size > 0) {
-          queries.push(`"${itemRequest}" disability`)
-    }
+  if (signals?.assistance instanceof Set && (signals.assistance.has('low_income') || signals.assistance.has('ssi_recipient') || signals.assistance.has('snap_recipient'))) {
+    queries.push(`"${itemRequest}" low income assistance`)
+  }
+  if (signals?.health?.size > 0) {
+    queries.push(`"${itemRequest}" disability`)
+  }
+  if (signals?.family instanceof Set) {
+    if (signals.family.has('single_parent')) queries.push(`"${itemRequest}" single parent`)
+    if (signals.family.has('foster_youth')) queries.push(`"${itemRequest}" foster youth`)
+    if (signals.family.has('homeless')) queries.push(`"${itemRequest}" homeless`)
+  }
+  if (signals?.demographics instanceof Set) {
+    if (signals.demographics.has('senior')) queries.push(`"${itemRequest}" senior elderly`)
+    if (signals.demographics.has('youth') || signals.demographics.has('young_adult')) queries.push(`"${itemRequest}" youth`)
+  }
+  const applicantTypes = signals?.applicantTypes
+  if (applicantTypes instanceof Set && applicantTypes.has('student')) {
+    queries.push(`"${itemRequest}" student scholarship`)
+  }
 
-  // Run searches (cap at 6 to stay within timeout)
-  const searchPromises = queries.slice(0, 6).map(async (query) => {
+  // Run searches (cap at 8 to cover more profile dimensions)
+  // (increased from 6 since we now have richer, more targeted queries)
+  const searchPromises = queries.slice(0, 8).map(async (query) => {
         try {
                 const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`
 

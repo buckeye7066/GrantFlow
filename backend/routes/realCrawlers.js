@@ -5,6 +5,8 @@ import { ensureProfileAccess } from '../utils/accessControl.js'
 import { expandNeed, scoreNeedMatch } from '../services/crawlers/needTaxonomy.js'
 import { getStrategy, listStrategies } from '../services/crawlers/strategyRegistry.js'
 import { searchWebForItem, KNOWN_ITEM_SOURCES, parseItemRequest } from '../services/crawlers/itemFundingCrawler.js'
+import { loadProfileContext } from '../services/profileHelpers.js'
+import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 
 const router = express.Router()
 
@@ -511,16 +513,14 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
         }
       }
 
-      // Live DuckDuckGo web search for the specific need
-      const profileRow = await db.prepare('SELECT * FROM profiles WHERE id = ?').get(profile_id)
-      const basicInfo = (() => { try { return typeof profileRow?.basic_information === 'string' ? JSON.parse(profileRow.basic_information) : (profileRow?.basic_information || {}) } catch { return {} } })()
-      const webProfile = {
-        signals: {
-          location: { state: basicInfo.state, city: basicInfo.city },
-          military: new Set(),
-          assistance: new Set(),
-          health: new Set(),
-        },
+      // Live DuckDuckGo web search — use real profile signals for targeted queries
+      let webProfile
+      try {
+        const ctx = await loadProfileContext(db, profile_id)
+        const enriched = buildProfileFacets(ctx)
+        webProfile = { signals: enriched.signals, profile: enriched.profile }
+      } catch {
+        webProfile = { signals: { location: {}, military: new Set(), assistance: new Set(), health: new Set() } }
       }
       const webResults = await searchWebForItem(need_text, webProfile)
       console.log(`[specific-need] Web search for "${need_text}" found ${webResults.length} results`)

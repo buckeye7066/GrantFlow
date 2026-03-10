@@ -318,6 +318,36 @@ function profileSignalTerms(facets = {}, crawlerType = 'comprehensive') {
   if (org.organization_type === 'church' || org.organization_type === 'faith_based') addIf(orgW, 'faith based organization grant')
   if (org.organization_type === 'school') addIf(orgW, 'school district grant')
 
+  // Immigration status
+  const immigration = facets?.immigration ?? facets?.demographics ?? {}
+  if (immigration.refugee) addIf(0.8, 'refugee resettlement assistance')
+  if (immigration.new_immigrant || immigration.immigrant_status === 'new_immigrant') addIf(0.7, 'immigrant assistance program')
+  if (immigration.permanent_resident) addIf(0.5, 'permanent resident benefits')
+
+  // Geographic qualifiers
+  const geo = facets?.geographic ?? facets?.location_focus ?? {}
+  if (geo.rural_resident || geo.rural) addIf(0.7, 'rural community grant')
+  if (geo.appalachian_region || geo.appalachian) addIf(0.7, 'appalachian community program')
+  if (geo.urban_underserved) addIf(0.6, 'urban underserved assistance')
+  if (geo.tribal_land) addIf(0.7, 'tribal community grant')
+
+  // Occupation-specific (beyond teacher/nurse handled by intentDisambiguation)
+  const occFacet = facets?.occupation ?? {}
+  if (occFacet.farmer) addIf(0.7, 'farmer grant USDA')
+  if (occFacet.firefighter) addIf(0.6, 'firefighter assistance program')
+  if (occFacet.law_enforcement) addIf(0.6, 'law enforcement grant')
+  if (occFacet.clergy || occFacet.missionary) addIf(0.5, 'faith worker assistance')
+  if (occFacet.truck_driver) addIf(0.5, 'CDL driver assistance program')
+
+  // Family situations not yet covered
+  if (fam.homeless) addIf(0.8, 'homeless shelter assistance')
+  if (fam.formerly_incarcerated) addIf(0.8, 'reentry program formerly incarcerated')
+  if (fam.domestic_violence_survivor) addIf(0.8, 'domestic violence survivor assistance')
+  if (fam.trafficking_survivor) addIf(0.8, 'trafficking survivor services')
+  if (fam.caregiver) addIf(famW, 'family caregiver support program')
+  if (fam.grandparent_raising_grandchildren) addIf(famW, 'grandparent kinship care assistance')
+  if (fam.disaster_survivor) addIf(0.7, 'disaster relief assistance')
+
   return {
     mustTerms: uniqueStrings(mustTerms).slice(0, 8),
     shouldTerms: uniqueStrings(shouldTerms).slice(0, 16),
