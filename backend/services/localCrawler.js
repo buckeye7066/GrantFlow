@@ -352,6 +352,7 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
         state: opp.state,
         source: 'local_foundation',
         source_id: opp.id,
+        record_origin: 'live_crawl',
         match_reasons: opp.match_reasons
       })
       
