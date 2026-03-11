@@ -68,7 +68,7 @@ async function auditLog(entry, context) {
  * @param {number} options.maxRetries - Maximum retries for failed jobs (default: 3)
  * @param {boolean} options.waitForCompletion - Wait for jobs to complete (default: false)
  * @param {number} options.timeoutMinutes - Timeout for job completion in minutes (default: 30)
- * @param {number} options.matchThreshold - Match percentage threshold for profile pipeline (default: 80)
+ * @param {number} options.matchThreshold - Match percentage threshold for profile pipeline (default: 55)
  * @param {boolean} options.saveAllToGlobal - Save all opportunities to global page (default: true)
  * @param {Object} context - Database and user context
  */
@@ -424,7 +424,7 @@ async function saveHighMatchesToProfile(options, context) {
   
   try {
     const thresholdNum = Number(matchThreshold)
-    const threshold = Number.isFinite(thresholdNum) ? Math.max(0, Math.min(100, thresholdNum)) : 80
+    const threshold = Number.isFinite(thresholdNum) ? Math.max(0, Math.min(100, thresholdNum)) : 55
 
     // Get the crawler job
     const job = db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)

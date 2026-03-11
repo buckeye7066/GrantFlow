@@ -8,6 +8,7 @@ import fs from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { upsertFundingOpportunity } from './opportunityInserter.js'
+import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import {
   buildProfileSignals,
   summarizeProfileSignals,
@@ -164,7 +165,8 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
       SELECT * FROM funding_opportunities 
       WHERE ${activePredicate}
       AND ${noMatchPredicate}
-      AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
+      AND ${trustedOriginClause()}
+      AND ${trustedSourceClause()}
       AND (${keywordConditions})
       LIMIT 50
     `).all(...keywordParams) || []

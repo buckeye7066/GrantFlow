@@ -2,15 +2,13 @@
  * profileSignals/index.js
  *
  * THE single canonical module for extracting profile signals.
- * Wraps profileAnalyzer and adds:
- *   - rawInputs (safe subset of raw sections for debugging)
- *   - intents (derived from signals for strategy routing)
- *   - assistancePrograms (currently enrolled gov programs)
+ * Uses loadProfileContext (the unified pipeline) and adapts its output
+ * to the shape crawlerManager / matchEngine expect.
  *
  * Every crawler MUST use this module; duplicate extraction logic is forbidden.
  */
 
-import { analyzeProfile } from '../crawlers/profileAnalyzer.js';
+import { loadProfileContext } from '../profileHelpers.js';
 
 /**
  * Detect high-level intents from analyzed signals.
@@ -160,6 +158,45 @@ function buildRawInputs(profile, sections) {
 }
 
 /**
+ * Adapt loadProfileContext signals to the analysis shape crawlerManager expects.
+ * This is the bridge that lets us use ONE extraction pipeline everywhere.
+ */
+function toAnalysisShape(profileContext) {
+  const s = profileContext.signals || {}
+  return {
+    profileId: profileContext.profile_id || profileContext.profile?.id,
+    profileName: profileContext.profile?.display_name || profileContext.profile?.name || null,
+    location: s.location || {},
+    applicantType: s.applicantType || 'individual',
+    needs: s.needs || new Set(),
+    demographics: s.demographics || new Set(),
+    health: s.health || new Set(),
+    family: s.family || new Set(),
+    military: s.military || new Set(),
+    occupation: s.occupation || new Set(),
+    immigration: s.immigration || new Set(),
+    geographic: s.geographic || new Set(),
+    income: s.financial || {},
+    education: s.education || {},
+    interests: s.interests || new Set(),
+    sports: s.sports || new Set(),
+    schools: s.schools || [],
+    organization: s.organization || {},
+    keywords: s.keywords || [],
+    keywordSet: s.keywordSet || new Set(),
+    phrases: s.phrases || new Set(),
+    intentPhrases: s.intentPhrases || new Set(),
+    applicantTypes: s.applicantTypes || new Set(),
+    assistance: s.assistance || new Set(),
+    genders: s.genders || new Set(),
+    academics: s.academics || {},
+    proBonoTerms: s.proBonoTerms || new Set(),
+    coverage: s.coverage || {},
+    rawSections: s.rawSections || {},
+  }
+}
+
+/**
  * Load ALL profile data and produce canonical signals.
  *
  * @param {Object} db - Database handle
@@ -167,62 +204,16 @@ function buildRawInputs(profile, sections) {
  * @returns {{ signals, intents, assistancePrograms, rawInputs }}
  */
 export async function loadProfileSignals(db, profileId) {
-  const profile = await db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId);
-  if (!profile) throw new Error(`Profile not found: ${profileId}`);
+  const profileContext = await loadProfileContext(db, profileId)
+  const signals = toAnalysisShape(profileContext)
+  const sections = profileContext.sections || {}
+  const profile = profileContext.profile || {}
 
-  const rows = await db.prepare(
-    'SELECT section_key, data FROM profile_sections WHERE profile_id = ?'
-  ).all(profileId);
+  const intents = deriveIntents(signals)
+  const assistancePrograms = extractAssistancePrograms(sections)
+  const rawInputs = buildRawInputs(profile, sections)
 
-  const sections = {};
-  for (const r of (rows || [])) {
-    try {
-      sections[r.section_key] = typeof r.data === 'string' ? JSON.parse(r.data) : r.data;
-    } catch { /* skip unparseable */ }
-  }
-
-  // Fallback: when profile_sections is empty, hydrate from profiles table columns
-  if (Object.keys(sections).length === 0) {
-    const COL_MAP = {
-      basic_information: 'basic_information',
-      education_information: 'education',
-      employment_information: 'employment',
-      health_information: 'health_medical',
-      financial_information: 'financial_information',
-      housing_information: 'housing',
-    };
-    for (const [col, secKey] of Object.entries(COL_MAP)) {
-      if (profile[col]) {
-        try {
-          const parsed = typeof profile[col] === 'string' ? JSON.parse(profile[col]) : profile[col];
-          if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
-            sections[secKey] = parsed;
-            if (col === 'employment_information' && !sections.occupation) {
-              sections.occupation = parsed;
-            }
-          }
-        } catch { /* skip */ }
-      }
-    }
-    if (profile.additional_information) {
-      try {
-        const addl = typeof profile.additional_information === 'string'
-          ? JSON.parse(profile.additional_information) : profile.additional_information;
-        if (addl && typeof addl === 'object') {
-          if (!sections.family_life) sections.family_life = addl;
-          if (!sections.military_service && (addl.veteran !== undefined || addl.active_duty !== undefined))
-            sections.military_service = addl;
-        }
-      } catch { /* skip */ }
-    }
-  }
-
-  const signals = await analyzeProfile(db, { ...profile, sections });
-  const intents = deriveIntents(signals);
-  const assistancePrograms = extractAssistancePrograms(sections);
-  const rawInputs = buildRawInputs(profile, sections);
-
-  return { signals, intents, assistancePrograms, rawInputs };
+  return { signals, intents, assistancePrograms, rawInputs, profileContext }
 }
 
 export default { loadProfileSignals };

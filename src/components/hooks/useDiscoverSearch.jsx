@@ -53,9 +53,9 @@ export function useDiscoverSearch() {
       // Invoke the search function
       const response = await base44.functions.invoke('searchOpportunities', payload);
 
-      // Check if the function succeeded
-      if (response.status === 200 && response.data?.success) {
-        const results = response.data.results || [];
+      // response is the parsed JSON body (apiFetch throws on non-2xx)
+      if (response?.success) {
+        const results = response.results || [];
         log.debug('search complete', { results: results.length })
         
         set({
@@ -63,11 +63,11 @@ export function useDiscoverSearch() {
           results: results,
           progress: 1,
           error: null,
-          nextCursor: null,
+          nextCursor: response.paging?.nextCursor ?? null,
         });
       } else {
-        console.error('[useDiscoverSearch] Function returned error:', response.data);
-        handleError(response.data || { message: 'Search failed' });
+        console.error('[useDiscoverSearch] Function returned error:', response);
+        handleError(response || { message: 'Search failed' });
       }
 
     } catch (err) {
@@ -89,15 +89,15 @@ export function useDiscoverSearch() {
         
         const response = await base44.functions.invoke('searchOpportunities', loadMorePayload);
         
-        if(response.status === 200 && response.data.success) {
+        if (response?.success) {
             set(s => ({
                 ...s,
                 phase: 'done',
-                results: [...s.results, ...(response.data.results || [])],
-                nextCursor: response.data.paging?.nextCursor,
+                results: [...s.results, ...(response.results || [])],
+                nextCursor: response.paging?.nextCursor ?? null,
             }));
         } else {
-            handleError(response.data);
+            handleError(response || { message: 'Load more failed' });
         }
 
     } catch(err) {

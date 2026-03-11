@@ -179,11 +179,10 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       const baseContext = await loadProfileContext(req.db, profileId)
                    const profileContext = buildProfileFacets(baseContext)
 
-      const conditions = ['is_active = ?']
-                   const params = []
-                         params.push(true)
-
       const isPostgres = req.db?.dialect === 'postgres'
+      const activeVal = isPostgres ? 'TRUE' : '1'
+      const conditions = [`is_active = ${activeVal}`]
+      const params = []
 
       // Unconditional exclusion of loans and matching-required funds.
       conditions.push(
@@ -200,6 +199,14 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       conditions.push(trustedOriginClause())
 
       conditions.push(trustedSourceClause())
+
+      // Geographic pre-filter: only load opps in the profile's state, national, or unspecified.
+      const profileState = profileContext?.signals?.location?.state || profileContext?.profile?.state
+      if (profileState) {
+        const natVal = isPostgres ? 'TRUE' : '1'
+        conditions.push(`(state = ? OR state = 'nationwide' OR state IS NULL OR is_national = ${natVal})`)
+        params.push(profileState)
+      }
 
       // Keep results current
       conditions.push(
@@ -252,7 +259,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               needsTransport: kws.has('transportation') || kws.has('ride assistance'),
       }
 
-      const scored = candidates
+      const allScored = candidates
                      .map((opp) => {
                                   if (isJunkOpportunity(opp, filterHints)) return null
 
@@ -265,16 +272,39 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                                }
                      })
                      .filter((opp) => opp !== null)
-                     .filter((opp) => (Number.isFinite(minScore) ? (opp.match_score ?? 0) >= minScore : true))
 
-      scored.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+      allScored.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+
+      let scored = Number.isFinite(minScore)
+        ? allScored.filter((opp) => (opp.match_score ?? 0) >= minScore)
+        : allScored
+
+      // Zero-results fallback: progressively lower threshold so users always see results.
+      let effectiveMinScore = minScore
+      if (scored.length === 0 && allScored.length > 0) {
+        const fallbackThresholds = [30, 15, 0]
+        for (const threshold of fallbackThresholds) {
+          scored = allScored.filter((opp) => (opp.match_score ?? 0) >= threshold)
+          if (scored.length > 0) {
+            effectiveMinScore = threshold
+            console.log(`[matching] Zero results at min_score=${minScore}; relaxed to ${threshold} (${scored.length} results)`)
+            break
+          }
+        }
+        if (scored.length === 0) {
+          scored = allScored.slice(0, 20)
+          effectiveMinScore = 0
+          console.log(`[matching] All thresholds exhausted; returning top ${scored.length} of ${allScored.length}`)
+        }
+      }
 
       res.json({
               profile_id: profileId,
-              min_score: Number.isFinite(minScore) ? minScore : null,
+              min_score: Number.isFinite(effectiveMinScore) ? effectiveMinScore : null,
               total_scored: candidates.length,
               returned: scored.length,
               opportunities: scored,
+              threshold_relaxed: effectiveMinScore !== minScore ? true : undefined,
       })
              } catch (error) {
                    console.error('Error matching profile to opportunities:', error)

@@ -20,7 +20,7 @@ function calculateMatchPercentage(opportunity, profileContext) {
 /**
  * Save opportunity to profile pipeline if match >= threshold.
  *
- * Back-compat: `minMatchThreshold` defaults to 80 to preserve prior behavior.
+ * `minMatchThreshold` defaults to 55 to capture solid matches without being too strict.
  */
 export async function saveToProfilePipeline(
   db,
@@ -28,7 +28,7 @@ export async function saveToProfilePipeline(
   profileId,
   profileContext,
   matchPercentage = null,
-  minMatchThreshold = 80,
+  minMatchThreshold = 55,
 ) {
   try {
     // Calculate match if not provided
@@ -37,7 +37,7 @@ export async function saveToProfilePipeline(
     }
     
     const thresholdNum = Number(minMatchThreshold)
-    const threshold = Number.isFinite(thresholdNum) ? Math.max(0, Math.min(100, thresholdNum)) : 80
+    const threshold = Number.isFinite(thresholdNum) ? Math.max(0, Math.min(100, thresholdNum)) : 55
 
     // Only save to pipeline if match meets threshold
     if (matchPercentage < threshold) {
@@ -152,7 +152,7 @@ export async function saveToProfilePipeline(
     const msg = String(error?.message || '')
     if (msg.toLowerCase().includes('unique') || msg.toLowerCase().includes('duplicate')) {
       const thresholdNum = Number(minMatchThreshold)
-      const threshold = Number.isFinite(thresholdNum) ? Math.max(0, Math.min(100, thresholdNum)) : 80
+      const threshold = Number.isFinite(thresholdNum) ? Math.max(0, Math.min(100, thresholdNum)) : 55
       return { saved: false, reason: 'Already in pipeline', matchPercentage, threshold }
     }
     return {
@@ -196,7 +196,7 @@ export async function trackGlobalOpportunity(db, opportunity) {
 /**
  * Process crawled opportunities and save appropriately
  */
-export async function processCrawledOpportunities(db, opportunities, profileId, profileContext, minMatchThreshold = 80) {
+export async function processCrawledOpportunities(db, opportunities, profileId, profileContext, minMatchThreshold = 55) {
   const results = {
     total: opportunities.length,
     savedToPipeline: 0,
@@ -208,7 +208,6 @@ export async function processCrawledOpportunities(db, opportunities, profileId, 
     // Calculate match percentage
     const matchPercentage = calculateMatchPercentage(opportunity, profileContext)
     
-    // Save to pipeline if match meets threshold
     if (matchPercentage >= minMatchThreshold) {
       const pipelineResult = await saveToProfilePipeline(db, opportunity, profileId, profileContext, matchPercentage, minMatchThreshold)
       if (pipelineResult.saved) {
@@ -226,7 +225,7 @@ export async function processCrawledOpportunities(db, opportunities, profileId, 
   }
   
   console.log(`[opportunityMatcher] Processed ${results.total} opportunities:`)
-  console.log(`  - ${results.savedToPipeline} saved to pipeline (≥${minMatchThreshold}% match)`)
+  console.log(`  - ${results.savedToPipeline} saved to pipeline (>=${minMatchThreshold}% match)`)
   console.log(`  - ${results.savedGlobally} saved globally`)
   
   return results

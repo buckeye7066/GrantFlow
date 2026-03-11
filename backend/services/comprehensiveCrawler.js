@@ -9,6 +9,7 @@ import fs from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { upsertFundingOpportunity } from './opportunityInserter.js'
+import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import {
   buildProfileSignals,
   summarizeProfileSignals,
@@ -178,7 +179,7 @@ export async function processComprehensiveCrawlerJob({ db, job, dataDir, profile
   console.log('[comprehensiveCrawler] Starting with real opportunities...')
   
   const parameters = job.parameters ?? {}
-  const matchThreshold = parameters.match_threshold || 80
+  const matchThreshold = parameters.match_threshold || 50
   const maxResults = parameters.max_results || 50
   
   // Build profile signals
@@ -202,7 +203,8 @@ export async function processComprehensiveCrawlerJob({ db, job, dataDir, profile
           FROM funding_opportunities
           WHERE is_active IS TRUE
             AND (requires_match IS FALSE OR requires_match IS NULL)
-            AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
+            AND ${trustedOriginClause()}
+            AND ${trustedSourceClause()}
           ORDER BY created_at DESC
           LIMIT 200
         `
@@ -211,7 +213,8 @@ export async function processComprehensiveCrawlerJob({ db, job, dataDir, profile
           FROM funding_opportunities
           WHERE is_active = 1
             AND (requires_match = 0 OR requires_match IS NULL)
-            AND source NOT IN ('comprehensive_crawler', 'synthetic', 'template')
+            AND ${trustedOriginClause()}
+            AND ${trustedSourceClause()}
           ORDER BY created_at DESC
           LIMIT 200
         `

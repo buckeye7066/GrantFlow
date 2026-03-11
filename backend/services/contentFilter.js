@@ -24,8 +24,12 @@ const INFO_DOMAINS = [
 
 const DIRECTORY_PATTERNS = [
   'contact your state', 'find a doctor', 'find a clinic',
-  'find local help', 'connect to help', 'state contact directory',
-  'office locator', 'provider directory',
+  'state contact directory', 'office locator', 'provider directory',
+]
+
+const FUNDING_RESCUE_TERMS = [
+  'grant', 'funding', 'scholarship', 'financial assistance',
+  'financial aid', 'subsidy', 'award', 'stipend', 'benefit',
 ]
 
 const COPAY_PATTERNS = [
@@ -65,8 +69,9 @@ export function isJunkOpportunity(opp, hints = {}) {
   // 2. Informational domains — always junk
   if (INFO_DOMAINS.some(d => url.includes(d))) return true
 
-  // 3. Generic contact/directory pages — always junk
-  if (DIRECTORY_PATTERNS.some(p => combined.includes(p))) return true
+  // 3. Generic contact/directory pages — junk UNLESS they mention real funding terms
+  const isDirectoryPage = DIRECTORY_PATTERNS.some(p => combined.includes(p))
+  if (isDirectoryPage && !FUNDING_RESCUE_TERMS.some(t => combined.includes(t))) return true
 
   // 4. Copay/patient assistance programs
   //    - If profile HAS health needs: keep them (they're real assistance)

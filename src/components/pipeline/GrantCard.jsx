@@ -71,8 +71,10 @@ export default function GrantCard({ grant, organization, organizationName, onSta
   const isDeadlineValid = deadlineDate && !isNaN(deadlineDate.getTime());
   const isExpired = isDeadlineValid && isPast(deadlineDate) && grant.deadline.toLowerCase() !== 'rolling';
 
+  // Normalize snake_case eligibility_bullets from backend to camelCase
+  const eligibilityBullets = grant.eligibilityBullets ?? grant.eligibility_bullets ?? [];
   // Check if this is a discovery result (from FundingOpportunity entity)
-  const isDiscoveryResult = grant.descriptionMd || grant.eligibilityBullets;
+  const isDiscoveryResult = grant.descriptionMd || eligibilityBullets.length > 0;
   const hasSummary = grant.descriptionMd && grant.descriptionMd.length > 0;
 
   // Get match score - prefer 'match' over 'match_score'
@@ -215,16 +217,16 @@ export default function GrantCard({ grant, organization, organizationName, onSta
           )}
 
           {/* Eligibility Bullets */}
-          {showSummary && grant.eligibilityBullets && grant.eligibilityBullets.length > 0 && (
+          {showSummary && eligibilityBullets.length > 0 && (
             <div className="mt-2 space-y-1">
-              {grant.eligibilityBullets.slice(0, 2).map((bullet, idx) => (
+              {eligibilityBullets.slice(0, 2).map((bullet, idx) => (
                 <div key={idx} className="flex items-start gap-1">
                   <CheckSquare className="w-3 h-3 text-emerald-600 mt-0.5 shrink-0" />
                   <span className="text-xs text-slate-600 line-clamp-1">{bullet}</span>
                 </div>
               ))}
-              {grant.eligibilityBullets.length > 2 && (
-                <span className="text-xs text-slate-500 italic">+{grant.eligibilityBullets.length - 2} more requirements</span>
+              {eligibilityBullets.length > 2 && (
+                <span className="text-xs text-slate-500 italic">+{eligibilityBullets.length - 2} more requirements</span>
               )}
             </div>
           )}
