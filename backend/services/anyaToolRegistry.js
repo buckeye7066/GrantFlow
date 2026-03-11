@@ -54,6 +54,7 @@ import {
 } from './anyaAutonomousFunctionTesting.js'
 import { getBackgroundCodeCrawlState } from './anyaAutonomousScheduler.js'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
+import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 
 const tools = new Map()
 
@@ -409,6 +410,8 @@ function collectGrantMatches(db, profileId, limit) {
                description, regions, keywords
         FROM funding_opportunities
         WHERE ${activePredicate} AND profile_id = ?
+          AND ${trustedOriginClause()}
+          AND ${trustedSourceClause()}
         ORDER BY updated_at DESC
         LIMIT ?
       `,
@@ -431,6 +434,8 @@ function collectGrantMatches(db, profileId, limit) {
                description, regions, keywords
         FROM funding_opportunities
         WHERE ${activePredicate}
+          AND ${trustedOriginClause()}
+          AND ${trustedSourceClause()}
         ORDER BY updated_at DESC
         LIMIT ?
       `,

@@ -362,8 +362,13 @@ router.post('/match/ai', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_AI), a
     let opportunities;
     if (opportunity_ids && opportunity_ids.length > 0) {
       const placeholders = opportunity_ids.map(() => '?').join(',');
+      const isPgIds = req.db?.dialect === 'postgres'
+      const actIds = isPgIds ? 'TRUE' : '1'
       opportunities = await req.db.prepare(`
-        SELECT * FROM funding_opportunities WHERE id IN (${placeholders})
+        SELECT * FROM funding_opportunities
+        WHERE id IN (${placeholders})
+          AND is_active = ${actIds}
+          AND ${trustedOriginClause()} AND ${trustedSourceClause()}
       `).all(...opportunity_ids);
     } else {
       const isPg = req.db?.dialect === 'postgres'
@@ -660,7 +665,13 @@ router.post('/analyze/eligibility', enforceTierCapability(TIER_CAPABILITIES.DOCU
     if (!(await ensureOrganizationAccess(req, res, String(profile_id)))) return
     
     const profile = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(profile_id);
-    const opportunity = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunity_id);
+    const isPgElig = req.db?.dialect === 'postgres'
+    const actElig = isPgElig ? 'TRUE' : '1'
+    const opportunity = await req.db.prepare(`
+      SELECT * FROM funding_opportunities
+      WHERE id = ? AND is_active = ${actElig}
+        AND ${trustedOriginClause()} AND ${trustedSourceClause()}
+    `).get(opportunity_id);
     
     if (!profile || !opportunity) {
       return res.status(404).json({ error: 'Profile or opportunity not found' });

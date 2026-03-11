@@ -926,10 +926,10 @@ router.get('/meta/ingestion', async (req, res) => {
 // Get distinct sources for filtering
 router.get('/meta/sources', async (req, res) => {
   try {
-    const conditions = ['source IS NOT NULL', 'is_active = ?'];
+    const isPostgres = req.db?.dialect === 'postgres'
+    const activeVal = isPostgres ? 'TRUE' : '1'
+    const conditions = ['source IS NOT NULL', `is_active = ${activeVal}`, trustedOriginClause(), trustedSourceClause()];
     const params = [];
-    params.push(true);
-    params.__dialect = req.db?.dialect;
     applyComplianceFilters(req.query.compliance, conditions, params);
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -951,10 +951,10 @@ router.get('/meta/sources', async (req, res) => {
 // Get distinct states for filtering
 router.get('/meta/states', async (req, res) => {
   try {
-    const conditions = ['state IS NOT NULL', 'is_active = ?'];
+    const isPostgres = req.db?.dialect === 'postgres'
+    const activeVal = isPostgres ? 'TRUE' : '1'
+    const conditions = ['state IS NOT NULL', `is_active = ${activeVal}`, trustedOriginClause(), trustedSourceClause()];
     const params = [];
-    params.push(true);
-    params.__dialect = req.db?.dialect;
     applyComplianceFilters(req.query.compliance, conditions, params);
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -1246,7 +1246,13 @@ router.get('/geo/scored', async (req, res) => {
 // Get single opportunity
 router.get('/:id([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})', async (req, res) => {
   try {
-    const opp = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(req.params.id);
+    const isPostgres = req.db?.dialect === 'postgres'
+    const activeVal = isPostgres ? 'TRUE' : '1'
+    const opp = await req.db.prepare(`
+      SELECT * FROM funding_opportunities
+      WHERE id = ? AND is_active = ${activeVal}
+        AND ${trustedOriginClause()} AND ${trustedSourceClause()}
+    `).get(req.params.id);
 
     if (!opp) {
       return res.status(404).json({ error: 'Opportunity not found' });

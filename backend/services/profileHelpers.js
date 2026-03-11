@@ -876,6 +876,7 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   if (health.neurodivergent) { healthSet.add('neurodivergent'); registerKeyword('neurodivergent'); registerKeyword('autism'); registerKeyword('adhd') }
   if (health.mental_health_condition) { healthSet.add('mental_health'); registerKeyword('mental health'); registerKeyword('behavioral health') }
   if (health.chronic_illness) { healthSet.add('chronic_illness'); registerKeyword('chronic illness'); registerKeyword('chronic condition') }
+  if (health.chronic_illness_type && typeof health.chronic_illness_type === 'string') { registerKeyword(health.chronic_illness_type) }
   if (health.rare_disease) { healthSet.add('rare_disease'); registerKeyword('rare disease'); registerKeyword('orphan disease') }
   if (health.visual_impairment) { healthSet.add('visual_impairment'); registerKeyword('visual impairment'); registerKeyword('blind'); registerKeyword('low vision') }
   if (health.hearing_impairment) { healthSet.add('hearing_impairment'); registerKeyword('hearing impairment'); registerKeyword('deaf'); registerKeyword('hard of hearing') }
@@ -1183,6 +1184,29 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   if (smallBusiness.business_name && typeof smallBusiness.business_name === 'string') {
     registerKeyword(smallBusiness.business_name)
   }
+  if (smallBusiness.years_in_business != null) {
+    const years = parseNumber(smallBusiness.years_in_business)
+    if (years !== null && years < 3) registerKeyword('startup')
+  }
+  if (smallBusiness.employee_count != null) {
+    const emp = parseNumber(smallBusiness.employee_count)
+    if (emp !== null && emp <= 10) registerKeyword('micro-enterprise')
+  }
+  if (smallBusiness.annual_revenue != null) {
+    const rev = parseNumber(smallBusiness.annual_revenue)
+    if (rev !== null && rev < 250000) registerKeyword('low revenue small business')
+  }
+  if (smallBusiness.certifications && Array.isArray(smallBusiness.certifications)) {
+    smallBusiness.certifications.forEach((cert) => {
+      if (typeof cert === 'string') registerKeyword(cert)
+    })
+    const certSet = new Set(smallBusiness.certifications.map(c => typeof c === 'string' ? c.toLowerCase() : ''))
+    if (certSet.has('wosb') || certSet.has('women-owned')) { applicantTypeSet.add('women-owned business'); registerKeyword('WOSB') }
+    if (certSet.has('hubzone')) { registerKeyword('HUBZone') }
+    if (certSet.has('mbe') || certSet.has('minority-owned')) { applicantTypeSet.add('minority-owned business'); registerKeyword('minority owned business') }
+    if (certSet.has('8a') || certSet.has('8(a)')) { registerKeyword('8a certification') }
+    if (certSet.has('sdvosb') || certSet.has('service-disabled veteran')) { applicantTypeSet.add('veteran-owned business'); registerKeyword('SDVOSB') }
+  }
   // Intent category "business startup" from profile_category or organization type
   const profileCategory = basic.profile_category ?? organizationDetails.organization_type ?? profile?.primary_type ?? ''
   if (/small_business|business_startup|startup|entrepreneur/i.test(profileCategory)) {
@@ -1310,6 +1334,28 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   if (education.first_generation) {
     demographicSet.add('first_generation')
     registerKeyword('first generation college student')
+  }
+  if (education.current_institution) registerKeyword(education.current_institution)
+  if (education.highest_level) {
+    registerKeyword(education.highest_level)
+    const lvl = normalizeString(education.highest_level)
+    if (lvl && /high\s*school|ged/i.test(lvl)) demographicSet.add('high_school')
+    if (lvl && /associate/i.test(lvl)) demographicSet.add('associate_degree')
+    if (lvl && /bachelor/i.test(lvl)) demographicSet.add('bachelors_degree')
+    if (lvl && /master/i.test(lvl)) demographicSet.add('masters_degree')
+    if (lvl && /doctor|phd/i.test(lvl)) demographicSet.add('doctorate')
+  }
+  if (education.community_service_hours) {
+    const hours = parseNumber(education.community_service_hours)
+    if (hours !== null && hours >= 100) registerKeyword('community service')
+  }
+  if (education.leadership_roles && Array.isArray(education.leadership_roles)) {
+    education.leadership_roles.forEach((r) => registerKeyword(r))
+    registerKeyword('leadership')
+  }
+  if (education.valedictorian) registerKeyword('valedictorian')
+  if (education.target_colleges && Array.isArray(education.target_colleges)) {
+    education.target_colleges.forEach((c) => registerKeyword(c))
   }
 
   // ============ MEDICAL INSURANCE ============
@@ -1567,8 +1613,125 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     })
   }
 
+  // ============ NEEDS DETECTION ============
+  const NEED_MAP = {
+    utilities: ['utilities','utility','electric','gas','water','energy','heating','cooling','lieap','liheap','power bill'],
+    housing: ['housing','rent','mortgage','shelter','homeless','section 8','home repair','eviction'],
+    food: ['food','snap','groceries','hunger','nutrition','wic','food bank','food pantry'],
+    healthcare: ['healthcare','medical','hospital','treatment','copay','prescription','therapy','nursing'],
+    disability: ['disability','disabled','special needs','assistive','wheelchair','blind','deaf'],
+    mental_health: ['mental health','behavioral health','counseling','psychiatric','ptsd'],
+    substance_recovery: ['substance','recovery','sober','addiction','detox','rehab'],
+    education: ['education','scholarship','tuition','college','university','school'],
+    employment: ['employment','job','workforce','career','vocational','job training'],
+    cash_assistance: ['cash assistance','emergency fund','financial aid','poverty'],
+    childcare: ['childcare','daycare','child care','after school','head start'],
+    transportation: ['transportation','vehicle','transit','bus','ride'],
+    internet: ['internet','broadband','connectivity','digital'],
+    legal: ['legal','attorney','court','eviction defense','immigration'],
+    business: ['business','entrepreneur','startup','self-employ','microenterprise'],
+  }
+  const needs = new Set()
+  const allKws = Array.from(keywordSet)
+  for (const kw of allKws) {
+    for (const [need, triggers] of Object.entries(NEED_MAP)) {
+      if (triggers.some(t => kw.includes(t))) needs.add(need)
+    }
+  }
+  if (assistanceSet.has('medicaid') || assistanceSet.has('medicare')) needs.add('healthcare')
+  if (assistanceSet.has('ssi') || assistanceSet.has('ssdi')) { needs.add('disability'); needs.add('cash_assistance') }
+  if (assistanceSet.has('snap')) needs.add('food')
+  if (assistanceSet.has('tanf')) needs.add('cash_assistance')
+  if (assistanceSet.has('section_8') || assistanceSet.has('section8')) needs.add('housing')
+  if (assistanceSet.has('liheap')) needs.add('utilities')
+  if (assistanceSet.has('wic')) needs.add('food')
+  if (healthSet.size > 0) needs.add('healthcare')
+  if (healthSet.has('disability') || healthSet.has('physical_disability') || healthSet.has('visual_impairment') || healthSet.has('hearing_impairment')) needs.add('disability')
+  if (healthSet.has('mental_health')) needs.add('mental_health')
+  if (healthSet.has('recovery')) needs.add('substance_recovery')
+  if (familySet.has('homeless')) needs.add('housing')
+  if (familySet.has('domestic_violence') || familySet.has('trafficking_survivor')) { needs.add('housing'); needs.add('legal') }
+
+  // ============ APPLICANT TYPE (single string) ============
+  let applicantType = 'individual'
+  if (applicantTypeSet.has('organization') || applicantTypeSet.has('nonprofit') || applicantTypeSet.has('501c3')) {
+    applicantType = 'organization'
+  } else if (applicantTypeSet.has('student') || applicantTypeSet.has('college student') || applicantTypeSet.has('high school student') || demographicSet.has('current_student')) {
+    applicantType = 'student'
+    needs.add('education'); needs.add('scholarship')
+  }
+  if (needs.size === 0) {
+    ;['utilities','housing','food','healthcare','cash_assistance'].forEach(n => needs.add(n))
+  }
+
+  // ============ IMMIGRATION SIGNALS ============
+  const immigrationSet = new Set()
+  const immigrantStatus = demographicsSection?.immigrant_status
+  if (immigrantStatus && immigrantStatus !== 'unknown' && immigrantStatus !== 'us_citizen') {
+    immigrationSet.add(immigrantStatus.toLowerCase().replace(/_/g, ' ').trim())
+    if (/refugee/i.test(immigrantStatus)) immigrationSet.add('refugee')
+    if (/permanent.resident/i.test(immigrantStatus)) immigrationSet.add('permanent_resident')
+    if (/new.immigrant/i.test(immigrantStatus)) immigrationSet.add('new_immigrant')
+    if (/daca/i.test(immigrantStatus)) immigrationSet.add('daca')
+    if (/asylee/i.test(immigrantStatus)) immigrationSet.add('asylee')
+  }
+
+  // ============ GEOGRAPHIC QUALIFIERS ============
+  const geographicSet = new Set()
+  if (demographicSet.has('rural')) geographicSet.add('rural')
+  if (demographicSet.has('appalachian')) geographicSet.add('appalachian')
+  if (demographicSet.has('urban_underserved')) geographicSet.add('urban_underserved')
+  if (demographicSet.has('tribal')) geographicSet.add('tribal')
+  if (demographicSet.has('frontier')) geographicSet.add('frontier')
+
+  // ============ FULL EDUCATION OBJECT ============
+  const eduSection = sections?.education ?? sections?.education_details ?? {}
+  const uniApps = sections?.university_applications ?? {}
+  const fullEducation = {
+    level: eduSection.highest_level || eduSection.degree_type || null,
+    currentSchool: eduSection.current_institution || eduSection.school_name || null,
+    targetColleges: Array.isArray(eduSection.target_colleges) ? eduSection.target_colleges : [],
+    intendedMajor: eduSection.field_of_study || null,
+    gpa: academics.gpa,
+    act: academics.act,
+    sat: academics.sat,
+    firstGeneration: !!eduSection.first_generation,
+    communityServiceHours: parseNumber(eduSection.community_service_hours),
+    valedictorian: !!eduSection.valedictorian,
+    leadershipRoles: Array.isArray(eduSection.leadership_roles) ? eduSection.leadership_roles : [],
+    extracurriculars: Array.isArray(eduSection.extracurriculars) ? eduSection.extracurriculars : [],
+    achievements: Array.isArray(eduSection.achievements) ? eduSection.achievements : [],
+    stemStudent: !!(['stem','engineering','computer science','mathematics','biology','chemistry','physics']
+      .some(s => (eduSection.field_of_study || '').toLowerCase().includes(s))),
+    returningAdult: !!eduSection.returning_adult,
+    recentGraduate: !!eduSection.recent_graduate,
+    gedGraduate: !!eduSection.ged_graduate,
+    jobRetraining: !!eduSection.job_retraining,
+  }
+
+  // ============ SCHOOLS (from university_applications) ============
+  const schools = Array.isArray(uniApps.applications) ? uniApps.applications : []
+
+  // ============ SPORTS ============
+  const sportsSet = new Set()
+  const sportsTerms = ['basketball','football','soccer','baseball','softball','volleyball','tennis','swimming','track','cross country','wrestling','lacrosse','hockey','golf','gymnastics','rowing','cheer','dance']
+  for (const interest of interestSet) {
+    if (sportsTerms.some(s => interest.includes(s))) sportsSet.add(interest)
+  }
+
+  // ============ ORGANIZATION DETAILS ============
+  const orgDetailsSection = sections?.organization_details ?? {}
+  const npCompliance = sections?.nonprofit_compliance ?? {}
+  const organizationSignals = {
+    is501c3: !!npCompliance.has_501c3 || !!npCompliance.is_501c3 || !!orgDetailsSection.is_501c3,
+    samRegistered: !!npCompliance.sam_registered || !!orgDetailsSection.sam_registered,
+    faithBased: !!orgDetailsSection.faith_based,
+    ein: npCompliance.ein || orgDetailsSection.ein || null,
+    uei: npCompliance.uei || orgDetailsSection.uei || null,
+    naicsCode: sections?.small_business_details?.naics_code || null,
+  }
+
   // ============ RAW SECTIONS PASSTHROUGH ============
-  // Store the raw sections for crawlers that need direct access to any field
   const rawSections = sections
 
   // ============ COVERAGE TRACKING ============
@@ -1595,8 +1758,6 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   }
 
   return {
-    // Backwards/forwards compatibility: some crawlers expect `signals.keywords` (iterable).
-    // Keep the canonical Set as `keywordSet` but also expose an array for JSON/debugging.
     keywords: Array.from(keywordSet),
     keywordSet,
     phrases: phraseSet,
@@ -1616,6 +1777,14 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     financial,
     rawSections,
     coverage,
+    needs,
+    applicantType,
+    immigration: immigrationSet,
+    geographic: geographicSet,
+    education: fullEducation,
+    schools,
+    sports: sportsSet,
+    organization: organizationSignals,
   }
 }
 

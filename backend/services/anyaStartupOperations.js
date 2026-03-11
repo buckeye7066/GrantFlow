@@ -63,13 +63,14 @@ export async function runStartupOperations(db) {
     // Phase 4: Sync profile opportunities to global
     console.log('[Anya Startup] Phase 4: Syncing opportunities to global pool...')
     try {
+      const activeVal = db?.dialect === 'postgres' ? 'TRUE' : '1'
       const profileOpps = db.prepare(`
         SELECT DISTINCT title, sponsor, deadline, amount_min, amount_max, 
                amount_description, application_url, state, opportunity_type,
                categories, keywords, eligibility_bullets, source, source_url
         FROM funding_opportunities 
         WHERE profile_id IS NOT NULL 
-        AND is_active = 1
+        AND is_active = ${activeVal}
       `).all()
       
       let synced = 0
@@ -88,7 +89,7 @@ export async function runStartupOperations(db) {
               amount_description, application_url, state, opportunity_type,
               categories, keywords, eligibility_bullets, source, source_url,
               is_active, profile_id, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${activeVal}, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
           `).run(
             globalId, opp.title, opp.sponsor, opp.deadline, opp.amount_min, opp.amount_max,
             opp.amount_description, opp.application_url, opp.state, opp.opportunity_type,

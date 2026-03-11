@@ -418,7 +418,7 @@ function calculateFacetAdjustments({ facets, opportunity, oppText }) {
     disability_support: ['disability', 'special needs', 'assistive', 'accessible', 'autism', 'blind', 'deaf'],
     healthcare_support: ['healthcare', 'medical', 'patient', 'hospital', 'treatment', 'copay', 'rx', 'charity care', 'free clinic', 'sliding scale'],
     housing_stability: ['housing', 'rent', 'eviction', 'shelter', 'utility', 'homeless', 'tenant rights'],
-    veteran_support: ['veteran', 'military', 'va ', 'service member'],
+    veteran_support: ['veteran', 'military', 'va', 'service member'],
     food_security: ['food assistance', 'nutrition', 'food bank', 'food pantry', 'meal'],
     transportation_access: ['transportation', 'vehicle', 'transit', 'bus pass', 'mobility'],
     legal_aid: ['legal aid', 'pro bono', 'legal clinic', 'eviction defense', 'attorney', 'court'],
@@ -501,7 +501,7 @@ function calculateFacetAdjustments({ facets, opportunity, oppText }) {
   }
 
   const hasVeteranSignals = facets?.military?.veteran === true || facets?.military?.disabled_veteran === true
-  if (hasVeteranSignals && countTokenMatches(oppCorpus, ['veteran', 'military', 'va ']) > 0) {
+  if (hasVeteranSignals && countTokenMatches(oppCorpus, ['veteran', 'military', 'va']) > 0) {
     points += 5
     reasons.push('Facet profile alignment: veteran (+5)')
   }
@@ -729,7 +729,7 @@ function calculateKeywordOverlap(profile, opportunity) {
       continue;
     }
     if (oppText.includes(kw)) {
-      matches += 0; // Was 0.1 — disabled: single-word text matches are too noisy
+      matches += 0.5
     }
   }
 

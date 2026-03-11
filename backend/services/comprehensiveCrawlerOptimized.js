@@ -9,6 +9,7 @@ import {
 } from './profileHelpers.js'
 import { saveToProfilePipeline } from './opportunityMatcher.js'
 import { runNationalZipCrawl } from './crawlers/nationalZipCrawler.js'
+import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -354,13 +355,15 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
   console.log(`[comprehensiveCrawler] Loaded ${realOpps.length} real opportunities`)
   
   // Also load from database
-  const dbOppsQuery =
-    db?.dialect === 'postgres'
+  const isPg = db?.dialect === 'postgres'
+  const dbOppsQuery = isPg
       ? `
           SELECT *
           FROM funding_opportunities
           WHERE is_active IS TRUE
             AND (requires_match IS FALSE OR requires_match IS NULL)
+            AND ${trustedOriginClause()}
+            AND ${trustedSourceClause()}
           ORDER BY created_at DESC
           LIMIT 200
         `
@@ -369,6 +372,8 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
           FROM funding_opportunities
           WHERE is_active = 1
             AND (requires_match = 0 OR requires_match IS NULL)
+            AND ${trustedOriginClause()}
+            AND ${trustedSourceClause()}
           ORDER BY created_at DESC
           LIMIT 200
         `

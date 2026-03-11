@@ -6,6 +6,7 @@
 
 import express from 'express'
 import zipcodes from 'zipcodes'
+import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 
 const router = express.Router()
 
@@ -55,14 +56,18 @@ router.get('/local-funding', async (req, res) => {
     const state = lookup?.state || null
 
     const db = req.db
+    const isPostgres = db?.dialect === 'postgres'
+    const activeVal = isPostgres ? 'TRUE' : '1'
     let rows = []
 
     if (state) {
       rows = db.prepare(`
         SELECT title, source_url, application_url, sponsor, source, state
         FROM funding_opportunities
-        WHERE is_active = 1
-          AND (state = ? OR state = 'nationwide' OR is_national = 1)
+        WHERE is_active = ${activeVal}
+          AND (state = ? OR state = 'nationwide' OR is_national = ${activeVal})
+          AND ${trustedOriginClause()}
+          AND ${trustedSourceClause()}
         ORDER BY updated_at DESC
         LIMIT 50
       `).all(state)
@@ -70,8 +75,10 @@ router.get('/local-funding', async (req, res) => {
       rows = db.prepare(`
         SELECT title, source_url, application_url, sponsor, source, state
         FROM funding_opportunities
-        WHERE is_active = 1
-          AND (is_national = 1 OR state = 'nationwide')
+        WHERE is_active = ${activeVal}
+          AND (is_national = ${activeVal} OR state = 'nationwide')
+          AND ${trustedOriginClause()}
+          AND ${trustedSourceClause()}
         ORDER BY updated_at DESC
         LIMIT 50
       `).all()

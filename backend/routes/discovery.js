@@ -214,10 +214,29 @@ router.post('/comprehensiveMatch', async (req, res) => {
       console.log(`[comprehensiveMatch] Top 5 scores:`, JSON.stringify(topScores));
     }
     
-    const matchThreshold = 50;
-    const highScoring = scoredOpportunities
+    let matchThreshold = 50;
+    let highScoring = scoredOpportunities
       .filter(o => o.fit_score >= matchThreshold)
       .sort((a, b) => b.fit_score - a.fit_score);
+
+    // Zero-results fallback: progressively lower threshold
+    if (highScoring.length === 0 && scoredOpportunities.length > 0) {
+      for (const fallback of [30, 15, 0]) {
+        highScoring = scoredOpportunities
+          .filter(o => o.fit_score >= fallback)
+          .sort((a, b) => b.fit_score - a.fit_score);
+        if (highScoring.length > 0) {
+          matchThreshold = fallback;
+          console.log(`[comprehensiveMatch] Zero results at 50; relaxed to ${fallback} (${highScoring.length} results)`);
+          break;
+        }
+      }
+      if (highScoring.length === 0) {
+        highScoring = scoredOpportunities.sort((a, b) => b.fit_score - a.fit_score).slice(0, 20);
+        matchThreshold = 0;
+        console.log(`[comprehensiveMatch] All thresholds exhausted; returning top ${highScoring.length}`);
+      }
+    }
     
     res.json({
       success: true,
@@ -225,6 +244,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
       total: highScoring.length,
       page,
       threshold_used: matchThreshold,
+      threshold_relaxed: matchThreshold < 50 ? true : undefined,
       total_evaluated: scoredOpportunities.length
     });
     
@@ -249,6 +269,8 @@ router.post('/searchOpportunities', async (req, res) => {
     const params = [];
     const isPostgres = req.db?.dialect === 'postgres';
 
+    const activeVal = isPostgres ? 'TRUE' : '1'
+    conditions.push(`is_active = ${activeVal}`);
     conditions.push(trustedOriginClause());
     conditions.push(trustedSourceClause());
 
@@ -502,7 +524,9 @@ router.post('/discoverECFServices', async (req, res) => {
     }
     
     // Search for local ECF services based on profile location
-    const conditions = ['source = ?'];
+    const isPostgresEcf = req.db?.dialect === 'postgres'
+    const ecfActive = isPostgresEcf ? 'TRUE' : '1'
+    const conditions = [`is_active = ${ecfActive}`, 'source = ?', trustedOriginClause()];
     const params = ['ecf_choices_discovery'];
     
     if (profile.state) {

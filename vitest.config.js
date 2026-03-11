@@ -5,8 +5,7 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./vitest.setup.js"],
     environment: "node",
-    // Exclude backend/tests/*.test.js (supertest resolution fails in Vitest on some setups); run via tests/unit/ or node
-    include: ["src/**/*.test.{js,jsx}"],
+    include: ["src/**/*.test.{js,jsx}", "backend/tests/**/*.test.{js,mjs}"],
     passWithNoTests: true,
     coverage: {
       provider: "v8",
