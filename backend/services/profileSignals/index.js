@@ -97,6 +97,17 @@ function deriveIntents(analysis) {
     intents.add('employment');
   }
 
+  if (needs.has?.('license_reinstatement_support') || needs.has?.('professional_remediation_funding') ||
+      needs.has?.('nursing_reentry_support') ||
+      (analysis.keywords || []).some(k =>
+        /probe|reinstatement|remediation|ethics\s*class|ethics\s*course|board.?required|return\s*to\s*practice|relicens|recertif|nurse\s*re.?entry|license\s*back|professional\s*boundar/i.test(k))) {
+    intents.add('license_reinstatement');
+    intents.add('healthcare');
+    intents.add('workforce');
+    intents.add('education');
+    intents.add('employment');
+  }
+
   return intents;
 }
 

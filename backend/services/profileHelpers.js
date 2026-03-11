@@ -1632,6 +1632,9 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     business: ['business','entrepreneur','startup','self-employ','microenterprise'],
     certification_assistance: ['cpr','first aid','aed','bls','heartsaver','acls','instructor certification','safety training','safety certification','cpr class','first aid class','cpr instructor','first aid instructor','instructor course','cpr/first aid','cpr/aed','teach cpr','community cpr','medical certification'],
     cpr_first_aid_training: ['cpr','first aid','aed','bls','heartsaver','cpr certification','first aid certification','safety trainer'],
+    license_reinstatement_support: ['probe','probe class','probe course','probe ethics','license reinstatement','nursing reinstatement','reinstatement course','ethics course','ethics class','remediation','remediation course','remediation program','board required','board-required','professional boundaries','return to practice','return to nursing','relicensing','recertification','nurse reentry','nurse re-entry','credential restoration','license back','nursing license back','disciplinary education','board-ordered education','mandatory professional education','professional compliance'],
+    nursing_reentry_support: ['nurse reentry','nurse re-entry','return to nursing','return to practice','nursing refresher','nursing re-entry','healthcare return to work','nursing workforce'],
+    professional_remediation_funding: ['probe','remediation','ethics course','professional boundaries','disciplinary remediation','board required education','mandated continuing education','professional compliance training'],
   }
   const needs = new Set()
   const allKws = Array.from(keywordSet)

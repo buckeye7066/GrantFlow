@@ -358,6 +358,38 @@ const KNOWN_ITEM_SOURCES = {
               keywords: ['instructor', 'ashi', 'medic first aid', 'hsi', 'teach', 'certification'],
       },
     ],
+    license_reinstatement: [
+      {
+              name: 'NCSBN — PROBE Professional Boundaries & Ethics Course',
+              url: 'https://www.ncsbn.org/nursing-regulation/discipline-and-alt-to-discipline/probe.page',
+              description: 'The PROBE program is board-required professional boundaries and ethics education for nursing license reinstatement. Information about the course, requirements, and enrollment.',
+              keywords: ['probe', 'ethics', 'reinstatement', 'nursing license', 'professional boundaries', 'board required', 'remediation'],
+      },
+      {
+              name: 'NCSBN — Nurse Re-Entry Program Directory',
+              url: 'https://www.ncsbn.org/nursing-regulation/practice/nurse-reentry.page',
+              description: 'State-by-state directory of nurse re-entry programs, refresher courses, and reinstatement pathways. Includes resources for returning to practice after suspension or lapse.',
+              keywords: ['nurse reentry', 'reinstatement', 'refresher', 'return to practice', 'nursing license'],
+      },
+      {
+              name: 'CareerOneStop — WIOA Training for License Reinstatement',
+              url: 'https://www.careeronestop.org/LocalHelp/AmericanJobCenters/find-american-job-centers.aspx',
+              description: 'Local American Job Centers provide WIOA-funded training vouchers that may cover professional license reinstatement courses, PROBE classes, remediation education, and recertification exams.',
+              keywords: ['wioa', 'workforce', 'reinstatement', 'training', 'license', 'career center', 'voucher', 'probe'],
+      },
+      {
+              name: 'State Vocational Rehabilitation — License Reinstatement Support',
+              url: 'https://rsa.ed.gov/about/states',
+              description: 'State VR agencies fund professional license reinstatement costs including PROBE course fees, remediation tuition, and exam fees for individuals with barriers to employment.',
+              keywords: ['vocational rehabilitation', 'reinstatement', 'license', 'disability', 'remediation', 'probe'],
+      },
+      {
+              name: 'American Nurses Association — Workforce & Career Resources',
+              url: 'https://www.nursingworld.org/practice-policy/workforce/',
+              description: 'ANA workforce resources for nurses including return-to-practice support, reinstatement guidance, and connections to state nursing association programs.',
+              keywords: ['nursing', 'workforce', 'return to practice', 'reinstatement', 'ana', 'career recovery'],
+      },
+    ],
 }
 
 /**
@@ -388,6 +420,7 @@ function parseItemRequest(request) {
                   clothing: ['clothing', 'clothes', 'uniform', 'suit', 'professional attire', 'work clothes'],
                   cpr_certification: ['cpr', 'first aid', 'aed', 'bls', 'heartsaver', 'acls', 'cpr class', 'first aid class', 'cpr certification', 'first aid certification', 'cpr/first aid', 'cpr/aed'],
                   instructor_certification: ['instructor certification', 'cpr instructor', 'first aid instructor', 'bls instructor', 'heartsaver instructor', 'teach cpr', 'teach first aid', 'become an instructor', 'safety trainer'],
+                  license_reinstatement: ['probe', 'probe class', 'probe course', 'probe ethics', 'license reinstatement', 'reinstatement course', 'reinstatement class', 'nursing license', 'nursing reinstatement', 'ethics course', 'ethics class', 'remediation', 'remediation course', 'board required', 'board-required', 'professional boundaries', 'return to practice', 'return to nursing', 'relicensing', 'recertification', 'license back', 'nurse reentry', 'nurse re-entry', 'credential restoration'],
             }
 
   for (const [category, keywords] of Object.entries(categoryMap)) {

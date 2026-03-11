@@ -781,6 +781,62 @@ export const SCHOLARSHIPS = [
     interestMatch: ['employment', 'healthcare', 'workforce'],
     intentMatch: ['employment', 'education'],
   },
+
+  // ════════════════════════════════════════
+  // LICENSE REINSTATEMENT / PROFESSIONAL REMEDIATION SUPPORT
+  // ════════════════════════════════════════
+  {
+    id: 'sch-ncsbn-nurse-reentry',
+    name: 'NCSBN Nurse Re-Entry Programs — State-by-State Reinstatement Support',
+    description: 'The NCSBN maintains a directory of nurse re-entry programs by state, including refresher courses, PROBE ethics programs, remediation options, and reinstatement pathways. Some programs offer reduced-cost or sponsored enrollment.',
+    url: 'https://www.ncsbn.org/nursing-regulation/practice/nurse-reentry.page',
+    categories: ['license_reinstatement_support', 'nursing_reentry_support', 'healthcare',
+      'professional_remediation_funding', 'education'],
+    eligibility: { requiresStudent: false },
+    type: 'portal',
+    fundingType: 'referral_service',
+    interestMatch: ['nursing', 'healthcare', 'license reinstatement'],
+    intentMatch: ['healthcare', 'employment', 'license_reinstatement'],
+  },
+  {
+    id: 'sch-ana-workforce-scholarship',
+    name: 'ANA Foundation — Nursing Career Recovery & Workforce Scholarships',
+    description: 'The American Nurses Foundation funds scholarships and grants supporting nursing career development, return-to-practice programs, and workforce re-entry. May cover costs related to license reinstatement education and remediation.',
+    url: 'https://www.nursingworld.org/foundation/programs/',
+    categories: ['license_reinstatement_support', 'nursing_reentry_support', 'healthcare',
+      'education', 'scholarship'],
+    eligibility: { requiresStudent: false },
+    type: 'referral',
+    fundingType: 'direct_grant',
+    interestMatch: ['nursing', 'healthcare'],
+    intentMatch: ['healthcare', 'education', 'license_reinstatement'],
+  },
+  {
+    id: 'sch-workforce-board-reinstatement',
+    name: 'State Workforce Development Boards — License Reinstatement Training Funding',
+    description: 'Local workforce development boards fund professional license reinstatement through WIOA. Covers PROBE ethics classes, nursing remediation courses, board-required education, and recertification training for eligible workers. Search by state for your local board.',
+    url: 'https://www.careeronestop.org/LocalHelp/WorkforceDevelopment/find-workforce-development-boards.aspx',
+    categories: ['license_reinstatement_support', 'workforce_reentry_training',
+      'professional_remediation_funding', 'employment'],
+    eligibility: { requiresStudent: false },
+    type: 'portal',
+    fundingType: 'direct_benefit',
+    interestMatch: ['employment', 'healthcare', 'nursing'],
+    intentMatch: ['employment', 'education', 'license_reinstatement'],
+  },
+  {
+    id: 'sch-vr-license-support',
+    name: 'State Vocational Rehabilitation — Professional License Reinstatement Funding',
+    description: 'State VR agencies fund professional license reinstatement for individuals with documented barriers to employment. Covers PROBE course fees, remediation class tuition, exam fees, and credential restoration for healthcare workers and other professionals.',
+    url: 'https://rsa.ed.gov/about/states',
+    categories: ['license_reinstatement_support', 'professional_remediation_funding',
+      'workforce_reentry_training', 'employment', 'disability'],
+    eligibility: { requiresStudent: false },
+    type: 'benefit',
+    fundingType: 'direct_benefit',
+    interestMatch: ['employment', 'disability', 'healthcare'],
+    intentMatch: ['employment', 'disability', 'license_reinstatement'],
+  },
 ];
 
 export default SCHOLARSHIPS;
