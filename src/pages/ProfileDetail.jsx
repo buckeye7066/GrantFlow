@@ -26,6 +26,7 @@ import { useSettingsStore } from "@/stores/settingsStore"
 import { useAuthStore } from "@/stores/authStore"
 import ProfileFilesPanel from "@/components/profiles/ProfileFilesPanel.jsx"
 import ProfileAppliedFundingPrint from "@/components/profiles/ProfileAppliedFundingPrint.jsx"
+import PrintableProfileTodo from "@/components/profiles/PrintableProfileTodo.jsx"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
@@ -528,6 +529,7 @@ export default function ProfileDetail() {
             <TabsTrigger className="shrink-0 min-w-max px-3" value="monitoring">Grant Monitoring</TabsTrigger>
             <TabsTrigger className="shrink-0 min-w-max px-3" value="proposals">Proposals & Files</TabsTrigger>
             <TabsTrigger className="shrink-0 min-w-max px-3" value="documents">Documents</TabsTrigger>
+            <TabsTrigger className="shrink-0 min-w-max px-3" value="action-plan">Action Plan</TabsTrigger>
             <TabsTrigger className="shrink-0 min-w-max px-3" value="billing">Billing</TabsTrigger>
             <TabsTrigger className="shrink-0 min-w-max px-3" value="personalization">Personalization</TabsTrigger>
             {isStudentProfile ? <TabsTrigger className="shrink-0 min-w-max px-3" value="universities">Universities</TabsTrigger> : null}
@@ -637,6 +639,10 @@ export default function ProfileDetail() {
               />
               <ProfileAppliedFundingPrint organizationId={profile.organization_id} profileName={profile.display_name} />
             </div>
+          </TabsContent>
+
+          <TabsContent value="action-plan" className="mt-6">
+            <PrintableProfileTodo profileId={profileId} profileName={profile.display_name} />
           </TabsContent>
 
           <TabsContent value="billing" className="mt-6">

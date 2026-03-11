@@ -1340,4 +1340,170 @@ Generate 8-20 items, ordered by priority (critical first). Be SPECIFIC to this p
   }
 });
 
+/**
+ * Generate a printable profile todo checklist with detailed step-by-step instructions.
+ * Analyzes the profile, pipeline grants, and needs to produce an actionable plan.
+ *
+ * POST /api/ai/generate-profile-todo
+ * Body: { profile_id }
+ */
+router.post('/generate-profile-todo', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_AI), async (req, res) => {
+  try {
+    const { profile_id } = req.body;
+    if (!profile_id) return res.status(400).json({ error: 'profile_id is required' });
+
+    const db = req.db;
+
+    const profile = await db.prepare(`SELECT * FROM profiles WHERE id = ?`).get(profile_id);
+    if (!profile) return res.status(404).json({ error: 'Profile not found' });
+
+    const parseSafe = (v) => { try { return typeof v === 'string' ? JSON.parse(v) : v; } catch { return {}; } };
+    const p = {
+      basic: parseSafe(profile.basic_information),
+      education: parseSafe(profile.education_information),
+      employment: parseSafe(profile.employment_information),
+      health: parseSafe(profile.health_information),
+      financial: parseSafe(profile.financial_information),
+      housing: parseSafe(profile.housing_information),
+      additional: parseSafe(profile.additional_information),
+      narrative: parseSafe(profile.narrative_information),
+    };
+
+    const applicantName = profile.display_name
+      || [p.basic?.first_name, p.basic?.last_name].filter(Boolean).join(' ')
+      || 'Applicant';
+
+    let grants = [];
+    try {
+      grants = await db.prepare(`
+        SELECT id, title, funder, status, deadline, amount, description, url, application_url,
+               match_score, match_reasons, funding_opportunity_id
+        FROM grants
+        WHERE profile_id = ?
+        ORDER BY
+          CASE status
+            WHEN 'discovery' THEN 1 WHEN 'discovered' THEN 2 WHEN 'interested' THEN 3
+            WHEN 'application_prep' THEN 4 WHEN 'drafting' THEN 5 WHEN 'portal' THEN 6
+            WHEN 'submitted' THEN 7 WHEN 'pending_review' THEN 8 WHEN 'follow_up' THEN 9
+            WHEN 'awarded' THEN 10 ELSE 99
+          END,
+          deadline ASC NULLS LAST
+      `).all(profile_id);
+    } catch { /* grants table may not have profile_id */ }
+
+    const sections = [];
+    try {
+      const rows = await db.prepare(`SELECT section_key, data FROM profile_sections WHERE profile_id = ?`).all(profile_id);
+      for (const row of rows) {
+        sections.push({ key: row.section_key, data: parseSafe(row.data) });
+      }
+    } catch { /* profile_sections may not exist */ }
+
+    const activeGrants = grants.filter(g =>
+      !['declined', 'declined_no_review', 'closed'].includes(g.status)
+    );
+    const pipelineSummary = activeGrants.slice(0, 20).map(g => ({
+      title: g.title || 'Untitled',
+      funder: g.funder || '',
+      status: g.status || 'discovery',
+      deadline: g.deadline || null,
+      amount: g.amount || null,
+      url: g.url || g.application_url || null,
+      match_score: g.match_score || null,
+    }));
+
+    const prompt = `You are an expert case manager and grant advisor. Analyze this person's complete profile and their funding pipeline, then generate a COMPREHENSIVE, ACTIONABLE TODO CHECKLIST they can print out and work through step by step.
+
+=== PROFILE ===
+Name: ${applicantName}
+Profile Type: ${profile.primary_type || 'individual'}
+Location: ${[p.basic?.city, p.basic?.state, p.basic?.zip_code].filter(Boolean).join(', ') || 'Unknown'}
+Education: ${JSON.stringify(p.education || {}).slice(0, 600)}
+Employment: ${JSON.stringify(p.employment || {}).slice(0, 600)}
+Health: ${JSON.stringify(p.health || {}).slice(0, 400)}
+Financial: ${JSON.stringify(p.financial || {}).slice(0, 400)}
+Housing: ${JSON.stringify(p.housing || {}).slice(0, 400)}
+Narrative/Goals: ${JSON.stringify(p.narrative || {}).slice(0, 600)}
+Additional: ${JSON.stringify(p.additional || {}).slice(0, 400)}
+${sections.length > 0 ? `Profile Sections: ${JSON.stringify(sections.map(s => ({ key: s.key, summary: JSON.stringify(s.data).slice(0, 200) }))).slice(0, 1500)}` : ''}
+
+=== FUNDING PIPELINE (${activeGrants.length} active opportunities) ===
+${pipelineSummary.length > 0 ? JSON.stringify(pipelineSummary, null, 1) : 'No funding opportunities in pipeline yet.'}
+
+=== INSTRUCTIONS ===
+Generate a structured todo list covering these categories (skip any that don't apply):
+
+1. PROFILE COMPLETION — what sections still need to be filled in, what documents to gather
+2. IMMEDIATE ACTIONS — urgent deadlines, time-sensitive opportunities, critical next steps
+3. APPLICATION TASKS — for each pipeline opportunity, what specific steps to complete (gather documents, fill out forms, write narratives, get references, etc.)
+4. FINANCIAL PREPARATION — documents to collect, budgets to prepare, financial statements needed
+5. PROFESSIONAL DEVELOPMENT — certifications, training, licenses, courses to complete
+6. DOCUMENT GATHERING — birth certificates, ID, tax returns, letters of support, transcripts, etc.
+7. FOLLOW-UP ACTIONS — things to check on, people to contact, statuses to verify
+8. LONG-TERM PLANNING — goals to work toward, future opportunities to watch for
+
+For each todo item, provide:
+- A clear, specific action statement (not vague)
+- Detailed step-by-step instructions on HOW to complete it
+- Any relevant deadlines or timeframes
+- What documents, information, or resources are needed
+- Who to contact or where to go (if applicable)
+- Priority level (critical, high, medium, low)
+
+Be SPECIFIC to this person's actual situation. Reference their real profile data, their real pipeline opportunities, and their actual needs. Don't be generic.
+
+Return ONLY valid JSON:
+{
+  "applicant_name": "the person's name",
+  "generated_date": "today's date",
+  "summary": "1-2 sentence overview of where this person stands and what they need to focus on",
+  "categories": [
+    {
+      "name": "Category Name",
+      "icon": "clipboard|clock|file-text|dollar-sign|award|folder|phone|target",
+      "items": [
+        {
+          "title": "Clear action statement",
+          "priority": "critical|high|medium|low",
+          "deadline": "specific date or timeframe if applicable, or null",
+          "instructions": "Detailed step-by-step instructions. Be thorough — this is what they'll print and follow.",
+          "resources_needed": "What they need to complete this (documents, information, etc.)",
+          "contact_or_location": "Who to contact or where to go, if applicable"
+        }
+      ]
+    }
+  ],
+  "total_items": number
+}`;
+
+    const openai = getOpenAI();
+    if (!openai) return res.status(503).json({ error: 'AI provider not configured' });
+
+    const completion = await openai.chat.completions.create({
+      model: DEFAULT_OPENAI_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.3,
+      max_tokens: 6000,
+    });
+
+    const rawText = extractCompletionText(completion);
+    let parsed = null;
+    try { parsed = JSON.parse(rawText); } catch {
+      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) try { parsed = JSON.parse(jsonMatch[0]); } catch { /* use raw */ }
+    }
+
+    res.json({
+      success: true,
+      profile_id,
+      applicant_name: applicantName,
+      pipeline_count: activeGrants.length,
+      todo: parsed || { raw: rawText },
+    });
+  } catch (error) {
+    console.error('[generate-profile-todo] Error:', error);
+    res.status(500).json(formatError(error));
+  }
+});
+
 export default router;
