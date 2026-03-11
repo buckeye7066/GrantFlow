@@ -31,7 +31,7 @@
  * RULES:
  * - Every URL must be a real, verified link
  * - NO loans, NO matching funds
- * - Categories must match the need detection system in profileAnalyzer.js
+ * - Categories must match the need detection system in profileHelpers.js
  * - Valid categories: utilities, housing, food, healthcare, cash_assistance,
  *   employment, childcare, education, transportation, disability,
  *   mental_health, substance_recovery, legal, clothing, internet,

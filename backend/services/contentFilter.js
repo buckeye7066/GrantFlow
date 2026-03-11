@@ -1,9 +1,8 @@
 /**
  * Unified content/junk filter for funding opportunities.
  *
- * Merges the best of matching.js's `isInformationalResult` (URL domain checks,
- * curated-source exception) and discovery.js's `isIrrelevantForProfile`
- * (profile-aware copay/health/transport filtering).
+ * Single isJunkOpportunity() filter combining URL domain checks,
+ * curated-source exception, and profile-aware copay/health/transport filtering.
  *
  * Used by both matching.js and discovery.js so junk detection is consistent.
  */

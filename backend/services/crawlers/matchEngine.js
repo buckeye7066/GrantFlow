@@ -613,7 +613,7 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
  * Run all programs through the matching engine.
  *
  * @param {Array} allPrograms - Combined array from all data sources
- * @param {Object} analysis   - Output from profileAnalyzer
+ * @param {Object} analysis   - Output from loadProfileSignals
  * @param {Object} options    - { minScore, maxResults }
  * @returns {Array} Ranked, scored, deduplicated results
  */

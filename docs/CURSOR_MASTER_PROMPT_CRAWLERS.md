@@ -107,7 +107,7 @@ When a strategy has hard gates, the crawler checks whether the profile's intents
 
 ## 4. Profile signals
 
-The `profileSignals/index.js` module is the single source of truth. It wraps `profileAnalyzer` and adds:
+The `profileSignals/index.js` module is the single source of truth. It wraps `profileHelpers.loadProfileContext` and adds:
 
 - **`deriveIntents`** — maps signals to intent buckets: `business`, `education`, `healthcare`, `housing`, `workforce`, `military`
 - **`extractAssistancePrograms`** — detects SNAP, Medicaid, Section 8, TANF, etc. from profile data
@@ -267,7 +267,7 @@ Dedicated files take priority — if `states/OH.js` exists, it overrides the aut
 
 1. **Before changing any crawler:** Confirm how profile data flows in (profileSignals → analysis object → strategyRegistry → matchEngine) and that `min_match_score` is used in filtering.
 2. **Before adding or returning an opportunity:** Ensure it has a valid URL, is not a loan or matching fund, and meets minimum match score (or is a directory exception).
-3. **Never duplicate profile extraction:** All crawlers MUST use `profileSignals/index.js`. Forbid direct `profileAnalyzer` calls from routes.
+3. **Never duplicate profile extraction:** All crawlers MUST use `profileSignals/index.js`. Direct profile extraction from routes is forbidden.
 4. **Always include match_explain:** If a new scoring dimension is added, update `scoreProgram` to include it in `match_explain.scoreBreakdown`.
 5. **School card changes:** Verify `generateSchoolCards()` reads all portal/contact fields from `analysis.schools[]`.
 6. **State additions:** Prefer adding to `stateRegistry.js` (immediate 12-program coverage) unless the state needs custom programs or county contacts.

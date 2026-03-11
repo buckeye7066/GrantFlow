@@ -63,6 +63,9 @@ async function main() {
   // Gate 6: Pipeline add-to-pipeline: no 500s under schema drift
   await run('node', ['--test', 'tests/unit/grants-add-to-pipeline-schema-drift.test.mjs'], { label: 'pipeline-add' })
 
+  // Gate 7: Matching pipeline integration — profiles must always find real results
+  await run('npx', ['vitest', 'run', 'backend/tests/matching-pipeline.test.js', '--reporter=verbose'], { label: 'matching-pipeline' })
+
   console.log('[gate] all release gates passed')
 }
 

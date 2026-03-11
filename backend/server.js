@@ -69,6 +69,8 @@ import seedAssistanceDirectories from './utils/seedAssistanceDirectories.js';
 import seedFaithBasedHousing from './utils/seedFaithBasedHousing.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { attachRequestContext } from './middleware/requestContext.js';
+import { pipelineMonitor, getPipelineHealth } from './middleware/pipelineMonitor.js';
+import { requestTimeout } from './middleware/requestTimeout.js';
 import { MAX_JSON_BODY_SIZE } from './config/constants.js';
 import { getSafeHealthSummary } from './services/diagnosticsService.js';
 import { initializeFeatureFlags } from './services/featureFlagService.js';
@@ -1531,6 +1533,14 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
   }
 });
 
+// Pipeline monitoring (zero-result + slow-response tracking)
+app.use(pipelineMonitor())
+
+// Pipeline health dashboard (admin-only)
+app.get('/api/admin/pipeline-health', (req, res) => {
+  res.json(getPipelineHealth())
+})
+
 // API routes
 app.use('/api/auth', authRouter);
 app.use('/api/activity', activityRouter);
@@ -1557,11 +1567,12 @@ app.use('/api/billing-settings', billingSettingsRouter);
 app.use('/api/contact-methods', contactMethodsRouter);
 app.use('/api/source-directory', sourceDirectoryRouter);
 app.use('/api/items', itemsRouter);
-app.use('/api/ai', aiRouter);
-app.use('/api/anya', anyaRouter); // Keep existing Anya routes for compatibility
+const PIPELINE_TIMEOUT = Number(process.env.PIPELINE_TIMEOUT_MS || 30000)
+app.use('/api/ai', requestTimeout(PIPELINE_TIMEOUT), aiRouter);
+app.use('/api/anya', anyaRouter);
 app.use('/api/profiles', profilesRouter);
 app.use('/api/reminders', remindersRouter);
-app.use('/api/matching', matchingRouter);
+app.use('/api/matching', requestTimeout(PIPELINE_TIMEOUT), matchingRouter);
 app.use('/api/grant-monitoring', grantMonitoringRouter);
 app.use('/api/crawlers', crawlersRouter);
 app.use('/api/real-crawlers', realCrawlersRouter);
@@ -1909,7 +1920,7 @@ app.get('/api/meta/dedupe', async (_req, res) => {
 })
 
 app.use('/api/admin', adminRouter);
-app.use('/api', discoveryRouter); // Discovery endpoints (comprehensiveMatch, searchOpportunities, etc.)
+app.use('/api', requestTimeout(PIPELINE_TIMEOUT), discoveryRouter);
 app.use('/api/crawler-v2', crawlerV2Router);
 app.use('/api/nf-programs', nfProgramsRouter);
 

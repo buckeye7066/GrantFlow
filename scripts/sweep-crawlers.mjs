@@ -108,13 +108,13 @@ async function main() {
   db.prepare(`INSERT INTO profiles (${cols.join(', ')}) VALUES (${placeholders})`)
     .run(...cols.map(c => PROFILE[c]));
 
-  // profile_sections for profileAnalyzer
+  // profile_sections for profile signal extraction
   db.exec(`CREATE TABLE IF NOT EXISTS profile_sections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     profile_id TEXT, section_key TEXT, data TEXT
   )`);
 
-  // unified_applications for profileAnalyzer
+  // unified_applications for profile signal extraction
   db.exec(`CREATE TABLE IF NOT EXISTS unified_applications (
     id INTEGER PRIMARY KEY, profile_id TEXT, status TEXT,
     contacts TEXT, department_contacts TEXT,

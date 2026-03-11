@@ -3,6 +3,7 @@ import fs from 'fs'
 import { getSafeHealthSummary } from '../services/diagnosticsService.js'
 import { ensureUploadsDirWritable, isLikelyPersistentPath } from '../utils/uploadsDir.js'
 import { getDataReadiness, getSystemAlerts } from '../services/dataReadinessService.js'
+import { getPipelineHealth } from '../middleware/pipelineMonitor.js'
 
 const router = express.Router()
 
@@ -231,10 +232,13 @@ router.get('/readyz', async (req, res) => {
     })
   }
 
+  const pipeline = getPipelineHealth()
+
   return res.status(200).json({
     ok: true,
     status: 'ready',
     dialect: dbCheck.dialect ?? null,
+    pipeline_status: pipeline.overall,
     timestamp: new Date().toISOString(),
   })
 })
