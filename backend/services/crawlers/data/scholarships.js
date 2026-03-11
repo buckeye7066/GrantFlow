@@ -729,6 +729,58 @@ export const SCHOLARSHIPS = [
     interestMatch: ['nursing', 'healthcare', 'medical'],
     intentMatch: ['education', 'healthcare'],
   },
+
+  // ════════════════════════════════════════
+  // CPR / FIRST AID / SAFETY CERTIFICATION FUNDING
+  // ════════════════════════════════════════
+  {
+    id: 'sch-aha-instructor-scholarship',
+    name: 'AHA Community Training Center — Instructor Certification Opportunities',
+    description: 'Many AHA Training Centers offer reduced-cost or sponsored instructor courses for individuals willing to teach CPR/BLS in underserved communities. Contact local Training Centers for availability.',
+    url: 'https://cpr.heart.org/en/training-programs/find-a-course',
+    categories: ['certification_assistance', 'cpr_first_aid_training', 'community_health_training', 'education'],
+    eligibility: { requiresStudent: false },
+    type: 'referral',
+    fundingType: 'referral_service',
+    interestMatch: ['healthcare', 'community service', 'teaching'],
+    intentMatch: ['education', 'community_health_training'],
+  },
+  {
+    id: 'sch-redcross-volunteer-cert',
+    name: 'Red Cross Volunteer Certification Assistance',
+    description: 'Red Cross chapters may provide free or reduced-cost CPR/First Aid/AED certification for active volunteers and those serving in disaster relief or community programs.',
+    url: 'https://www.redcross.org/volunteer/become-a-volunteer.html',
+    categories: ['certification_assistance', 'cpr_first_aid_training', 'volunteer_training_support'],
+    eligibility: { requiresStudent: false },
+    type: 'referral',
+    fundingType: 'direct_benefit',
+    interestMatch: ['community service', 'healthcare'],
+    intentMatch: ['community_health_training', 'volunteer_training_support'],
+  },
+  {
+    id: 'sch-nsc-scholarship-safety',
+    name: 'National Safety Council — Safety Training Scholarships',
+    description: 'The NSC periodically offers scholarships and reduced-rate training for First Aid, CPR, AED, and workplace safety certifications. Available for individuals and nonprofit organizations.',
+    url: 'https://www.nsc.org/safety-training/first-aid',
+    categories: ['certification_assistance', 'cpr_first_aid_training', 'workforce_training', 'education'],
+    eligibility: { requiresStudent: false },
+    type: 'referral',
+    fundingType: 'referral_service',
+    interestMatch: ['safety', 'workplace'],
+    intentMatch: ['employment', 'education'],
+  },
+  {
+    id: 'sch-workforce-board-cert',
+    name: 'State Workforce Development Boards — Certification Training Grants',
+    description: 'State and local workforce development boards fund certification training through WIOA. Covers CPR, First Aid, BLS, ACLS, and instructor courses for eligible job seekers. Search by state to find your local board.',
+    url: 'https://www.careeronestop.org/LocalHelp/WorkforceDevelopment/find-workforce-development-boards.aspx',
+    categories: ['certification_assistance', 'cpr_first_aid_training', 'workforce_training', 'employment'],
+    eligibility: { requiresStudent: false },
+    type: 'portal',
+    fundingType: 'direct_benefit',
+    interestMatch: ['employment', 'healthcare', 'workforce'],
+    intentMatch: ['employment', 'education'],
+  },
 ];
 
 export default SCHOLARSHIPS;

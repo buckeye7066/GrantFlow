@@ -41,7 +41,8 @@ const STRATEGIES = {
     label: 'Government Benefits',
     candidateSources: ['federal', 'state'],
     hardGates: [],
-    needEmphasis: ['utilities', 'housing', 'food', 'healthcare', 'cash_assistance', 'disability', 'employment'],
+    needEmphasis: ['utilities', 'housing', 'food', 'healthcare', 'cash_assistance', 'disability', 'employment',
+      'certification_assistance', 'workforce_training'],
     intentBoost: {},
     urlPolicy: 'strict',
     maxResults: 60,
@@ -109,6 +110,22 @@ const STRATEGIES = {
     urlPolicy: 'standard',
     maxResults: 80,
     minScore: 25,
+  },
+
+  certification_training: {
+    id: 'certification_training',
+    label: 'Certification & Training Assistance',
+    candidateSources: ['federal', 'state', 'national', 'scholarships'],
+    hardGates: [],
+    needEmphasis: ['certification_assistance', 'cpr_first_aid_training', 'workforce_training',
+      'community_health_training', 'volunteer_training_support', 'employment', 'education'],
+    intentBoost: { employment: 15, education: 15, community_health_training: 20 },
+    urlPolicy: 'standard',
+    maxResults: 80,
+    minScore: 20,
+    categoryFilter: ['certification_assistance', 'cpr_first_aid_training', 'employment',
+      'education', 'workforce_training', 'community_health_training', 'volunteer_training_support',
+      'healthcare', 'childcare'],
   },
 
   item_matching: {

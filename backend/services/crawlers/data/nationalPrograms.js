@@ -678,6 +678,164 @@ export const NATIONAL_PROGRAMS = [
     fundingType: 'direct_benefit',
     intentMatch: ['employment', 'disability'],
   },
+
+  // ════════════════════════════════════════
+  // CPR / FIRST AID / SAFETY CERTIFICATION FUNDING
+  // ════════════════════════════════════════
+
+  // --- Bucket 1: Workforce Development / Job Training ---
+  {
+    id: 'np-ajc-cpr-training',
+    name: 'American Job Centers — CPR/First Aid Certification Funding',
+    description: 'Local American Job Centers (formerly One-Stop Career Centers) provide WIOA-funded training vouchers that cover CPR, First Aid, AED, BLS, and instructor certification costs. Find your nearest center for free certification assistance.',
+    url: 'https://www.careeronestop.org/LocalHelp/AmericanJobCenters/find-american-job-centers.aspx',
+    categories: ['certification_assistance', 'cpr_first_aid_training', 'employment', 'workforce_training'],
+    type: 'portal',
+    fundingType: 'direct_benefit',
+    recurring: true,
+    intentMatch: ['employment', 'education'],
+  },
+  {
+    id: 'np-wioa-certification-vouchers',
+    name: 'WIOA Individual Training Accounts — Certification Tuition Assistance',
+    description: 'The Workforce Innovation and Opportunity Act (WIOA) provides Individual Training Accounts (ITAs) that pay for certification classes including CPR, First Aid, BLS, ACLS, and instructor courses. Available through local workforce development boards for eligible adults and dislocated workers.',
+    url: 'https://www.dol.gov/agencies/eta/wioa',
+    categories: ['certification_assistance', 'cpr_first_aid_training', 'employment', 'workforce_training', 'education'],
+    type: 'benefit',
+    fundingType: 'direct_benefit',
+    recurring: true,
+    intentMatch: ['employment', 'education'],
+  },
+  {
+    id: 'np-healthcare-upskilling',
+    name: 'Health Profession Opportunity Grants (HPOG) — Healthcare Certification Training',
+    description: 'HHS-funded grants through community organizations that pay for healthcare certification training including CPR, First Aid, BLS, CNA, and other health credentials for TANF recipients and low-income individuals.',
+    url: 'https://www.acf.hhs.gov/ofa/programs/hpog',
+    categories: ['certification_assistance', 'cpr_first_aid_training', 'healthcare', 'employment', 'workforce_training'],
+    type: 'benefit',
+    fundingType: 'direct_benefit',
+    intentMatch: ['employment', 'healthcare'],
+  },
+
+  // --- Bucket 2: Community / Nonprofit / Civic Club Support ---
+  {
+    id: 'np-rotary-community-grants',
+    name: 'Rotary Club — Community Grants & Safety Education Support',
+    description: 'Local Rotary Clubs fund community health and safety initiatives including CPR/AED training, instructor certification, and community preparedness programs. Contact your local Rotary Club or district for grant applications.',
+    url: 'https://www.rotary.org/en/our-programs/grants',
+    categories: ['certification_assistance', 'cpr_first_aid_training', 'community_health_training', 'volunteer_training_support'],
+    type: 'portal',
+    fundingType: 'direct_grant',
+    intentMatch: ['community_health_training'],
+  },
+  {
+    id: 'np-lions-club-community',
+    name: 'Lions Club International — Community Health & Safety Grants',
+    description: 'Lions Clubs support community health initiatives including CPR training, AED placement, first aid education, and safety certification sponsorship. Apply through your local Lions Club.',
+    url: 'https://www.lionsclubs.org/en/start-our-approach/grant-types',
+    categories: ['certification_assistance', 'cpr_first_aid_training', 'community_health_training'],
+    type: 'portal',
+    fundingType: 'direct_grant',
+    intentMatch: ['community_health_training'],
+  },
+  {
+    id: 'np-community-foundation-safety',
+    name: 'Community Foundations — Safety Training & Health Education Grants',
+    description: 'Over 800 community foundations across the U.S. fund local health and safety programs. Many accept applications for CPR/First Aid instructor training, community preparedness, and safety education mini-grants.',
+    url: 'https://www.cof.org/community-foundation-locator',
+    categories: ['certification_assistance', 'cpr_first_aid_training', 'community_health_training', 'volunteer_training_support'],
+    type: 'portal',
+    fundingType: 'direct_grant',
+    intentMatch: ['community_health_training'],
+  },
+
+  // --- Bucket 3: Faith-Based / Church / Ministry ---
+  {
+    id: 'np-church-benevolence-training',
+    name: 'Church Benevolence Funds — Ministry Safety Training Sponsorship',
+    description: 'Many churches and faith-based organizations have benevolence funds or community outreach budgets that cover safety training costs including CPR/First Aid certification and instructor courses for volunteers, staff, and community members.',
+    url: 'https://www.churchlawandtax.com/web/2021/september/benevolence-fund-basics.html',
+    categories: ['certification_assistance', 'cpr_first_aid_training', 'community_health_training', 'volunteer_training_support'],
+    type: 'referral',
+    fundingType: 'direct_grant',
+    intentMatch: ['community_health_training', 'volunteer_training_support'],
+  },
+
+  // --- Bucket 4: Employer / Agency Sponsorship ---
+  {
+    id: 'np-hospital-education-cpr',
+    name: 'Hospital Education Departments — CPR/BLS Instructor Sponsorship',
+    description: 'Many hospitals sponsor CPR, BLS, and ACLS instructor training for employees, volunteers, and community health workers. Contact education or volunteer services departments at local hospitals for sponsorship opportunities.',
+    url: 'https://cpr.heart.org/en/cpr-courses-and-kits/healthcare-professional/basic-life-support-bls',
+    categories: ['certification_assistance', 'cpr_first_aid_training', 'healthcare', 'workforce_training'],
+    type: 'referral',
+    fundingType: 'employer_sponsored',
+    intentMatch: ['healthcare', 'employment'],
+  },
+  {
+    id: 'np-fire-ems-training-fund',
+    name: 'Fire/EMS Departments — Public Safety Training Assistance',
+    description: 'Many fire departments and EMS agencies provide free or funded CPR, First Aid, and AED training for community members. Some sponsor instructor certification for volunteers who commit to teaching community classes.',
+    url: 'https://www.usfa.fema.gov/training/',
+    categories: ['certification_assistance', 'cpr_first_aid_training', 'community_health_training'],
+    type: 'referral',
+    fundingType: 'direct_benefit',
+    intentMatch: ['community_health_training', 'employment'],
+  },
+
+  // --- Bucket 5: Childcare / Youth / Community Safety ---
+  {
+    id: 'np-childcare-cpr-requirement',
+    name: 'Child Care & Development Fund (CCDF) — CPR/First Aid Training Support',
+    description: 'State CCDF programs often cover CPR and First Aid certification costs for childcare workers, daycare providers, and afterschool program staff as a required health and safety training. Contact your state childcare resource and referral agency.',
+    url: 'https://www.acf.hhs.gov/occ/ccdf-reauthorization',
+    categories: ['certification_assistance', 'cpr_first_aid_training', 'childcare', 'workforce_training'],
+    type: 'benefit',
+    fundingType: 'direct_benefit',
+    intentMatch: ['childcare', 'employment'],
+  },
+  {
+    id: 'np-ymca-safety-training',
+    name: 'YMCA — Staff & Volunteer Safety Certification Programs',
+    description: 'YMCA locations frequently provide free or subsidized CPR, First Aid, and AED training for staff, volunteers, and community members. Many locations also sponsor instructor certification for long-term volunteers.',
+    url: 'https://www.ymca.org/what-we-do/youth-development',
+    categories: ['certification_assistance', 'cpr_first_aid_training', 'community_health_training', 'volunteer_training_support'],
+    type: 'referral',
+    fundingType: 'direct_benefit',
+    intentMatch: ['community_health_training', 'childcare'],
+  },
+
+  // --- Bucket 6: Public Safety / AED / Training Grants ---
+  {
+    id: 'np-aha-community-training',
+    name: 'American Heart Association — Community CPR Training Resources & Grants',
+    description: 'The AHA offers community CPR training programs, instructor development opportunities, and partners with organizations to fund CPR/AED education. Includes Nation of Lifesavers initiative and community training center resources.',
+    url: 'https://cpr.heart.org/en/training-programs/community-training-resources',
+    categories: ['certification_assistance', 'cpr_first_aid_training', 'community_health_training'],
+    type: 'portal',
+    fundingType: 'referral_service',
+    intentMatch: ['community_health_training', 'healthcare'],
+  },
+  {
+    id: 'np-redcross-training-aid',
+    name: 'American Red Cross — Certification Training & Financial Assistance',
+    description: 'The Red Cross offers CPR, First Aid, AED, and instructor training nationwide. Some chapters provide reduced-cost or free training for volunteers, nonprofit staff, and community organizations. Contact your local chapter for scholarship availability.',
+    url: 'https://www.redcross.org/take-a-class/classes/cpr-certification',
+    categories: ['certification_assistance', 'cpr_first_aid_training', 'community_health_training'],
+    type: 'portal',
+    fundingType: 'referral_service',
+    intentMatch: ['community_health_training'],
+  },
+  {
+    id: 'np-fema-community-preparedness',
+    name: 'FEMA Community Emergency Response Team (CERT) — Free Safety Training',
+    description: 'FEMA CERT programs offer free community safety training including CPR, First Aid, disaster preparedness, and basic emergency response skills. Available in most communities through local emergency management agencies.',
+    url: 'https://www.ready.gov/cert',
+    categories: ['certification_assistance', 'cpr_first_aid_training', 'community_health_training'],
+    type: 'benefit',
+    fundingType: 'direct_benefit',
+    intentMatch: ['community_health_training'],
+  },
 ];
 
 export default NATIONAL_PROGRAMS;

@@ -306,6 +306,58 @@ const KNOWN_ITEM_SOURCES = {
               keywords: ['clothing', 'professional', 'free', 'workforce'],
       },
         ],
+    cpr_certification: [
+      {
+              name: 'American Heart Association — CPR/BLS Courses',
+              url: 'https://cpr.heart.org/en/courses',
+              description: 'CPR, BLS, ACLS, Heartsaver, and instructor certification courses. The AHA is the gold standard for CPR/First Aid training.',
+              keywords: ['cpr', 'bls', 'acls', 'heartsaver', 'instructor', 'certification', 'first aid', 'aed'],
+      },
+      {
+              name: 'American Red Cross — CPR/First Aid/AED Certification',
+              url: 'https://www.redcross.org/take-a-class/cpr',
+              description: 'CPR, First Aid, AED, and instructor certification classes. Online and in-person. Nationally recognized.',
+              keywords: ['cpr', 'first aid', 'aed', 'certification', 'instructor', 'red cross'],
+      },
+      {
+              name: 'CareerOneStop — Training & Certification Funding',
+              url: 'https://www.careeronestop.org/LocalHelp/AmericanJobCenters/find-american-job-centers.aspx',
+              description: 'Find your local American Job Center for WIOA-funded training vouchers that cover CPR, First Aid, and other certification costs.',
+              keywords: ['wioa', 'workforce', 'certification', 'training', 'job center', 'cpr', 'voucher'],
+      },
+      {
+              name: 'FEMA CERT — Free Community Safety Training',
+              url: 'https://www.ready.gov/cert',
+              description: 'Free CERT training programs include CPR, First Aid, and emergency response skills. Available through local emergency management.',
+              keywords: ['cert', 'fema', 'cpr', 'first aid', 'free', 'community', 'emergency'],
+      },
+      {
+              name: 'National Safety Council — First Aid/CPR/AED Training',
+              url: 'https://www.nsc.org/safety-training/first-aid',
+              description: 'First Aid, CPR, and AED training courses from the National Safety Council. Employer and individual options available.',
+              keywords: ['nsc', 'first aid', 'cpr', 'aed', 'safety', 'certification', 'employer'],
+      },
+    ],
+    instructor_certification: [
+      {
+              name: 'AHA Instructor Network — Become a CPR Instructor',
+              url: 'https://cpr.heart.org/en/cpr-courses-and-kits/instructor',
+              description: 'Information on becoming an AHA CPR, BLS, or Heartsaver instructor. Includes Training Center requirements and instructor course details.',
+              keywords: ['instructor', 'cpr instructor', 'bls instructor', 'heartsaver instructor', 'aha', 'teach cpr'],
+      },
+      {
+              name: 'Red Cross — Become a First Aid/CPR/AED Instructor',
+              url: 'https://www.redcross.org/take-a-class/become-an-instructor',
+              description: 'Red Cross instructor certification pathway for CPR, First Aid, and AED. Teach in your community, workplace, or organization.',
+              keywords: ['instructor', 'red cross instructor', 'teach first aid', 'teach cpr', 'certification'],
+      },
+      {
+              name: 'ASHI/MEDIC First Aid — Instructor Programs',
+              url: 'https://emergencycare.hsi.com/instructor-training',
+              description: 'HSI/ASHI instructor training for CPR, First Aid, Bloodborne Pathogens, and Emergency Oxygen. Alternative to AHA and Red Cross.',
+              keywords: ['instructor', 'ashi', 'medic first aid', 'hsi', 'teach', 'certification'],
+      },
+    ],
 }
 
 /**
@@ -334,6 +386,8 @@ function parseItemRequest(request) {
     small_business: ['small business', 'startup', 'entrepreneur', 'business funding', 'business grant', 'sba'],
     food: ['food', 'groceries', 'meals', 'pantry', 'nutrition'],
                   clothing: ['clothing', 'clothes', 'uniform', 'suit', 'professional attire', 'work clothes'],
+                  cpr_certification: ['cpr', 'first aid', 'aed', 'bls', 'heartsaver', 'acls', 'cpr class', 'first aid class', 'cpr certification', 'first aid certification', 'cpr/first aid', 'cpr/aed'],
+                  instructor_certification: ['instructor certification', 'cpr instructor', 'first aid instructor', 'bls instructor', 'heartsaver instructor', 'teach cpr', 'teach first aid', 'become an instructor', 'safety trainer'],
             }
 
   for (const [category, keywords] of Object.entries(categoryMap)) {
