@@ -371,6 +371,7 @@ class SqliteDb {
     this.path = sqlitePath;
     this._db = new Database(sqlitePath);
     this._db.pragma('journal_mode = WAL');
+    this._db.pragma(`busy_timeout = ${Number(process.env.SQLITE_BUSY_TIMEOUT_MS || 5000)}`);
   }
 
   // Compatibility with better-sqlite3 API used throughout the codebase.
@@ -487,6 +488,7 @@ class PostgresDb {
       max: Number(process.env.PG_POOL_MAX || 10),
       idleTimeoutMillis: Number(process.env.PG_POOL_IDLE_MS || 30000),
       connectionTimeoutMillis: Number(process.env.PG_POOL_CONN_TIMEOUT_MS || 10000),
+      statement_timeout: Number(process.env.PG_STATEMENT_TIMEOUT_MS || 15000),
     });
   }
 

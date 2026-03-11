@@ -298,13 +298,17 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
         }
       }
 
+      const MAX_RESPONSE = 500
+      const capped = scored.length > MAX_RESPONSE ? scored.slice(0, MAX_RESPONSE) : scored
+
       res.json({
               profile_id: profileId,
               min_score: Number.isFinite(effectiveMinScore) ? effectiveMinScore : null,
               total_scored: candidates.length,
-              returned: scored.length,
-              opportunities: scored,
+              returned: capped.length,
+              opportunities: capped,
               threshold_relaxed: effectiveMinScore !== minScore ? true : undefined,
+              truncated: scored.length > MAX_RESPONSE ? true : undefined,
       })
              } catch (error) {
                    console.error('Error matching profile to opportunities:', error)
