@@ -68,6 +68,15 @@ function detectProfileIntents(analysis) {
   if (needs.has?.('mental_health') || health.has?.('mental_health')) intents.add('mental_health');
   if (needs.has?.('substance_recovery') || health.has?.('substance_recovery')) intents.add('substance_recovery');
 
+  if (needs.has?.('certification_assistance') || needs.has?.('cpr_first_aid_training') ||
+      (analysis.keywords || []).some(k =>
+        /cpr|first\s*aid|aed|bls|heartsaver|instructor\s*cert|safety\s*train|certification\s*class/i.test(k))) {
+    intents.add('community_health_training');
+    intents.add('certification_assistance');
+    intents.add('education');
+    intents.add('employment');
+  }
+
   return intents;
 }
 

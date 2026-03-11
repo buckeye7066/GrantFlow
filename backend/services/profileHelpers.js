@@ -1630,6 +1630,8 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     internet: ['internet','broadband','connectivity','digital'],
     legal: ['legal','attorney','court','eviction defense','immigration'],
     business: ['business','entrepreneur','startup','self-employ','microenterprise'],
+    certification_assistance: ['cpr','first aid','aed','bls','heartsaver','acls','instructor certification','safety training','safety certification','cpr class','first aid class','cpr instructor','first aid instructor','instructor course','cpr/first aid','cpr/aed','teach cpr','community cpr','medical certification'],
+    cpr_first_aid_training: ['cpr','first aid','aed','bls','heartsaver','cpr certification','first aid certification','safety trainer'],
   }
   const needs = new Set()
   const allKws = Array.from(keywordSet)
