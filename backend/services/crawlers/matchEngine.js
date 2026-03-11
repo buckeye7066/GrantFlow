@@ -411,6 +411,7 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
 
   // ── Negative match penalty (only hard-gate on truly disqualifying negatives) ──
   const negPenalty = computeNegativePenalty(program, analysis);
+  if (negPenalty <= -100) return null;
     score += negPenalty;
 
   // ── Military match (5 points) ──
