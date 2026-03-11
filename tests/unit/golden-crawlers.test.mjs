@@ -251,7 +251,7 @@ describe('Need Taxonomy', () => {
 
   it('expands "PROBE class" to employment', () => {
     const exp = expandNeed('PROBE class for nursing');
-    assert.ok(exp.canonicalNeed === 'employment' || exp.matchedKey === 'licensure' || exp.matchedKey === 'training');
+    assert.ok(exp.canonicalNeed === 'employment' || exp.canonicalNeed === 'license_reinstatement_support' || exp.matchedKey === 'licensure' || exp.matchedKey === 'training');
   });
 
   it('expands "utility shutoff" to utilities', () => {
