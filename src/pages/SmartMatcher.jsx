@@ -157,29 +157,29 @@ export default function SmartMatcher() {
                       <div>
                                 <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-2">
                                             <Sparkles className="w-8 h-8" /> Smart Matcher
-                                </h1>h1>
+                                </h1>
                                 <p className="text-slate-600 mt-2">
                                             AI-powered opportunity matching based on your profile
-                                </p>p>
-                      </div>div>
+                                </p>
+                      </div>
               
                       <Card>
                                 <CardHeader>
-                                            <CardTitle>Match Configuration</CardTitle>CardTitle>
-                                            <CardDescription>Select a profile and adjust matching criteria</CardDescription>CardDescription>
-                                </CardHeader>CardHeader>
+                                            <CardTitle>Match Configuration</CardTitle>
+                                            <CardDescription>Select a profile and adjust matching criteria</CardDescription>
+                                </CardHeader>
                                 <CardContent className="space-y-4">
                                             <div>
-                                                          <Label>Profile</Label>Label>
+                                                          <Label>Profile</Label>
                                                           <ProfileSelect
                                                                             value={selectedProfileId}
                                                                             onValueChange={setSelectedProfileId}
                                                                             placeholder="Select a profile to match..."
                                                                           />
-                                            </div>div>
+                                            </div>
                                             <div className="grid md:grid-cols-2 gap-4">
                                                           <div>
-                                                                          <Label>Search Keywords</Label>Label>
+                                                                          <Label>Search Keywords</Label>
                                                                           <div className="relative">
                                                                                             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-400" />
                                                                                             <Input
@@ -188,10 +188,10 @@ export default function SmartMatcher() {
                                                                                                                   onChange={(e) => setSearchQuery(e.target.value)}
                                                                                                                   className="pl-10"
                                                                                                                 />
-                                                                          </div>div>
-                                                          </div>div>
+                                                                          </div>
+                                                          </div>
                                                           <div>
-                                                                          <Label>Minimum Match Score</Label>Label>
+                                                                          <Label>Minimum Match Score</Label>
                                                                           <div className="flex items-center gap-2">
                                                                                             <SlidersHorizontal className="w-4 h-4 text-slate-400" />
                                                                                             <input
@@ -200,17 +200,17 @@ export default function SmartMatcher() {
                                                                                                                   onChange={(e) => setMinScore(Number(e.target.value))}
                                                                                                                   className="flex-1"
                                                                                                                 />
-                                                                                            <span className="text-sm font-medium w-12 text-right">{minScore}%</span>span>
-                                                                          </div>div>
-                                                          </div>div>
-                                            </div>div>
+                                                                                            <span className="text-sm font-medium w-12 text-right">{minScore}%</span>
+                                                                          </div>
+                                                          </div>
+                                            </div>
                                   {selectedProfileId && selectedProfileId !== 'all' && (
                         <div className="text-xs text-slate-600">
                           {isScoring ? 'Scoring opportunities using full profile data\u2026' : `Showing ${filteredOpportunities.length} matches (server-scored)`}
-                        </div>div>
+                        </div>
                                             )}
-                                </CardContent>CardContent>
-                      </Card>Card>
+                                </CardContent>
+                      </Card>
               
                 {/* ----------------------------------------------------------------- */}
                 {/* Profile Matching Checklist – persistent per profile               */}
@@ -223,12 +223,12 @@ export default function SmartMatcher() {
                                                               Profile Matching Checklist
                                                               <Badge variant="outline" className="ml-auto text-sm">
                                                                 {checkedCount}/{allChecklistItems.length}
-                                                              </Badge>Badge>
-                                              </CardTitle>CardTitle>
+                                                              </Badge>
+                                              </CardTitle>
                                               <CardDescription>
                                                               Track items needed for strong matches. Your progress is saved automatically per profile.
-                                              </CardDescription>CardDescription>
-                                </CardHeader>CardHeader>
+                                              </CardDescription>
+                                </CardHeader>
                                 <CardContent className="space-y-3">
                                   {allChecklistItems.map((item) => {
                                       const isCustom = item.id.startsWith("custom_")
@@ -244,7 +244,7 @@ export default function SmartMatcher() {
                                                                                                                         className={`flex-1 text-sm cursor-pointer select-none ${checklistState.checked[item.id] ? "line-through text-slate-400" : "text-slate-700"}`}
                                                                                                                       >
                                                                                                   {item.label}
-                                                                                                  </label>label>
+                                                                                                  </label>
                                                                               {isCustom && (
                                                                                                     <button
                                                                                                                               type="button"
@@ -253,9 +253,9 @@ export default function SmartMatcher() {
                                                                                                                               title="Remove custom item"
                                                                                                                             >
                                                                                                                             <X className="w-4 h-4" />
-                                                                                                      </button>button>
+                                                                                                      </button>
                                                                                                 )}
-                                                                            </div>div>
+                                                                            </div>
                                                                           )
                                   })}
                                 
@@ -271,20 +271,20 @@ export default function SmartMatcher() {
                                                                                 />
                                                               <Button size="sm" variant="outline" onClick={addCustomItem} disabled={!newItemText.trim()}>
                                                                                 Add
-                                                              </Button>Button>
-                                              </div>div>
-                                </CardContent>CardContent>
-                    </Card>Card>
+                                                              </Button>
+                                              </div>
+                                </CardContent>
+                    </Card>
                       )}
               
                 {!selectedProfileId || selectedProfileId === 'all' ? (
                     <Card>
                                 <CardContent className="p-12 text-center">
                                               <Star className="w-16 h-16 mx-auto text-slate-300 mb-4" />
-                                              <h3 className="text-xl font-semibold text-slate-900 mb-2">Select a Profile</h3>h3>
-                                              <p className="text-slate-600">Choose a profile above to see matched opportunities</p>p>
-                                </CardContent>CardContent>
-                    </Card>Card>
+                                              <h3 className="text-xl font-semibold text-slate-900 mb-2">Select a Profile</h3>
+                                              <p className="text-slate-600">Choose a profile above to see matched opportunities</p>
+                                </CardContent>
+                    </Card>
                   ) : (
                     <>
                                 <div className="grid md:grid-cols-3 gap-4">
@@ -292,42 +292,42 @@ export default function SmartMatcher() {
                                                               <CardHeader className="pb-2">
                                                                                 <CardTitle className="text-sm font-medium text-slate-600 flex items-center gap-2">
                                                                                                     <Award className="w-4 h-4" /> Top Matches
-                                                                                </CardTitle>CardTitle>
-                                                              </CardHeader>CardHeader>
+                                                                                </CardTitle>
+                                                              </CardHeader>
                                                               <CardContent>
-                                                                                <div className="text-2xl font-bold">{topMatches.length}</div>div>
-                                                                                <p className="text-xs text-slate-600 mt-1">85%+ match score</p>p>
-                                                              </CardContent>CardContent>
-                                              </Card>Card>
+                                                                                <div className="text-2xl font-bold">{topMatches.length}</div>
+                                                                                <p className="text-xs text-slate-600 mt-1">85%+ match score</p>
+                                                              </CardContent>
+                                              </Card>
                                               <Card>
                                                               <CardHeader className="pb-2">
                                                                                 <CardTitle className="text-sm font-medium text-slate-600 flex items-center gap-2">
                                                                                                     <TrendingUp className="w-4 h-4" /> Good Matches
-                                                                                </CardTitle>CardTitle>
-                                                              </CardHeader>CardHeader>
+                                                                                </CardTitle>
+                                                              </CardHeader>
                                                               <CardContent>
-                                                                                <div className="text-2xl font-bold">{goodMatches.length}</div>div>
-                                                                                <p className="text-xs text-slate-600 mt-1">70-84% match score</p>p>
-                                                              </CardContent>CardContent>
-                                              </Card>Card>
+                                                                                <div className="text-2xl font-bold">{goodMatches.length}</div>
+                                                                                <p className="text-xs text-slate-600 mt-1">70-84% match score</p>
+                                                              </CardContent>
+                                              </Card>
                                               <Card>
                                                               <CardHeader className="pb-2">
                                                                                 <CardTitle className="text-sm font-medium text-slate-600 flex items-center gap-2">
                                                                                                     <Filter className="w-4 h-4" /> All Qualified
-                                                                                </CardTitle>CardTitle>
-                                                              </CardHeader>CardHeader>
+                                                                                </CardTitle>
+                                                              </CardHeader>
                                                               <CardContent>
-                                                                                <div className="text-2xl font-bold">{allQualified.length}</div>div>
-                                                                                <p className="text-xs text-slate-600 mt-1">{minScore}%+ match score</p>p>
-                                                              </CardContent>CardContent>
-                                              </Card>Card>
-                                </div>div>
+                                                                                <div className="text-2xl font-bold">{allQualified.length}</div>
+                                                                                <p className="text-xs text-slate-600 mt-1">{minScore}%+ match score</p>
+                                                              </CardContent>
+                                              </Card>
+                                </div>
                     
                                 <Tabs defaultValue="top" className="space-y-4">
                                               <TabsList>
-                                                              <TabsTrigger value="top">Top Matches</TabsTrigger>TabsTrigger>
-                                                              <TabsTrigger value="all">All Matches</TabsTrigger>TabsTrigger>
-                                              </TabsList>TabsList>
+                                                              <TabsTrigger value="top">Top Matches</TabsTrigger>
+                                                              <TabsTrigger value="all">All Matches</TabsTrigger>
+                                              </TabsList>
                                 
                                               <TabsContent value="top" className="space-y-4">
                                                 {topMatches.length > 0 ? (
@@ -338,39 +338,39 @@ export default function SmartMatcher() {
                                                                                                                   <div className="flex items-start justify-between gap-4">
                                                                                                                                               <div className="flex-1">
                                                                                                                                                                             <div className="flex items-center gap-2 mb-2">
-                                                                                                                                                                                                            <h3 className="font-semibold text-slate-900">{opp.title}</h3>h3>
+                                                                                                                                                                                                            <h3 className="font-semibold text-slate-900">{opp.title}</h3>
                                                                                                                                                                                                             <Badge variant="default" className="bg-green-600">
                                                                                                                                                                                                                                               {opp.match_score ?? 0}% Match
-                                                                                                                                                                                                                                            </Badge>Badge>
-                                                                                                                                                                                                          </div>div>
-                                                                                                                                                                            <p className="text-sm text-slate-600 mb-2 line-clamp-2">{opp.description}</p>p>
+                                                                                                                                                                                                                                            </Badge>
+                                                                                                                                                                                                          </div>
+                                                                                                                                                                            <p className="text-sm text-slate-600 mb-2 line-clamp-2">{opp.description}</p>
                                                                                                                                                                             <div className="flex flex-wrap gap-2 text-xs text-slate-500">
-                                                                                                                                                                                                            {opp.sponsor && <span>{"\u2022"} {opp.sponsor}</span>span>}
-                                                                                                                                                                                                            {opp.state && <span>{"\u2022"} {opp.state}</span>span>}
-                                                                                                                                                                                                            {opp.deadline && <span>{"\u2022"} Due: {opp.deadline}</span>span>}
-                                                                                                                                                                                                          </div>div>
+                                                                                                                                                                                                            {opp.sponsor && <span>{"\u2022"} {opp.sponsor}</span>}
+                                                                                                                                                                                                            {opp.state && <span>{"\u2022"} {opp.state}</span>}
+                                                                                                                                                                                                            {opp.deadline && <span>{"\u2022"} Due: {opp.deadline}</span>}
+                                                                                                                                                                                                          </div>
                                                                                                                                                 {opp.match_reasons && opp.match_reasons.length > 0 && (
                                                                                                   <div className="mt-2 flex flex-wrap gap-1">
                                                                                                     {opp.match_reasons.slice(0, 6).map((reason, i) => (
-                                                                                                                                        <Badge key={i} variant="secondary" className="text-xs">{reason}</Badge>Badge>
+                                                                                                                                        <Badge key={i} variant="secondary" className="text-xs">{reason}</Badge>
                                                                                                                                       ))}
-                                                                                                    </div>div>
+                                                                                                    </div>
                                                                                                                                                                             )}
-                                                                                                                                                </div>div>
-                                                                                                                                              <Button size="sm" onClick={() => handleOpenOpp(opp)}>View</Button>Button>
-                                                                                                                    </div>div>
-                                                                                          </CardContent>CardContent>
-                                                                </Card>Card>
+                                                                                                                                                </div>
+                                                                                                                                              <Button size="sm" onClick={() => handleOpenOpp(opp)}>View</Button>
+                                                                                                                    </div>
+                                                                                          </CardContent>
+                                                                </Card>
                                                               ))}
-                                        </div>div>
+                                        </div>
                                       ) : (
                                         <Card>
                                                             <CardContent className="p-12 text-center">
-                                                                                  <p className="text-slate-600">No top matches found. Try adjusting your criteria.</p>p>
-                                                            </CardContent>CardContent>
-                                        </Card>Card>
+                                                                                  <p className="text-slate-600">No top matches found. Try adjusting your criteria.</p>
+                                                            </CardContent>
+                                        </Card>
                                                               )}
-                                              </TabsContent>TabsContent>
+                                              </TabsContent>
                                 
                                               <TabsContent value="all" className="space-y-4">
                                                 {filteredOpportunities.length > 0 ? (
@@ -381,40 +381,40 @@ export default function SmartMatcher() {
                                                                                                                   <div className="flex items-start justify-between gap-4">
                                                                                                                                               <div className="flex-1">
                                                                                                                                                                             <div className="flex items-center gap-2 mb-2">
-                                                                                                                                                                                                            <h3 className="font-semibold text-slate-900">{opp.title}</h3>h3>
+                                                                                                                                                                                                            <h3 className="font-semibold text-slate-900">{opp.title}</h3>
                                                                                                                                                                                                             <Badge variant={(opp.match_score ?? 0) >= 85 ? "default" : "secondary"}>
                                                                                                                                                                                                                                               {opp.match_score ?? 0}%
-                                                                                                                                                                                                                                            </Badge>Badge>
-                                                                                                                                                                                                          </div>div>
-                                                                                                                                                                            <p className="text-sm text-slate-600 mb-2 line-clamp-2">{opp.description}</p>p>
+                                                                                                                                                                                                                                            </Badge>
+                                                                                                                                                                                                          </div>
+                                                                                                                                                                            <p className="text-sm text-slate-600 mb-2 line-clamp-2">{opp.description}</p>
                                                                                                                                                                             <div className="flex flex-wrap gap-2 text-xs text-slate-500">
-                                                                                                                                                                                                            {opp.sponsor && <span>{"\u2022"} {opp.sponsor}</span>span>}
-                                                                                                                                                                                                            {opp.state && <span>{"\u2022"} {opp.state}</span>span>}
-                                                                                                                                                                                                            {opp.deadline && <span>{"\u2022"} Due: {opp.deadline}</span>span>}
-                                                                                                                                                                                                          </div>div>
-                                                                                                                                                </div>div>
-                                                                                                                                              <Button size="sm" variant="outline" onClick={() => handleOpenOpp(opp)}>View</Button>Button>
-                                                                                                                    </div>div>
-                                                                                          </CardContent>CardContent>
-                                                                </Card>Card>
+                                                                                                                                                                                                            {opp.sponsor && <span>{"\u2022"} {opp.sponsor}</span>}
+                                                                                                                                                                                                            {opp.state && <span>{"\u2022"} {opp.state}</span>}
+                                                                                                                                                                                                            {opp.deadline && <span>{"\u2022"} Due: {opp.deadline}</span>}
+                                                                                                                                                                                                          </div>
+                                                                                                                                                </div>
+                                                                                                                                              <Button size="sm" variant="outline" onClick={() => handleOpenOpp(opp)}>View</Button>
+                                                                                                                    </div>
+                                                                                          </CardContent>
+                                                                </Card>
                                                               ))}
-                                        </div>div>
+                                        </div>
                                       ) : (
                                         <Card>
                                                             <CardContent className="p-12 text-center">
-                                                                                  <p className="text-slate-600">No matches found. Try lowering the minimum score or adjusting keywords.</p>p>
-                                                            </CardContent>CardContent>
-                                        </Card>Card>
+                                                                                  <p className="text-slate-600">No matches found. Try lowering the minimum score or adjusting keywords.</p>
+                                                            </CardContent>
+                                        </Card>
                                                               )}
-                                              </TabsContent>TabsContent>
-                                </Tabs>Tabs>
-                    </>>
+                                              </TabsContent>
+                                </Tabs>
+                    </>
                   )}
               
                       <Dialog open={Boolean(selectedOpp)} onOpenChange={(open) => !open && setSelectedOpp(null)}>
                                 <DialogContent className="max-w-2xl">
                                             <DialogHeader>
-                                                          <DialogTitle>{selectedOpp?.title ?? 'Opportunity'}</DialogTitle>DialogTitle>
+                                                          <DialogTitle>{selectedOpp?.title ?? 'Opportunity'}</DialogTitle>
                                                           <DialogDescription>
                                                             {(selectedOpp?.sponsor || selectedOpp?.state || selectedOpp?.deadline)
                                                                                 ? [
@@ -423,30 +423,30 @@ export default function SmartMatcher() {
                                                                                                         selectedOpp?.deadline ? `Deadline: ${selectedOpp.deadline}` : null,
                                                                                                       ].filter(Boolean).join(' \u2022 ')
                                                                                 : 'Details'}
-                                                          </DialogDescription>DialogDescription>
-                                            </DialogHeader>DialogHeader>
+                                                          </DialogDescription>
+                                            </DialogHeader>
                                             <div className="space-y-4">
                                               {selectedOpp?.description && (
-                          <div className="text-sm text-slate-700 whitespace-pre-wrap">{selectedOpp.description}</div>div>
+                          <div className="text-sm text-slate-700 whitespace-pre-wrap">{selectedOpp.description}</div>
                                                           )}
                                               {Array.isArray(selectedOpp?.match_reasons) && selectedOpp.match_reasons.length > 0 && (
                           <div className="space-y-2">
-                                            <div className="text-sm font-semibold text-slate-900">Why this matched</div>div>
+                                            <div className="text-sm font-semibold text-slate-900">Why this matched</div>
                                             <div className="flex flex-wrap gap-1">
                                               {selectedOpp.match_reasons.map((reason, idx) => (
-                                                  <Badge key={idx} variant="secondary" className="text-xs">{reason}</Badge>Badge>
+                                                  <Badge key={idx} variant="secondary" className="text-xs">{reason}</Badge>
                                                 ))}
-                                            </div>div>
-                          </div>div>
+                                            </div>
+                          </div>
                                                           )}
-                                            </div>div>
+                                            </div>
                                             <DialogFooter>
-                                                          <Button variant="outline" onClick={() => setSelectedOpp(null)}>Close</Button>Button>
-                                                          <Button onClick={handleOpenLink}>Open link</Button>Button>
-                                            </DialogFooter>DialogFooter>
-                                </DialogContent>DialogContent>
-                      </Dialog>Dialog>
-              </div>div>
-        </div>div>
+                                                          <Button variant="outline" onClick={() => setSelectedOpp(null)}>Close</Button>
+                                                          <Button onClick={handleOpenLink}>Open link</Button>
+                                            </DialogFooter>
+                                </DialogContent>
+                      </Dialog>
+              </div>
+        </div>
       )
-}</></div>
+}

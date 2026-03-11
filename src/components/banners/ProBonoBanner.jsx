@@ -88,27 +88,27 @@ export default function ProBonoBanner() {
                                                             {isExpired
                                                                                 ? "Pro Bono Period Has Ended"
                                                                                 : "Important: Pro Bono Status Ending Soon"}
-                                                          </p>p>
+                                                          </p>
                                                           <p className="mt-1">
                                                             {isExpired ? (
                             <>
                                                 Your pro bono arrangement has ended. Charges will now apply
-                                                based on <strong>{tierName}</strong>strong> and any active add-ons.
+                                                based on <strong>{tierName}</strong> and any active add-ons.
                                                 Please review the payment sheet for full pricing details.
-                            </>>
+                            </>
                           ) : (
                             <>
                                                 Your pro bono arrangement will end in{" "}
-                                                <strong>{daysLabel}</strong>strong>
-                              {endDateLabel && <> (on {endDateLabel})</>>}. After that,
-                                                charges will begin based on <strong>{tierName}</strong>strong> and
+                                                <strong>{daysLabel}</strong>
+                              {endDateLabel && <> (on {endDateLabel})</>}. After that,
+                                                charges will begin based on <strong>{tierName}</strong> and
                                                 any active add-ons. Please review the payment sheet below
                                                 for full pricing details.
-                            </>>
+                            </>
                           )}
-                                                          </p>p>
-                                            </div>div>
-                                </div>div>
+                                                          </p>
+                                            </div>
+                                </div>
                                 <div className="flex items-center gap-2 shrink-0">
                                             <a
                                                             href={PDF_URL}
@@ -117,17 +117,17 @@ export default function ProBonoBanner() {
                                                           >
                                                           <FileDown className="h-4 w-4" />
                                                           Payment Sheet
-                                            </a>a>
+                                            </a>
                                             <button
                                                             onClick={handleDismiss}
                                                             className="rounded-md p-1 text-amber-600 hover:bg-amber-100 hover:text-amber-800 transition-colors"
                                                             aria-label="Dismiss banner"
                                                           >
                                                           <X className="h-5 w-5" />
-                                            </button>button>
-                                </div>div>
-                      </div>div>
-              </div>div>
-        </div>div>
+                                            </button>
+                                </div>
+                      </div>
+              </div>
+        </div>
       )
-}</></></></div>
+}
