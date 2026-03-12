@@ -17,12 +17,14 @@ const buckets = {
   matching: { total: 0, zeroResult: 0, slow: 0, errors: 0, recent: [] },
   discovery: { total: 0, zeroResult: 0, slow: 0, errors: 0, recent: [] },
   ai: { total: 0, zeroResult: 0, slow: 0, errors: 0, recent: [] },
+  anya: { total: 0, zeroResult: 0, slow: 0, errors: 0, recent: [] },
 }
 
 function classifyPath(path) {
   if (path.startsWith('/api/matching')) return 'matching'
   if (path.startsWith('/api/discovery')) return 'discovery'
   if (path.startsWith('/api/ai/match') || path.startsWith('/api/ai/comprehensive')) return 'ai'
+  if (path.startsWith('/api/anya')) return 'anya'
   return null
 }
 

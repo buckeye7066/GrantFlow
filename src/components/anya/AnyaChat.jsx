@@ -37,7 +37,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 
-function MessageBubble({ message }) {
+const MessageBubble = React.memo(function MessageBubble({ message }) {
   const isAssistant = message.role === "assistant"
   return (
     <div
@@ -75,7 +75,7 @@ function MessageBubble({ message }) {
       ) : null}
     </div>
   )
-}
+})
 
 export default function AnyaChat({ profileId }) {
   const user = useAuthStore((state) => state.user)
@@ -104,6 +104,7 @@ export default function AnyaChat({ profileId }) {
   const [isAdminToolsOpen, setIsAdminToolsOpen] = useState(false)
   const [adminToolForm, setAdminToolForm] = useState({})
   const [invokingAdminTool, setInvokingAdminTool] = useState(null)
+  const isSendingRef = React.useRef(false)
 
   const hasMessages = messages.length > 0
   const hasTasks = tasks.length > 0
@@ -408,6 +409,9 @@ export default function AnyaChat({ profileId }) {
       log.debug('handleSend returning early', { hasText: Boolean(trimmed), isDisabled })
       return
     }
+    // Synchronous ref guard prevents rapid double-sends before React re-renders the disabled state
+    if (isSendingRef.current) return
+    isSendingRef.current = true
     setIsSending(true)
     log.debug('sending message', { sessionId })
     let optimisticId = null
@@ -445,6 +449,7 @@ export default function AnyaChat({ profileId }) {
         description: error instanceof Error ? error.message : "Please try again shortly.",
       })
     } finally {
+      isSendingRef.current = false
       setIsSending(false)
     }
   }
