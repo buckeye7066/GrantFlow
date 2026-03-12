@@ -1,98 +1,61 @@
-import React, { Suspense, useState } from "react";
-import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
+import React, { Suspense, lazy } from "react";
 import Layout from "./Layout.jsx";
 import OnboardingFlow from "@/components/onboarding/OnboardingFlow";
 
-import Dashboard from "./Dashboard";
-
-import Organizations from "./Organizations";
-import MyProfiles from "./MyProfiles";
-import Funder from "./Funder";
-
-import DiscoverGrants from "./DiscoverGrants";
-import SmartMatcher from "./SmartMatcher";
-import ItemFunding from "./ItemFunding";
-
-import Pipeline from "./Pipeline";
-
-import Proposals from "./Proposals";
-import Outreach from "./Outreach";
-import GrantDeadline from "./GrantDeadline";
-
-import Budgets from "./Budgets";
-
-import Documents from "./Documents";
-
-import Calendar from "./Calendar";
-
-import Reports from "./Reports";
-import AdvancedAnalytics from "./AdvancedAnalytics";
-
-import Billing from "./Billing";
-import Automation from "./Automation";
-
-import NewProject from "./NewProject";
-
-import GrantDetail from "./GrantDetail";
-import Apply from "./Apply";
-import VNextApplication from "./VNextApplication";
-import VNextFinishPacket from "./VNextFinishPacket";
-
-import InvoiceView from "./InvoiceView";
-
-import CreateInvoice from "./CreateInvoice";
-
-import NOFOParser from "./NOFOParser";
-
-import AIGrantScorer from "./AIGrantScorer";
-
-import BudgetDetail from "./BudgetDetail";
-
-import PrintPipeline from "./PrintPipeline";
-
-import OneTimeFix from "./OneTimeFix";
-
-import DataSources from "./DataSources";
-
-import SourceRegistry from "./SourceRegistry";
-
-import BackfillContacts from "./BackfillContacts";
-
-import Stewardship from "./Stewardship";
-import ProfileDetail from "./ProfileDetail";
-
-import Diagnostics from "./Diagnostics";
-
-import ComplianceReportDetail from "./ComplianceReportDetail";
-
-import ProfileMatcher from "./ProfileMatcher";
-
-import SourceDirectory from "./SourceDirectory";
-
-import GrantMonitoring from "./GrantMonitoring";
-
-import PrintableApplication from "./PrintableApplication";
-
-import BillingSheet from "./BillingSheet";
-
-import OrganizationProfile from "./OrganizationProfile";
-
-import FundingOpportunities from "./FundingOpportunities";
-
-import Pricing from "./Pricing";
-import Services from "./Services";
-
-import Settings from "./Settings";
-
-import Help from "./Help";
-
-import Admin from "./Admin";
-import Incognito from "./Incognito";
-
-import Login from "./Login";
-import AuthCallback from "./AuthCallback";
-import ServiceApplication from "./ServiceApplication";
-import SetPassword from "./SetPassword";
+const Dashboard = lazy(() => import("./Dashboard"));
+const Organizations = lazy(() => import("./Organizations"));
+const MyProfiles = lazy(() => import("./MyProfiles"));
+const Funder = lazy(() => import("./Funder"));
+const DiscoverGrants = lazy(() => import("./DiscoverGrants"));
+const SmartMatcher = lazy(() => import("./SmartMatcher"));
+const ItemFunding = lazy(() => import("./ItemFunding"));
+const Pipeline = lazy(() => import("./Pipeline"));
+const Proposals = lazy(() => import("./Proposals"));
+const Outreach = lazy(() => import("./Outreach"));
+const GrantDeadline = lazy(() => import("./GrantDeadline"));
+const Budgets = lazy(() => import("./Budgets"));
+const Documents = lazy(() => import("./Documents"));
+const Calendar = lazy(() => import("./Calendar"));
+const Reports = lazy(() => import("./Reports"));
+const AdvancedAnalytics = lazy(() => import("./AdvancedAnalytics"));
+const Billing = lazy(() => import("./Billing"));
+const Automation = lazy(() => import("./Automation"));
+const NewProject = lazy(() => import("./NewProject"));
+const GrantDetail = lazy(() => import("./GrantDetail"));
+const Apply = lazy(() => import("./Apply"));
+const VNextApplication = lazy(() => import("./VNextApplication"));
+const VNextFinishPacket = lazy(() => import("./VNextFinishPacket"));
+const InvoiceView = lazy(() => import("./InvoiceView"));
+const CreateInvoice = lazy(() => import("./CreateInvoice"));
+const NOFOParser = lazy(() => import("./NOFOParser"));
+const AIGrantScorer = lazy(() => import("./AIGrantScorer"));
+const BudgetDetail = lazy(() => import("./BudgetDetail"));
+const PrintPipeline = lazy(() => import("./PrintPipeline"));
+const OneTimeFix = lazy(() => import("./OneTimeFix"));
+const DataSources = lazy(() => import("./DataSources"));
+const SourceRegistry = lazy(() => import("./SourceRegistry"));
+const BackfillContacts = lazy(() => import("./BackfillContacts"));
+const Stewardship = lazy(() => import("./Stewardship"));
+const ProfileDetail = lazy(() => import("./ProfileDetail"));
+const Diagnostics = lazy(() => import("./Diagnostics"));
+const ComplianceReportDetail = lazy(() => import("./ComplianceReportDetail"));
+const ProfileMatcher = lazy(() => import("./ProfileMatcher"));
+const SourceDirectory = lazy(() => import("./SourceDirectory"));
+const GrantMonitoring = lazy(() => import("./GrantMonitoring"));
+const PrintableApplication = lazy(() => import("./PrintableApplication"));
+const BillingSheet = lazy(() => import("./BillingSheet"));
+const OrganizationProfile = lazy(() => import("./OrganizationProfile"));
+const FundingOpportunities = lazy(() => import("./FundingOpportunities"));
+const Pricing = lazy(() => import("./Pricing"));
+const Services = lazy(() => import("./Services"));
+const Settings = lazy(() => import("./Settings"));
+const Help = lazy(() => import("./Help"));
+const Admin = lazy(() => import("./Admin"));
+const Incognito = lazy(() => import("./Incognito"));
+const Login = lazy(() => import("./Login"));
+const AuthCallback = lazy(() => import("./AuthCallback"));
+const ServiceApplication = lazy(() => import("./ServiceApplication"));
+const SetPassword = lazy(() => import("./SetPassword"));
 
 import { Route, Routes, useLocation, Navigate } from 'react-router-dom';
 import { useAuthStore } from "@/stores/authStore";
@@ -106,22 +69,6 @@ function RouteLoading() {
     )
 }
 
-function EnsureQueryClientProvider({ children }) {
-    const [fallbackClient] = useState(() => new QueryClient());
-    let hasClient = true;
-
-    try {
-        useQueryClient();
-    } catch (error) {
-        hasClient = false;
-    }
-
-    if (!hasClient) {
-        return <QueryClientProvider client={fallbackClient}>{children}</QueryClientProvider>;
-    }
-
-    return children;
-}
 
 const PAGES = {
     
@@ -269,7 +216,7 @@ function LayoutRoutes() {
     }
 
     return (
-        <EnsureQueryClientProvider>
+        <Suspense fallback={<RouteLoading />}>
             <Layout currentPageName={currentPage}>
                 <Routes>
 
@@ -371,7 +318,7 @@ function LayoutRoutes() {
                 </Routes>
             </Layout>
             <OnboardingFlow />
-        </EnsureQueryClientProvider>
+        </Suspense>
     );
 }
 

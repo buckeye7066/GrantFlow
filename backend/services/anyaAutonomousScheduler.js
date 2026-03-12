@@ -276,16 +276,27 @@ export async function runOnStartup(db) {
   return runAllAutonomousOperations({ db }, 'startup')
 }
 
+let _adminLoginRunInProgress = false
+
 /**
- * Run autonomous operations on admin login
+ * Run autonomous operations on admin login (with concurrency guard)
  */
 export async function runOnAdminLogin(db, userId) {
   if (!AUTONOMOUS_CONFIG.runOnAdminLogin) {
     return null
   }
+  if (_adminLoginRunInProgress) {
+    console.log('[Anya Scheduler] Admin login ops already in progress, skipping')
+    return null
+  }
   
+  _adminLoginRunInProgress = true
   console.log(`[Anya Scheduler] Running operations for admin login: ${userId}`)
-  return runAllAutonomousOperations({ db, user: { id: userId, role: 'admin' } }, 'admin_login')
+  try {
+    return await runAllAutonomousOperations({ db, user: { id: userId, role: 'admin' } }, 'admin_login')
+  } finally {
+    _adminLoginRunInProgress = false
+  }
 }
 
 let _lastScheduledRunDate = null
@@ -313,9 +324,15 @@ export async function checkSchedule(db) {
     return null
   }
 
-  _lastScheduledRunDate = today
   console.log('[Anya Scheduler] Running scheduled operations...')
-  return runAllAutonomousOperations({ db }, 'schedule')
+  try {
+    const result = await runAllAutonomousOperations({ db }, 'schedule')
+    _lastScheduledRunDate = today
+    return result
+  } catch (err) {
+    console.error('[Anya Scheduler] Scheduled run failed:', err.message)
+    return null
+  }
 }
 
 /**
@@ -404,14 +421,14 @@ export function startBackgroundCodeCrawlAndRepair(context) {
 
   runCodeCrawlAndRepairOnly(context)
     .then((result) => {
-      backgroundCodeCrawlState.running = false
-      backgroundCodeCrawlState.completedAt = new Date().toISOString()
       backgroundCodeCrawlState.lastResult = result
     })
     .catch((err) => {
+      backgroundCodeCrawlState.lastError = err?.message || String(err)
+    })
+    .finally(() => {
       backgroundCodeCrawlState.running = false
       backgroundCodeCrawlState.completedAt = new Date().toISOString()
-      backgroundCodeCrawlState.lastError = err?.message || String(err)
     })
 
   return { queued: true, message: 'Code crawl and repair started in the background.' }

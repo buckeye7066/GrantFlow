@@ -126,66 +126,47 @@ export async function initializeAnyaOnLogin(db, user, profileId = null, { upload
     const sessionTitle = admin ? 'Admin Login Auto-Crawl Session' : 'Login Auto-Crawl Session'
     const sessionId = await createAnyaSession(db, user.id, profileId, sessionTitle)
 
-    // Core crawlers — every user gets these
-    const jobIds = {
-      local: await createCrawlerJob(db, profileId, 'local', {
-        radius_miles: 25,
-        max_results: 100,
-      }),
-      scholarship: await createCrawlerJob(db, profileId, 'scholarship', {
-        max_results: 50,
-      }),
-      comprehensive: await createCrawlerJob(db, profileId, 'comprehensive', {
-        max_results: 200,
-      }),
-    }
-
-    // Admin-only crawlers (heavier workload)
+    const coreDefs = [
+      ['local', { radius_miles: 25, max_results: 100 }],
+      ['scholarship', { max_results: 50 }],
+      ['comprehensive', { max_results: 200 }],
+    ]
     if (admin) {
-      jobIds.profile_enrichment = await createCrawlerJob(db, profileId, 'profile_enrichment', {})
-      jobIds.government_funding = await createCrawlerJob(db, profileId, 'government_funding', {})
-      jobIds.special_needs = await createCrawlerJob(db, profileId, 'special_needs', {})
-      jobIds.ecf_hcbs = await createCrawlerJob(db, profileId, 'ecf_hcbs', {})
-      jobIds.student_grants = await createCrawlerJob(db, profileId, 'student_grants', {})
+      coreDefs.push(
+        ['profile_enrichment', {}],
+        ['government_funding', {}],
+        ['special_needs', {}],
+        ['ecf_hcbs', {}],
+        ['student_grants', {}],
+      )
     }
 
-    // Dispatch all jobs (fire-and-forget)
-    Object.entries(jobIds).forEach(([type, jobId]) => {
-      try {
-        const promise = dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI })
-        if (promise && typeof promise.catch === 'function') {
-          promise.catch(err => {
-            console.error(`[anyaLoginTrigger] Job ${jobId} (${type}) dispatch failed:`, err)
-          })
+    const entries = await Promise.all(
+      coreDefs.map(async ([type, params]) => [type, await createCrawlerJob(db, profileId, type, params)])
+    )
+    const jobIds = Object.fromEntries(entries)
+
+    // Dispatch + welcome message in background — do NOT block login response
+    setImmediate(() => {
+      for (const [type, jobId] of Object.entries(jobIds)) {
+        try {
+          const promise = dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI })
+          if (promise && typeof promise.catch === 'function') {
+            promise.catch(err => console.error(`[anyaLoginTrigger] Job ${jobId} (${type}) dispatch failed:`, err))
+          }
+        } catch (err) {
+          console.error(`[anyaLoginTrigger] Job ${jobId} (${type}) dispatch failed:`, err)
         }
-        console.log(`[anyaLoginTrigger] Dispatched ${type} crawler job: ${jobId}`)
-      } catch (err) {
-        console.error(`[anyaLoginTrigger] Job ${jobId} (${type}) dispatch failed:`, err)
       }
+
+      const welcomeMessage = admin
+        ? `Welcome back! I've automatically started background tasks: Local, Scholarship, Comprehensive, Profile Enrichment, Government Funding, Special Needs & ECF/HCBS, and Student Grants. Ask me about crawler status anytime.`
+        : `Welcome! I'm searching for local opportunities, scholarships, and nationwide matches for your profile. Results will be ready shortly.`
+
+      addAnyaMessage(db, sessionId, 'assistant', welcomeMessage).catch(err =>
+        console.error('[anyaLoginTrigger] Failed to add welcome message:', err)
+      )
     })
-
-    const welcomeMessage = admin
-      ? `Welcome back! I've automatically started the following background tasks:
-
-1. **Local Opportunities** - Searching within 25 miles
-2. **Scholarship Opportunities** - Finding relevant scholarships
-3. **Comprehensive Match** - Scanning the opportunity catalog for strong nationwide matches
-4. **Profile Enrichment** - Updating profile data
-5. **Government Funding** - Federal / state programs
-6. **Special Needs & ECF/HCBS** - Specialized programs
-
-I'll notify you when these crawlers complete. You can check their progress anytime by asking me about crawler status.
-
-How can I help you today?`
-      : `Welcome! I'm searching for funding opportunities that match your profile:
-
-1. **Local Opportunities** - Searching near you
-2. **Scholarships** - Finding relevant scholarships
-3. **Nationwide Match** - Scanning the full catalog
-
-I'll have results ready shortly. How can I help you today?`
-
-    await addAnyaMessage(db, sessionId, 'assistant', welcomeMessage)
 
     return { sessionId, jobIds, profileId }
   } catch (error) {

@@ -435,14 +435,33 @@ export async function upsertFundingOpportunity(db, opportunity) {
 /**
  * Persist only policy-compliant opportunities. Non-negotiable: loans, matching funds,
  * placeholders, and invalid/missing URLs are never written to the database.
+ * Batched in transactions of 50 for performance.
  */
 export async function bulkUpsertFundingOpportunities(db, opportunities = []) {
+  const BATCH_SIZE = 50
   const inserted = []
-  for (const opportunity of opportunities) {
-    const policy = enforceOpportunityPolicy(opportunity)
-    if (!policy.ok) continue
-    const result = await upsertFundingOpportunity(db, opportunity)
-    if (result?.inserted) inserted.push(result.id)
+  for (let i = 0; i < opportunities.length; i += BATCH_SIZE) {
+    const batch = opportunities.slice(i, i + BATCH_SIZE)
+    try {
+      await db.withTransaction(async (tx) => {
+        for (const opportunity of batch) {
+          const policy = enforceOpportunityPolicy(opportunity)
+          if (!policy.ok) continue
+          const result = await upsertFundingOpportunity(tx, opportunity)
+          if (result?.inserted) inserted.push(result.id)
+        }
+      })
+    } catch (err) {
+      console.error(`[bulkUpsert] Batch ${i}-${i + batch.length} failed, falling back to individual:`, err.message)
+      for (const opportunity of batch) {
+        try {
+          const policy = enforceOpportunityPolicy(opportunity)
+          if (!policy.ok) continue
+          const result = await upsertFundingOpportunity(db, opportunity)
+          if (result?.inserted) inserted.push(result.id)
+        } catch { /* skip individual failures */ }
+      }
+    }
   }
   return inserted
 }

@@ -48,7 +48,16 @@ export default defineConfig(({ mode }) => {
       allowedHosts: true,
     },
     build: {
-      sourcemap: true,
+      sourcemap: mode !== 'production',
+      chunkSizeWarningLimit: 1000,
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+            'query': ['@tanstack/react-query'],
+          },
+        },
+      },
     },
   }
 })

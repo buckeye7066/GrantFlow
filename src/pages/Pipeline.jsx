@@ -56,6 +56,7 @@ export default function Pipeline() {
   const profilesQuery = useQuery({
     queryKey: ['profiles', 'pipeline-selector'],
     queryFn: () => listProfiles({ summary: true }),
+    staleTime: 60_000,
   })
   const profiles = Array.isArray(profilesQuery.data) ? profilesQuery.data : []
 

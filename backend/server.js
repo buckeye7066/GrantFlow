@@ -3,6 +3,7 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import compression from 'compression';
 import { fileURLToPath } from 'url';
 import { dirname, join, resolve } from 'path';
 import fs from 'fs';
@@ -242,6 +243,8 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
+
+app.use(compression({ threshold: 1024 }));
 
 // Request ID (correlate client errors with server logs)
 app.use((req, res, next) => {
@@ -1051,12 +1054,6 @@ function resolveJwtSecret() {
 
 const EFFECTIVE_JWT_SECRET = resolveJwtSecret()
 const isProd = process.env.NODE_ENV === 'production'
-
-// Make db available to routes
-app.use((req, res, next) => {
-  req.db = db;
-  next();
-});
 
 app.use(async (req, res, next) => {
   const authHeader = req.headers.authorization || '';

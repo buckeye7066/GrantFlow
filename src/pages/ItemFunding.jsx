@@ -329,11 +329,13 @@ export default function ItemFunding() {
   const statesQuery = useQuery({
     queryKey: ["opportunity-states"],
     queryFn: () => listOpportunityStates(),
+    staleTime: 5 * 60_000,
   })
 
   const profilesQuery = useQuery({
     queryKey: ["profiles"],
     queryFn: listProfiles,
+    staleTime: 60_000,
   })
 
   const selectedProfileQuery = useQuery({
