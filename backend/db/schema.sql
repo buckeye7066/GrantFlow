@@ -193,6 +193,9 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   match_percentage REAL,
   match_reasons TEXT DEFAULT '[]', -- JSON array of match/eligibility reasons
   
+  -- Loan / matching fund flag
+  is_loan BOOLEAN DEFAULT FALSE,
+
   -- Status
   is_active BOOLEAN DEFAULT TRUE,
   last_crawled DATETIME,

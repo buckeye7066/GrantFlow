@@ -31,6 +31,7 @@ function createInMemoryDb() {
       requires_501c3 INTEGER,
       match_percentage REAL,
       opportunity_type TEXT,
+      is_loan INTEGER DEFAULT 0,
       is_active INTEGER,
       raw_source_payload TEXT,
       last_crawled TEXT,

@@ -40,6 +40,7 @@ function createDb() {
       match_percentage REAL,
       match_reasons TEXT DEFAULT '[]',
       notes TEXT,
+      is_loan INTEGER DEFAULT 0,
       is_active INTEGER DEFAULT 1,
       last_crawled DATETIME,
       contact_info TEXT DEFAULT NULL
