@@ -372,6 +372,10 @@ class SqliteDb {
     this._db = new Database(sqlitePath);
     this._db.pragma('journal_mode = WAL');
     this._db.pragma(`busy_timeout = ${Number(process.env.SQLITE_BUSY_TIMEOUT_MS || 5000)}`);
+    this._db.pragma('synchronous = NORMAL');
+    this._db.pragma('foreign_keys = ON');
+    this._db.pragma(`cache_size = ${Number(process.env.SQLITE_CACHE_SIZE_KB || -64000)}`);
+    this._db.pragma('temp_store = MEMORY');
   }
 
   // Compatibility with better-sqlite3 API used throughout the codebase.

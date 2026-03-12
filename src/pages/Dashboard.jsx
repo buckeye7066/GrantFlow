@@ -168,6 +168,7 @@ export default function Dashboard() {
       return Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : []
     },
     enabled: currentUser?.role === "admin",
+    staleTime: 120_000,
   })
 
   const { data: grants = [], isLoading: isLoadingGrants, error: grantsError } = useQuery({
@@ -177,6 +178,7 @@ export default function Dashboard() {
       return Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : []
     },
     enabled: Boolean(currentUser),
+    staleTime: 60_000,
   })
 
   const { data: milestones = [], isLoading: isLoadingMilestones, error: milestonesError } = useQuery({
@@ -186,6 +188,7 @@ export default function Dashboard() {
       return Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : []
     },
     enabled: Boolean(currentUser),
+    staleTime: 60_000,
   })
 
   const { data: expenses = [], isLoading: isLoadingExpenses, error: expensesError } = useQuery({
@@ -195,6 +198,7 @@ export default function Dashboard() {
       return Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : []
     },
     enabled: Boolean(currentUser),
+    staleTime: 60_000,
   })
 
   const {

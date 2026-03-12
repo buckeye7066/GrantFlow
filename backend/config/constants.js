@@ -59,7 +59,7 @@ export const OAUTH_STATE_EXPIRATION_MS = 10 * 60 * 1000; // 10 minutes
 
 // File upload limits
 export const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
-export const MAX_JSON_BODY_SIZE = '50mb';
+export const MAX_JSON_BODY_SIZE = '5mb';
 
 // Billing constants
 export const BILLING_TIERS = {
