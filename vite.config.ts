@@ -57,35 +57,30 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         output: {
           manualChunks(id) {
-            if (id.includes('node_modules')) {
-              if (id.includes('react') || id.includes('react-dom') || id.includes('react-router-dom')) {
-                return 'react-vendor'
-              }
-              if (id.includes('@tanstack/react-query')) {
-                return 'query'
-              }
-              if (id.includes('@radix-ui')) {
-                return 'radix-ui'
-              }
-              if (id.includes('recharts')) {
-                return 'recharts'
-              }
-              if (id.includes('framer-motion')) {
-                return 'framer-motion'
-              }
-              if (id.includes('date-fns')) {
-                return 'date-fns'
-              }
-              if (id.includes('lucide-react')) {
-                return 'lucide-react'
-              }
-              if (id.includes('zustand')) {
-                return 'zustand'
-              }
-              if (id.includes('zod')) {
-                return 'zod'
-              }
+            const n = id.replace(/\\/g, '/')
+            if (!n.includes('node_modules/')) return undefined
+
+            if (
+              /node_modules\/react(-dom)?\//.test(n) &&
+              !n.includes('node_modules/react-router') &&
+              !n.includes('node_modules/react-hook-form') &&
+              !n.includes('node_modules/react-day-picker') &&
+              !n.includes('node_modules/react-markdown') &&
+              !n.includes('node_modules/react-resizable')
+            ) {
+              return 'react-vendor'
             }
+            if (n.includes('node_modules/zustand/') || n.includes('node_modules/use-sync-external-store/')) {
+              return 'zustand-vendor'
+            }
+            if (n.includes('node_modules/@radix-ui/')) return 'radix-ui'
+            if (n.includes('node_modules/@tanstack/react-query/')) return 'query'
+            if (n.includes('node_modules/recharts/')) return 'recharts'
+            if (n.includes('node_modules/framer-motion/')) return 'framer-motion'
+            if (n.includes('node_modules/date-fns/')) return 'date-fns'
+            if (n.includes('node_modules/lucide-react/')) return 'lucide-react'
+            if (n.includes('node_modules/zod/')) return 'zod'
+            return undefined
           },
         },
       },
