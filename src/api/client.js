@@ -49,6 +49,7 @@ class APIClient {
     this.stubWarnings = new Set();
     this.isDev = import.meta.env?.DEV ?? false;
     this.entities = {};
+    this._inflightRequests = new Map();
 
     // Persisted active profile context for profile-scoped requests.
     if (typeof window !== 'undefined') {
@@ -273,6 +274,26 @@ class APIClient {
   }
 
   async fetch(endpoint, options = {}) {
+    const { _isRetry } = options || {};
+    const method = String((options || {}).method || 'GET').toUpperCase();
+
+    // Deduplicate identical in-flight GET requests to avoid redundant network calls
+    if (method === 'GET' && !_isRetry) {
+      const inflightKey = `${this.baseUrl}${endpoint}`;
+      if (this._inflightRequests.has(inflightKey)) {
+        return this._inflightRequests.get(inflightKey);
+      }
+      const promise = this._doFetch(endpoint, options).finally(() => {
+        this._inflightRequests.delete(inflightKey);
+      });
+      this._inflightRequests.set(inflightKey, promise);
+      return promise;
+    }
+
+    return this._doFetch(endpoint, options);
+  }
+
+  async _doFetch(endpoint, options = {}) {
     const url = `${this.baseUrl}${endpoint}`;
     const token = this.getToken();
     const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
