@@ -32,6 +32,7 @@ function createOpportunitiesDb() {
       sponsor TEXT,
       source TEXT,
       source_id TEXT,
+      is_loan INTEGER DEFAULT 0,
       is_active INTEGER DEFAULT 1,
       last_crawled DATETIME,
       state TEXT,

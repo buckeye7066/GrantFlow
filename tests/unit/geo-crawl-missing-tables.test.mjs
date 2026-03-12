@@ -67,6 +67,7 @@ test('geo crawl: self-heals when geo progress tables are missing (sqlite)', asyn
       type TEXT,
       requires_match BOOLEAN DEFAULT FALSE,
       match_percentage REAL,
+      is_loan BOOLEAN DEFAULT FALSE,
       last_verified_at DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
