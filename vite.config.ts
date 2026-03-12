@@ -48,12 +48,12 @@ export default defineConfig(({ mode }) => {
       allowedHosts: true,
     },
     build: {
-      target: 'es2020',
       cssMinify: true,
       sourcemap: mode !== 'production',
       chunkSizeWarningLimit: 1000,
       cssCodeSplit: true,
       minify: 'esbuild',
+      target: 'es2020',
       rollupOptions: {
         output: {
           manualChunks(id) {
