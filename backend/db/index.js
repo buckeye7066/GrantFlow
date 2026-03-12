@@ -489,7 +489,7 @@ class PostgresDb {
     this.url = connectionString;
     this._pool = new Pool({
       connectionString,
-      max: Number(process.env.PG_POOL_MAX || 10),
+      max: Number(process.env.DB_POOL_MAX || process.env.PG_POOL_MAX || 20),
       idleTimeoutMillis: Number(process.env.PG_POOL_IDLE_MS || 30000),
       connectionTimeoutMillis: Number(process.env.PG_POOL_CONN_TIMEOUT_MS || 10000),
       statement_timeout: Number(process.env.PG_STATEMENT_TIMEOUT_MS || 15000),

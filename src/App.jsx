@@ -64,13 +64,6 @@ function App() {
     )
   }
 
-  // Router basename must match the deployed base path. In dev we serve at `/`,
-  // while some production deployments live under a sub-path (e.g. `/grantflow`).
-  const normalizeBase = (base) => {
-    if (!base) return '/'
-    if (base === '/') return '/'
-    return base.endsWith('/') ? base.slice(0, -1) : base
-  }
   const basename = env.appBase
 
   return (

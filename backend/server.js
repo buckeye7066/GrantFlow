@@ -38,24 +38,17 @@ import authRouter from './routes/auth.js';
 import preferencesRouter from './routes/preferences.js';
 import incognitoRouter from './routes/incognito.js';
 import adminRouter from './routes/admin.js';
-import createGeoCrawlRouter from './routes/geoCrawl.js'
 import discoveryRouter from './routes/discovery.js';
-import serviceApplicationRouter from './routes/serviceApplication.js';
 import statsRouter from './routes/stats.js';
 import jwt from 'jsonwebtoken';
-import crawlerV2Router from './routes/crawlerV2.js';
-import nfProgramsRouter from './routes/nfPrograms.js';
-import nofoRouter from './routes/nofo.js';
 import healthRouter from './routes/health.js';
 import crawlLogsRouter from './routes/crawlLogs.js'
-import legacyFunctionsRouter from './routes/legacyFunctions.js'
 import sourceDirectoryRouter from './routes/sourceDirectory.js'
 import activityRouter from './routes/activity.js'
 import budgetsRouter from './routes/budgets.js'
 import contactsRouter from './routes/contacts.js'
 import applicationDraftsRouter from './routes/applicationDrafts.js'
 import applicationsRouter from './routes/applications.js'
-import vnextApplicationsRouter from './routes/vnextApplications.js'
 import billingSettingsRouter from './routes/billingSettings.js'
 import contactMethodsRouter from './routes/contactMethods.js'
 import outreachLogsRouter from './routes/outreachLogs.js'
@@ -91,6 +84,26 @@ import { seedServiceCatalogFromExtract } from './services/serviceCatalogStore.js
 import adminServiceCatalogRouter from './routes/adminServiceCatalog.js'
 import collegesRouter from './routes/colleges.js'
 import { allowedOriginCheckSQL } from './utils/recordOrigins.js'
+
+/**
+ * Lazy-loading route helper — caches the imported router after first load.
+ * Routes that are called infrequently (e.g., admin crawlers, legacy functions)
+ * are excluded from the eager import list to speed up server startup.
+ *
+ * @param {string} specifier - ESM specifier relative to this file (e.g., './routes/nofo.js')
+ * @param {Function} [extract] - Optional: extract the router from the module (default: .default)
+ * @returns {express.RequestHandler}
+ */
+function lazyRouter(specifier, extract) {
+  let _router = null
+  return async (req, res, next) => {
+    if (!_router) {
+      const mod = await import(specifier)
+      _router = extract ? extract(mod) : (mod.default ?? mod)
+    }
+    _router(req, res, next)
+  }
+}
 
 // Validate environment variables early (fail-fast in production).
 const { env: ENV } = assertEnv()
@@ -343,10 +356,21 @@ app.use(healthRouter);
 
 // IMPORTANT: Missing uploads must return 404 (not SPA index.html).
 // Serve both current + legacy upload locations, then terminate with a strict 404.
-app.use('/uploads', express.static(uploadsDir, { index: false }));
+// User-uploaded files use no-cache so updated files are always re-validated.
+app.use('/uploads', express.static(uploadsDir, {
+  index: false,
+  setHeaders(res) {
+    res.setHeader('Cache-Control', 'no-cache')
+  },
+}));
 try {
   if (legacyUploadsDir !== uploadsDir && fs.existsSync(legacyUploadsDir)) {
-    app.use('/uploads', express.static(legacyUploadsDir, { index: false }));
+    app.use('/uploads', express.static(legacyUploadsDir, {
+      index: false,
+      setHeaders(res) {
+        res.setHeader('Cache-Control', 'no-cache')
+      },
+    }));
   }
 } catch {
   // ignore legacy-dir probing failures
@@ -445,7 +469,17 @@ async function repairInvalidDocumentStatuses(db) {
 }
 
 // Serve static files from Vite build
-app.use(express.static(distPath));
+// Hashed asset files (JS/CSS with content hash in filename) get long-lived immutable cache.
+// The SPA entry point (index.html) must not be cached so users always get the latest version.
+app.use(express.static(distPath, {
+  setHeaders(res, filePath) {
+    if (filePath.includes('/assets/') && !filePath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+    } else if (filePath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
+    }
+  },
+}))
 // Serve the SPA under the configured base path so production builds (base=/grantflow) work locally.
 const APP_BASE_PATH = ENV?.appBase || process.env.AUTH_FRONTEND_APP_BASE || process.env.VITE_APP_BASE || '/grantflow';
 if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
@@ -1541,7 +1575,7 @@ app.get('/api/admin/pipeline-health', (req, res) => {
 // API routes
 app.use('/api/auth', authRouter);
 app.use('/api/activity', activityRouter);
-app.use('/api/service-application', serviceApplicationRouter);
+app.use('/api/service-application', lazyRouter('./routes/serviceApplication.js'));
 app.use('/api/billing', billingRouter);
 app.use('/api/stats', statsRouter);
 app.use('/api/services', servicesRouter);
@@ -1559,7 +1593,7 @@ app.use('/api/contacts', contactsRouter);
 app.use('/api/outreach-logs', outreachLogsRouter);
 app.use('/api/application-drafts', applicationDraftsRouter);
 app.use('/api/applications', applicationsRouter);
-app.use('/api/vnext/applications', vnextApplicationsRouter);
+app.use('/api/vnext/applications', lazyRouter('./routes/vnextApplications.js'));
 app.use('/api/billing-settings', billingSettingsRouter);
 app.use('/api/contact-methods', contactMethodsRouter);
 app.use('/api/source-directory', sourceDirectoryRouter);
@@ -1578,13 +1612,13 @@ app.use('/api/preferences', preferencesRouter);
 app.use('/api/incognito', incognitoRouter);
 app.use('/api/version', versionRouter);
 // Base44 function-style endpoints (used by NOFO Parser + Diagnostics)
-app.use('/api', nofoRouter);
+app.use('/api', lazyRouter('./routes/nofo.js'));
 // Base44 legacy function-style endpoints (legacy UI flows: DataSources/SourceDirectory)
-app.use('/api', legacyFunctionsRouter);
+app.use('/api', lazyRouter('./routes/legacyFunctions.js'));
 // Base44 legacy entity endpoints
 app.use('/api/crawl-logs', crawlLogsRouter);
 // Geo Crawl monitor + start endpoints (admin-only)
-app.use('/api/geo-crawl', createGeoCrawlRouter({ uploadDir: uploadsDir, getOpenAI: null }));
+app.use('/api/geo-crawl', lazyRouter('./routes/geoCrawl.js', (mod) => mod.default({ uploadDir: uploadsDir, getOpenAI: null })));
 app.use('/api/colleges', collegesRouter);
 
 function resolveBuildSha() {
@@ -1918,8 +1952,8 @@ app.get('/api/meta/dedupe', async (_req, res) => {
 
 app.use('/api/admin', adminRouter);
 app.use('/api', requestTimeout(PIPELINE_TIMEOUT), discoveryRouter);
-app.use('/api/crawler-v2', crawlerV2Router);
-app.use('/api/nf-programs', nfProgramsRouter);
+app.use('/api/crawler-v2', lazyRouter('./routes/crawlerV2.js'));
+app.use('/api/nf-programs', lazyRouter('./routes/nfPrograms.js'));
 
 // Pipeline stats
 app.get('/api/pipeline/stats', async (req, res) => {
