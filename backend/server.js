@@ -65,6 +65,7 @@ import { errorHandler } from './middleware/errorHandler.js';
 import { attachRequestContext } from './middleware/requestContext.js';
 import { pipelineMonitor, getPipelineHealth } from './middleware/pipelineMonitor.js';
 import { requestTimeout } from './middleware/requestTimeout.js';
+import { responseCache } from './middleware/responseCache.js';
 import { MAX_JSON_BODY_SIZE } from './config/constants.js';
 import { getSafeHealthSummary } from './services/diagnosticsService.js';
 import { initializeFeatureFlags } from './services/featureFlagService.js';
@@ -133,6 +134,7 @@ const distPath = join(__dirname, '..', 'dist');
 
 const app = express();
 app.set('trust proxy', 1);
+app.set('etag', 'strong');
 const PORT = ENV?.PORT ?? process.env.PORT ?? 8080;
 
 // --- Upload storage health (single source of truth) ---
@@ -1577,7 +1579,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/activity', activityRouter);
 app.use('/api/service-application', lazyRouter('./routes/serviceApplication.js'));
 app.use('/api/billing', billingRouter);
-app.use('/api/stats', statsRouter);
+app.use('/api/stats', responseCache(60_000), statsRouter);
 app.use('/api/services', servicesRouter);
 app.use('/api/stripe', stripeRouter);
 app.use('/api/admin/service-catalog', adminServiceCatalogRouter)
@@ -1605,7 +1607,7 @@ app.use('/api/profiles', profilesRouter);
 app.use('/api/reminders', remindersRouter);
 app.use('/api/matching', requestTimeout(PIPELINE_TIMEOUT), matchingRouter);
 app.use('/api/grant-monitoring', grantMonitoringRouter);
-app.use('/api/crawlers', crawlersRouter);
+app.use('/api/crawlers', responseCache(30_000), crawlersRouter);
 app.use('/api/real-crawlers', realCrawlersRouter);
 app.use('/api/preferences', preferencesRouter);
 // Incognito module endpoints (gated by user custom preferences)

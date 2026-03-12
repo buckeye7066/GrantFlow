@@ -48,6 +48,7 @@ export default defineConfig(({ mode }) => {
       allowedHosts: true,
     },
     build: {
+      cssMinify: true,
       sourcemap: mode !== 'production',
       chunkSizeWarningLimit: 1000,
       cssCodeSplit: true,

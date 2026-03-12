@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Multi-stage Dockerfile for GrantFlow (Vite + Express hybrid)
 # Stage 1: Build stage
 FROM node:20-slim AS builder
@@ -14,7 +15,9 @@ RUN apt-get update \
 COPY package*.json ./
 
 # Install ALL deps (incl dev) for build. Use lockfile.
-RUN npm ci --legacy-peer-deps
+# --mount=type=cache persists the npm cache across builds for faster installs.
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --legacy-peer-deps
 
 # Copy all source files
 COPY . .
