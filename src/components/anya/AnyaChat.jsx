@@ -75,7 +75,7 @@ const MessageBubble = React.memo(function MessageBubble({ message }) {
       ) : null}
     </div>
   )
-}
+})
 
 export default function AnyaChat({ profileId }) {
   const user = useAuthStore((state) => state.user)
