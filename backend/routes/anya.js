@@ -19,6 +19,11 @@ const router = express.Router()
 
 const resolveAdminToken = () => process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null
 
+// Cache for the ?test=true status check result (5-minute TTL)
+let _statusTestCache = null
+let _statusTestCacheExpiry = 0
+const STATUS_TEST_CACHE_TTL_MS = 5 * 60 * 1000
+
 /**
  * Admin authentication middleware for Anya routes.
  * Uses req.ctx.isAdmin (DB-backed) as the canonical source of truth.
@@ -72,6 +77,11 @@ router.get('/status', adminAuth, async (_req, res) => {
   let modelInfo = null
 
   if (shouldTest) {
+    // Return cached result if still valid (avoids redundant API calls)
+    if (_statusTestCache && Date.now() < _statusTestCacheExpiry) {
+      return res.json(_statusTestCache)
+    }
+
     if (isProd) {
       anthropicStatus = anthropicStatus === 'missing_key' ? 'missing_key' : 'not_tested'
       anthropicError = {
@@ -122,7 +132,7 @@ router.get('/status', adminAuth, async (_req, res) => {
     }
   }
 
-  res.json({
+  const responseBody = {
     status: 'ready',
     anthropic: {
       status: anthropicStatus,
@@ -137,7 +147,15 @@ router.get('/status', adminAuth, async (_req, res) => {
     environment: { node_env: process.env.NODE_ENV },
     last_action_at: null,
     active_sessions: null,
-  })
+  }
+
+  // Cache the test result to avoid redundant external API calls
+  if (shouldTest && !isProd) {
+    _statusTestCache = responseBody
+    _statusTestCacheExpiry = Date.now() + STATUS_TEST_CACHE_TTL_MS
+  }
+
+  res.json(responseBody)
 })
 
 router.get('/sessions', async (req, res) => {

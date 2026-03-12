@@ -50,11 +50,41 @@ export default defineConfig(({ mode }) => {
     build: {
       sourcemap: mode !== 'production',
       chunkSizeWarningLimit: 1000,
+      cssCodeSplit: true,
+      minify: 'esbuild',
+      target: 'es2020',
       rollupOptions: {
         output: {
-          manualChunks: {
-            'react-vendor': ['react', 'react-dom', 'react-router-dom'],
-            'query': ['@tanstack/react-query'],
+          manualChunks(id) {
+            if (id.includes('node_modules')) {
+              if (id.includes('react') || id.includes('react-dom') || id.includes('react-router-dom')) {
+                return 'react-vendor'
+              }
+              if (id.includes('@tanstack/react-query')) {
+                return 'query'
+              }
+              if (id.includes('@radix-ui')) {
+                return 'radix-ui'
+              }
+              if (id.includes('recharts')) {
+                return 'recharts'
+              }
+              if (id.includes('framer-motion')) {
+                return 'framer-motion'
+              }
+              if (id.includes('date-fns')) {
+                return 'date-fns'
+              }
+              if (id.includes('lucide-react')) {
+                return 'lucide-react'
+              }
+              if (id.includes('zustand')) {
+                return 'zustand'
+              }
+              if (id.includes('zod')) {
+                return 'zod'
+              }
+            }
           },
         },
       },

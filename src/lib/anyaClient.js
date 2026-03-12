@@ -1,13 +1,27 @@
 import { apiFetch } from "@/api/client"
 
+// In-flight request cache for deduplication — prevents duplicate concurrent fetches
+// for the same resource (sessions list, per-session messages).
+const _inflight = new Map()
+
+function deduplicatedFetch(key, fn) {
+  if (_inflight.has(key)) return _inflight.get(key)
+  const promise = fn().finally(() => _inflight.delete(key))
+  _inflight.set(key, promise)
+  return promise
+}
+
 export async function getAnyaSessions({ limit } = {}) {
   const searchParams = new URLSearchParams()
   if (limit != null) {
     searchParams.set("limit", String(limit))
   }
   const query = searchParams.toString()
-  const response = await apiFetch(`/api/anya/sessions${query ? `?${query}` : ""}`)
-  return response?.sessions || []
+  const url = `/api/anya/sessions${query ? `?${query}` : ""}`
+  return deduplicatedFetch(`sessions:${url}`, async () => {
+    const response = await apiFetch(url)
+    return response?.sessions || []
+  })
 }
 
 export async function createAnyaSession({ profileId, title, metadata } = {}) {
@@ -27,10 +41,11 @@ export async function getAnyaMessages(sessionId, { limit, direction } = {}) {
   if (limit != null) searchParams.set("limit", String(limit))
   if (direction) searchParams.set("direction", direction)
   const query = searchParams.toString()
-  const response = await apiFetch(
-    `/api/anya/sessions/${sessionId}/messages${query ? `?${query}` : ""}`,
-  )
-  return response?.messages || []
+  const url = `/api/anya/sessions/${sessionId}/messages${query ? `?${query}` : ""}`
+  return deduplicatedFetch(`messages:${url}`, async () => {
+    const response = await apiFetch(url)
+    return response?.messages || []
+  })
 }
 
 export async function postAnyaMessage(sessionId, message) {
