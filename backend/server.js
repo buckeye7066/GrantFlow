@@ -447,9 +447,17 @@ async function repairInvalidDocumentStatuses(db) {
 }
 
 // Serve static files from Vite build
-// Hashed assets (JS/CSS chunks) are immutable – browsers can cache them forever
-app.use('/assets', express.static(join(distPath, 'assets'), { maxAge: '1y', immutable: true }));
-app.use(express.static(distPath));
+// Hashed asset files (JS/CSS with content hash in filename) get long-lived immutable cache.
+// The SPA entry point (index.html) must not be cached so users always get the latest version.
+app.use(express.static(distPath, {
+  setHeaders(res, filePath) {
+    if (filePath.includes('/assets/') && !filePath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+    } else if (filePath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
+    }
+  },
+}))
 // Serve the SPA under the configured base path so production builds (base=/grantflow) work locally.
 const APP_BASE_PATH = ENV?.appBase || process.env.AUTH_FRONTEND_APP_BASE || process.env.VITE_APP_BASE || '/grantflow';
 if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
@@ -465,8 +473,6 @@ if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
   }
   app.use(`${normalizedBase}/uploads`, (_req, res) => res.status(404).send('Not Found'));
 
-  // Hashed assets under the base path are also immutable
-  app.use(`${normalizedBase}/assets`, express.static(join(distPath, 'assets'), { maxAge: '1y', immutable: true }));
   app.use(APP_BASE_PATH, express.static(distPath));
 }
 
