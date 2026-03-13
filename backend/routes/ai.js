@@ -1506,4 +1506,95 @@ Return ONLY valid JSON:
   }
 });
 
+/**
+ * AI School Data Lookup — uses Anthropic with web search to auto-fill
+ * admissions snapshot fields for a university application.
+ *
+ * POST /api/ai/school-lookup
+ * Body: { school_name: string }
+ */
+router.post('/school-lookup', async (req, res) => {
+  try {
+    const { school_name } = req.body;
+    if (!school_name || typeof school_name !== 'string' || !school_name.trim()) {
+      return res.status(400).json({ error: 'school_name is required' });
+    }
+
+    const trimmedName = school_name.trim();
+    console.log(`[school-lookup] Looking up data for: ${trimmedName}`);
+
+    const anthropic = await createAnthropicClient();
+    if (!anthropic) {
+      // Fall back to OpenAI without web search
+      const result = await invokeTextWithFallback({
+        prompt: `Look up the following information for "${trimmedName}" and return ONLY a JSON object with these exact keys. Use "—" for any value you cannot find. Do not include any other text, markdown, or explanation.\n\nKeys:\n- acceptanceRate (e.g. "65%")\n- avgGPA (e.g. "3.4")\n- satRange (e.g. "1050-1250")\n- tuition (e.g. "$28,900/yr")\n- fafsaCode (e.g. "003525")\n- graduationRate (e.g. "52%")\n- studentTeacher (e.g. "14:1")\n- avgClassSize (e.g. "18")\n- estCost (e.g. "$38,200/yr" — total estimated cost of attendance)\n- enrollment (e.g. "5,200")\n- founded (e.g. "1901")\n- type (e.g. "Private, Nonprofit" or "Public")\n- setting (e.g. "Urban" or "Suburban")\n\nReturn ONLY the JSON object, no backticks, no explanation.`,
+        temperature: 0.1,
+        maxTokens: 1000,
+      });
+
+      if (!result.text) {
+        return res.status(502).json({ error: 'AI provider unavailable' });
+      }
+
+      const parsed = tryExtractFirstJson(result.text);
+      if (!parsed) {
+        return res.status(502).json({ error: 'Failed to parse AI response', raw: result.text });
+      }
+
+      return res.json({ success: true, school_name: trimmedName, data: parsed, provider: result.provider });
+    }
+
+    // Use Anthropic with web search for best results
+    const response = await anthropic.messages.create({
+      model: process.env.ANTHROPIC_MODEL_SCHOOL_LOOKUP || 'claude-sonnet-4-20250514',
+      max_tokens: 1000,
+      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
+      messages: [{
+        role: 'user',
+        content: `Look up the following information for "${trimmedName}" and return ONLY a JSON object with these exact keys. Use "—" for any value you cannot find. Do not include any other text, markdown, or explanation.
+
+Keys:
+- acceptanceRate (e.g. "65%")
+- avgGPA (e.g. "3.4")
+- satRange (e.g. "1050-1250")
+- tuition (e.g. "$28,900/yr")
+- fafsaCode (e.g. "003525")
+- graduationRate (e.g. "52%")
+- studentTeacher (e.g. "14:1")
+- avgClassSize (e.g. "18")
+- estCost (e.g. "$38,200/yr" — total estimated cost of attendance)
+- enrollment (e.g. "5,200")
+- founded (e.g. "1901")
+- type (e.g. "Private, Nonprofit" or "Public")
+- setting (e.g. "Urban" or "Suburban")
+
+Return ONLY the JSON object, no backticks, no explanation.`
+      }],
+    });
+
+    const textBlocks = (response.content || [])
+      .filter(b => b.type === 'text')
+      .map(b => b.text)
+      .join('\n');
+
+    let parsed = null;
+    try {
+      parsed = JSON.parse(textBlocks.trim());
+    } catch {
+      parsed = tryExtractFirstJson(textBlocks);
+    }
+
+    if (!parsed) {
+      console.warn('[school-lookup] Could not parse response:', textBlocks.slice(0, 300));
+      return res.status(502).json({ error: 'Failed to parse AI response', raw: textBlocks.slice(0, 500) });
+    }
+
+    console.log(`[school-lookup] Success for ${trimmedName}: ${Object.keys(parsed).length} fields`);
+    return res.json({ success: true, school_name: trimmedName, data: parsed, provider: 'anthropic-web-search' });
+  } catch (error) {
+    console.error('[school-lookup] Error:', error);
+    res.status(500).json(formatError(error));
+  }
+});
+
 export default router;
