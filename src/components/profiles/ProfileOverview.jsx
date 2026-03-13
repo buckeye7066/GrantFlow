@@ -322,7 +322,13 @@ function TargetCollegesCards({ colleges, onViewInUniversities }) {
         {list.map((name, idx) => (
           <div
             key={`${name}-${idx}`}
-            className="rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2.5 flex items-center gap-2"
+            className="rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2.5 flex items-center gap-2 cursor-pointer hover:bg-slate-100 hover:border-slate-300 transition-colors"
+            onClick={(e) => {
+              e.stopPropagation()
+              if (onViewInUniversities) onViewInUniversities()
+            }}
+            role="button"
+            tabIndex={0}
           >
             <GraduationCap className="w-4 h-4 text-indigo-500 shrink-0" />
             <span className="text-sm font-medium text-slate-800 truncate">{name}</span>
