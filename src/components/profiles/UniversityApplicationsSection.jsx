@@ -37,6 +37,7 @@ import { useToast } from "@/components/ui/use-toast"
 import UniversityApplicationForm from "./UniversityApplicationForm.jsx"
 import { deleteDocument, ingestDocument, listDocuments } from "@/api/documents"
 import DocumentItem from "@/components/documents/DocumentItem"
+import { useSchoolAIAssist, mapAIDataToApplicationPatch, AIAssistButton, AIAssistLog, SchoolAIAssistStyles } from "./SchoolCardAIAssist"
 
 const STATUS_STYLES = {
   planning: { label: "Planning", className: "bg-slate-100 text-slate-700 border-slate-200" },
@@ -722,6 +723,7 @@ export default function UniversityApplicationsSection({
 
   return (
     <Card className="mt-10 border-slate-200 shadow-sm">
+      <SchoolAIAssistStyles />
       <CardHeader className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <CardTitle className="text-xl font-semibold text-slate-900 flex items-center gap-2">
@@ -878,6 +880,20 @@ function ApplicationCard({
   onDeleteSchoolDoc,
   docBusy,
 }) {
+  const aiAssist = useSchoolAIAssist()
+  const aiLogRef = useRef(null)
+
+  const handleAIAutoFill = async () => {
+    if (!application.name) return
+    const data = await aiAssist.runLookup(application.name)
+    if (data && onQuickUpdate) {
+      const patch = mapAIDataToApplicationPatch(data)
+      if (Object.keys(patch).length > 0) {
+        await onQuickUpdate(application.id, patch, "AI auto-filled school data.")
+      }
+    }
+  }
+
   const statusStyle = STATUS_STYLES[application.status] ?? STATUS_STYLES.planning
   const pipeline = safeArray(application.financial_aid_pipeline)
   const contacts = safeArray(application.contacts)
@@ -1122,6 +1138,10 @@ function ApplicationCard({
           <ExternalLinkButton href={application.actions?.pay_fee_url}>Pay Fee</ExternalLinkButton>
           <ExternalLinkButton href={application.actions?.visit_url}>Visit</ExternalLinkButton>
           <ExternalLinkButton href={zillowUrl}>Housing (Zillow)</ExternalLinkButton>
+          <AIAssistButton
+            status={aiAssist.status}
+            onClick={handleAIAutoFill}
+          />
           <Button variant="outline" size="icon" onClick={onEdit}>
             <Edit className="w-4 h-4" />
           </Button>
@@ -1407,6 +1427,12 @@ function ApplicationCard({
             )}
           </div>
         </div>
+
+        {aiAssist.status !== "idle" && (
+          <div className="lg:col-span-12">
+            <AIAssistLog status={aiAssist.status} log={aiAssist.log} logRef={aiLogRef} />
+          </div>
+        )}
 
         <div className="lg:col-span-12 space-y-4">
           <h4 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
