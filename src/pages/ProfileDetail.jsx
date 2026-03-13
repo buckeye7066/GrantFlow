@@ -339,7 +339,14 @@ export default function ProfileDetail() {
     const pt = String(profile.primary_type || "").toLowerCase()
     const bi = profile.sections?.find((s) => s.section_key === "basic_information")?.data ?? {}
     const ptl = String(bi?.profile_type || "").toLowerCase()
-    const isStudent = ["high_school_student", "college_student", "graduate_student"].includes(pt) || ptl.includes("student")
+    const eduData = profile.sections?.find((s) => s.section_key === "education")?.data
+    const hl = String(eduData?.highest_level || "").toLowerCase()
+    const tc = eduData?.target_colleges
+    const hasTc = Array.isArray(tc) ? tc.length > 0 : typeof tc === "string" && tc.trim().length > 0
+    const isStudent = ["high_school_student", "college_student", "graduate_student"].includes(pt)
+      || ptl.includes("student")
+      || hl.includes("student")
+      || hasTc
     if (!isStudent) return
     const usd = profile.sections?.find((s) => s.section_key === "university_applications")?.data ?? {}
     const uniApps = Array.isArray(usd?.applications) ? usd.applications : []
@@ -420,11 +427,18 @@ export default function ProfileDetail() {
     profile.sections?.find((section) => section.section_key === "basic_information")?.data ?? {}
   const profileTypeLabel = String(basicInfo?.profile_type || "").toLowerCase()
 
-  // Some legacy/baseline profiles store student classification inside `basic_information.profile_type`.
-  // Treat those as student profiles so the Universities tab + portals are always available.
+  const eduSection = profile.sections?.find((s) => s.section_key === "education")?.data
+  const highestLevel = String(eduSection?.highest_level || "").toLowerCase()
+  const targetColleges = eduSection?.target_colleges
+  const hasTargetColleges = Array.isArray(targetColleges)
+    ? targetColleges.length > 0
+    : typeof targetColleges === "string" && targetColleges.trim().length > 0
+
   const isStudentProfile =
     ["high_school_student", "college_student", "graduate_student"].includes(primaryType) ||
-    profileTypeLabel.includes("student")
+    profileTypeLabel.includes("student") ||
+    highestLevel.includes("student") ||
+    hasTargetColleges
 
   const healthMedical =
     profile.sections?.find((section) => section.section_key === "health_medical")?.data ?? {}
