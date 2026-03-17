@@ -8,6 +8,7 @@ import { searchWebForItem, KNOWN_ITEM_SOURCES, parseItemRequest } from '../servi
 import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
+import { applyRelevanceFilter, extractProfileData } from '../services/relevanceFilter.js'
 
 const router = express.Router()
 
@@ -218,13 +219,30 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     const mapped = result.results.map(mapResultToFrontendShape)
 
+    // Load profile context for relevance filtering
+    let profileData = {}
+    try {
+      const profileContext = await loadProfileContext(db, profile_id)
+      profileData = extractProfileData(profileContext)
+    } catch (ctxErr) {
+      console.warn(`[RealCrawlers] Could not load profile context for relevance filter — filtering will be skipped: ${ctxErr?.message}`)
+    }
+
     // Merge "near you" opportunities from funding_opportunities table
     const curatedTitles = mapped.map(o => o.title || o.name || '');
     const nearbyOpps = await queryNearbyOpportunities(db, result.analysis, curatedTitles, 30);
     const allMapped = [...mapped, ...nearbyOpps];
 
     let filtered = allMapped
-      .filter((opp) => typeof opp.match_score === 'number' && opp.match_score >= min_match_score)
+      .filter((opp) => {
+        if (typeof opp.match_score !== 'number' || opp.match_score < min_match_score) return false
+        const relevance = applyRelevanceFilter(opp, profileData)
+        if (!relevance.pass) {
+          console.log(`[RealCrawlers] Filtered out "${opp.title}" — ${relevance.reason}`)
+          return false
+        }
+        return true
+      })
       .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
       .slice(0, (strategy.maxResults || 100) + nearbyOpps.length)
 
