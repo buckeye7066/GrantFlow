@@ -432,6 +432,7 @@ class PostgresTx {
   }
 
   prepare(sql) {
+        sql = fixBooleanIntegers(sql);
     const hasNamed = /@[_A-Za-z][_A-Za-z0-9]*/.test(sql);
     const converted = hasNamed ? atNameToDollarPlaceholders(sql) : qmarkToDollarPlaceholders(sql);
     return {
@@ -483,6 +484,15 @@ class PostgresTx {
   }
 }
 
+
+// Fix SQLite boolean-as-integer comparisons for PostgreSQL compatibility.
+// SQLite uses INTEGER for booleans (0/1), but PostgreSQL uses BOOLEAN (TRUE/FALSE).
+// This converts patterns like "is_active = 1" to "is_active = TRUE" for known boolean column prefixes.
+function fixBooleanIntegers(sql) {
+    return sql
+      .replace(/\b(is_\w+|active|activated|verified|archived|published|ocr_used)\s*=\s*1\b/gi, '$1 = TRUE')
+      .replace(/\b(is_\w+|active|activated|verified|archived|published|ocr_used)\s*=\s*0\b/gi, '$1 = FALSE');
+}
 class PostgresDb {
   constructor(connectionString) {
     this.dialect = 'postgres';
@@ -497,6 +507,7 @@ class PostgresDb {
   }
 
   prepare(sql) {
+        sql = fixBooleanIntegers(sql);
     const hasNamed = /@[_A-Za-z][_A-Za-z0-9]*/.test(sql);
     const converted = hasNamed ? atNameToDollarPlaceholders(sql) : qmarkToDollarPlaceholders(sql);
     return {
