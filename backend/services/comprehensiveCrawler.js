@@ -15,6 +15,7 @@ import {
   summarizeProfileSignals,
   safeParseArrayField,
 } from './profileHelpers.js'
+import { applyRelevanceFilter, extractProfileData } from './relevanceFilter.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -253,6 +254,7 @@ export async function processComprehensiveCrawlerJob({ db, job, dataDir, profile
   
   // Score and filter opportunities
   const scoredOpps = []
+  const profileData = extractProfileData(profileContext)
   
   for (const opp of allOpps) {
     // Skip if requires matching funds
@@ -261,6 +263,12 @@ export async function processComprehensiveCrawlerJob({ db, job, dataDir, profile
     const { score, matchReasons } = calculateOpportunityMatch(opp, signals, profileState)
     
     if (score >= matchThreshold) {
+      // Apply hard disqualification rules as a post-filter
+      const relevance = applyRelevanceFilter(opp, profileData)
+      if (!relevance.pass) {
+        console.log(`[comprehensiveCrawler] Filtered out "${opp.title}" — ${relevance.reason}`)
+        continue
+      }
       scoredOpps.push({
         ...opp,
         match_score: score,
