@@ -6,6 +6,7 @@
 
 import crypto from 'crypto'
 import { calculateMatchScore } from './matchingEngine.js'
+import { applyRelevanceFilter, extractProfileData } from './relevanceFilter.js'
 
 /**
  * Calculate match percentage between opportunity and profile.
@@ -204,11 +205,19 @@ export async function processCrawledOpportunities(db, opportunities, profileId, 
     matches: []
   }
   
+  const profileData = extractProfileData(profileContext)
+
   for (const opportunity of opportunities) {
     // Calculate match percentage
     const matchPercentage = calculateMatchPercentage(opportunity, profileContext)
     
     if (matchPercentage >= minMatchThreshold) {
+      // Apply hard disqualification rules as a post-filter
+      const relevance = applyRelevanceFilter(opportunity, profileData)
+      if (!relevance.pass) {
+        console.log(`[opportunityMatcher] Filtered out "${opportunity.title}" — ${relevance.reason}`)
+        continue
+      }
       const pipelineResult = await saveToProfilePipeline(db, opportunity, profileId, profileContext, matchPercentage, minMatchThreshold)
       if (pipelineResult.saved) {
         results.savedToPipeline++
