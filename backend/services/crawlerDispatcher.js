@@ -31,6 +31,17 @@ const dataDir = process.env.CRAWLER_DATA_DIR
  */
 const JOB_TIMEOUT_MS = parseInt(process.env.CRAWLER_JOB_TIMEOUT_MS || String(30 * 60 * 1000), 10)
 
+/**
+ * Longer timeout for pipeline_automation jobs, which make sequential AI calls per grant.
+ * Default 45 minutes; override via PIPELINE_JOB_TIMEOUT_MS.
+ */
+const PIPELINE_JOB_TIMEOUT_MS = parseInt(process.env.PIPELINE_JOB_TIMEOUT_MS || String(45 * 60 * 1000), 10)
+
+function getJobTimeoutMs(jobType) {
+  if (jobType === 'pipeline_automation') return PIPELINE_JOB_TIMEOUT_MS
+  return JOB_TIMEOUT_MS
+}
+
 function withTimeout(promise, ms, label) {
   let timeoutId
   const timeoutPromise = new Promise((_, reject) => {
@@ -423,7 +434,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
 
       result = await withTimeout(
         handler(context),
-        JOB_TIMEOUT_MS,
+        getJobTimeoutMs(job.type),
         `Job ${jobId} (${job.type})`,
       )
 
