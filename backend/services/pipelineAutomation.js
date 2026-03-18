@@ -252,7 +252,7 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
             grants.push(context)
       } else if (profileId) {
             const limitRaw = parameters.limit
-            const defaultLimit = wantsAll ? 2000 : 200
+            const defaultLimit = 200
             const limit =
                     Number.isFinite(Number(limitRaw)) && Number(limitRaw) > 0
                 ? Number(limitRaw)
@@ -284,15 +284,24 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
                     grants.push(await fetchGrantContext(db, row.id))
             }
       } else if (organizationId) {
+            const limitRaw = parameters.limit
+            const defaultLimit = 100
+            const limit =
+                    Number.isFinite(Number(limitRaw)) && Number(limitRaw) > 0
+                ? Number(limitRaw)
+                      : defaultLimit
+
             const rows = await db
               .prepare(
                         `
                                 SELECT id FROM grants
                                         WHERE organization_id = ?
                                                   AND status IN (${statusPlaceholders})
-                                                          `,
+                                                          ORDER BY deadline IS NULL, deadline ASC
+                                                                  LIMIT ?
+                                                                          `,
                       )
-              .all(organizationId, ...PROCESSABLE_STATUSES)
+              .all(organizationId, ...PROCESSABLE_STATUSES, limit)
 
       grants = []
             for (const row of rows) {
@@ -312,7 +321,7 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
                         ...PROCESSABLE_STATUSES,
                         (() => {
                                     const limitRaw = parameters.limit
-                                    const defaultLimit = wantsAll ? 2000 : 10
+                                    const defaultLimit = wantsAll ? 100 : 10
                                     const limit =
                                                   Number.isFinite(Number(limitRaw)) && Number(limitRaw) > 0
                                         ? Number(limitRaw)
@@ -467,6 +476,9 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
                 // but flag it for human review. The grant should be in the correct column
                 // so the user can see what needs attention.
                 appliedStatus = validatedStatus
+      }
+
+      if (handoffRequired) {
               handoffs += 1
       }
 
