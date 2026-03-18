@@ -320,8 +320,7 @@ export default function Pipeline() {
         ...(forProfile ? { profile_id: forProfile } : {}),
         parameters: {
           process_all: true,
-          // All profiles: process up to 2000 grants so "864 of 864" is fully covered
-          ...(forProfile ? { limit: 2000 } : { limit: 2000 }),
+          ...(forProfile ? { limit: 200 } : { limit: 100 }),
         },
       }
 
