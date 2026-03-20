@@ -320,6 +320,14 @@ export async function upsertFundingOpportunity(db, opportunity) {
         : null,
     notes: opportunity.notes ?? null,
     record_origin: recordOrigin,
+    funding_domain: opportunity.funding_domain ?? null,
+    funding_subdomain: opportunity.funding_subdomain ?? null,
+    source_category: opportunity.source_category ?? null,
+    compliance_required: JSON.stringify(ensureArray(opportunity.compliance_required)),
+    certifications_required: JSON.stringify(ensureArray(opportunity.certifications_required)),
+    geo_eligibility: opportunity.geo_eligibility != null ? JSON.stringify(opportunity.geo_eligibility) : null,
+    signal_tags: JSON.stringify(ensureArray(opportunity.signal_tags)),
+    crawler_version: opportunity.crawler_version ?? null,
   }
 
   const insert = db.prepare(`
@@ -356,7 +364,15 @@ export async function upsertFundingOpportunity(db, opportunity) {
       match_reasons,
       notes,
       is_active,
-      last_crawled
+      last_crawled,
+      funding_domain,
+      funding_subdomain,
+      source_category,
+      compliance_required,
+      certifications_required,
+      geo_eligibility,
+      signal_tags,
+      crawler_version
     ) VALUES (
       @id,
       @title,
@@ -390,7 +406,15 @@ export async function upsertFundingOpportunity(db, opportunity) {
       @match_reasons,
       @notes,
       @is_active,
-      CURRENT_TIMESTAMP
+      CURRENT_TIMESTAMP,
+      @funding_domain,
+      @funding_subdomain,
+      @source_category,
+      @compliance_required,
+      @certifications_required,
+      @geo_eligibility,
+      @signal_tags,
+      @crawler_version
     )
   `)
 
@@ -427,6 +451,14 @@ export async function upsertFundingOpportunity(db, opportunity) {
     match_reasons: record.match_reasons,
     notes: record.notes,
     is_active: toDbBoolean(db, true),
+    funding_domain: record.funding_domain,
+    funding_subdomain: record.funding_subdomain,
+    source_category: record.source_category,
+    compliance_required: record.compliance_required,
+    certifications_required: record.certifications_required,
+    geo_eligibility: record.geo_eligibility,
+    signal_tags: record.signal_tags,
+    crawler_version: record.crawler_version,
   })
 
   return { id, inserted: true, skipped: false }

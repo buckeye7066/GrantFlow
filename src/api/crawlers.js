@@ -76,6 +76,31 @@ export async function fetchCrawlerStatus(profileId) {
 }
 
 /**
+ * List all available crawlers (featured + more) from the backend.
+ * @returns {Promise<{crawlers: Array, total: number}>}
+ */
+export async function listRealCrawlers() {
+  return apiFetch('/api/real-crawlers/list')
+}
+
+/**
+ * Run smart funding search (recommended sources from profile: geo + national + state waiver).
+ * Single button: "Find Real Funding For Me".
+ * @param {Object} opts
+ * @param {string} opts.profileId - Required.
+ * @param {number} [opts.minMatchScore]
+ * @returns {Promise<{ success, count, opportunities, sources_used }>}
+ */
+export async function runSmartCrawler({ profileId, minMatchScore = 50 }) {
+  const pid = typeof profileId === 'string' ? profileId.trim() : null
+  if (!pid) throw new Error('profile_id is required. Select a profile first.')
+  return apiFetch('/api/real-crawlers/run-smart', {
+    method: 'POST',
+    body: JSON.stringify({ profile_id: pid, min_match_score: minMatchScore }),
+  })
+}
+
+/**
  * Run a real crawler (local_funding, student_grants, health_resources, etc.).
  * profile_id is required - throws early if missing (developer error).
  * @param {Object} opts
