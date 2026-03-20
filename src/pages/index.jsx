@@ -46,6 +46,7 @@ const PrintableApplication = lazy(() => import("./PrintableApplication"));
 const BillingSheet = lazy(() => import("./BillingSheet"));
 const OrganizationProfile = lazy(() => import("./OrganizationProfile"));
 const FundingOpportunities = lazy(() => import("./FundingOpportunities"));
+const FundingResults = lazy(() => import("./FundingResults"));
 const Pricing = lazy(() => import("./Pricing"));
 const Services = lazy(() => import("./Services"));
 const Settings = lazy(() => import("./Settings"));
@@ -81,8 +82,7 @@ const PAGES = {
     Funder: Funder,
     
     DiscoverGrants: DiscoverGrants,
-    
-    SmartMatcher: SmartMatcher,
+    FundingResults: FundingResults,
     
     ItemFunding: ItemFunding,
     
@@ -232,6 +232,7 @@ function LayoutRoutes() {
                 <Route path="/Funder" element={withBoundary(<Funder />, "Funder")} />
 
                 <Route path="/DiscoverGrants" element={withBoundary(<DiscoverGrants />, "DiscoverGrants")} />
+                <Route path="/FundingResults" element={withBoundary(<FundingResults />, "FundingResults")} />
 
                 <Route path="/SmartMatcher" element={withBoundary(<SmartMatcher />, "SmartMatcher")} />
 

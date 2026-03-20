@@ -12,6 +12,7 @@ import {
   adminCodeLint,
   adminCodeAnalyze,
   adminCodeEdit,
+  adminCodeScan,
   adminCrawlerList,
   adminCrawlerRun,
   adminCrawlerCheck,
@@ -861,7 +862,24 @@ registerTool({
   handler: adminCodeEdit,
 })
 
-// Crawler Management Tools
+registerTool({
+  name: 'admin.code.scan',
+  description: 'Scan the codebase for TODOs, console.logs, debugger statements, and other issues. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      directory: { type: 'string', description: 'Directory to scan (default: entire repo)' },
+      filePattern: { type: 'string', description: 'File pattern to match (default: "*.js")' },
+      issueTypes: {
+        type: 'array',
+        items: { type: 'string', enum: ['todo', 'console', 'debugger', 'fixme', 'hack', 'all'] },
+        description: 'Types of issues to find',
+      },
+    },
+  },
+  handler: (params, context) => adminCodeScan({ directory: params.directory, filePattern: params.filePattern, issueTypes: params.issueTypes }, context),
+})
 registerTool({
   name: 'admin.crawler.list',
   description: 'List all crawler jobs with their status. Admin only.',
