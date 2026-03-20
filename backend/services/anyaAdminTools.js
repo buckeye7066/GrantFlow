@@ -7,6 +7,30 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const REPO_ROOT = path.resolve(process.cwd())
 
+/**
+ * Recursively collect JS/JSX files from a directory (excludes node_modules, .git, hidden dirs).
+ * @param {string} dir - Root directory to scan
+ * @returns {Promise<string[]>} Absolute file paths
+ */
+async function collectFiles(dir) {
+  const results = []
+  try {
+    const entries = await fs.readdir(dir, { withFileTypes: true })
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name)
+      if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
+        const nested = await collectFiles(fullPath)
+        results.push(...nested)
+      } else if (entry.isFile() && /\.(js|jsx|ts|tsx|mjs|cjs)$/.test(entry.name)) {
+        results.push(fullPath)
+      }
+    }
+  } catch {
+    // ignore unreadable directories
+  }
+  return results
+}
+
 // ============================================================================
 // Admin Role Enforcement (canonical: req.ctx.isAdmin / users.is_admin)
 // ============================================================================
@@ -294,19 +318,8 @@ export async function adminCodeLint({ targetPath, fix = false }, context) {
     if (stats.isFile()) {
       files.push(resolvedPath)
     } else if (stats.isDirectory()) {
-      // Scan directory for JS/JSX files
-      async function collectFiles(dir) {
-        const entries = await fs.readdir(dir, { withFileTypes: true })
-        for (const entry of entries) {
-          const fullPath = path.join(dir, entry.name)
-          if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
-            await collectFiles(fullPath)
-          } else if (entry.isFile() && /\.(js|jsx)$/.test(entry.name)) {
-            files.push(fullPath)
-          }
-        }
-      }
-      await collectFiles(resolvedPath)
+      const nested = await collectFiles(resolvedPath)
+      files.push(...nested)
     }
 
     // Basic lint checks
@@ -1044,6 +1057,86 @@ export async function adminHealthCheck(_params, context) {
   }
 
   return health
+}
+
+/**
+ * Scan codebase for specific issues: TODOs, console.logs, debugger statements, etc.
+ * @param {string} directory - Directory to scan (default: entire repo)
+ * @param {string} filePattern - File pattern to match (default: "*.js")
+ * @param {Array<string>} issueTypes - Types of issues to find (todo, console, debugger, fixme, hack)
+ * @param {Object} context - Request context with user and db info
+ * @returns {Promise<Object>} Scan results with found issues grouped by type and file
+ * @admin ADMIN ONLY
+ */
+export async function adminCodeScan({ directory = '.', filePattern = '*.js', issueTypes = ['todo', 'console', 'debugger'] }, context) {
+  requireAdmin(context.user)
+
+  const searchRoot = directory ? path.resolve(REPO_ROOT, directory) : REPO_ROOT
+
+  const findings = {
+    todo_items: [],
+    console_statements: [],
+    debugger_statements: [],
+    fixme_items: [],
+    hack_items: [],
+  }
+
+  const scanPatterns = [
+    { type: 'todo_items', regex: /\/\/\s*TODO|\/\*\s*TODO/gi, severity: 'info', description: 'TODO comment found' },
+    { type: 'console_statements', regex: /console\.(log|warn|error|debug|info|table)\(/g, severity: 'warning', description: 'Console statement found' },
+    { type: 'debugger_statements', regex: /\bdebugger\b/g, severity: 'error', description: 'Debugger statement found' },
+    { type: 'fixme_items', regex: /\/\/\s*FIXME|\/\*\s*FIXME/gi, severity: 'warning', description: 'FIXME comment found' },
+    { type: 'hack_items', regex: /\/\/\s*HACK|\/\*\s*HACK/gi, severity: 'warning', description: 'HACK comment found' },
+  ]
+
+  try {
+    const files = await collectFiles(searchRoot)
+
+    for (const file of files.slice(0, 200)) {
+      try {
+        const content = await fs.readFile(file, 'utf8')
+        const lines = content.split('\n')
+
+        for (let idx = 0; idx < lines.length; idx++) {
+          const line = lines[idx]
+          for (const pattern of scanPatterns) {
+            const issueKey = pattern.type.replace('_items', '').replace('_statements', '')
+            if (!issueTypes.includes(issueKey) && !issueTypes.includes('all')) continue
+            pattern.regex.lastIndex = 0
+            if (pattern.regex.test(line)) {
+              const relativePath = path.relative(REPO_ROOT, file)
+              findings[pattern.type].push({
+                file: relativePath,
+                line: idx + 1,
+                severity: pattern.severity,
+                description: pattern.description,
+                preview: line.trim().slice(0, 100),
+                fix: `Review and address the ${pattern.description.toLowerCase()}`,
+              })
+            }
+          }
+        }
+      } catch {
+        // Skip files that can't be read
+      }
+    }
+  } catch (err) {
+    throw new Error(`Failed to scan codebase: ${err.message}`)
+  }
+
+  const totalIssues = Object.values(findings).reduce((sum, arr) => sum + arr.length, 0)
+  return {
+    scanned_directory: path.relative(REPO_ROOT, searchRoot),
+    file_pattern: filePattern,
+    issue_types: issueTypes,
+    issues_found: totalIssues,
+    findings,
+    summary: {
+      total: totalIssues,
+      by_type: Object.fromEntries(Object.entries(findings).map(([type, items]) => [type, items.length])),
+      timestamp: new Date().toISOString(),
+    },
+  }
 }
 
 /**

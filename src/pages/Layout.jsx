@@ -37,6 +37,7 @@ import AnyaFloatingButton from "@/components/anya/AnyaFloatingButton";
 import { AnyaContextProvider } from "@/contexts/AnyaContext";
 import { useFeatureFlags } from "@/lib/featureFlags";
 import ProBonoBanner from "@/components/banners/ProBonoBanner.jsx";
+import FirstRunOnboardingGate from "@/components/onboarding/FirstRunOnboardingGate";
 import AppBreadcrumb from "@/components/shared/AppBreadcrumb";
 import GrantLifecyclePhaseIndicator from "@/components/shared/GrantLifecyclePhaseIndicator";
 import { apiFetch } from "@/api/client";
@@ -349,6 +350,12 @@ export default function Layout({ children, currentPageName }) {
 
         {/* Onboarding Flow */}
         <OnboardingFlow />
+
+        {/* First-run onboarding wizard (ZIP, state, intent) */}
+        <FirstRunOnboardingGate
+          profiles={profiles ?? []}
+          activeProfileId={activeProfileId === '__admin__' ? null : activeProfileId}
+        />
 
         {/* Anya AI Assistant Floating Button */}
         <AnyaFloatingButton profileId={activeProfileId} />

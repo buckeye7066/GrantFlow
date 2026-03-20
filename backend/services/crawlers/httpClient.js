@@ -114,3 +114,26 @@ export async function postWithRetry(url, data, config = {}, options = {}) {
   return await requestWithRetry({ ...config, method: 'POST', url, data }, options)
 }
 
+
+/**
+ * HEAD request for URL verification. Never throws; returns { ok, status }.
+ * ok=true when status 200-399.
+ */
+export async function headForVerification(url, options = {}) {
+  const timeoutMs = options.timeoutMs ?? 5000
+  try {
+    const response = await axios.request({
+      method: 'HEAD',
+      url,
+      timeout: timeoutMs,
+      validateStatus: () => true,
+      headers: {
+        'User-Agent': 'GrantFlow Crawler/1.0 (+contact: support@grantflow.app)',
+      },
+    })
+    const ok = response.status >= 200 && response.status < 400
+    return { ok, status: response.status }
+  } catch (err) {
+    return { ok: false, status: null, error: err?.message || String(err) }
+  }
+}
