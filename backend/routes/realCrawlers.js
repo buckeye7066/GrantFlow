@@ -1,6 +1,7 @@
 import express from 'express'
 import { randomUUID } from 'crypto'
 import { ensureAuth } from '../middleware/auth.js'
+import { standardRateLimiter } from '../middleware/rateLimiting.js'
 import { runCrawler, SCHEMA } from '../services/crawlers/crawlerManager.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
 import { expandNeed, scoreNeedMatch } from '../services/crawlers/needTaxonomy.js'
@@ -650,7 +651,7 @@ router.get('/health-check', async (_req, res) => {
  * Unified "Find Real Funding For Me" — runs curated crawlers + domain engines + state waiver.
  * POST /api/real-crawlers/run-smart
  */
-router.post('/run-smart', ensureAuth, async (req, res) => {
+router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
   const { profile_id, min_match_score = 50 } = req.body || {}
 
   if (!profile_id) {
