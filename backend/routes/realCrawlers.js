@@ -1,4 +1,5 @@
 import express from 'express'
+import { randomUUID } from 'crypto'
 import { ensureAuth } from '../middleware/auth.js'
 import { runCrawler, SCHEMA } from '../services/crawlers/crawlerManager.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
@@ -706,7 +707,7 @@ router.post('/run-smart', ensureAuth, async (req, res) => {
           if (dedupeKey && !seenTitles.has(dedupeKey)) {
             seenTitles.add(dedupeKey)
             allOpportunities.push({
-              id: o.id || `domain-${Date.now()}-${Math.random()}`,
+              id: o.id || `domain-${randomUUID()}`,
               title: o.title,
               name: o.title,
               description: o.description ?? null,
