@@ -1,4 +1,4 @@
-﻿# Cursor context/indexing exclusions
+# Cursor context/indexing exclusions
 # (Keeps large/generated/binary artifacts from being indexed and watched.)
 
 # Dependencies & build output
@@ -13,10 +13,19 @@ artifacts/
 .vite/
 .cache/
 
+# Lockfiles can be huge/noisy and frequently trigger oversized diffs/context in Composer
+package-lock.json
+
 # Local runtime data / uploads
 backend/data/
 backend/uploads/
 backend/temp_images/
+
+# Logs / temp
+**/*.log
+**/*.tmp
+logs/
+tmp/
 
 # Local databases
 seed/*.db
