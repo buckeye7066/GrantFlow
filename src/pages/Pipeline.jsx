@@ -195,13 +195,11 @@ export default function Pipeline() {
         2000,
         selectedProfileId && selectedProfileId !== 'all' ? { profile_id: selectedProfileId } : {},
       ),
-    initialData: [],
   });
 
   const { data: organizations = [], isLoading: isLoadingOrgs } = useQuery({
     queryKey: ['organizations'],
     queryFn: () => base44.entities.Organization.list(),
-    initialData: [],
   });
 
   const updateGrantMutation = useMutation({
