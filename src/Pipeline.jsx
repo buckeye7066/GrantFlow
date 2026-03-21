@@ -69,13 +69,11 @@ export default function Pipeline() {
   const { data: grants = [], isLoading: isLoadingGrants } = useQuery({
     queryKey: ['grants'],
     queryFn: () => base44.entities.Grant.list('-created_date'),
-    initialData: [],
   });
 
   const { data: organizations = [], isLoading: isLoadingOrgs } = useQuery({
     queryKey: ['organizations'],
     queryFn: () => base44.entities.Organization.list(),
-    initialData: [],
   });
 
   const updateGrantMutation = useMutation({
