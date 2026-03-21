@@ -208,7 +208,18 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   profile_id TEXT,
 
   -- Misc
-  notes TEXT
+  notes TEXT,
+
+  -- Domain corpus metadata (National Funding Aggregator)
+  funding_domain TEXT,
+  funding_subdomain TEXT,
+  source_category TEXT,
+  compliance_required TEXT DEFAULT '[]',
+  certifications_required TEXT DEFAULT '[]',
+  geo_eligibility TEXT,
+  signal_tags TEXT DEFAULT '[]',
+  verified_url INTEGER DEFAULT 0,
+  crawler_version TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_funding_opportunities_fingerprint
