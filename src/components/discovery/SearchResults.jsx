@@ -76,7 +76,7 @@ function getOpportunityKey(opp, idx) {
   return `${String(raw)}|${idx}`;
 }
 
-const AddToPipelineButton = ({ opportunity, onAddToPipeline, organizationName }) => {
+export const AddToPipelineButton = ({ opportunity, onAddToPipeline, organizationName }) => {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [lastStatus, setLastStatus] = React.useState(null);

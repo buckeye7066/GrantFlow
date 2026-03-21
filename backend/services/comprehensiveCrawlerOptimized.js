@@ -9,6 +9,7 @@ import {
 } from './profileHelpers.js'
 import { saveToProfilePipeline } from './opportunityMatcher.js'
 import { runNationalZipCrawl } from './crawlers/nationalZipCrawler.js'
+import { runDomainCorpusCrawl } from './crawlers/domainCorpusCrawler.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -232,6 +233,19 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
       const effectiveZipList = runAllStates ? undefined : zipList || undefined
 
       const jobId = contextOrDb?.job?.id ?? null
+
+      // Phase 0: Domain corpus build - run all domain crawlers from registry, persist directory resources.
+      // National Funding Aggregator: enriches catalog with 60+ domain types before ZIP discovery.
+      let domainCorpusStats = null
+      try {
+        domainCorpusStats = await runDomainCorpusCrawl(db, {
+          skipVerification: params.skip_url_verification ?? false,
+          geoRunId: params.geo_run_id ?? params.geoRunId ?? null,
+        })
+        console.log('[comprehensiveCrawler] Domain corpus phase complete:', domainCorpusStats)
+      } catch (domainErr) {
+        console.warn('[comprehensiveCrawler] Domain corpus phase failed (continuing with ZIP crawl):', domainErr?.message || domainErr)
+      }
 
       const runOnce = async (stateArg) => {
         return await runNationalZipCrawl(db, {

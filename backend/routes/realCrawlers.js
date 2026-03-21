@@ -1,5 +1,7 @@
 import express from 'express'
+import { randomUUID } from 'crypto'
 import { ensureAuth } from '../middleware/auth.js'
+import { standardRateLimiter } from '../middleware/rateLimiting.js'
 import { runCrawler, SCHEMA } from '../services/crawlers/crawlerManager.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
 import { expandNeed, scoreNeedMatch } from '../services/crawlers/needTaxonomy.js'
@@ -9,6 +11,8 @@ import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { applyRelevanceFilter, extractProfileData } from '../services/relevanceFilter.js'
+import { runAllDomainEngines } from '../services/crawlers/domainEngines/index.js'
+import { crawlStateWaiverBenefits, evaluateStateWaiverEligibility } from '../services/crawlers/stateWaiverBenefitsCrawler.js'
 
 const router = express.Router()
 
@@ -93,6 +97,7 @@ const CRAWLER_TYPES = [
   'student_grants',
   'health_resources',
   'ecf_benefits',
+  'state_waiver_benefits',
   'item_matching',
   'special_needs',
 ]
@@ -640,6 +645,146 @@ router.get('/health-check', async (_req, res) => {
       { source: 'State Programs', reachable: true, note: 'Dynamic per-state loading' },
     ],
   })
+})
+
+/**
+ * Unified "Find Real Funding For Me" — runs curated crawlers + domain engines + state waiver.
+ * POST /api/real-crawlers/run-smart
+ */
+router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
+  const { profile_id, min_match_score = 50 } = req.body || {}
+
+  if (!profile_id) {
+    return res.status(400).json({
+      error: 'Profile ID required',
+      message: 'Select a profile to run the smart funding search.',
+    })
+  }
+  if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
+
+  const db = req.db
+  const minScore = Number(min_match_score) || 50
+  const allOpportunities = []
+  const seenTitles = new Set()
+
+  try {
+    // 1) Curated crawlers (local_funding + government_funding)
+    for (const crawlerType of ['local_funding', 'government_funding']) {
+      try {
+        const result = await runCrawler(db, profile_id, {
+          minScore: Math.max(1, Math.floor(minScore * 0.25)),
+          maxResults: 50,
+          crawlerType,
+        })
+        if (result.debug?.gated) continue
+        const mapped = result.results.map(mapResultToFrontendShape)
+        for (const opp of mapped) {
+          const key = String(opp.title || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+          if (key && !seenTitles.has(key)) {
+            seenTitles.add(key)
+            allOpportunities.push(opp)
+          }
+        }
+      } catch (crawlErr) {
+        console.warn(`[run-smart] ${crawlerType} failed (continuing):`, crawlErr?.message)
+      }
+    }
+
+    // 2) National: domain engines
+    try {
+      let profileForEngines = null
+      try {
+        const ctx = await loadProfileContext(db, profile_id)
+        profileForEngines = ctx?.profile ?? null
+      } catch {
+        // continue without profile context
+      }
+      if (profileForEngines) {
+        const domainOpps = await runAllDomainEngines(profileForEngines, {})
+        for (const o of domainOpps) {
+          const urlKey = (o.url || o.application_url || o.source_url || '').toLowerCase()
+          const titleKey = String(o.title || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+          const dedupeKey = urlKey || titleKey
+          if (dedupeKey && !seenTitles.has(dedupeKey)) {
+            seenTitles.add(dedupeKey)
+            allOpportunities.push({
+              id: o.id || `domain-${randomUUID()}`,
+              title: o.title,
+              name: o.title,
+              description: o.description ?? null,
+              url: o.url ?? o.application_url ?? o.source_url ?? null,
+              application_url: o.application_url ?? o.url ?? null,
+              source_url: o.source_url ?? o.url ?? null,
+              match_score: o.match_score ?? 60,
+              match_reasons: o.match_reasons ?? [],
+              categories: o.categories ?? [],
+              opportunity_type: o.opportunity_type ?? 'program',
+              funding_type: o.funding_type ?? null,
+              amount_max: o.amount_max ?? null,
+              amount_description: o.amount_description ?? null,
+              sponsor: o.sponsor ?? 'National Program',
+              source: o.source ?? 'domain',
+              record_origin: o.record_origin ?? 'live_crawl',
+              is_national: o.is_national ?? true,
+              state: o.state ?? null,
+              deadline_type: o.deadline_type ?? 'rolling',
+            })
+          }
+        }
+      }
+    } catch (domainErr) {
+      console.warn('[run-smart] Domain engines failed (continuing):', domainErr?.message)
+    }
+
+    // 3) State waiver benefits if eligible
+    try {
+      let profileForWaiver = null
+      try {
+        const ctx = await loadProfileContext(db, profile_id)
+        profileForWaiver = ctx?.profile ?? null
+      } catch {
+        // continue
+      }
+      if (profileForWaiver) {
+        const waiverEligible = evaluateStateWaiverEligibility(profileForWaiver).eligible
+        if (waiverEligible) {
+          const waiverOpps = await crawlStateWaiverBenefits(profileForWaiver, {})
+          for (const o of waiverOpps) {
+            const urlKey = (o.url || o.application_url || o.source_url || '').toLowerCase()
+            const titleKey = String(o.title || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+            const dedupeKey = urlKey || titleKey
+            if (dedupeKey && !seenTitles.has(dedupeKey)) {
+              seenTitles.add(dedupeKey)
+              allOpportunities.push({ ...o, match_score: o.match_score ?? 60 })
+            }
+          }
+        }
+      }
+    } catch (waiverErr) {
+      console.warn('[run-smart] State waiver crawl failed (continuing):', waiverErr?.message)
+    }
+
+    const filtered = allOpportunities
+      .filter((opp) => typeof opp.match_score !== 'number' || opp.match_score >= minScore || opp.is_directory_resource)
+      .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+      .slice(0, 100)
+
+    return res.json({
+      success: true,
+      count: filtered.length,
+      total_found: allOpportunities.length,
+      min_match_score: minScore,
+      opportunities: filtered,
+      sources_used: ['local_funding', 'government_funding', 'domain_engines', 'state_waiver_benefits'],
+    })
+  } catch (err) {
+    console.error('[RealCrawlers] run-smart error:', err)
+    return res.status(500).json({
+      success: false,
+      error: err?.message || 'Smart search failed',
+      opportunities: [],
+    })
+  }
 })
 
 export default router
