@@ -84,7 +84,7 @@ export const LIFECYCLE_PHASES = [
   { id: "find", label: "Find Grants", path: "/DiscoverGrants" },
   { id: "review", label: "Review Fit", path: "/Pipeline" },
   { id: "prepare", label: "Prepare Materials", path: "/Documents" },
-  { id: "submit", label: "Submit", path: "/Apply" },
+  { id: "submit", label: "Submit", path: "/Pipeline" },
   { id: "track", label: "Track Status", path: "/Pipeline" },
 ];
 
