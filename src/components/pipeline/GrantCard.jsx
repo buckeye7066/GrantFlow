@@ -10,7 +10,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { MoreVertical, Star, Edit, Trash2, Calendar, DollarSign, Building2, Target, CheckSquare, Sparkles, ExternalLink, AlertCircle } from 'lucide-react';
 import { format, isPast } from 'date-fns';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import HelpTip from '@/components/help/HelpTip';
 
@@ -54,6 +54,7 @@ function isValidExternalUrl(url) {
 export default function GrantCard({ grant, organization, organizationName, onStatusChange, onStarToggle, onDelete, isDragging, checklistProgress, showSummary = false }) {
   const [showMenu, setShowMenu] = useState(false);
   const cardRef = useRef(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -147,19 +148,24 @@ export default function GrantCard({ grant, organization, organizationName, onSta
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               {onStarToggle && (
-                <DropdownMenuItem onClick={() => { onStarToggle(); setShowMenu(false); }}>
+                <DropdownMenuItem onSelect={() => { onStarToggle(); setShowMenu(false); }}>
                   <Star className="w-4 h-4 mr-2" />
                   {grant.starred ? 'Unstar' : 'Star'}
                 </DropdownMenuItem>
               )}
-              <Link to={createPageUrl("GrantDetail", { id: grant.id })}>
-                <DropdownMenuItem>
-                  <Edit className="w-4 h-4 mr-2" />
-                  View Details
-                </DropdownMenuItem>
-              </Link>
+              <DropdownMenuItem onSelect={() => { navigate(createPageUrl("GrantDetail", { id: grant.id })); setShowMenu(false); }}>
+                <Edit className="w-4 h-4 mr-2" />
+                View Details
+              </DropdownMenuItem>
               {onDelete && (
-                <DropdownMenuItem onClick={() => { onDelete(grant); setShowMenu(false); }} className="text-red-600">
+                <DropdownMenuItem
+                  onSelect={(e) => {
+                    e.preventDefault();
+                    onDelete(grant);
+                    setShowMenu(false);
+                  }}
+                  className="text-red-600"
+                >
                   <Trash2 className="w-4 h-4 mr-2" />
                   Delete
                 </DropdownMenuItem>
