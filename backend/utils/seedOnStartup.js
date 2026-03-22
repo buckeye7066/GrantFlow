@@ -440,9 +440,6 @@ export function seedOnStartup(db) {
   // Always run cleanup on startup to remove stale irrelevant grants from prior seeding runs
   cleanupIrrelevantGrants(db);
   
-  // Cleanup: remove irrelevant grants from prior seeding passes before adding new ones
-  cleanupIrrelevantGrants(db);
-  
   // Seed opportunities if needed
   if (oppCount < 50) {
     seedFundingOpportunities(db);
