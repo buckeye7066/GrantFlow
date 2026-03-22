@@ -355,7 +355,7 @@ export function applyRelevanceFilter(opportunity, profileData) {
   // We skip this check only when the opportunity explicitly has is_national=true.
   // We intentionally do NOT skip when state is null/empty — a missing state column
   // is not the same as "national".
-  if (profileState && !Boolean(opportunity.is_national)) {
+  if (profileState && !opportunity.is_national) {
     const titleStateAbbr = extractStateNameFromTitle(opportunity.title || '')
     if (titleStateAbbr) {
       const profileStateAbbr = normalizeState(profileState.toLowerCase())
