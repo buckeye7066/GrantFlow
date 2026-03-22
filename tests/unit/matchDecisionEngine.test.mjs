@@ -582,7 +582,7 @@ test('persistence: decision can be stored and retrieved from grants table', () =
   const opportunityFingerprint = computeOpportunityFingerprint(oppNorm)
 
   // Simulate what opportunityMatcher.js saveToProfilePipeline does
-  const crypto = { randomUUID: () => 'test-grant-id-123' }
+  const grantId = 'test-grant-id-123'
   db.prepare(`
     INSERT INTO grants (
       id, profile_id, title, match_score,
@@ -591,14 +591,14 @@ test('persistence: decision can be stored and retrieved from grants table', () =
       matcher_version, evaluated_at, match_confidence
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    'test-grant-id-123', 'p-persist', opp.title, decision.score,
+    grantId, 'p-persist', opp.title, decision.score,
     decision.decision, decision.explanation, JSON.stringify(decision.matchedNeeds),
     String(decision.eligible), JSON.stringify(decision.ineligibilityReasons),
     profileFingerprint, opportunityFingerprint,
     decision.matcherVersion, decision.evaluatedAt, decision.confidence
   )
 
-  const row = db.prepare('SELECT * FROM grants WHERE id = ?').get('test-grant-id-123')
+  const row = db.prepare('SELECT * FROM grants WHERE id = ?').get(grantId)
   assert.ok(row, 'Grant row should be stored')
   assert.equal(row.match_decision, decision.decision, 'match_decision should match')
   assert.equal(row.matcher_version, MATCHER_VERSION, 'matcher_version should be stored')

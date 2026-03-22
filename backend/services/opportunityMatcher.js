@@ -9,6 +9,21 @@ import { calculateMatchScore } from './matchingEngine.js'
 import { applyRelevanceFilter, extractProfileData } from './relevanceFilter.js'
 import { computeMatchDecision, normalizeProfile, computeProfileFingerprint, normalizeOpportunity, computeOpportunityFingerprint } from './matchDecisionEngine.js'
 
+// Cache the result of the decision-columns PRAGMA check per DB instance to avoid
+// running PRAGMA table_info(grants) on every saveToProfilePipeline call.
+const _decisionColumnCache = new WeakMap()
+
+function hasGrantsDecisionColumns(db) {
+  if (_decisionColumnCache.has(db)) return _decisionColumnCache.get(db)
+  let result = false
+  try {
+    const cols = db.prepare('PRAGMA table_info(grants)').all()
+    result = cols.some((c) => c.name === 'match_decision')
+  } catch { /* ignore */ }
+  _decisionColumnCache.set(db, result)
+  return result
+}
+
 /**
  * Calculate match percentage between opportunity and profile.
  * Uses the shared decision engine as the single source of truth.
@@ -132,11 +147,7 @@ export async function saveToProfilePipeline(
     const contactInfo = parseContactInfo(opportunity)
 
     // Detect which columns exist in the grants table (handles DBs without migration applied)
-    let hasDecisionColumns = false
-    try {
-      const cols = db.prepare('PRAGMA table_info(grants)').all()
-      hasDecisionColumns = cols.some((c) => c.name === 'match_decision')
-    } catch { /* ignore */ }
+    const hasDecisionColumns = hasGrantsDecisionColumns(db)
 
     if (hasDecisionColumns) {
       await db
