@@ -272,8 +272,10 @@ async function main() {
     let orgId = profile.organization_id
     if (!orgId) {
       orgId = crypto.randomUUID()
-      db.prepare(`INSERT INTO organizations (id, name, applicant_type, created_at, updated_at) VALUES (?, ?, 'individual', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
-        .run(orgId, profile.display_name || 'My Organization')
+      db.prepare(`
+        INSERT INTO organizations (id, name, applicant_type, created_at, updated_at)
+        VALUES (?, ?, 'individual', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `).run(orgId, profile.display_name || 'My Organization')
       db.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile.id)
     }
 
