@@ -150,10 +150,27 @@ export function applyRelevanceFilter(opportunity, profileData) {
     profileType === 'student' ||
     profileType === 'high_school_student' ||
     profileType === 'college_student'
+  // Broadened: catches em-dash, regular dash, plain " - ", "Financial Aid", "Housing",
+  // "Off-Campus Resources", and generic "community college" financial aid programs.
   const universitySpecificPattern =
-    /\b(university\s*—|college\s*—|institutional scholarship|college.{0,15}financial aid|university.{0,15}financial aid|college.{0,15}housing|university.{0,15}housing|off.campus resources)\b/i
+    /\b(university\s*[—–-]\s*|college\s*[—–-]\s*|institutional scholarship|college.{0,20}financial aid|university.{0,20}financial aid|college.{0,20}housing|university.{0,20}housing|off.campus resources?|community college.{0,30}(aid|grant|scholarship|resource))\b/i
   if (universitySpecificPattern.test(oppText) && !isStudentProfile) {
     return { pass: false, reason: 'Entity type mismatch: university/college-specific program for non-student profile' }
+  }
+
+  // ── 2e-i. FEMA/disaster programs for non-disaster profiles ─────────────────
+  // FEMA Individual Assistance and generic disaster relief should not appear for
+  // profiles that have no disaster-related need indicator.
+  const femaDisasterPattern =
+    /\b(fema individual assistance|fema disaster (relief|assistance|grant)|disaster (relief|assistance) grant|individual.*assistance.*disaster|ihp\b|individuals and households program)\b/i
+  if (femaDisasterPattern.test(oppText)) {
+    const hasDisasterIndicator =
+      (Array.isArray(profileData.tags) &&
+        profileData.tags.some((t) => /disaster|fema|emergency|flood|fire|tornado|hurricane|storm/i.test(String(t)))) ||
+      (profileData.primary_type || '').toLowerCase() === 'disaster_survivor'
+    if (!hasDisasterIndicator) {
+      return { pass: false, reason: 'Demographic mismatch: FEMA/disaster program, no disaster need indicator in profile' }
+    }
   }
 
   // ── 2e. Foster care youth programs ────────────────────────────────────────
