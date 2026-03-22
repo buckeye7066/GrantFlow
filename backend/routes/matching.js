@@ -1,6 +1,7 @@
 import express from 'express'
 import { formatError } from '../middleware/errorHandler.js'
 import { calculateMatchScore } from '../services/matchingEngine.js'
+import { computeMatchDecision, normalizeProfile } from '../services/matchDecisionEngine.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
@@ -259,15 +260,26 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               needsTransport: kws.has('transportation') || kws.has('ride assistance'),
       }
 
+      // Pre-normalize profile once for the v2.0.0 REJECT filter (avoids re-running per opportunity)
+      const rawProfileForDecision = profileContext?.profile ?? profileContext
+      const profileSectionsForDecision = profileContext?.sections ?? null
+      const profileNormForDecision = normalizeProfile(rawProfileForDecision, profileSectionsForDecision)
+
       const allScored = candidates
                      .map((opp) => {
                                   if (isJunkOpportunity(opp, filterHints)) return null
+
+                                  // Run v2.0.0 engine: filter hard ineligibles (REJECT) before surfacing
+                                  const decision = computeMatchDecision(profileNormForDecision, opp)
+                                  if (decision.decision === 'REJECT') return null
 
                                   const computed = calculateMatchScore(profileContext, opp)
                                return {
                                            ...opp,
                                            match_score: computed.score,
                                            match_reasons: computed.reasons,
+                                           match_decision: decision.decision,
+                                           match_explanation: decision.explanation,
                                            url: opp.application_url ?? opp.source_url ?? null,
                                }
                      })

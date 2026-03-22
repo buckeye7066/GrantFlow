@@ -320,10 +320,12 @@ export function normalizeProfile(rawProfile, sections = null) {
     if (ma && typeof ma === 'object') {
       isVeteranFromSections =
         Boolean(ma.is_veteran) ||
+        Boolean(ma.veteran) ||                        // common field name: { veteran: true }
         Boolean(ma.served_in_military) ||
         Boolean(ma.military_service) ||
         Boolean(ma.veteran_status) ||
         String(ma.branch ?? '').length > 0 ||
+        String(ma.military_branch ?? '').length > 0 || // common field: military_branch: "Army"
         String(ma.discharge_status ?? '').length > 0
     }
   }
@@ -348,9 +350,12 @@ export function normalizeProfile(rawProfile, sections = null) {
         Boolean(ea.is_student) ||
         Boolean(ea.currently_enrolled) ||
         Boolean(ea.enrolled_in_school) ||
+        Boolean(ea.first_generation) ||              // first-gen college student signal
         String(ea.school_name ?? '').length > 0 ||
         String(ea.grade_level ?? '').length > 0 ||
-        String(ea.degree_program ?? '').length > 0
+        String(ea.degree_program ?? '').length > 0 ||
+        String(ea.field_of_study ?? '').length > 0 || // common field: field_of_study
+        String(ea.highest_level ?? '').length > 0    // common field: highest_level: "high school"
     }
   }
 
@@ -371,6 +376,7 @@ export function normalizeProfile(rawProfile, sections = null) {
   let isBusinessFromSections = false
   const businessSection =
     profileSections?.business ??
+    profileSections?.small_business_details ??       // common section key in real profiles
     profileSections?.self_employment ??
     profileSections?.entrepreneurship ??
     null
@@ -382,6 +388,7 @@ export function normalizeProfile(rawProfile, sections = null) {
         Boolean(ba.is_self_employed) ||
         Boolean(ba.has_business) ||
         String(ba.business_name ?? '').length > 0 ||
+        String(ba.naics_code ?? '').length > 0 ||    // common business field
         String(ba.ein ?? '').length > 0
     }
   }
@@ -437,10 +444,13 @@ export function normalizeProfile(rawProfile, sections = null) {
       hasChronicIllnessFromSections =
         Boolean(ha.has_disability) ||
         Boolean(ha.has_chronic_illness) ||
+        Boolean(ha.chronic_illness) ||               // common field: { chronic_illness: true }
         Boolean(ha.has_medical_condition) ||
         Boolean(ha.needs_dme) ||
         Boolean(ha.uses_assistive_technology) ||
         String(ha.conditions ?? '').length > 0 ||
+        String(ha.chronic_illness_type ?? '').length > 0 || // common field: chronic_illness_type
+        String(ha.disability_type ?? '').length > 0 ||      // common field: disability_type
         safeParseArray(ha.diagnoses).length > 0
     }
   }
