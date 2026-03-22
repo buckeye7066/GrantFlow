@@ -1,25 +1,50 @@
 /**
  * Opportunity Matcher and Pipeline Manager
  * Evaluates opportunity matches and saves to appropriate pipelines
- * Delegates scoring to matchingEngine for single source of truth
+ * Delegates to matchDecisionEngine for one shared decision pipeline.
  */
 
 import crypto from 'crypto'
 import { calculateMatchScore } from './matchingEngine.js'
 import { applyRelevanceFilter, extractProfileData } from './relevanceFilter.js'
+import { computeMatchDecision, normalizeProfile, computeProfileFingerprint, normalizeOpportunity, computeOpportunityFingerprint } from './matchDecisionEngine.js'
+
+// Cache the result of the decision-columns PRAGMA check per DB instance to avoid
+// running PRAGMA table_info(grants) on every saveToProfilePipeline call.
+const _decisionColumnCache = new WeakMap()
+
+function hasGrantsDecisionColumns(db) {
+  if (_decisionColumnCache.has(db)) return _decisionColumnCache.get(db)
+  let result = false
+  try {
+    const cols = db.prepare('PRAGMA table_info(grants)').all()
+    result = cols.some((c) => c.name === 'match_decision')
+  } catch { /* ignore */ }
+  _decisionColumnCache.set(db, result)
+  return result
+}
 
 /**
  * Calculate match percentage between opportunity and profile.
- * Delegates to matchingEngine.calculateMatchScore for one engine, one set of weights.
+ * Uses the shared decision engine as the single source of truth.
  */
 function calculateMatchPercentage(opportunity, profileContext) {
   if (!profileContext) return 0
-  const { score } = calculateMatchScore(profileContext, opportunity)
-  return score
+  try {
+    const profile = profileContext?.profile ?? profileContext
+    const sections = profileContext?.sections ?? null
+    const decision = computeMatchDecision(profile, opportunity, { profileSections: sections })
+    return decision.score
+  } catch {
+    // Fallback to legacy scorer if decision engine fails (e.g. incomplete data)
+    const { score } = calculateMatchScore(profileContext, opportunity)
+    return score
+  }
 }
 
 /**
  * Save opportunity to profile pipeline if match >= threshold.
+ * Calls the shared decision engine and stores full match metadata.
  *
  * `minMatchThreshold` defaults to 55 to capture solid matches without being too strict.
  */
@@ -32,13 +57,34 @@ export async function saveToProfilePipeline(
   minMatchThreshold = 55,
 ) {
   try {
-    // Calculate match if not provided
-    if (matchPercentage === null) {
-      matchPercentage = calculateMatchPercentage(opportunity, profileContext)
-    }
-    
     const thresholdNum = Number(minMatchThreshold)
     const threshold = Number.isFinite(thresholdNum) ? Math.max(0, Math.min(100, thresholdNum)) : 55
+
+    // Run the full decision engine
+    const rawProfile = profileContext?.profile ?? profileContext
+    const profileSections = profileContext?.sections ?? null
+    let decision
+    try {
+      decision = computeMatchDecision(rawProfile, opportunity, { profileSections })
+    } catch {
+      decision = null
+    }
+
+    // If decision is REJECT (hard ineligible), never save regardless of score
+    if (decision?.decision === 'REJECT') {
+      return {
+        saved: false,
+        reason: `Rejected: ${(decision.ineligibilityReasons ?? []).join('; ')}`,
+        matchPercentage: decision.score ?? 0,
+        threshold,
+        decision: 'REJECT',
+      }
+    }
+
+    // Use decision engine score when available, fall back to legacy scorer
+    if (matchPercentage === null) {
+      matchPercentage = decision?.score ?? calculateMatchPercentage(opportunity, profileContext)
+    }
 
     // Only save to pipeline if match meets threshold
     if (matchPercentage < threshold) {
@@ -99,65 +145,149 @@ export async function saveToProfilePipeline(
         threshold,
       }
     }
+
+    // Compute fingerprints for versioning
+    const profileFingerprint = computeProfileFingerprint(
+      normalizeProfile(rawProfile, profileSections)
+    )
+    const opportunityFingerprint = computeOpportunityFingerprint(
+      normalizeOpportunity(opportunity)
+    )
     
     // Add to pipeline — preserve application URL, contact info, amounts, and submission method
     const grantId = crypto.randomUUID()
     const contactInfo = parseContactInfo(opportunity)
-    await db
-      .prepare(
-        `
-          INSERT INTO grants (
-            id,
-            organization_id,
-            profile_id,
-            funding_opportunity_id,
-            title,
-            funder,
-            status,
-            deadline,
-            match_score,
-            match_reasons,
-            notes,
-            application_url,
-            application_method,
-            contact_name,
-            contact_email,
-            contact_phone,
-            amount_requested,
-            amount_min,
-            amount_max
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-      )
-      .run(
-        grantId,
-        profile.organization_id ?? null,
-        profileId,
-        opportunity.id,
-        opportunity.title,
-        opportunity.sponsor,
-        'discovered',
-        opportunity.deadline ?? null,
-        matchPercentage,
-        JSON.stringify(profileContext?.match_reasons ?? opportunity.match_reasons ?? []),
-        `Auto-added: ${matchPercentage}% match for profile ${profileId} (threshold ${threshold}%)`,
-        opportunity.application_url || opportunity.applicationUrl || opportunity.url || null,
-        opportunity.application_method || opportunity.submission_method || guessMethodFromOpportunity(opportunity) || null,
-        contactInfo.name,
-        contactInfo.email,
-        contactInfo.phone,
-        opportunity.amount_max || opportunity.maxAmount || null,
-        opportunity.amount_min || opportunity.amountMin || null,
-        opportunity.amount_max || opportunity.amountMax || null,
-      )
+
+    // Detect which columns exist in the grants table (handles DBs without migration applied)
+    const hasDecisionColumns = hasGrantsDecisionColumns(db)
+
+    if (hasDecisionColumns) {
+      await db
+        .prepare(
+          `
+            INSERT INTO grants (
+              id,
+              organization_id,
+              profile_id,
+              funding_opportunity_id,
+              title,
+              funder,
+              status,
+              deadline,
+              match_score,
+              match_reasons,
+              notes,
+              application_url,
+              application_method,
+              contact_name,
+              contact_email,
+              contact_phone,
+              amount_requested,
+              amount_min,
+              amount_max,
+              match_decision,
+              match_explanation,
+              matched_needs,
+              eligibility_status,
+              ineligibility_reasons,
+              profile_fingerprint,
+              opportunity_fingerprint,
+              matcher_version,
+              evaluated_at,
+              match_confidence
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `,
+        )
+        .run(
+          grantId,
+          profile.organization_id ?? null,
+          profileId,
+          opportunity.id,
+          opportunity.title,
+          opportunity.sponsor,
+          'discovered',
+          opportunity.deadline ?? null,
+          matchPercentage,
+          JSON.stringify(profileContext?.match_reasons ?? opportunity.match_reasons ?? []),
+          `Auto-added: ${matchPercentage}% match for profile ${profileId} (threshold ${threshold}%)`,
+          opportunity.application_url || opportunity.applicationUrl || opportunity.url || null,
+          opportunity.application_method || opportunity.submission_method || guessMethodFromOpportunity(opportunity) || null,
+          contactInfo.name,
+          contactInfo.email,
+          contactInfo.phone,
+          opportunity.amount_max || opportunity.maxAmount || null,
+          opportunity.amount_min || opportunity.amountMin || null,
+          opportunity.amount_max || opportunity.amountMax || null,
+          decision?.decision ?? null,
+          decision?.explanation ?? null,
+          JSON.stringify(decision?.matchedNeeds ?? []),
+          decision ? String(decision.eligible) : null,
+          JSON.stringify(decision?.ineligibilityReasons ?? []),
+          profileFingerprint ?? null,
+          opportunityFingerprint ?? null,
+          decision?.matcherVersion ?? null,
+          decision?.evaluatedAt ?? null,
+          decision?.confidence ?? null,
+        )
+    } else {
+      // Legacy insert without decision columns (pre-migration DBs)
+      await db
+        .prepare(
+          `
+            INSERT INTO grants (
+              id,
+              organization_id,
+              profile_id,
+              funding_opportunity_id,
+              title,
+              funder,
+              status,
+              deadline,
+              match_score,
+              match_reasons,
+              notes,
+              application_url,
+              application_method,
+              contact_name,
+              contact_email,
+              contact_phone,
+              amount_requested,
+              amount_min,
+              amount_max
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `,
+        )
+        .run(
+          grantId,
+          profile.organization_id ?? null,
+          profileId,
+          opportunity.id,
+          opportunity.title,
+          opportunity.sponsor,
+          'discovered',
+          opportunity.deadline ?? null,
+          matchPercentage,
+          JSON.stringify(profileContext?.match_reasons ?? opportunity.match_reasons ?? []),
+          `Auto-added: ${matchPercentage}% match for profile ${profileId} (threshold ${threshold}%)`,
+          opportunity.application_url || opportunity.applicationUrl || opportunity.url || null,
+          opportunity.application_method || opportunity.submission_method || guessMethodFromOpportunity(opportunity) || null,
+          contactInfo.name,
+          contactInfo.email,
+          contactInfo.phone,
+          opportunity.amount_max || opportunity.maxAmount || null,
+          opportunity.amount_min || opportunity.amountMin || null,
+          opportunity.amount_max || opportunity.amountMax || null,
+        )
+    }
     
-    console.log(`[opportunityMatcher] Added to pipeline: ${opportunity.title} (${matchPercentage}% match for profile ${profileId})`)
+    console.log(`[opportunityMatcher] Added to pipeline: ${opportunity.title} (${matchPercentage}% match for profile ${profileId}, decision: ${decision?.decision ?? 'N/A'})`)
     
     return {
       saved: true,
       matchPercentage,
       threshold,
       pipelineId: grantId,
+      decision: decision?.decision ?? null,
     }
   } catch (error) {
     console.error('[opportunityMatcher] Error saving to pipeline:', error)
