@@ -253,7 +253,14 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     let thresholdFallbackMessage = null
     if (filtered.length === 0 && allMapped.length > 0) {
+      // Threshold fallback: show best available matches that still pass relevance
+      // filtering. This ensures directory resources (food banks, United Way, etc.)
+      // are not silently suppressed by a high match-score threshold.
       filtered = allMapped
+        .filter((opp) => {
+          const relevance = applyRelevanceFilter(opp, profileData)
+          return relevance.pass
+        })
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
         .slice(0, 50)
       thresholdFallbackMessage = `No results met your threshold of ${min_match_score}%. Showing best available matches.`
