@@ -7,9 +7,18 @@ import Database from 'better-sqlite3'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import crypto from 'crypto'
+import { applyRelevanceFilter } from '../backend/services/relevanceFilter.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
+
+// Safety guard: refuse to run in production or when seeding is explicitly disabled.
+const _nodeEnv = String(process.env.NODE_ENV || '').trim().toLowerCase()
+const _disableSeeding = String(process.env.DISABLE_SEEDING || '').trim().toLowerCase()
+if (_nodeEnv === 'production' || _disableSeeding === 'true' || _disableSeeding === '1') {
+  console.error('[seed-matched-grants] Seeding disabled in production.')
+  process.exit(1)
+}
 
 const DB_PATH = join(__dirname, '../seed/grantflow.db')
 
@@ -208,40 +217,74 @@ async function main() {
     console.log(`  Keywords: ${[...signals.keywords].slice(0, 5).join(', ')}...`)
     console.log(`  State: ${signals.location.state || 'none'}`)
     console.log(`  Military: ${signals.military.size > 0 ? [...signals.military].join(', ') : 'none'}`)
-    
-    // Score each opportunity
-    const scoredOpps = opportunities.map(opp => {
-      const { score, matchedFields } = calculateMatchScore(signals, opp)
-      return { opp, score, matchedFields }
-    })
-    
-    // Sort by score and filter for 80%+
-    const highMatches = scoredOpps
-      .filter(s => s.score >= 80)
-      .sort((a, b) => b.score - a.score)
-    
-    console.log(`  High matches (80%+): ${highMatches.length}`)
-    
-    // Take top 10 for this profile
-    const grantsToCreate = highMatches.slice(0, 10)
-    
-    if (grantsToCreate.length === 0) {
-      // If no high matches, take top 5 anyway for demo purposes
-      const topMatches = scoredOpps
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 5)
-      console.log(`  No 80%+ matches, creating top ${topMatches.length} matches anyway`)
-      grantsToCreate.push(...topMatches)
+
+    // Build profileData for relevance filter
+    function parseSec(key) {
+      const row = sections.find(s => s.section_key === key)
+      if (!row || !row.data) return {}
+      try { return typeof row.data === 'string' ? JSON.parse(row.data) : row.data } catch { return {} }
+    }
+    const basicSec = parseSec('basic_information')
+    const demoSec = parseSec('demographics')
+    const milSec = parseSec('military_service')
+    const healthSec = parseSec('health_medical')
+    const familySec = parseSec('family_life')
+    const locSec = parseSec('location_focus')
+    let parsedTags = []
+    try { parsedTags = typeof profile.tags === 'string' ? JSON.parse(profile.tags) : (profile.tags || []) } catch { parsedTags = [] }
+    const profileData = {
+      primary_type: profile.primary_type || null,
+      veteran_status: milSec.veteran || demoSec.veteran_status || null,
+      immigrant_status: demoSec.immigrant_status || null,
+      disability_status: healthSec.disability_type || demoSec.disability_status || null,
+      state: signals.location.state || basicSec.state || locSec.state || null,
+      tags: parsedTags,
+      gender: basicSec.gender || demoSec.gender || null,
+      age: basicSec.age || demoSec.age || null,
+      foster_youth: familySec.foster_youth || null,
+      first_responder: null,
     }
     
-    // Create grants
+    // Score each opportunity and apply relevance filter
+    const scoredOpps = []
+    for (const opp of opportunities) {
+      const oppForFilter = {
+        ...opp,
+        keywords: safeParseJSON(opp.keywords, []),
+        categories: safeParseJSON(opp.categories, []),
+      }
+      const relevance = applyRelevanceFilter(oppForFilter, profileData)
+      if (!relevance.pass) continue
+
+      const { score, matchedFields } = calculateMatchScore(signals, opp)
+      if (score >= 80) {
+        scoredOpps.push({ opp, score, matchedFields })
+      }
+    }
+    
+    // Sort by score and take top 10 — no fallback for below-threshold matches
+    scoredOpps.sort((a, b) => b.score - a.score)
+    const grantsToCreate = scoredOpps.slice(0, 10)
+    
+    console.log(`  High matches (80%+, relevance-filtered): ${scoredOpps.length}`)
+    
+    // Ensure organization exists for the profile
+    let orgId = profile.organization_id
+    if (!orgId) {
+      orgId = crypto.randomUUID()
+      db.prepare(`INSERT INTO organizations (id, name, applicant_type, created_at, updated_at) VALUES (?, ?, 'individual', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+        .run(orgId, profile.display_name || 'My Organization')
+      db.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile.id)
+    }
+
+    // Create grants — always set profile_id for correct pipeline scoping
     for (const { opp, score, matchedFields } of grantsToCreate) {
-      // Check if grant already exists for this org/opportunity
+      // Check if grant already exists for this profile/opportunity
       const existing = db.prepare(`
         SELECT id FROM grants 
-        WHERE organization_id = ? 
+        WHERE profile_id = ? 
           AND (funding_opportunity_id = ? OR title = ?)
-      `).get(profile.organization_id, opp.id, opp.title)
+      `).get(profile.id, opp.id, opp.title)
       
       if (existing) {
         continue // Skip duplicate
@@ -249,26 +292,33 @@ async function main() {
       
       const grantId = crypto.randomUUID()
       
-      db.prepare(`
-        INSERT INTO grants (
-          id, organization_id, funding_opportunity_id, title, funder,
-          deadline, status, match_score, match_reasons, application_url,
-          created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `).run(
-        grantId,
-        profile.organization_id,
-        opp.id,
-        opp.title,
-        opp.sponsor,
-        opp.deadline,
-        score,
-        JSON.stringify(matchedFields),
-        opp.application_url
-      )
-      
-      totalGrantsCreated++
-      console.log(`    ✓ Added: ${opp.title} (${score}%)`)
+      try {
+        db.prepare(`
+          INSERT INTO grants (
+            id, organization_id, profile_id, funding_opportunity_id, title, funder,
+            deadline, status, match_score, match_reasons, application_url,
+            created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `).run(
+          grantId,
+          orgId,
+          profile.id,
+          opp.id,
+          opp.title,
+          opp.sponsor,
+          opp.deadline,
+          score,
+          JSON.stringify(matchedFields),
+          opp.application_url
+        )
+        
+        totalGrantsCreated++
+        console.log(`    ✓ Added: ${opp.title} (${score}%)`)
+      } catch (e) {
+        if (!e.message.includes('UNIQUE')) {
+          console.error(`    ✗ ${e.message}`)
+        }
+      }
     }
   }
   
@@ -278,7 +328,7 @@ async function main() {
   const stats = db.prepare(`
     SELECT p.display_name, COUNT(g.id) as grant_count
     FROM profiles p
-    LEFT JOIN grants g ON g.organization_id = p.organization_id
+    LEFT JOIN grants g ON g.profile_id = p.id
     GROUP BY p.id
   `).all()
   

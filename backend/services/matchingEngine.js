@@ -168,9 +168,18 @@ export function calculateMatchScore(profile, opportunity) {
   const isIndividualFamilyType = ['individual', 'individual_need', 'family', 'medical_assistance'].includes(profileTypeNorm)
 
   // University/college grants hitting non-student profiles
-  if (!isStudentType && /\b(university\s*—|college\s*—|institutional scholarship|financial aid.*university|financial aid.*college|off.campus resources)\b/i.test(oppText)) {
-    score -= 20
-    reasons.push('Cross-category penalty: university/college program for non-student profile (-20)')
+  // Pattern covers em-dash, en-dash, hyphen, and no-dash variants to catch all title formats.
+  if (!isStudentType && /\b(university\s*[—–-]|college\s*[—–-]|university\s+financial aid|college\s+financial aid|university\s+housing|college\s+housing|institutional scholarship|financial aid.*university|financial aid.*college|off.campus resources?|community college.{0,30}(aid|grant|scholarship))\b/i.test(oppText)) {
+    score -= 40
+    reasons.push('Cross-category penalty: university/college program for non-student profile (-40)')
+  }
+
+  // FEMA/disaster grants hitting non-disaster profiles
+  const isDisasterProfile = (Array.isArray(effectiveProfile?.tags) && effectiveProfile.tags.some((t) => /disaster|fema|emergency|flood|fire|tornado|hurricane|storm/i.test(String(t)))) ||
+    profileTypeNorm === 'disaster_survivor'
+  if (!isDisasterProfile && /\b(fema individual assistance|fema disaster (relief|assistance|grant)|disaster (relief|assistance) grant|ihp\b|individuals and households program)\b/i.test(oppText)) {
+    score -= 40
+    reasons.push('Cross-category penalty: FEMA/disaster program for non-disaster profile (-40)')
   }
 
   // Veteran-focused grants hitting non-veteran profiles
