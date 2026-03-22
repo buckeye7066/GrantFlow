@@ -8,6 +8,7 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import { applyRelevanceFilter } from '../services/relevanceFilter.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -261,9 +262,47 @@ export function seedProfileGrants(db) {
       db.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile.id);
     }
     
+    // Build profileData for relevance filter
+    let parsedTags = [];
+    try { parsedTags = JSON.parse(profile.tags || '[]'); } catch (e) { /* ignore */ }
+    const basic = sections.basic_information || {};
+    const demographics = sections.demographics || {};
+    const military = sections.military_service || {};
+    const health = sections.health_medical || {};
+    const family = sections.family_life || {};
+    const locFocus = sections.location_focus || {};
+    const addr = basic.address;
+    let stateFromAddr = null;
+    if (typeof addr === 'string') {
+      stateFromAddr = (addr.match(/\b([A-Z]{2})\s*,?\s*\d{5}/) || [])[1] || null;
+    } else if (addr && typeof addr === 'object') {
+      stateFromAddr = addr.state || null;
+    }
+    const profileData = {
+      primary_type: profile.primary_type || null,
+      veteran_status: military.veteran || demographics.veteran_status || null,
+      immigrant_status: demographics.immigrant_status || null,
+      disability_status: health.disability_type || demographics.disability_status || null,
+      state: profile.state || basic.state || locFocus.state || stateFromAddr || null,
+      tags: parsedTags,
+      gender: basic.gender || demographics.gender || null,
+      age: basic.age || demographics.age || null,
+      foster_youth: family.foster_youth || null,
+      first_responder: null,
+    };
+
     // Add grants to pipeline
     let added = 0;
     for (const { opp, score, matchedFields } of topMatches) {
+      // Apply relevance filter before inserting
+      const oppForFilter = {
+        ...opp,
+        keywords: (() => { try { return JSON.parse(opp.keywords || '[]'); } catch (e) { return []; } })(),
+        categories: (() => { try { return JSON.parse(opp.categories || '[]'); } catch (e) { return []; } })(),
+      };
+      const filterResult = applyRelevanceFilter(oppForFilter, profileData);
+      if (!filterResult.pass) continue;
+
       // Check for duplicates
       const existing = db.prepare(`
         SELECT id FROM grants 

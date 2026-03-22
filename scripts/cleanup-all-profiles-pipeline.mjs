@@ -153,7 +153,13 @@ function track(category) {
 }
 
 for (const profile of profiles) {
-  const grants = db.prepare('SELECT id, title, funder, created_at FROM grants WHERE profile_id = ? ORDER BY created_at ASC').all(profile.id)
+  const grants = db.prepare(`
+    SELECT id, title, funder, created_at FROM grants 
+    WHERE profile_id = ? OR organization_id IN (
+      SELECT organization_id FROM profiles WHERE id = ? AND organization_id IS NOT NULL
+    )
+    ORDER BY created_at ASC
+  `).all(profile.id, profile.id)
   if (grants.length === 0) continue
 
   const sections = {}

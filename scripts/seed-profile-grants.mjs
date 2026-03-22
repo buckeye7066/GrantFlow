@@ -19,6 +19,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import { applyRelevanceFilter } from '../backend/services/relevanceFilter.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -362,9 +363,43 @@ for (const profile of profiles) {
   
   // Build signals
   const signals = buildProfileSignals(profile, sections);
-  const profileState = profile.state || 
-    sections.find(s => s.section_key === 'location_focus')?.data?.state ||
-    sections.find(s => s.section_key === 'basic_information')?.data?.state;
+
+  // Fix: sections[].data is a JSON string — parse it before accessing .state
+  function parseSectionData(sections, key) {
+    const row = sections.find(s => s.section_key === key);
+    if (!row || !row.data) return {};
+    try { return typeof row.data === 'string' ? JSON.parse(row.data) : row.data; } catch { return {}; }
+  }
+  const locFocusData = parseSectionData(sections, 'location_focus');
+  const basicInfoData = parseSectionData(sections, 'basic_information');
+  const addr = basicInfoData.address;
+  let stateFromAddr = null;
+  if (typeof addr === 'string') {
+    stateFromAddr = (addr.match(/\b([A-Z]{2})\s*,?\s*\d{5}/) || [])[1] || null;
+  } else if (addr && typeof addr === 'object') {
+    stateFromAddr = addr.state || null;
+  }
+  const profileState = profile.state || locFocusData.state || basicInfoData.state || stateFromAddr || null;
+
+  // Build profileData for relevance filter
+  const demographicsData = parseSectionData(sections, 'demographics');
+  const militaryData = parseSectionData(sections, 'military_service');
+  const healthData = parseSectionData(sections, 'health_medical');
+  const familyData = parseSectionData(sections, 'family_life');
+  let parsedTags = [];
+  try { parsedTags = typeof profile.tags === 'string' ? JSON.parse(profile.tags) : (profile.tags || []); } catch { parsedTags = []; }
+  const profileData = {
+    primary_type: profile.primary_type || null,
+    veteran_status: militaryData.veteran || demographicsData.veteran_status || null,
+    immigrant_status: demographicsData.immigrant_status || null,
+    disability_status: healthData.disability_type || demographicsData.disability_status || null,
+    state: profileState,
+    tags: parsedTags,
+    gender: basicInfoData.gender || demographicsData.gender || null,
+    age: basicInfoData.age || demographicsData.age || null,
+    foster_youth: familyData.foster_youth || null,
+    first_responder: null,
+  };
   
   // Get or create organization for this profile
   let orgId = profile.organization_id;
@@ -396,6 +431,15 @@ for (const profile of profiles) {
     const { score, matchReasons } = calculateMatchScore(opp, signals, profileState);
     
     if (score >= 80) {
+      // Apply relevance filter before adding to candidates
+      const oppForFilter = {
+        ...opp,
+        keywords: Array.isArray(opp.keywords) ? opp.keywords : (() => { try { return JSON.parse(opp.keywords || '[]'); } catch { return []; } })(),
+        categories: Array.isArray(opp.categories) ? opp.categories : (() => { try { return JSON.parse(opp.categories || '[]'); } catch { return []; } })(),
+      };
+      const filterResult = applyRelevanceFilter(oppForFilter, profileData);
+      if (!filterResult.pass) continue;
+
       scoredOpps.push({
         ...opp,
         match_score: score,
