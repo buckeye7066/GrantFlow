@@ -342,13 +342,13 @@ console.log(`   Removed ${placeholderGrantsRemoved.changes} placeholder grants`)
 // Prepare insert statement
 const insertGrant = db.prepare(`
   INSERT INTO grants (
-    id, organization_id, title, funder, deadline, status, 
+    id, organization_id, profile_id, title, funder, deadline, status, 
     match_score, match_reasons, application_url, amount_requested, notes
-  ) VALUES (?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?)
 `);
 
 const checkExisting = db.prepare(`
-  SELECT id FROM grants WHERE organization_id = ? AND title = ?
+  SELECT id FROM grants WHERE profile_id = ? AND title = ?
 `);
 
 console.log('\n4. Seeding grants for each profile...');
@@ -456,14 +456,15 @@ for (const profile of profiles) {
   
   let addedForProfile = 0;
   for (const opp of top50) {
-    // Check if already exists
-    const existing = checkExisting.get(orgId, opp.title);
+    // Check if already exists for this profile
+    const existing = checkExisting.get(profile.id, opp.title);
     if (existing) continue;
     
     try {
       insertGrant.run(
         crypto.randomUUID(),
         orgId,
+        profile.id,   // profile_id for correct pipeline scoping
         opp.title,
         opp.sponsor,
         opp.deadline || null,
@@ -493,8 +494,7 @@ console.log(`   Total grants added: ${totalGrantsAdded}`);
 const grantsByProfile = db.prepare(`
   SELECT p.display_name, COUNT(g.id) as grant_count
   FROM profiles p
-  LEFT JOIN organizations o ON p.organization_id = o.id
-  LEFT JOIN grants g ON o.id = g.organization_id
+  LEFT JOIN grants g ON p.id = g.profile_id
   GROUP BY p.id
 `).all();
 
