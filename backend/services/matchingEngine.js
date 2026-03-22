@@ -212,8 +212,8 @@ export function calculateMatchScore(profile, opportunity) {
   if (profileState && !oppIsNational) {
     const titleStateAbbr = _extractStateNameFromTitle(opportunity.title || '')
     if (titleStateAbbr) {
-      const profileStateNorm = normalizeState(profileState.toLowerCase())
-      if (profileStateNorm !== titleStateAbbr.toLowerCase()) {
+      const profileStateNorm = normalizeState(profileState.toLowerCase()).toUpperCase()
+      if (profileStateNorm !== titleStateAbbr.toUpperCase()) {
         score -= 25
         reasons.push(`Cross-category penalty: opportunity title names ${titleStateAbbr}, profile is in ${profileState.toUpperCase()} (-25)`)
       }
