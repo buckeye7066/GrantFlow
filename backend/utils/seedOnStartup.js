@@ -10,6 +10,7 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { applyRelevanceFilter } from '../services/relevanceFilter.js';
 import { buildProfileSignals } from '../services/profileHelpers.js';
+import { computeMatchDecision } from '../services/matchDecisionEngine.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -281,6 +282,10 @@ export function seedProfileGrants(db) {
       };
       const filterResult = applyRelevanceFilter(oppForFilter, profileData);
       if (!filterResult.pass) continue;
+
+      // v2.0.0 canonical decision engine: skip hard ineligibles (REJECT)
+      const decision = computeMatchDecision(profile, opp, { profileSections: sectionsObj });
+      if (decision.decision === 'REJECT') continue;
 
       // Check for duplicates — profile-scoped (prefer profile_id uniqueness check)
       const existing = db.prepare(`

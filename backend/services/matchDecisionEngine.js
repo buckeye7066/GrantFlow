@@ -181,12 +181,22 @@ export function evaluateEligibility(profileNorm, oppNorm) {
   }
 
   // -- Entity type mismatch --
+  // When allowed types don't include 'individual', check if profile's specific trait
+  // flags qualify it (e.g., a veteran whose entityType is 'individual' still qualifies
+  // for veteran-only opportunities when isVeteran=true).
   const allowedTypes = oppNorm.entityTypesAllowed ?? []
   if (allowedTypes.length > 0 && !allowedTypes.includes('individual')) {
     const profileType = profileNorm.entityType
     if (profileType && !allowedTypes.includes(profileType)) {
-      // Don't hard-reject if the profile type is unclear, just flag
-      if (profileType !== 'organization') {
+      // Don't reject if the profile's specific trait flags cover what's required
+      const qualifiesByTrait = (
+        (allowedTypes.includes('veteran') && profileNorm.isVeteran) ||
+        (allowedTypes.includes('student') && profileNorm.isStudent) ||
+        (allowedTypes.includes('nonprofit') && profileNorm.isNonprofit) ||
+        (allowedTypes.includes('business') && profileNorm.isBusiness) ||
+        (allowedTypes.includes('caregiver') && profileNorm.isCaregiver)
+      )
+      if (!qualifiesByTrait && profileType !== 'organization') {
         ineligibilityReasons.push(
           `Opportunity is for ${allowedTypes.join('/')} but profile is ${profileType}`
         )
