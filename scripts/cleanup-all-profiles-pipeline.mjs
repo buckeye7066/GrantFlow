@@ -34,6 +34,30 @@ function extractStateFromTitle(title) {
   return null
 }
 
+const STATE_NAME_TO_ABBR_ENTRIES = [
+  ['alabama', 'AL'], ['alaska', 'AK'], ['arizona', 'AZ'], ['arkansas', 'AR'],
+  ['california', 'CA'], ['colorado', 'CO'], ['connecticut', 'CT'], ['delaware', 'DE'],
+  ['florida', 'FL'], ['georgia', 'GA'], ['hawaii', 'HI'], ['idaho', 'ID'],
+  ['illinois', 'IL'], ['indiana', 'IN'], ['iowa', 'IA'], ['kansas', 'KS'],
+  ['kentucky', 'KY'], ['louisiana', 'LA'], ['maine', 'ME'], ['maryland', 'MD'],
+  ['massachusetts', 'MA'], ['michigan', 'MI'], ['minnesota', 'MN'], ['mississippi', 'MS'],
+  ['missouri', 'MO'], ['montana', 'MT'], ['nebraska', 'NE'], ['nevada', 'NV'],
+  ['new hampshire', 'NH'], ['new jersey', 'NJ'], ['new mexico', 'NM'], ['new york', 'NY'],
+  ['north carolina', 'NC'], ['north dakota', 'ND'], ['ohio', 'OH'], ['oklahoma', 'OK'],
+  ['oregon', 'OR'], ['pennsylvania', 'PA'], ['rhode island', 'RI'], ['south carolina', 'SC'],
+  ['south dakota', 'SD'], ['tennessee', 'TN'], ['texas', 'TX'], ['utah', 'UT'],
+  ['vermont', 'VT'], ['virginia', 'VA'], ['washington', 'WA'], ['west virginia', 'WV'],
+  ['wisconsin', 'WI'], ['wyoming', 'WY'],
+].sort((a, b) => b[0].length - a[0].length)
+
+function extractStateNameFromTitle(title) {
+  const lower = (title || '').toLowerCase()
+  for (const [name, abbr] of STATE_NAME_TO_ABBR_ENTRIES) {
+    if (lower.includes(name)) return abbr
+  }
+  return null
+}
+
 function extractProfileState(profile, sections) {
   const basic = sections.basic_information || {}
   const locFocus = sections.location_focus || {}
@@ -93,8 +117,27 @@ function applyRelevanceFilter(oppText, profileData) {
 
   // University/college for non-students
   const isStudent = ['student', 'high_school_student', 'college_student'].includes(profileType)
-  if (/\b(university\s*—|college\s*—|institutional scholarship|college.{0,15}financial aid|university.{0,15}financial aid|college.{0,15}housing|university.{0,15}housing|off.campus resources)\b/i.test(oppText) && !isStudent) {
+  if (/\b(university\s*[—–-]\s*|college\s*[—–-]\s*|institutional scholarship|college.{0,20}financial aid|university.{0,20}financial aid|college.{0,20}housing|university.{0,20}housing|off.campus resources?|community college.{0,30}(aid|grant|scholarship|resource))\b/i.test(oppText) && !isStudent) {
     return { pass: false, reason: 'university/college program for non-student' }
+  }
+
+  // Generic student scholarship / academic aid for non-students
+  if (/\b(federal pell grant|pell grant|teach grant\b|fseog\b|federal supplemental educational opportunity|buick achievers|questbridge\b|quest bridge|jack kent cooke|gates scholarship|cobell scholarship|cal grant\b|texas public educational grant|tpeg\b|state tuition (assistance|grant)|tuition assistance program|academic competitive grant|smart grant|iraq and afghanistan service grant)\b/i.test(oppText) && !isStudent) {
+    return { pass: false, reason: 'student-only academic aid for non-student profile' }
+  }
+
+  // HIV/AIDS-specific programs
+  if (/\b(ryan white|hiv\/aids program|aids drug assistance|adap\b|people living with hiv|plwh\b|hiv.{0,20}(care|treatment|support|assistance)|aids.{0,20}(care|treatment|support|assistance))\b/i.test(oppText)) {
+    const hasHiv = (Array.isArray(profileData.tags) && profileData.tags.some(t => /hiv|aids\b/i.test(String(t)))) ||
+      (profileData.disability_status && /hiv|aids/i.test(JSON.stringify(profileData.disability_status)))
+    if (!hasHiv) return { pass: false, reason: 'HIV/AIDS-specific program, no HIV/AIDS indicator in profile' }
+  }
+
+  // FEMA/disaster for non-disaster profiles
+  if (/\b(fema individual assistance|fema disaster (relief|assistance|grant)|disaster (relief|assistance) grant|individual.*assistance.*disaster|ihp\b|individuals and households program)\b/i.test(oppText)) {
+    const hasFEMA = (Array.isArray(profileData.tags) && profileData.tags.some(t => /disaster|fema|emergency|flood|fire|tornado|hurricane|storm/i.test(String(t)))) ||
+      (profileData.primary_type || '').toLowerCase() === 'disaster_survivor'
+    if (!hasFEMA) return { pass: false, reason: 'FEMA/disaster program, no disaster indicator' }
   }
 
   // Foster care youth
@@ -109,8 +152,17 @@ function applyRelevanceFilter(oppText, profileData) {
     if (!hasFR) return { pass: false, reason: 'first responder program, no indicator' }
   }
 
-  // Blind-specific
-  if (/\b(for the blind|national federation of the blind|american foundation for the blind|visual impairment support)\b/i.test(oppText)) {
+  // IDD-specific — require a positive IDD indicator
+  if (/\b(ecf choices|didd\b|intellectual disability|developmental disability|idd waiver|intellectual.{0,20}developmental)\b/i.test(oppText)) {
+    const disabilityText = JSON.stringify(profileData.disability_status || '').toLowerCase()
+    const hasIdd = disabilityText.includes('intellectual') || disabilityText.includes('developmental') ||
+      disabilityText.includes('idd') || disabilityText.includes('ecf') || disabilityText.includes('didd') ||
+      (Array.isArray(profileData.tags) && profileData.tags.some(t => /intellectual|developmental|idd/i.test(String(t))))
+    if (!hasIdd) return { pass: false, reason: 'IDD-specific program, no IDD indicators in profile' }
+  }
+
+  // Blind-specific — require a positive visual-impairment indicator
+  if (/\b(blind only|visually impaired only|for the blind|national federation of the blind|american foundation for the blind|visual impairment support|blindness program)\b/i.test(oppText)) {
     const hasVisual = (Array.isArray(profileData.tags) && profileData.tags.some(t => /blind|visual/i.test(String(t)))) ||
       (profileData.disability_status && JSON.stringify(profileData.disability_status).toLowerCase().includes('visual'))
     if (!hasVisual) return { pass: false, reason: 'blindness-specific, no visual impairment' }
@@ -175,9 +227,11 @@ for (const profile of profiles) {
   const family = sections.family_life || {}
 
   const profileState = extractProfileState({ state: null }, sections)
+  const rawVeteran = demographics.veteran_status || military.veteran || null
+  const veteranStatus = (rawVeteran === true || /^veteran/i.test(String(rawVeteran || ''))) ? true : null
   const profileData = {
     primary_type: profile.primary_type || null,
-    veteran_status: demographics.veteran_status || military.veteran || null,
+    veteran_status: veteranStatus,
     immigrant_status: demographics.immigrant_status || null,
     disability_status: demographics.disability_status || health.disability_type || null,
     tags: parseTags(profile.tags),
@@ -198,9 +252,11 @@ for (const profile of profiles) {
     }
     seenTitles.add(titleNorm)
 
-    // 2. Wrong-state check
+    // 2. Wrong-state check (both "near [City], ST" pattern and state-name-in-title)
     if (profileState) {
-      const grantState = extractStateFromTitle(grant.title || '')
+      const grantState =
+        extractStateFromTitle(grant.title || '') ||
+        extractStateNameFromTitle(grant.title || '')
       if (grantState && grantState !== profileState) {
         toDelete.push({ id: grant.id, title: grant.title, reason: `wrong state: grant is ${grantState}, profile is ${profileState}` })
         track('wrong_state')

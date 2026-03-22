@@ -217,7 +217,7 @@ export function seedProfileGrants(db) {
     
     // Score opportunities
     const scored = opportunities.map(opp => {
-      let score = 40;
+      let score = 25;
       const matchedFields = [];
       
       let oppKeywords = [], oppCategories = [];
@@ -247,7 +247,7 @@ export function seedProfileGrants(db) {
     
     // Filter and sort
     const topMatches = scored
-      .filter(s => s.score >= 45)
+      .filter(s => s.score >= 60)
       .sort((a, b) => b.score - a.score)
       .slice(0, 50);
     

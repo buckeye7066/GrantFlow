@@ -150,10 +150,51 @@ export function applyRelevanceFilter(opportunity, profileData) {
     profileType === 'student' ||
     profileType === 'high_school_student' ||
     profileType === 'college_student'
+  // Broadened: catches em-dash, regular dash, plain " - ", "Financial Aid", "Housing",
+  // "Off-Campus Resources", and generic "community college" financial aid programs.
   const universitySpecificPattern =
-    /\b(university\s*—|college\s*—|institutional scholarship|college.{0,15}financial aid|university.{0,15}financial aid|college.{0,15}housing|university.{0,15}housing|off.campus resources)\b/i
+    /\b(university\s*[—–-]\s*|college\s*[—–-]\s*|institutional scholarship|college.{0,20}financial aid|university.{0,20}financial aid|college.{0,20}housing|university.{0,20}housing|off.campus resources?|community college.{0,30}(aid|grant|scholarship|resource))\b/i
   if (universitySpecificPattern.test(oppText) && !isStudentProfile) {
     return { pass: false, reason: 'Entity type mismatch: university/college-specific program for non-student profile' }
+  }
+
+  // ── 2d-ii. Generic student scholarship / academic aid for non-student profiles ─
+  // These programs are exclusively for enrolled or prospective students.
+  // Block them unless the profile type indicates a student.
+  const genericStudentAidPattern =
+    /\b(federal pell grant|pell grant|teach grant\b|fseog\b|federal supplemental educational opportunity|buick achievers|questbridge\b|quest bridge|jack kent cooke|gates scholarship|cobell scholarship|cal grant\b|texas public educational grant|tpeg\b|state tuition (assistance|grant)|tuition assistance program|state financial aid program|academic competitive grant|smart grant|iraq and afghanistan service grant|dependent student grant|college access grant|college opportunity grant|need.based (college|academic) (grant|scholarship))\b/i
+  if (genericStudentAidPattern.test(oppText) && !isStudentProfile) {
+    return { pass: false, reason: 'Entity type mismatch: student-only academic aid program for non-student profile' }
+  }
+
+  // ── 2d-iii. HIV/AIDS-specific programs for profiles with no HIV indicator ──
+  // Ryan White and AIDS drug assistance programs are exclusively for people living
+  // with HIV/AIDS. Block for profiles with no HIV/AIDS indicator.
+  const hivAidsPattern =
+    /\b(ryan white|hiv\/aids program|aids drug assistance|adap\b|people living with hiv|plwh\b|hiv.{0,20}(care|treatment|support|assistance)|aids.{0,20}(care|treatment|support|assistance))\b/i
+  if (hivAidsPattern.test(oppText)) {
+    const hasHivIndicator =
+      (Array.isArray(profileData.tags) &&
+        profileData.tags.some((t) => /hiv|aids\b/i.test(String(t)))) ||
+      (profileData.disability_status && /hiv|aids/i.test(JSON.stringify(profileData.disability_status)))
+    if (!hasHivIndicator) {
+      return { pass: false, reason: 'Demographic mismatch: HIV/AIDS-specific program, no HIV/AIDS indicator in profile' }
+    }
+  }
+
+  // ── 2e-i. FEMA/disaster programs for non-disaster profiles ─────────────────
+  // FEMA Individual Assistance and generic disaster relief should not appear for
+  // profiles that have no disaster-related need indicator.
+  const femaDisasterPattern =
+    /\b(fema individual assistance|fema disaster (relief|assistance|grant)|disaster (relief|assistance) grant|individual.*assistance.*disaster|ihp\b|individuals and households program)\b/i
+  if (femaDisasterPattern.test(oppText)) {
+    const hasDisasterIndicator =
+      (Array.isArray(profileData.tags) &&
+        profileData.tags.some((t) => /disaster|fema|emergency|flood|fire|tornado|hurricane|storm/i.test(String(t)))) ||
+      (profileData.primary_type || '').toLowerCase() === 'disaster_survivor'
+    if (!hasDisasterIndicator) {
+      return { pass: false, reason: 'Demographic mismatch: FEMA/disaster program, no disaster need indicator in profile' }
+    }
   }
 
   // ── 2e. Foster care youth programs ────────────────────────────────────────
@@ -218,7 +259,8 @@ export function applyRelevanceFilter(opportunity, profileData) {
 
   // ── 5. Disability Program Specificity ─────────────────────────────────────
 
-  // IDD-specific programs
+  // IDD-specific programs — require a positive IDD indicator; block everyone else
+  // (ECF Choices, DIDD waivers, etc. are exclusively for people with IDD diagnoses)
   const iddPattern =
     /\b(ecf choices|didd\b|intellectual disability|developmental disability|idd waiver|intellectual.{0,20}developmental)\b/i
   if (iddPattern.test(oppText)) {
@@ -236,16 +278,12 @@ export function applyRelevanceFilter(opportunity, profileData) {
             String(t).toLowerCase().includes('developmental') ||
             String(t).toLowerCase().includes('idd'),
         ))
-    if (
-      profileData.disability_status !== undefined &&
-      profileData.disability_status !== null &&
-      !hasIddIndicator
-    ) {
+    if (!hasIddIndicator) {
       return { pass: false, reason: 'Disability mismatch: IDD-specific program, no IDD indicators in profile' }
     }
   }
 
-  // Blind/visually-impaired specific
+  // Blind/visually-impaired specific — require a positive visual-impairment indicator
   const blindPattern = /\b(blind only|visually impaired only|for the blind|blindness program)\b/i
   if (blindPattern.test(oppText)) {
     const disabilityText = JSON.stringify(profileData.disability_status || '').toLowerCase()
@@ -256,11 +294,7 @@ export function applyRelevanceFilter(opportunity, profileData) {
         profileData.tags.some(
           (t) => String(t).toLowerCase().includes('blind') || String(t).toLowerCase().includes('visual'),
         ))
-    if (
-      profileData.disability_status !== undefined &&
-      profileData.disability_status !== null &&
-      !hasVisualImpairment
-    ) {
+    if (!hasVisualImpairment) {
       return { pass: false, reason: 'Disability mismatch: blindness-specific program, no visual impairment in profile' }
     }
   }
