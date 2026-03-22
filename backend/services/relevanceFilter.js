@@ -90,24 +90,23 @@ export function applyRelevanceFilter(opportunity, profileData) {
     return { pass: false, reason: 'Demographic mismatch: women-only program, profile is not female' }
   }
 
-  // Veteran-required grants — only block if profile explicitly has no veteran status
-  const veteranRequiredPattern =
-    /\b(veterans? only|must be a veteran|veteran status required|active duty only|service members only)\b/i
-  if (veteranRequiredPattern.test(oppText)) {
-    // Only block when we have explicit confirmation the profile is not a veteran
-    const explicitNonVeteran =
-      profileData.veteran_status === 'no' ||
-      profileData.veteran_status === false ||
-      profileData.veteran_status === 'false' ||
-      profileData.veteran_status === 'non-veteran'
-    if (explicitNonVeteran) {
-      return { pass: false, reason: 'Demographic mismatch: veteran-only program for non-veteran profile' }
-    }
+  // Veteran-focused grants — block when profile has no veteran indicator.
+  // Broadened beyond "veterans only" to catch programs like SSVF that are inherently
+  // veteran-targeted even without an explicit "only" qualifier.
+  const isVeteranProfile =
+    profileData.veteran_status === true ||
+    profileData.veteran_status === 'yes' ||
+    profileData.veteran_status === 'true'
+  const veteranFocusedPattern =
+    /\b(ssvf|supportive services for veteran|veterans? only|must be a veteran|veteran status required|active duty only|service members only|boots to business|veteran entrepreneurship|va (housing|benefits|disability|healthcare|medical)|veterans? (assistance|support|services|program|families))\b/i
+  if (veteranFocusedPattern.test(oppText) && !isVeteranProfile) {
+    return { pass: false, reason: 'Demographic mismatch: veteran-focused program, profile has no veteran indicator' }
   }
 
-  // Refugee/resettlement specific — only block if profile has no immigrant indicator
+  // Refugee/resettlement specific — block if profile has no immigrant indicator.
+  // Broadened to also catch "Office of Refugee Resettlement" and "IRC — Resettlement".
   const refugeePattern =
-    /\b(refugee resettlement|resettlement only|for refugees only|newly arrived immigrants? only)\b/i
+    /\b(refugee resettlement|resettlement only|for refugees only|newly arrived immigrants? only|office of refugee|refugee assistance|irc.{0,5}resettlement)\b/i
   if (refugeePattern.test(oppText)) {
     const hasImmigrantIndicator = Boolean(
       profileData.immigrant_status &&
@@ -115,12 +114,71 @@ export function applyRelevanceFilter(opportunity, profileData) {
         profileData.immigrant_status !== 'false' &&
         profileData.immigrant_status !== false,
     )
-    if (
-      profileData.immigrant_status !== undefined &&
-      profileData.immigrant_status !== null &&
-      !hasImmigrantIndicator
-    ) {
+    if (!hasImmigrantIndicator) {
       return { pass: false, reason: 'Demographic mismatch: refugee-specific program, no immigrant indicator in profile' }
+    }
+  }
+
+  // ── 2b. Business/SBA grants for non-business profiles ─────────────────────
+  // SBA, entrepreneur, and small-business-specific programs should not appear
+  // for individual/family/student profiles who are not business owners.
+  const isBusinessProfile =
+    profileType === 'small_business' ||
+    profileType === 'organization' ||
+    profileType === 'nonprofit'
+  const businessOnlyPattern =
+    /\b(sba\b|small business (administration|development|innovation|grants?|resources?|funding)|sbir\b|sttr\b|entrepreneur(ship)?( training| center| program)?|minority business development|business development grant|usda (rural )?business|community advantage program|8\(a\) business|women.owned small business|wosb\b|liftfund|nase growth grant|kiva u\.?s\.?|crowdfunded business|value.added producer grant|vapg\b|native cdfi|indigenous business|national urban league.{0,20}entrepreneur|self.employment assistance)\b/i
+  if (businessOnlyPattern.test(oppText) && !isBusinessProfile) {
+    return { pass: false, reason: 'Entity type mismatch: business/SBA program for non-business profile' }
+  }
+
+  // ── 2c. Nonprofit-specific grants for individuals ─────────────────────────
+  // Programs explicitly "for nonprofits" should not appear for individual/family/student profiles.
+  const isNonprofitProfile =
+    profileType === 'organization' ||
+    profileType === 'nonprofit'
+  const nonprofitOnlyPattern =
+    /\b(for nonprofits|philanthropy for nonprofits|grants? for nonprofits|nonprofit.only|nonprofits? (van|vehicle|equipment)|foundation directory online)\b/i
+  if (nonprofitOnlyPattern.test(oppText) && !isNonprofitProfile) {
+    return { pass: false, reason: 'Entity type mismatch: nonprofit-specific program for non-nonprofit profile' }
+  }
+
+  // ── 2d. University/college-specific programs for non-students ──────────────
+  // Institutional scholarships, financial aid, and housing from specific universities
+  // should not appear for profiles that are not students.
+  const isStudentProfile =
+    profileType === 'student' ||
+    profileType === 'high_school_student' ||
+    profileType === 'college_student'
+  const universitySpecificPattern =
+    /\b(university\s*—|college\s*—|institutional scholarship|college.{0,15}financial aid|university.{0,15}financial aid|college.{0,15}housing|university.{0,15}housing|off.campus resources)\b/i
+  if (universitySpecificPattern.test(oppText) && !isStudentProfile) {
+    return { pass: false, reason: 'Entity type mismatch: university/college-specific program for non-student profile' }
+  }
+
+  // ── 2e. Foster care youth programs ────────────────────────────────────────
+  const fosterYouthPattern =
+    /\b(foster.?club|youth aging out|foster care youth|foster youth|chafee|aging out of foster)\b/i
+  if (fosterYouthPattern.test(oppText)) {
+    const hasFosterIndicator = Boolean(
+      (Array.isArray(profileData.tags) && profileData.tags.some(t => /foster/i.test(String(t)))) ||
+      profileData.foster_youth === true,
+    )
+    if (!hasFosterIndicator) {
+      return { pass: false, reason: 'Demographic mismatch: foster care youth program, no foster care indicator in profile' }
+    }
+  }
+
+  // ── 2f. First responder programs ──────────────────────────────────────────
+  const firstResponderPattern =
+    /\b(first responder(s)?( children)?( foundation)?|firefighter grant|law enforcement grant|emt grant)\b/i
+  if (firstResponderPattern.test(oppText)) {
+    const hasFirstResponderIndicator = Boolean(
+      (Array.isArray(profileData.tags) && profileData.tags.some(t => /first.?respond|firefight|emt|paramedic|law.?enforce/i.test(String(t)))) ||
+      profileData.first_responder === true,
+    )
+    if (!hasFirstResponderIndicator) {
+      return { pass: false, reason: 'Demographic mismatch: first responder program, no first responder indicator in profile' }
     }
   }
 
@@ -240,6 +298,8 @@ export function extractProfileData(profileContext) {
   const education = sections.education || {}
   const comprehensive = sections.comprehensive_application || {}
 
+  const family = sections.family_life || {}
+
   return {
     primary_type:
       profile.primary_type ||
@@ -263,6 +323,11 @@ export function extractProfileData(profileContext) {
       null,
     immigrant_status:
       demographics.immigrant_status ||
+      null,
+    foster_youth:
+      family.foster_youth ||
+      null,
+    first_responder:
       null,
     employment,
     education,

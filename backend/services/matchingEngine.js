@@ -158,6 +158,40 @@ export function calculateMatchScore(profile, opportunity) {
   score += facetAdjustments.points
   reasons.push(...facetAdjustments.reasons)
   
+  // ── Cross-category mismatch penalties ──
+  // These catch grants that slip through keyword overlap but are fundamentally
+  // for a different audience than the profile. Penalties reduce score, not discard.
+  const profileTypeNorm = normalizeString(profileType || '')
+  const isStudentType = ['student', 'high_school_student', 'college_student'].includes(profileTypeNorm)
+  const isBusinessType = ['small_business'].includes(profileTypeNorm)
+  const isOrgType = ['organization', 'nonprofit'].includes(profileTypeNorm)
+  const isIndividualFamilyType = ['individual', 'individual_need', 'family', 'medical_assistance'].includes(profileTypeNorm)
+
+  // University/college grants hitting non-student profiles
+  if (!isStudentType && /\b(university\s*—|college\s*—|institutional scholarship|financial aid.*university|financial aid.*college|off.campus resources)\b/i.test(oppText)) {
+    score -= 20
+    reasons.push('Cross-category penalty: university/college program for non-student profile (-20)')
+  }
+
+  // Veteran-focused grants hitting non-veteran profiles
+  const hasVetFacet = effectiveFacets?.military?.veteran === true || effectiveFacets?.military?.disabled_veteran === true
+  if (!hasVetFacet && /\b(ssvf|supportive services for veteran|boots to business|veteran entrepreneurship|veteran families)\b/i.test(oppText)) {
+    score -= 15
+    reasons.push('Cross-category penalty: veteran-focused program for non-veteran profile (-15)')
+  }
+
+  // Business/SBA grants hitting non-business profiles
+  if (!isBusinessType && !isOrgType && /\b(sba\b|small business (administration|development|innovation)|sbir|sttr|entrepreneur(ship)?\s+(training|center|program))\b/i.test(oppText)) {
+    score -= 15
+    reasons.push('Cross-category penalty: business/SBA program for non-business profile (-15)')
+  }
+
+  // Nonprofit-specific grants hitting individual profiles
+  if (isIndividualFamilyType && /\b(for nonprofits|philanthropy for nonprofits|grants? for nonprofits)\b/i.test(oppText)) {
+    score -= 10
+    reasons.push('Cross-category penalty: nonprofit-specific program for individual/family profile (-10)')
+  }
+
   // Amount eligibility (10 pts)
   if (amountInRange(effectiveProfile?.funding_amount_needed, opportunity)) {
     score += 10;
