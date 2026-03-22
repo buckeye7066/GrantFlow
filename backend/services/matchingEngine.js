@@ -167,10 +167,11 @@ export function calculateMatchScore(profile, opportunity) {
   const isOrgType = ['organization', 'nonprofit'].includes(profileTypeNorm)
   const isIndividualFamilyType = ['individual', 'individual_need', 'family', 'medical_assistance'].includes(profileTypeNorm)
 
-  // University/college grants hitting non-student profiles
-  if (!isStudentType && /\b(university\s*—|college\s*—|institutional scholarship|financial aid.*university|financial aid.*college|off.campus resources)\b/i.test(oppText)) {
-    score -= 20
-    reasons.push('Cross-category penalty: university/college program for non-student profile (-20)')
+  // University/college grants hitting non-student profiles — strong penalty so
+  // institutional financial-aid / housing programs never bubble up for families.
+  if (!isStudentType && /\b(university\s*[—–-]\s*|college\s*[—–-]\s*|institutional scholarship|financial aid.*university|financial aid.*college|off.campus resources)\b/i.test(oppText)) {
+    score -= 40
+    reasons.push('Cross-category penalty: university/college program for non-student profile (-40)')
   }
 
   // Veteran-focused grants hitting non-veteran profiles
@@ -190,6 +191,33 @@ export function calculateMatchScore(profile, opportunity) {
   if (isIndividualFamilyType && /\b(for nonprofits|philanthropy for nonprofits|grants? for nonprofits)\b/i.test(oppText)) {
     score -= 10
     reasons.push('Cross-category penalty: nonprofit-specific program for individual/family profile (-10)')
+  }
+
+  // FEMA/disaster-relief grants for profiles without a disaster need indicator
+  const hasDisasterSignal =
+    (Array.isArray(effectiveFacets?.tags) &&
+      effectiveFacets.tags.some(t => /disaster|fema|emergency|flood|fire|tornado|hurricane|storm/i.test(String(t)))) ||
+    (Array.isArray(effectiveSignals?.tags) &&
+      effectiveSignals.tags.some(t => /disaster|fema|emergency|flood|fire|tornado|hurricane|storm/i.test(String(t)))) ||
+    (effectiveProfile?.primary_type || '').toLowerCase() === 'disaster_survivor'
+  if (!hasDisasterSignal && /\b(fema individual assistance|fema disaster (relief|assistance)|disaster relief grant|ihp\b|individuals and households program)\b/i.test(oppText)) {
+    score -= 30
+    reasons.push('Cross-category penalty: FEMA/disaster program for non-disaster profile (-30)')
+  }
+
+  // State-name-in-title mismatch penalty: if the opportunity title explicitly names
+  // a US state that is different from the profile's state, apply a strong penalty.
+  // (The hard disqualification lives in relevanceFilter.js; this soft penalty
+  //  catches scoring paths that bypass the filter.)
+  if (profileState && !oppIsNational) {
+    const titleStateAbbr = _extractStateNameFromTitle(opportunity.title || '')
+    if (titleStateAbbr) {
+      const profileStateNorm = normalizeState(profileState.toLowerCase())
+      if (profileStateNorm !== titleStateAbbr.toLowerCase()) {
+        score -= 25
+        reasons.push(`Cross-category penalty: opportunity title names ${titleStateAbbr}, profile is in ${profileState.toUpperCase()} (-25)`)
+      }
+    }
   }
 
   // Amount eligibility (10 pts)
@@ -373,6 +401,22 @@ function normalizeState(value) {
   if (STATE_MAPPING[s]) return STATE_MAPPING[s].toUpperCase()
   const sanitized = s.replace(/[^a-z]/g, '')
   return sanitized.length === 2 ? sanitized.toUpperCase() : sanitized.toUpperCase()
+}
+
+// Sorted by name length descending so multi-word names ("west virginia") match
+// before single-word names ("virginia") when scanning opportunity titles.
+const _STATE_NAME_ENTRIES = Object.entries(STATE_MAPPING).sort((a, b) => b[0].length - a[0].length)
+
+/**
+ * Detect a US state name embedded in an opportunity title.
+ * Returns the 2-letter uppercase abbreviation, or null if none found.
+ */
+function _extractStateNameFromTitle(title) {
+  const lower = (title || '').toLowerCase()
+  for (const [name, abbr] of _STATE_NAME_ENTRIES) {
+    if (lower.includes(name)) return abbr
+  }
+  return null
 }
 
 function applicantTypeSetHas(applicantTypesSet, values = []) {

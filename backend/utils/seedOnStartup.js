@@ -198,11 +198,8 @@ export function seedProfileGrants(db) {
     if (sections.family_life?.single_parent) { keywords.add('single parent'); keywords.add('family'); }
     if (sections.family_life?.caregiver) { keywords.add('caregiver'); keywords.add('family'); }
     
-    // Financial
-    if (sections.financial_information) {
-      keywords.add('financial');
-      keywords.add('assistance');
-    }
+    // Financial - intentionally omit broad words "financial" and "assistance"
+    // which match nearly every opportunity and produce false positives
     
     // Narrative
     if (sections.narrative?.mission) {
@@ -245,9 +242,9 @@ export function seedProfileGrants(db) {
       return { opp, score: Math.min(100, score), matchedFields };
     });
     
-    // Filter and sort
+    // Filter and sort — raise threshold to 75 to reduce false positives
     const topMatches = scored
-      .filter(s => s.score >= 60)
+      .filter(s => s.score >= 75)
       .sort((a, b) => b.score - a.score)
       .slice(0, 50);
     
@@ -306,20 +303,20 @@ export function seedProfileGrants(db) {
       // Check for duplicates
       const existing = db.prepare(`
         SELECT id FROM grants 
-        WHERE organization_id = ? AND (funding_opportunity_id = ? OR title = ?)
-      `).get(orgId, opp.id, opp.title);
+        WHERE profile_id = ? AND (funding_opportunity_id = ? OR title = ?)
+      `).get(profile.id, opp.id, opp.title);
       
       if (!existing) {
         const grantId = crypto.randomUUID();
         try {
           db.prepare(`
             INSERT INTO grants (
-              id, organization_id, funding_opportunity_id, title, funder,
+              id, organization_id, profile_id, funding_opportunity_id, title, funder,
               deadline, status, match_score, match_reasons, application_url,
               created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
           `).run(
-            grantId, orgId, opp.id, opp.title, opp.sponsor,
+            grantId, orgId, profile.id, opp.id, opp.title, opp.sponsor,
             opp.deadline, score, JSON.stringify(matchedFields.slice(0, 10)),
             opp.application_url
           );
@@ -340,6 +337,169 @@ export function seedProfileGrants(db) {
   return totalGrantsAdded;
 }
 
+/**
+ * Scan all existing grants and delete those that fail the canonical relevance
+ * filter for their profile. This runs on every server start (dev-only) so that
+ * grants inserted by prior buggy code are automatically purged.
+ */
+export function cleanupIrrelevantGrants(db) {
+  if (isSeedingBlocked()) {
+    console.info('[seedOnStartup] cleanupIrrelevantGrants: blocked (production or DISABLE_SEEDING)')
+    return 0
+  }
+
+  // Build a list of state name → abbr entries, sorted by name length descending
+  // so multi-word names ("west virginia") match before sub-strings ("virginia").
+  const STATE_NAME_TO_ABBR = [
+    ['west virginia', 'WV'], ['north carolina', 'NC'], ['north dakota', 'ND'],
+    ['south carolina', 'SC'], ['south dakota', 'SD'], ['new hampshire', 'NH'],
+    ['rhode island', 'RI'], ['new mexico', 'NM'], ['new jersey', 'NJ'],
+    ['new york', 'NY'], ['connecticut', 'CT'], ['massachusetts', 'MA'],
+    ['mississippi', 'MS'], ['pennsylvania', 'PA'], ['minnesota', 'MN'],
+    ['tennessee', 'TN'], ['california', 'CA'], ['louisiana', 'LA'],
+    ['wisconsin', 'WI'], ['kentucky', 'KY'], ['oklahoma', 'OK'],
+    ['nebraska', 'NE'], ['arkansas', 'AR'], ['colorado', 'CO'],
+    ['maryland', 'MD'], ['michigan', 'MI'], ['missouri', 'MO'],
+    ['delaware', 'DE'], ['illinois', 'IL'], ['virginia', 'VA'],
+    ['montana', 'MT'], ['wyoming', 'WY'], ['georgia', 'GA'],
+    ['arizona', 'AZ'], ['indiana', 'IN'], ['florida', 'FL'],
+    ['alabama', 'AL'], ['vermont', 'VT'], ['kansas', 'KS'],
+    ['nevada', 'NV'], ['oregon', 'OR'], ['alaska', 'AK'],
+    ['hawaii', 'HI'], ['idaho', 'ID'], ['maine', 'ME'],
+    ['texas', 'TX'], ['utah', 'UT'], ['iowa', 'IA'],
+    ['ohio', 'OH'],
+  ].sort((a, b) => b[0].length - a[0].length)
+
+  function extractStateNameFromTitle(title) {
+    const lower = (title || '').toLowerCase()
+    for (const [name, abbr] of STATE_NAME_TO_ABBR) {
+      if (lower.includes(name)) return abbr
+    }
+    return null
+  }
+
+  function extractStateFromAddress(addr) {
+    if (!addr) return null
+    if (typeof addr === 'object') return addr.state || null
+    if (typeof addr === 'string') {
+      const m = addr.match(/\b([A-Z]{2})\s*,?\s*\d{5}/)
+      return m ? m[1] : null
+    }
+    return null
+  }
+
+  console.log('[seedOnStartup] cleanupIrrelevantGrants: scanning all profile grants...')
+  const profiles = db.prepare("SELECT id, display_name, primary_type, tags FROM profiles WHERE status = 'active'").all()
+  const deleteStmt = db.prepare('DELETE FROM grants WHERE id = ?')
+  let totalRemoved = 0
+
+  for (const profile of profiles) {
+    const grants = db.prepare(`
+      SELECT id, title, funder, notes FROM grants
+      WHERE profile_id = ?
+         OR (profile_id IS NULL AND organization_id IN (
+           SELECT organization_id FROM profiles WHERE id = ? AND organization_id IS NOT NULL
+         ))
+    `).all(profile.id, profile.id)
+    if (grants.length === 0) continue
+
+    const sections = {}
+    const rows = db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profile.id)
+    for (const row of rows) {
+      try { sections[row.section_key] = JSON.parse(row.data || '{}') } catch { sections[row.section_key] = {} }
+    }
+
+    const basic = sections.basic_information || {}
+    const demographics = sections.demographics || {}
+    const military = sections.military_service || {}
+    const health = sections.health_medical || {}
+    const family = sections.family_life || {}
+    const locFocus = sections.location_focus || {}
+    const comp = sections.comprehensive_application || {}
+
+    let parsedTags = []
+    try { parsedTags = JSON.parse(profile.tags || '[]') } catch { /* ignore */ }
+
+    const rawVeteran = demographics.veteran_status || military.veteran || null
+    const veteranStatus = (rawVeteran === true || /^veteran/i.test(String(rawVeteran || ''))) ? true : null
+
+    const profileState = (
+      profile.state ||
+      basic.state ||
+      locFocus.state ||
+      extractStateFromAddress(basic.address) ||
+      extractStateFromAddress(comp.address) ||
+      null
+    )
+
+    const profileData = {
+      primary_type: profile.primary_type || null,
+      veteran_status: veteranStatus,
+      immigrant_status: demographics.immigrant_status || null,
+      disability_status: demographics.disability_status || health.disability_type || null,
+      foster_youth: family.foster_youth || null,
+      first_responder: null,
+      gender: basic.gender || demographics.gender || null,
+      age: basic.age || demographics.age || null,
+      state: profileState,
+      tags: parsedTags,
+      employment: sections.employment || {},
+      education: sections.education || {},
+    }
+
+    const seenTitles = new Set()
+    let removedForProfile = 0
+
+    for (const grant of grants) {
+      const titleNorm = (grant.title || '').trim()
+
+      // Duplicate: keep first occurrence, remove the rest
+      if (seenTitles.has(titleNorm)) {
+        deleteStmt.run(grant.id)
+        removedForProfile++
+        continue
+      }
+      seenTitles.add(titleNorm)
+
+      // Wrong-state check: title contains an explicit state name different from profile's
+      if (profileState) {
+        const grantState = extractStateNameFromTitle(grant.title || '')
+        if (grantState && grantState !== profileState.toUpperCase()) {
+          console.log(`[seedOnStartup] cleanup: removing "${grant.title}" (wrong state ${grantState}) from ${profile.display_name}`)
+          deleteStmt.run(grant.id)
+          removedForProfile++
+          continue
+        }
+      }
+
+      // Full relevance filter
+      const opportunity = {
+        title: grant.title || '',
+        description: grant.notes || '',
+        sponsor: grant.funder || '',
+        keywords: [],
+        categories: [],
+        eligibility_bullets: [],
+        state: null,
+        is_national: true, // geo check done above via state-name-in-title
+      }
+      const result = applyRelevanceFilter(opportunity, profileData)
+      if (!result.pass) {
+        console.log(`[seedOnStartup] cleanup: removing "${grant.title}" (${result.reason}) from ${profile.display_name}`)
+        deleteStmt.run(grant.id)
+        removedForProfile++
+      }
+    }
+
+    if (removedForProfile > 0) {
+      totalRemoved += removedForProfile
+    }
+  }
+
+  console.log(`[seedOnStartup] cleanupIrrelevantGrants: removed ${totalRemoved} irrelevant grants across ${profiles.length} profiles`)
+  return totalRemoved
+}
+
 export function seedOnStartup(db) {
   if (isSeedingBlocked()) {
     console.info('[seedOnStartup] seedOnStartup: blocked (production or DISABLE_SEEDING)')
@@ -353,13 +513,17 @@ export function seedOnStartup(db) {
   
   console.log(`[seedOnStartup] Current state: ${oppCount} opportunities, ${grantCount} grants`);
   
+  // Cleanup: remove irrelevant grants from prior seeding passes before adding new ones
+  cleanupIrrelevantGrants(db);
+  
   // Seed opportunities if needed
   if (oppCount < 50) {
     seedFundingOpportunities(db);
   }
   
   // Seed grants if needed
-  if (grantCount < 50) {
+  const grantCountAfterCleanup = db.prepare('SELECT COUNT(*) as c FROM grants').get().c;
+  if (grantCountAfterCleanup < 50) {
     seedProfileGrants(db);
   }
   

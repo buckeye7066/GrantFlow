@@ -39,14 +39,30 @@ const profileKeywords = {
 
 // Insert grants
 const insertGrant = db.prepare(`
-  INSERT INTO grants (id, organization_id, funding_opportunity_id, title, funder, amount_requested, status, match_score, match_reasons, notes)
-  VALUES (?, ?, ?, ?, ?, ?, 'discovered', ?, ?, ?)
+  INSERT INTO grants (id, organization_id, profile_id, funding_opportunity_id, title, funder, amount_requested, status, match_score, match_reasons, notes)
+  VALUES (?, ?, ?, ?, ?, ?, ?, 'discovered', ?, ?, ?)
 `);
 
 let totalGrantsCreated = 0;
 
 for (const profile of profiles) {
   console.log(`\n${profile.display_name}:`);
+
+  // Ensure the profile has an organization
+  let orgId = profile.organization_id;
+  if (!orgId) {
+    const existingOrg = db.prepare('SELECT id FROM organizations WHERE name = ?').get(profile.display_name || 'My Organization');
+    if (existingOrg) {
+      orgId = existingOrg.id;
+    } else {
+      orgId = crypto.randomUUID();
+      db.prepare(`
+        INSERT INTO organizations (id, name, applicant_type, created_at, updated_at)
+        VALUES (?, ?, 'individual_need', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `).run(orgId, profile.display_name || 'My Organization');
+    }
+    db.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile.id);
+  }
 
   // Get profile sections for relevance filter
   const sectionRows = db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profile.id);
@@ -106,7 +122,8 @@ for (const profile of profiles) {
       if (!filterResult.pass) continue;
 
       const grantId = crypto.randomUUID();
-      const matchScore = 75 + Math.floor(Math.random() * 20); // 75-94%
+      // Deterministic score: keyword match already confirmed, use a fixed representative value.
+      const matchScore = 75;
       const matchReasons = JSON.stringify([
         `Matches ${type} profile type`,
         `Relevant to ${profile.display_name}`,
@@ -116,7 +133,8 @@ for (const profile of profiles) {
       try {
         insertGrant.run(
           grantId,
-          profile.id,  // Using profile.id as organization_id for individual profiles
+          orgId,       // proper organization_id
+          profile.id,  // profile_id — ensures strict per-profile scoping
           opp.id,
           opp.title,
           opp.sponsor || opp.source,
@@ -150,7 +168,8 @@ for (const profile of profiles) {
       try {
         insertGrant.run(
           grantId,
-          profile.id,
+          orgId,       // proper organization_id
+          profile.id,  // profile_id
           opp.id,
           opp.title,
           opp.sponsor || opp.source,
