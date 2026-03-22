@@ -116,8 +116,17 @@ function applyRelevanceFilter(oppText, profileData) {
     if (!hasFR) return { pass: false, reason: 'first responder program, no indicator' }
   }
 
-  // Blind-specific
-  if (/\b(for the blind|national federation of the blind|american foundation for the blind|visual impairment support)\b/i.test(oppText)) {
+  // IDD-specific — require a positive IDD indicator
+  if (/\b(ecf choices|didd\b|intellectual disability|developmental disability|idd waiver|intellectual.{0,20}developmental)\b/i.test(oppText)) {
+    const disabilityText = JSON.stringify(profileData.disability_status || '').toLowerCase()
+    const hasIdd = disabilityText.includes('intellectual') || disabilityText.includes('developmental') ||
+      disabilityText.includes('idd') || disabilityText.includes('ecf') || disabilityText.includes('didd') ||
+      (Array.isArray(profileData.tags) && profileData.tags.some(t => /intellectual|developmental|idd/i.test(String(t))))
+    if (!hasIdd) return { pass: false, reason: 'IDD-specific program, no IDD indicators in profile' }
+  }
+
+  // Blind-specific — require a positive visual-impairment indicator
+  if (/\b(blind only|visually impaired only|for the blind|national federation of the blind|american foundation for the blind|visual impairment support|blindness program)\b/i.test(oppText)) {
     const hasVisual = (Array.isArray(profileData.tags) && profileData.tags.some(t => /blind|visual/i.test(String(t)))) ||
       (profileData.disability_status && JSON.stringify(profileData.disability_status).toLowerCase().includes('visual'))
     if (!hasVisual) return { pass: false, reason: 'blindness-specific, no visual impairment' }
