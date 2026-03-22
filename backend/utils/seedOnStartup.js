@@ -9,6 +9,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { applyRelevanceFilter } from '../services/relevanceFilter.js';
+import { buildProfileSignals } from '../services/profileHelpers.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -137,7 +138,7 @@ export function seedProfileGrants(db) {
     SELECT * FROM funding_opportunities 
     WHERE is_active = 1 
     AND (requires_match = 0 OR requires_match IS NULL)
-    LIMIT 100
+    LIMIT 200
   `).all();
   
   console.log(`[seedOnStartup] Found ${opportunities.length} opportunities to match`);
@@ -152,122 +153,30 @@ export function seedProfileGrants(db) {
     }
     
     // Get profile sections
-    const sections = {};
+    const sectionsObj = {};
     const sectionRows = db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profile.id);
     sectionRows.forEach(row => {
-      try { sections[row.section_key] = JSON.parse(row.data || '{}'); } catch (e) { sections[row.section_key] = {}; }
+      try { sectionsObj[row.section_key] = JSON.parse(row.data || '{}'); } catch (e) { sectionsObj[row.section_key] = {}; }
     });
     
-    // Build profile signals
-    const keywords = new Set();
-    
-    // Add tags
+    // Use canonical buildProfileSignals for comprehensive keyword extraction
+    let signals;
     try {
-      const tags = JSON.parse(profile.tags || '[]');
-      tags.forEach(t => keywords.add(t.toLowerCase()));
-    } catch (e) { /* ignore */ }
-    
-    // Add general keywords based on profile type
-    if (profile.primary_type === 'individual') {
-      keywords.add('individual');
-      keywords.add('personal');
+      signals = buildProfileSignals({ profile, sections: sectionsObj });
+    } catch (e) {
+      console.warn(`[seedOnStartup] buildProfileSignals failed for ${profile.display_name}:`, e.message);
+      continue;
     }
-    if (profile.primary_type === 'organization' || profile.primary_type === 'nonprofit') {
-      keywords.add('nonprofit');
-      keywords.add('organization');
-      keywords.add('community');
-    }
-    
-    // Military
-    if (sections.military_service) {
-      if (sections.military_service.veteran) { keywords.add('veteran'); }
-      if (sections.military_service.disabled_veteran) { keywords.add('disabled veteran'); }
-    }
-    
-    // Health
-    if (sections.health_medical) {
-      if (sections.health_medical.chronic_illness) { keywords.add('chronic'); keywords.add('health'); }
-      if (sections.health_medical.disability_type) {
-        const types = Array.isArray(sections.health_medical.disability_type) ? sections.health_medical.disability_type : [];
-        types.forEach(t => keywords.add(t.toLowerCase()));
-        if (types.length > 0) { keywords.add('disability'); }
-      }
-    }
-    
-    // Family
-    if (sections.family_life?.single_parent) { keywords.add('single parent'); keywords.add('family'); }
-    if (sections.family_life?.caregiver) { keywords.add('caregiver'); keywords.add('family'); }
-    
-    // Financial - intentionally omit broad words "financial" and "assistance"
-    // which match nearly every opportunity and produce false positives
-    
-    // Narrative
-    if (sections.narrative?.mission) {
-      const missionTerms = ['wellness', 'health', 'education', 'community', 'youth', 'senior', 
-        'disability', 'veteran', 'faith', 'ministry', 'food', 'housing', 'employment'];
-      missionTerms.forEach(term => {
-        if (sections.narrative.mission.toLowerCase().includes(term)) {
-          keywords.add(term);
-        }
-      });
-    }
-    
-    // Score opportunities
-    const scored = opportunities.map(opp => {
-      let score = 25;
-      const matchedFields = [];
-      
-      let oppKeywords = [], oppCategories = [];
-      try { oppKeywords = JSON.parse(opp.keywords || '[]'); } catch (e) { /* ignore malformed JSON */ }
-      try { oppCategories = JSON.parse(opp.categories || '[]'); } catch (e) { /* ignore malformed JSON */ }
-      
-      const oppTerms = new Set([
-        ...oppKeywords.map(k => k.toLowerCase()),
-        ...oppCategories.map(c => c.toLowerCase())
-      ]);
-      
-      // Keyword matching
-      let keywordMatches = 0;
-      keywords.forEach(kw => {
-        for (const term of oppTerms) {
-          if (term.includes(kw) || kw.includes(term)) {
-            keywordMatches++;
-            matchedFields.push(kw);
-            break;
-          }
-        }
-      });
-      score += Math.min(30, keywordMatches * 5);
-      
-      return { opp, score: Math.min(100, score), matchedFields };
-    });
-    
-    // Filter and sort — raise threshold to 75 to reduce false positives
-    const topMatches = scored
-      .filter(s => s.score >= 75)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 50);
-    
-    // Ensure organization exists
-    let orgId = profile.organization_id;
-    if (!orgId) {
-      orgId = crypto.randomUUID();
-      db.prepare(`
-        INSERT INTO organizations (id, name, applicant_type, created_at, updated_at)
-        VALUES (?, ?, 'individual_need', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `).run(orgId, profile.display_name || 'My Organization');
-      db.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile.id);
-    }
-    
+
     // Build profileData for relevance filter
     let parsedTags = [];
     try { parsedTags = JSON.parse(profile.tags || '[]'); } catch (e) { /* ignore */ }
-    const basic = sections.basic_information || {};
-    const demographics = sections.demographics || {};
-    const military = sections.military_service || {};
-    const health = sections.health_medical || {};
-    const family = sections.family_life || {};
-    const locFocus = sections.location_focus || {};
+    const basic = sectionsObj.basic_information || {};
+    const demographics = sectionsObj.demographics || {};
+    const military = sectionsObj.military_service || {};
+    const health = sectionsObj.health_medical || {};
+    const family = sectionsObj.family_life || {};
+    const locFocus = sectionsObj.location_focus || {};
     const addr = basic.address;
     let stateFromAddr = null;
     if (typeof addr === 'string') {
@@ -288,6 +197,79 @@ export function seedProfileGrants(db) {
       first_responder: null,
     };
 
+    // Score opportunities using canonical signals
+    const scored = opportunities.map(opp => {
+      let score = 0;
+      const matchedFields = [];
+      
+      let oppKeywords = [], oppCategories = [];
+      try { oppKeywords = JSON.parse(opp.keywords || '[]'); } catch (e) { /* ignore malformed JSON */ }
+      try { oppCategories = JSON.parse(opp.categories || '[]'); } catch (e) { /* ignore malformed JSON */ }
+      
+      const oppTerms = new Set([
+        ...oppKeywords.map(k => k.toLowerCase()),
+        ...oppCategories.map(c => c.toLowerCase())
+      ]);
+
+      const oppText = `${opp.title || ''} ${opp.description || ''}`.toLowerCase();
+
+      // Geographic scoring
+      const oppState = (opp.state || '').toLowerCase();
+      const profState = (profileData.state || '').toLowerCase();
+      if (!oppState || oppState === 'nationwide' || opp.is_national) {
+        score += 8;
+      } else if (profState && oppState === profState) {
+        score += 18;
+        matchedFields.push(`state:${opp.state}`);
+      } else if (profState && oppState && oppState !== profState) {
+        score -= 20; // state mismatch penalty
+      }
+
+      // Intent phrase matching (5 pts each, up to 25)
+      let intentMatches = 0;
+      if (signals.intentPhraseSet) {
+        for (const phrase of signals.intentPhraseSet) {
+          const p = String(phrase).toLowerCase();
+          if (p.length < 4) continue;
+          if (oppText.includes(p) || oppKeywords.some(k => k.toLowerCase().includes(p))) {
+            intentMatches++;
+            matchedFields.push(`intent:${p}`);
+          }
+        }
+      }
+      score += Math.min(25, intentMatches * 5);
+
+      // Keyword matching (1.5 pts each in opp keywords, 0.5 in text, up to 20)
+      let kwScore = 0;
+      const keywordsToCheck = signals.keywordSet || signals.keywords || new Set();
+      for (const kw of keywordsToCheck) {
+        const k = String(kw).toLowerCase();
+        if (k.length < 3 || k.includes(' ')) continue;
+        if (oppTerms.has(k)) { kwScore += 1.5; matchedFields.push(`kw:${k}`); }
+        else if (oppText.includes(k)) { kwScore += 0.5; }
+      }
+      score += Math.min(20, Math.floor(kwScore));
+
+      return { opp, score: Math.min(100, Math.max(0, score)), matchedFields };
+    });
+    
+    // Filter with higher threshold (65) and apply relevance filter
+    const topMatches = scored
+      .filter(s => s.score >= 65)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 50);
+    
+    // Ensure organization exists
+    let orgId = profile.organization_id;
+    if (!orgId) {
+      orgId = crypto.randomUUID();
+      db.prepare(`
+        INSERT INTO organizations (id, name, applicant_type, created_at, updated_at)
+        VALUES (?, ?, 'individual_need', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `).run(orgId, profile.display_name || 'My Organization');
+      db.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile.id);
+    }
+
     // Add grants to pipeline
     let added = 0;
     for (const { opp, score, matchedFields } of topMatches) {
@@ -300,7 +282,7 @@ export function seedProfileGrants(db) {
       const filterResult = applyRelevanceFilter(oppForFilter, profileData);
       if (!filterResult.pass) continue;
 
-      // Check for duplicates
+      // Check for duplicates — profile-scoped (prefer profile_id uniqueness check)
       const existing = db.prepare(`
         SELECT id FROM grants 
         WHERE profile_id = ? AND (funding_opportunity_id = ? OR title = ?)
@@ -338,166 +320,108 @@ export function seedProfileGrants(db) {
 }
 
 /**
- * Scan all existing grants and delete those that fail the canonical relevance
- * filter for their profile. This runs on every server start (dev-only) so that
- * grants inserted by prior buggy code are automatically purged.
+ * Remove grants from profile pipelines that fail the relevance filter.
+ * This is a one-time cleanup that runs on startup (non-production) to remove
+ * grants inserted by previous buggy seeding paths.
+ * Only removes grants that have a profile_id set (profile-scoped grants).
  */
 export function cleanupIrrelevantGrants(db) {
   if (isSeedingBlocked()) {
     console.info('[seedOnStartup] cleanupIrrelevantGrants: blocked (production or DISABLE_SEEDING)')
     return 0
   }
+  console.log('[seedOnStartup] Running cleanup of irrelevant profile grants...');
 
-  // Build a list of state name → abbr entries, sorted by name length descending
-  // so multi-word names ("west virginia") match before sub-strings ("virginia").
-  const STATE_NAME_TO_ABBR = [
-    ['west virginia', 'WV'], ['north carolina', 'NC'], ['north dakota', 'ND'],
-    ['south carolina', 'SC'], ['south dakota', 'SD'], ['new hampshire', 'NH'],
-    ['rhode island', 'RI'], ['new mexico', 'NM'], ['new jersey', 'NJ'],
-    ['new york', 'NY'], ['connecticut', 'CT'], ['massachusetts', 'MA'],
-    ['mississippi', 'MS'], ['pennsylvania', 'PA'], ['minnesota', 'MN'],
-    ['tennessee', 'TN'], ['california', 'CA'], ['louisiana', 'LA'],
-    ['wisconsin', 'WI'], ['kentucky', 'KY'], ['oklahoma', 'OK'],
-    ['nebraska', 'NE'], ['arkansas', 'AR'], ['colorado', 'CO'],
-    ['maryland', 'MD'], ['michigan', 'MI'], ['missouri', 'MO'],
-    ['delaware', 'DE'], ['illinois', 'IL'], ['virginia', 'VA'],
-    ['montana', 'MT'], ['wyoming', 'WY'], ['georgia', 'GA'],
-    ['arizona', 'AZ'], ['indiana', 'IN'], ['florida', 'FL'],
-    ['alabama', 'AL'], ['vermont', 'VT'], ['kansas', 'KS'],
-    ['nevada', 'NV'], ['oregon', 'OR'], ['alaska', 'AK'],
-    ['hawaii', 'HI'], ['idaho', 'ID'], ['maine', 'ME'],
-    ['texas', 'TX'], ['utah', 'UT'], ['iowa', 'IA'],
-    ['ohio', 'OH'],
-  ].sort((a, b) => b[0].length - a[0].length)
+  // Get all profile-scoped grants with their associated profile data
+  const grants = db.prepare(`
+    SELECT g.id, g.title, g.funder, g.match_score,
+           g.profile_id, g.funding_opportunity_id,
+           fo.description, fo.keywords, fo.categories, fo.state, fo.is_national,
+           fo.sponsor, fo.eligibility_bullets
+    FROM grants g
+    LEFT JOIN funding_opportunities fo ON g.funding_opportunity_id = fo.id
+    WHERE g.profile_id IS NOT NULL
+  `).all();
 
-  function extractStateNameFromTitle(title) {
-    const lower = (title || '').toLowerCase()
-    for (const [name, abbr] of STATE_NAME_TO_ABBR) {
-      if (lower.includes(name)) return abbr
-    }
-    return null
+  if (grants.length === 0) {
+    console.log('[seedOnStartup] No profile-scoped grants to check');
+    return 0;
   }
 
-  function extractStateFromAddress(addr) {
-    if (!addr) return null
-    if (typeof addr === 'object') return addr.state || null
+  console.log(`[seedOnStartup] Checking ${grants.length} profile-scoped grants for relevance...`);
+
+  // Cache profiles and sections to avoid re-querying
+  const profileCache = new Map();
+  const getProfileData = (profileId) => {
+    if (profileCache.has(profileId)) return profileCache.get(profileId);
+    const profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId);
+    if (!profile) { profileCache.set(profileId, null); return null; }
+    const sectionRows = db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId);
+    const sections = {};
+    sectionRows.forEach(row => {
+      try { sections[row.section_key] = JSON.parse(row.data || '{}'); } catch (e) { sections[row.section_key] = {}; }
+    });
+    const basic = sections.basic_information || {};
+    const demographics = sections.demographics || {};
+    const military = sections.military_service || {};
+    const health = sections.health_medical || {};
+    const family = sections.family_life || {};
+    const locFocus = sections.location_focus || {};
+    const addr = basic.address;
+    let stateFromAddr = null;
     if (typeof addr === 'string') {
-      const m = addr.match(/\b([A-Z]{2})\s*,?\s*\d{5}/)
-      return m ? m[1] : null
+      stateFromAddr = (addr.match(/\b([A-Z]{2})\s*,?\s*\d{5}/) || [])[1] || null;
+    } else if (addr && typeof addr === 'object') {
+      stateFromAddr = addr.state || null;
     }
-    return null
-  }
-
-  console.log('[seedOnStartup] cleanupIrrelevantGrants: scanning all profile grants...')
-  const profiles = db.prepare("SELECT id, display_name, primary_type, tags FROM profiles WHERE status = 'active'").all()
-  const deleteStmt = db.prepare('DELETE FROM grants WHERE id = ?')
-  let totalRemoved = 0
-
-  for (const profile of profiles) {
-    const grants = db.prepare(`
-      SELECT id, title, funder, notes FROM grants
-      WHERE profile_id = ?
-         OR (profile_id IS NULL AND organization_id IN (
-           SELECT organization_id FROM profiles WHERE id = ? AND organization_id IS NOT NULL
-         ))
-    `).all(profile.id, profile.id)
-    if (grants.length === 0) continue
-
-    const sections = {}
-    const rows = db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profile.id)
-    for (const row of rows) {
-      try { sections[row.section_key] = JSON.parse(row.data || '{}') } catch { sections[row.section_key] = {} }
-    }
-
-    const basic = sections.basic_information || {}
-    const demographics = sections.demographics || {}
-    const military = sections.military_service || {}
-    const health = sections.health_medical || {}
-    const family = sections.family_life || {}
-    const locFocus = sections.location_focus || {}
-    const comp = sections.comprehensive_application || {}
-
-    let parsedTags = []
-    try { parsedTags = JSON.parse(profile.tags || '[]') } catch { /* ignore */ }
-
-    const rawVeteran = demographics.veteran_status || military.veteran || null
-    const veteranStatus = (rawVeteran === true || /^veteran/i.test(String(rawVeteran || ''))) ? true : null
-
-    const profileState = (
-      profile.state ||
-      basic.state ||
-      locFocus.state ||
-      extractStateFromAddress(basic.address) ||
-      extractStateFromAddress(comp.address) ||
-      null
-    )
-
-    const profileData = {
+    let parsedTags = [];
+    try { parsedTags = JSON.parse(profile.tags || '[]'); } catch (e) { /* ignore */ }
+    const data = {
       primary_type: profile.primary_type || null,
-      veteran_status: veteranStatus,
+      veteran_status: military.veteran || demographics.veteran_status || null,
       immigrant_status: demographics.immigrant_status || null,
-      disability_status: demographics.disability_status || health.disability_type || null,
-      foster_youth: family.foster_youth || null,
-      first_responder: null,
+      disability_status: health.disability_type || demographics.disability_status || null,
+      state: profile.state || basic.state || locFocus.state || stateFromAddr || null,
+      tags: parsedTags,
       gender: basic.gender || demographics.gender || null,
       age: basic.age || demographics.age || null,
-      state: profileState,
-      tags: parsedTags,
-      employment: sections.employment || {},
-      education: sections.education || {},
-    }
+      foster_youth: family.foster_youth || null,
+      first_responder: null,
+    };
+    profileCache.set(profileId, data);
+    return data;
+  };
 
-    const seenTitles = new Set()
-    let removedForProfile = 0
+  let removed = 0;
+  for (const grant of grants) {
+    const profileData = getProfileData(grant.profile_id);
+    if (!profileData) continue;
 
-    for (const grant of grants) {
-      const titleNorm = (grant.title || '').trim()
+    const oppForFilter = {
+      title: grant.title || '',
+      description: grant.description || '',
+      sponsor: grant.funder || grant.sponsor || '',
+      keywords: (() => { try { return JSON.parse(grant.keywords || '[]'); } catch (e) { return []; } })(),
+      categories: (() => { try { return JSON.parse(grant.categories || '[]'); } catch (e) { return []; } })(),
+      eligibility_bullets: (() => { try { return JSON.parse(grant.eligibility_bullets || '[]'); } catch (e) { return []; } })(),
+      state: grant.state || null,
+      is_national: grant.is_national || false,
+    };
 
-      // Duplicate: keep first occurrence, remove the rest
-      if (seenTitles.has(titleNorm)) {
-        deleteStmt.run(grant.id)
-        removedForProfile++
-        continue
+    const filterResult = applyRelevanceFilter(oppForFilter, profileData);
+    if (!filterResult.pass) {
+      try {
+        db.prepare('DELETE FROM grants WHERE id = ?').run(grant.id);
+        console.log(`[seedOnStartup] Removed irrelevant grant "${grant.title}" from profile ${grant.profile_id}: ${filterResult.reason}`);
+        removed++;
+      } catch (e) {
+        // Ignore errors
       }
-      seenTitles.add(titleNorm)
-
-      // Wrong-state check: title contains an explicit state name different from profile's
-      if (profileState) {
-        const grantState = extractStateNameFromTitle(grant.title || '')
-        if (grantState && grantState !== profileState.toUpperCase()) {
-          console.log(`[seedOnStartup] cleanup: removing "${grant.title}" (wrong state ${grantState}) from ${profile.display_name}`)
-          deleteStmt.run(grant.id)
-          removedForProfile++
-          continue
-        }
-      }
-
-      // Full relevance filter
-      const opportunity = {
-        title: grant.title || '',
-        description: grant.notes || '',
-        sponsor: grant.funder || '',
-        keywords: [],
-        categories: [],
-        eligibility_bullets: [],
-        state: null,
-        is_national: true, // geo check done above via state-name-in-title
-      }
-      const result = applyRelevanceFilter(opportunity, profileData)
-      if (!result.pass) {
-        console.log(`[seedOnStartup] cleanup: removing "${grant.title}" (${result.reason}) from ${profile.display_name}`)
-        deleteStmt.run(grant.id)
-        removedForProfile++
-      }
-    }
-
-    if (removedForProfile > 0) {
-      totalRemoved += removedForProfile
     }
   }
 
-  console.log(`[seedOnStartup] cleanupIrrelevantGrants: removed ${totalRemoved} irrelevant grants across ${profiles.length} profiles`)
-  return totalRemoved
+  console.log(`[seedOnStartup] Cleanup complete: removed ${removed} irrelevant grants`);
+  return removed;
 }
 
 export function seedOnStartup(db) {
@@ -512,6 +436,9 @@ export function seedOnStartup(db) {
   const oppCount = db.prepare('SELECT COUNT(*) as c FROM funding_opportunities').get().c;
   
   console.log(`[seedOnStartup] Current state: ${oppCount} opportunities, ${grantCount} grants`);
+
+  // Always run cleanup on startup to remove stale irrelevant grants from prior seeding runs
+  cleanupIrrelevantGrants(db);
   
   // Cleanup: remove irrelevant grants from prior seeding passes before adding new ones
   cleanupIrrelevantGrants(db);
