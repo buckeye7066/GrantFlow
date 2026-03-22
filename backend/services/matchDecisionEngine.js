@@ -32,7 +32,7 @@ export { normalizeOpportunity, computeOpportunityFingerprint } from './opportuni
 import { normalizeProfile, computeProfileFingerprint } from './profileNormalizer.js'
 import { normalizeOpportunity, computeOpportunityFingerprint } from './opportunityNormalizer.js'
 
-export const MATCHER_VERSION = '1.0.0'
+export const MATCHER_VERSION = '2.0.0'
 
 // ---------------------------------------------------------------------------
 // Source trust scoring
@@ -144,6 +144,40 @@ export function evaluateEligibility(profileNorm, oppNorm) {
   // -- Business requirement --
   if (oppNorm.requiresBusiness && !profileNorm.isBusiness) {
     ineligibilityReasons.push('Requires business or self-employment')
+  }
+
+  // -- Institutional / research-only: reject ordinary individuals --
+  if (oppNorm.isInstitutionalOnly || oppNorm.isResearchOnly) {
+    const isOrdinaryIndividual =
+      !profileNorm.isNonprofit &&
+      !profileNorm.isBusiness &&
+      profileNorm.entityType !== 'researcher' &&
+      profileNorm.entityType !== 'organization'
+    if (isOrdinaryIndividual) {
+      ineligibilityReasons.push('Opportunity is for institutions or research organizations only')
+    }
+  }
+
+  // -- Disease-specific: reject profiles without corresponding condition --
+  if (oppNorm.diseaseSpecific && !profileNorm.hasChronicIllness && !profileNorm.hasDisabilityNeed) {
+    ineligibilityReasons.push('Opportunity targets a specific medical condition not indicated in profile')
+  }
+
+  // -- Disaster / FEMA context required --
+  if (oppNorm.requiresDisasterContext && !profileNorm.hasEmergencyNeed) {
+    ineligibilityReasons.push('Opportunity requires disaster or emergency context not present in profile')
+  }
+
+  // -- Caregiver program: require caregiver indicators when strictly caregiver-focused --
+  if (oppNorm.isCaregiverProgram && !profileNorm.isCaregiver && !profileNorm.hasFosterIndicator) {
+    // Soft signal — downgrade but don't hard-reject unless entity types explicitly exclude
+    missingFields.push('caregiver_status')
+  }
+
+  // -- DME / equipment mismatch: profile lacks disability/medical need --
+  if (oppNorm.isDmeOrEquipment && !profileNorm.hasDisabilityNeed && !profileNorm.hasChronicIllness) {
+    // Not a hard reject (someone could have need not yet noted), but flag missing data
+    missingFields.push('disability_or_medical_need_for_equipment')
   }
 
   // -- Entity type mismatch --
@@ -307,15 +341,28 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   confidence = Math.max(0, Math.min(100, confidence))
 
   // Step 7: Decision
+  // ACCEPT requires: eligible=true, score≥40, needAlignment>0, hasApplicationUrl, confidence≥50
+  // Unknown applicability forces REVIEW (conservative: don't false-ACCEPT ambiguous opportunities)
+  // Too many missing fields forces REVIEW
   let decision
   if (eligible === false) {
     decision = 'REJECT'
-  } else if (eligible === 'maybe' || missingFields.length > 0 || score < 40) {
+  } else if (
+    eligible === 'maybe' ||
+    missingFields.length > 2 ||
+    oppNorm.applicabilityUnknown
+  ) {
     decision = 'REVIEW'
-  } else if (score >= 40 && needAlignmentScore > 0) {
-    decision = 'ACCEPT'
+  } else if (score < 40 || needAlignmentScore === 0) {
+    decision = 'REVIEW'
+  } else if (!oppNorm.hasApplicationUrl) {
+    // No actionable application path → downgrade to REVIEW
+    decision = 'REVIEW'
+  } else if (confidence < 50) {
+    // Insufficient confidence → REVIEW
+    decision = 'REVIEW'
   } else {
-    decision = 'REVIEW'
+    decision = 'ACCEPT'
   }
 
   // Step 8: Human-readable explanation
@@ -331,6 +378,12 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   }
   if (missingFields.length > 0) {
     explanationParts.push(`Missing data: ${missingFields.join(', ')}.`)
+  }
+  if (oppNorm.applicabilityUnknown) {
+    explanationParts.push('Opportunity applicability is unclear; conservative REVIEW applied.')
+  }
+  if (!oppNorm.hasApplicationUrl && decision !== 'REJECT') {
+    explanationParts.push('No application URL found; cannot confirm actionability.')
   }
   if (explanationParts.length === 0) {
     explanationParts.push(decision === 'ACCEPT'
