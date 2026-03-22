@@ -82,7 +82,8 @@ export function calculateSourceTrust(opportunity) {
 
   // record_origin trust adjustments
   const origin = opportunity.record_origin ?? ''
-  if (origin === 'curated_verified' || origin === 'grants_gov' || origin === 'verified_real') return 80
+  if (origin === 'grants_gov' || origin === 'verified_real') return 90
+  if (origin === 'curated_verified') return 80
   if (origin === 'curated_benefits' || origin === 'curated_program') return 65
   if (origin === 'live_crawl') return 40
 

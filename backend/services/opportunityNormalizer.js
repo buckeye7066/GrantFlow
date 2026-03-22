@@ -188,13 +188,11 @@ export function normalizeOpportunity(rawOpp) {
   // -- Veteran/student/nonprofit requirements --
   const requiresVeteran =
     Boolean(rawOpp.requires_veteran) ||
-    (entityTypesAllowed.length === 1 && entityTypesAllowed[0] === 'veteran') ||
-    (entityTypesAllowed.length > 0 && !entityTypesAllowed.includes('individual') && entityTypesAllowed.every(t => t === 'veteran'))
+    (entityTypesAllowed.length > 0 && entityTypesAllowed.every(t => t === 'veteran'))
 
   const requiresStudent =
     Boolean(rawOpp.requires_student) ||
-    (entityTypesAllowed.length === 1 && entityTypesAllowed[0] === 'student') ||
-    (entityTypesAllowed.length > 0 && !entityTypesAllowed.includes('individual') && entityTypesAllowed.every(t => t === 'student'))
+    (entityTypesAllowed.length > 0 && entityTypesAllowed.every(t => t === 'student'))
 
   const requiresNonprofit =
     Boolean(rawOpp.requires_501c3) ||

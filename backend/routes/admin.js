@@ -4828,6 +4828,7 @@ router.post('/backfill-matches', async (req, res) => {
          LEFT JOIN (
            SELECT profile_id, json_group_object(section_key, json(data)) AS data
            FROM profile_sections
+           WHERE profile_id IN (SELECT DISTINCT profile_id FROM grants WHERE profile_id IS NOT NULL)
            GROUP BY profile_id
          ) ps ON ps.profile_id = g.profile_id
          WHERE g.profile_id IS NOT NULL`,
