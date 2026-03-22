@@ -1,5 +1,12 @@
 import Database from 'better-sqlite3';
 import crypto from 'crypto';
+import { fileURLToPath } from 'url';
+import path from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+import { applyRelevanceFilter } from '../services/relevanceFilter.js';
 
 // Safety guard: refuse to run in production or when seeding is explicitly disabled.
 const nodeEnv = String(process.env.NODE_ENV || '').trim().toLowerCase()
@@ -40,7 +47,39 @@ let totalGrantsCreated = 0;
 
 for (const profile of profiles) {
   console.log(`\n${profile.display_name}:`);
-  
+
+  // Get profile sections for relevance filter
+  const sectionRows = db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profile.id);
+  const sections = {};
+  for (const row of sectionRows) {
+    try { sections[row.section_key] = JSON.parse(row.data || '{}'); } catch { sections[row.section_key] = {}; }
+  }
+  const demographics = sections.demographics || {};
+  const military = sections.military_service || {};
+  const health = sections.health_medical || {};
+  const family = sections.family_life || {};
+  const basic = sections.basic_information || {};
+  const locFocus = sections.location_focus || {};
+  const addr = basic.address;
+  let stateFromAddr = null;
+  if (typeof addr === 'string') {
+    stateFromAddr = (addr.match(/\b([A-Z]{2})\s*,?\s*\d{5}/) || [])[1] || null;
+  } else if (addr && typeof addr === 'object') {
+    stateFromAddr = addr.state || null;
+  }
+  const profileData = {
+    primary_type: profile.primary_type || null,
+    veteran_status: military.veteran || demographics.veteran_status || null,
+    immigrant_status: demographics.immigrant_status || null,
+    disability_status: health.disability_type || demographics.disability_status || null,
+    state: basic.state || locFocus.state || stateFromAddr || null,
+    tags: [],
+    gender: basic.gender || demographics.gender || null,
+    age: basic.age || demographics.age || null,
+    foster_youth: family.foster_youth || null,
+    first_responder: null,
+  };
+
   // Determine profile type keywords
   const type = profile.primary_type || 'individual';
   const keywords = profileKeywords[type] || profileKeywords['individual'];
@@ -57,6 +96,15 @@ for (const profile of profiles) {
     const matches = keywords.some(kw => combined.includes(kw.toLowerCase()));
     
     if (matches && matchedOpps < 5) { // Limit 5 per profile
+      // Apply relevance filter before inserting
+      const oppForFilter = {
+        ...opp,
+        keywords: (() => { try { return JSON.parse(opp.keywords || '[]'); } catch { return []; } })(),
+        categories: (() => { try { return JSON.parse(opp.categories || '[]'); } catch { return []; } })(),
+      };
+      const filterResult = applyRelevanceFilter(oppForFilter, profileData);
+      if (!filterResult.pass) continue;
+
       const grantId = crypto.randomUUID();
       const matchScore = 75 + Math.floor(Math.random() * 20); // 75-94%
       const matchReasons = JSON.stringify([
@@ -90,9 +138,14 @@ for (const profile of profiles) {
   }
   
   if (matchedOpps === 0) {
-    // Add some general opportunities
-    const generalOpps = opportunities.slice(0, 3);
-    for (const opp of generalOpps) {
+    // Add some general opportunities (filtered)
+    for (const opp of opportunities.slice(0, 3)) {
+      const oppForFilter = {
+        ...opp,
+        keywords: (() => { try { return JSON.parse(opp.keywords || '[]'); } catch { return []; } })(),
+        categories: (() => { try { return JSON.parse(opp.categories || '[]'); } catch { return []; } })(),
+      };
+      if (!applyRelevanceFilter(oppForFilter, profileData).pass) continue;
       const grantId = crypto.randomUUID();
       try {
         insertGrant.run(
@@ -108,6 +161,7 @@ for (const profile of profiles) {
         );
         console.log(`  + ${opp.title.substring(0, 50)}...`);
         totalGrantsCreated++;
+        break; // Only add one general opportunity
       } catch (err) {
         // Skip duplicates
       }
