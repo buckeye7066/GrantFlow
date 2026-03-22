@@ -14,6 +14,7 @@
 import Database from 'better-sqlite3'
 import { fileURLToPath } from 'url'
 import path from 'path'
+import { applyRelevanceFilter } from '../backend/services/relevanceFilter.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DB_PATH = path.resolve(__dirname, '..', 'backend', 'data', 'grantflow.db')
@@ -79,107 +80,6 @@ function extractProfileState(profile, sections) {
   return profile.state || basic.state || locFocus.state || stateFromAddr || stateFromComp || null
 }
 
-// ─── Relevance filter (same rules as backend/services/relevanceFilter.js) ───
-
-function applyRelevanceFilter(oppText, profileData) {
-  const profileType = (profileData.primary_type || '').toLowerCase()
-
-  // Entity type: individual-only for orgs
-  if (profileType === 'organization') {
-    if (/\b(snap|food stamps|tanf|wic|ssdi|ssi\b|medicaid enrollment|section 8|housing voucher)\b/i.test(oppText)) {
-      return { pass: false, reason: 'individual-only program for organization' }
-    }
-  }
-
-  // Veteran-focused
-  const isVet = profileData.veteran_status === true || profileData.veteran_status === 'yes' || profileData.veteran_status === 'true'
-  if (/\b(ssvf|supportive services for veteran|veterans? only|must be a veteran|boots to business|veteran entrepreneurship|veterans? (assistance|support|services|program|families))\b/i.test(oppText) && !isVet) {
-    return { pass: false, reason: 'veteran-focused, profile is not a veteran' }
-  }
-
-  // Refugee/resettlement
-  if (/\b(refugee resettlement|for refugees only|office of refugee|refugee assistance|irc.{0,5}resettlement)\b/i.test(oppText)) {
-    const hasImmigrant = profileData.immigrant_status && profileData.immigrant_status !== 'no' && profileData.immigrant_status !== 'false'
-    if (!hasImmigrant) return { pass: false, reason: 'refugee-specific, no immigrant indicator' }
-  }
-
-  // Business/SBA for non-business
-  const isBiz = ['small_business', 'organization', 'nonprofit'].includes(profileType)
-  if (/\b(sba\b|small business (administration|development|innovation|grants?|resources?|funding)|sbir\b|sttr\b|entrepreneur(ship)?( training| center| program)?|minority business development|business development grant|usda (rural )?business|community advantage program|8\(a\) business|women.owned small business|wosb\b|liftfund|nase growth grant|kiva u\.?s\.?|crowdfunded business|value.added producer grant|vapg\b|native cdfi|indigenous business|self.employment assistance)\b/i.test(oppText) && !isBiz) {
-    return { pass: false, reason: 'business/SBA program for non-business profile' }
-  }
-
-  // Nonprofit-only
-  const isNP = ['organization', 'nonprofit'].includes(profileType)
-  if (/\b(for nonprofits|philanthropy for nonprofits|grants? for nonprofits|nonprofit.only)\b/i.test(oppText) && !isNP) {
-    return { pass: false, reason: 'nonprofit-specific for non-nonprofit profile' }
-  }
-
-  // University/college for non-students
-  const isStudent = ['student', 'high_school_student', 'college_student'].includes(profileType)
-  if (/\b(university\s*[—–-]\s*|college\s*[—–-]\s*|institutional scholarship|college.{0,20}financial aid|university.{0,20}financial aid|college.{0,20}housing|university.{0,20}housing|off.campus resources?|community college.{0,30}(aid|grant|scholarship|resource))\b/i.test(oppText) && !isStudent) {
-    return { pass: false, reason: 'university/college program for non-student' }
-  }
-
-  // Generic student scholarship / academic aid for non-students
-  if (/\b(federal pell grant|pell grant|teach grant\b|fseog\b|federal supplemental educational opportunity|buick achievers|questbridge\b|quest bridge|jack kent cooke|gates scholarship|cobell scholarship|cal grant\b|texas public educational grant|tpeg\b|state tuition (assistance|grant)|tuition assistance program|academic competitive grant|smart grant|iraq and afghanistan service grant)\b/i.test(oppText) && !isStudent) {
-    return { pass: false, reason: 'student-only academic aid for non-student profile' }
-  }
-
-  // HIV/AIDS-specific programs
-  if (/\b(ryan white|hiv\/aids program|aids drug assistance|adap\b|people living with hiv|plwh\b|hiv.{0,20}(care|treatment|support|assistance)|aids.{0,20}(care|treatment|support|assistance))\b/i.test(oppText)) {
-    const hasHiv = (Array.isArray(profileData.tags) && profileData.tags.some(t => /hiv|aids\b/i.test(String(t)))) ||
-      (profileData.disability_status && /hiv|aids/i.test(JSON.stringify(profileData.disability_status)))
-    if (!hasHiv) return { pass: false, reason: 'HIV/AIDS-specific program, no HIV/AIDS indicator in profile' }
-  }
-
-  // FEMA/disaster for non-disaster profiles
-  if (/\b(fema individual assistance|fema disaster (relief|assistance|grant)|disaster (relief|assistance) grant|individual.*assistance.*disaster|ihp\b|individuals and households program)\b/i.test(oppText)) {
-    const hasFEMA = (Array.isArray(profileData.tags) && profileData.tags.some(t => /disaster|fema|emergency|flood|fire|tornado|hurricane|storm/i.test(String(t)))) ||
-      (profileData.primary_type || '').toLowerCase() === 'disaster_survivor'
-    if (!hasFEMA) return { pass: false, reason: 'FEMA/disaster program, no disaster indicator' }
-  }
-
-  // Foster care youth
-  if (/\b(foster.?club|youth aging out|foster care youth|aging out of foster)\b/i.test(oppText)) {
-    const hasFoster = Array.isArray(profileData.tags) && profileData.tags.some(t => /foster/i.test(String(t)))
-    if (!hasFoster) return { pass: false, reason: 'foster youth program, no foster indicator' }
-  }
-
-  // First responder
-  if (/\b(first responder(s)?( children)?( foundation)?)\b/i.test(oppText)) {
-    const hasFR = Array.isArray(profileData.tags) && profileData.tags.some(t => /first.?respond|firefight|emt|paramedic/i.test(String(t)))
-    if (!hasFR) return { pass: false, reason: 'first responder program, no indicator' }
-  }
-
-  // IDD-specific — require a positive IDD indicator
-  if (/\b(ecf choices|didd\b|intellectual disability|developmental disability|idd waiver|intellectual.{0,20}developmental)\b/i.test(oppText)) {
-    const disabilityText = JSON.stringify(profileData.disability_status || '').toLowerCase()
-    const hasIdd = disabilityText.includes('intellectual') || disabilityText.includes('developmental') ||
-      disabilityText.includes('idd') || disabilityText.includes('ecf') || disabilityText.includes('didd') ||
-      (Array.isArray(profileData.tags) && profileData.tags.some(t => /intellectual|developmental|idd/i.test(String(t))))
-    if (!hasIdd) return { pass: false, reason: 'IDD-specific program, no IDD indicators in profile' }
-  }
-
-  // Blind-specific — require a positive visual-impairment indicator
-  if (/\b(blind only|visually impaired only|for the blind|national federation of the blind|american foundation for the blind|visual impairment support|blindness program)\b/i.test(oppText)) {
-    const hasVisual = (Array.isArray(profileData.tags) && profileData.tags.some(t => /blind|visual/i.test(String(t)))) ||
-      (profileData.disability_status && JSON.stringify(profileData.disability_status).toLowerCase().includes('visual'))
-    if (!hasVisual) return { pass: false, reason: 'blindness-specific, no visual impairment' }
-  }
-
-  // Federal institutional grants not for individuals
-  const isIndividual = ['individual', 'individual_need', 'family', 'medical_assistance'].includes(profileType)
-  if (isIndividual) {
-    const fedInstitutionalPattern = /\b(slip.on tanker|border security|counternarcotics|counterterrorism|logistical support for inl|scientific.*coordination center|clinical trial optional|screwworm.*challenge|wildland fire|department of the interior.*ofw|travel.*training.*logistics for (costa rica|el salvador|colombia|peru))\b/i
-    if (fedInstitutionalPattern.test(oppText)) {
-      return { pass: false, reason: 'federal institutional grant, not for individuals' }
-    }
-  }
-
-  return { pass: true }
-}
-
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 console.log(`\n=== Pipeline Audit & Cleanup (${DRY_RUN ? 'DRY RUN' : 'LIVE'}) ===\n`)
@@ -234,7 +134,14 @@ for (const profile of profiles) {
     veteran_status: veteranStatus,
     immigrant_status: demographics.immigrant_status || null,
     disability_status: demographics.disability_status || health.disability_type || null,
+    foster_youth: family.foster_youth || null,
+    first_responder: null,
+    gender: basic.gender || demographics.gender || null,
+    age: basic.age || demographics.age || null,
+    state: profileState,
     tags: parseTags(profile.tags),
+    employment: sections.employment || {},
+    education: sections.education || {},
   }
 
   const toDelete = []
@@ -264,9 +171,18 @@ for (const profile of profiles) {
       }
     }
 
-    // 3. Relevance filter
-    const oppText = `${grant.title || ''} ${grant.funder || ''}`.toLowerCase()
-    const result = applyRelevanceFilter(oppText, profileData)
+    // 3. Canonical relevance filter — build an opportunity object so all rules run correctly
+    const opportunity = {
+      title: grant.title || '',
+      description: grant.funder || '',
+      sponsor: grant.funder || '',
+      keywords: [],
+      categories: [],
+      eligibility_bullets: [],
+      state: null,
+      is_national: true, // geo check already handled above via state-name-in-title
+    }
+    const result = applyRelevanceFilter(opportunity, profileData)
     if (!result.pass) {
       toDelete.push({ id: grant.id, title: grant.title, reason: result.reason })
       track('relevance_filter')
