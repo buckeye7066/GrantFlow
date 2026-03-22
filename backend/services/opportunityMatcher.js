@@ -49,7 +49,19 @@ export async function saveToProfilePipeline(
         threshold,
       }
     }
-    
+
+    // Apply hard disqualification rules — always enforced regardless of caller.
+    // This ensures paths that call saveToProfilePipeline directly (localCrawler,
+    // anyaAutonomousFunctionRunner, backfill scripts) cannot bypass the filter.
+    if (profileContext) {
+      const profileData = extractProfileData(profileContext)
+      const relevance = applyRelevanceFilter(opportunity, profileData)
+      if (!relevance.pass) {
+        console.log(`[opportunityMatcher] saveToProfilePipeline filtered out "${opportunity.title}" — ${relevance.reason}`)
+        return { saved: false, reason: relevance.reason, matchPercentage, threshold }
+      }
+    }
+
     // Resolve profile context (organization is optional; profile-scoped pipeline is canonical).
     const profile = await db
       .prepare(
