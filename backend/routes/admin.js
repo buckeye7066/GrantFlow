@@ -4783,4 +4783,156 @@ router.post('/clear-all-pipelines', async (req, res) => {
   }
 })
 
+/**
+ * POST /api/admin/backfill-matches
+ * Re-evaluates all existing profile pipeline entries using the current decision engine.
+ * Updates match_decision, match_explanation, matched_needs, eligibility_status,
+ * ineligibility_reasons, profile_fingerprint, opportunity_fingerprint, matcher_version, evaluated_at.
+ * Removes entries that are now hard-ineligible (REJECT).
+ */
+router.post('/backfill-matches', async (req, res) => {
+  try {
+    if (!(await ensureAdminRequest(req, res))) return
+
+    const db = req.db
+
+    // Check that migration columns exist
+    let hasDecisionColumns = false
+    try {
+      const cols = db.prepare('PRAGMA table_info(grants)').all()
+      hasDecisionColumns = cols.some((c) => c.name === 'match_decision')
+    } catch { /* ignore */ }
+
+    if (!hasDecisionColumns) {
+      return res.status(400).json({
+        error: 'Decision columns not found in grants table. Run `npm run migrate` first.',
+      })
+    }
+
+    const { computeMatchDecision, normalizeProfile, computeProfileFingerprint, normalizeOpportunity, computeOpportunityFingerprint, MATCHER_VERSION } = await import('../services/matchDecisionEngine.js')
+
+    // Load all pipeline entries with associated opportunity and profile data
+    const grants = await db
+      .prepare(
+        `SELECT g.id, g.profile_id, g.funding_opportunity_id, g.title,
+                fo.description, fo.sponsor, fo.eligibility_bullets, fo.categories,
+                fo.keywords, fo.is_national, fo.state, fo.application_url,
+                fo.source_url, fo.record_origin, fo.is_loan, fo.deadline,
+                fo.deadline_type, fo.funding_type, fo.opportunity_type,
+                fo.entity_types_allowed, fo.need_types_supported,
+                p.primary_type, p.tags,
+                ps.data AS sections_data
+         FROM grants g
+         LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
+         LEFT JOIN profiles p ON p.id = g.profile_id
+         LEFT JOIN (
+           SELECT profile_id, json_group_object(section_key, json(data)) AS data
+           FROM profile_sections
+           GROUP BY profile_id
+         ) ps ON ps.profile_id = g.profile_id
+         WHERE g.profile_id IS NOT NULL`,
+      )
+      .all()
+
+    let accepted = 0
+    let reviewed = 0
+    let rejected = 0
+    let errors = 0
+
+    for (const row of grants) {
+      try {
+        const rawProfile = {
+          id: row.profile_id,
+          primary_type: row.primary_type,
+          tags: row.tags,
+        }
+        let sections = null
+        try { sections = row.sections_data ? JSON.parse(row.sections_data) : null } catch { /* ignore */ }
+
+        const rawOpp = {
+          id: row.funding_opportunity_id,
+          title: row.title,
+          description: row.description,
+          sponsor: row.sponsor,
+          eligibility_bullets: row.eligibility_bullets,
+          categories: row.categories,
+          keywords: row.keywords,
+          is_national: row.is_national,
+          state: row.state,
+          application_url: row.application_url,
+          source_url: row.source_url,
+          record_origin: row.record_origin,
+          is_loan: row.is_loan,
+          deadline: row.deadline,
+          deadline_type: row.deadline_type,
+          funding_type: row.funding_type,
+          opportunity_type: row.opportunity_type,
+          entity_types_allowed: row.entity_types_allowed,
+          need_types_supported: row.need_types_supported,
+        }
+
+        const decision = computeMatchDecision(rawProfile, rawOpp, { profileSections: sections })
+        const profileFingerprint = computeProfileFingerprint(normalizeProfile(rawProfile, sections))
+        const opportunityFingerprint = computeOpportunityFingerprint(normalizeOpportunity(rawOpp))
+
+        if (decision.decision === 'REJECT') {
+          // Remove hard-ineligible entries
+          await db.prepare('DELETE FROM grants WHERE id = ?').run(row.id)
+          rejected++
+        } else {
+          // Update metadata
+          await db.prepare(`
+            UPDATE grants SET
+              match_decision = ?,
+              match_explanation = ?,
+              matched_needs = ?,
+              eligibility_status = ?,
+              ineligibility_reasons = ?,
+              profile_fingerprint = ?,
+              opportunity_fingerprint = ?,
+              matcher_version = ?,
+              evaluated_at = ?,
+              match_confidence = ?,
+              match_score = ?
+            WHERE id = ?
+          `).run(
+            decision.decision,
+            decision.explanation,
+            JSON.stringify(decision.matchedNeeds),
+            String(decision.eligible),
+            JSON.stringify(decision.ineligibilityReasons),
+            profileFingerprint,
+            opportunityFingerprint,
+            MATCHER_VERSION,
+            new Date().toISOString(),
+            decision.confidence,
+            decision.score,
+            row.id,
+          )
+          if (decision.decision === 'ACCEPT') accepted++
+          else reviewed++
+        }
+      } catch (err) {
+        console.error(`[admin/backfill-matches] Error processing grant ${row.id}:`, err)
+        errors++
+      }
+    }
+
+    console.log(`[admin/backfill-matches] Completed: accepted=${accepted}, reviewed=${reviewed}, rejected=${rejected}, errors=${errors}`)
+
+    res.json({
+      success: true,
+      total: grants.length,
+      accepted,
+      reviewed,
+      rejected,
+      errors,
+      matcherVersion: MATCHER_VERSION,
+    })
+  } catch (error) {
+    console.error('[admin/backfill-matches] error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 export default router;
