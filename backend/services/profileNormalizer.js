@@ -242,11 +242,39 @@ export function normalizeProfile(rawProfile, sections = null) {
     null
   const entityType = normalizeEntityType(rawType)
 
-  // -- Location --
-  const state = profile.state ?? profile.primary_state ?? null
-  const zip = profile.postal_code ?? profile.zip_code ?? profile.zip ?? null
-  const county = profile.county ?? null
-  const city = profile.city ?? null
+  // -- Location: top-level first, then fall back to sections --
+  let state = profile.state ?? profile.primary_state ?? null
+  let zip = profile.postal_code ?? profile.zip_code ?? profile.zip ?? null
+  let county = profile.county ?? null
+  let city = profile.city ?? null
+
+  // Extract location from sections if top-level is incomplete
+  if ((!state || !zip) && profileSections) {
+    const locationSection =
+      profileSections.location ??
+      profileSections.address ??
+      profileSections.contact_info ??
+      null
+    if (locationSection) {
+      const la = locationSection.answers ?? locationSection
+      if (la && typeof la === 'object') {
+        if (!state) state = la.state ?? la.primary_state ?? null
+        if (!zip) zip = la.zip ?? la.postal_code ?? la.zip_code ?? null
+        if (!county) county = la.county ?? null
+        if (!city) city = la.city ?? null
+      }
+    }
+    // Also check organization section
+    const orgSection = profileSections.organization ?? profileSections.org ?? null
+    if (orgSection) {
+      const oa = orgSection.answers ?? orgSection
+      if (oa && typeof oa === 'object') {
+        if (!state) state = oa.state ?? null
+        if (!zip) zip = oa.zip ?? oa.postal_code ?? null
+        if (!city) city = oa.city ?? null
+      }
+    }
+  }
 
   // -- Need categories --
   const rawNeeds = [
@@ -276,31 +304,211 @@ export function normalizeProfile(rawProfile, sections = null) {
 
   const needCategories = [...new Set(rawNeeds.map(normalizeNeedCategory).filter(Boolean))]
 
-  // -- Flags --
+  // ---------------------------------------------------------------------------
+  // Derive richer signals from section content
+  // ---------------------------------------------------------------------------
+
+  // -- Veteran status: top-level flags or military_service section --
+  let isVeteranFromSections = false
+  const militarySection =
+    profileSections?.military_service ??
+    profileSections?.military ??
+    profileSections?.veteran ??
+    null
+  if (militarySection) {
+    const ma = militarySection.answers ?? militarySection
+    if (ma && typeof ma === 'object') {
+      isVeteranFromSections =
+        Boolean(ma.is_veteran) ||
+        Boolean(ma.served_in_military) ||
+        Boolean(ma.military_service) ||
+        Boolean(ma.veteran_status) ||
+        String(ma.branch ?? '').length > 0 ||
+        String(ma.discharge_status ?? '').length > 0
+    }
+  }
+
   const isVeteran =
     Boolean(profile.is_veteran) ||
     entityType === 'veteran' ||
     needCategories.includes('veteran') ||
-    String(rawType ?? '').toLowerCase().includes('veteran')
+    String(rawType ?? '').toLowerCase().includes('veteran') ||
+    isVeteranFromSections
+
+  // -- Student status: top-level flags or education section --
+  let isStudentFromSections = false
+  const educationSection =
+    profileSections?.education ??
+    profileSections?.student ??
+    null
+  if (educationSection) {
+    const ea = educationSection.answers ?? educationSection
+    if (ea && typeof ea === 'object') {
+      isStudentFromSections =
+        Boolean(ea.is_student) ||
+        Boolean(ea.currently_enrolled) ||
+        Boolean(ea.enrolled_in_school) ||
+        String(ea.school_name ?? '').length > 0 ||
+        String(ea.grade_level ?? '').length > 0 ||
+        String(ea.degree_program ?? '').length > 0
+    }
+  }
 
   const isStudent =
     Boolean(profile.is_student) ||
     entityType === 'student' ||
-    String(rawType ?? '').toLowerCase().includes('student')
+    String(rawType ?? '').toLowerCase().includes('student') ||
+    isStudentFromSections
 
+  // -- Nonprofit status --
   const isNonprofit =
     Boolean(profile.is_nonprofit) ||
     Boolean(profile.requires_501c3) ||
     entityType === 'nonprofit' ||
     String(rawType ?? '').toLowerCase().includes('nonprofit')
 
+  // -- Business status: top-level flags or business section --
+  let isBusinessFromSections = false
+  const businessSection =
+    profileSections?.business ??
+    profileSections?.self_employment ??
+    profileSections?.entrepreneurship ??
+    null
+  if (businessSection) {
+    const ba = businessSection.answers ?? businessSection
+    if (ba && typeof ba === 'object') {
+      isBusinessFromSections =
+        Boolean(ba.owns_business) ||
+        Boolean(ba.is_self_employed) ||
+        Boolean(ba.has_business) ||
+        String(ba.business_name ?? '').length > 0 ||
+        String(ba.ein ?? '').length > 0
+    }
+  }
+
   const isBusiness =
     Boolean(profile.is_business) ||
     entityType === 'business' ||
-    String(rawType ?? '').toLowerCase().includes('business')
+    String(rawType ?? '').toLowerCase().includes('business') ||
+    isBusinessFromSections
 
-  const hasDisabilityNeed = needCategories.includes('disability')
-  const hasEmergencyNeed = needCategories.includes('emergency')
+  // -- Caregiver / family: family_life section, dependents, foster indicators --
+  let isCaregiverFromSections = false
+  let hasFosterIndicator = false
+  const familySection =
+    profileSections?.family_life ??
+    profileSections?.family ??
+    profileSections?.caregiving ??
+    null
+  if (familySection) {
+    const fa = familySection.answers ?? familySection
+    if (fa && typeof fa === 'object') {
+      isCaregiverFromSections =
+        Boolean(fa.is_caregiver) ||
+        Boolean(fa.provides_care) ||
+        Boolean(fa.has_dependents) ||
+        Boolean(fa.cares_for_family_member) ||
+        Number(fa.number_of_dependents ?? 0) > 0 ||
+        Number(fa.num_dependents ?? 0) > 0
+      hasFosterIndicator =
+        Boolean(fa.is_foster_parent) ||
+        Boolean(fa.foster_care) ||
+        Boolean(fa.has_foster_children) ||
+        String(fa.foster_status ?? '').toLowerCase().includes('foster')
+    }
+  }
+
+  const isCaregiver =
+    Boolean(profile.is_caregiver) ||
+    entityType === 'caregiver' ||
+    isCaregiverFromSections ||
+    needCategories.includes('family_life')
+
+  // -- Disability / chronic illness / DME --
+  let hasChronicIllnessFromSections = false
+  const healthSection =
+    profileSections?.health_medical ??
+    profileSections?.medical ??
+    profileSections?.health ??
+    null
+  if (healthSection) {
+    const ha = healthSection.answers ?? healthSection
+    if (ha && typeof ha === 'object') {
+      hasChronicIllnessFromSections =
+        Boolean(ha.has_disability) ||
+        Boolean(ha.has_chronic_illness) ||
+        Boolean(ha.has_medical_condition) ||
+        Boolean(ha.needs_dme) ||
+        Boolean(ha.uses_assistive_technology) ||
+        String(ha.conditions ?? '').length > 0 ||
+        safeParseArray(ha.diagnoses).length > 0
+    }
+  }
+
+  const hasDisabilityNeed = needCategories.includes('disability') || hasChronicIllnessFromSections
+  const hasChronicIllness = hasChronicIllnessFromSections || needCategories.includes('disability')
+
+  // -- Emergency / disaster context --
+  let hasEmergencyFromSections = false
+  const emergencySection =
+    profileSections?.emergency ??
+    profileSections?.disaster ??
+    profileSections?.crisis ??
+    null
+  if (emergencySection) {
+    const ema = emergencySection.answers ?? emergencySection
+    if (ema && typeof ema === 'object') {
+      hasEmergencyFromSections =
+        Boolean(ema.has_emergency) ||
+        Boolean(ema.disaster_affected) ||
+        Boolean(ema.in_crisis) ||
+        Boolean(ema.fema_eligible) ||
+        String(ema.disaster_type ?? '').length > 0
+    }
+  }
+
+  const hasEmergencyNeed = needCategories.includes('emergency') || hasEmergencyFromSections
+
+  // -- Housing instability --
+  let hasHousingInstabilityFromSections = false
+  const housingSection =
+    profileSections?.housing ??
+    profileSections?.shelter ??
+    null
+  if (housingSection) {
+    const hua = housingSection.answers ?? housingSection
+    if (hua && typeof hua === 'object') {
+      hasHousingInstabilityFromSections =
+        Boolean(hua.housing_instability) ||
+        Boolean(hua.risk_of_eviction) ||
+        Boolean(hua.homeless) ||
+        Boolean(hua.temporary_housing) ||
+        String(hua.housing_situation ?? '').toLowerCase().includes('unstable') ||
+        String(hua.housing_situation ?? '').toLowerCase().includes('evict')
+    }
+  }
+
+  const hasHousingNeed = needCategories.includes('housing') || hasHousingInstabilityFromSections
+
+  // -- Employment need signals --
+  let hasEmploymentNeed = false
+  const employmentSection =
+    profileSections?.employment ??
+    profileSections?.work ??
+    profileSections?.income ??
+    null
+  if (employmentSection) {
+    const empa = employmentSection.answers ?? employmentSection
+    if (empa && typeof empa === 'object') {
+      hasEmploymentNeed =
+        Boolean(empa.unemployed) ||
+        Boolean(empa.seeking_employment) ||
+        Boolean(empa.needs_job_training) ||
+        Boolean(empa.underemployed) ||
+        String(empa.employment_status ?? '').toLowerCase().includes('unemployed')
+    }
+  }
+
   const hasBusinessNeed = needCategories.includes('business') || isBusiness
 
   // -- Age (for scholarship/senior eligibility) --
@@ -318,8 +526,13 @@ export function normalizeProfile(rawProfile, sections = null) {
     isStudent,
     isNonprofit,
     isBusiness,
+    isCaregiver,
+    hasFosterIndicator,
+    hasChronicIllness,
     hasDisabilityNeed,
     hasEmergencyNeed,
+    hasHousingNeed,
+    hasEmploymentNeed,
     hasBusinessNeed,
     age,
     displayName: profile.display_name ?? profile.name ?? null,
@@ -343,6 +556,9 @@ export function computeProfileFingerprint(normalizedProfile) {
     isStudent: normalizedProfile.isStudent,
     isNonprofit: normalizedProfile.isNonprofit,
     isBusiness: normalizedProfile.isBusiness,
+    isCaregiver: normalizedProfile.isCaregiver,
+    hasChronicIllness: normalizedProfile.hasChronicIllness,
+    hasEmergencyNeed: normalizedProfile.hasEmergencyNeed,
   }
   return crypto
     .createHash('sha256')

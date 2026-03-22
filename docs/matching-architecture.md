@@ -12,13 +12,15 @@ All matching is routed through a single shared engine:
 backend/services/matchDecisionEngine.js
 ```
 
+**MATCHER_VERSION: 2.0.0** — Legacy `calculateMatchScore` fallback removed. `computeMatchDecision()` is the sole authority.
+
 ### Exported Functions
 
 | Function | Purpose |
 |---|---|
 | `normalizeProfile(profile, sections?)` | Converts raw profile data to canonical normalized form |
 | `normalizeOpportunity(opportunity)` | Extracts structured eligibility from raw opportunity data |
-| `evaluateEligibility(profileNorm, oppNorm)` | Hard eligibility checks (loan, closed deadline, geo, entity type) |
+| `evaluateEligibility(profileNorm, oppNorm)` | Hard eligibility checks (loan, closed deadline, geo, entity type, disease-specific, institutional, disaster) |
 | `calculateNeedAlignment(profileNorm, oppNorm)` | Need-to-funding-type mapping score |
 | `calculateSourceTrust(opportunity)` | Source quality/trust score |
 | `computeMatchDecision(rawProfile, rawOpp, opts?)` | Full structured decision |
@@ -37,7 +39,7 @@ backend/services/matchDecisionEngine.js
   matchedProfileTraits: string[],   // Which profile traits matched
   missingEligibilityFields: string[], // Fields needed but missing
   explanation: string,              // Human-readable summary
-  matcherVersion: "1.0.0",
+  matcherVersion: "2.0.0",
   evaluatedAt: ISO timestamp
 }
 ```
@@ -51,13 +53,28 @@ backend/services/matchDecisionEngine.js
    - Student requirement but profile is not a student
    - Nonprofit requirement but profile is not a nonprofit
    - Business requirement but profile is not a business
+   - Institutional/research-only, but profile is an ordinary individual/family
+   - Disease-specific, but profile has no chronic illness or disability indicator
+   - Disaster/FEMA context required, but profile has no emergency need indicator
    - State-specific opportunity but profile is in a different state
+   - Entity type mismatch (e.g., nonprofit-only grant for an individual)
 
-2. **REVIEW**: No hard ineligibility but:
+2. **REVIEW**: No hard ineligibility, but:
+   - `applicabilityUnknown = true` (opportunity entity types unclear — conservative, not false ACCEPT)
+   - More than 2 missing eligibility fields
    - Score < 40, OR
-   - Missing eligibility fields (unknown location, no entity type, no application URL)
+   - `needAlignment = 0`, OR
+   - No application URL found, OR
+   - Confidence < 50
 
-3. **ACCEPT**: Eligible AND score ≥ 40 AND needAlignment > 0
+3. **ACCEPT**: All of the following:
+   - `eligible = true` (no hard ineligibility)
+   - `applicabilityUnknown = false`
+   - `score ≥ 40`
+   - `needAlignment > 0`
+   - `hasApplicationUrl = true` (actionable path to apply)
+   - `confidence ≥ 50`
+   - `missingEligibilityFields.length ≤ 2`
 
 ### Score Composition
 
@@ -88,17 +105,54 @@ backend/services/matchDecisionEngine.js
 | nonprofit, church, faith_based, 501c3 | (entity) `nonprofit` |
 | small_business, entrepreneur, startup | (entity) `business` |
 
+**Section-derived signals** (v2):
+
+`normalizeProfile(profile, sections)` now derives richer truth from section content:
+
+| Section Key | Derived Signal |
+|---|---|
+| `military_service` | `isVeteran` (from branch, discharge_status, served_in_military) |
+| `education` | `isStudent` (from currently_enrolled, school_name, degree_program) |
+| `business` / `self_employment` | `isBusiness` (from owns_business, ein, business_name) |
+| `family_life` / `caregiving` | `isCaregiver`, `hasFosterIndicator` (from is_caregiver, has_dependents, foster_status) |
+| `health_medical` / `medical` | `hasChronicIllness`, `hasDisabilityNeed` (from has_disability, conditions, diagnoses) |
+| `emergency` / `disaster` | `hasEmergencyNeed` (from disaster_affected, fema_eligible) |
+| `housing` | `hasHousingNeed` (from risk_of_eviction, housing_instability) |
+| `location` / `address` | `state`, `zip`, `city` — fallback when top-level is incomplete |
+
+**Normalized profile structure:**
+
+```js
+{
+  id, entityType, state, zip, county, city,
+  needCategories: string[],    // Canonical need buckets
+  isVeteran, isStudent, isNonprofit, isBusiness,
+  isCaregiver, hasFosterIndicator,
+  hasChronicIllness, hasDisabilityNeed,
+  hasEmergencyNeed, hasHousingNeed, hasEmploymentNeed, hasBusinessNeed,
+  age, displayName
+}
+```
+
 ### `backend/services/opportunityNormalizer.js`
 
-- `normalizeOpportunity(rawOpp)` → structured eligibility
+- `normalizeOpportunity(rawOpp)` → structured eligibility (conservative)
 - `computeOpportunityFingerprint(normalizedOpp)` → SHA-256 hash
 
+**Conservative design** (v2): Unknown applicability is tracked as `applicabilityUnknown: true`
+rather than defaulting to `['individual']`. This forces REVIEW instead of false ACCEPT.
+
 Extracts from title/description/eligibility_bullets:
-- `entityTypesAllowed[]` — who can apply
+- `entityTypesAllowed[]` — who can apply (empty + `applicabilityUnknown=true` if unclear)
+- `applicabilityUnknown` — true when entity eligibility could not be determined
 - `needTypesSupported[]` — what needs it covers
 - `fundingType` — grant/scholarship/loan/voucher/...
 - `deadlineStatus` — open/rolling/closed/unknown
 - `requiresVeteran`, `requiresStudent`, `requiresNonprofit`, `requiresBusiness`
+- `isLoan`, `isProBono`, `isInKind`, `isReferralOnly`
+- `isInstitutionalOnly`, `isResearchOnly`
+- `diseaseSpecific`, `requiresDisasterContext`
+- `isDmeOrEquipment`, `isCaregiverProgram`
 
 ## Persistence Model
 
@@ -147,7 +201,15 @@ Pipeline entries (grants table) include the `matcher_version`, `profile_fingerpr
 
 ## Matcher Versioning
 
-Current version: **1.0.0** (defined as `MATCHER_VERSION` in `matchDecisionEngine.js`)
+Current version: **2.0.0** (defined as `MATCHER_VERSION` in `matchDecisionEngine.js`)
+
+**Breaking changes in v2.0.0:**
+- Legacy `calculateMatchScore` fallback removed from `opportunityMatcher.js`
+- `computeMatchDecision()` is the sole authority for all pipeline decisions
+- Unknown opportunity applicability no longer defaults to `['individual']`; forces REVIEW instead
+- ACCEPT now requires: `hasApplicationUrl`, `confidence ≥ 50`, `needAlignment > 0`, `applicabilityUnknown = false`
+- New hard-reject classes: institutional/research-only, disease-specific, disaster/FEMA context required
+- Profile normalization derives richer signals from section content (caregiver, veteran, student, business, disability, emergency, housing, location)
 
 When the matching logic changes in a backward-incompatible way:
 1. Increment `MATCHER_VERSION`
@@ -174,7 +236,7 @@ Re-evaluates all existing pipeline entries using the current decision engine:
   "reviewed": 123,
   "rejected": 221,
   "errors": 0,
-  "matcherVersion": "1.0.0"
+  "matcherVersion": "2.0.0"
 }
 ```
 
@@ -195,11 +257,27 @@ All insertion paths go through `saveToProfilePipeline()` in `opportunityMatcher.
 
 **Hard REJECT gate**: If `decision.decision === 'REJECT'`, the entry is NOT saved regardless of the raw score.
 
+**Legacy fallback removed (v2.0.0)**: `opportunityMatcher.js` no longer imports or calls `calculateMatchScore` from `matchingEngine.js`. `computeMatchDecision()` is the sole scoring authority.
+
 The following callers use `saveToProfilePipeline`:
 - `backend/services/localCrawler.js`
 - `backend/services/comprehensiveCrawlerOptimized.js`
 - `backend/services/anyaAutonomousFunctionRunner.js`
 - `backend/scripts/backfill-profile-pipeline-from-opportunities.mjs`
+
+## Relevance Filter
+
+`backend/services/relevanceFilter.js` provides an additional hard-disqualification layer applied
+within `saveToProfilePipeline()`. It acts as a complementary safety net to `evaluateEligibility()`,
+not as a competing authority.
+
+**Relationship:**
+- `evaluateEligibility()` = canonical canonical eligibility authority (entity type, geography, loan, requirements, disease-specific, institutional, disaster context)
+- `relevanceFilter.js` = additional regex/pattern safety net applied after the decision engine
+
+The relevance filter is applied before the pipeline INSERT to catch any patterns not yet covered
+by `evaluateEligibility()`. Over time, patterns should be promoted from `relevanceFilter.js` into
+`evaluateEligibility()` to maintain the canonical architecture.
 
 ## Source Trust Scoring
 
@@ -217,30 +295,37 @@ The following callers use `saveToProfilePipeline`:
 
 ## Test Plan
 
-Tests are in `tests/unit/matchDecisionEngine.test.mjs`.
+Tests are in:
+- `tests/unit/matchDecisionEngine.test.mjs` (existing — 55 tests)
+- `tests/unit/matchDecisionEngine.comprehensive.test.mjs` (v2 regression harness — 54 tests)
 
-### Coverage
+### Comprehensive Test Coverage (v2)
 
-1. **Profile normalization aliasing** — medical→health_medical, family→family_life, etc.
-2. **Opportunity normalization** — entity type extraction, deadline status, funding type
-3. **Eligibility decisions** — loan, closed deadline, veteran/student/nonprofit/business requirements, geo mismatch
-4. **Need-type alignment** — full overlap, no overlap, partial overlap
-5. **Source trust scoring** — .gov, .edu, .org, no URL, curated_verified
-6. **computeMatchDecision() integration** — REJECT/ACCEPT/REVIEW scenarios, structured output
-7. **Persistence** — decision output has all required DB columns, fingerprint changes trigger re-evaluation
-8. **Regression tests**:
-   - Student aid NOT shown to non-student
-   - FEMA/disaster NOT shown without disaster context  
-   - Business grant NOT shown to non-business individual
-   - Nonprofit grant NOT shown to individual
-   - Geographic mismatch NOT shown outside eligible region
-   - Loan always REJECTED
-9. **Positive tests** — veteran gets veteran grant, student gets education grant, etc.
+1. **MATCHER_VERSION** is `2.0.0`
+2. **Profile classes** (ACCEPT/REVIEW/REJECT for each):
+   - Caregiver/family profile
+   - Student profile (including non-student REJECT for student-only)
+   - Veteran profile (including section-derived flag)
+   - Nonprofit/ministry profile (including individual REJECT for nonprofit-only)
+   - Business/startup profile (including section-derived flag)
+   - Disability/medical profile (including section-derived flags)
+   - Emergency/disaster profile (including section-derived flag)
+   - Ordinary individual with housing/utilities need
+3. **Unknown applicability** → `applicabilityUnknown=true`, never ACCEPT
+4. **ACCEPT requires needAlignment > 0**
+5. **ACCEPT requires hasApplicationUrl**
+6. **Institutional/research-only** → REJECT for ordinary individuals
+7. **Disease-specific** → REJECT when profile lacks condition indicator
+8. **Disaster/FEMA** → REJECT when profile lacks emergency context
+9. **Section-derived signals** for veteran, student, business, caregiver, disability, emergency, location
+10. **Fingerprint v2** includes `applicabilityUnknown`, `isCaregiver`, `hasChronicIllness`
+11. **New opportunity flags** (`isProBono`, `isInKind`, `isInstitutionalOnly`, `requiresDisasterContext`, `isDmeOrEquipment`, `diseaseSpecific`)
 
 ### Running Tests
 
 ```sh
 node --test tests/unit/matchDecisionEngine.test.mjs
+node --test tests/unit/matchDecisionEngine.comprehensive.test.mjs
 ```
 
 Or as part of the full suite:
@@ -248,3 +333,4 @@ Or as part of the full suite:
 ```sh
 npm run unit
 ```
+
