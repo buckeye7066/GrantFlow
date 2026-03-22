@@ -25,6 +25,43 @@ const STATE_ABBREVIATIONS = {
   wisconsin: 'wi', wyoming: 'wy',
 }
 
+// State name → 2-letter abbreviation (uppercase) sorted by name length descending so
+// multi-word state names ("west virginia") match before single-word names ("virginia").
+const STATE_NAME_TO_ABBR_ENTRIES = [
+  ['west virginia', 'WV'], ['north carolina', 'NC'], ['north dakota', 'ND'],
+  ['south carolina', 'SC'], ['south dakota', 'SD'], ['new hampshire', 'NH'],
+  ['rhode island', 'RI'], ['new mexico', 'NM'], ['new jersey', 'NJ'],
+  ['new york', 'NY'], ['connecticut', 'CT'], ['massachusetts', 'MA'],
+  ['mississippi', 'MS'], ['pennsylvania', 'PA'], ['minnesota', 'MN'],
+  ['tennessee', 'TN'], ['california', 'CA'], ['louisiana', 'LA'],
+  ['wisconsin', 'WI'], ['kentucky', 'KY'], ['oklahoma', 'OK'],
+  ['nebraska', 'NE'], ['arkansas', 'AR'], ['colorado', 'CO'],
+  ['maryland', 'MD'], ['michigan', 'MI'], ['missouri', 'MO'],
+  ['delaware', 'DE'], ['illinois', 'IL'],
+  ['virginia', 'VA'], ['montana', 'MT'], ['wyoming', 'WY'],
+  ['georgia', 'GA'], ['arizona', 'AZ'], ['indiana', 'IN'],
+  ['florida', 'FL'], ['alabama', 'AL'], ['vermont', 'VT'],
+  ['kansas', 'KS'], ['nevada', 'NV'], ['oregon', 'OR'],
+  ['alaska', 'AK'], ['hawaii', 'HI'], ['idaho', 'ID'],
+  ['maine', 'ME'], ['texas', 'TX'], ['utah', 'UT'],
+  ['iowa', 'IA'], ['ohio', 'OH'],
+].sort((a, b) => b[0].length - a[0].length)
+
+/**
+ * Detect a US state name embedded in an opportunity title.
+ * "Ohio Family and Children First" → "OH"
+ * "New York Tuition Assistance Program" → "NY"
+ *
+ * Returns the 2-letter uppercase state abbreviation or null.
+ */
+export function extractStateNameFromTitle(title) {
+  const lower = (title || '').toLowerCase()
+  for (const [name, abbr] of STATE_NAME_TO_ABBR_ENTRIES) {
+    if (lower.includes(name)) return abbr
+  }
+  return null
+}
+
 /** Normalize a state string to its 2-letter abbreviation when possible. */
 function normalizeState(s) {
   return STATE_ABBREVIATIONS[s] || s
@@ -310,7 +347,43 @@ export function applyRelevanceFilter(opportunity, profileData) {
     }
   }
 
+  // ── 6b. State name embedded in opportunity title ───────────────────────────
+  // If the opportunity title contains an explicit US state name that differs
+  // from the profile's state, it is almost certainly a state-specific program
+  // that the profile cannot access (e.g. "Cleveland State University — Financial Aid"
+  // for a TN profile, or "Ohio Family and Children First" for a CA profile).
+  // We skip this check only when the opportunity explicitly has is_national=true.
+  // We intentionally do NOT skip when state is null/empty — a missing state column
+  // is not the same as "national".
+  if (profileState && !opportunity.is_national) {
+    const titleStateAbbr = extractStateNameFromTitle(opportunity.title || '')
+    if (titleStateAbbr) {
+      const profileStateAbbr = normalizeState(profileState.toLowerCase())
+      const titleStateAbbrLower = titleStateAbbr.toLowerCase()
+      if (profileStateAbbr !== titleStateAbbrLower) {
+        return {
+          pass: false,
+          reason: `Geographic mismatch: opportunity title names ${titleStateAbbr}, profile is in ${profileState.toUpperCase()}`,
+        }
+      }
+    }
+  }
+
   return { pass: true }
+}
+
+/**
+ * Extract a 2-letter state abbreviation from an address value that may be a
+ * plain string ("123 Main St, Nashville, TN 37201") or an object ({ state: 'TN' }).
+ */
+function extractStateFromAddress(addr) {
+  if (!addr) return null
+  if (typeof addr === 'object') return addr.state || null
+  if (typeof addr === 'string') {
+    const m = addr.match(/\b([A-Z]{2})\s*,?\s*\d{5}/)
+    return m ? m[1] : null
+  }
+  return null
 }
 
 /**
@@ -369,6 +442,8 @@ export function extractProfileData(profileContext) {
       profile.state ||
       basic.state ||
       sections.location_focus?.state ||
+      extractStateFromAddress(basic.address) ||
+      extractStateFromAddress((sections.comprehensive_application || {}).address) ||
       null,
     tags: profile.tags || [],
   }
