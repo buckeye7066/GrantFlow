@@ -93,8 +93,15 @@ function applyRelevanceFilter(oppText, profileData) {
 
   // University/college for non-students
   const isStudent = ['student', 'high_school_student', 'college_student'].includes(profileType)
-  if (/\b(university\s*—|college\s*—|institutional scholarship|college.{0,15}financial aid|university.{0,15}financial aid|college.{0,15}housing|university.{0,15}housing|off.campus resources)\b/i.test(oppText) && !isStudent) {
+  if (/\b(university\s*[—–-]\s*|college\s*[—–-]\s*|institutional scholarship|college.{0,20}financial aid|university.{0,20}financial aid|college.{0,20}housing|university.{0,20}housing|off.campus resources?|community college.{0,30}(aid|grant|scholarship|resource))\b/i.test(oppText) && !isStudent) {
     return { pass: false, reason: 'university/college program for non-student' }
+  }
+
+  // FEMA/disaster for non-disaster profiles
+  if (/\b(fema individual assistance|fema disaster (relief|assistance|grant)|disaster (relief|assistance) grant|individual.*assistance.*disaster|ihp\b|individuals and households program)\b/i.test(oppText)) {
+    const hasFEMA = (Array.isArray(profileData.tags) && profileData.tags.some(t => /disaster|fema|emergency|flood|fire|tornado|hurricane|storm/i.test(String(t)))) ||
+      (profileData.primary_type || '').toLowerCase() === 'disaster_survivor'
+    if (!hasFEMA) return { pass: false, reason: 'FEMA/disaster program, no disaster indicator' }
   }
 
   // Foster care youth
