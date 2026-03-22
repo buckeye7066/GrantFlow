@@ -456,7 +456,7 @@ for (const profile of profiles) {
   
   let addedForProfile = 0;
   for (const opp of top50) {
-    // Check if already exists
+    // Check if already exists for this profile
     const existing = checkExisting.get(profile.id, opp.title);
     if (existing) continue;
     
@@ -464,7 +464,7 @@ for (const profile of profiles) {
       insertGrant.run(
         crypto.randomUUID(),
         orgId,
-        profile.id,  // profile_id — strict per-profile scoping
+        profile.id,   // profile_id for correct pipeline scoping
         opp.title,
         opp.sponsor,
         opp.deadline || null,
@@ -494,8 +494,7 @@ console.log(`   Total grants added: ${totalGrantsAdded}`);
 const grantsByProfile = db.prepare(`
   SELECT p.display_name, COUNT(g.id) as grant_count
   FROM profiles p
-  LEFT JOIN organizations o ON p.organization_id = o.id
-  LEFT JOIN grants g ON o.id = g.organization_id
+  LEFT JOIN grants g ON p.id = g.profile_id
   GROUP BY p.id
 `).all();
 
