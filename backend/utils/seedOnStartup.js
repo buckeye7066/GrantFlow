@@ -446,7 +446,8 @@ export function seedOnStartup(db) {
   }
   
   // Seed grants if needed
-  if (grantCount < 50) {
+  const grantCountAfterCleanup = db.prepare('SELECT COUNT(*) as c FROM grants').get().c;
+  if (grantCountAfterCleanup < 50) {
     seedProfileGrants(db);
   }
   

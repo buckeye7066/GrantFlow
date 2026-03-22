@@ -155,6 +155,7 @@ for (const profile of profiles) {
           grantId,
           orgId,
           profile.id,  // profile_id for correct pipeline scoping
+
           opp.id,
           opp.title,
           opp.sponsor || opp.source,
