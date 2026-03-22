@@ -47,6 +47,39 @@ function extractStateFromTitle(title) {
   return null
 }
 
+// Map of state names in grant titles to their 2-letter abbreviation.
+// Sorted by name length descending so multi-word names ("new york") match before
+// single-word names ("new") — sorting once at module load avoids per-call sort.
+const STATE_NAME_TO_ABBR_ENTRIES = [
+  ['alabama', 'AL'], ['alaska', 'AK'], ['arizona', 'AZ'], ['arkansas', 'AR'],
+  ['california', 'CA'], ['colorado', 'CO'], ['connecticut', 'CT'], ['delaware', 'DE'],
+  ['florida', 'FL'], ['georgia', 'GA'], ['hawaii', 'HI'], ['idaho', 'ID'],
+  ['illinois', 'IL'], ['indiana', 'IN'], ['iowa', 'IA'], ['kansas', 'KS'],
+  ['kentucky', 'KY'], ['louisiana', 'LA'], ['maine', 'ME'], ['maryland', 'MD'],
+  ['massachusetts', 'MA'], ['michigan', 'MI'], ['minnesota', 'MN'], ['mississippi', 'MS'],
+  ['missouri', 'MO'], ['montana', 'MT'], ['nebraska', 'NE'], ['nevada', 'NV'],
+  ['new hampshire', 'NH'], ['new jersey', 'NJ'], ['new mexico', 'NM'], ['new york', 'NY'],
+  ['north carolina', 'NC'], ['north dakota', 'ND'], ['ohio', 'OH'], ['oklahoma', 'OK'],
+  ['oregon', 'OR'], ['pennsylvania', 'PA'], ['rhode island', 'RI'], ['south carolina', 'SC'],
+  ['south dakota', 'SD'], ['tennessee', 'TN'], ['texas', 'TX'], ['utah', 'UT'],
+  ['vermont', 'VT'], ['virginia', 'VA'], ['washington', 'WA'], ['west virginia', 'WV'],
+  ['wisconsin', 'WI'], ['wyoming', 'WY'],
+].sort((a, b) => b[0].length - a[0].length)
+
+/**
+ * Detect a state name embedded in a program title.
+ * "Ohio Family and Children First" → "OH"
+ * "New York Tuition Assistance Program" → "NY"
+ * "Texas Public Educational Grant" → "TX"
+ */
+function extractStateNameFromTitle(title) {
+  const lower = (title || '').toLowerCase()
+  for (const [name, abbr] of STATE_NAME_TO_ABBR_ENTRIES) {
+    if (lower.includes(name)) return abbr
+  }
+  return null
+}
+
 function extractProfileState(profile, sections) {
   const basic = sections.basic_information || {}
   const locFocus = sections.location_focus || {}
@@ -126,10 +159,14 @@ for (const profile of profiles) {
 
   const profileState = extractProfileState(profile, sections)
 
+  // Normalize veteran_status: the seed stores "Veteran" (string); the filter needs a boolean
+  const rawVeteran = demographics.veteran_status || military.veteran || null
+  const veteranStatus = (rawVeteran === true || /^veteran/i.test(String(rawVeteran || ''))) ? true : null
+
   // Build the profileData object expected by applyRelevanceFilter()
   const profileData = {
     primary_type: profile.primary_type || null,
-    veteran_status: demographics.veteran_status || military.veteran || null,
+    veteran_status: veteranStatus,
     immigrant_status: demographics.immigrant_status || null,
     disability_status: demographics.disability_status || health.disability_type || null,
     foster_youth: family.foster_youth || null,
@@ -157,9 +194,13 @@ for (const profile of profiles) {
     }
     seenTitles.add(titleNorm)
 
-    // 2. Wrong-state check via "near [City], [StateAbbr]" pattern in title
+    // 2. Wrong-state check:
+    //    a) "near [City], [StateAbbr]" pattern in title
+    //    b) State name embedded in program title (e.g. "Ohio Family and Children First")
     if (profileState) {
-      const grantState = extractStateFromTitle(grant.title || '')
+      const grantState =
+        extractStateFromTitle(grant.title || '') ||
+        extractStateNameFromTitle(grant.title || '')
       if (grantState && grantState !== profileState) {
         toDelete.push({
           id: grant.id,

@@ -158,6 +158,30 @@ export function applyRelevanceFilter(opportunity, profileData) {
     return { pass: false, reason: 'Entity type mismatch: university/college-specific program for non-student profile' }
   }
 
+  // ── 2d-ii. Generic student scholarship / academic aid for non-student profiles ─
+  // These programs are exclusively for enrolled or prospective students.
+  // Block them unless the profile type indicates a student.
+  const genericStudentAidPattern =
+    /\b(federal pell grant|pell grant|teach grant\b|fseog\b|federal supplemental educational opportunity|buick achievers|questbridge\b|quest bridge|jack kent cooke|gates scholarship|cobell scholarship|cal grant\b|texas public educational grant|tpeg\b|state tuition (assistance|grant)|tuition assistance program|state financial aid program|academic competitive grant|smart grant|iraq and afghanistan service grant|dependent student grant|college access grant|college opportunity grant|need.based (college|academic) (grant|scholarship))\b/i
+  if (genericStudentAidPattern.test(oppText) && !isStudentProfile) {
+    return { pass: false, reason: 'Entity type mismatch: student-only academic aid program for non-student profile' }
+  }
+
+  // ── 2d-iii. HIV/AIDS-specific programs for profiles with no HIV indicator ──
+  // Ryan White and AIDS drug assistance programs are exclusively for people living
+  // with HIV/AIDS. Block for profiles with no HIV/AIDS indicator.
+  const hivAidsPattern =
+    /\b(ryan white|hiv\/aids program|aids drug assistance|adap\b|people living with hiv|plwh\b|hiv.{0,20}(care|treatment|support|assistance)|aids.{0,20}(care|treatment|support|assistance))\b/i
+  if (hivAidsPattern.test(oppText)) {
+    const hasHivIndicator =
+      (Array.isArray(profileData.tags) &&
+        profileData.tags.some((t) => /hiv|aids\b/i.test(String(t)))) ||
+      (profileData.disability_status && /hiv|aids/i.test(JSON.stringify(profileData.disability_status)))
+    if (!hasHivIndicator) {
+      return { pass: false, reason: 'Demographic mismatch: HIV/AIDS-specific program, no HIV/AIDS indicator in profile' }
+    }
+  }
+
   // ── 2e-i. FEMA/disaster programs for non-disaster profiles ─────────────────
   // FEMA Individual Assistance and generic disaster relief should not appear for
   // profiles that have no disaster-related need indicator.
