@@ -81,7 +81,7 @@ function parseTags(raw) {
 
 console.log(`\n=== run-pipeline-cleanup-now.mjs (${DRY_RUN ? 'DRY RUN — no deletes' : 'LIVE — will delete'}) ===\n`)
 
-const profiles = db.prepare('SELECT id, display_name, primary_type, state, tags FROM profiles').all()
+const profiles = db.prepare('SELECT id, display_name, primary_type, tags FROM profiles').all()
 console.log(`Found ${profiles.length} profiles.\n`)
 
 const deleteStmt = db.prepare('DELETE FROM grants WHERE id = ?')
@@ -96,7 +96,7 @@ function track(category) {
 for (const profile of profiles) {
   // Load all grants for this profile (by profile_id or via the organization it belongs to)
   const grants = db.prepare(`
-    SELECT id, title, funder, description, created_at
+    SELECT id, title, funder, notes, created_at
     FROM grants
     WHERE profile_id = ?
        OR organization_id IN (
@@ -175,7 +175,7 @@ for (const profile of profiles) {
     // Build an opportunity object so the filter can inspect all fields.
     const opportunity = {
       title: grant.title || '',
-      description: grant.description || '',
+      description: grant.notes || '',
       sponsor: grant.funder || '',
       keywords: [],
       categories: [],

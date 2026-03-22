@@ -235,7 +235,8 @@ export function applyRelevanceFilter(opportunity, profileData) {
 
   // ── 5. Disability Program Specificity ─────────────────────────────────────
 
-  // IDD-specific programs
+  // IDD-specific programs — require a positive IDD indicator; block everyone else
+  // (ECF Choices, DIDD waivers, etc. are exclusively for people with IDD diagnoses)
   const iddPattern =
     /\b(ecf choices|didd\b|intellectual disability|developmental disability|idd waiver|intellectual.{0,20}developmental)\b/i
   if (iddPattern.test(oppText)) {
@@ -253,16 +254,12 @@ export function applyRelevanceFilter(opportunity, profileData) {
             String(t).toLowerCase().includes('developmental') ||
             String(t).toLowerCase().includes('idd'),
         ))
-    if (
-      profileData.disability_status !== undefined &&
-      profileData.disability_status !== null &&
-      !hasIddIndicator
-    ) {
+    if (!hasIddIndicator) {
       return { pass: false, reason: 'Disability mismatch: IDD-specific program, no IDD indicators in profile' }
     }
   }
 
-  // Blind/visually-impaired specific
+  // Blind/visually-impaired specific — require a positive visual-impairment indicator
   const blindPattern = /\b(blind only|visually impaired only|for the blind|blindness program)\b/i
   if (blindPattern.test(oppText)) {
     const disabilityText = JSON.stringify(profileData.disability_status || '').toLowerCase()
@@ -273,11 +270,7 @@ export function applyRelevanceFilter(opportunity, profileData) {
         profileData.tags.some(
           (t) => String(t).toLowerCase().includes('blind') || String(t).toLowerCase().includes('visual'),
         ))
-    if (
-      profileData.disability_status !== undefined &&
-      profileData.disability_status !== null &&
-      !hasVisualImpairment
-    ) {
+    if (!hasVisualImpairment) {
       return { pass: false, reason: 'Disability mismatch: blindness-specific program, no visual impairment in profile' }
     }
   }
