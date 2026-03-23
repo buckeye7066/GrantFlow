@@ -16,6 +16,7 @@
 import { db } from '../db/index.js'
 import { buildProfileContext } from '../services/profileHelpers.js'
 import { saveToProfilePipeline } from '../services/opportunityMatcher.js'
+import { PIPELINE_ALLOWED_SOURCES } from '../config/pipelineAllowedSources.js'
 
 function num(value, fallback) {
   const n = Number(value)
@@ -28,18 +29,8 @@ async function main() {
 
   // Keep scope limited to the sources created by our crawlers + directories.
   // This prevents pulling in synthetic/templates and avoids unexpected spam.
-  const allowedSources = [
-    'verified_real',
-    'local_foundation',
-    'scholarship_crawler',
-    'health_resources_crawler',
-    'item_funding',
-    'item_gift',
-    // Geo/local directory sources (these are real entry points; include them)
-    'local_directory_united_way',
-    'local_directory_feeding_america',
-    'local_directory_cap',
-  ]
+  // Single source of truth: imported from backend/config/pipelineAllowedSources.js
+  const allowedSources = PIPELINE_ALLOWED_SOURCES
 
   const profiles = await db
     .prepare(`SELECT id, display_name FROM profiles WHERE status = 'active' ORDER BY created_at ASC`)

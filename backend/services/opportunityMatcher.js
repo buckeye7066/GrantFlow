@@ -10,6 +10,7 @@
 import crypto from 'crypto'
 import { applyRelevanceFilter, extractProfileData } from './relevanceFilter.js'
 import { computeMatchDecision, normalizeProfile, computeProfileFingerprint, normalizeOpportunity, computeOpportunityFingerprint } from './matchDecisionEngine.js'
+import { isPipelineSourceAllowed } from '../config/pipelineAllowedSources.js'
 
 // Cache the result of the decision-columns PRAGMA check per DB instance to avoid
 // running PRAGMA table_info(grants) on every saveToProfilePipeline call.
@@ -61,6 +62,20 @@ export async function saveToProfilePipeline(
   try {
     const thresholdNum = Number(minMatchThreshold)
     const threshold = Number.isFinite(thresholdNum) ? Math.max(0, Math.min(100, thresholdNum)) : 55
+
+    // ── Source allowlist enforcement ──────────────────────────────────────
+    // Block pipeline inserts from non-approved sources regardless of score.
+    // This is the hard gate that prevents synthetic/template/spam sources
+    // from entering any profile's pipeline via any code path.
+    const oppSource = opportunity?.source ? String(opportunity.source).trim() : null
+    if (oppSource && !isPipelineSourceAllowed(oppSource)) {
+      return {
+        saved: false,
+        reason: `Source "${oppSource}" is not in the pipeline allowed sources list`,
+        matchPercentage: null,
+        threshold,
+      }
+    }
 
     // Run the full decision engine
     const rawProfile = profileContext?.profile ?? profileContext
@@ -352,6 +367,11 @@ export async function processCrawledOpportunities(db, opportunities, profileId, 
   const profileData = extractProfileData(profileContext)
 
   for (const opportunity of opportunities) {
+    // Skip non-allowed sources entirely (avoid computing match score)
+    if (!isPipelineSourceAllowed(opportunity.source)) {
+      continue
+    }
+
     // Calculate match percentage
     const matchPercentage = calculateMatchPercentage(opportunity, profileContext)
     
