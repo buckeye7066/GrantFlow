@@ -524,7 +524,7 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
         `).get(opp.id || opp.source_id)
         
         if (insertedOpp) {
-          const oppWithId = { ...opp, id: insertedOpp.id }
+          const oppWithId = { ...opp, id: insertedOpp.id, source: opp.source || 'verified_real' }
           const result = await saveToProfilePipeline(db, oppWithId, profileId, profileContext, opp.match_score)
           if (result.saved) {
             savedToProfile++
