@@ -8,6 +8,14 @@ const __dirname = path.dirname(__filename);
 
 import { applyRelevanceFilter } from '../services/relevanceFilter.js';
 import { buildProfileSignals } from '../services/profileHelpers.js';
+import {
+  computeMatchDecision,
+  normalizeProfile,
+  normalizeOpportunity,
+  computeProfileFingerprint,
+  computeOpportunityFingerprint,
+  MATCHER_VERSION,
+} from '../services/matchDecisionEngine.js';
 
 // Safety guard: refuse to run in production or when seeding is explicitly disabled.
 const nodeEnv = String(process.env.NODE_ENV || '').trim().toLowerCase()
@@ -29,11 +37,26 @@ console.log(`Found ${profiles.length} profiles`);
 const opportunities = db.prepare('SELECT * FROM funding_opportunities WHERE is_active = 1 OR is_active IS NULL LIMIT 200').all();
 console.log(`Found ${opportunities.length} opportunities\n`);
 
+// Detect whether decision columns are present in the grants table
+const _grantsCols = db.prepare('PRAGMA table_info(grants)').all().map(c => c.name);
+const _hasDecisionCols = _grantsCols.includes('match_decision');
+
 // Insert grants — include profile_id for correct pipeline scoping
-const insertGrant = db.prepare(`
-  INSERT INTO grants (id, organization_id, profile_id, funding_opportunity_id, title, funder, amount_requested, status, match_score, match_reasons, notes)
-  VALUES (?, ?, ?, ?, ?, ?, ?, 'discovered', ?, ?, ?)
-`);
+// When decision columns are present (migrated schema), store full canonical metadata.
+const insertGrant = _hasDecisionCols
+  ? db.prepare(`
+      INSERT INTO grants (
+        id, organization_id, profile_id, funding_opportunity_id, title, funder,
+        amount_requested, status, match_score, match_reasons, notes,
+        match_decision, match_explanation, matched_needs, eligibility_status,
+        ineligibility_reasons, profile_fingerprint, opportunity_fingerprint,
+        matcher_version, evaluated_at, match_confidence
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'discovered', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+  : db.prepare(`
+      INSERT INTO grants (id, organization_id, profile_id, funding_opportunity_id, title, funder, amount_requested, status, match_score, match_reasons, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'discovered', ?, ?, ?)
+    `);
 
 let totalGrantsCreated = 0;
 
@@ -98,22 +121,20 @@ for (const profile of profiles) {
     const filterResult = applyRelevanceFilter(oppForFilter, profileData);
     if (!filterResult.pass) continue;
 
-    // Score based on canonical signals
+    // Score based on canonical signals (used as pre-filter heuristic only)
     const oppText = `${opp.title || ''} ${opp.description || ''}`.toLowerCase();
     const oppKws = new Set(oppForFilter.keywords.map(k => k.toLowerCase()));
-    let score = 0;
-    const matchReasons = [];
+    let heuristicScore = 0;
 
     // Geographic
     const oppState = (opp.state || '').toLowerCase();
     const profState = (profileData.state || '').toLowerCase();
     if (!oppState || oppState === 'nationwide' || opp.is_national) {
-      score += 8;
+      heuristicScore += 8;
     } else if (profState && oppState === profState) {
-      score += 18;
-      matchReasons.push(`state:${opp.state}`);
+      heuristicScore += 18;
     } else if (profState && oppState && oppState !== profState) {
-      score -= 20;
+      heuristicScore -= 20;
     }
 
     // Intent phrases (5 pts each)
@@ -121,8 +142,7 @@ for (const profile of profiles) {
       for (const phrase of signals.intentPhraseSet) {
         const p = String(phrase).toLowerCase();
         if (p.length >= 4 && (oppText.includes(p) || oppKws.has(p))) {
-          score += 5;
-          matchReasons.push(`intent:${p}`);
+          heuristicScore += 5;
         }
       }
     }
@@ -132,13 +152,28 @@ for (const profile of profiles) {
     for (const kw of kwSet) {
       const k = String(kw).toLowerCase();
       if (k.length < 3 || k.includes(' ')) continue;
-      if (oppKws.has(k)) { score += 1.5; matchReasons.push(`kw:${k}`); }
-      else if (oppText.includes(k)) { score += 0.5; }
+      if (oppKws.has(k)) { heuristicScore += 1.5; }
+      else if (oppText.includes(k)) { heuristicScore += 0.5; }
     }
 
-    score = Math.max(0, Math.min(100, Math.floor(score)));
+    heuristicScore = Math.max(0, Math.min(100, Math.floor(heuristicScore)));
 
-    if (score >= 65 && matchedOpps < 50) {
+    // Pre-filter: skip obviously poor heuristic matches to avoid calling decision engine on every opp
+    if (heuristicScore < 10 || matchedOpps >= 50) continue;
+
+    // --- CANONICAL DECISION ENGINE: final acceptance authority ---
+    const decision = computeMatchDecision(profile, opp, { profileSections: sections });
+
+    // Hard reject: never insert into profile pipeline
+    if (decision.decision === 'REJECT') continue;
+
+    // Use canonical score as the stored match score
+    const score = decision.score;
+
+    // Only save if canonical score meets threshold (65 for this seeding script)
+    if (score < 65) continue;
+
+    {
       const grantId = crypto.randomUUID();
       // Ensure org exists
       let orgId = profile.organization_id;
@@ -151,20 +186,46 @@ for (const profile of profiles) {
         }
       }
       try {
-        insertGrant.run(
-          grantId,
-          orgId,
-          profile.id,  // profile_id for correct pipeline scoping
-
-          opp.id,
-          opp.title,
-          opp.sponsor || opp.source,
-          opp.amount_max || opp.amount_min || null,
-          score,
-          JSON.stringify(matchReasons.slice(0, 5)),
-          `Auto-matched for ${profile.display_name}`
-        );
-        console.log(`  ✓ ${opp.title.substring(0, 50)}... (${score}%)`);
+        if (_hasDecisionCols) {
+          const profileFingerprint = computeProfileFingerprint(normalizeProfile(profile, sections)) ?? null;
+          const opportunityFingerprint = computeOpportunityFingerprint(normalizeOpportunity(opp)) ?? null;
+          insertGrant.run(
+            grantId,
+            orgId,
+            profile.id,
+            opp.id,
+            opp.title,
+            opp.sponsor || opp.source,
+            opp.amount_max || opp.amount_min || null,
+            score,
+            JSON.stringify(decision.matchedNeeds ?? []),
+            `Auto-matched for ${profile.display_name}`,
+            decision.decision,
+            decision.explanation ?? null,
+            JSON.stringify(decision.matchedNeeds ?? []),
+            String(decision.eligible),
+            JSON.stringify(decision.ineligibilityReasons ?? []),
+            profileFingerprint,
+            opportunityFingerprint,
+            MATCHER_VERSION,
+            decision.evaluatedAt ?? new Date().toISOString(),
+            decision.confidence ?? null,
+          );
+        } else {
+          insertGrant.run(
+            grantId,
+            orgId,
+            profile.id,
+            opp.id,
+            opp.title,
+            opp.sponsor || opp.source,
+            opp.amount_max || opp.amount_min || null,
+            score,
+            JSON.stringify(decision.matchedNeeds ?? []),
+            `Auto-matched for ${profile.display_name}`,
+          );
+        }
+        console.log(`  ✓ ${opp.title.substring(0, 50)}... (${score}% canonical:${decision.decision})`);
         matchedOpps++;
         totalGrantsCreated++;
       } catch (err) {
