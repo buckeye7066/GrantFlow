@@ -313,8 +313,8 @@ A local heuristic scorer based on keyword overlap, geographic signals, and inten
 |---|---|---|---|
 | `backend/utils/seedOnStartup.js:seedProfileGrants()` | heuristic ≥ 5 | `computeMatchDecision` ACCEPT/REVIEW | Safe: threshold is very low |
 | `backend/scripts/seed-profile-grants.mjs` | heuristic ≥ 5 | `computeMatchDecision` ACCEPT/REVIEW; then post-decision score ≥ 40 (matches canonical ACCEPT minimum) | Safe: canonical runs first, score check is post-evaluation |
-| `scripts/seed-profile-grants.mjs` | heuristic ≥ 5 | `computeMatchDecision` ACCEPT/REVIEW | Safe: threshold is very low |
-| `scripts/seed-matched-grants.mjs` | heuristic ≥ 5 | `computeMatchDecision` ACCEPT/REVIEW | Safe: threshold is very low |
+| `scripts/seed-profile-grants.mjs` | heuristic ≥ 5 | `computeMatchDecision` ACCEPT/REVIEW | Safe: adaptive cap (≤200 evaluate all, >200 take top 200) |
+| `scripts/seed-matched-grants.mjs` | heuristic ≥ 5 | `computeMatchDecision` ACCEPT/REVIEW | Safe: adaptive cap (≤200 evaluate all, >200 take top 200) |
 | `backend/services/opportunityMatcher.js:saveToProfilePipeline()` | none (no heuristic) | `computeMatchDecision` ACCEPT/REVIEW | Canonical-only; no heuristic pre-filter |
 | `backend/scripts/backfill-profile-pipeline-from-opportunities.mjs` | none | delegates to `saveToProfilePipeline()` | Safe: no pre-filtering |
 
@@ -330,7 +330,11 @@ A local heuristic scorer based on keyword overlap, geographic signals, and inten
 
 ### Performance Strategy
 
-- **Candidate pool cap**: Top 50 by heuristic pre-score are passed to the canonical engine per profile. This bounds worst-case CPU cost while retaining the most plausible candidates.
+- **Adaptive candidate pool cap**: The junk filter (heuristic < 5) eliminates the vast majority of irrelevant candidates. Of the remaining candidates:
+  - If ≤ 200 junk-filtered candidates remain, **all** are evaluated canonically — no cap.
+  - If > 200 remain, they are sorted by heuristic score and the **top 200** are passed to the canonical engine. This generous ceiling makes it virtually impossible to miss a strong canonical match while keeping performance bounded.
+  - The constant `ADAPTIVE_CANDIDATE_CAP = 200` is defined explicitly in each seeding script.
+  - `computeMatchDecision()` remains the sole acceptance authority; the adaptive cap only bounds the candidate pool, never substitutes for canonical evaluation.
 - **SQL LIMIT 500**: The database query fetches up to 500 active opportunities before heuristic scoring, ensuring sufficient coverage without loading the entire database.
 - **Canonical engine is not brute-forced**: The junk filter ensures the canonical engine only processes plausible candidates, maintaining acceptable performance at scale.
 

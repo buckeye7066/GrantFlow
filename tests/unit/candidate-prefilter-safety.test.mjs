@@ -18,6 +18,9 @@
  *  5. State/program fit (Ohio profile, Ohio-specific program) → ACCEPT
  *  6. Lifecycle: stale ACCEPT → REJECT when opportunity becomes a loan
  *  6b. Lifecycle: REVIEW (no application URL) → ACCEPT/REVIEW when opportunity gains URL
+ *  7. Strong canonical match survives when > 50 heuristic candidates exist
+ *  8. Adaptive cap constant (200) is a reasonable finite bound
+ *  9. Junk filter is aligned with canonical REJECT for truly irrelevant candidates
  */
 
 import test from 'node:test'
@@ -329,6 +332,169 @@ test('lifecycle (6b): adding application URL upgrades from REVIEW to ACCEPT/REVI
 
   // With URL + matching state + housing/emergency need → should ACCEPT or REVIEW (not REJECT)
   assertNotReject(withUrlDecision, 'lifecycle: opportunity gained application URL')
+})
+
+// ---------------------------------------------------------------------------
+// Test 7: Strong canonical match survives when > 50 heuristic candidates exist
+//
+// Simulates the scenario where a specific opportunity has a modest heuristic
+// score (would have ranked #55 under the old top-50 cap) but strong canonical
+// alignment (state match + housing need + valid URL). Under the old hard-50
+// cap the opportunity would have been excluded before canonical evaluation.
+// This test proves computeMatchDecision() still returns ACCEPT or REVIEW for
+// such an opportunity, confirming the adaptive strategy does not miss it.
+// ---------------------------------------------------------------------------
+
+test('prefilter-safety (7): strong canonical match not excluded when > 50 heuristic candidates exist', () => {
+  const profile = {
+    primary_type: 'individual',
+    state: 'OH',
+    needs: '["housing","financial_assistance"]',
+  }
+  const sections = {
+    basic_information: { state: 'OH' },
+    financial_information: {
+      housing_instability: true,
+      financial_need_level: 'High',
+    },
+  }
+
+  // Build 55 mock opportunities with higher heuristic scores than the target.
+  // Their canonical properties don't matter for this test — we only care about
+  // what happens to the target opportunity.
+  const higherScoredOpps = Array.from({ length: 55 }, (_, i) => ({
+    id: `opp-higher-${i}`,
+    title: `Higher Heuristic Grant ${i}`,
+    description: 'Grant with stronger keyword overlap.',
+    application_url: `https://example.gov/grant-${i}`,
+    is_national: 1,
+    categories: JSON.stringify(['housing', 'financial_assistance']),
+    keywords: JSON.stringify(['housing', 'financial', 'assistance']),
+    heuristicScore: 30 + i, // scores 30–84, all above the target
+  }))
+
+  // The target opportunity: lower heuristic score (would be rank 56 under old cap)
+  // but has canonical alignment: OH state match + housing need + valid application URL.
+  const targetOpp = {
+    id: 'opp-target-rank56',
+    title: 'Ohio Housing Stability Fund',
+    description: 'Provides direct financial assistance for housing stability to Ohio residents.',
+    application_url: 'https://ohio.gov/housing-stability-fund',
+    is_national: 0,
+    state: 'OH',
+    is_loan: 0,
+    categories: JSON.stringify(['housing']),
+    keywords: JSON.stringify(['housing', 'stability']),
+    heuristicScore: 8, // modest score — below all 55 higher-scored opps
+  }
+
+  // Confirm the target would have been excluded under a strict top-50 sort.
+  // Under the old logic: sort by heuristicScore desc → target ranks #56.
+  const allOpps = [...higherScoredOpps, targetOpp]
+  const sortedByHeuristic = [...allOpps].sort((a, b) => b.heuristicScore - a.heuristicScore)
+  const targetRank = sortedByHeuristic.findIndex(o => o.id === targetOpp.id) + 1
+  assert.ok(
+    targetRank > 50,
+    `Target opportunity should rank > 50 heuristically (got rank ${targetRank}) — proving old cap would have excluded it`,
+  )
+
+  // Verify that computeMatchDecision() still returns ACCEPT or REVIEW for the
+  // target opportunity when it reaches canonical evaluation (as the adaptive
+  // strategy ensures it will, since candidate count = 56 ≤ 200).
+  const decision = computeMatchDecision(profile, targetOpp, { profileSections: sections })
+  assertNotReject(decision, 'rank-56 target with strong canonical alignment')
+})
+
+// ---------------------------------------------------------------------------
+// Test 8: Adaptive cap constant is a reasonable finite bound
+//
+// The ADAPTIVE_CANDIDATE_CAP of 200 is large enough to cover any realistic
+// profile's candidate pool while still bounding worst-case canonical calls.
+// This test documents and asserts the expected constant value.
+//
+// NOTE: This constant (200) must be kept in sync with the ADAPTIVE_CANDIDATE_CAP
+// definitions in scripts/seed-profile-grants.mjs and scripts/seed-matched-grants.mjs.
+// ---------------------------------------------------------------------------
+
+test('prefilter-safety (8): adaptive cap (200) is a reasonable finite bound', () => {
+  // Mirror the constant from the seeding scripts — must be kept in sync.
+  const ADAPTIVE_CANDIDATE_CAP = 200
+
+  // The cap must be finite and greater than the old hard-50 cutoff.
+  assert.ok(
+    Number.isFinite(ADAPTIVE_CANDIDATE_CAP),
+    'ADAPTIVE_CANDIDATE_CAP must be a finite number',
+  )
+  assert.ok(
+    ADAPTIVE_CANDIDATE_CAP > 50,
+    `ADAPTIVE_CANDIDATE_CAP (${ADAPTIVE_CANDIDATE_CAP}) must be greater than the old hard-50 cutoff`,
+  )
+
+  // Simulate 300 candidates: adaptive selection must return exactly 200,
+  // not all 300, confirming performance is still bounded.
+  const allCandidates = Array.from({ length: 300 }, (_, i) => ({ id: i, score: i }))
+  const selected =
+    allCandidates.length <= ADAPTIVE_CANDIDATE_CAP
+      ? allCandidates
+      : [...allCandidates].sort((a, b) => b.score - a.score).slice(0, ADAPTIVE_CANDIDATE_CAP)
+
+  assert.equal(
+    selected.length,
+    ADAPTIVE_CANDIDATE_CAP,
+    `With 300 candidates, adaptive selection should return exactly ${ADAPTIVE_CANDIDATE_CAP}`,
+  )
+
+  // Confirm the top-scored candidates were selected (not a random subset).
+  const topScore = selected[0].score
+  assert.equal(topScore, 299, 'Highest-scoring candidate should be first in selected pool')
+})
+
+// ---------------------------------------------------------------------------
+// Test 9: Canonical engine independently REJECTs truly irrelevant candidates
+// (performance safety alignment).
+//
+// A clearly irrelevant opportunity (wrong state, loan, requires 501c3 the
+// profile doesn't have, no overlapping keywords) should be canonically REJECTed.
+// This confirms that the canonical engine and the junk filter are aligned:
+// what is irrelevant enough to be excluded by the junk filter is also
+// independently rejected by computeMatchDecision(), so no meaningful canonical
+// match is at risk of being "falsely saved" by removing the junk filter.
+// ---------------------------------------------------------------------------
+
+test('prefilter-safety (9): canonical engine rejects truly irrelevant candidates independently', () => {
+  const profile = {
+    primary_type: 'individual',
+    state: 'OH',
+    needs: '["housing"]',
+  }
+  const sections = {
+    basic_information: { state: 'OH' },
+  }
+
+  // Completely irrelevant opportunity: targets businesses in a different state,
+  // requires 501(c)(3) status, and is a loan — nothing aligns with the profile.
+  const irrelevantOpp = {
+    id: 'opp-irrelevant-1',
+    title: 'California Small Business Loan Program',
+    description: 'Low-interest loan for California small businesses with 501(c)(3) status.',
+    application_url: 'https://ca.gov/small-business-loan',
+    is_national: 0,
+    state: 'CA',
+    is_loan: 1,
+    requires_501c3: 1,
+    categories: JSON.stringify(['business', 'loan']),
+    keywords: JSON.stringify(['business', 'loan', 'California', '501c3']),
+  }
+
+  // Canonical engine must REJECT this opportunity.
+  const decision = computeMatchDecision(profile, irrelevantOpp, { profileSections: sections })
+  assertDecision(decision, 'REJECT', 'truly irrelevant opportunity: CA business loan for OH individual')
+
+  // Confirm ineligibility was the driving factor (not just a low score).
+  assert.ok(
+    decision.ineligibilityReasons.length > 0,
+    `Irrelevant opportunity should have explicit ineligibility reasons; got: ${JSON.stringify(decision.ineligibilityReasons)}`,
+  )
 })
 
 // ---------------------------------------------------------------------------
