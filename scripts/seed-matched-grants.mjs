@@ -283,11 +283,28 @@ async function main() {
       }
     }
     
-    // Sort by heuristic pre-score; take top 50 to pass to canonical engine — not an acceptance gate
-    scoredOpps.sort((a, b) => b.score - a.score)
-    const grantsToCreate = scoredOpps.slice(0, 50)
-    
-    console.log(`  Heuristic candidates (junk-filtered, score>=5): ${scoredOpps.length}, passing top 50 to canonical engine`)
+    // ---------------------------------------------------------------------------
+    // Adaptive candidate selection — three-tier strategy:
+    //   1. Junk filter (heuristic < 5): removes clear garbage (applied above).
+    //   2. Adaptive cap (≤ ADAPTIVE_CANDIDATE_CAP pass through; > cap takes top N):
+    //      bounds worst-case canonical engine calls while ensuring no plausible
+    //      canonical match is excluded merely because it ranked below an old
+    //      hard-50 cutoff.
+    //   3. Canonical engine (computeMatchDecision): sole acceptance authority.
+    // ---------------------------------------------------------------------------
+    const ADAPTIVE_CANDIDATE_CAP = 200
+    let grantsToCreate
+    if (scoredOpps.length <= ADAPTIVE_CANDIDATE_CAP) {
+      grantsToCreate = scoredOpps
+    } else {
+      scoredOpps.sort((a, b) => b.score - a.score)
+      grantsToCreate = scoredOpps.slice(0, ADAPTIVE_CANDIDATE_CAP)
+    }
+
+    const passingCount = scoredOpps.length <= ADAPTIVE_CANDIDATE_CAP
+      ? `all ${scoredOpps.length}`
+      : `top ${ADAPTIVE_CANDIDATE_CAP} of ${scoredOpps.length}`
+    console.log(`  Heuristic candidates (junk-filtered, score>=5): ${scoredOpps.length}, passing ${passingCount} to canonical engine`)
     
     // Ensure organization exists for the profile
     let orgId = profile.organization_id
