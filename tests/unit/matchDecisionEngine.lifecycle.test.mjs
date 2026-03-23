@@ -65,7 +65,7 @@ function buildDb() {
       .join('\n')
       .trim()
     if (!sqlLines) continue
-    try { raw.exec(sqlLines) } catch { /* column may already exist — safe to ignore */ }
+    try { raw.exec(sqlLines) } catch { /* Ignore: ALTER TABLE IF NOT EXISTS semantics — column may already exist */ }
   }
 
   // Wrap to match the DB interface used by saveToProfilePipeline (async-compatible sync API)
@@ -137,17 +137,18 @@ function insertProfile(db, profile) {
     )
     // Store needs and state in profile_sections (basic_information)
     if (profile.state || profile.needs) {
-      const sectionData = JSON.stringify({
-        state: profile.state ?? null,
-        needs: profile.needs ? (typeof profile.needs === 'string' ? JSON.parse(profile.needs) : profile.needs) : [],
-      })
+      let parsedNeeds = []
+      if (profile.needs) {
+        parsedNeeds = typeof profile.needs === 'string' ? JSON.parse(profile.needs) : profile.needs
+      }
+      const sectionData = JSON.stringify({ state: profile.state ?? null, needs: parsedNeeds })
       try {
         db.prepare(
           `INSERT OR IGNORE INTO profile_sections (profile_id, section_key, data) VALUES (?, 'basic_information', ?)`,
         ).run(profile.id, sectionData)
-      } catch { /* ignore */ }
+      } catch { /* OR IGNORE handles duplicate section rows */ }
     }
-  } catch { /* ignore */ }
+  } catch { /* OR IGNORE handles duplicate profile rows */ }
 }
 
 function insertOrg(db, orgId) {
