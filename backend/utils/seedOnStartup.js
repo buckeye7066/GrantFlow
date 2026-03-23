@@ -10,7 +10,7 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { applyRelevanceFilter } from '../services/relevanceFilter.js';
 import { buildProfileSignals } from '../services/profileHelpers.js';
-import { computeMatchDecision } from '../services/matchDecisionEngine.js';
+import { computeMatchDecision, MATCHER_VERSION, normalizeProfile, normalizeOpportunity, computeProfileFingerprint, computeOpportunityFingerprint } from '../services/matchDecisionEngine.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -413,11 +413,16 @@ export function cleanupIrrelevantGrants(db) {
       is_national: grant.is_national || false,
     };
 
+    // Two-layer filter: relevance filter first (fast), then canonical decision engine (thorough)
     const filterResult = applyRelevanceFilter(oppForFilter, profileData);
-    if (!filterResult.pass) {
+    const decisionResult = computeMatchDecision(profileData, oppForFilter);
+    if (!filterResult.pass || decisionResult.decision === 'REJECT') {
+      const removalReason = !filterResult.pass
+        ? filterResult.reason
+        : `Decision engine REJECT: ${(decisionResult.ineligibilityReasons ?? []).join('; ')}`;
       try {
         db.prepare('DELETE FROM grants WHERE id = ?').run(grant.id);
-        console.log(`[seedOnStartup] Removed irrelevant grant "${grant.title}" from profile ${grant.profile_id}: ${filterResult.reason}`);
+        console.log(`[seedOnStartup] Removed irrelevant grant "${grant.title}" from profile ${grant.profile_id}: ${removalReason}`);
         removed++;
       } catch (e) {
         // Ignore errors
@@ -457,6 +462,166 @@ export function seedOnStartup(db) {
   }
   
   console.log('[seedOnStartup] Database seeding complete');
+
+  // Re-evaluate stale pipeline entries: fingerprint or matcher_version changed
+  reEvaluateStalePipelineEntries(db);
+}
+
+/**
+ * Re-evaluate profile pipeline grants whose profile fingerprint, opportunity
+ * fingerprint, or matcher_version no longer match the current engine.
+ *
+ * Stale grants are re-evaluated via computeMatchDecision():
+ *   - If the decision is now REJECT, the grant is removed from the pipeline.
+ *   - If decision changes to ACCEPT/REVIEW, the stored metadata is updated.
+ *
+ * This runs on every non-production startup to keep the pipeline consistent
+ * after profile changes, opportunity updates, or engine upgrades.
+ */
+export function reEvaluateStalePipelineEntries(db) {
+  if (isSeedingBlocked()) {
+    console.info('[seedOnStartup] reEvaluateStalePipelineEntries: blocked (production or DISABLE_SEEDING)')
+    return { reEvaluated: 0, removed: 0 }
+  }
+
+  // Check whether decision columns exist (pre-migration DBs may not have them)
+  let hasDecisionColumns = false
+  try {
+    const cols = db.prepare('PRAGMA table_info(grants)').all()
+    hasDecisionColumns = cols.some(c => c.name === 'matcher_version')
+  } catch { /* ignore */ }
+
+  if (!hasDecisionColumns) {
+    console.info('[seedOnStartup] reEvaluateStalePipelineEntries: decision columns not present, skipping')
+    return { reEvaluated: 0, removed: 0 }
+  }
+
+  console.log('[seedOnStartup] Re-evaluating stale profile pipeline entries...')
+
+  // Find all profile-scoped grants where matcher_version differs from the current version
+  // OR where profile_fingerprint / opportunity_fingerprint is null (never evaluated by v2.0.0)
+  const staleGrants = db.prepare(`
+    SELECT g.id AS grant_id, g.profile_id, g.funding_opportunity_id, g.title,
+           g.matcher_version, g.profile_fingerprint, g.opportunity_fingerprint,
+           fo.id AS fo_id, fo.title AS fo_title, fo.description, fo.keywords,
+           fo.categories, fo.state AS fo_state, fo.is_national, fo.sponsor,
+           fo.eligibility_bullets, fo.application_url, fo.source_url,
+           fo.requires_501c3, fo.requires_match, fo.is_loan, fo.deadline,
+           fo.deadline_type, fo.is_active, fo.record_origin, fo.amount_min, fo.amount_max
+    FROM grants g
+    LEFT JOIN funding_opportunities fo ON g.funding_opportunity_id = fo.id
+    WHERE g.profile_id IS NOT NULL
+      AND (
+        g.matcher_version IS NULL
+        OR g.matcher_version <> ?
+        OR g.profile_fingerprint IS NULL
+        OR g.opportunity_fingerprint IS NULL
+      )
+    LIMIT 500
+  `).all(MATCHER_VERSION)
+
+  if (staleGrants.length === 0) {
+    console.log('[seedOnStartup] No stale pipeline entries found.')
+    return { reEvaluated: 0, removed: 0 }
+  }
+
+  console.log(`[seedOnStartup] Found ${staleGrants.length} stale pipeline entries to re-evaluate.`)
+
+  // Cache profile data to avoid re-querying per grant
+  const profileCache = new Map()
+  const getProfileWithSections = (profileId) => {
+    if (profileCache.has(profileId)) return profileCache.get(profileId)
+    const profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
+    if (!profile) { profileCache.set(profileId, null); return null }
+    const sectionRows = db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId)
+    const sections = {}
+    sectionRows.forEach(row => {
+      try { sections[row.section_key] = JSON.parse(row.data || '{}') } catch { sections[row.section_key] = {} }
+    })
+    const result = { profile, sections }
+    profileCache.set(profileId, result)
+    return result
+  }
+
+  let reEvaluated = 0
+  let removed = 0
+
+  for (const row of staleGrants) {
+    const profileData = getProfileWithSections(row.profile_id)
+    if (!profileData) continue
+
+    // Reconstruct the opportunity object for the decision engine
+    const opp = {
+      id: row.fo_id,
+      title: row.fo_title || row.title,
+      description: row.description,
+      keywords: row.keywords,
+      categories: row.categories,
+      state: row.fo_state,
+      is_national: row.is_national,
+      sponsor: row.sponsor,
+      eligibility_bullets: row.eligibility_bullets,
+      application_url: row.application_url,
+      source_url: row.source_url,
+      requires_501c3: row.requires_501c3,
+      requires_match: row.requires_match,
+      is_loan: row.is_loan,
+      deadline: row.deadline,
+      deadline_type: row.deadline_type,
+      is_active: row.is_active,
+      record_origin: row.record_origin,
+      amount_min: row.amount_min,
+      amount_max: row.amount_max,
+    }
+
+    const decision = computeMatchDecision(profileData.profile, opp, { profileSections: profileData.sections })
+
+    if (decision.decision === 'REJECT') {
+      // Remove from pipeline — this opportunity is now hard-ineligible
+      try {
+        db.prepare('DELETE FROM grants WHERE id = ?').run(row.grant_id)
+        console.log(`[seedOnStartup] Re-eval removed "${opp.title}" from profile ${row.profile_id}: ${(decision.ineligibilityReasons ?? []).join('; ')}`)
+        removed++
+      } catch { /* ignore */ }
+    } else {
+      // Update decision metadata and fingerprints
+      try {
+        const profileFingerprint = computeProfileFingerprint(normalizeProfile(profileData.profile, profileData.sections))
+        const opportunityFingerprint = computeOpportunityFingerprint(normalizeOpportunity(opp))
+        db.prepare(`
+          UPDATE grants SET
+            match_decision = ?,
+            match_explanation = ?,
+            eligibility_status = ?,
+            ineligibility_reasons = ?,
+            matched_needs = ?,
+            match_confidence = ?,
+            profile_fingerprint = ?,
+            opportunity_fingerprint = ?,
+            matcher_version = ?,
+            evaluated_at = ?,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).run(
+          decision.decision,
+          decision.explanation ?? null,
+          String(decision.eligible),
+          JSON.stringify(decision.ineligibilityReasons ?? []),
+          JSON.stringify(decision.matchedNeeds ?? []),
+          decision.confidence ?? null,
+          profileFingerprint ?? null,
+          opportunityFingerprint ?? null,
+          decision.matcherVersion,
+          decision.evaluatedAt,
+          row.grant_id,
+        )
+        reEvaluated++
+      } catch { /* ignore — old schema without all columns */ }
+    }
+  }
+
+  console.log(`[seedOnStartup] Re-evaluation complete: ${reEvaluated} updated, ${removed} removed.`)
+  return { reEvaluated, removed }
 }
 
 export default seedOnStartup;

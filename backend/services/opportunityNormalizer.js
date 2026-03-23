@@ -59,6 +59,19 @@ const RESEARCH_ONLY_PATTERNS = [
 ]
 
 // ---------------------------------------------------------------------------
+// University / off-campus resource indicators (requires student status)
+// ---------------------------------------------------------------------------
+const UNIVERSITY_STUDENT_ONLY_PATTERNS = [
+  'off-campus housing', 'off campus housing', 'student housing directory',
+  'student emergency fund', 'university emergency assistance', 'college emergency fund',
+  'bursar', 'financial aid office', 'tuition assistance program', 'student aid fund',
+  'campus emergency', 'dean of students', 'student affairs',
+  'enrolled student only', 'currently enrolled', 'enrollment verification',
+  'student health fee', 'student services fee', 'university resource',
+  'campus resource', 'college resource', 'university program',
+]
+
+// ---------------------------------------------------------------------------
 // Disease-specific / condition-specific indicators
 // NOTE: Avoid short patterns that could match common words (e.g. "als" matches "individuals")
 // ---------------------------------------------------------------------------
@@ -123,7 +136,7 @@ const CAREGIVER_PROGRAM_PATTERNS = [
 const NEED_TEXT_PATTERNS = Object.entries({
   housing: ['housing', 'rent', 'mortgage', 'eviction', 'shelter', 'home repair', 'homeless', 'rental assistance', 'homelessness'],
   utilities: ['utilities', 'electric', 'gas bill', 'water bill', 'heating', 'cooling', 'internet access', 'utility assistance'],
-  health_medical: ['medical', 'health', 'healthcare', 'prescription', 'dental', 'vision', 'mental health', 'behavioral health', 'therapy', 'health care'],
+  health_medical: ['medical', 'health', 'healthcare', 'prescription', 'dental', 'vision', 'mental health', 'behavioral health', 'therapy', 'health care', 'patient assistance', 'patient aid', 'medical assistance', 'chronic illness', 'chronic condition', 'diabetes', 'cancer', 'disease', 'condition-specific', 'disease-specific', 'illness'],
   food: ['food', 'nutrition', 'groceries', 'hunger', 'snap', 'meal', 'food assistance', 'food insecurity'],
   education: ['education', 'tuition', 'scholarship', 'college', 'training', 'workforce', 'vocational', 'financial aid', 'student aid'],
   disability: ['disability', 'disabled', 'adaptive', 'assistive technology', 'wheelchair', 'dme', 'chronic illness', 'mobility', 'adaptive equipment'],
@@ -327,7 +340,8 @@ export function normalizeOpportunity(rawOpp) {
 
   const requiresStudent =
     Boolean(rawOpp.requires_student) ||
-    (entityTypesAllowed.length > 0 && entityTypesAllowed.every(t => t === 'student'))
+    (entityTypesAllowed.length > 0 && entityTypesAllowed.every(t => t === 'student')) ||
+    matchesAnyPattern(text, UNIVERSITY_STUDENT_ONLY_PATTERNS)
 
   const requiresNonprofit =
     Boolean(rawOpp.requires_501c3) ||

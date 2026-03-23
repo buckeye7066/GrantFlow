@@ -121,6 +121,18 @@ export function evaluateEligibility(profileNorm, oppNorm) {
     ineligibilityReasons.push('Opportunity is a loan, not a grant')
   }
 
+  // -- Pro bono / in-kind / referral-only: never direct funding for individual profile pipelines --
+  // These are services or referrals, not grants. Hard-reject for all profile types.
+  if (oppNorm.isProBono) {
+    ineligibilityReasons.push('Opportunity is pro bono services, not a grant or direct funding')
+  }
+  if (oppNorm.isInKind) {
+    ineligibilityReasons.push('Opportunity provides in-kind goods/services, not direct financial assistance')
+  }
+  if (oppNorm.isReferralOnly) {
+    ineligibilityReasons.push('Opportunity is a referral service only, not a direct grant application')
+  }
+
   // -- Closed deadline --
   if (oppNorm.deadlineStatus === 'closed') {
     ineligibilityReasons.push('Application deadline has passed')
